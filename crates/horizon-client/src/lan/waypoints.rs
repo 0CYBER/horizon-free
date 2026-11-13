@@ -136,6 +136,51 @@ struct Memo {
     team: Option<(String, Option<i32>)>,
 }
 
+/// One receiver's connections, by source, in the order they were made: a remade
+/// connection keeps its place, a broken one leaves it. Found by source in one
+/// lookup: a crowd has a few hundred in each row, and every move visits them.
+#[derive(Default)]
+struct Row {
+    slots: Vec<Option<(u128, Connection)>>,
+    at: HashMap<u128, usize>,
+}
+
+impl Row {
+    fn get_mut(&mut self, source: u128) -> Option<&mut Connection> {
+        let i = *self.at.get(&source)?;
+        self.slots[i].as_mut().map(|(_, c)| c)
+    }
+    fn put(&mut self, source: u128, c: Connection) {
+        if let Some(slot) = self.get_mut(source) {
+            *slot = c;
+            return;
+        }
+        self.at.insert(source, self.slots.len());
+        self.slots.push(Some((source, c)));
+    }
+    fn take(&mut self, source: u128) -> Option<Connection> {
+        let i = self.at.remove(&source)?;
+        let c = self.slots[i].take().map(|(_, c)| c);
+        // The holes are skipped in order, and packed once they are most of the row.
+        if self.slots.len() > 16 && self.at.len() * 2 < self.slots.len() {
+            self.slots.retain(Option::is_some);
+            for (i, slot) in self.slots.iter().enumerate() {
+                if let Some((s, _)) = slot {
+                    self.at.insert(*s, i);
+                }
+            }
+        }
+        c
+    }
+    /// The sources, in the row's order.
+    fn sources(self) -> impl Iterator<Item = u128> {
+        self.slots.into_iter().flatten().map(|(s, _)| s)
+    }
+}
+
+/// A receiver's ChunkTrackingView: its centre and radius.
+type View = Option<([i32; 2], i32)>;
+
 /// ServerWaypointManager for one level.
 #[derive(Default)]
 pub struct Waypoints {
@@ -144,28 +189,35 @@ pub struct Waypoints {
     /// The receivers, in the order they joined.
     players: Vec<u128>,
     /// Connections by receiver, then source.
-    connections: HashMap<u128, Vec<(u128, Connection)>>,
+    connections: HashMap<u128, Row>,
     memo: HashMap<u128, Memo>,
     /// The `locator_bar` game rule as last seen.
     enabled: Option<bool>,
 }
 
-/// One tick's players, and the packets for their connections.
-struct Tick<'a> {
+/// What every row reads this tick: the players, read only.
+struct Shared<'a> {
     players: HashMap<u128, &'a Player>,
     /// The connections of the players in other levels: one who just left this level is
     /// still told of the waypoints it loses (`removePlayer` disconnects them).
     away: &'a [(u128, u32)],
-    view: HashMap<u128, ([i32; 2], i32)>,
     /// Players a respawn replaced this tick: a new ServerPlayer, on its first tick.
     fresh: &'a [u128],
     enabled: bool,
-    out: Vec<(u32, C)>,
 }
 
-impl<'a> Tick<'a> {
+/// One receiver's row as a connection to it changes: its view, and where its packets go.
+struct Receiving<'r> {
+    receiver: u128,
+    view: View,
+    row: &'r mut Row,
+    out: &'r mut Vec<(u32, C)>,
+}
+
+impl Shared<'_> {
     fn send(
-        &mut self,
+        &self,
+        out: &mut Vec<(u32, C)>,
         receiver: u128,
         source: u128,
         operation: i32,
@@ -185,20 +237,27 @@ impl<'a> Tick<'a> {
         else {
             return;
         };
-        self.out
-            .push((conn, waypoint(source, operation, icon, target)));
+        out.push((conn, waypoint(source, operation, icon, target)));
     }
-    fn connect(&mut self, receiver: u128, source: u128, c: &Connection) {
+    fn connect(&self, out: &mut Vec<(u32, C)>, receiver: u128, source: u128, c: &Connection) {
         let target = match c.kind {
             Kind::Block(p) => WaypointTarget::Block(p),
             Kind::Chunk(p) => WaypointTarget::Chunk(p),
             Kind::Azimuth(a) => WaypointTarget::Azimuth(a),
         };
-        self.send(receiver, source, waypoint_operation::TRACK, &c.icon, target);
+        self.send(
+            out,
+            receiver,
+            source,
+            waypoint_operation::TRACK,
+            &c.icon,
+            target,
+        );
     }
     /// `ClientboundTrackedWaypointPacket.removeWaypoint`: an empty waypoint with the null icon.
-    fn disconnect(&mut self, receiver: u128, source: u128) {
+    fn disconnect(&self, out: &mut Vec<(u32, C)>, receiver: u128, source: u128) {
         self.send(
+            out,
             receiver,
             source,
             waypoint_operation::UNTRACK,
@@ -207,8 +266,8 @@ impl<'a> Tick<'a> {
         );
     }
     /// `ChunkTrackingView.isInViewDistance` of the receiver's view.
-    fn chunk_visible(&self, [x, z]: [i32; 2], receiver: u128) -> bool {
-        let Some(&([cx, cz], r)) = self.view.get(&receiver) else {
+    fn chunk_visible(view: View, [x, z]: [i32; 2]) -> bool {
+        let Some(([cx, cz], r)) = view else {
             return false;
         };
         let dx = i64::from(((x - cx).abs() - 1).max(0));
@@ -236,11 +295,11 @@ impl<'a> Tick<'a> {
         horizon_core::geometry::trig::atan2(d[0], -d[2]) as f32
     }
     /// The source and the receiver, if both are in the level this tick.
-    fn pair(&self, source: u128, receiver: u128) -> Option<(&'a Player, &'a Player)> {
+    fn pair(&self, source: u128, receiver: u128) -> Option<(&Player, &Player)> {
         Some((*self.players.get(&source)?, *self.players.get(&receiver)?))
     }
     /// `LivingEntity.makeWaypointConnectionWith`.
-    fn make(&self, (s, r): (&Player, &Player)) -> Option<Connection> {
+    fn make(&self, view: View, (s, r): (&Player, &Player)) -> Option<Connection> {
         if s.first_tick || self.fresh.contains(&s.uuid) || s.uuid == r.uuid || self.ignores(s, r) {
             return None;
         }
@@ -251,7 +310,7 @@ impl<'a> Tick<'a> {
         }
         let kind = if Self::really_far(s, r) {
             Kind::Azimuth(Self::azimuth(s, r))
-        } else if !self.chunk_visible(s.chunk(), r.uuid) {
+        } else if !Self::chunk_visible(view, s.chunk()) {
             Kind::Chunk(s.chunk())
         } else {
             Kind::Block(s.block())
@@ -259,8 +318,7 @@ impl<'a> Tick<'a> {
         Some(Connection { kind, icon })
     }
     /// `Connection.isBroken` for each kind.
-    fn broken(&self, c: &Connection, (s, r): (&Player, &Player)) -> bool {
-        let receiver = r.uuid;
+    fn broken(&self, view: View, c: &Connection, (s, r): (&Player, &Player)) -> bool {
         match c.kind {
             Kind::Block(last) => {
                 let now = s.block();
@@ -269,17 +327,17 @@ impl<'a> Tick<'a> {
             Kind::Chunk(last) => {
                 let now = s.chunk();
                 let moved = (now[0] - last[0]).abs().max((now[1] - last[1]).abs());
-                moved > 1 || self.ignores(s, r) || self.chunk_visible(last, receiver)
+                moved > 1 || self.ignores(s, r) || Self::chunk_visible(view, last)
             }
             Kind::Azimuth(_) => {
                 self.ignores(s, r)
-                    || self.chunk_visible(s.chunk(), receiver)
+                    || Self::chunk_visible(view, s.chunk())
                     || !Self::really_far(s, r)
             }
         }
     }
     /// `Connection.update`: the packet when the waypoint moved.
-    fn update(&mut self, c: &mut Connection, (s, r): (&Player, &Player)) {
+    fn update(out: &mut Vec<(u32, C)>, c: &mut Connection, (s, r): (&Player, &Player)) {
         let target = match &mut c.kind {
             Kind::Block(last) => {
                 let now = s.block();
@@ -307,10 +365,61 @@ impl<'a> Tick<'a> {
             }
         };
         if let Some(conn) = r.conn {
-            self.out.push((
+            out.push((
                 conn,
                 waypoint(s.uuid, waypoint_operation::UPDATE, &c.icon, target),
             ));
+        }
+    }
+
+    /// `createConnection` on the receiver's row.
+    fn create_connection(&self, to: &mut Receiving, source: u128) {
+        let receiver = to.receiver;
+        if receiver == source || !self.enabled {
+            return;
+        }
+        match self
+            .pair(source, receiver)
+            .and_then(|pair| self.make(to.view, pair))
+        {
+            Some(c) => {
+                self.connect(to.out, receiver, source, &c);
+                to.row.put(source, c);
+            }
+            None => {
+                if to.row.take(source).is_some() {
+                    self.disconnect(to.out, receiver, source);
+                }
+            }
+        }
+    }
+    /// The receiver's connection to the source updated in its place
+    /// (`updateConnection`), or made if it has none (`createConnection`).
+    fn update_or_create(&self, to: &mut Receiving, source: u128) {
+        let receiver = to.receiver;
+        if receiver == source || !self.enabled {
+            return;
+        }
+        let pair = self.pair(source, receiver);
+        let Some(c) = to.row.get_mut(source) else {
+            return self.create_connection(to, source);
+        };
+        // A connection to a player who isn't in the level is broken.
+        if let Some(pair) = pair
+            && !self.broken(to.view, c, pair)
+        {
+            Self::update(to.out, c, pair);
+            return;
+        }
+        match pair.and_then(|pair| self.make(to.view, pair)) {
+            Some(new) => {
+                self.connect(to.out, receiver, source, &new);
+                *c = new;
+            }
+            None => {
+                self.disconnect(to.out, receiver, source);
+                to.row.take(source);
+            }
         }
     }
 }
@@ -325,68 +434,55 @@ fn waypoint(source: u128, operation: i32, icon: &Icon, target: WaypointTarget) -
     })
 }
 
+/// One tick's players, the receivers' views, and the packets for their connections.
+struct Tick<'a> {
+    s: Shared<'a>,
+    view: HashMap<u128, ([i32; 2], i32)>,
+    out: Vec<(u32, C)>,
+}
+
+impl Tick<'_> {
+    fn disconnect(&mut self, receiver: u128, source: u128) {
+        self.s.disconnect(&mut self.out, receiver, source);
+    }
+}
+
+/// A player who moved this tick, as each receiver's row meets the move
+/// ([`Waypoints::moves_by_receiver`]).
+struct Move {
+    uuid: u128,
+    /// It ticked since joining: its waypoint and its own connections are updated.
+    ticked: bool,
+    /// Its waypoint is tracked: every receiver's connection to it is updated.
+    transmits: bool,
+    receives: bool,
+    /// Its view's new centre, when it changed chunk.
+    new_view: View,
+}
+
+/// Players at which the moves are worked out on several threads, a share of the receivers each.
+const MOVES_BY_RECEIVER: usize = 32;
+
 impl Waypoints {
-    fn put(&mut self, receiver: u128, source: u128, c: Connection) {
-        let row = self.connections.entry(receiver).or_default();
-        match row.iter_mut().find(|(s, _)| *s == source) {
-            Some(slot) => slot.1 = c,
-            None => row.push((source, c)),
-        }
+    /// The receiver's row, its view and the tick's packets.
+    fn with_row(&mut self, t: &mut Tick, receiver: u128, f: impl FnOnce(&Shared, &mut Receiving)) {
+        let mut to = Receiving {
+            receiver,
+            view: t.view.get(&receiver).copied(),
+            row: self.connections.entry(receiver).or_default(),
+            out: &mut t.out,
+        };
+        f(&t.s, &mut to);
     }
     fn take(&mut self, receiver: u128, source: u128) -> Option<Connection> {
-        let row = self.connections.get_mut(&receiver)?;
-        let i = row.iter().position(|(s, _)| *s == source)?;
-        Some(row.remove(i).1)
+        self.connections.get_mut(&receiver)?.take(source)
     }
-
     /// `createConnection`.
     fn create_connection(&mut self, t: &mut Tick, receiver: u128, source: u128) {
-        if receiver == source || !t.enabled {
-            return;
-        }
-        match t.pair(source, receiver).and_then(|pair| t.make(pair)) {
-            Some(c) => {
-                t.connect(receiver, source, &c);
-                self.put(receiver, source, c);
-            }
-            None => {
-                if self.take(receiver, source).is_some() {
-                    t.disconnect(receiver, source);
-                }
-            }
-        }
+        self.with_row(t, receiver, |s, to| s.create_connection(to, source));
     }
-    /// The receiver's connection to the source updated in its place
-    /// (`updateConnection`), or made if it has none (`createConnection`).
     fn update_or_create(&mut self, t: &mut Tick, receiver: u128, source: u128) {
-        if receiver == source || !t.enabled {
-            return;
-        }
-        let Some(row) = self.connections.get_mut(&receiver) else {
-            return self.create_connection(t, receiver, source);
-        };
-        let Some(i) = row.iter().position(|(s, _)| *s == source) else {
-            return self.create_connection(t, receiver, source);
-        };
-        let c = &mut row[i].1;
-        // A connection to a player who isn't in the level is broken.
-        let pair = t.pair(source, receiver);
-        if let Some(pair) = pair
-            && !t.broken(c, pair)
-        {
-            t.update(c, pair);
-            return;
-        }
-        match pair.and_then(|pair| t.make(pair)) {
-            Some(new) => {
-                t.connect(receiver, source, &new);
-                *c = new;
-            }
-            None => {
-                t.disconnect(receiver, source);
-                row.remove(i);
-            }
-        }
+        self.with_row(t, receiver, |s, to| s.update_or_create(to, source));
     }
     /// `trackWaypoint`.
     fn track(&mut self, t: &mut Tick, source: u128) {
@@ -437,7 +533,12 @@ impl Waypoints {
     }
     /// `removePlayer`.
     fn remove_player(&mut self, t: &mut Tick, player: u128) {
-        for (source, _) in self.connections.remove(&player).unwrap_or_default() {
+        for source in self
+            .connections
+            .remove(&player)
+            .unwrap_or_default()
+            .sources()
+        {
             t.disconnect(player, source);
         }
         self.untrack(t, player);
@@ -446,7 +547,12 @@ impl Waypoints {
     /// `breakAllConnections`.
     fn break_all(&mut self, t: &mut Tick) {
         for receiver in self.players.clone() {
-            for (source, _) in self.connections.remove(&receiver).unwrap_or_default() {
+            for source in self
+                .connections
+                .remove(&receiver)
+                .unwrap_or_default()
+                .sources()
+            {
                 t.disconnect(receiver, source);
             }
         }
@@ -468,6 +574,10 @@ impl Waypoints {
 
     /// [`Self::tick`] for one level of several: `away` are the connections of the players
     /// in the other levels, for the untracks owed to one who has just left this one.
+    ///
+    /// Each connection's packets go to its receiver, so only their order for each receiver
+    /// matters: the packets of different receivers may come out interleaved differently
+    /// (the moves worked out by receiver), each receiver's never.
     pub fn tick_level(
         &mut self,
         players: &[Player],
@@ -475,19 +585,33 @@ impl Waypoints {
         respawned: &[u128],
         locator_bar: bool,
     ) -> Vec<(u32, C)> {
+        self.tick_with(players, away, respawned, locator_bar, MOVES_BY_RECEIVER)
+    }
+
+    /// [`Self::tick_level`], the moves worked out by receiver from `by_receiver` players on.
+    fn tick_with(
+        &mut self,
+        players: &[Player],
+        away: &[(u128, u32)],
+        respawned: &[u128],
+        locator_bar: bool,
+        by_receiver: usize,
+    ) -> Vec<(u32, C)> {
         let mut t = Tick {
-            players: players.iter().map(|p| (p.uuid, p)).collect(),
-            away,
+            s: Shared {
+                players: players.iter().map(|p| (p.uuid, p)).collect(),
+                away,
+                fresh: respawned,
+                enabled: locator_bar,
+            },
             view: HashMap::default(),
-            fresh: respawned,
-            enabled: locator_bar,
             out: Vec::new(),
         };
         // Vanilla reads the rule when it connects; changing it breaks or remakes
         // every connection (MinecraftServer.onGameRuleChanged).
         let was = self.enabled.replace(locator_bar);
         for (uuid, memo) in &self.memo {
-            if let Some(p) = t.players.get(uuid) {
+            if let Some(p) = t.s.players.get(uuid) {
                 t.view.insert(*uuid, (memo.view_center, p.view_distance));
             }
         }
@@ -496,7 +620,7 @@ impl Waypoints {
             .players
             .iter()
             .copied()
-            .filter(|uuid| !t.players.contains_key(uuid) || respawned.contains(uuid))
+            .filter(|uuid| !t.s.players.contains_key(uuid) || respawned.contains(uuid))
             .collect();
         for uuid in gone {
             self.remove_player(&mut t, uuid);
@@ -532,6 +656,16 @@ impl Waypoints {
             for player in self.players.clone() {
                 self.update_player(&mut t, player);
             }
+        }
+        // Nobody hid, showed or changed team: the moves alone, worked out by receiver.
+        if players.len() >= by_receiver
+            && players.iter().all(|p| {
+                let memo = &self.memo[&p.uuid];
+                (p.transmit_range > 0.0) == memo.transmitting && p.team == memo.team
+            })
+        {
+            self.moves_by_receiver(&mut t, players);
+            return t.out;
         }
         for p in players {
             let memo = &self.memo[&p.uuid];
@@ -575,6 +709,104 @@ impl Waypoints {
             }
         }
         t.out
+    }
+
+    /// The moves loop of [`Self::tick_with`] when nobody hid, showed or changed team, row by
+    /// row: a move changes the connections to the player who moved (in every receiver's row)
+    /// and that player's own row, and a row reads only itself, its receiver's view and the
+    /// players. So each receiver meets the moves in the loop's order on its own, on several
+    /// threads, and its packets come out as the loop sends them.
+    fn moves_by_receiver(&mut self, t: &mut Tick, players: &[Player]) {
+        let mut moves = Vec::new();
+        for player in players {
+            let memo = self
+                .memo
+                .get_mut(&player.uuid)
+                .expect("every player has a memo");
+            if memo.position == player.position {
+                continue;
+            }
+            memo.position = player.position;
+            let moved_view = memo.view_center != player.chunk();
+            if moved_view {
+                memo.view_center = player.chunk();
+            }
+            moves.push(Move {
+                uuid: player.uuid,
+                ticked: !player.first_tick,
+                transmits: memo.transmitting && self.waypoints.contains(&player.uuid),
+                receives: player.receive_range > 0.0,
+                new_view: moved_view.then(|| (player.chunk(), player.view_distance)),
+            });
+        }
+        if moves.is_empty() {
+            return;
+        }
+        // Every row a move reaches: the receivers', and those of movers who receive but aren't
+        // listed as receivers (`updatePlayer` runs on their own row all the same).
+        struct Job {
+            receiver: u128,
+            listed: bool,
+            view: View,
+            row: Row,
+            out: Vec<(u32, C)>,
+        }
+        let mut jobs: Vec<Job> = self
+            .players
+            .iter()
+            .map(|&receiver| (receiver, true))
+            .chain(
+                moves
+                    .iter()
+                    .filter(|m| m.receives && !self.players.contains(&m.uuid))
+                    .map(|m| (m.uuid, false)),
+            )
+            .map(|(receiver, listed)| Job {
+                receiver,
+                listed,
+                view: t.view.get(&receiver).copied(),
+                row: self.connections.remove(&receiver).unwrap_or_default(),
+                out: Vec::new(),
+            })
+            .collect();
+        let (s, waypoints, moves) = (&t.s, &self.waypoints, &moves);
+        horizon_threads::par_chunks_mut(&mut jobs, 8, |jobs| {
+            for job in jobs {
+                let mut to = Receiving {
+                    receiver: job.receiver,
+                    view: job.view,
+                    row: &mut job.row,
+                    out: &mut job.out,
+                };
+                for m in moves {
+                    if m.uuid != job.receiver {
+                        // `updateWaypoint`: this receiver's connection to the mover.
+                        if job.listed && m.ticked && m.transmits {
+                            s.update_or_create(&mut to, m.uuid);
+                        }
+                        continue;
+                    }
+                    // `updatePlayer` before and after the view follows the move.
+                    if m.ticked && m.receives {
+                        for &source in waypoints {
+                            s.update_or_create(&mut to, source);
+                        }
+                    }
+                    if m.new_view.is_some() {
+                        to.view = m.new_view;
+                    }
+                    if m.receives {
+                        for &source in waypoints {
+                            s.update_or_create(&mut to, source);
+                        }
+                    }
+                }
+            }
+        });
+        for job in jobs {
+            t.out.extend(job.out);
+            self.connections.insert(job.receiver, job.row);
+        }
     }
 }
 
@@ -678,6 +910,98 @@ mod tests {
         assert_eq!(
             to(&out, 20),
             vec![(waypoint_operation::UNTRACK, WaypointTarget::Empty)]
+        );
+    }
+
+    /// Each connection's packets as bytes, in the order it is sent them.
+    fn by_conn(out: &[(u32, C)]) -> std::collections::BTreeMap<u32, Vec<Vec<u8>>> {
+        let mut by = std::collections::BTreeMap::<u32, Vec<Vec<u8>>>::new();
+        for (conn, packet) in out {
+            by.entry(*conn).or_default().push(packet.encode());
+        }
+        by
+    }
+
+    /// The moves worked out by receiver give every connection the bytes the one loop gives,
+    /// in its order: crowds walking, crossing chunks and going far, with joins, leaves,
+    /// respawns, hiding, team changes, spectators and the rule switched (which take the loop).
+    #[test]
+    fn moves_by_receiver_match_the_loop() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let mut sent = 0;
+        for level in 0..40 {
+            let (mut serial, mut by_receiver) = (Waypoints::default(), Waypoints::default());
+            let count = 2 + next(60) as u32;
+            let spread = [4.0, 40.0, 400.0, 4000.0][level % 4];
+            let mut players: Vec<Player> = (0..count)
+                .map(|i| {
+                    let mut p = player(
+                        u128::from(i) * 7 + 1,
+                        100 + i,
+                        [
+                            (next(1000) as f64 / 1000.0 - 0.5) * spread,
+                            64.0,
+                            (next(1000) as f64 / 1000.0 - 0.5) * spread,
+                        ],
+                    );
+                    p.view_distance = 2 + next(10) as i32;
+                    p.first_tick = next(4) == 0;
+                    p
+                })
+                .collect();
+            let mut joined = count;
+            for tick in 0..30 {
+                let mut respawned = Vec::new();
+                let calm = tick % 3 != 0;
+                for p in &mut players {
+                    p.first_tick = p.first_tick && next(3) == 0;
+                    if next(4) != 0 {
+                        let step = if next(20) == 0 { spread } else { 1.5 };
+                        p.position[0] += (next(1000) as f64 / 1000.0 - 0.5) * step;
+                        p.position[2] += (next(1000) as f64 / 1000.0 - 0.5) * step;
+                    }
+                    if !calm {
+                        match next(40) {
+                            0 => {
+                                p.transmit_range = if p.transmit_range > 0.0 {
+                                    0.0
+                                } else {
+                                    PLAYER_RANGE
+                                }
+                            }
+                            1 => p.team = Some(("red".into(), team_rgb("red"))),
+                            2 => p.team = None,
+                            3 => p.spectator = !p.spectator,
+                            4 => respawned.push(p.uuid),
+                            _ => {}
+                        }
+                    }
+                }
+                if !calm && next(3) == 0 && players.len() > 2 {
+                    players.remove(next(players.len() as u64) as usize);
+                }
+                if !calm && next(3) == 0 {
+                    joined += 1;
+                    let mut p = player(u128::from(joined) * 7 + 1, 100 + joined, [0.5, 64.0, 0.5]);
+                    p.first_tick = true;
+                    players.push(p);
+                }
+                let rule = calm || next(10) != 0;
+                let a = serial.tick_with(&players, &[], &respawned, rule, usize::MAX);
+                let b = by_receiver.tick_with(&players, &[], &respawned, rule, 0);
+                sent += a.len();
+                assert_eq!(by_conn(&a), by_conn(&b), "level {level}, tick {tick}");
+            }
+        }
+        assert!(
+            sent > 10_000,
+            "the crowds were sent their waypoints ({sent})"
         );
     }
 

@@ -15,7 +15,10 @@
 //! `level.dat`) are migrated on open.
 mod backpressure;
 mod block_entity_order;
+mod far_regions;
 mod respawn;
+mod writes;
+use writes::{Outstanding, Writer};
 
 use crate::{
     Result,
@@ -749,7 +752,7 @@ pub fn encode_block_entity(
                         .collect(),
                 ),
             ));
-            entries.push(("triggered", Tag::Int(i32::from(c.triggered))));
+            entries.push(("triggered", Tag::Int(c.triggered)));
             entries.push(("crafting_ticks_remaining", Tag::Int(c.crafting_ticks)));
         }
         BlockEntity::Banner(b) => {
@@ -941,7 +944,7 @@ fn decode_mod_block_entity(id: String, tag: &Tag) -> Option<crate::containers::M
 }
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
-    let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
+    let int = |k: &str| tag.get(k).and_then(crate::nbt_path::int_value); // getIntOr
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
     if id.contains(':') && !id.starts_with("minecraft:") {
@@ -1124,7 +1127,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
                     }
                 }
             }
-            c.triggered = int("triggered").unwrap_or(0) != 0;
+            c.triggered = int("triggered").unwrap_or(0);
             c.state_triggered = None;
             c.crafting_ticks = int("crafting_ticks_remaining").unwrap_or(0);
         }
@@ -2113,6 +2116,8 @@ const MAX_OPEN_REGIONS: usize = 256;
 struct RegionFiles {
     regions: HashMap<(i32, i32), (Option<Arc<Mutex<RegionFile>>>, u64)>,
     clock: u64,
+    /// Each region's write stamp (`far_regions::writing`).
+    written: HashMap<(i32, i32), u64>,
 }
 impl RegionFiles {
     #[cfg(test)]
@@ -2213,6 +2218,7 @@ fn write_region_records(
             continue;
         };
         let mut region = region.lock().map_err(|_| "region file poisoned")?;
+        let _writing = far_regions::writing(cache, (rx, rz));
         let mut changed = false;
         for (pos, record) in &list {
             match record {
@@ -2500,21 +2506,6 @@ impl Folder {
     }
 }
 
-/// The background thread that encodes chunks and writes them into the region files, in
-/// submission order.
-struct Writer {
-    send: mpsc::Sender<WriteBatch>,
-    thread: std::thread::JoinHandle<()>,
-}
-
-/// Writes still queued or running, with a condition to wait for none.
-#[derive(Default)]
-struct Outstanding {
-    count: Mutex<usize>,
-    chunks: AtomicUsize,
-    error: Mutex<Option<String>>,
-    done: Condvar,
-}
 /// One dimension folder (`dimensions/minecraft/<name>`). Region files are
 /// read lazily by worker threads.
 pub struct SaveDir {
@@ -2530,8 +2521,8 @@ pub struct SaveDir {
     pub tables: OnceLock<Arc<SaveTables>>,
     /// The dimension's skylight and height, from its folder name.
     pub shape: LevelShape,
-    /// Which chunks each region file holds, for far terrain (`lod_saved`).
-    lod_regions: Mutex<crate::fast_hash::FxHashMap<(i32, i32), LodRegion>>,
+    /// The region file headers kept for far readers (`far_record`).
+    far_regions: far_regions::FarRegions,
     /// Saved chunks decoded for far terrain, shared by its sampling threads
     /// (`lod_surfaces_shared`), oldest first.
     lod_decoded: Mutex<LodDecoded>,
@@ -2557,15 +2548,6 @@ struct LodDecoded {
 /// for how long: edits saved later show after it.
 const LOD_DECODED: usize = 1024;
 const LOD_DECODED_TTL: std::time::Duration = std::time::Duration::from_secs(30);
-/// A region file's saved chunks (bit `x + z * 32`), `None` without the file,
-/// as of `checked`.
-struct LodRegion {
-    checked: std::time::Instant,
-    chunks: Option<[u64; 16]>,
-}
-/// How long far terrain trusts a region file's chunk list: chunks saved after
-/// it was read show in the far view this long after.
-const LOD_REGION_TTL: std::time::Duration = std::time::Duration::from_secs(10);
 impl SaveDir {
     /// This dimension's server-owned mod attachments: `data/horizon/attachments.dat`, Horizon's
     /// own namespace. A file that doesn't read is moved aside to `attachments.dat.corrupt`, with
@@ -2633,7 +2615,7 @@ impl SaveDir {
             outstanding: Default::default(),
             tables: OnceLock::new(),
             shape,
-            lod_regions: Default::default(),
+            far_regions: Default::default(),
             lod_decoded: Default::default(),
             datafix_context: OnceLock::new(),
             blending_lookup: OnceLock::new(),
@@ -2750,40 +2732,6 @@ impl SaveDir {
         put(&mut data, "tickets", Tag::List(tickets));
         write_saved_data(&self.root, "chunk_tickets", data)
     }
-    /// Whether chunk `x z` is in its region file, from a chunk list kept
-    /// `LOD_REGION_TTL`. Far terrain asks for every column of the view: it
-    /// opened the region file each time, also where there is none, which
-    /// held the far view back for minutes.
-    fn lod_saved(&self, x: i32, z: i32) -> bool {
-        let key = (x >> 5, z >> 5);
-        let mut regions = self.lod_regions.lock().unwrap();
-        let fresh = regions
-            .get(&key)
-            .is_some_and(|region| region.checked.elapsed() < LOD_REGION_TTL);
-        if !fresh {
-            let chunks = RegionFile::open(self.region_path("region", key.0, key.1))
-                .ok()
-                .map(|region| {
-                    let mut bits = [0u64; 16];
-                    for (pos, _) in region.chunks() {
-                        let index = ((pos.x & 31) + (pos.z & 31) * 32) as usize;
-                        bits[index / 64] |= 1 << (index % 64);
-                    }
-                    bits
-                });
-            regions.insert(
-                key,
-                LodRegion {
-                    checked: std::time::Instant::now(),
-                    chunks,
-                },
-            );
-        }
-        let index = ((x & 31) + (z & 31) * 32) as usize;
-        regions[&key]
-            .chunks
-            .is_some_and(|bits| bits[index / 64] & (1 << (index % 64)) != 0)
-    }
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
         region_path(&self.root, folder, rx, rz)
     }
@@ -2840,38 +2788,55 @@ impl SaveDir {
     }
     /// A record as saved: the pending write first, then the region file.
     fn read_record_raw(&self, folder: &str, x: i32, z: i32) -> Option<NamedTag> {
+        self.try_read_record_raw(folder, x, z).ok().flatten()
+    }
+    /// `read_record_raw`, telling a record that isn't there (`Ok(None)`) from a read that failed
+    /// (`Err`, already reported): the second may succeed on a later read.
+    fn try_read_record_raw(
+        &self,
+        folder: &str,
+        x: i32,
+        z: i32,
+    ) -> std::result::Result<Option<NamedTag>, ()> {
         let pending = self
             .pending
             .lock()
-            .ok()?
+            .map_err(|_| ())?
             .get(&(Folder::of(folder), x, z))
             .map(|(_, r)| r.clone());
         if let Some(record) = pending {
-            return record.tag().map(|t| (*t).clone());
+            return Ok(record.tag().map(|t| (*t).clone()));
         }
         let cache = match Folder::of(folder) {
             Folder::Region => &self.regions,
             Folder::Entities => &self.entity_regions,
             Folder::Poi => &self.poi_regions,
         };
-        match read_region_record(&self.root, cache, folder, x, z) {
-            Ok(record) => record,
+        read_region_record(&self.root, cache, folder, x, z).map_err(|e| {
+            crate::chunk_io::report_load_failure(&self.root, x, z, &e);
+        })
+    }
+    /// A record brought to the current version (`upgrade_record`); `Err` when that failed.
+    fn try_read_record(
+        &self,
+        folder: &str,
+        x: i32,
+        z: i32,
+    ) -> std::result::Result<Option<NamedTag>, ()> {
+        let Some(mut record) = self.try_read_record_raw(folder, x, z)? else {
+            return Ok(None);
+        };
+        match self.upgrade_record(Folder::of(folder), &mut record) {
+            Ok(()) => Ok(Some(record)),
             Err(e) => {
                 crate::chunk_io::report_load_failure(&self.root, x, z, &e);
-                None
+                Err(())
             }
         }
     }
     /// A record brought to the current version (`upgrade_record`).
     fn read_record(&self, folder: &str, x: i32, z: i32) -> Option<NamedTag> {
-        let mut record = self.read_record_raw(folder, x, z)?;
-        match self.upgrade_record(Folder::of(folder), &mut record) {
-            Ok(()) => Some(record),
-            Err(e) => {
-                crate::chunk_io::report_load_failure(&self.root, x, z, &e);
-                None
-            }
-        }
+        self.try_read_record(folder, x, z).ok().flatten()
     }
     fn upgrade_record(&self, folder: Folder, record: &mut NamedTag) -> Result<()> {
         upgrade_record(folder, record, || {
@@ -2881,15 +2846,31 @@ impl SaveDir {
         })
     }
     pub fn load(&self, x: i32, z: i32, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
-        let root = self.read_record("region", x, z)?;
+        self.try_load(x, z, registry, biomes).ok().flatten()
+    }
+    /// `load`, telling a chunk that isn't saved as a full chunk (`Ok(None)`) from a read that
+    /// failed (`Err`): a later read may succeed.
+    fn try_load(
+        &self,
+        x: i32,
+        z: i32,
+        registry: &BlockRegistry,
+        biomes: &Biomes,
+    ) -> std::result::Result<Option<Chunk>, ()> {
+        let Some(root) = self.try_read_record("region", x, z)? else {
+            return Ok(None);
+        };
         let tables = self.tables.get().map(|t| &**t);
-        let mut chunk = decode_with(&root, registry, biomes, tables, self.shape.column())?;
+        let Some(mut chunk) = decode_with(&root, registry, biomes, tables, self.shape.column())
+        else {
+            return Ok(None);
+        };
         load_light(&root.tag, &mut chunk, self.shape.sky_light);
         chunk.entities = horizon_world::chunk::legacy_entities(&root.tag);
-        Some(chunk)
+        Ok(Some(chunk))
     }
     /// A saved full chunk read for a player's far ring (`lan::far`), as `load` but past the gameplay
-    /// region cache, and only where the region file lists it (no file opened where there is none).
+    /// region cache (`far_record`).
     pub fn load_far(
         &self,
         x: i32,
@@ -2897,27 +2878,7 @@ impl SaveDir {
         registry: &BlockRegistry,
         biomes: &Biomes,
     ) -> Option<Chunk> {
-        let pending = self
-            .pending
-            .lock()
-            .ok()?
-            .get(&(Folder::Region, x, z))
-            .map(|(_, record)| record.clone());
-        let root = if let Some(record) = pending {
-            record.tag().map(|tag| (*tag).clone())?
-        } else {
-            if !self.lod_saved(x, z) {
-                return None;
-            }
-            let mut region = RegionFile::open(self.region_path("region", x >> 5, z >> 5)).ok()?;
-            let mut root = region
-                .read(ChunkPos::new(x, z))
-                .ok()??
-                .nbt(Limits::default())
-                .ok()?;
-            self.upgrade_record(Folder::Region, &mut root).ok()?;
-            root
-        };
+        let root = self.far_record(x, z)?;
         let tables = self.tables.get().map(|t| &**t);
         let mut chunk = decode_with(&root, registry, biomes, tables, self.shape.column())?;
         load_light(&root.tag, &mut chunk, self.shape.sky_light);
@@ -2973,172 +2934,6 @@ impl SaveDir {
             out.extend(list.iter().cloned());
         }
         out
-    }
-    /// Queue `records` for the writer thread; with `wait`, return once
-    /// they and every earlier write are on disk.
-    fn write_records(
-        &self,
-        folder: &str,
-        records: Vec<((i32, i32), Option<NamedTag>)>,
-        wait: bool,
-    ) -> Result<()> {
-        let records = records
-            .into_iter()
-            .map(|(k, t)| (k, t.map_or(Record::Delete, |t| Record::Tag(Arc::new(t)))))
-            .collect();
-        self.queue(Folder::of(folder), records, wait)
-    }
-    fn queue(&self, folder: Folder, records: Vec<((i32, i32), Record)>, wait: bool) -> Result<()> {
-        if !records.is_empty() {
-            let mut batch = Vec::with_capacity(records.len());
-            {
-                let mut pending = self.pending.lock().map_err(|_| "pending writes poisoned")?;
-                for (key, record) in records {
-                    let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
-                    pending.insert((folder, key.0, key.1), (seq, record.clone()));
-                    batch.push((key, record, seq));
-                }
-            }
-            *self
-                .outstanding
-                .count
-                .lock()
-                .map_err(|_| "writer poisoned")? += 1;
-            let mut writer = self.writer.lock().map_err(|_| "writer poisoned")?;
-            let writer = writer.get_or_insert_with(|| self.start_writer());
-            let chunks = if folder == Folder::Region {
-                batch.len()
-            } else {
-                0
-            };
-            self.outstanding.chunks.fetch_add(chunks, Ordering::Relaxed);
-            if writer.send.send((folder, batch)).is_err() {
-                self.outstanding.chunks.fetch_sub(chunks, Ordering::Relaxed);
-                *self
-                    .outstanding
-                    .error
-                    .lock()
-                    .map_err(|_| "writer poisoned")? = Some("the region writer stopped".into());
-                *self
-                    .outstanding
-                    .count
-                    .lock()
-                    .map_err(|_| "writer poisoned")? -= 1;
-                self.outstanding.done.notify_all();
-                return Err("the region writer stopped".into());
-            }
-        }
-        if wait {
-            self.flush()?;
-        }
-        Ok(())
-    }
-    fn start_writer(&self) -> Writer {
-        let (send, receive) = mpsc::channel::<WriteBatch>();
-        let root = self.root.clone();
-        let (regions, entity_regions, poi_regions) = (
-            self.regions.clone(),
-            self.entity_regions.clone(),
-            self.poi_regions.clone(),
-        );
-        let pending = self.pending.clone();
-        let outstanding = self.outstanding.clone();
-        let thread = std::thread::Builder::new()
-            .name("horizon-region-writer".into())
-            .spawn(move || {
-                for (kind, batch) in receive {
-                    let cache = match kind {
-                        Folder::Region => &regions,
-                        Folder::Entities => &entity_regions,
-                        Folder::Poi => &poi_regions,
-                    };
-                    let folder = kind.name();
-                    // IOWorker.pendingWrites: a chunk queued again since is
-                    // written once, by its newest batch.
-                    let newest = |k: &(i32, i32), seq: u64| {
-                        pending.lock().map_or(true, |p| {
-                            p.get(&(kind, k.0, k.1)).is_none_or(|p| p.0 <= seq)
-                        })
-                    };
-                    let resolved: Vec<_> = batch
-                        .iter()
-                        .filter(|(k, _, seq)| newest(k, *seq))
-                        .filter_map(|(k, r, _)| Some((*k, resolve_poi(&root, cache, *k, r)?)))
-                        .collect();
-                    let records: Vec<_> = resolved.iter().map(|(k, r)| (*k, r)).collect();
-                    let result = write_region_records(&root, cache, folder, &records);
-                    if let Err(e) = &result {
-                        let message = format!("failed to write {folder} files: {e}");
-                        log::warn!("Horizon: {message}");
-                        *outstanding.error.lock().unwrap() = Some(message);
-                        // `reportChunkSaveFailure` for each chunk of the batch.
-                        for (k, _, _) in &batch {
-                            crate::chunk_io::report_save_failure(&root, k.0, k.1, e);
-                        }
-                    }
-                    // Keep failed snapshots readable; never report them as durable.
-                    if result.is_ok()
-                        && let Ok(mut pending) = pending.lock()
-                    {
-                        for (k, _, seq) in &batch {
-                            if pending.get(&(kind, k.0, k.1)).is_some_and(|p| p.0 == *seq) {
-                                pending.remove(&(kind, k.0, k.1));
-                            }
-                        }
-                    }
-                    if kind == Folder::Region {
-                        outstanding.chunks.fetch_sub(batch.len(), Ordering::Relaxed);
-                    }
-                    if let Ok(mut count) = outstanding.count.lock() {
-                        *count -= 1;
-                        outstanding.done.notify_all();
-                    }
-                }
-            })
-            .expect("spawn region writer");
-        Writer { send, thread }
-    }
-    /// Wait until every queued write is on disk.
-    pub fn flush(&self) -> Result<()> {
-        let mut count = self
-            .outstanding
-            .count
-            .lock()
-            .map_err(|_| "writer poisoned")?;
-        while *count > 0 {
-            count = self
-                .outstanding
-                .done
-                .wait(count)
-                .map_err(|_| "writer poisoned")?;
-        }
-        self.write_result()
-    }
-    /// `ChunkMap.activeChunkWrites`: chunk records, excluding entity/POI IO.
-    pub fn active_chunk_writes(&self) -> usize {
-        self.outstanding.chunks.load(Ordering::Relaxed)
-    }
-    /// Poll durability without holding up the event loop. Errors remain visible
-    /// to every waiter, including a later synchronous shutdown.
-    pub fn writes_finished(&self) -> Result<bool> {
-        let count = self
-            .outstanding
-            .count
-            .lock()
-            .map_err(|_| "writer poisoned")?;
-        self.write_result()?;
-        Ok(*count == 0)
-    }
-    fn write_result(&self) -> Result<()> {
-        match &*self
-            .outstanding
-            .error
-            .lock()
-            .map_err(|_| "writer poisoned")?
-        {
-            Some(error) => Err(error.clone().into()),
-            None => Ok(()),
-        }
     }
     /// Write `chunks` into their region files and wait until they are on disk.
     pub fn save(
@@ -3226,16 +3021,6 @@ impl SaveDir {
             })
             .collect();
         self.write_records("entities", records, wait)
-    }
-}
-
-impl Drop for SaveDir {
-    /// Finish queued writes before the world is let go.
-    fn drop(&mut self) {
-        if let Some(writer) = self.writer.get_mut().ok().and_then(Option::take) {
-            drop(writer.send);
-            let _ = writer.thread.join();
-        }
     }
 }
 
@@ -3640,8 +3425,8 @@ pub enum WorldPreset {
     Amplified,
     SingleBiomeSurface,
     /// `minecraft:debug_all_block_states`: a grid of every block state
-    /// (`DebugLevelSource`). The create screen does not offer it; a data
-    /// pack, `level-type` or a saved world names it.
+    /// (`DebugLevelSource`). The create screen offers it only with Alt held;
+    /// a data pack, `level-type` or a saved world names it too.
     Debug,
 }
 impl WorldPreset {
@@ -5005,33 +4790,35 @@ impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
     }
 }
 
-/// Read one palette index without expanding the other entries in the section.
-fn lod_palette_index(
-    container: &Tag,
-    index: usize,
-    entries: usize,
-    minimum_bits: u32,
-) -> Option<usize> {
-    let Tag::List(palette) = container.get("palette")? else {
-        return None;
+/// Unpack a section's paletted container into `out` (4096 blocks or 64 biome
+/// cells): each entry's palette index as stored, unchecked. Returns the
+/// palette's length, `None` for a container vanilla does not write. Once a
+/// section: far terrain looked both up by name for each block (#6386).
+fn lod_palette_indices(container: &Tag, out: &mut [u16], minimum_bits: u32) -> Option<usize> {
+    let palette = match container.get("palette")? {
+        Tag::List(palette) if (1..=out.len()).contains(&palette.len()) => palette,
+        _ => return None,
     };
-    if palette.is_empty() || palette.len() > entries || index >= entries {
-        return None;
-    }
     if palette.len() == 1 {
-        return Some(0);
+        out.fill(0);
+        return Some(1);
     }
-    let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(minimum_bits);
-    let per_word = 64 / bits as usize;
+    let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(minimum_bits) as usize;
+    let per_word = 64 / bits;
     let Tag::LongArray(data) = container.get("data")? else {
         return None;
     };
-    if data.len() != entries.div_ceil(per_word) {
+    if data.len() != out.len().div_ceil(per_word) {
         return None;
     }
-    let value = ((data[index / per_word] as u64 >> ((index % per_word) * bits as usize))
-        & ((1 << bits) - 1)) as usize;
-    (value < palette.len()).then_some(value)
+    for (word, indices) in data.iter().zip(out.chunks_mut(per_word)) {
+        let mut word = *word as u64;
+        for index in indices {
+            *index = (word & ((1 << bits) - 1)) as u16;
+            word >>= bits;
+        }
+    }
+    Some(palette.len())
 }
 fn lod_light_layers(sections: &[(i32, &Tag)], layout: ColumnLayout, sky_light: bool) -> Box<[u8]> {
     let mut layers = vec![(None, None); layout.sections()];
@@ -5111,6 +4898,7 @@ fn decode_lod_surfaces(
     let mut water = [None; 256];
     let light = lod_light_layers(&sections, layout, sky_light);
     let mut states = BTreeMap::new();
+    let mut indices = [0u16; 4096];
     for (section_y, section) in sections {
         if let Some(blocks) = section.get("block_states") {
             let Tag::List(palette) = blocks.get("palette")? else {
@@ -5150,45 +4938,42 @@ fn decode_lod_surfaces(
                     }))
                 })
                 .collect::<Option<_>>()?;
-            let biome_palette: Vec<_> = section
-                .get("biomes")
-                .and_then(|container| match container.get("palette")? {
-                    Tag::List(palette) => Some(palette),
-                    _ => None,
-                })
-                .into_iter()
-                .flatten()
-                .map(|entry| match entry {
-                    Tag::String(name) => biomes.id(&name.to_string_lossy()),
-                    _ => 0,
-                })
-                .collect();
+            let length = lod_palette_indices(blocks, &mut indices, 4)?;
+            if indices.iter().any(|&index| usize::from(index) >= length) {
+                return None;
+            }
+            // The air above the ground, mostly: nothing here is far terrain.
+            if !palette.iter().flatten().any(|&(_, _, kept)| kept) {
+                continue;
+            }
+            // Each 4x4x4 cell's biome; 0 where the section's biomes do not say.
+            let mut cell_biomes = [0u16; 64];
+            if let Some(container) = section.get("biomes")
+                && let Some(Tag::List(names)) = container.get("palette")
+                && lod_palette_indices(container, &mut cell_biomes, 1).is_some()
+            {
+                let ids: Vec<u16> = names
+                    .iter()
+                    .map(|entry| match entry {
+                        Tag::String(name) => biomes.id(&name.to_string_lossy()),
+                        _ => 0,
+                    })
+                    .collect();
+                for biome in &mut cell_biomes {
+                    *biome = ids.get(usize::from(*biome)).copied().unwrap_or(0);
+                }
+            }
             for z in 0..16 {
                 for x in 0..16 {
                     let cell = z * 16 + x;
                     let column = &mut columns[cell];
                     for y in (0..16).rev() {
-                        let index = y * 256 + cell;
-                        let palette_index = lod_palette_index(blocks, index, 4096, 4)?;
-                        let Some((state, fluid, kept)) = palette[palette_index] else {
+                        let Some((state, fluid, true)) =
+                            palette[usize::from(indices[y * 256 + cell])]
+                        else {
                             continue;
                         };
-                        if !kept {
-                            continue;
-                        }
-                        let biome = section
-                            .get("biomes")
-                            .and_then(|container| {
-                                lod_palette_index(
-                                    container,
-                                    (y / 4) * 16 + (z / 4) * 4 + x / 4,
-                                    64,
-                                    1,
-                                )
-                            })
-                            .and_then(|index| biome_palette.get(index))
-                            .copied()
-                            .unwrap_or(0);
+                        let biome = cell_biomes[(y / 4) * 16 + (z / 4) * 4 + x / 4];
                         let height = section_y * 16 + y as i32 + 1;
                         if column.surface.is_none() {
                             if fluid {
@@ -5270,28 +5055,7 @@ impl SaveDir {
         assets: &crate::assets::Assets,
         biomes: &Biomes,
     ) -> Option<LodSurfaces> {
-        let pending = self
-            .pending
-            .lock()
-            .ok()?
-            .get(&(Folder::Region, x, z))
-            .map(|(_, record)| record.clone());
-        let root = if let Some(record) = pending {
-            record.tag().map(|tag| (*tag).clone())?
-        } else {
-            if !self.lod_saved(x, z) {
-                return None;
-            }
-            // Far-only reads must not populate the gameplay region cache across the whole view.
-            let mut region = RegionFile::open(self.region_path("region", x >> 5, z >> 5)).ok()?;
-            let mut root = region
-                .read(ChunkPos::new(x, z))
-                .ok()??
-                .nbt(Limits::default())
-                .ok()?;
-            self.upgrade_record(Folder::Region, &mut root).ok()?;
-            root
-        };
+        let root = self.far_record(x, z)?;
         // Proto saves may still be missing decoration from their neighbors.
         if text(root.tag.get("Status"))
             .is_some_and(|status| status != "minecraft:full" && status != "full")
@@ -6376,12 +6140,165 @@ mod tests {
             ("palette", Tag::List(vec![Tag::Byte(0), Tag::Byte(1)])),
             ("data", Tag::LongArray(vec![0; 256])),
         ]);
-        assert_eq!(lod_palette_index(&states, 4095, 4096, 4), Some(0));
-        assert_eq!(lod_palette_index(&states, 4096, 4096, 4), None);
-        put(&mut states, "data", Tag::LongArray(vec![15; 256]));
-        assert_eq!(lod_palette_index(&states, 0, 4096, 4), None);
+        let mut indices = [9u16; 4096];
+        assert_eq!(lod_palette_indices(&states, &mut indices, 4), Some(2));
+        assert_eq!(indices, [0; 4096]);
+        // Two palette entries take 4 bits a block, 16 blocks a long: block 17
+        // is the second of the second long, block 4095 the last of the last.
+        let mut data = vec![0i64; 256];
+        data[1] = 0x10;
+        data[255] = 1 << 60;
+        put(&mut states, "data", Tag::LongArray(data));
+        assert_eq!(lod_palette_indices(&states, &mut indices, 4), Some(2));
+        let set: Vec<usize> = (0..4096).filter(|&i| indices[i] != 0).collect();
+        assert_eq!(set, [17, 4095]);
+        assert_eq!((indices[17], indices[4095]), (1, 1));
         put(&mut states, "data", Tag::LongArray(vec![0; 255]));
-        assert_eq!(lod_palette_index(&states, 0, 4096, 4), None);
+        assert_eq!(lod_palette_indices(&states, &mut indices, 4), None);
+        put(&mut states, "palette", Tag::List(Vec::new()));
+        assert_eq!(lod_palette_indices(&states, &mut indices, 4), None);
+        // One entry needs no data; the biomes' 64 cells pack from 1 bit.
+        let one = Tag::compound([("palette", Tag::List(vec![Tag::Byte(0)]))]);
+        let mut cells = [9u16; 64];
+        assert_eq!(lod_palette_indices(&one, &mut cells, 1), Some(1));
+        assert_eq!(cells, [0; 64]);
+        let three = Tag::compound([
+            ("palette", Tag::List(vec![Tag::Byte(0); 3])),
+            // 2 bits a cell, 32 cells a long: cell 1 is 2, cell 33 is 1.
+            ("data", Tag::LongArray(vec![0b1000, 0b0100])),
+        ]);
+        assert_eq!(lod_palette_indices(&three, &mut cells, 1), Some(3));
+        assert_eq!((cells[0], cells[1], cells[33], cells[63]), (0, 2, 1, 0));
+    }
+
+    #[test]
+    fn saved_far_surface_checks_packed_indices_against_their_palettes() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        let forest = biomes.id("minecraft:forest");
+        let desert = biomes.id("minecraft:desert");
+        assert!(forest != 0 && desert != 0 && forest != desert);
+        // One section, y 0..16. Blocks: air and stone, 4 bits a block.
+        // Biomes: three of them, 2 bits a 4x4x4 cell, 32 cells a long.
+        let chunk = |blocks: Vec<i64>, cells: i64| NamedTag {
+            name: "".into(),
+            tag: Tag::compound([(
+                "sections",
+                Tag::List(vec![Tag::compound([
+                    ("Y", Tag::Byte(0)),
+                    (
+                        "block_states",
+                        Tag::compound([
+                            (
+                                "palette",
+                                Tag::List(vec![
+                                    Tag::String("minecraft:air".into()),
+                                    Tag::String("minecraft:stone".into()),
+                                ]),
+                            ),
+                            ("data", Tag::LongArray(blocks)),
+                        ]),
+                    ),
+                    (
+                        "biomes",
+                        Tag::compound([
+                            (
+                                "palette",
+                                Tag::List(vec![
+                                    Tag::String("minecraft:forest".into()),
+                                    Tag::String("minecraft:desert".into()),
+                                    Tag::String("minecraft:plains".into()),
+                                ]),
+                            ),
+                            ("data", Tag::LongArray(vec![cells, 0])),
+                        ]),
+                    ),
+                ])]),
+            )]),
+        };
+        let decode = |root: &NamedTag| {
+            decode_lod_surfaces(root, &assets, &biomes, LevelShape::OVERWORLD.column(), true)
+        };
+        // Stone in the bottom layer (the first 256 blocks, 16 a long).
+        let mut blocks = vec![0i64; 256];
+        blocks[..16].fill(0x1111_1111_1111_1111);
+        // The first cell (x 0..4) is desert, the second (x 4..8) names a
+        // fourth biome the palette does not have, the others are forest.
+        let columns = decode(&chunk(blocks.clone(), 0b1101)).expect("a valid section");
+        let surface = |x: usize| columns[x].surface.unwrap();
+        assert_eq!((surface(0).height, surface(0).state), (1, stone));
+        assert_eq!(surface(0).biome, desert);
+        assert_eq!(surface(4).biome, 0, "an index past the palette is no biome");
+        assert_eq!(surface(8).biome, forest);
+        // The last block names a third state the palette does not have.
+        blocks[255] = 2 << 60;
+        assert!(
+            decode(&chunk(blocks, 0b1101)).is_none(),
+            "a block index past the palette makes no far columns"
+        );
+    }
+
+    /// #6386: far terrain looked a section's palette and data up by name for
+    /// each of its 4096 blocks, and its biomes again for each block it kept:
+    /// milliseconds for one saved chunk, most of them over the air above the
+    /// ground, on every far sampling thread.
+    #[test]
+    fn saved_far_surface_reads_a_section_once_not_once_a_block() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let dandelion = assets
+            .registry
+            .default_state("minecraft:dandelion")
+            .unwrap();
+        // A flower in each section and air around it: nothing far terrain
+        // keeps, so what is left to pay is reading the sections' blocks, as
+        // loading the chunk for play does.
+        let mut chunk = Chunk::empty(3, -5);
+        for section in 0..chunk.sections.len() as i32 {
+            chunk.set(8, MIN_Y + section * 16 + 8, 8, dandelion.0);
+        }
+        let saved = encode(&chunk, assets.registry, &biomes);
+        let layout = LevelShape::OVERWORLD.column();
+        let far = || decode_lod_surfaces(&saved, &assets, &biomes, layout, true);
+        let columns = far().expect("far columns");
+        assert!(
+            columns
+                .iter()
+                .all(|column| column.surface.is_none() && column.spans.is_empty()),
+            "a flower is no far terrain"
+        );
+        // The fastest of several runs of each, taken in turns, so that a busy
+        // machine does not decide.
+        let time = |run: &dyn Fn()| {
+            let started = std::time::Instant::now();
+            run();
+            started.elapsed()
+        };
+        let (mut far_time, mut load_time) = (std::time::Duration::MAX, std::time::Duration::MAX);
+        for _ in 0..25 {
+            far_time = far_time.min(time(&|| {
+                std::hint::black_box(far());
+            }));
+            load_time = load_time.min(time(&|| {
+                std::hint::black_box(decode_with(&saved, assets.registry, &biomes, None, layout));
+            }));
+        }
+        // Measured, optimized and not: 3 to 8 loads (the light layers come on
+        // top of the blocks), and 100 to 300 with a lookup by name for each
+        // block.
+        assert!(
+            far_time <= load_time * 32,
+            "the far columns of a chunk took {far_time:?}, loading it {load_time:?}"
+        );
     }
 
     #[test]
@@ -6722,7 +6639,7 @@ mod tests {
         let mut crafter = crate::containers::Crafter::default();
         crafter.items[2] = Some(crate::items::ItemStack::new("minecraft:stick", 5));
         crafter.disabled[4] = true;
-        crafter.triggered = true;
+        crafter.triggered = 1;
         crafter.crafting_ticks = 3;
         let tag = encode_block_entity(
             (7, 8, 9),
@@ -6736,9 +6653,49 @@ mod tests {
         };
         assert_eq!(back.items[2].as_ref().map(|s| s.count), Some(5));
         assert!(back.disabled[4] && !back.disabled[3]);
-        assert!(back.triggered);
+        assert!(back.is_triggered());
         assert_eq!(back.crafting_ticks, 3);
         assert_eq!(back.redstone_signal(), 2);
+    }
+    /// `triggered` is an int vanilla saves as it is and calls triggered only at 1, so other
+    /// values come back unchanged and untriggered.
+    #[test]
+    fn crafter_triggered_keeps_the_whole_int() {
+        for value in [0, 1, 5, -1, 65537] {
+            let crafter = crate::containers::Crafter {
+                triggered: value,
+                ..Default::default()
+            };
+            let tag = encode_block_entity(
+                (0, 0, 0),
+                &crate::containers::BlockEntity::Crafter(crafter),
+                "minecraft:crafter",
+            );
+            let (_, back) = decode_block_entity(&tag).expect("crafter");
+            let crate::containers::BlockEntity::Crafter(back) = back else {
+                panic!("not a crafter");
+            };
+            assert_eq!(back.triggered, value);
+            assert_eq!(back.is_triggered(), value == 1, "triggered {value}");
+        }
+    }
+    #[test]
+    fn crafter_triggered_double_load_floors_and_saturates() {
+        for (value, expected) in [(-0.5_f64, -1), (1.5, 1), (4294967297.0, i32::MAX)] {
+            let tag = Tag::compound([
+                ("id", string("minecraft:crafter")),
+                ("x", Tag::Int(0)),
+                ("y", Tag::Int(0)),
+                ("z", Tag::Int(0)),
+                ("triggered", Tag::Double(value.to_bits())),
+            ]);
+            let (_, back) = decode_block_entity(&tag).expect("crafter");
+            let crate::containers::BlockEntity::Crafter(back) = back else {
+                panic!("not a crafter");
+            };
+            assert_eq!(back.triggered, expected, "triggered {value}d");
+            assert_eq!(back.is_triggered(), expected == 1, "triggered {value}d");
+        }
     }
     #[test]
     fn campfire_block_entity_round_trips() {

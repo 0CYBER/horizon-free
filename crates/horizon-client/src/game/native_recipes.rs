@@ -149,7 +149,7 @@ impl Game<'_> {
     /// recipe book places: every grid slot gets the same count, capped at the
     /// ingredients' stack size, alternatives (tags) shared out as vanilla's
     /// `StackedItemContents` does. A server from before `all` ignores it.
-    /// API @API:transfer_recipe_all@.
+    /// API 623.
     pub(super) fn native_transfer_recipe_all(&mut self, book_id: i32, all: bool) {
         self.transfer_viewer_recipe(book_id, all);
     }

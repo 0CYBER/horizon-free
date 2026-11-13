@@ -111,9 +111,11 @@ impl Game<'_> {
         let Some(replay) = g.replay.as_deref_mut() else {
             return;
         };
-        // Ticks no longer kept (a server that stalled for seconds): wait for the next teleport.
+        // Ticks no longer kept (a server that stalled for seconds), or one that couldn't be played:
+        // start again from the server's own position for the guest, excused until the moves agree
+        // (at most DRIFT ticks), instead of going unchecked until the next teleport.
         let Some(over) = replay.catch_up(record, server, tolerance, &mut run) else {
-            g.replay = None;
+            g.replay = Some(Box::new(Replay::rebased(server, g.position, record)));
             return;
         };
         if over.ticks == 0 || waiting {

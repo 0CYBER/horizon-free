@@ -1279,6 +1279,9 @@ pub struct ChatScreen {
     /// `CommandSuggestions.setRestrictions`: what the Chat option allows.
     pub abilities: ChatAbilities,
     pub layout: SuggestLayout,
+    /// `MouseHandler.lastClick`: a click within 250 ms of the last one on
+    /// this screen is a double click.
+    last_click: Option<std::time::Instant>,
 }
 /// Local completions waiting for the server's reply to request `id`.
 struct Awaiting {
@@ -1401,6 +1404,7 @@ impl ChatScreen {
             auto_suggestions: true,
             abilities,
             layout: SuggestLayout::CHAT,
+            last_click: None,
         };
         s.update_command_info(m, c);
         s
@@ -1439,6 +1443,7 @@ impl ChatScreen {
             auto_suggestions: true,
             abilities: ChatAbilities::new(ChatVisibility::Full),
             layout: SuggestLayout::COMMAND_BLOCK,
+            last_click: None,
         };
         s.update_command_info(m, c);
         s
@@ -1966,8 +1971,15 @@ impl ChatScreen {
             }
             self.suggestions = Some(l);
         }
+        // MouseHandler: the same screen's click within 250 ms is a double
+        // click, which selects the word under the pointer.
+        let now = std::time::Instant::now();
+        let double = self
+            .last_click
+            .is_some_and(|at| now.duration_since(at).as_millis() < 250);
+        self.last_click = Some(now);
         if self.input.contains(x, y) {
-            self.input.click(m, x, false);
+            self.input.click(m, x, false, double);
             return true;
         }
         false

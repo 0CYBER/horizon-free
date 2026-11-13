@@ -1,5 +1,5 @@
 //! Safe async task offloading API for native mods using a dedicated worker pool.
-//! API @API:mod_async_worker@.
+//! API 636.
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -109,7 +109,7 @@ impl NativeTasks {
             .unwrap_or_default()
     }
 
-    /// Submit a background job to the dedicated mod worker pool. API @API:mod_async_worker@.
+    /// Submit a background job to the dedicated mod worker pool. API 636.
     pub(crate) fn spawn_background_job(&self, job: Box<dyn FnOnce() + Send + 'static>) {
         let mod_call = crate::crash::current_native_mod();
         spawn_pool_job(Box::new(move || {
@@ -118,7 +118,7 @@ impl NativeTasks {
         }));
     }
 
-    /// Defer a callback to run on this game's thread during `native_tick`. API @API:mod_async_worker@.
+    /// Defer a callback to run on this game's thread during `native_tick`. API 636.
     pub(crate) fn defer_main_thread(&self, callback: TaskCallback) {
         let mod_call = crate::crash::current_native_mod();
         if let Ok(mut q) = self.callbacks.lock() {
@@ -129,7 +129,7 @@ impl NativeTasks {
     /// Offload heavy computation to the dedicated mod worker pool and run `callback` on this
     /// game's thread during `native_tick`.
     /// Panics in the background task or main-thread callback are caught and reported per mod.
-    /// API @API:mod_async_worker@.
+    /// API 636.
     pub(crate) fn spawn_task(
         &self,
         task: Box<dyn FnOnce() + Send + 'static>,
@@ -153,18 +153,18 @@ impl NativeTasks {
 }
 
 impl Game<'_> {
-    /// Submit a background job to the dedicated mod worker pool. API @API:mod_async_worker@.
+    /// Submit a background job to the dedicated mod worker pool. API 636.
     pub(super) fn native_spawn_background_job(&self, job: Box<dyn FnOnce() + Send + 'static>) {
         self.native_tasks.spawn_background_job(job);
     }
 
-    /// Defer a callback to run on this game's thread during `native_tick`. API @API:mod_async_worker@.
+    /// Defer a callback to run on this game's thread during `native_tick`. API 636.
     pub(super) fn native_defer_main_thread(&self, callback: TaskCallback) {
         self.native_tasks.defer_main_thread(callback);
     }
 
     /// Offload heavy computation to the dedicated mod worker pool and run `callback` on this
-    /// game's thread during `native_tick`. API @API:mod_async_worker@.
+    /// game's thread during `native_tick`. API 636.
     pub(super) fn native_spawn_task(
         &self,
         task: Box<dyn FnOnce() + Send + 'static>,

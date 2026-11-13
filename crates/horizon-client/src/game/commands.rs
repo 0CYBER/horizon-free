@@ -1593,7 +1593,7 @@ impl Game<'_> {
                 // in it (whose chunks lose their tickets) is abandoned.
                 if let Some(conn) = self.lan_acting {
                     horizon_client::lan::hub::teleport_cause(Some("command"));
-                    self.server_trips.retain(|trip| !trip.is(conn));
+                    self.hold_for_chunks(conn, v);
                 }
                 let from = self
                     .player

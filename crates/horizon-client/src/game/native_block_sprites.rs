@@ -33,7 +33,7 @@ impl Game<'_> {
     /// `native_draw_quad` take, and that face's
     /// tint index (-1 for none): a copycat block drawing a box of its material's textures with `native_draw_cube`,
     /// kept with `BlockEntityDraw::keep`. The face culled against that side comes first, else the first facing it;
-    /// None when the model has no face that way or isn't baked. API @API:block_face_sprite@.
+    /// None when the model has no face that way or isn't baked. API 420.
     pub(super) fn native_block_face_sprite(
         &self,
         state: BlockStateId,
@@ -60,7 +60,7 @@ impl Game<'_> {
     }
     /// For a client mod: every block state by its id, with its facts, what its model draws on each side and the
     /// texture behind each sprite, as the resources loaded now; a copy to keep and use on any thread. Ask again when
-    /// `native_block_sprites_version` changes. API @API:block_appearance@.
+    /// `native_block_sprites_version` changes. API 457.
     pub(super) fn native_block_states(&self) -> BlockStates {
         BlockStates::new(
             self.res.facts(),
@@ -71,7 +71,7 @@ impl Game<'_> {
     }
     /// For a client mod: the files of the resources loaded now, resource packs' over vanilla's, to read textures
     /// and other resources on any thread. Ask again when `native_block_sprites_version` changes. API
-    /// @API:block_appearance@.
+    /// 457.
     pub(super) fn native_client_resources(&self) -> ClientResources {
         ClientResources::new(self.options.resources.clone())
     }

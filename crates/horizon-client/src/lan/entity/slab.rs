@@ -114,6 +114,31 @@ impl ServerEntities {
         self.order[index].1
     }
 
+    /// The entities of this tick's `indices` (in that order, each once), each borrowed on its
+    /// own, so they can be worked on apart.
+    pub(super) fn of_indices_mut(&mut self, indices: &[usize]) -> Vec<&mut ServerEntity> {
+        let mut wanted: Vec<(u32, usize)> = indices
+            .iter()
+            .enumerate()
+            .map(|(k, &index)| (self.slot_of_index(index), k))
+            .collect();
+        wanted.sort_unstable();
+        let mut out: Vec<Option<&mut ServerEntity>> = indices.iter().map(|_| None).collect();
+        let mut wanted = wanted.into_iter().peekable();
+        for (slot, entry) in self.slots.iter_mut().enumerate() {
+            let Some(&(next, k)) = wanted.peek() else {
+                break;
+            };
+            if next as usize == slot {
+                wanted.next();
+                out[k] = entry.as_mut().map(|(_, s)| s);
+            }
+        }
+        out.into_iter()
+            .map(|s| s.expect("each index is a live slot, met once"))
+            .collect()
+    }
+
     /// Keeps only the entities `keep` says to.
     pub(super) fn retain(&mut self, mut keep: impl FnMut(&ServerEntity) -> bool) {
         for (slot, entry) in self.slots.iter_mut().enumerate() {

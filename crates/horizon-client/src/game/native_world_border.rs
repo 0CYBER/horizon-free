@@ -13,7 +13,7 @@ impl Game<'_> {
     /// every level today, so the three levels answer the same bounds, and
     /// this follows when that changes. None off a server and for a dimension
     /// other than the Overworld, the Nether and the End. API
-    /// @API:world_border@.
+    /// 515.
     pub(super) fn native_world_border(&self, dimension: &str) -> Option<[f64; 4]> {
         let known = matches!(
             dimension,

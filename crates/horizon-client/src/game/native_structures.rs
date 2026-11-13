@@ -42,7 +42,7 @@ impl Game<'_> {
     /// `/place template` picks at `at`; no processor runs, and the template's
     /// entities are left out. None for an id that doesn't parse or has a `.`
     /// or `..` part, a template the game doesn't have, and on a client.
-    /// API @API:structure_template@.
+    /// API 433.
     pub(super) fn native_structure_template(
         &mut self,
         id: &str,

@@ -316,7 +316,7 @@ impl ItemStack {
     /// The stack `ItemStack.CODEC` reads from `tag` (`id`, `count`,
     /// `components`), as `item_nbt::item_from_nbt` does; None for air or an
     /// id that is no valid identifier. The id is not looked up in a registry.
-    /// API @API:item_from_snbt@.
+    /// API 527.
     pub fn from_nbt(tag: &horizon_world::nbt::Compound) -> Option<Self> {
         crate::item_nbt::item_from_nbt(&Tag::Compound(tag.clone()))
     }

@@ -18,7 +18,7 @@ impl Game<'_> {
     /// The actual animated block sprite is sampled with mipmaps. Faces are sorted, alpha blended,
     /// back culled and write ordinary color/depth, with sky light retained and block luminosity
     /// raised to the fluid's (lava 15). No model diffuse shade, geometry inset or alpha cutoff.
-    /// API @API:fluid_render@.
+    /// API 563.
     pub(super) fn native_draw_fluid_box(
         &self,
         draw: &mut BlockEntityDraw,

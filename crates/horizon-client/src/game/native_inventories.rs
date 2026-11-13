@@ -338,7 +338,7 @@ impl Game<'_> {
     /// `native_inventory` and the helpers above read and change it; when they
     /// join, they load it as a returning player. Err: no world, the player on
     /// the server (`Online`), a file already (`HasFile`), or the file cannot
-    /// be written (`File`). API @API:create_player_file@.
+    /// be written (`File`). API 599.
     pub(super) fn native_create_player_file(
         &mut self,
         uuid: u128,
@@ -381,7 +381,7 @@ impl Game<'_> {
     /// nothing moves and the Err says why. Each side is live or its file
     /// (`native_inventory`); at most one may be a file, which is written
     /// before the live side changes. Their screens follow with the tick's
-    /// sync. Typed helpers: API @API:inventory_typed@.
+    /// sync. Typed helpers: API 601.
     pub(super) fn native_move_stack_typed(
         &mut self,
         from: (u128, NativeInventoryKind, usize),
@@ -485,7 +485,7 @@ impl Game<'_> {
     /// inventory loaded from elsewhere. Live or their file, as
     /// `native_inventory`; a player on the server is sent their whole
     /// inventory at once. Err as `native_inventory`, or for a wrong number
-    /// of slots or a `selected` past the hotbar. @API:set_inventory@.
+    /// of slots or a `selected` past the hotbar. 508.
     pub(super) fn native_set_inventory_typed(
         &mut self,
         uuid: u128,
@@ -531,7 +531,7 @@ impl Game<'_> {
     /// there (Bukkit's `setItem`, checked like `native_move_stack`). Live or
     /// their file; a player's screen follows with the tick's sync. Err as
     /// `native_inventory`, for no such slot, or when the slot changed.
-    /// @API:set_inventory_slot@.
+    /// 509.
     pub(super) fn native_set_inventory_slot_typed(
         &mut self,
         uuid: u128,
@@ -555,7 +555,7 @@ impl Game<'_> {
     /// or none, and returns them in order. Live or their file; a player's
     /// screen follows with the tick's sync. Err as `native_inventory`, for a
     /// slot named twice, or when one changed (nothing is taken then).
-    /// @API:set_inventory_slot@.
+    /// 509.
     pub(super) fn native_take_stacks_typed(
         &mut self,
         uuid: u128,
@@ -618,7 +618,7 @@ impl Game<'_> {
 
     /// `inventory_changed` for the players on the server: each of their
     /// inventory kinds whose slots differ from what the mods last heard is
-    /// heard once (`native_inventory_changed`; API @API:inventory_changed@), after the players' equipment
+    /// heard once (`native_inventory_changed`; API 600), after the players' equipment
     /// in each tick. A player new to the server counts from empty, as for
     /// equipment. A player away is not checked: changes made to their file
     /// come from the mods' own calls.
@@ -737,7 +737,7 @@ impl Game<'_> {
     }
 }
 
-/// Another player's inventory in a menu, for server mods. API @API:inventory_menu@.
+/// Another player's inventory in a menu, for server mods. API 526.
 #[allow(dead_code)]
 impl Game<'_> {
     /// Opens a chest menu of `rows` rows titled `title` for the player
@@ -760,7 +760,7 @@ impl Game<'_> {
     /// inventory and the ender chest), a layout longer than the rows' slots, a slot number
     /// past the inventory or one shown twice, and inside a player's turn
     /// (call it from `native_menu_clicked` or `native_server_tick`).
-    /// API @API:inventory_menu@.
+    /// API 526.
     pub(super) fn native_open_inventory_menu(
         &mut self,
         viewer: u128,

@@ -201,7 +201,7 @@ pub(super) fn inside(p: (f32, f32), [x, y, w, h]: [f32; 4]) -> bool {
 impl Game<'_> {
     /// How mod `mod_id`'s panel draws its page buttons and search box from
     /// now on (`NativePanelStyle`; the recipe book's until it says). Kept for
-    /// the session, whether or not its panel is showing. API @API:panel_style@.
+    /// the session, whether or not its panel is showing. API 622.
     pub(super) fn native_panel_style(&mut self, mod_id: &str, style: NativePanelStyle) {
         self.panel.set_style(mod_id, style);
     }

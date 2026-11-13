@@ -414,7 +414,7 @@ impl Game<'_> {
     /// A line in chat as that player, disguised: no signature, named as the player is shown, to
     /// every player who shows chat (a mod's character, a bot's line). `line` keeps its styling,
     /// so click and hover events work as in `native_tell`. False when the player isn't on, and
-    /// inside a player's hook, where the hub is out of reach. API @API:chat_as@.
+    /// inside a player's hook, where the hub is out of reach. API 606.
     pub(super) fn native_chat_as(&self, uuid: u128, line: Text) -> bool {
         let Some(host) = &self.lan else {
             return false;
@@ -589,7 +589,7 @@ impl Game<'_> {
     /// another id (hide them again from `native_player_logged_in`). Only
     /// where no player's state is swapped in, as `native_run_command`; false
     /// there, when `viewer` isn't on and for their own entity. API
-    /// @API:hide_entity_from@.
+    /// 523.
     pub(super) fn native_hide_entity_from(
         &mut self,
         viewer: u128,
@@ -628,7 +628,7 @@ impl Game<'_> {
     /// later (they join, a vanish ends), so it is kept until a mod sets it
     /// again or the server stops, also if they leave and come back. Only
     /// where no player's state is swapped in, as `native_run_command`; false
-    /// there and when they aren't on. API @API:set_list_name@.
+    /// there and when they aren't on. API 552.
     pub(super) fn native_set_list_name(&mut self, uuid: u128, name: Option<&Text>) -> bool {
         let Some(host) = &mut self.lan else {
             return false;
@@ -650,7 +650,7 @@ impl Game<'_> {
     /// or the nickname. Kept until a mod sets it again or the server stops,
     /// also if they leave and come back. Only where no player's state is
     /// swapped in, as `native_run_command`; false there and when they aren't
-    /// on. API @API:set_display_name@.
+    /// on. API 551.
     pub(super) fn native_set_display_name(&mut self, uuid: u128, name: Option<&Text>) -> bool {
         let Some(host) = &mut self.lan else {
             return false;
@@ -677,7 +677,7 @@ impl Game<'_> {
     /// mod sets it again or the server stops, also if they leave and come
     /// back. Only where no player's state is swapped in, as
     /// `native_run_command`; false there, when they aren't on and for a tag
-    /// that isn't one. API @API:set_name_tag@.
+    /// that isn't one. API 553.
     pub(super) fn native_set_name_tag(&mut self, uuid: u128, tag: Option<&str>) -> bool {
         if tag.is_some_and(|t| {
             t.is_empty() || t.len() > 16 || !t.bytes().all(|b| b.is_ascii_graphic())
@@ -722,7 +722,7 @@ impl Game<'_> {
     }
     /// A system line in every player's chat, as `native_broadcast` sends it
     /// but neither in the server's log nor past the mods' `broadcast_message`
-    /// hook (a mod's own line, which it logs itself). API @API:join_leave_helpers@.
+    /// hook (a mod's own line, which it logs itself). API 608.
     pub(super) fn native_broadcast_quiet(&self, line: Text) {
         self.send_system_line(&line);
     }
@@ -737,24 +737,24 @@ impl Game<'_> {
     }
     /// The open world's folder name, which is the level name the server
     /// opened (`level-name` in server.properties on a dedicated server).
-    /// None when no world is open. API @API:level_name@.
+    /// None when no world is open. API 617.
     pub(super) fn native_level_name(&self) -> Option<String> {
         self.world_root.file_name()?.to_str().map(str::to_owned)
     }
     /// The dimension a world folder holds: `world` is `minecraft:overworld`,
     /// `world_nether` `minecraft:the_nether`, `world_the_end` `minecraft:the_end`
     /// (the folder names Bukkit's default worlds use). None for any other
-    /// name. API @API:level_name@.
+    /// name. API 617.
     pub(super) fn native_dimension_of_world(&self, world: &str) -> Option<String> {
         dimension_of_world(world).map(str::to_owned)
     }
     /// The world folder name that holds `dimension` (the reverse of
-    /// `native_dimension_of_world`); None for any other dimension id. API @API:level_name@.
+    /// `native_dimension_of_world`); None for any other dimension id. API 617.
     pub(super) fn native_world_of_dimension(&self, dimension: &str) -> Option<String> {
         world_of_dimension(dimension).map(str::to_owned)
     }
     /// The server's motd from server.properties, as the list ping shows it;
-    /// empty when no server runs. API @API:join_leave_helpers@.
+    /// empty when no server runs. API 608.
     pub(super) fn native_motd(&self) -> String {
         self.lan
             .as_ref()
@@ -763,20 +763,20 @@ impl Game<'_> {
     }
     /// Whether the dedicated server runs in online mode (`online-mode` of server.properties):
     /// its players sign in with their accounts. None off a dedicated server and before it listens.
-    /// API @API:server_settings@.
+    /// API 641.
     pub(super) fn native_online_mode(&self) -> Option<bool> {
         Some(online_mode_of(&self.dedicated_lan()?.shared.config))
     }
     /// The port the dedicated server listens on: `server-port` of server.properties, or the
     /// `--port` it was started with. None off a dedicated server and before it listens.
-    /// API @API:server_settings@.
+    /// API 641.
     pub(super) fn native_server_port(&self) -> Option<u16> {
         Some(self.dedicated_lan()?.port)
     }
     /// How the dedicated server takes its players from a proxy: `"velocity"` when it signs the
     /// forwarded player information with `forwarding.secret` (offline mode behind Velocity),
     /// `"none"` when it doesn't; None off a dedicated server and before it listens. The secret
-    /// itself is never returned. API @API:server_settings@.
+    /// itself is never returned. API 641.
     pub(super) fn native_proxy_forwarding(&self) -> Option<&'static str> {
         Some(proxy_forwarding_of(&self.dedicated_lan()?.shared.config))
     }
@@ -787,14 +787,14 @@ impl Game<'_> {
     }
     /// Whether a player has played on the open world before: their player
     /// data file is there (`players/data/<uuid>.dat`). False when no world
-    /// is open. API @API:join_leave_helpers@.
+    /// is open. API 608.
     pub(super) fn native_has_played_before(&self, uuid: u128) -> bool {
         !self.world_root.as_os_str().is_empty()
             && horizon_client::lan::playerdata::path(&self.world_root, uuid).is_file()
     }
 
     /// Writes a line to the server's log at `level` (`INFO`, `WARN` or
-    /// `ERROR`), in the console's format on a dedicated server. API @API:server_log@.
+    /// `ERROR`), in the console's format on a dedicated server. API 583.
     pub(super) fn native_log(&self, level: &str, line: &str) {
         if self.options.dedicated.is_some() {
             super::dedicated::log(level, line);
@@ -809,7 +809,7 @@ impl Game<'_> {
     /// Adds a player to the dedicated server's whitelist (`whitelist add`
     /// in the console, the file saved as it does). True when they were not
     /// on it; false when no dedicated server runs or they already are.
-    /// API @API:whitelist_edit@.
+    /// API 586.
     pub(super) fn native_whitelist_add(&self, uuid: u128, name: &str) -> bool {
         let Some(lists) = &self.server_lists else {
             return false;
@@ -828,7 +828,7 @@ impl Game<'_> {
     /// Removes a player from the dedicated server's whitelist (`whitelist
     /// remove`); with the whitelist on, the players no longer on it are
     /// disconnected. True when they were on it; false when no dedicated
-    /// server runs or they were not. API @API:whitelist_edit@.
+    /// server runs or they were not. API 586.
     pub(super) fn native_whitelist_remove(&mut self, uuid: u128, name: &str) -> bool {
         let Some(lists) = self.server_lists.clone() else {
             return false;
@@ -923,7 +923,7 @@ impl Game<'_> {
     /// player it hears, whose level is set by then: a login gate needs no
     /// `ops.json` of its own. Inside a player's hook, with the hub out of
     /// reach, only that player is found. None for a player who isn't on, and
-    /// on a client. API @API:player_permission@.
+    /// on a client. API 485.
     pub(super) fn native_player_permission(&self, player: u128) -> Option<u8> {
         if let Some((uuid, level)) = self.native_login_permission
             && uuid == player
@@ -980,7 +980,7 @@ impl Game<'_> {
     /// anything else to vanilla's. The lines it answers with come back in
     /// `output` and reach no one else, operators included. Only where
     /// `native_run_command` runs: inside a player's hook nothing runs. API
-    /// @API:run_command_captured@.
+    /// 502.
     pub(super) fn native_run_command_captured(&mut self, line: &str) -> NativeCommandResult {
         let mut out = NativeCommandResult::default();
         if self.lan_acting.is_some() || self.lan.is_none() {
@@ -1019,14 +1019,14 @@ impl Game<'_> {
     /// `Bukkit.dispatchCommand` from the console): a command a mod registered
     /// goes to the mods (`native_perform_console_command`), anything else to
     /// vanilla's. Whether it ran: a mod took it, or vanilla's ran without
-    /// failing. No output, as `native_run_command`. API @API:run_mod_command@.
+    /// failing. No output, as `native_run_command`. API 503.
     pub(super) fn native_run_mod_command(&mut self, line: &str) -> bool {
         self.native_run_command_captured(line).ran
     }
     /// The server's command `label` names (Bukkit's `CommandMap.getCommand`):
     /// one a mod registered (`native_register_commands`), else vanilla's, an
     /// alias resolved (`tp` gives `teleport`). None when there is none.
-    /// API @API:command_info@.
+    /// API 461.
     pub(super) fn native_command_info(&self, label: &str) -> Option<NativeCommandInfo> {
         let label = label.strip_prefix('/').unwrap_or(label);
         if let Some(host) = &self.lan
@@ -1056,7 +1056,7 @@ impl Game<'_> {
     /// `output`. `native_player_command` doesn't hear it. Where
     /// `native_run_command` runs, or inside that player's own hook (then the
     /// lines join the hook's feedback); elsewhere, or for a player not on the
-    /// server, nothing runs. API @API:run_command_as@.
+    /// server, nothing runs. API 501.
     pub(super) fn native_run_command_as(&mut self, uuid: u128, line: &str) -> NativeCommandResult {
         let mut out = NativeCommandResult::default();
         let line = line.strip_prefix('/').unwrap_or(line).to_owned();
@@ -1625,7 +1625,7 @@ impl Game<'_> {
     /// commands players may run are rebuilt, and every player on the server is
     /// sent their tree again, after `native_player_commands_sent`. Nothing
     /// happens where no world is open to players, and nothing for a server
-    /// whose mods never call it. API @API:refresh_commands@.
+    /// whose mods never call it. API 447.
     pub(super) fn native_refresh_commands(&mut self) {
         self.native_commands_refresh = true;
     }

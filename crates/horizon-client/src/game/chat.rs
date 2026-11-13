@@ -1057,7 +1057,7 @@ impl Game<'_> {
         self.capture(false);
     }
     /// The open chat box's text and its cursor, counted in characters; `None`
-    /// while the chat screen isn't open. API @API:chat_input@.
+    /// while the chat screen isn't open. API 559.
     #[allow(dead_code)]
     pub(super) fn native_chat_input(&self) -> Option<(String, usize)> {
         let screen = self.ui.chat_screen.as_ref()?;
@@ -1067,7 +1067,7 @@ impl Game<'_> {
     /// (characters, clamped to the text), as an edit: completions refresh as
     /// they do for typing. What typing can't put in the box isn't put there
     /// either (`chat_box_text`), and the 256-character limit holds. An error
-    /// while the chat screen isn't open. API @API:chat_input@.
+    /// while the chat screen isn't open. API 559.
     #[allow(dead_code)]
     pub(super) fn native_set_chat_input(
         &mut self,

@@ -291,10 +291,15 @@ impl SceneCollisions<'_, '_> {
     }
     fn context(&self, bounds: Aabb) -> CollisionContext<'static> {
         let y = bounds.min_position().y;
-        if !self
-            .subject
-            .is_some_and(|s| s.lava_walker || s.leather_boots)
-        {
+        // An entity context is needed wherever PowderSnowBlock or a strider
+        // reads the entity: boots, the walkable tag, a long fall.
+        if !self.subject.is_some_and(|s| {
+            s.lava_walker
+                || s.leather_boots
+                || s.walkable_type
+                || s.falling_block
+                || s.fall_distance > 2.5
+        }) {
             return CollisionContext::position(y);
         }
         CollisionContext::for_entity(

@@ -355,7 +355,7 @@ fn mem(m: &mut Mob) -> &mut Memories {
 fn cant_reach(m: &mut Mob) -> &mut Slot<i64> {
     &mut mem(m).cant_reach_walk_target_since
 }
-fn mem_ref(m: &Mob) -> Option<&Memories> {
+pub(super) fn mem_ref(m: &Mob) -> Option<&Memories> {
     brain(m).map(|b| &b.mem)
 }
 
@@ -3502,7 +3502,7 @@ fn play_work_sound(m: &mut Mob, cx: &mut Bx) {
     }
 }
 /// `WorkAtPoi.start`'s restock.
-fn restock_if_due(m: &mut Mob, w: &MobWorld) {
+pub(super) fn restock_if_due(m: &mut Mob, w: &MobWorld) {
     let day = w.day_time.div_euclid(24000);
     if let Some(t) = m.extra.trade.as_mut()
         && t.should_restock(w.game_time, day)

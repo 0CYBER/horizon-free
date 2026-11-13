@@ -8,7 +8,7 @@ use super::{Dim, Game};
 use crate::mod_api::NativeChunkLoad;
 
 #[cfg(test)]
-mod native_chunk_load_tests;
+pub(super) mod native_chunk_load_tests;
 
 // Native mods use these; nothing in Horizon does.
 impl Game<'_> {
@@ -55,7 +55,7 @@ impl Game<'_> {
     /// `native_chunk_load_release` for the same `owner`, namespaced as
     /// there. Poll `native_chunk_load_state`. True when this owner's request
     /// is new; false when it already had one or the request is refused. API
-    /// @API:chunk_load_async@.
+    /// 626.
     pub(super) fn native_chunk_load_request(
         &mut self,
         owner: &str,
@@ -66,7 +66,7 @@ impl Game<'_> {
     }
 
     /// Where `owner`'s request for `chunk` of `dimension` stands
-    /// (`NativeChunkLoad`). Loads nothing. API @API:chunk_load_async@.
+    /// (`NativeChunkLoad`). Loads nothing. API 626.
     pub(super) fn native_chunk_load_state(
         &self,
         owner: &str,
@@ -91,7 +91,7 @@ impl Game<'_> {
     /// Whether chunk `chunk` of the level `dimension` is loaded now, in
     /// place or in a level open with nobody in it. Loads and generates
     /// nothing, and a level not open stays closed. False off a server. API
-    /// @API:chunk_load_async@.
+    /// 626.
     pub(super) fn native_chunk_is_loaded(&self, dimension: &str, chunk: [i32; 2]) -> bool {
         let Some(dim) = native_dim(dimension).filter(|_| self.native_authoritative()) else {
             return false;
@@ -108,7 +108,7 @@ impl Game<'_> {
 
     /// Lets go of `owner`'s request for `chunk` of `dimension`, so the chunk
     /// can unload again once nothing else (a player, `/forceload`, another
-    /// owner) holds it. True when `owner` had one. API @API:chunk_load_async@.
+    /// owner) holds it. True when `owner` had one. API 626.
     pub(super) fn native_chunk_load_release(
         &mut self,
         owner: &str,

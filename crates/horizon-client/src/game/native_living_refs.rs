@@ -1,7 +1,7 @@
 //! Living entities for native server mods, through a `LivingRef`
 //! (docs/native-mods.md, "Entity and level handles", #7387): the equipment
 //! of mobs, players and armor stands. Reads return `None`, writes false, for
-//! a stale handle. On a client (API @API:client_entity_refs@) reads give the
+//! a stale handle. On a client (API 428) reads give the
 //! equipment the server synced (`ClientboundSetEquipmentPacket`, and this
 //! window's own inventory), and writes are refused.
 use super::Game;

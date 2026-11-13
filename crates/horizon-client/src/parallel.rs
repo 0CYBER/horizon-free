@@ -225,6 +225,52 @@ impl Auto {
     }
 }
 
+/// Whether a villager's brain draws from the villager's own random instead of the level's.
+///
+/// The level random is one stream, so a draw has to wait for every mob before it (`OrderedDraws`),
+/// and a villager's brain draws on nearly every turn (behaviour durations, one-in-N rolls).
+/// With the parallel tick on, those draws come from a stream seeded from the villager's own, so
+/// no villager waits on another mob and the lanes run apart. That is the one place the parallel
+/// tick departs from vanilla's draw order: the villagers' rolls have the same odds but not the
+/// same values a vanilla level would give them. The seed is derived from the mob's id and the game
+/// time, so the villager's entity random keeps vanilla's sequence. The serial loop does the same while the parallel
+/// tick is on, so which path a tick takes never changes the result.
+pub fn villagers_own_random() -> bool {
+    OWN_RANDOM_TEST.load(Ordering::Relaxed) || parallel_tick() > 0
+}
+
+/// Whether a mob's turn draws the level-random rolls from a stream of its own instead of the level's.
+///
+/// A draw from the level's one stream waits until every mob before it in the list has had its turn
+/// (`OrderedDraws`), in whatever lane those run. Some mobs draw on every tick (a fish that leads a
+/// school rolls one in 200, `AbstractSchoolingFish.tick`; a parrot one in 400; brains draw their
+/// durations), so on a busy level the lanes took turns instead of running side by side. With the
+/// parallel tick on, a turn's level-random draws come from [`mob_turn_random`]: the same odds, not
+/// the values a vanilla level would give, as for the villagers' brains above. No player can rely on
+/// those values: the level's stream is shared with the spawns and the blocks of every chunk. The
+/// mob's own entity random keeps vanilla's sequence, and the serial loop draws the same way while
+/// the parallel tick is on, so which path a tick takes never changes the result.
+pub fn mobs_own_random() -> bool {
+    parallel_tick() > 0
+}
+
+/// The stream a mob's turn draws its level-random rolls from under [`mobs_own_random`]: seeded
+/// from the mob's id and the game time (a splitmix64 mix), not from a draw.
+pub fn mob_turn_random(id: u32, game_time: i64) -> horizon_core::random::LegacyRandom {
+    let mut z = (u64::from(id) << 32) ^ (game_time as u64) ^ 0x6d6f_625f_7475_726e;
+    z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    horizon_core::random::LegacyRandom::new((z ^ (z >> 31)) as i64)
+}
+
+/// A test's switch for [`villagers_own_random`], process-wide because the lanes are threads: any
+/// gameplay test running at the same time in the same binary sees villagers on their own random, so
+/// the tests that set it run alone (`--test-threads=1`).
+#[doc(hidden)]
+pub static OWN_RANDOM_TEST: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// How many threads a phase may share its work among: `horizon-threads`' count (at most 8) while
 /// the parallel tick is on, else 1.
 pub fn lanes() -> usize {
@@ -262,6 +308,55 @@ pub fn par_map<T: Sync, R: Send>(
     f: impl Fn(&[T], &mut Vec<R>) + Sync,
 ) -> Vec<R> {
     par_map_on(items, min, lanes(), f)
+}
+
+/// `f` over `items` in chunks of `chunk`, in place, on the pool: the same sharing out as
+/// `horizon_threads::par_chunks_mut`, without starting threads for every call. A chunk runs on
+/// whatever thread takes it, so `f` must not depend on the order. Unlike [`par_map`] it does not
+/// wait for the parallel tick's switch (the phases that use it ran shared out before the pool
+/// existed, #8158): it shares out unless `HORIZON_SERIAL_TICK=all` or one thread is all there is.
+/// The thread-locals the tick relies on do not follow a helper.
+pub fn par_chunks_mut<T: Send>(items: &mut [T], chunk: usize, f: impl Fn(&mut [T]) + Send + Sync) {
+    let lanes = if horizon_threads::serial_tick_all() {
+        1
+    } else {
+        horizon_threads::worker_count().clamp(1, 8)
+    };
+    par_chunks_mut_on(items, chunk, lanes, f);
+}
+
+/// [`par_chunks_mut`] on `lanes` threads.
+fn par_chunks_mut_on<T: Send>(
+    items: &mut [T],
+    chunk: usize,
+    lanes: usize,
+    f: impl Fn(&mut [T]) + Send + Sync,
+) {
+    let chunk = chunk.max(1);
+    let count = items.len().div_ceil(chunk);
+    if lanes <= 1 || count < 2 {
+        for slice in items.chunks_mut(chunk) {
+            f(slice);
+        }
+        return;
+    }
+    // A thread takes a chunk whole; the lock is only held while a chunk is taken, never while
+    // it runs: the chunk is popped in a statement of its own, so the guard is gone before `f`
+    // (a guard in a `while let` scrutinee would live through the loop body).
+    let pending = Mutex::new(items.chunks_mut(chunk).collect::<Vec<_>>());
+    let work = || {
+        loop {
+            let next = pending.lock().unwrap_or_else(PoisonError::into_inner).pop();
+            let Some(slice) = next else { break };
+            f(slice);
+        }
+    };
+    pool().in_place_scope(|s| {
+        for _ in 1..lanes.min(count) {
+            s.spawn(|_| work());
+        }
+        work();
+    });
 }
 
 /// [`par_map`] on `lanes` threads.
@@ -383,6 +478,52 @@ mod tests {
             f(&items, &mut serial);
             assert_eq!(par_map_on(&items, 1, 4, f), serial, "{n} items");
         }
+    }
+
+    /// Every chunk is handled once, whole, and its items changed in place, for item counts that
+    /// don't divide into chunks evenly.
+    #[test]
+    fn chunks_are_each_handled_once() {
+        for n in [0usize, 1, 15, 16, 17, 79, 80, 1000] {
+            let mut items: Vec<u64> = (0..n as u64).collect();
+            par_chunks_mut_on(&mut items, 16, 4, |chunk| {
+                assert!(chunk.len() <= 16);
+                for x in chunk {
+                    *x = *x * 3 + 1;
+                }
+            });
+            assert_eq!(items, (0..n as u64).map(|x| x * 3 + 1).collect::<Vec<_>>());
+        }
+    }
+
+    /// Chunks really run at the same time: one waits (bounded, so a serial run fails instead of
+    /// hanging) until another has started, and each item is still handled exactly once.
+    #[test]
+    fn chunks_overlap_and_run_once() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+        let active = AtomicUsize::new(0);
+        let overlapped = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let runs: Vec<AtomicUsize> = (0..64).map(|_| AtomicUsize::new(0)).collect();
+        let mut items: Vec<usize> = (0..64).collect();
+        par_chunks_mut_on(&mut items, 4, 4, |chunk| {
+            for &i in chunk.iter() {
+                runs[i].fetch_add(1, Ordering::SeqCst);
+            }
+            if active.fetch_add(1, Ordering::SeqCst) >= 1 {
+                overlapped.store(true, Ordering::SeqCst);
+            }
+            while !overlapped.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            active.fetch_sub(1, Ordering::SeqCst);
+        });
+        assert!(
+            overlapped.load(Ordering::SeqCst),
+            "no two chunks ran at once"
+        );
+        assert!(runs.iter().all(|r| r.load(Ordering::SeqCst) == 1));
     }
 
     /// A panic in a part reaches the caller instead of being lost on a helper.
