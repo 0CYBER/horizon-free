@@ -444,7 +444,9 @@ def bots_command(args):
 def populate(server, spec, seed):
     """Fills the level around the players with `spec` = "items,carts,mobs" (counts), as a busy server has it: the
     entity tracker and the entity states cost by what is in the level, not only by how many players walk in it.
-    Each one goes at a random offset of up to 120 blocks from a random player, from the same seed on every run."""
+    Each one goes at a random offset of up to 120 blocks from a random player: the offsets
+    come from the same seed on every run, but `execute at @r` picks the player with the server's own RNG, so the
+    placements still differ between runs."""
     import random
     rng = random.Random(seed)
     counts = [int(n) for n in (spec.split(',') + ['0', '0'])[:3]]
