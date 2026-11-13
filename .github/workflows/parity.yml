@@ -90,6 +90,27 @@ jobs:
           python3 tools/prepare_output.py check --cache --base "$BASE_SHA"
       - name: The version constants are the pinned jar's
         run: python3 tools/gen_version_consts.py --check
+      - name: Command teleport arrivals hold and release their players
+        env:
+          BASE_SHA: ${{ steps.merge.outputs.base }}
+        run: |
+          if ! git diff --quiet "$BASE_SHA" HEAD -- .github/workflows/parity.yml \
+              crates/horizon-client/src/game/server_travel.rs \
+              crates/horizon-client/src/game/server_travel/hold_tests.rs \
+              crates/horizon-client/src/game/lan_actions.rs; then
+            repo="$PWD"
+            task_home=$(mktemp -d)
+            trap 'rm -rf "$task_home"' EXIT
+            export HORIZON_HOME="$task_home/home" HORIZON_LAUNCHER_HOME="$task_home/launcher"
+            export XDG_DATA_HOME="$task_home/data" XDG_CONFIG_HOME="$task_home/config"
+            export HORIZON_LAUNCHER_TRASH="$task_home/trash" HORIZON_LAUNCHER_CLIPBOARD="$task_home/clipboard"
+            export HORIZON_LAUNCHER_DESKTOP="$task_home/desktop"
+            export HORIZON_LAUNCHER_NO_SELF_UPDATE=1 HORIZON_NO_AUDIO=1
+            export HORIZON_TEST_RESOURCES="$repo/.local/horizon-client/$(python3 -c 'from tools import lab; print(lab.VERSION)')"
+            cd "$task_home"
+            cargo test --manifest-path "$repo/Cargo.toml" --locked -p horizon-client --lib \
+              game::server_travel::hold_tests:: -- --ignored
+          fi
       - name: The harnesses this change can affect
         env:
           PARITY_HOSTS: ''
