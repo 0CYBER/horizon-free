@@ -952,8 +952,16 @@ mod tests {
         (en, seen)
     }
 
-    #[test]
-    fn every_horizon_key_the_code_names_is_in_en_us() {
+    /// The crates whose `horizon.` keys must be in en_us.json.
+    const CLIENT_CRATES: [&str; 4] = [
+        "horizon-client",
+        "horizon-client-render",
+        "horizon-client-core",
+        "horizon-client-input",
+    ];
+
+    /// The Rust sources of `krates`, or of every crate under `crates/` when it is empty.
+    fn crate_sources(krates: &[&str]) -> Vec<std::path::PathBuf> {
         fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
                 let path = entry.path();
@@ -964,27 +972,68 @@ mod tests {
                 }
             }
         }
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = Vec::new();
+        if krates.is_empty() {
+            for entry in std::fs::read_dir(&crates).unwrap().flatten() {
+                rust_files(&entry.path().join("src"), &mut files);
+            }
+        }
+        for krate in krates {
+            rust_files(&crates.join(krate).join("src"), &mut files);
+        }
+        assert!(files.len() > 100, "found only {} sources", files.len());
+        files
+    }
+
+    /// A sentence key (the English text itself, not a `horizon.` id) that no
+    /// source names as a string literal is text the game no longer shows: its
+    /// rewording left it behind in every language (#13802).
+    #[test]
+    fn every_sentence_key_in_en_us_is_one_the_code_names() {
+        let en: HashMap<String, String> = serde_json::from_str(
+            &std::fs::read_to_string(bundled_dir().join("en_us.json")).unwrap(),
+        )
+        .unwrap();
+        // Every crate: a feature moved out of the client crates keeps its strings.
+        let code: String = crate_sources(&[])
+            .iter()
+            .map(|file| std::fs::read_to_string(file).unwrap())
+            .collect();
+        let sentences: Vec<&String> = en.keys().filter(|k| !k.starts_with("horizon.")).collect();
+        assert!(
+            sentences.len() > 100,
+            "found only {} sentence keys",
+            sentences.len()
+        );
+        // A JSON string literal escapes `"` and `\` as Rust's does.
+        let mut dead: Vec<&str> = sentences
+            .into_iter()
+            .filter(|key| !code.contains(&serde_json::to_string(key).unwrap()))
+            .map(String::as_str)
+            .collect();
+        dead.sort_unstable();
+        assert!(
+            dead.is_empty(),
+            "en_us.json keys no code asks for: {dead:#?}"
+        );
+    }
+
+    #[test]
+    fn every_horizon_key_the_code_names_is_in_en_us() {
         let english = |dir: &std::path::Path| -> HashMap<String, String> {
             serde_json::from_str(&std::fs::read_to_string(dir.join("en_us.json")).unwrap()).unwrap()
         };
         let mut en = english(&bundled_dir());
-        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let mut files = Vec::new();
-        for krate in [
-            "horizon-client",
-            "horizon-client-render",
-            "horizon-client-core",
-        ] {
-            rust_files(&crates.join(krate).join("src"), &mut files);
-        }
+        let mut krates = CLIENT_CRATES.to_vec();
         // A crate that ships lang files names its keys in its own sources.
-        for (name, dir) in crate_lang_dirs() {
-            en.extend(english(&dir));
-            rust_files(&crates.join(name).join("src"), &mut files);
+        let lang_dirs = crate_lang_dirs();
+        for (name, dir) in &lang_dirs {
+            en.extend(english(dir));
+            krates.push(name);
         }
-        assert!(files.len() > 100, "found only {} sources", files.len());
         let mut found = 0;
-        for file in files {
+        for file in crate_sources(&krates) {
             let text = std::fs::read_to_string(&file).unwrap();
             for (at, _) in text.match_indices("\"horizon.") {
                 let rest = &text[at + 1..];

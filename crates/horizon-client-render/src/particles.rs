@@ -1402,100 +1402,8 @@ impl ParticleLightCache {
     }
 }
 
-const PARTICLE_SECTION_CACHE_SIZE: usize = 128;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SectionFrustumResult {
-    Outside,
-    Intersects,
-    Inside,
-}
-
-#[derive(Clone, Copy)]
-struct CachedSectionFrustum {
-    section: [i32; 3],
-    radius_quarters: i32,
-    result: SectionFrustumResult,
-}
-
-struct ParticleSectionFrustumCache {
-    entries: [Option<CachedSectionFrustum>; PARTICLE_SECTION_CACHE_SIZE],
-}
-
-impl Default for ParticleSectionFrustumCache {
-    fn default() -> Self {
-        Self {
-            entries: [None; PARTICLE_SECTION_CACHE_SIZE],
-        }
-    }
-}
-
-impl ParticleSectionFrustumCache {
-    fn result(
-        &mut self,
-        world: [f64; 3],
-        camera: DVec3,
-        radius: f64,
-        frustum: &crate::gfx::Frustum,
-    ) -> SectionFrustumResult {
-        let Some(section) = world_section(world) else {
-            return SectionFrustumResult::Intersects;
-        };
-        if !radius.is_finite() || radius < 0.0 || radius * 4.0 > f64::from(i32::MAX) {
-            return SectionFrustumResult::Intersects;
-        }
-        let radius_quarters = (radius * 4.0).ceil() as i32;
-        let hash = (section[0] as u32).wrapping_mul(73_856_093)
-            ^ (section[1] as u32).wrapping_mul(19_349_663)
-            ^ (section[2] as u32).wrapping_mul(83_492_791)
-            ^ (radius_quarters as u32).wrapping_mul(2_654_435_761);
-        let slot = hash as usize & (PARTICLE_SECTION_CACHE_SIZE - 1);
-        if let Some(entry) = self.entries[slot]
-            && entry.section == section
-            && entry.radius_quarters == radius_quarters
-        {
-            return entry.result;
-        }
-
-        let pad = f64::from(radius_quarters) * 0.25;
-        let camera = camera.to_array();
-        let min = array::from_fn(|axis| f64::from(section[axis]) * 16.0 - pad - camera[axis]);
-        let max = array::from_fn(|axis| min[axis] + 16.0 + 2.0 * pad);
-        let result = if min.into_iter().chain(max).any(|v| !v.is_finite()) {
-            SectionFrustumResult::Intersects
-        } else {
-            let min = FVec3::from_array(min.map(|v| v as f32));
-            let max = FVec3::from_array(max.map(|v| v as f32));
-            if !min.is_finite() || !max.is_finite() {
-                SectionFrustumResult::Intersects
-            } else if frustum.contains(min, max) {
-                SectionFrustumResult::Inside
-            } else if frustum.intersects(min, max) {
-                SectionFrustumResult::Intersects
-            } else {
-                SectionFrustumResult::Outside
-            }
-        };
-        self.entries[slot] = Some(CachedSectionFrustum {
-            section,
-            radius_quarters,
-            result,
-        });
-        result
-    }
-}
-
-fn world_section(position: [f64; 3]) -> Option<[i32; 3]> {
-    let mut block = [0; 3];
-    for axis in 0..3 {
-        let value = position[axis].floor();
-        if !value.is_finite() || value < f64::from(i32::MIN) || value > f64::from(i32::MAX) {
-            return None;
-        }
-        block[axis] = value as i32;
-    }
-    Some([block[0] >> 4, block[1] >> 4, block[2] >> 4])
-}
+mod view_cull;
+use view_cull::{PARTICLE_FRUSTUM_OFFSET, ParticleSectionFrustumCache, SectionFrustumResult};
 
 fn below_half_pixel(radius: f64, distance_squared: f64, pixel_focal_length: f32) -> bool {
     let projected_limit = 4.0 * radius * f64::from(pixel_focal_length);
@@ -4703,16 +4611,7 @@ impl ParticleEngine {
         light_at: &dyn Fn([i32; 3]) -> u8,
         out: &mut Vec<Vertex>,
     ) {
-        self.render_inner::<false>(
-            camera,
-            base,
-            partial,
-            0.0,
-            None,
-            &mut |_, _| false,
-            light_at,
-            out,
-        );
+        self.render_in_view(camera, base, partial, None, light_at, out);
     }
 
     /// Render particles after rejecting view-frustum misses and any particles
@@ -4730,7 +4629,7 @@ impl ParticleEngine {
         out: &mut Vec<Vertex>,
     ) {
         if !culling_enabled {
-            self.render(camera, base, partial, light_at, out);
+            self.render_in_view(camera, base, partial, frustum, light_at, out);
             return;
         }
         self.render_inner::<true>(
@@ -4761,8 +4660,14 @@ impl ParticleEngine {
         additive.clear();
         let mut section_cache =
             (CULL && frustum.is_some()).then(ParticleSectionFrustumCache::default);
+        let view = frustum.map(|f| f.pulled_back(PARTICLE_FRUSTUM_OFFSET));
         for p in &self.particles {
             if p.no_render {
+                continue;
+            }
+            if let Some(view) = &view
+                && !view_cull::in_view(view, p, camera)
+            {
                 continue;
             }
             // SparkParticle.extract: twinkling sparks blink after a third of their life.
@@ -5197,6 +5102,115 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(attributes(&disabled), attributes(&regular));
+    }
+
+    /// An engine whose smoke particles stand at `positions`, camera-relative (the camera is at
+    /// the origin looking down -z, like `Mat4::IDENTITY` as a view).
+    fn smoke_at(positions: &[[f64; 3]]) -> ParticleEngine {
+        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
+        let sprite = "test:smoke".to_owned();
+        engine.atlas.insert(
+            sprite.clone(),
+            (
+                Rect {
+                    u0: 0.0,
+                    v0: 0.0,
+                    u1: 1.0,
+                    v1: 1.0,
+                    w: 16,
+                    h: 16,
+                },
+                false,
+            ),
+        );
+        let mut random = LegacyRandom::new(7);
+        for &at in positions {
+            let mut particle = Particle::moving(&mut random, ParticleType::Smoke, at, [0.0; 3]);
+            particle.sprite = Sprite::Named(sprite.clone());
+            engine.particles.push(particle);
+        }
+        engine
+    }
+
+    fn quad_vertices(engine: &ParticleEngine, view: Option<&crate::gfx::Frustum>) -> usize {
+        let mut out = Vec::new();
+        engine.render_in_view(DVec3::ZERO, Quat::IDENTITY, 0.5, view, &|_| 0xf0, &mut out);
+        out.len()
+    }
+
+    #[test]
+    fn particles_outside_the_pulled_back_frustum_make_no_quads() {
+        use crate::gfx::{Frustum, world_projection};
+        let view = Frustum::from_view_projection(world_projection(70.0, 16.0 / 9.0, 512.0));
+        let kept = [
+            [0.0, 0.0, -5.0],   // straight ahead
+            [0.0, 0.0, 2.5],    // behind the camera, inside the 3 blocks of offset
+            [0.0, 0.0, -300.0], // far, inside the far plane
+        ];
+        let dropped = [
+            [0.0, 0.0, 10.0],   // well behind the camera
+            [0.0, 0.0, 3.5],    // just past the offset
+            [100.0, 0.0, -5.0], // far to the side
+            [0.0, 60.0, -5.0],  // far above
+            [0.0, 0.0, -600.0], // beyond the far plane
+        ];
+        let all: Vec<_> = kept.iter().chain(&dropped).copied().collect();
+        let engine = smoke_at(&all);
+        let only_kept = quad_vertices(&smoke_at(&kept), None);
+        assert!(only_kept > 0);
+        assert_eq!(quad_vertices(&engine, Some(&view)), only_kept);
+        // Without a view every particle is drawn, as before.
+        assert_eq!(
+            quad_vertices(&engine, None),
+            only_kept * all.len() / kept.len()
+        );
+        // `render` is the same as no view.
+        let mut regular = Vec::new();
+        engine.render(DVec3::ZERO, Quat::IDENTITY, 0.5, &|_| 0xf0, &mut regular);
+        assert_eq!(regular.len(), quad_vertices(&engine, None));
+    }
+
+    #[test]
+    fn the_culled_path_applies_the_same_frustum_test() {
+        use crate::gfx::{Frustum, world_projection};
+        let view = Frustum::from_view_projection(world_projection(70.0, 16.0 / 9.0, 512.0));
+        let engine = smoke_at(&[[0.0, 0.0, -5.0], [0.0, 0.0, 10.0]]);
+        let mut out = Vec::new();
+        // The disabled setting still keeps vanilla's always-on test.
+        engine.render_culled(
+            DVec3::ZERO,
+            Quat::IDENTITY,
+            0.5,
+            900.0,
+            false,
+            Some(&view),
+            |_, _| panic!("disabled culling must not query particle visibility"),
+            &|_| 0xf0,
+            &mut out,
+        );
+        assert_eq!(
+            out.len(),
+            quad_vertices(&smoke_at(&[[0.0, 0.0, -5.0]]), None)
+        );
+    }
+
+    #[test]
+    fn a_particle_is_tested_at_its_position_this_tick_not_an_interpolated_one() {
+        use crate::gfx::{Frustum, world_projection};
+        let view = Frustum::from_view_projection(world_projection(70.0, 16.0 / 9.0, 512.0));
+        // The frame is drawn half way (0.5) between `previous` and `position`.
+        // Ahead now, far behind a tick ago (half way: 12.5 behind, outside): kept.
+        let mut coming = smoke_at(&[[0.0, 0.0, -5.0]]);
+        coming.particles[0].previous = [0.0, 0.0, 30.0];
+        assert!(quad_vertices(&coming, None) > 0);
+        assert_eq!(
+            quad_vertices(&coming, Some(&view)),
+            quad_vertices(&coming, None)
+        );
+        // Behind now, ahead a tick ago (half way: 5 ahead, inside): dropped.
+        let mut going = smoke_at(&[[0.0, 0.0, 10.0]]);
+        going.particles[0].previous = [0.0, 0.0, -20.0];
+        assert_eq!(quad_vertices(&going, Some(&view)), 0);
     }
 
     #[test]

@@ -59,7 +59,7 @@ impl Toast {
             last_changed: 0,
         }
     }
-    /// A mod's own toast (`native_add_toast`, API @API:add_toast@): drawn as an `AdvancementToast`
+    /// A mod's own toast (`native_add_toast`, API 581): drawn as an `AdvancementToast`
     /// with `label` in the frame label's place and `description` as its
     /// title, yellow (pink, with the challenge sound, for a challenge).
     pub(super) fn of_mod(icon: &str, label: Text, description: Text, challenge: bool) -> Self {
@@ -1160,7 +1160,7 @@ impl Game<'_> {
         self.adv.last_inventory = key;
         // Native mods hear the change before any criterion is looked at, so
         // they do with no `inventory_changed` advancement in the tree too
-        // (`native_player_inventory_changed`, API @API:player_inventory_changed@).
+        // (`native_player_inventory_changed`, API 579).
         if self.remote.is_none()
             && !self.no_player_here()
             && !horizon_client::mod_api::mods().is_empty()
@@ -2561,7 +2561,7 @@ pub struct AdvancementDisplay {
 
 impl Game<'_> {
     /// The display of the advancement `id` in the loaded tree; None for an
-    /// id the tree does not have, or one with no display. API @API:advancement_display@.
+    /// id the tree does not have, or one with no display. API 591.
     pub(super) fn native_advancement_display(&mut self, id: &str) -> Option<AdvancementDisplay> {
         let tree = self.advancement_tree();
         let advancement = &tree.list[*tree.by_id.get(id)?];

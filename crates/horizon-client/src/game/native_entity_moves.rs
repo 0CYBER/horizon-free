@@ -18,7 +18,7 @@ impl Game<'_> {
     /// Moves the entity to `pos` in its level (`Entity.teleportTo`), as
     /// `/tp` does: a player is placed there and told, a rider gets off. With
     /// `rotation` (yaw, pitch in degrees) it also turns. False for a position
-    /// outside the world's bounds. API @API:entity_moves@.
+    /// outside the world's bounds. API 570.
     pub(super) fn native_entity_teleport_to(
         &mut self,
         entity: EntityRef,
@@ -39,7 +39,7 @@ impl Game<'_> {
     }
     /// Turns the entity to `yaw` and `pitch` in degrees (`Entity.setYRot`,
     /// `setXRot`), as `/rotate` does: the pitch is clamped to -90..90, and a
-    /// player's client is told. API @API:entity_moves@.
+    /// player's client is told. API 570.
     pub(super) fn native_entity_set_rotation(
         &mut self,
         entity: EntityRef,
@@ -57,7 +57,7 @@ impl Game<'_> {
     }
     /// The yaw of the entity's head (`Entity.getYHeadRot`): a mob's or a
     /// player's own, the body's yaw for the kinds without a head. API
-    /// @API:entity_moves@.
+    /// 570.
     pub(super) fn native_entity_head_yaw(&self, entity: EntityRef) -> Option<f32> {
         let t = self.native_entity_target(entity)?;
         if let Some(g) = self.native_target_guest(t) {
@@ -69,7 +69,7 @@ impl Game<'_> {
         Some(self.target_rotation(t)[0])
     }
     /// Turns a mob's head to `yaw` (`Entity.setYHeadRot`); its body follows
-    /// as its AI turns it. False for the other kinds. API @API:entity_moves@.
+    /// as its AI turns it. False for the other kinds. API 570.
     pub(super) fn native_entity_set_head_yaw(&mut self, entity: EntityRef, yaw: f32) -> bool {
         let Some(Target::Mob(id)) = self.native_entity_target(entity) else {
             return false;
@@ -84,14 +84,14 @@ impl Game<'_> {
         }
     }
     /// The horizontal direction the entity faces (`Entity.getDirection`):
-    /// `north`, `south`, `east` or `west`. API @API:entity_moves@.
+    /// `north`, `south`, `east` or `west`. API 570.
     pub(super) fn native_entity_direction(&self, entity: EntityRef) -> Option<&'static str> {
         let t = self.native_entity_target(entity)?;
         Some(facing(self.target_rotation(t)[0]))
     }
     /// The entity's width and height (`Entity.getBbWidth`, `getBbHeight`):
     /// its box's, so a baby's or a scaled entity's own. API
-    /// @API:entity_moves@.
+    /// 570.
     pub(super) fn native_entity_dimensions(&self, entity: EntityRef) -> Option<[f64; 2]> {
         let [min, max] = self.native_entity_bounding_box(entity)?;
         Some([max[0] - min[0], max[1] - min[1]])
@@ -99,7 +99,7 @@ impl Game<'_> {
     /// Adds `delta` to the entity's velocity (`Entity.push`,
     /// `addDeltaMovement`). False for a player (its client moves it), an
     /// entity Horizon doesn't simulate, or a value that isn't finite. API
-    /// @API:entity_moves@.
+    /// 570.
     pub(super) fn native_entity_push(&mut self, entity: EntityRef, delta: [f64; 3]) -> bool {
         if !delta.iter().all(|v| v.is_finite()) || self.native_entity_target(entity).is_none() {
             return false;

@@ -1183,7 +1183,7 @@ pub use build::{generate, inject};
 mod injection;
 pub use injection::{TraitContract, TraitInjection};
 mod staged;
-pub use staged::{MIXINS_STAGE, staged_mods};
+pub use staged::{MIXINS_STAGE, mob_turn, staged_mods};
 #[cfg(test)]
 mod injection_tests;
 

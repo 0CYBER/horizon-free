@@ -79,7 +79,7 @@ impl Game<'_> {
     /// A snapshot of loaded chunk `chunk` (`[x, z]`) of the level `dimension`
     /// (`minecraft:the_nether`), in place or open with nobody in it. None off
     /// a server, for a level not open and for a chunk not loaded; nothing is
-    /// loaded or generated for it. API @API:chunk_snapshot@.
+    /// loaded or generated for it. API 460.
     pub(super) fn native_chunk_snapshot(
         &self,
         dimension: &str,
@@ -111,7 +111,7 @@ impl Game<'_> {
     /// The map colour of block state `state` (`BlockState.getMapColor`):
     /// `(id, colour)`, the `MapColor` id and its `col` (0xRRGGBB), `(0, 0)`
     /// for `MapColor.NONE` (air, glass). None for an unknown state. API
-    /// @API:chunk_snapshot@.
+    /// 460.
     pub(super) fn native_block_map_color(&self, state: BlockStateId) -> Option<(u8, u32)> {
         let known = usize::try_from(state.0).is_ok_and(|s| s < self.pack.assets.registry.len());
         if !known {
@@ -123,7 +123,7 @@ impl Game<'_> {
 
     /// The name of biome id `biome` (`minecraft:plains`), as a snapshot's
     /// `noise_biome` gives it. None for an unknown id. API
-    /// @API:chunk_snapshot@.
+    /// 460.
     pub(super) fn native_biome_name(&self, biome: u16) -> Option<&str> {
         let biomes = world_biomes!(self);
         biomes.list.get(usize::from(biome)).map(|b| b.name.as_str())
@@ -134,7 +134,7 @@ impl Game<'_> {
     /// modifiers), foliage, dry foliage and water, after
     /// `native_biome_colors`. The biome's own, not blended over the biome
     /// blend radius as the client draws them. None for an unknown id. API
-    /// @API:chunk_snapshot@.
+    /// 460.
     pub(super) fn native_biome_tint(&self, biome: u16, x: i32, z: i32) -> Option<BiomeColors> {
         let biomes = world_biomes!(self);
         let b = biomes.list.get(usize::from(biome))?;

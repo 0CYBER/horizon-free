@@ -127,7 +127,7 @@ impl NativeProtoChunk<'_> {
 /// here. A chunk can be asked again (a proto chunk saved unfinished, the
 /// neighbours of a finished chunk, the far terrain's decoration), so answer
 /// the same each time. Server-side, and wherever chunks generate (single
-/// player, far terrain). @API:chunk_generate@.
+/// player, far terrain). 518.
 #[inline(never)]
 pub fn native_chunk_generate(
     dimension: &str,
@@ -174,7 +174,7 @@ impl NativeLodColumn<'_> {
 /// many per tile, on the far terrain's workers, several at once and never
 /// on the server thread: answer from the terrain function alone, quickly,
 /// without building the chunk. Wherever far terrain is sampled (a client's
-/// own far terrain, single player). @API:lod_column@.
+/// own far terrain, single player). 532.
 #[inline(never)]
 pub fn native_lod_column(
     dimension: &str,

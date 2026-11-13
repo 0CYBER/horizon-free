@@ -74,7 +74,7 @@ impl Game<'_> {
     /// it never covers the screen's other drawing or is covered by it but in
     /// the order drawn. Draw it from a screen's drawing hook
     /// (`native_screen_draw`). A client's call; nothing is drawn on a server.
-    /// API @API:scenes_in_screens@.
+    /// API 422.
     pub(super) fn native_draw_scene(
         &self,
         batch: &mut HudBatch,

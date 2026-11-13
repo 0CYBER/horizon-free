@@ -27,6 +27,8 @@ horizon-mcp = { path = "../horizon-mcp" }
 # The server thread ahead of the workers (MinecraftServer.spin's Thread.setPriority).
 horizon-optifine = { path = "../horizon-optifine" }
 horizon-threads = { path = "../horizon-threads" }
+# The .hzperf capture format and writer (docs/perf-platform.md).
+horizon-perf-format = { path = "../horizon-perf-format" }
 # One pool of helper threads for the server tick's parallel phases (`parallel.rs`): threads made
 # once, not for every phase of every tick.
 rayon = "1.10"
@@ -91,6 +93,8 @@ rustix = { version = "1", default-features = false, features = ["std", "time", "
 [target.'cfg(windows)'.dependencies]
 # Use the registered URI handler without routing links through Explorer/cmd.
 open = { version = "5.4.5", features = ["shellexecute-on-windows"] }
+# Resolve virtualized folders to shell-compatible physical paths (desktop.rs).
+dunce = "1.0.5"
 # DirectX 12, where Vulkan has no adapter or device, or by choice (`graphicsApi`, graphics.rs).
 # Shaders compile with FXC (d3dcompiler_47.dll, part of Windows), or on integrated GPUs with DXC
 # (dxcompiler.dll beside the game, gfx/dx12_compiler.rs).
@@ -110,6 +114,8 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
 default = ["audio", "controllers"]
+# Dev-only: the ignored tracker-send benchmark uses the executable's allocator.
+tracker-send-bench = []
 # Sound output. Without it (and `controllers`) the program links neither libasound nor libudev on
 # Linux: the server build (`--no-default-features`, released as horizon-engine; docs/server.md).
 audio = ["horizon-client-render/audio"]
@@ -130,6 +136,8 @@ workspace = true
 horizon-theme = { path = "../horizon-theme" }
 horizon-client-render = { path = "../horizon-client-render", features = ["test-support"] }
 horizon-items = { path = "../horizon-items", features = ["test-support"] }
+# Reads back the captures the server_perf tests write.
+horizon-perf = { path = "../horizon-perf" }
 # Every WGSL shader translated as wgpu's DirectX 12 backend does (gfx.rs tests).
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "msl-out", "spv-out"] }
 

@@ -4,6 +4,7 @@ mod admin;
 pub(super) mod compute;
 mod data;
 mod display_names;
+mod target_position;
 pub(super) use data::place_summoned;
 mod effects;
 pub(super) mod execute;
@@ -310,7 +311,7 @@ impl Game<'_> {
         self.command_source = outer;
         ok
     }
-    fn syntax_failure(&mut self, e: &CommandError, command: &str) {
+    pub(in crate::game) fn syntax_failure(&mut self, e: &CommandError, command: &str) {
         self.command_failure(e.message.clone());
         let Some(input) = &e.input else { return };
         let cursor = e.cursor.min(input.len());
@@ -451,9 +452,7 @@ impl Game<'_> {
         // the server's own source, "Server".
         let who = match self.command_source.and_then(|s| s.entity) {
             Some(entity) => self.target_name(entity),
-            None if self.console_broadcast.is_some() => {
-                Text::literal(if self.rcon_source { "Rcon" } else { "Server" }.to_owned())
-            }
+            None if self.console_broadcast.is_some() => self.server_name(),
             None => self.player_display_name(),
         };
         let line = Text::translate("chat.type.admin", &[who, message])
@@ -537,118 +536,6 @@ impl Game<'_> {
         };
         conn.and_then(|c| self.command_guest(c))
             .map_or(self.dim, |g| Dim::from_id(&g.dimension))
-    }
-    pub(super) fn target_position(&self, t: Target) -> Option<[f64; 3]> {
-        match t {
-            Target::Player => self
-                .player
-                .as_ref()
-                .map(|p| [p.position.x, p.position.y, p.position.z]),
-            Target::Guest(conn) => self.command_guest(conn).map(|g| g.position),
-            Target::Mob(id) => self
-                .mobs
-                .iter()
-                .find(|m| m.id == id)
-                .map(|m| [m.position.x, m.position.y, m.position.z]),
-            Target::Item(id) => self
-                .dropped
-                .iter()
-                .find(|i| i.id == id)
-                .map(|i| [i.position.x, i.position.y, i.position.z]),
-            Target::Orb(id) => self
-                .orbs
-                .iter()
-                .find(|o| o.id == id)
-                .map(|o| [o.position.x, o.position.y, o.position.z]),
-            Target::Projectile(id) => self
-                .creatures
-                .projectiles
-                .iter()
-                .find(|a| a.id == id)
-                .map(|a| [a.position.x, a.position.y, a.position.z]),
-            Target::Stand(id) => self
-                .armor_stands
-                .iter()
-                .find(|a| a.id == id)
-                .map(|a| [a.position.x, a.position.y, a.position.z]),
-            Target::Frame(id) => self.item_frames.iter().find(|f| f.id == id).map(|f| {
-                let (lo, hi) = f.bounds();
-                [
-                    (lo[0] + hi[0]) / 2.0,
-                    (lo[1] + hi[1]) / 2.0,
-                    (lo[2] + hi[2]) / 2.0,
-                ]
-            }),
-            Target::Painting(id) => self.paintings.iter().find(|p| p.id == id).map(|p| {
-                let (lo, hi) = p.bounds();
-                [
-                    (lo[0] + hi[0]) / 2.0,
-                    (lo[1] + hi[1]) / 2.0,
-                    (lo[2] + hi[2]) / 2.0,
-                ]
-            }),
-            Target::Boat(id) => self
-                .boats
-                .iter()
-                .find(|b| b.id == id)
-                .map(|b| [b.position.x, b.position.y, b.position.z]),
-            Target::Cart(id) => self
-                .carts
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| [c.position.x, c.position.y, c.position.z]),
-            Target::Other(id) => self
-                .others
-                .iter()
-                .find(|o| o.id == id)
-                .map(|o| [o.position.x, o.position.y, o.position.z]),
-            Target::Crystal(id) => self
-                .crystals
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| [c.position.x, c.position.y, c.position.z]),
-            Target::Dragon(id) => self
-                .dragon
-                .as_ref()
-                .filter(|d| d.id == id)
-                .map(|d| [d.position.x, d.position.y, d.position.z]),
-            Target::Cushion(id) => self
-                .cushions
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| [c.position.x, c.position.y, c.position.z]),
-            Target::Tnt(id) => self
-                .tnts
-                .iter()
-                .find(|t| t.id == id)
-                .map(|t| [t.position.x, t.position.y, t.position.z]),
-            Target::Falling(id) => self
-                .falling
-                .iter()
-                .find(|f| f.id == id)
-                .map(|f| [f.position.x, f.position.y, f.position.z]),
-            Target::Rocket(id) => self
-                .rockets
-                .iter()
-                .find(|r| r.id == id)
-                .map(|r| [r.position.x, r.position.y, r.position.z]),
-            Target::Cloud(id) => self.breath_clouds.iter().find(|c| c.id == id).map(|c| c.at),
-            Target::Trident(id) => self
-                .tridents
-                .iter()
-                .find(|t| t.id == id)
-                .map(|t| [t.position.x, t.position.y, t.position.z]),
-            Target::Fangs(id) => self.fangs.list.iter().find(|f| f.id == id).map(|f| f.pos),
-            Target::Spawner(id) => self
-                .ominous_spawners
-                .iter()
-                .find(|s| s.id == id)
-                .map(|s| s.position),
-            Target::Knot(id) => self.natural_knot(id).map(|fence| {
-                let p = horizon_client::mobs::leash::knot_state(fence).position;
-                [p.x, p.y, p.z]
-            }),
-        }
     }
     pub(super) fn target_type(&self, t: Target) -> String {
         match t {
@@ -1706,7 +1593,7 @@ impl Game<'_> {
                 // in it (whose chunks lose their tickets) is abandoned.
                 if let Some(conn) = self.lan_acting {
                     horizon_client::lan::hub::teleport_cause(Some("command"));
-                    self.server_trips.retain(|trip| !trip.is(conn));
+                    self.hold_for_chunks(conn, v);
                 }
                 let from = self
                     .player
@@ -1851,7 +1738,7 @@ impl Game<'_> {
             }
             Target::Crystal(id) => {
                 if let Some(c) = self.crystals.iter_mut().find(|c| c.id == id) {
-                    c.position = v;
+                    (c.position, c.fall.0) = (v, true); // performTeleport: setOnGround(true)
                 }
             }
             Target::Dragon(id) => {
@@ -1862,6 +1749,8 @@ impl Game<'_> {
             }
             Target::Tnt(id) => {
                 if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id) {
+                    // `PrimedTnt.teleport` includes same-level command teleports.
+                    t.used_portal = true;
                     t.position = v;
                     t.previous = v;
                     if let Some(r) = rotation {
@@ -2487,17 +2376,7 @@ impl Game<'_> {
                 self.item_frames.retain(|f| f.id != id);
             }
             Target::Painting(id) => self.paintings.retain(|p| p.id != id),
-            Target::Boat(id) => {
-                // AbstractBoat.remove: a killed boat drops its lead.
-                if let Some(i) = self.boats.iter().position(|b| b.id == id) {
-                    self.release_vehicle_container(id);
-                    let b = self.boats.remove(i);
-                    // AbstractChestBoat.remove, after the live menu writes
-                    // back its slots.
-                    self.drop_vehicle_contents(b.position.components(), &b.items);
-                    self.boat_removed(&b);
-                }
-            }
+            Target::Boat(id) => self.kill_boat(id),
             Target::Cart(id) => {
                 self.release_vehicle_container(id);
                 if let Some(i) = self.carts.iter().position(|c| c.id == id) {
@@ -2613,23 +2492,14 @@ impl Game<'_> {
                     // `new ExperienceOrb(level, pos, Vec3.ZERO, 0)`, unstuck like any orb spawn.
                     let at = self.unstuck_orb(pos);
                     self.next_entity += 1;
-                    self.orbs.push(horizon_client::entities::ExperienceOrb {
-                        rotation: [0.0, 0.0],
-                        join: Default::default(),
-                        no_gravity: false,
-                        id: self.next_entity,
-                        position: Vec3::new(at[0], at[1], at[2]),
-                        previous: Vec3::new(at[0], at[1], at[2]),
-                        velocity: Vec3::new(0.0, 0.0, 0.0),
-                        value: 0,
-                        age: 0,
-                        on_ground: false,
-                        count: 1,
-                        ticks: 0,
-                        health: 5,
-                        air: 300,
-                        following: None,
-                    });
+                    let at = Vec3::new(at[0], at[1], at[2]);
+                    let orb = horizon_client::entities::ExperienceOrb::new(
+                        self.next_entity,
+                        at,
+                        Vec3::ZERO,
+                        0,
+                    );
+                    self.orbs.push(orb);
                     // tryAddFreshEntityWithPassengers refused: ERROR_DUPLICATE_UUID.
                     if !self.native_joins_flush(false, self.next_entity) {
                         return Err(err("commands.summon.failed.uuid", &[]));
@@ -2654,14 +2524,9 @@ impl Game<'_> {
                     self.next_entity += 1;
                     let at = Vec3::new(pos[0], pos[1], pos[2]);
                     let drawn = self.world.random.next_int_bound(100_000).unwrap_or(0);
-                    self.crystals.push(super::dragon::Crystal {
-                        id: self.next_entity,
-                        position: at,
-                        show_bottom: true,
-                        time: super::dragon::Crystal::start_time(at, drawn, self.clock.still()),
-                        beam: None,
-                        invulnerable: false,
-                    });
+                    let time = super::dragon::Crystal::start_time(at, drawn, self.clock.still());
+                    let crystal = super::dragon::Crystal::new(self.next_entity, at, true, time);
+                    self.crystals.push(crystal);
                     // tryAddFreshEntityWithPassengers refused: ERROR_DUPLICATE_UUID.
                     if !self.native_joins_flush(false, self.next_entity) {
                         return Err(err("commands.summon.failed.uuid", &[]));
@@ -4431,7 +4296,7 @@ impl Game<'_> {
                                 .map(|cart| cart.command.name())
                         })
                     })
-                    .unwrap_or_else(|| Text::literal("Server")),
+                    .unwrap_or_else(|| self.server_name()),
             },
             None => self.player_display_name(),
         };

@@ -83,11 +83,15 @@ impl CartIndex {
             .as_ref()
             .is_some_and(|(stamp, ..)| *stamp == mobs.stamp())
         {
-            self.mobs = Some((
-                mobs.stamp(),
-                SeenGrid::new(mobs.iter().map(Mob::bounds)),
-                mobs.iter().filter_map(|m| m.extra.mount).collect(),
-            ));
+            // One walk for both: each mob is a few cache lines away from the next.
+            let mut mounted = FxHashSet::default();
+            let grid = SeenGrid::new(mobs.iter().map(|m| {
+                if let Some(v) = m.extra.mount {
+                    mounted.insert(v);
+                }
+                m.bounds()
+            }));
+            self.mobs = Some((mobs.stamp(), grid, mounted));
         }
         let (_, grid, mounted) = self.mobs.as_ref()?;
         grid.candidates(area, out).then(|| mounted.contains(&cart))

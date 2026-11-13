@@ -151,7 +151,7 @@ pub(crate) fn modifier_id(uuid: u128, name: &str) -> String {
     }
 }
 
-pub(super) fn modifier_uuid(id: &str) -> u128 {
+pub(crate) fn modifier_uuid(id: &str) -> u128 {
     if let Some((uuid, _)) = MODIFIER_IDS.iter().find(|(_, name)| *name == id) {
         return *uuid;
     }

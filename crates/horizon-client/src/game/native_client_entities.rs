@@ -122,7 +122,7 @@ impl Game<'_> {
 
     /// An entity id no entity of this server will take
     /// (`Entity.nextEntityId`'s counter), for a mod's own packets to a
-    /// client. API @API:client_entities@.
+    /// client. API 519.
     pub(super) fn native_reserve_entity_id(&mut self) -> i32 {
         self.take_entity_id() as i32
     }
@@ -140,7 +140,7 @@ impl Game<'_> {
     /// `_move` and `_remove`. None when `viewer` isn't on, for an unknown
     /// type, a player, a position or yaw that isn't finite, and inside a
     /// player's hook where the server is out of reach. Bukkit has no such API
-    /// (plugins send the packets). API @API:client_entities@.
+    /// (plugins send the packets). API 519.
     pub(super) fn native_client_entity_spawn(
         &mut self,
         viewer: u128,
@@ -194,7 +194,7 @@ impl Game<'_> {
     /// display's `start_interpolation` is sent with it, so a changed
     /// transformation eases over `interpolation_duration`. False when it is
     /// not their client-side entity, and where the server is out of reach.
-    /// API @API:client_entities@.
+    /// API 519.
     pub(super) fn native_client_entity_set(
         &mut self,
         viewer: u128,
@@ -214,7 +214,7 @@ impl Game<'_> {
     /// (`ClientboundTeleportEntityPacket`, absolute; a display eases over its
     /// `teleport_duration`). False when it is not their client-side entity,
     /// for a position or yaw that isn't finite, and where the server is out
-    /// of reach. API @API:client_entities@.
+    /// of reach. API 519.
     pub(super) fn native_client_entity_move(
         &mut self,
         viewer: u128,
@@ -244,7 +244,7 @@ impl Game<'_> {
     /// (`ClientboundRemoveEntitiesPacket`); ids that are not theirs are left
     /// alone (an entity the server tracks is hidden with
     /// `native_hide_entity_from`). False when none of them was theirs, and
-    /// where the server is out of reach. API @API:client_entities@.
+    /// where the server is out of reach. API 519.
     pub(super) fn native_client_entity_remove(&mut self, viewer: u128, ids: &[i32]) -> bool {
         let Some(host) = &mut self.lan else {
             return false;

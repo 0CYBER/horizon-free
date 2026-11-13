@@ -30,7 +30,7 @@ pub fn native_player_chat(
 /// `native_player_chat` with the sender's permission level (`level`, their operator level, 0
 /// for everyone else): heard after v1, with the same cancel and replies. A mod that uses this
 /// hook need not use v1, and a mod that uses both hears the message twice. It cannot change the
-/// text. Once for each message a player sends, on a server. API @API:player_chat_v2@.
+/// text. Once for each message a player sends, on a server. API 609.
 #[inline(never)]
 pub fn native_player_chat_v2(
     player: u128,
@@ -47,7 +47,7 @@ pub fn native_player_chat_v2(
 /// `ChatDecorator`): a mod sets `decorated` to the text that replaces the message in the line.
 /// The signed body stays the original message, so its signature still checks; only the shown
 /// text changes, and it is sent as the unsigned content. Heard after `native_player_chat` let
-/// the message through, on a server. API @API:chat_decorate@.
+/// the message through, on a server. API 607.
 #[inline(never)]
 pub fn native_chat_decorate(player: u128, name: &str, message: &str, decorated: &mut Option<Text>) {
     crate::native_client_hooks::chat_decorate(player, name, message, decorated);

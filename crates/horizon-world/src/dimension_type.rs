@@ -114,6 +114,12 @@ pub struct DimensionFacts {
     pub snow_golem_melts: bool,
     pub can_start_raid: bool,
     pub sky_light_level: f32,
+    /// `EnvironmentAttributes.CLOUD_HEIGHT`: where the dimension's clouds start
+    /// (its 192.33 default where the dimension type doesn't set one).
+    pub cloud_height: f32,
+    /// `EnvironmentAttributes.CLOUD_COLOR`'s alpha: 0 where the dimension has
+    /// no clouds at all (`Entity.isInClouds`), 0.8 in the overworld.
+    pub cloud_color_alpha: f32,
     pub bed_rule: BedRule,
     pub straw_bed_rule: BedRule,
 }
@@ -161,6 +167,9 @@ static VANILLA: LazyLock<[DimensionFacts; 4]> = LazyLock::new(|| {
         snow_golem_melts: false,
         can_start_raid: true,
         sky_light_level: 15.0,
+        // `ARGB.vector4fFromARGB32(ARGB.white(0.8F))` and 192.33.
+        cloud_height: 192.33,
+        cloud_color_alpha: 0.8,
         bed_rule: BedRule::CAN_SLEEP_WHEN_DARK,
         straw_bed_rule: BedRule::DESTROY_ON_LEAVE,
     };
@@ -193,6 +202,8 @@ static VANILLA: LazyLock<[DimensionFacts; 4]> = LazyLock::new(|| {
         snow_golem_melts: true,
         can_start_raid: false,
         sky_light_level: 4.0,
+        // No cloud colour: no clouds to stand in, though 192.33 stays the height.
+        cloud_color_alpha: 0.0,
         bed_rule: BedRule::DESTROY_ON_USE,
         straw_bed_rule: BedRule::DESTROY_ON_USE,
         ..overworld_type.clone()
@@ -215,6 +226,7 @@ static VANILLA: LazyLock<[DimensionFacts; 4]> = LazyLock::new(|| {
         default_clock: Some("minecraft:the_end".to_owned()),
         timelines: vec!["minecraft:villager_schedule".to_owned()],
         nether_portal_spawns_piglin: false,
+        cloud_color_alpha: 0.0,
         bed_rule: BedRule::DESTROY_ON_USE,
         straw_bed_rule: BedRule::DESTROY_ON_USE,
         ..overworld_type.clone()
@@ -257,6 +269,23 @@ impl DimensionFacts {
         let attributes = &json["attributes"];
         let attribute = |k: &str| &attributes[format!("minecraft:gameplay/{k}")];
         let bool_attr = |k: &str, default: bool| attribute(k).as_bool().unwrap_or(default);
+        // `EnvironmentAttributes.CLOUD_HEIGHT` and `CLOUD_COLOR`, the two visual
+        // attributes `Entity.isInClouds` reads.
+        let visual = |k: &str| &attributes[format!("minecraft:visual/{k}")];
+        let cloud_height = visual("cloud_height").as_f64().unwrap_or(192.33) as f32;
+        let cloud_color_alpha = match visual("cloud_color") {
+            Value::Null => 0.0,
+            v => {
+                let attribute = crate::environment_attributes::attribute("visual/cloud_color")
+                    .ok_or("visual/cloud_color is not registered")?;
+                match crate::environment_attributes::Entry::parse(attribute, v)?
+                    .apply(&crate::environment_attributes::Value::Argb([0.0; 4]))
+                {
+                    crate::environment_attributes::Value::Argb(c) => c[3],
+                    _ => 0.0,
+                }
+            }
+        };
         let bed = |k: &str, default: BedRule| match attribute(k) {
             Value::Null => Ok(default),
             v => BedRule::from_json(v),
@@ -318,6 +347,8 @@ impl DimensionFacts {
             snow_golem_melts: bool_attr("snow_golem_melts", false),
             can_start_raid: bool_attr("can_start_raid", true),
             sky_light_level: attribute("sky_light_level").as_f64().unwrap_or(15.0) as f32,
+            cloud_height,
+            cloud_color_alpha,
             bed_rule: bed("bed_rule", BedRule::CAN_SLEEP_WHEN_DARK)?,
             straw_bed_rule: bed("straw_bed_rule", BedRule::DESTROY_ON_LEAVE)?,
         })

@@ -80,6 +80,7 @@ impl Mob {
             is_vehicle: equine::is_vehicle(m),
             still: m.species() == Species::HappyGhast && happy_ghast::on_still_timeout(m),
             carrying: m.rider.is_some() || m.extra.rider.is_some(),
+            collisions: 0,
             knockback_resistance: m.attrs.knockback_resistance,
             effects: m
                 .extra
@@ -91,5 +92,18 @@ impl Mob {
             hurt_recently: m.species() == Species::Piglin && m.extra.piglin.hurt,
             huntable: m.species() == Species::Hoglin && !m.is_baby() && !m.extra.cannot_be_hunted,
         }
+    }
+}
+
+impl Seen {
+    /// `LivingEntity.getVisibilityPercent` for a mob target: 1, or
+    /// ×0.7×armor cover (at least 0.1) while `isInvisible`. A mob does not
+    /// sneak (`isShiftKeyDown` is a player's) and its `getArmorCoverPercentage`
+    /// is 0, which the 0.1 floor turns into 0.07 - the sheep the evoker looks
+    /// for has no armour, and no worn `mob_visibility` either. `invisible` is
+    /// the flag or the effect: Horizon does not model vanilla's
+    /// `updateInvisibilityStatus` sync of the effect into the flag.
+    pub fn visibility_percent(&self) -> f64 {
+        if self.invisible { 0.7 * 0.1 } else { 1.0 }
     }
 }

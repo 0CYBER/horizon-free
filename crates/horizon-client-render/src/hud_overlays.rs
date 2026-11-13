@@ -39,14 +39,13 @@ pub fn text_with_backdrop(
     background: u32,
 ) {
     if background != 0 {
-        // Font.PreparedTextBuilder.markBackground: one pixel above and left of
-        // the glyphs, the glyph advance to the right and nine high: not a
-        // fixed two-pixel frame.
+        // GuiGraphicsExtractor.textWithBackdrop adds two pixels around the
+        // text's advance and the font's nine-pixel line height.
         out.push(fill(
-            x - 1,
-            y - 1,
-            x + w,
-            y + 9,
+            x - 2,
+            y - 2,
+            x + w + 2,
+            y + 11,
             multiply(background, color),
         ));
     }
@@ -1491,10 +1490,10 @@ mod boss_bar_room_tests {
 mod backdrop_tests {
     use super::*;
 
-    /// `markBackground`: the backdrop reaches one pixel above and left of the
-    /// glyphs, their advance to the right and nine down, not 2 on every side.
+    /// `GuiGraphicsExtractor.textWithBackdrop`: two pixels around the advance
+    /// and the nine-pixel font line, independently of glyph-background drawing.
     #[test]
-    fn the_backdrop_frames_the_glyphs_by_one_pixel() {
+    fn the_backdrop_frames_the_text_by_two_pixels() {
         let mut out = Vec::new();
         text_with_backdrop(
             &mut out,
@@ -1508,6 +1507,6 @@ mod backdrop_tests {
         let Some(GuiDraw::Fill { x0, y0, x1, y1, .. }) = out.first() else {
             panic!("a backdrop is a fill first");
         };
-        assert_eq!((*x0, *y0, *x1, *y1), (9, 19, 16, 29));
+        assert_eq!((*x0, *y0, *x1, *y1), (8, 18, 18, 31));
     }
 }

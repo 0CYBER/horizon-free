@@ -677,7 +677,7 @@ impl PackScreen {
             return action;
         }
         if self.search.contains(x, y) {
-            self.search.click(m, x, false);
+            self.search.click(m, x, false, false);
             self.set_focus(Focus::Search);
             return Action::None;
         }
@@ -1100,6 +1100,9 @@ impl PackScreen {
             0,
         );
         self.search.draw(&mut out, m, blink_ms, None);
+        if self.browser.is_none() && self.search.contains(f64::from(mouse.0), f64::from(mouse.1)) {
+            crate::widgets::text_cursor(true, true);
+        }
         for side in 0..2 {
             self.draw_list(&mut out, m, side, mouse);
         }
@@ -1134,7 +1137,7 @@ impl PackScreen {
             if d::inside(point, qx, qy, BROWSER_SEARCH_W, 18) {
                 self.browser_search.x = qx;
                 self.browser_search.y = qy;
-                self.browser_search.click(m, x, false);
+                self.browser_search.click(m, x, false, false);
                 self.browser_focus = true;
                 return Some(Action::None);
             }
@@ -1302,6 +1305,9 @@ impl PackScreen {
         field.x = qx;
         field.y = qy;
         field.draw(out, m, 0, None);
+        if field.contains(f64::from(mouse.0), f64::from(mouse.1)) {
+            crate::widgets::text_cursor(true, true);
+        }
         let (sbx, sby) = self.browser_search_button();
         d::button(
             out,

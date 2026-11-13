@@ -1,12 +1,12 @@
-//! Mobs: entity types (dimensions and default attributes exported from
-//! vanilla), models (vanilla `LayerDefinitions` baked part trees) and the
-//! `Mob` entity with vanilla's AI framework: goal and target selectors with
-//! priorities and control flags (`goals`), A* pathfinding with walk, swim,
-//! fly and amphibious node evaluators (`path`, `nav`), move/look/jump/body
-//! controls (`control`), `LivingEntity` physics (`living`) and per-species
-//! behaviour, models, animations and sounds.
+//! Mobs: entity types (dimensions and default attributes exported from vanilla), models (vanilla
+//! `LayerDefinitions` baked part trees) and the `Mob` entity with vanilla's AI framework: goal and
+//! target selectors with priorities and control flags (`goals`), A* pathfinding with walk, swim,
+//! fly and amphibious node evaluators (`path`, `nav`), move/look/jump/body controls (`control`),
+//! `LivingEntity` physics (`living`) and per-species behaviour, models, animations and sounds.
 mod mob_slot;
 mod pending_pushes;
+mod push;
+pub use creaking::mob_can_use_portal;
 pub use mob_slot::MobSlot;
 pub use pending_pushes::{PendingPushes, apply_mob_pushes};
 pub mod ai;
@@ -34,6 +34,7 @@ pub mod copper_golem;
 pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
+pub mod dab;
 pub mod data;
 pub mod dolphin;
 pub mod doors;
@@ -1299,6 +1300,8 @@ pub struct Mob {
     /// `Entity.needsSync`: knocked back, pushed or jumped since its server
     /// last sent it, so the next update goes out at once.
     pub needs_sync: bool,
+    /// The mobs it pushed this turn, kept while the collision cap is on (`push::Cap`).
+    pub pushed: Vec<u32>,
     /// `Entity.syncPosition`: it bounced this tick (`restituteMovementAfterCollisions`),
     /// so its tracker keeps this position as a step of the next move it sends.
     pub sync_position: bool,
@@ -2428,6 +2431,8 @@ pub struct Seen {
     pub still: bool,
     /// `Entity.isVehicle`: something rides it.
     pub carrying: bool,
+    /// Pushes given or taken so far this tick, while the collision cap is on.
+    pub collisions: u32,
 }
 impl Seen {
     /// Whether `canBeCollidedWith` can ever hold for this kind: the slots
@@ -2586,13 +2591,6 @@ impl Mob {
 /// `events[from..]` into `pending`, which the caller adds to each mob's
 /// velocity before its tick (and to every mob once all have ticked). The
 /// other events keep their order.
-/// The part of `Entity.canUsePortal` a mob's own state decides: it is alive,
-/// it is not a boss that never travels, and — over `Monster.canUsePortal` —
-/// it is not a creaking bound to a heart (`Creaking.canUsePortal`). The
-/// rides and the players a side carries are the caller's half.
-pub fn mob_can_use_portal(m: &Mob) -> bool {
-    m.alive() && m.species() != Species::Wither && creaking::can_use_portal(m)
-}
 pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut PendingPushes) {
     // One pass: a crowd's tick holds a push per neighbour, and removing each
     // in place would shift the rest every time.
@@ -3064,6 +3062,7 @@ impl Mob {
             horizontal_collision: false,
             vertical_collision_below: false,
             needs_sync: false,
+            pushed: Vec::new(),
             sync_position: false,
             gear_knockback_resistance: None,
             hurt_time: 0,
@@ -4304,9 +4303,10 @@ impl Mob {
             self.position.z,
         ]
     }
+    /// `Entity.playSound(event, 1.0, 1.0)`: at the feet, and nothing while silent.
     pub fn sound(&self, event: &'static str, events: &mut Vec<MobEvent>) {
-        let at = [self.position.x, self.eye_y(), self.position.z];
-        events.push(MobEvent::Sound(event, at, 1.0, 1.0));
+        let at = [self.position.x, self.position.y, self.position.z];
+        events.extend((!self.silent).then_some(MobEvent::Sound(event, at, 1.0, 1.0)));
     }
     /// `Mob.getAmbientSoundInterval`; `HappyGhast` waits six times as long
     /// while it carries a passenger.
@@ -4345,9 +4345,8 @@ impl Mob {
     }
     /// Mob.playSound with LivingEntity.getVoicePitch.
     pub fn voice(&mut self, event: &'static str, events: &mut Vec<MobEvent>) {
-        // Java evaluates the arguments of `playSound(event, getSoundVolume(),
-        // getVoicePitch())` before the call, so the pitch is drawn even for a
-        // silent entity, whose `Entity.playSound` then plays nothing.
+        // Java draws the pitch before `Entity.playSound` looks at isSilent, so a
+        // silent entity draws it and then plays nothing.
         let pitch = self.voice_pitch();
         if self.silent {
             return;

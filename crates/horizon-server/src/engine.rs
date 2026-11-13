@@ -2,7 +2,7 @@
 //! game/dedicated.rs). It reads the vanilla files the supervisor writes, takes console commands on stdin and
 //! logs on stdout.
 
-use crate::config::Config;
+use crate::config::{Config, Entities};
 use std::{
     io::{BufRead, BufReader, Write},
     net::{Ipv4Addr, TcpStream},
@@ -239,6 +239,7 @@ pub fn spawn(
     dir: &Path,
     low_memory: bool,
     parallel_tick: bool,
+    entities: &Entities,
     transfers: Option<&str>,
 ) -> std::io::Result<Child> {
     command(
@@ -247,6 +248,7 @@ pub fn spawn(
         dir,
         low_memory,
         parallel_tick,
+        entities,
         transfers,
     )?
     .spawn()
@@ -259,6 +261,7 @@ fn command(
     dir: &Path,
     low_memory: bool,
     parallel_tick: bool,
+    entities: &Entities,
     transfers: Option<&str>,
 ) -> std::io::Result<Command> {
     // The game runs in the server folder, so a folder given relative to ours (`--dir srv`) would put its
@@ -300,6 +303,30 @@ fn command(
     // the variable alone, so one the operator set still works.
     if parallel_tick {
         command.env("HORIZON_PARALLEL_TICK", "1");
+    }
+    // `[entities] dab`: the game's switch and its three numbers (mobs/dab.rs). Off leaves the variables alone.
+    if entities.dab {
+        command
+            .env("HORIZON_DAB", "1")
+            .env(
+                "HORIZON_DAB_START_DISTANCE",
+                entities.dab_start_distance.to_string(),
+            )
+            .env(
+                "HORIZON_DAB_MAX_TICK_FREQ",
+                entities.dab_max_tick_freq.to_string(),
+            )
+            .env(
+                "HORIZON_DAB_ACTIVATION_DIST_MOD",
+                entities.dab_activation_dist_mod.to_string(),
+            );
+    }
+    // `[entities] max_collisions`: the cap on the pushes of a mob's tick. 0 (vanilla) leaves the variable alone.
+    if entities.max_collisions > 0 {
+        command.env(
+            "HORIZON_MAX_ENTITY_COLLISIONS",
+            entities.max_collisions.to_string(),
+        );
     }
     Ok(command)
 }
@@ -426,6 +453,7 @@ mod tests {
                 &dir,
                 low_memory,
                 false,
+                &Entities::default(),
                 None,
             )
             .unwrap();
@@ -448,6 +476,7 @@ mod tests {
                 &dir,
                 false,
                 parallel_tick,
+                &Entities::default(),
                 None,
             )
             .unwrap();
@@ -461,6 +490,60 @@ mod tests {
     }
 
     #[test]
+    fn dab_reaches_the_game_only_when_it_is_on() {
+        let env = |entities: Entities, name: &str| {
+            let dir = std::env::temp_dir();
+            let command = command(
+                Path::new("horizon-client"),
+                &dir,
+                &dir,
+                false,
+                false,
+                &entities,
+                None,
+            )
+            .unwrap();
+            command
+                .get_envs()
+                .find(|(k, _)| *k == name)
+                .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+        };
+        let on = Entities {
+            dab: true,
+            dab_start_distance: 16,
+            dab_max_tick_freq: 10,
+            dab_activation_dist_mod: 7,
+            ..Entities::default()
+        };
+        assert_eq!(env(on.clone(), "HORIZON_DAB").as_deref(), Some("1"));
+        assert_eq!(
+            env(on.clone(), "HORIZON_DAB_START_DISTANCE").as_deref(),
+            Some("16")
+        );
+        assert_eq!(
+            env(on.clone(), "HORIZON_DAB_MAX_TICK_FREQ").as_deref(),
+            Some("10")
+        );
+        assert_eq!(
+            env(on, "HORIZON_DAB_ACTIVATION_DIST_MOD").as_deref(),
+            Some("7")
+        );
+        assert_eq!(env(Entities::default(), "HORIZON_DAB"), None);
+        let capped = Entities {
+            max_collisions: 8,
+            ..Entities::default()
+        };
+        assert_eq!(
+            env(capped, "HORIZON_MAX_ENTITY_COLLISIONS").as_deref(),
+            Some("8")
+        );
+        assert_eq!(
+            env(Entities::default(), "HORIZON_MAX_ENTITY_COLLISIONS"),
+            None
+        );
+    }
+
+    #[test]
     fn transfers_reach_the_game_only_when_they_are_on() {
         let args = |transfers: Option<&str>| {
             let dir = std::env::temp_dir();
@@ -470,6 +553,7 @@ mod tests {
                 &dir,
                 false,
                 false,
+                &Entities::default(),
                 transfers,
             )
             .unwrap();
@@ -653,6 +737,7 @@ mod tests {
                 &server,
                 false,
                 false,
+                &Entities::default(),
                 None,
             ) {
                 Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {

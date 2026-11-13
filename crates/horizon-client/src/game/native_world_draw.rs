@@ -13,7 +13,7 @@ use std::ops::{Deref, DerefMut};
 /// One world frame, independently of block entities or source blocks. Its pose
 /// starts camera-relative and shares `BlockEntityDraw`'s push/pop, translate,
 /// rotate and scale operations, partial tick, game time and packed light.
-/// `keep` does not cache a world canvas. API @API:world_canvas@.
+/// `keep` does not cache a world canvas. API 431.
 pub struct NativeWorldDraw {
     pub camera: [f64; 3],
     draw: BlockEntityDraw,
@@ -143,7 +143,7 @@ impl Game<'_> {
     /// Normal, depth-tested atlas quad under the current pose. UVs use 16
     /// texels per sprite side; color is [red, green, blue, alpha]. No model
     /// diffuse lighting is applied; `draw.light` still selects lightmap light.
-    /// False for an unknown sprite or non-finite geometry. API @API:world_canvas@.
+    /// False for an unknown sprite or non-finite geometry. API 431.
     pub(super) fn native_world_quad(
         &self,
         draw: &mut NativeWorldDraw,
@@ -161,7 +161,7 @@ impl Game<'_> {
     }
     /// Actual styled world font at (0,0), with ARGB default color and optional
     /// eight-offset ARGB outline. Returns the text advance in font pixels.
-    /// The front of outlined text uses POLYGON_OFFSET. API @API:world_canvas@.
+    /// The front of outlined text uses POLYGON_OFFSET. API 431.
     pub(super) fn native_world_text(
         &self,
         draw: &mut NativeWorldDraw,

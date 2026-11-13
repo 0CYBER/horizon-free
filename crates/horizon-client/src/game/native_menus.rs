@@ -163,7 +163,7 @@ impl Game<'_> {
     /// reason, the input slots go to `native_menu_input_closed` and what the
     /// mods leave there goes back to the player (`clearContainer`). None
     /// for a player not here, or `input` empty or past the rows' slots.
-    /// API @API:menu_input@.
+    /// API 533.
     pub(super) fn native_open_menu_with_input(
         &mut self,
         uuid: u128,
@@ -185,7 +185,7 @@ impl Game<'_> {
     }
     /// What the player's open native menu holds, by slot: the items the mod
     /// shows and what the player put in its input slots. None while no menu
-    /// a mod opened is open. API @API:menu_input@.
+    /// a mod opened is open. API 533.
     pub(super) fn native_menu_contents(&self, uuid: u128) -> Option<Vec<Option<ItemStack>>> {
         let host = self.lan.as_ref()?;
         let g = host
@@ -199,7 +199,7 @@ impl Game<'_> {
     /// The stack on the player's cursor: inside `native_menu_clicked`, the
     /// one they held as they made that click (a click on the mod's own slots
     /// moves nothing, so it is still there); else the one they hold now.
-    /// None for an empty cursor or a player not here. API @API:menu_input@.
+    /// None for an empty cursor or a player not here. API 533.
     pub(super) fn native_menu_cursor(&self, uuid: u128) -> Option<ItemStack> {
         if let Some((player, cursor)) = &self.native_click_cursor
             && *player == uuid
@@ -558,6 +558,34 @@ impl Game<'_> {
             MenuRemoval::Disconnected => self.drop_guest_items(host, gi, stacks),
         }
     }
+}
+
+/// Sets the viewer counts `known` holds for `dim` to `now` and returns the
+/// changes as `(pos, previous, viewers)`, in position order. A container that
+/// is no longer counted goes to 0 and leaves `known`.
+pub(super) fn viewer_changes(
+    known: &mut std::collections::HashMap<(&'static str, (i32, i32, i32)), u32>,
+    dim: &'static str,
+    mut now: std::collections::HashMap<(i32, i32, i32), u32>,
+) -> Vec<((i32, i32, i32), u32, u32)> {
+    let mut changes = Vec::new();
+    known.retain(|&(d, pos), previous| {
+        if d != dim {
+            return true;
+        }
+        let viewers = now.remove(&pos).unwrap_or(0);
+        if viewers != *previous {
+            changes.push((pos, *previous, viewers));
+            *previous = viewers;
+        }
+        viewers > 0
+    });
+    for (pos, viewers) in now {
+        known.insert((dim, pos), viewers);
+        changes.push((pos, 0, viewers));
+    }
+    changes.sort_unstable();
+    changes
 }
 
 #[cfg(test)]

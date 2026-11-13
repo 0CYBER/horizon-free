@@ -18,7 +18,7 @@ impl Game<'_> {
     /// `MinecraftServer.getTickTimesNanos` lays them out: the tick numbered
     /// `n` at index `n % 100` (0 where none was recorded yet). Sort a copy
     /// for percentiles; the average is `native_tick_stats`'. On a client, its
-    /// own ticks. API @API:tick_times@.
+    /// own ticks. API 554.
     pub(super) fn native_tick_times(&self) -> Vec<u64> {
         self.clock.tick_times_nanos()
     }
@@ -26,7 +26,7 @@ impl Game<'_> {
     /// (Bukkit's `Server.getTPS`), measured between the ends of the recorded
     /// ticks and averaged once a second as a load average is; 20 at the
     /// start. A sprint reads more than the rate, a server that falls behind
-    /// less. API @API:tick_times@.
+    /// less. API 554.
     pub(super) fn native_tps(&self) -> [f64; 3] {
         self.clock.tps()
     }
@@ -37,7 +37,7 @@ impl Game<'_> {
     /// are those the hub holds, so inside a player's own hook (the hub taken
     /// out) none are counted. A walk over every entity: once a second or
     /// less, not every tick. None on a client and for a level that isn't
-    /// open. API @API:level_stats@.
+    /// open. API 529.
     pub(super) fn native_level_stats(&mut self, dimension: &str) -> Option<NativeLevelStats> {
         let dim = self.diagnosed_level(dimension)?;
         self.with_level_in_place(dim, |game| {
@@ -62,7 +62,7 @@ impl Game<'_> {
     /// Every entity of the open level `dimension`: its id (the one events
     /// and `native_entity` take), its type and its position, players
     /// included (as `native_level_stats` counts them). Empty on a client and
-    /// for a level that isn't open. API @API:level_stats@.
+    /// for a level that isn't open. API 529.
     pub(super) fn native_level_entities(
         &mut self,
         dimension: &str,
@@ -77,7 +77,7 @@ impl Game<'_> {
     /// its type, the vanilla block entity type of its block (`minecraft:chest`,
     /// `minecraft:barrel`, `minecraft:mob_spawner`), else the block's name (a
     /// mod's). Empty on a client and for a level that isn't open. API
-    /// @API:level_stats@.
+    /// 529.
     pub(super) fn native_level_block_entities(&self, dimension: &str) -> Vec<([i32; 3], String)> {
         let world = match self.diagnosed_level(dimension) {
             Some(dim) if dim == self.dim => Some(&self.world),
@@ -91,7 +91,7 @@ impl Game<'_> {
     /// `native_server_packets`, from now on: while on, each packet costs the
     /// network thread a lock and a list entry, so turn it on for a session
     /// and off after. Off drops what is kept. A switch for the whole server,
-    /// shared by every mod. API @API:server_packets@.
+    /// shared by every mod. API 549.
     pub(super) fn native_count_packets(&self, on: bool) {
         horizon_client::lan::conn::count_packets(on);
         if !on {
@@ -128,7 +128,7 @@ impl Game<'_> {
     /// `HORIZON_SPIKES`, performance reports and every mod: spans stay on
     /// while anyone wants them. Spans are recorded on every thread (two clock
     /// reads a step): turn them on for a profiling session and off after.
-    /// Only on a server. API @API:server_tick_timed@.
+    /// Only on a server. API 550.
     pub(super) fn native_spans(&self, on: bool) {
         if self.native_authoritative() {
             tick_profile::want_spans(tick_profile::SPANS_MOD, on);
@@ -140,12 +140,12 @@ impl Game<'_> {
     /// read off. Sampled apart from a performance report's, so both can run.
     /// For a lighter profile, turn it on in `ServerTickStart` of one tick in
     /// N and off after. Call it from a server hook (it belongs to the server
-    /// thread). API @API:server_tick_timed@.
+    /// thread). API 550.
     pub(super) fn native_mob_cost_sampling(&self, on: bool) {
         tick_profile::set_mod_sampling(on);
     }
     /// The mob costs sampled since the last call (`native_mob_cost_sampling`),
-    /// costliest first; clears them. API @API:server_tick_timed@.
+    /// costliest first; clears them. API 550.
     pub(super) fn native_take_mob_costs(&self) -> Vec<NativeMobCost> {
         tick_profile::take_mod()
             .into_iter()

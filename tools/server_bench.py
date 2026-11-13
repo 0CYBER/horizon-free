@@ -36,6 +36,8 @@ Two more Java servers, both dev-only downloads into .local/server-bench/jars (ne
   tools/benchmark-deps/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
 Both run with the same heap as vanilla (`--heap`).
 
+`--profile[=ARGS]` has Horizon record its measure window with `horizon-report ARGS` and attaches the run's record with `horizon-perf attach` (docs/hosting.md).
+
 `pumpkin` runs Pumpkin (github.com/Pumpkin-MC/Pumpkin, GPL-3.0), a binary you built yourself and name with
 `--pumpkin`: a black box, nothing of it is read or shipped. A first start in a scratch folder (on 127.0.0.1
 only, without telemetry) writes its default configuration; every run gets that file with the same settings
@@ -71,6 +73,14 @@ ROOT = lab.ROOT
 EXE = '.exe' if os.name == 'nt' else ''
 # Where horizon-server and horizon-bots are (the engine is found beside horizon-server or on the PATH).
 BIN = Path(os.environ.get('HORIZON_BENCH_BIN', ROOT / 'target/release'))
+
+PERF = BIN / f'horizon-perf{EXE}'
+# The longest window horizon-report records.
+REPORT_MAX_SECONDS = 600
+# What a run's record is called inside the capture it is attached to.
+RUN_RECORD = 'server-bench-run'
+# The line the server logs once the capture is on disk.
+SAVED = re.compile(r'Saved (.+?\.hzperf) \(the file stays')
 
 PROPERTIES = {
     'level-seed': '12345',
@@ -376,7 +386,49 @@ def server_command(kind, directory, args):
     else:
         # The anticheat is on by default: off, to measure the server without it.
         toml.write_text(toml.read_text() + '\n[anticheat]\nenabled = false\n')
+    if args.dab:
+        # Mob AI far from players (docs/hosting.md): the defaults of Pufferfish's DAB.
+        toml.write_text(toml.read_text() + '\n[entities]\ndab = true\n')
     return [server, '--dir', directory, 'run']
+
+
+def report_line(seconds, extra=''):
+    """The console line that records the measure window; the game ends a report at REPORT_MAX_SECONDS."""
+    return ' '.join(['horizon-report', str(min(seconds, REPORT_MAX_SECONDS)), *extra.split()])
+
+
+def saved_capture(lines, directory):
+    """The capture the server said it saved (it prints the path from its own folder), or None."""
+    for line in lines:
+        if found := SAVED.search(line):
+            return directory / found.group(1)
+    return None
+
+
+def attach_run(capture, record, directory, run=subprocess.run):
+    """Adds the run's record to the capture as an attachment, with horizon-perf."""
+    body = directory / 'run-record.json'
+    body.write_text(json.dumps(record))
+    run([PERF, 'attach', capture, '--name', RUN_RECORD, '--body', body], check=True, capture_output=True, text=True)
+
+
+def start_profile(server, kind, args):
+    """Has Horizon's console record the measure window; true when it was asked to (only Horizon writes captures)."""
+    if args.profile is None or kind != 'horizon':
+        return False
+    server.console(report_line(args.seconds, args.profile))
+    return True
+
+
+def finish_profile(server, directory, result, run=subprocess.run):
+    """Waits for the capture and attaches the run's record to it; a failure is noted, the run stands."""
+    try:
+        server.wait_for(SAVED.pattern, 120)
+        capture = saved_capture(server.since(0), directory)
+        attach_run(capture, {k: v for k, v in result.items() if k != 'bots_failed'}, directory, run)
+        result['profile'] = str(capture)
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as e:
+        result['profile_error'] = str(e)
 
 
 def flag_count(directory):
@@ -390,6 +442,26 @@ def bots_command(args):
     if args.bots_via:
         return [*args.bots_via.split(), args.bots_bin or 'horizon-bots']
     return [args.bots_bin or BIN / f'horizon-bots{EXE}']
+
+
+def populate(server, spec, seed):
+    """Fills the level around the players with `spec` = "items,carts,mobs" (counts), as a busy server has it: the
+    entity tracker and the entity states cost by what is in the level, not only by how many players walk in it.
+    Each one goes at a random offset of up to 120 blocks from a random player: the offsets
+    come from the same seed on every run, but `execute at @r` picks the player with the server's own RNG, so the
+    placements still differ between runs."""
+    import random
+    rng = random.Random(seed)
+    counts = [int(n) for n in (spec.split(',') + ['0', '0'])[:3]]
+    things = [
+        ('item', '{Item:{id:"minecraft:cobblestone",count:1},Age:-32768s}'),
+        ('minecart', ''),
+        ('chicken', '{PersistenceRequired:1b}'),
+    ]
+    for count, (kind, data) in zip(counts, things):
+        for _ in range(count):
+            dx, dz = rng.randint(-120, 120), rng.randint(-120, 120)
+            server.console(f'execute at @r run summon {kind} ~{dx} ~3 ~{dz} {data}'.rstrip())
 
 
 def run_once(kind, bots, behaviour, args, out):
@@ -416,6 +488,13 @@ def run_once(kind, bots, behaviour, args, out):
         server.console('gamerule respawn_radius 0')
         for rule in filter(None, args.gamerule.split(',')):
             server.console('gamerule ' + rule.replace('=', ' '))
+        if args.farm:
+            # A farm of mobs ~100 blocks east of the spawn, inside the simulation distance and far from
+            # the bots: the mobs a player is not near, which DAB slows. Cows and villagers (zombies would burn in daylight), two blocks apart so cramming leaves them be.
+            for i in range(args.farm):
+                x, z = 90 + i % 40 * 2, -80 + i // 40 * 2
+                kind = 'minecraft:villager' if i % 2 else 'minecraft:cow'
+                server.console(f'summon {kind} {x} 100 {z} {{PersistenceRequired:1b}}')
         time.sleep(5)
         report = out / f'{name}-bots.json'
         total = bots * args.join_every + args.warmup + args.seconds
@@ -432,7 +511,13 @@ def run_once(kind, bots, behaviour, args, out):
         bot_lines = []
         threading.Thread(target=lambda: bot_lines.extend(bot_process.stdout), daemon=True).start()
         # All bots in, then the warm-up.
-        time.sleep(bots * args.join_every + args.warmup)
+        if args.entities:
+            time.sleep(bots * args.join_every)
+            populate(server, args.entities, args.seed)
+            time.sleep(args.warmup)
+        else:
+            time.sleep(bots * args.join_every + args.warmup)
+        profiling = start_profile(server, kind, args)
         measure_start = time.time()
         rss, cpu, ticks = [], [], []
         _, last_cpu = tree_usage(server.process.pid)
@@ -501,6 +586,8 @@ def run_once(kind, bots, behaviour, args, out):
             'bots_failed': [b for b in summary.get('per_bot', []) if b.get('error')],
             'tick_queries': len(ticks),
         })
+        if profiling:
+            finish_profile(server, directory, result)
     except Exception as e:  # a failed run is reported, and the next one still runs
         result['error'] = str(e)
     finally:
@@ -566,9 +653,15 @@ def main():
     parser.add_argument('--gamerule', default='',
                         help="more game rules for both servers, 'name=value,...' (locator_bar=false: Horizon has "
                              "no locator bar yet)")
+    parser.add_argument('--entities', default='', metavar='ITEMS,CARTS,MOBS',
+                        help='fill the level with this many dropped items, minecarts and chickens once the bots are in')
     parser.add_argument('--heap', default='4g', help='the Java heap, -Xms and -Xmx (vanilla, Paper, Fabric)')
     parser.add_argument('--out', type=Path, default=None, help='the report (JSON)')
     parser.add_argument('--nice', type=int, default=0, help='run the servers under nice -n N')
+    parser.add_argument('--dab', action='store_true',
+                        help="turn Horizon's mob AI throttling on (server.toml [entities] dab); Horizon only")
+    parser.add_argument('--farm', type=int, default=0,
+                        help='summon this many mobs ~100 blocks from the spawn, away from the bots (the DAB fixture)')
     parser.add_argument('--anticheat', action='store_true',
                         help="turn Horizon's anticheat on (server.toml [anticheat]); its flags are counted")
     parser.add_argument('--ground', action='store_true',
@@ -578,6 +671,9 @@ def main():
     parser.add_argument('--bots-bin', default='', help='horizon-bots (on the --bots-via machine)')
     parser.add_argument('--connect', default='127.0.0.1', help='the address the bots reach the server at')
     parser.add_argument('--pumpkin', type=Path, default=None, help='the Pumpkin binary (--servers pumpkin)')
+    parser.add_argument('--profile', nargs='?', const='', default=None, metavar='ARGS',
+                        help="record Horizon's measure window with horizon-report (ARGS: its flags, as "
+                             "--profile=--no-samples) and attach the run's record to the capture")
     parser.add_argument('--repeat', type=int, default=1,
                         help='rounds: every server and bot count once per round, the servers alternated')
     args = parser.parse_args()
