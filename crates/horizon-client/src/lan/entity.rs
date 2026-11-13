@@ -1640,6 +1640,10 @@ mod late_pair_tests;
 mod slab;
 
 #[cfg(test)]
+#[path = "entity/send_bench.rs"]
+mod send_bench;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
