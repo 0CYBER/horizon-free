@@ -51,7 +51,7 @@ pub(super) struct GuestPlay {
     destroy_delay: u32,
     using: Option<(usize, u32)>,
     use_duration: i32,
-    use_ticks_set: bool,
+    use_start: super::using_item::UseStart,
     use_delay: u32,
     /// The shield's ItemCooldowns entry: an axe disabled it for this many ticks.
     pub(super) shield_cooldown: u32,
@@ -199,7 +199,7 @@ pub(super) struct GuestSwap {
     destroy_delay: u32,
     using: Option<(usize, u32)>,
     use_duration: i32,
-    use_ticks_set: bool,
+    use_start: super::using_item::UseStart,
     use_delay: u32,
     pub(super) shield_cooldown: u32,
     /// The guest's item cooldowns (`Game::cooldowns` for its turn).
@@ -613,7 +613,7 @@ impl Game<'_> {
         let destroy_delay = std::mem::replace(&mut self.destroy_delay, play.destroy_delay);
         let using = std::mem::replace(&mut self.using, play.using.take());
         let use_duration = std::mem::replace(&mut self.use_duration, play.use_duration);
-        let use_ticks_set = std::mem::replace(&mut self.use_ticks_set, play.use_ticks_set);
+        let use_start = std::mem::replace(&mut self.use_start, std::mem::take(&mut play.use_start));
         let use_delay = std::mem::replace(&mut self.use_delay, play.use_delay);
         let shield_cooldown = std::mem::replace(&mut self.shield_cooldown, play.shield_cooldown);
         let cooldowns = std::mem::replace(&mut self.cooldowns, std::mem::take(&mut play.cooldowns));
@@ -741,7 +741,7 @@ impl Game<'_> {
             destroy_delay,
             using,
             use_duration,
-            use_ticks_set,
+            use_start,
             use_delay,
             shield_cooldown,
             cooldowns,
@@ -843,7 +843,7 @@ impl Game<'_> {
             destroy_delay,
             using,
             use_duration,
-            use_ticks_set,
+            use_start,
             use_delay,
             shield_cooldown,
             cooldowns,
@@ -1002,7 +1002,7 @@ impl Game<'_> {
         play.destroy_delay = std::mem::replace(&mut self.destroy_delay, destroy_delay);
         play.using = std::mem::replace(&mut self.using, using);
         play.use_duration = std::mem::replace(&mut self.use_duration, use_duration);
-        play.use_ticks_set = std::mem::replace(&mut self.use_ticks_set, use_ticks_set);
+        play.use_start = std::mem::replace(&mut self.use_start, use_start);
         play.use_delay = std::mem::replace(&mut self.use_delay, use_delay);
         play.shield_cooldown = std::mem::replace(&mut self.shield_cooldown, shield_cooldown);
         play.cooldowns = std::mem::replace(&mut self.cooldowns, cooldowns);
@@ -2268,7 +2268,7 @@ impl Game<'_> {
                                 {
                                     g.native_player_ready_arrow(uuid, &name, &arrow);
                                 }
-                                g.release_used_item(&stack, ticks, false);
+                                g.release_using_item(&stack, ticks);
                                 if listening {
                                     g.native_player_stop_using_item(uuid, &name);
                                 }
@@ -2302,13 +2302,11 @@ impl Game<'_> {
                     let slot = g.selected;
                     std::mem::swap(&mut g.inventory[slot], &mut g.offhand);
                     let (offhand, main) = (g.offhand.clone(), g.inventory[slot].clone());
-                    if let Some(play) = host.play.get_mut(&conn) {
-                        play.using = None;
-                    }
-                    // setItemInHand: the off hand, then the main hand.
+                    // setItemInHand: the off hand, then the main hand, then stopUsingItem.
                     self.as_guest(host, conn, |g| {
                         g.player_on_equip("offhand", main.as_ref(), offhand.as_ref());
                         g.player_on_equip("mainhand", offhand.as_ref(), main.as_ref());
+                        g.stop_using();
                     });
                     let guest = &host.hub.guests[gi];
                     self.native_player_swap_with_equipment_slot(guest.uuid, &guest.name, "offhand");
@@ -2352,13 +2350,13 @@ impl Game<'_> {
                 let g = &mut host.hub.guests[gi];
                 let changed = g.selected != p.slot as usize;
                 g.selected = p.slot as usize;
-                if let Some(play) = host.play.get_mut(&conn)
-                    && changed
+                if changed
+                    && let Some(play) = host.play.get(&conn)
                     && play
                         .using
                         .is_some_and(|(slot, _)| slot != super::shield::OFFHAND_SLOT)
                 {
-                    play.using = None;
+                    self.as_guest(host, conn, |g| g.stop_using());
                 }
             }
             // ServerGamePacketListenerImpl.handlePunch: the main hand swings
@@ -5032,7 +5030,7 @@ impl Game<'_> {
         let mut soul = None;
         let events = self.as_guest(host, conn, |game| {
             let rules = game.world.health_rules;
-            let freeze_immune = game.wears_freeze_immune();
+            let (freeze_immune, boots) = (game.wears_freeze_immune(), game.wears_leather_boots());
             let burn_immune = game.wears_burn_from_stepping_immunity();
             let boat = game.riding_boat_fluid_box();
             let Some(player) = game.player.as_mut() else {
@@ -5119,7 +5117,7 @@ impl Game<'_> {
             // lit campfires and grown sweet berry bushes hurt (#1305).
             w.player.shift_key_down = sneaking;
             let _ = w.player.set_sleeping(sleeping);
-            w.player.freeze_immune = freeze_immune;
+            (w.player.freeze_immune, w.player.leather_boots) = (freeze_immune, boots);
             w.player.burn_from_stepping_immune = burn_immune;
             let _ = w.server_block_damage(start);
             let _ = w.update_soul_speed_block();
@@ -5253,22 +5251,18 @@ impl Game<'_> {
                         host.hub.sound(name, at, volume, pitch, source, None);
                     }
                 }
-                // LivingEntity.causeFallDamage, and HoneyBlock.fallOn's
-                // `entity.playSound`: Player.playSound skips the guest, whose
-                // own client plays it; everyone else hears it.
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Sound {
-                    sound,
-                    volume,
-                    pitch,
-                    ..
-                }) => {
-                    if let Some(name) = sound
-                        .player_fall_sound()
-                        .or_else(|| sound.honey_landing_sound())
-                    {
-                        let source = horizon_client::settings::sound_source(name) as i32;
-                        self.audio.play_unshared(name, Some(at), volume, pitch);
-                        host.hub.sound(name, at, volume, pitch, source, Some(conn));
+                // LivingEntity.causeFallDamage (the fall sound and
+                // playBlockFallSound), and HoneyBlock.fallOn's `entity.playSound`:
+                // Player.playSound skips the guest, whose own client plays it;
+                // everyone else hears it.
+                MotionEvent::Fall(
+                    event @ (horizon_client::landing::FallEvent::Sound { .. }
+                    | horizon_client::landing::FallEvent::BlockFallSound { .. }),
+                ) => {
+                    if let Some((name, volume, pitch)) = event.heard_fall_sound(self.res.facts()) {
+                        let source = horizon_client::settings::sound_source(&name) as i32;
+                        self.audio.play_unshared(&name, Some(at), volume, pitch);
+                        host.hub.sound(&name, at, volume, pitch, source, Some(conn));
                     }
                 }
                 // HoneyBlock.fallOn: entity event 54, including the player who

@@ -623,7 +623,8 @@ def check_menu_transfer(host, guest, out):
         guest.raw('key', 'e', 'tap')
         guest.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
         inventory = guest('screen')
-        stale = [s for s in inventory.get('slots', []) if s.get('slot', 0) >= 300]
+        # 300-499 are a container's slots; 500-504 are the player's own armor and offhand.
+        stale = [s for s in inventory.get('slots', []) if 300 <= s.get('slot', 0) < 500]
         diamonds = guest('inventory')['counts'].get('minecraft:diamond', 0)
         guest.shot(out, f'menu-transfer-{label}')
         guest.raw('key', 'esc', 'tap')
@@ -650,6 +651,10 @@ def check_menu_transfer(host, guest, out):
         settled('respawn')
     finally:
         back_to_game(guest)
+        # A failure after the trip must not leave the guest in the Nether for the checks that follow.
+        if guest('state').get('dimension') != OVERWORLD:
+            guest('command', command=f'execute in {OVERWORLD} run tp @s {home[0]:.2f} {home[1]:.2f} {home[2]:.2f}')
+            wait_dimension(guest, OVERWORLD, 400)
         guest('command', command=f'execute in {OVERWORLD} run setblock {chest[0]} {chest[1]} {chest[2]} minecraft:air')
     return results
 

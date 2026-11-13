@@ -64,6 +64,26 @@ pub(super) struct Group<M: MobSlot> {
     pub corpses: Vec<Mob>,
     pub gone: Vec<Gone>,
     pub guest_events: Vec<(u32, u32, MobEvent)>,
+    /// The mod hooks its turns kept for the join, with each turn's place in the whole list (a
+    /// group of the parallel tick with mods loaded: `native_client_hooks::Deferred`).
+    pub deferred: Vec<(usize, horizon_client::native_client_hooks::Deferred)>,
+    /// Whether each turn draws its level-random rolls from a stream of its own, so that it waits
+    /// for no other lane (`parallel::mobs_own_random`, read once where the group is made).
+    own_random: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's switch for the groups its thread makes, over the parallel tick's.
+    pub(super) static OWN_RANDOM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn own_random() -> bool {
+    #[cfg(test)]
+    if OWN_RANDOM.with(std::cell::Cell::get) {
+        return true;
+    }
+    horizon_client::parallel::mobs_own_random()
 }
 
 /// What decides each turn besides the group, read at the turn as the serial loop reads it.
@@ -77,7 +97,7 @@ pub(super) struct Turns<'t, 'w> {
     /// The one player's position, when the level has one: every mob's nearest.
     pub single_player: Option<Option<Vec3>>,
     /// Whether a mod canceled a mob's tick.
-    pub canceled: &'t dyn Fn(u32) -> bool,
+    pub canceled: &'t (dyn Fn(u32) -> bool + Sync),
     /// `getCurrentDifficultyAt` a position.
     pub difficulty: &'t (dyn Fn([f64; 3]) -> LocalDifficulty + Sync),
     /// The last chunk's difficulty: mobs come in runs of one chunk.
@@ -137,6 +157,8 @@ impl<M: MobSlot> Group<M> {
             corpses: Vec::new(),
             gone: Vec::new(),
             guest_events: Vec::new(),
+            deferred: Vec::new(),
+            own_random: own_random(),
         }
     }
 
@@ -173,7 +195,17 @@ impl<M: MobSlot> Group<M> {
                 foreign.reader.set(at);
             }
             if let Some(foreign) = foreign {
-                foreign.in_seed_order(at, || self.turn(i, turns, shared));
+                foreign.in_seed_order(at, || {
+                    if foreign.defers {
+                        let ((), kept) =
+                            horizon_client::native_client_hooks::deferring_turn(|| {
+                                self.turn(i, turns, shared);
+                            });
+                        self.deferred.extend(kept.into_iter().map(|d| (at, d)));
+                    } else {
+                        self.turn(i, turns, shared);
+                    }
+                });
             } else {
                 self.turn(i, turns, shared);
             }
@@ -334,11 +366,16 @@ impl<M: MobSlot> Group<M> {
         w.controlling_player_movement = controlling_player_movement;
         self.ticked.insert(self.mobs[i].mob().id);
         let sampled = super::super::tick_profile::start_mob(&self.mobs[i].mob().kind);
+        // The level's stream is one for every lane: a turn that draws from it waits for the
+        // turns before it. On its own stream it waits for none.
+        let mut own = self
+            .own_random
+            .then(|| horizon_client::parallel::mob_turn_random(self.mobs[i].mob().id, w.game_time));
         let kept = horizon_client::mobs::riders::tick(
             &mut self.mobs,
             i,
             &w,
-            &mut self.random,
+            own.as_mut().unwrap_or(&mut self.random),
             &mut self.events,
         );
         super::super::tick_profile::end_mob(shared.level_id, sampled);
@@ -363,7 +400,10 @@ impl<M: MobSlot> Group<M> {
                 shared.guest_ids,
                 self.player.as_ref(),
             );
-            if let Some((player, mob)) = named {
+            // A grouped turn runs while no mod hooks the change (`horizon_mod_api_gen::mob_turn`).
+            if let Some((player, mob)) = named
+                && !horizon_client::native_client_hooks::deferring()
+            {
                 let kind = super::super::native_hooks::mob_kind(m);
                 let mut cancel = false;
                 Game::native_living_change_target(
@@ -447,8 +487,19 @@ impl<M: MobSlot> Group<M> {
         self.keep.push(kept);
         // ServerLevel ticks entities one after another: the ones
         // after this mob see it as it is now.
+        let collisions = self.snapshot[i].collisions;
         self.snapshot[i] = seen(m, shared.uuid);
+        self.snapshot[i].collisions = collisions;
         self.snapshot[i].alive &= kept;
+        // The server's collision cap (`mobs::max_collisions`): each mob `m` pushed in its turn
+        // counts one more for it and for the mob pushed, which the mobs after it see. Off, a turn
+        // leaves no list.
+        for id in std::mem::take(&mut m.pushed) {
+            self.snapshot[i].collisions += 1;
+            if let Some(&slot) = self.index.get(&id) {
+                self.snapshot[slot as usize].collisions += 1;
+            }
+        }
         self.grid.update(i, self.snapshot[i].bounds);
         horizon_client::mobs::apply_brain_events(&mut self.mobs, &mut self.events, from);
     }

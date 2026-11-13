@@ -694,7 +694,7 @@ impl Game<'_> {
         position: [f64; 3],
         velocity: [f64; 3],
     ) {
-        self.add_item_entity_drawn(stack, position, Some(velocity), true, 0);
+        self.add_item_entity_drawn(stack, position, Some(velocity), true, 0, 0);
     }
 
     pub(super) fn add_item_entity(
@@ -704,7 +704,21 @@ impl Game<'_> {
         velocity: Option<[f64; 3]>,
         pickup_delay: u32,
     ) -> [f64; 3] {
-        self.add_item_entity_drawn(stack, position, velocity, velocity.is_none(), pickup_delay)
+        self.add_item_entity_drawn(
+            stack,
+            position,
+            velocity,
+            velocity.is_none(),
+            pickup_delay,
+            0,
+        )
+    }
+
+    /// `spawnAtLocation` for a drop that then calls
+    /// `ItemEntity.setExtendedLifetime`: the item joins the world at `age`
+    /// instead of 0, so the wither's nether star lives 12000 ticks, not 6000.
+    pub(super) fn spawn_item_aged(&mut self, stack: ItemStack, position: [f64; 3], age: i32) {
+        self.add_item_entity_drawn(stack, position, None, true, 10, age);
     }
 
     /// `add_item_entity`; `constructor_motion` draws the five-argument
@@ -716,6 +730,7 @@ impl Game<'_> {
         velocity: Option<[f64; 3]>,
         constructor_motion: bool,
         pickup_delay: u32,
+        age: i32,
     ) -> [f64; 3] {
         let (item, count) = (stack.item.clone(), stack.count as i32);
         self.next_entity += 1;
@@ -738,6 +753,7 @@ impl Game<'_> {
             rotation: [yaw, 0.0],
             pickup_delay: i64::from(pickup_delay),
             random: own,
+            age,
             ..ItemEntity::new(
                 self.next_entity,
                 stack,
@@ -1017,14 +1033,10 @@ mod escape_tests {
         let mut game = server_game();
         let feet = horizon_core::geometry::Vec3::new(8.5, 70.0, 8.5);
         game.player = Some(horizon_client::motion::PlayerMotion::new(game.motion, feet).unwrap());
-        // Entity-ticking chunks also need the surrounding loaded chunks.
-        for x in -2..=2 {
-            for z in -2..=2 {
-                game.world
-                    .chunks
-                    .insert((x, z), Arc::new(Chunk::empty(x, z)));
-            }
-        }
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.load_ticking_neighbourhood(0, 0);
         game.update_chunk_tickets();
         assert!(game.entity_ticking_area()(8, 8));
         let stone = game
@@ -1056,3 +1068,6 @@ mod escape_tests {
 #[cfg(test)]
 #[path = "item_void_tests.rs"]
 mod item_void_tests;
+#[cfg(test)]
+#[path = "wither_star_tests.rs"]
+mod wither_star_tests;

@@ -386,6 +386,9 @@ def server_command(kind, directory, args):
     else:
         # The anticheat is on by default: off, to measure the server without it.
         toml.write_text(toml.read_text() + '\n[anticheat]\nenabled = false\n')
+    if args.dab:
+        # Mob AI far from players (docs/hosting.md): the defaults of Pufferfish's DAB.
+        toml.write_text(toml.read_text() + '\n[entities]\ndab = true\n')
     return [server, '--dir', directory, 'run']
 
 
@@ -441,6 +444,26 @@ def bots_command(args):
     return [args.bots_bin or BIN / f'horizon-bots{EXE}']
 
 
+def populate(server, spec, seed):
+    """Fills the level around the players with `spec` = "items,carts,mobs" (counts), as a busy server has it: the
+    entity tracker and the entity states cost by what is in the level, not only by how many players walk in it.
+    Each one goes at a random offset of up to 120 blocks from a random player: the offsets
+    come from the same seed on every run, but `execute at @r` picks the player with the server's own RNG, so the
+    placements still differ between runs."""
+    import random
+    rng = random.Random(seed)
+    counts = [int(n) for n in (spec.split(',') + ['0', '0'])[:3]]
+    things = [
+        ('item', '{Item:{id:"minecraft:cobblestone",count:1},Age:-32768s}'),
+        ('minecart', ''),
+        ('chicken', '{PersistenceRequired:1b}'),
+    ]
+    for count, (kind, data) in zip(counts, things):
+        for _ in range(count):
+            dx, dz = rng.randint(-120, 120), rng.randint(-120, 120)
+            server.console(f'execute at @r run summon {kind} ~{dx} ~3 ~{dz} {data}'.rstrip())
+
+
 def run_once(kind, bots, behaviour, args, out):
     name = f'{kind}-{behaviour}-{bots}'
     directory = out / name
@@ -465,6 +488,13 @@ def run_once(kind, bots, behaviour, args, out):
         server.console('gamerule respawn_radius 0')
         for rule in filter(None, args.gamerule.split(',')):
             server.console('gamerule ' + rule.replace('=', ' '))
+        if args.farm:
+            # A farm of mobs ~100 blocks east of the spawn, inside the simulation distance and far from
+            # the bots: the mobs a player is not near, which DAB slows. Cows and villagers (zombies would burn in daylight), two blocks apart so cramming leaves them be.
+            for i in range(args.farm):
+                x, z = 90 + i % 40 * 2, -80 + i // 40 * 2
+                kind = 'minecraft:villager' if i % 2 else 'minecraft:cow'
+                server.console(f'summon {kind} {x} 100 {z} {{PersistenceRequired:1b}}')
         time.sleep(5)
         report = out / f'{name}-bots.json'
         total = bots * args.join_every + args.warmup + args.seconds
@@ -481,7 +511,12 @@ def run_once(kind, bots, behaviour, args, out):
         bot_lines = []
         threading.Thread(target=lambda: bot_lines.extend(bot_process.stdout), daemon=True).start()
         # All bots in, then the warm-up.
-        time.sleep(bots * args.join_every + args.warmup)
+        if args.entities:
+            time.sleep(bots * args.join_every)
+            populate(server, args.entities, args.seed)
+            time.sleep(args.warmup)
+        else:
+            time.sleep(bots * args.join_every + args.warmup)
         profiling = start_profile(server, kind, args)
         measure_start = time.time()
         rss, cpu, ticks = [], [], []
@@ -618,9 +653,15 @@ def main():
     parser.add_argument('--gamerule', default='',
                         help="more game rules for both servers, 'name=value,...' (locator_bar=false: Horizon has "
                              "no locator bar yet)")
+    parser.add_argument('--entities', default='', metavar='ITEMS,CARTS,MOBS',
+                        help='fill the level with this many dropped items, minecarts and chickens once the bots are in')
     parser.add_argument('--heap', default='4g', help='the Java heap, -Xms and -Xmx (vanilla, Paper, Fabric)')
     parser.add_argument('--out', type=Path, default=None, help='the report (JSON)')
     parser.add_argument('--nice', type=int, default=0, help='run the servers under nice -n N')
+    parser.add_argument('--dab', action='store_true',
+                        help="turn Horizon's mob AI throttling on (server.toml [entities] dab); Horizon only")
+    parser.add_argument('--farm', type=int, default=0,
+                        help='summon this many mobs ~100 blocks from the spawn, away from the bots (the DAB fixture)')
     parser.add_argument('--anticheat', action='store_true',
                         help="turn Horizon's anticheat on (server.toml [anticheat]); its flags are counted")
     parser.add_argument('--ground', action='store_true',

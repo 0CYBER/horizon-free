@@ -34,8 +34,32 @@ pub(super) fn clientbound(
         cb::EXPLODE => Some(explode(payload)?),
         cb::PROJECTILE_POWER => Some(projectile_power(payload)?),
         cb::MERCHANT_OFFERS => Some(merchant_offers(payload, ids)?),
+        cb::UPDATE_ATTRIBUTES => Some(update_attributes(payload)?),
         _ => None,
     })
+}
+
+/// 1.21's update_attributes as 1.20.6's: a modifier is named by a UUID, not an identifier (vanilla's own
+/// modifiers keep their old UUIDs, any other gets `UUID.nameUUIDFromBytes` of its identifier).
+fn update_attributes(payload: &[u8]) -> Result<Vec<u8>> {
+    let mut r = Reader::new(payload);
+    let mut w = Writer::new();
+    w.varint(r.varint()?);
+    let n = r.count(r.remaining())?;
+    w.varint(n as i32);
+    for _ in 0..n {
+        w.varint(r.varint()?);
+        w.f64(r.f64()?);
+        let m = r.count(r.remaining())?;
+        w.varint(m as i32);
+        for _ in 0..m {
+            let id = r.string(32767)?;
+            w.uuid(crate::item::v1_20_5::modifier_uuid(&id));
+            w.f64(r.f64()?);
+            w.varint(r.varint()?);
+        }
+    }
+    Ok(w.data)
 }
 
 /// The serverbound `use_item` the 1.20.6 client sent (`payload`, under the pinned id `id`) with the head's yaw and
@@ -166,6 +190,43 @@ fn trade_item(payload: &[u8], r: &mut Reader, ids: &'static Ids) -> Result<Vec<u
     r.bytes(len - head_len)?;
     stack.truncate(len);
     Ok(stack)
+}
+
+#[cfg(test)]
+mod attribute_tests {
+    use super::*;
+
+    /// A 1.20.6 client reads a modifier as UUID, amount, operation (wiki and minecraft-data 1.20.6 agree).
+    #[test]
+    fn a_1_20_6_client_gets_modifier_uuids() {
+        let mut w = Writer::new();
+        w.varint(9); // entity
+        w.varint(1);
+        w.varint(0); // armor
+        w.f64(0.0);
+        w.varint(1);
+        w.string("minecraft:armor.boots");
+        w.f64(3.0);
+        w.varint(0);
+        let out = update_attributes(&w.data).unwrap();
+        let mut r = Reader::new(&out);
+        assert_eq!(
+            (
+                r.varint().unwrap(),
+                r.varint().unwrap(),
+                r.varint().unwrap()
+            ),
+            (9, 1, 0)
+        );
+        assert_eq!(r.f64().unwrap(), 0.0);
+        assert_eq!(r.varint().unwrap(), 1);
+        assert_eq!(
+            r.uuid().unwrap(),
+            crate::item::v1_20_5::modifier_uuid("minecraft:armor.boots")
+        );
+        assert_eq!((r.f64().unwrap(), r.varint().unwrap()), (3.0, 0));
+        assert_eq!(r.remaining(), 0);
+    }
 }
 
 #[cfg(test)]

@@ -739,8 +739,11 @@ impl Game<'_> {
         };
         strike_players(self);
         self.each_guest_hit(strike_players);
-        // Dropped items burn up (ItemEntity health 5), save fire-resistant ones.
+        // `Entity.thunderHit` hurts an item for 5 (`ItemEntity.hurtServer`): its
+        // health drops, and it is destroyed only at zero unless its
+        // `damage_resistant` covers `lightning_bolt` (`ItemStack.canBeHurtBy`).
         let mut left = self.thunder_count(strike, ThunderHit::Item);
+        let mut destroyed_contents = Vec::new();
         for h in self.entity_handles_rev() {
             if left == 0 {
                 break;
@@ -752,10 +755,22 @@ impl Game<'_> {
             left -= 1;
             let e = &self.dropped[i];
             b.hit_items.push(e.id);
-            if !(e.stack.item.contains("netherite") || (e.age < 20 && b.spared.contains(&e.id))) {
+            if (e.age < 20 && b.spared.contains(&e.id))
+                || self.item_resistant_to(i, "minecraft:lightning_bolt")
+            {
+                continue;
+            }
+            let item = &mut self.dropped[i];
+            item.health = (item.health as f32 - 5.0) as i32;
+            item.needs_sync = true;
+            if item.health <= 0 {
+                let at = item.position;
+                let contents = item.hurt(0).unwrap_or_default();
                 self.dropped.remove(i);
+                destroyed_contents.extend(contents.into_iter().map(|stack| (stack, at)));
             }
         }
+        self.spawn_destroyed_contents(destroyed_contents);
         self.native_leaves_flush();
         struck
     }

@@ -90,27 +90,33 @@ FAILURE_TAILS, FAILURE_TAIL_LINES = 10, 30  # the summary prints the end of the 
 
 
 def harness_settings(path):
-    """PARITY_SHARDS and PARITY_RUST_SCOPE, read from a harness's source without running it."""
+    """PARITY_SHARDS, PARITY_RUST_SCOPE and PARITY_MANUAL, read from a harness's source without running it."""
     import ast
     text = Path(path).read_text(encoding="utf-8")
     settings = {}
     if "PARITY_" in text:
         for node in ast.parse(text).body:
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) \
-                    and node.targets[0].id in ("PARITY_SHARDS", "PARITY_RUST_SCOPE"):
+                    and node.targets[0].id in ("PARITY_SHARDS", "PARITY_RUST_SCOPE", "PARITY_MANUAL"):
                 settings[node.targets[0].id] = ast.literal_eval(node.value)
     return settings
 
 
 SHARDS = {}  # "datafix#2" -> "2/8": the share of a sharded harness each entry runs (PARITY_SHARD)
+MANUAL = {}  # "guest_close_event" -> how to run it: a proof script that needs arguments, which no run starts
 
 
 def harnesses():
-    """Harness names and scripts. A harness declaring PARITY_SHARDS = N runs as N entries, NAME#1 to NAME#N."""
+    """Harness names and scripts. A harness declaring PARITY_SHARDS = N runs as N entries, NAME#1 to NAME#N.
+    A script declaring PARITY_MANUAL = "<how to run it>" is a proof run by hand with arguments: left out (MANUAL)."""
     found = {}
     for path in sorted((ROOT / "tools").glob("test_*_parity.py")):
         name = path.name[len("test_"):-len("_parity.py")]
-        count = harness_settings(path).get("PARITY_SHARDS", 1)
+        settings = harness_settings(path)
+        if settings.get("PARITY_MANUAL"):
+            MANUAL[name] = settings["PARITY_MANUAL"]
+            continue
+        count = settings.get("PARITY_SHARDS", 1)
         if count > 1:
             for index in range(1, count + 1):
                 found[f"{name}#{index}"] = path
@@ -1652,6 +1658,9 @@ def main():
     # A sharded harness's name stands for all its shards.
     args.names = [entry for name in args.names for entry in ([name] if name in found else
                   [shard for shard in found if base_name(shard) == name] or [name])]
+    by_hand = [name for name in args.names if name in MANUAL]
+    if by_hand:
+        parser.error("; ".join(f"{name} is run by hand, not by parity.py: {MANUAL[name]}" for name in by_hand))
     unknown = [name for name in args.names if name not in found]
     if unknown:
         parser.error("unknown harnesses: " + ", ".join(unknown))

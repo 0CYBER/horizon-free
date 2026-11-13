@@ -751,6 +751,38 @@ environment variable `HORIZON_PARALLEL_TICK=1`, for a host that gives you no way
 with a fixed startup command). With the setting off, a `HORIZON_PARALLEL_TICK` already in the server's
 environment still applies.
 
+One thing differs from the serial tick while it is on: the rolls a mob makes on the level's random (a fish
+leaving its school, a parrot imitating, a brain's durations) come from a random of the mob's own, so that mobs
+on different threads do not wait for each other. The odds are vanilla's; the values are not the ones the level's
+random would have given ([mob-islands.md](mob-islands.md#every-turn-draws-its-own-random)).
+
+### Mob AI far from players: `[entities] dab`
+
+Off by default, because it is not vanilla's behaviour: mobs far from every player react more slowly. It is
+Pufferfish's "dynamic activation of brain", with the same names and defaults. Add the section to `server.toml`:
+
+```toml
+[entities]
+dab = true                    # false (the default): every mob thinks every tick, as in vanilla
+dab_start_distance = 12       # blocks; a mob this close to the nearest player is never slowed
+dab_max_tick_freq = 20        # ticks; the longest wait between two AI ticks
+dab_activation_dist_mod = 8   # raise it to slow far mobs less, lower it to slow them more
+```
+
+A mob farther than `dab_start_distance` from the nearest player (squared distance `d²`) runs its AI on the ticks where
+`age % interval == 0`, with `interval = clamp(d² >> dab_activation_dist_mod, 1, dab_max_tick_freq)`: 14 ticks at
+60 blocks with the defaults, 20 from about 71 blocks. Only the decisions wait: goals and targets, the brains of villagers,
+piglins, axolotls and the like, and each species' `customServerAiStep`. A far mob still moves (its navigation, move,
+look and jump controls run), falls, floats, is pushed, takes damage and effects, and its despawn check runs.
+
+Never slowed: withers and wardens; a mob with a target or anger, or hurt in the last two seconds; raiders in a raid; a
+mob that is ridden, riding, carrying a passenger or on a lead; a tamed mob that is not sitting.
+
+Unlike Pufferfish, it applies to every mob (Pufferfish limits the brain part to villagers, axolotls, hoglins,
+zombified piglins and goats and has an entity blacklist), and a level with no player counts as far away. It applies at
+the next start, and is the same switch as the environment variables `HORIZON_DAB=1`, `HORIZON_DAB_START_DISTANCE`,
+`HORIZON_DAB_MAX_TICK_FREQ` and `HORIZON_DAB_ACTIVATION_DIST_MOD`.
+
 ## When something goes wrong
 
 - **"no prepared game files"**: `init` and `run` list the folders they looked in. Prepare (step 2), or set

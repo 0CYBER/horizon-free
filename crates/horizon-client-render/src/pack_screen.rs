@@ -677,7 +677,7 @@ impl PackScreen {
             return action;
         }
         if self.search.contains(x, y) {
-            self.search.click(m, x, false);
+            self.search.click(m, x, false, false);
             self.set_focus(Focus::Search);
             return Action::None;
         }
@@ -1137,7 +1137,7 @@ impl PackScreen {
             if d::inside(point, qx, qy, BROWSER_SEARCH_W, 18) {
                 self.browser_search.x = qx;
                 self.browser_search.y = qy;
-                self.browser_search.click(m, x, false);
+                self.browser_search.click(m, x, false, false);
                 self.browser_focus = true;
                 return Some(Action::None);
             }

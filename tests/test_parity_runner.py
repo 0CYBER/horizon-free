@@ -413,6 +413,15 @@ class ShardTests(unittest.TestCase):
             self.assertEqual(parity.SHARDS["x#2"], "2/3")
             self.assertEqual(parity.base_name("x#2"), "x")
 
+    def test_a_manual_proof_script_is_left_out(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)), \
+                mock.patch.dict(parity.MANUAL, clear=True):
+            (Path(temp) / "tools").mkdir()
+            (Path(temp) / "tools/test_x_parity.py").write_text('import sys\nPARITY_MANUAL = "--side java, then --side native"\n')
+            (Path(temp) / "tools/test_y_parity.py").write_text("")
+            self.assertEqual(sorted(parity.harnesses()), ["y"])
+            self.assertEqual(parity.MANUAL, {"x": "--side java, then --side native"})
+
 
 class OracleArgumentTests(unittest.TestCase):
     def test_an_agent_jar_is_an_input(self):

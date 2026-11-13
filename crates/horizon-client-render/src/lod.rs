@@ -9,6 +9,7 @@ use crate::{
 };
 pub mod bake;
 pub mod cache;
+mod detail;
 mod kept;
 mod mesh;
 pub mod packed;
@@ -2386,13 +2387,6 @@ impl Lod {
         if self.shared.mesh_held.swap(held, Ordering::Release) && !held {
             self.shared.mesh_wake.notify_all();
         }
-    }
-    /// Reduced far detail (`graphics::FarDetail::Reduced`): the next update
-    /// replans when it changes, and tiles sampled from then on approximate
-    /// wide cells (`GeneratorWorker::lod_grid`).
-    pub fn set_reduced_detail(&mut self, reduced: bool) {
-        self.reduced_detail = reduced;
-        self.shared.approximate.store(reduced, Ordering::Relaxed);
     }
     fn held(&self) -> bool {
         self.small && self.near_loading
@@ -6114,5 +6108,35 @@ mod tests {
         lod.finish_observed((1, 1), ReducedColumns::new(columns));
         assert!(lod.stale.contains(&key));
         assert_eq!(queued(&mut lod), [key]);
+    }
+
+    #[test]
+    fn changing_far_detail_samples_tiles_again() {
+        for level in [0, 1, 2, 3, 5] {
+            let mut lod = Lod::scheduler_for_test();
+            let key = TileKey { x: 0, z: 0, level };
+            lod.plan.nodes.insert(key);
+            lod.active.insert(key);
+            lod.ready.insert(key, Arc::new(samples(70)));
+            assert!(
+                queued(&mut lod).is_empty(),
+                "level {level}: sampled tile is not asked again"
+            );
+            lod.set_reduced_detail(true);
+            assert!(
+                lod.ready.contains_key(&key),
+                "level {level}: old samples stay"
+            );
+            assert_eq!(queued(&mut lod), [key], "level {level}: not sampled again");
+            lod.finish_sample(key, samples(70));
+            lod.set_reduced_detail(true);
+            assert!(queued(&mut lod).is_empty(), "level {level}: same value");
+            lod.set_reduced_detail(false);
+            assert_eq!(
+                queued(&mut lod),
+                [key],
+                "level {level}: not sampled again on the way back"
+            );
+        }
     }
 }

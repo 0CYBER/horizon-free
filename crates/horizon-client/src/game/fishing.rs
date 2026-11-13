@@ -1744,7 +1744,7 @@ impl Game<'_> {
     }
 
     /// The fishing medium a mod says the hook at `position` floats in
-    /// (`native_fishing_medium`), when it is in it. API @API:fishing_medium@.
+    /// (`native_fishing_medium`), when it is in it. API 578.
     fn hook_medium(
         &mut self,
         id: u32,

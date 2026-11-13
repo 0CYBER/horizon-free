@@ -40,7 +40,7 @@ impl Game<'_> {
     /// color or size values in `velocity`. Normal distance, settings and population
     /// limits still apply. True means submitted, not necessarily visible: an unknown
     /// provider or missing sprite set draws nothing. False on a server, without a
-    /// client player/level, or for non-finite numeric input. API @API:client_particles@.
+    /// client player/level, or for non-finite numeric input. API 453.
     pub(super) fn native_add_particle(
         &mut self,
         options: &ParticleOptions,
@@ -69,7 +69,7 @@ impl Game<'_> {
     /// sparks. True means queued; false on a server, without a client player
     /// or level, for non-finite input and for more than
     /// [`MAX_CLIENT_FIREWORK_EXPLOSIONS`] explosions. API
-    /// @API:client_fireworks@.
+    /// 580.
     pub(super) fn native_client_fireworks(
         &mut self,
         at: [f64; 3],

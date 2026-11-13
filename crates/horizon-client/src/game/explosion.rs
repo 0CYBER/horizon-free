@@ -862,13 +862,36 @@ impl Game<'_> {
         let (mut items_kept, mut orbs_kept) = (0, 0);
         let (mut boats_gone, mut carts_gone) = (0, 0);
         let mut destroyed_contents = Vec::new();
+        // The entities in reach, less those a mod spares (`native_explosion_entities`); no list
+        // without native mods, which are the only ones to spare any.
+        let spared: std::collections::HashSet<u32> = if horizon_client::mod_api::mods().is_empty() {
+            Default::default()
+        } else {
+            let reach: Vec<u32> = self
+                .entity_handles()
+                .filter_map(|handle| {
+                    with_entity!(self, handle, e => {
+                        let feet = e.position();
+                        let dist = blast_distance(center, [feet.x, feet.y, feet.z]);
+                        (dist <= diameter).then(|| e.id())
+                    })
+                })
+                .collect();
+            let mut kept = reach.clone();
+            self.native_explosion_entities(self.dim.id(), center, &mut kept);
+            let kept: std::collections::HashSet<u32> = kept.into_iter().collect();
+            reach.into_iter().filter(|id| !kept.contains(id)).collect()
+        };
         for handle in self.entity_handles() {
             let handle = match handle {
                 EntityHandle::Boat(i) => EntityHandle::Boat(i - boats_gone),
                 EntityHandle::Cart(i) => EntityHandle::Cart(i - carts_gone),
                 other => other,
             };
-            let hit = with_entity!(self, handle, e => self.blast_hit(e, center, diameter, &blast));
+            let spare =
+                !spared.is_empty() && spared.contains(&with_entity!(self, handle, e => e.id()));
+            let hit = with_entity!(self, handle, e => self.blast_hit(e, center, diameter, &blast))
+                .filter(|_| !spare);
             let mut destroyed = false;
             if let Some(Hit {
                 dist,
@@ -944,13 +967,14 @@ impl Game<'_> {
                     }
                     // `ItemEntity.hurtServer`: the damage comes off `Health`
                     // (5 to start) in f32 and the item is destroyed at zero, so
-                    // a survivor keeps the health the blast left it. The nether
-                    // star is `ItemStack.canBeHurtBy`'s explosion exception, and
-                    // a blast with a source entity under `mobGriefing` off never
+                    // a survivor keeps the health the blast left it. A stack whose
+                    // `damage_resistant` covers the blast (the nether star's
+                    // `#is_explosion`) is skipped (`ItemStack.canBeHurtBy`), and a
+                    // blast with a source entity under `mobGriefing` off never
                     // reaches here (`items_ignore`).
                     EntityHandle::Item(i) => {
-                        let item = &mut self.dropped[i];
-                        if &*item.stack.item != "minecraft:nether_star" {
+                        if !self.item_resistant_to(i, damage_type) {
+                            let item = &mut self.dropped[i];
                             item.health = (item.health as f32 - amount) as i32;
                             destroyed = item.health <= 0;
                             if destroyed {
@@ -1826,6 +1850,55 @@ mod tests {
             food: Default::default(),
             tempt: Default::default(),
         })
+    }
+
+    /// Spares one entity from every blast (`native_explosion_entities`).
+    struct Spare(u32);
+    impl crate::mod_api::Hooks for Spare {
+        fn explosion_entities(
+            &self,
+            _: &mut dyn crate::mod_api::Host,
+            event: &mut crate::mod_api::ExplosionEntitiesEvent<'_>,
+        ) {
+            event.entities.retain(|&id| id != self.0);
+        }
+    }
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_mod_spares_an_entity_from_a_blast() {
+        crate::mod_api::in_own_process(
+            "game::explosion::tests::a_mod_spares_an_entity_from_a_blast",
+            a_mod_spares_an_entity_from_a_blast_in_own_process,
+        );
+    }
+
+    /// Two husks either side of a blast: the one a mod takes out of the list is neither hurt nor
+    /// pushed, the other is both.
+    fn a_mod_spares_an_entity_from_a_blast_in_own_process() {
+        let mut game = crate::game::native_machines::tests::server_game();
+        game.build_registries();
+        let spare: Box<dyn crate::mod_api::Hooks> = Box::new(Spare(2));
+        assert!(crate::mod_api::MODS.set(vec![spare].into()).is_ok());
+        let kind = game.res.mob_types().get("minecraft:husk").unwrap().clone();
+        for (id, x) in [(1, 6.5), (2, 10.5)] {
+            let husk =
+                horizon_client::mobs::Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 8.5), 0.0);
+            game.mobs.push(husk);
+        }
+        let full = game.mobs[0].health;
+        game.server_explode_from_cause(
+            [8.5, 64.0, 8.5],
+            2.0,
+            BlockInteraction::Keep,
+            false,
+            ExplosionSource::default().with_silence(true),
+            None,
+        )
+        .unwrap();
+        let (hit, spared) = (&game.mobs[0], &game.mobs[1]);
+        assert!(hit.health < full && hit.velocity != Vec3::ZERO);
+        assert_eq!((spared.health, spared.velocity), (full, Vec3::ZERO));
     }
 
     #[test]

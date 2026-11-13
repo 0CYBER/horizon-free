@@ -316,7 +316,7 @@ impl ItemStack {
     /// The stack `ItemStack.CODEC` reads from `tag` (`id`, `count`,
     /// `components`), as `item_nbt::item_from_nbt` does; None for air or an
     /// id that is no valid identifier. The id is not looked up in a registry.
-    /// API @API:item_from_snbt@.
+    /// API 527.
     pub fn from_nbt(tag: &horizon_world::nbt::Compound) -> Option<Self> {
         crate::item_nbt::item_from_nbt(&Tag::Compound(tag.clone()))
     }
@@ -785,10 +785,16 @@ fn template_from(tag: &Tag) -> Option<ItemStack> {
         Tag::String(id) => Some(ItemStack::new(&id.to_string_lossy(), 1)),
         _ => {
             let id = tag.get("id").and_then(string)?;
+            // `ItemStackTemplate.CODEC`: `count` is `ExtraCodecs.intRange(1, 99)`, so a
+            // template outside it does not decode.
+            let count = tag.get("count").and_then(int).unwrap_or(1);
+            if !(1..=99).contains(&count) {
+                return None;
+            }
             let (damage, extra) = decode_components(tag.get("components"));
             Some(ItemStack {
                 item: Arc::from(id.as_str()),
-                count: tag.get("count").and_then(int).unwrap_or(1).max(1) as u32,
+                count: count as u32,
                 damage,
                 extra,
             })
@@ -2913,5 +2919,24 @@ mod written_book_tests {
             ..book
         };
         assert_eq!(written_book_tag(&unresolved).get("resolved"), None);
+    }
+
+    /// `ItemStackTemplate.CODEC` reads `count` with `intRange(1, 99)`: outside it
+    /// the template is rejected, absent it is 1.
+    #[test]
+    fn a_template_count_outside_one_to_ninety_nine_is_rejected() {
+        let template = |count: Option<i32>| {
+            let mut fields = vec![("id", Tag::String("minecraft:stone".into()))];
+            if let Some(count) = count {
+                fields.push(("count", Tag::Int(count)));
+            }
+            template_from(&Tag::compound(fields)).map(|s| s.count)
+        };
+        assert_eq!(template(None), Some(1));
+        assert_eq!(template(Some(1)), Some(1));
+        assert_eq!(template(Some(99)), Some(99));
+        assert_eq!(template(Some(0)), None);
+        assert_eq!(template(Some(100)), None);
+        assert_eq!(template(Some(-1)), None);
     }
 }

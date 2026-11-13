@@ -74,6 +74,8 @@ pub struct Memories {
     /// authoritative actor identity and clears stale raw data instead of inventing one.
     /// Its remaining TTL is the existing `Extra::anger` counter.
     pub guarded_angry_at: Option<Option<[i32; 4]>>,
+    /// `Piglin.setCannotHunt`: the piglin will not start hunting hoglins.
+    pub cannot_hunt: bool,
     /// `AVOID_TARGET`.
     pub avoid: Option<AvoidTarget>,
     /// `RIDE_TARGET`.
@@ -131,6 +133,10 @@ pub fn set_guarded_anger_target(m: &mut Mob, player: Option<[i32; 4]>) {
     m.extra.piglin.guarded_angry_at = Some(player);
 }
 
+/// `AbstractPiglin.canHunt`: false when the saved `CannotHunt` flag is set.
+pub fn can_hunt(m: &Mob) -> bool {
+    !m.extra.piglin.cannot_hunt
+}
 /// `PiglinAi.isIdle`: whether the active activity is `Activity::Idle`.
 pub fn is_idle(m: &Mob) -> bool {
     activity(m) == Activity::Idle
@@ -858,11 +864,12 @@ pub fn receive_attack_target(
     }
     take
 }
-/// `PiglinAi.stopHoldingOffHandItem` without bartering (`wasHurtBy`): a gold
-/// ingot is not bartered and is gone; anything else ends its admiring next
-/// tick, as if the time ran out, and the game side puts it away.
+/// `PiglinAi.stopHoldingOffHandItem` without bartering (`wasHurtBy`): an
+/// adult's gold ingot is not bartered and is gone; anything else (a baby's
+/// ingot too, which it holds in its main hand) ends its admiring next tick,
+/// as if the time ran out, and the game side puts it away.
 pub fn stop_admiring(m: &mut Mob) {
-    if m.extra.off_hand.as_deref() == Some("minecraft:gold_ingot") {
+    if m.extra.off_hand.as_deref() == Some("minecraft:gold_ingot") && !m.is_baby() {
         m.extra.off_hand = None;
         m.extra.using_item = 0;
     } else {
@@ -1357,6 +1364,7 @@ impl Goal for HuntHoglin {
             || m.extra.anger > 0
             || m.ai.target.is_some()
             || m.extra.piglin.activity == Activity::Avoid
+            || m.extra.piglin.cannot_hunt
         {
             return false;
         }
@@ -2301,6 +2309,9 @@ pub fn write_guarded_anger(m: &Mob, map: &mut horizon_world::nbt::Compound) {
 /// piglin; the counter is what Horizon's goals ask.
 pub fn read_guarded_anger(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
     use horizon_world::nbt::Tag;
+    // `Piglin.readAdditionalSaveData`: `getBooleanOr(CannotHunt, false)`.
+    m.extra.piglin.cannot_hunt = matches!(tag.get("CannotHunt"), Some(Tag::Byte(b)) if *b != 0)
+        || matches!(tag.get("CannotHunt"), Some(Tag::Int(i)) if *i != 0);
     let memory = tag
         .get("Brain")
         .and_then(|b| b.get("memories"))
@@ -2648,6 +2659,55 @@ mod conversion_tests {
             assert_eq!(from.extra.off_hand, None, "the new mob carries nothing");
         });
         let _ = ran;
+    }
+}
+
+#[cfg(test)]
+mod cannot_hunt_save_tests {
+    use super::*;
+    use horizon_world::nbt::Tag;
+
+    fn piglin() -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = std::sync::Arc::make_mut(&mut kind);
+        k.id = "minecraft:piglin".into();
+        k.species = Species::Piglin;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    fn saved(cannot_hunt: Option<i8>) -> Tag {
+        let mut fields = vec![
+            ("id", Tag::String("minecraft:piglin".into())),
+            (
+                "Pos",
+                Tag::List(vec![
+                    Tag::Double(0.0f64.to_bits()),
+                    Tag::Double(64.0f64.to_bits()),
+                    Tag::Double(0.0f64.to_bits()),
+                ]),
+            ),
+        ];
+        if let Some(value) = cannot_hunt {
+            fields.push(("CannotHunt", Tag::Byte(value)));
+        }
+        Tag::compound(fields)
+    }
+
+    /// `Piglin.readAdditionalSaveData` reads `CannotHunt` with
+    /// `getBooleanOr`, and `addAdditionalSaveData` always writes it. Horizon
+    /// wrote a hardcoded 0 and never read it back, so a piglin that had
+    /// `cannotHunt` set could hunt hoglins again after a reload.
+    #[test]
+    fn a_saved_cannot_hunt_is_read_and_written_back() {
+        let template = piglin();
+        let types = [("minecraft:piglin".into(), template.kind)].into();
+        for (raw, expected) in [(Some(1), true), (Some(0), false), (None, false)] {
+            let m = crate::entity_nbt::mob_from_nbt(&saved(raw), &types, 1, None).unwrap();
+            assert_eq!(m.extra.piglin.cannot_hunt, expected);
+            assert_eq!(can_hunt(&m), !expected);
+            let out = crate::entity_nbt::mob_to_nbt(&m, [1, 2, 3, 4], None, None, |_| None);
+            assert_eq!(out.get("CannotHunt"), Some(&Tag::Byte(i8::from(expected))));
+        }
     }
 }
 

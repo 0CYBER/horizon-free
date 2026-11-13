@@ -18,7 +18,7 @@ impl Game<'_> {
     /// `Entity.checkBelowWorld` for the boat at `i`: true when it fell out of
     /// the world and is gone.
     pub(in crate::game) fn boat_below_world(&mut self, i: usize) -> bool {
-        if !below_world(self.boats[i].position.y, self.world.bottom_y()) {
+        if !below_world(self.boats[i].position.y, self.world.shape.min_y) {
             return false;
         }
         self.eject_boat_mobs(i, true);
@@ -41,7 +41,7 @@ impl Game<'_> {
         kind: &str,
     ) -> Option<usize> {
         let i = cart_at(&self.carts, id, slot)?;
-        if !below_world(self.carts[i].position.y, self.world.bottom_y()) {
+        if !below_world(self.carts[i].position.y, self.world.shape.min_y) {
             return Some(i);
         }
         self.eject_cart_mobs(i);
@@ -68,44 +68,51 @@ mod tests {
         assert!(below_world(-64.5, 0));
     }
 
-    /// A tick discards the boat and the chest minecart under -128 in the
-    /// overworld, before they move, and spills the cart's slots; the two on
-    /// the line or above it stay, whatever their fall this tick.
+    /// A tick discards vehicles below each dimension's own floor, even when
+    /// its chunk storage extends lower, and spills the container's contents.
+    /// Vehicles on the line or above it survive this tick.
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn a_tick_discards_the_vehicles_under_the_world() {
         use horizon_client::chunk::Chunk;
         use horizon_core::position::ChunkPos;
-        let mut g = crate::game::native_machines::tests::server_game();
-        g.build_registries();
-        g.set_allow_commands(true);
-        g.world
-            .chunks
-            .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
-        g.block_ticks.add_empty_chunk(ChunkPos::new(0, 0)).unwrap();
-        assert!(g.run_command("forceload add 0 0"));
-        for summon in [
-            "summon oak_boat 0.5 -128 0.5",
-            "summon oak_boat 4.5 -128.5 4.5",
-            "summon minecart 6.5 -127 6.5",
-            "summon chest_minecart 2.5 -129 2.5 {Items:[{Slot:0b,id:\"minecraft:diamond\",count:3}]}",
-        ] {
-            assert!(g.run_command(summon), "{summon}");
+        for min_y in [-64, 0] {
+            let mut g = crate::game::native_machines::tests::server_game();
+            g.world.shape.min_y = min_y;
+            g.build_registries();
+            g.set_allow_commands(true);
+            g.world
+                .chunks
+                .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+            g.block_ticks.add_empty_chunk(ChunkPos::new(0, 0)).unwrap();
+            assert!(g.run_command("forceload add 0 0"));
+            let line = min_y - 64;
+            for summon in [
+                format!("summon oak_boat 0.5 {line} 0.5"),
+                format!("summon oak_boat 4.5 {} 4.5", f64::from(line) - 0.5),
+                format!("summon minecart 6.5 {} 6.5", line + 1),
+                format!(
+                    "summon chest_minecart 2.5 {} 2.5 {{Items:[{{Slot:0b,id:\"minecraft:diamond\",count:3}}]}}",
+                    line - 1
+                ),
+            ] {
+                assert!(g.run_command(&summon), "{summon}");
+            }
+            g.sync_tick_chunks();
+            g.tick_boats();
+            g.tick_carts();
+            let boats: Vec<f64> = g.boats.iter().map(|b| b.position.x).collect();
+            assert_eq!(boats, [0.5]);
+            let carts: Vec<f64> = g.carts.iter().map(|c| c.position.x).collect();
+            assert_eq!(carts, [6.5]);
+            let spilled: u32 = g
+                .dropped
+                .iter()
+                .filter(|i| &*i.stack.item == "minecraft:diamond")
+                .map(|i| i.stack.count)
+                .sum();
+            assert_eq!(spilled, 3);
         }
-        g.sync_tick_chunks();
-        g.tick_boats();
-        g.tick_carts();
-        let boats: Vec<f64> = g.boats.iter().map(|b| b.position.x).collect();
-        assert_eq!(boats, [0.5]);
-        let carts: Vec<f64> = g.carts.iter().map(|c| c.position.x).collect();
-        assert_eq!(carts, [6.5]);
-        let spilled: u32 = g
-            .dropped
-            .iter()
-            .filter(|i| &*i.stack.item == "minecraft:diamond")
-            .map(|i| i.stack.count)
-            .sum();
-        assert_eq!(spilled, 3);
     }
 
     #[test]

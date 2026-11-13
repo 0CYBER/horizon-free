@@ -3,7 +3,8 @@
 //! - a function with `sampler2D` parameters is copied once per set of samplers its callers pass
 //!   (all of them a shader's global samplers), the copy reading those samplers by name;
 //! - an unsized array (`const float[] w = float[](...)`, `float w[] = ...`) takes the size its
-//!   initializer gives.
+//!   initializer gives;
+//! - an array declared with a `const int`'s size takes the constant's expression.
 
 /// The longest shader rewritten (vanilla's, includes expanded, are a few KiB).
 const MAX_LEN: usize = 64 * 1024;
@@ -17,7 +18,115 @@ pub(super) fn fixups(text: &str) -> String {
     if text.len() > MAX_LEN {
         return text.to_owned();
     }
-    size_unsized_arrays(&specialize_sampler_params(text))
+    size_by_int_constants(&size_unsized_arrays(&specialize_sampler_params(text)))
+}
+
+/// The most `const int`s a shader's arrays are sized by.
+const MAX_INT_CONSTANTS: usize = 256;
+
+/// `type name[n]` becomes `type name[(expression)]` where `const int n = expression;` is in scope;
+/// accesses (`name[n]`) are left as they are. Two constants of one name and different values in
+/// one scope, which only exclusive `#if` branches allow, leave the text as it was; the same one
+/// twice is a guarded include pasted twice.
+fn size_by_int_constants(text: &str) -> String {
+    struct Constant<'a> {
+        name: &'a str,
+        expression: &'a str,
+        from: usize,
+        to: usize,
+    }
+    let bytes = text.as_bytes();
+    let mut constants: Vec<Constant> = Vec::new();
+    let mut scopes: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => scopes.push(Vec::new()),
+            b'}' => {
+                for c in scopes.pop().unwrap_or_default() {
+                    constants[c].to = i;
+                }
+                if scopes.is_empty() {
+                    return text.to_owned();
+                }
+            }
+            b'c' if text[i..].starts_with("const int ")
+                && (i == 0 || !is_ident(char::from(bytes[i - 1]))) =>
+            {
+                let start = i + "const int ".len();
+                let Some(end) = text[start..].find([';', '{', '}']).map(|e| start + e) else {
+                    break;
+                };
+                if bytes[end] == b';'
+                    && let Some((name, expression)) = text[start..end].split_once('=')
+                {
+                    let (name, expression) = (name.trim(), expression.trim());
+                    if is_name(name) && !expression.is_empty() {
+                        let scope = scopes.last_mut().expect("the global scope stays");
+                        let same = scope.iter().find(|&&c| constants[c].name == name);
+                        match same {
+                            Some(&c) if constants[c].expression == expression => {}
+                            Some(_) => return text.to_owned(),
+                            None if constants.len() == MAX_INT_CONSTANTS => {
+                                return text.to_owned();
+                            }
+                            None => {
+                                scope.push(constants.len());
+                                constants.push(Constant {
+                                    name,
+                                    expression,
+                                    from: end,
+                                    to: text.len(),
+                                });
+                            }
+                        }
+                    }
+                }
+                i = end;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if constants.is_empty() {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut at = 0;
+    while let Some(found) = text[at..].find('[') {
+        let open = at + found;
+        at = open + 1;
+        let Some(close) = text[open..].find(']').map(|c| open + c) else {
+            break;
+        };
+        let size = text[open + 1..close].trim();
+        let Some(constant) = constants
+            .iter()
+            .filter(|c| c.name == size && c.from < open && open < c.to)
+            .max_by_key(|c| c.from)
+        else {
+            continue;
+        };
+        if !declares_an_array(text, open) {
+            continue;
+        }
+        out.push_str(&text[copied..=open]);
+        out.push('(');
+        out.push_str(constant.expression);
+        out.push(')');
+        copied = close;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// Whether the `[` at `open` follows `type name`, so it sizes a declaration.
+fn declares_an_array(text: &str, open: usize) -> bool {
+    ident_before(text, open)
+        .and_then(|(start, _)| ident_before(text, start))
+        .is_some_and(|(_, ty)| !matches!(ty, "return" | "else" | "case"))
 }
 
 fn is_ident(c: char) -> bool {

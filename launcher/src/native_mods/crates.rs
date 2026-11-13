@@ -245,17 +245,15 @@ fn validate_sibling_path(
 /// `symlink_metadata` reports links without following them. Windows junctions are reparse points
 /// as well, so reject the reparse attribute even if the standard file type is not a symlink.
 fn is_link_or_junction(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
     #[cfg(windows)]
-    {
+    let reparse = {
         use std::os::windows::fs::MetadataExt;
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
         metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
+    };
     #[cfg(not(windows))]
-    false
+    let reparse = false;
+    metadata.file_type().is_symlink() || reparse
 }
 
 /// Why a mod's crates can't build with Horizon's lock file `horizon`: a crate they name that it

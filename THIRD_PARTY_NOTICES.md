@@ -62,6 +62,8 @@ The GLSL frontend also resets the common type for each comma-separated declarato
 variable's array specifier does not change later variables.
 It also reads a struct member outside a constant expression through a pointer to the member,
 not out of a loaded copy of the whole struct, so a member an atomic function uses can be read.
+The shared interpolation defaults also compile with `glsl-in` alone, without needing the
+SPIR-V or WGSL frontend to enable them.
 
 ## DirectX Shader Compiler
 
@@ -355,6 +357,9 @@ Horizon (Copyright (c) 2026 Ludovic Marie and the Horizon contributors).
 
 `crates/horizon-client-render/src/touch.rs` and `touch/tests/` are adapted from the touch input
 state of Starling's `crates/horizon-client-render/src/touch.rs` at the same commit.
+
+`crates/horizon-client-render/src/touch/draw.rs` is adapted from the touch control drawing in
+Starling's `crates/horizon-client-render/src/touch.rs` at the same commit.
 
 `crates/horizon-client-render/src/android_runtime.rs` and `android_runtime/tests/` are adapted from the
 input part of Starling's `crates/horizon-client-render/src/android_runtime.rs` at the same commit.

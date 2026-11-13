@@ -433,7 +433,7 @@ impl Game<'_> {
             .as_ref()
             .map(|s| (s.selected.map_or(-1, |i| i as i32), s.stone.clone()));
         let crafter_data = match self.container_kind() {
-            Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.triggered)),
+            Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.is_triggered())),
             _ => None,
         };
         // The merchant's session, lent to the menu for this click.
@@ -656,10 +656,16 @@ impl Game<'_> {
                 self.station_sound(sound);
             }
         } else if kind == Kind::Stonecutter {
+            // `StonecutterMenu.container`'s listener runs on every change of the
+            // input slot (`slotsChanged` and `containerChanged` both hang off
+            // it): a recipe button or an inventory click is not one.
+            let input_changed = before[0] != menu.slot(0).cloned();
             if let Some(s) = self.station.as_mut() {
                 s.selected = usize::try_from(menu.data[0]).ok();
                 s.stone = std::mem::take(&mut menu.stone);
-                s.stonecutter_changed();
+                if input_changed {
+                    s.stonecutter_changed();
+                }
             }
             for sound in sounds.into_iter().filter(|_| !predicting) {
                 self.station_sound(sound);

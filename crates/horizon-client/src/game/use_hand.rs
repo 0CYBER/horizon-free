@@ -3,6 +3,19 @@
 use super::*;
 
 impl Game<'_> {
+    /// `Level.playSound(player, ...)`: a guest's client already predicted the
+    /// fire-starter sound, so play it locally on the server and forward it to
+    /// the other guests without leaving it in the broadcast capture.
+    pub(super) fn play_block_use_sound(&mut self, sound: &str, at: [f64; 3], pitch: f32) {
+        if self.lan_acting.is_some() {
+            self.audio.play_unshared(sound, Some(at), 1.0, pitch);
+            self.guest_block_sounds
+                .push((sound.to_owned(), at, 1.0, pitch));
+        } else {
+            self.audio.play(sound, Some(at), 1.0, pitch);
+        }
+    }
+
     /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
     /// then `useItem`. Whether the click ends here (it acted or failed).
     pub(super) fn use_hand(&mut self, block_hit: Option<&Hit>) -> Result<bool> {

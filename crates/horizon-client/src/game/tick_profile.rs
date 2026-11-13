@@ -8,7 +8,10 @@
 use horizon_client::{fast_hash::FxHashMap, mobs::MobType};
 use std::{
     cell::{Cell, RefCell},
-    sync::atomic::{AtomicU8, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
     time::Instant,
 };
 
@@ -20,17 +23,20 @@ const REPORT: u8 = 1;
 const MOD: u8 = 2;
 
 /// The time and the ticks of one mob type in one level.
+#[derive(Default)]
 struct Cost {
-    kind: String,
     nanos: u64,
     mob_ticks: u64,
 }
+
+/// Sums by level, then by the type's registry id: one entry per type, found without allocating.
+type Totals = FxHashMap<&'static str, FxHashMap<String, Cost>>;
 
 thread_local! {
     /// [`REPORT`] and [`MOD`], each set while it samples.
     static SAMPLING: Cell<u8> = const { Cell::new(0) };
     /// The report's sums, then the mod's.
-    static COSTS: RefCell<[FxHashMap<(&'static str, usize), Cost>; 2]> = RefCell::default();
+    static COSTS: RefCell<[Totals; 2]> = RefCell::default();
 }
 
 /// Who wants the tick's spans recorded besides nobody: `HORIZON_SPIKES` (the slow ring's steps),
@@ -69,6 +75,43 @@ fn set(who: u8, on: bool) {
     SAMPLING.with(|s| s.set(if on { s.get() | who } else { s.get() & !who }));
 }
 
+/// Who samples on this thread: what a helper thread running part of its mob loop samples for.
+pub(super) fn sampling() -> u8 {
+    SAMPLING.with(Cell::get)
+}
+
+/// A helper thread's sums, for the thread whose mob loop it ran part of ([`merge`]).
+pub(super) struct Sums([Totals; 2]);
+
+/// This helper thread samples for `who` ([`sampling`] of the thread it helps), from empty sums.
+pub(super) fn begin_helper(who: u8) {
+    SAMPLING.with(|s| s.set(who));
+    COSTS.with(|c| *c.borrow_mut() = Default::default());
+}
+
+/// What this helper thread sampled since [`begin_helper`]; it samples nothing more.
+pub(super) fn end_helper() -> Sums {
+    SAMPLING.with(|s| s.set(0));
+    Sums(COSTS.with(|c| std::mem::take(&mut *c.borrow_mut())))
+}
+
+/// Add a helper thread's sums to this thread's.
+pub(super) fn merge(sums: Sums) {
+    COSTS.with(|c| {
+        let mut costs = c.borrow_mut();
+        for (into, from) in costs.iter_mut().zip(sums.0) {
+            for (dim, kinds) in from {
+                let into = into.entry(dim).or_default();
+                for (kind, cost) in kinds {
+                    let sum = into.entry(kind).or_default();
+                    sum.nanos += cost.nanos;
+                    sum.mob_ticks += cost.mob_ticks;
+                }
+            }
+        }
+    });
+}
+
 /// When this tick is sampled, the start of a mob's tick.
 #[inline]
 pub(super) fn start() -> Option<Instant> {
@@ -78,25 +121,25 @@ pub(super) fn start() -> Option<Instant> {
 /// A sampled mob of type `kind` in level `dim` ticked since `started`.
 #[inline]
 pub(super) fn add(dim: &'static str, kind: &MobType, started: Instant) {
-    add_kind(dim, std::ptr::from_ref(kind) as usize, &kind.id, started);
+    add_kind(dim, &kind.id, started);
 }
 
 /// A mob of type `kind` starts its tick: the CPU sampler's work, and `horizon-report`'s cost by mob type when sampled.
-pub(super) fn start_mob(kind: &MobType) -> Option<(Instant, MobType)> {
+pub(super) fn start_mob(kind: &Arc<MobType>) -> Option<(Instant, Arc<MobType>)> {
     horizon_threads::work::set_entity(horizon_threads::work::entity_id(&kind.id));
-    start().map(|t| (t, kind.clone()))
+    start().map(|t| (t, Arc::clone(kind)))
 }
 
 /// The mob [`start_mob`] started ended its tick in level `dim`.
-pub(super) fn end_mob(dim: &'static str, sampled: Option<(Instant, MobType)>) {
+pub(super) fn end_mob(dim: &'static str, sampled: Option<(Instant, Arc<MobType>)>) {
     horizon_threads::work::clear_work();
     if let Some((started, kind)) = sampled {
         add(dim, &kind, started);
     }
 }
 
-/// [`add`] for the type at address `key` named `id`.
-fn add_kind(dim: &'static str, key: usize, id: &str, started: Instant) {
+/// [`add`] for the type with registry id `id`.
+fn add_kind(dim: &'static str, id: &str, started: Instant) {
     let nanos = started.elapsed().as_nanos() as u64;
     let who = SAMPLING.with(Cell::get);
     COSTS.with(|c| {
@@ -105,11 +148,12 @@ fn add_kind(dim: &'static str, key: usize, id: &str, started: Instant) {
             if who & bit == 0 {
                 continue;
             }
-            let cost = sums.entry((dim, key)).or_insert_with(|| Cost {
-                kind: id.to_owned(),
-                nanos: 0,
-                mob_ticks: 0,
-            });
+            let kinds = sums.entry(dim).or_default();
+            // The id is copied once, for a type's first sample in a level.
+            if !kinds.contains_key(id) {
+                kinds.insert(id.to_owned(), Cost::default());
+            }
+            let cost = kinds.get_mut(id).expect("just inserted");
             cost.nanos += nanos;
             cost.mob_ticks += 1;
         }
@@ -139,11 +183,13 @@ fn take_of(sums: usize) -> Vec<MobCost> {
     let costs = COSTS.with(|c| std::mem::take(&mut c.borrow_mut()[sums]));
     let mut out: Vec<MobCost> = costs
         .into_iter()
-        .map(|((dimension, _), c)| MobCost {
-            dimension,
-            kind: c.kind,
-            nanos: c.nanos,
-            mob_ticks: c.mob_ticks,
+        .flat_map(|(dimension, kinds)| {
+            kinds.into_iter().map(move |(kind, c)| MobCost {
+                dimension,
+                kind,
+                nanos: c.nanos,
+                mob_ticks: c.mob_ticks,
+            })
         })
         .collect();
     out.sort_by(|a, b| b.nanos.cmp(&a.nanos).then_with(|| a.kind.cmp(&b.kind)));
@@ -159,7 +205,7 @@ pub(super) fn sample_cost_nanos() -> f64 {
     let timer = Instant::now();
     for _ in 0..N {
         if let Some(started) = start() {
-            add_kind("calibration", 1, "calibration", started);
+            add_kind("calibration", "calibration", started);
         }
     }
     let per = timer.elapsed().as_nanos() as f64 / f64::from(N);
@@ -172,15 +218,14 @@ pub(super) fn sample_cost_nanos() -> f64 {
 mod tests {
     use super::*;
 
-    /// A mob type at a made-up address.
-    fn add(dim: &'static str, (key, id): (usize, &str), started: Instant) {
-        add_kind(dim, key, id, started);
+    fn add(dim: &'static str, id: &str, started: Instant) {
+        add_kind(dim, id, started);
     }
 
     /// Mobs add up by level and type, only on sampled ticks; taking them clears them.
     #[test]
     fn costs_add_up_by_level_and_type_while_sampling() {
-        let (zombie, cow) = ((1, "minecraft:zombie"), (2, "minecraft:cow"));
+        let (zombie, cow) = ("minecraft:zombie", "minecraft:cow");
         set_sampling(false);
         assert!(start().is_none(), "nothing is timed while off");
         set_sampling(true);
@@ -209,6 +254,83 @@ mod tests {
         assert!(take().is_empty());
     }
 
+    /// A helper thread running part of the mob loop samples for whoever samples on the thread
+    /// it helps, and its sums join that thread's.
+    #[test]
+    fn a_helper_threads_samples_join_the_server_threads() {
+        let zombie = "minecraft:zombie";
+        set_sampling(true);
+        add("minecraft:overworld", zombie, Instant::now());
+        let who = sampling();
+        let helped = std::thread::spawn(move || {
+            begin_helper(who);
+            for _ in 0..2 {
+                add("minecraft:overworld", zombie, start().expect("sampled"));
+            }
+            let sums = end_helper();
+            assert!(start().is_none(), "the helper stops sampling");
+            sums
+        })
+        .join()
+        .unwrap();
+        merge(helped);
+        set_sampling(false);
+        let costs = take();
+        assert_eq!(costs.len(), 1, "{costs:?}");
+        assert_eq!(costs[0].mob_ticks, 3);
+        assert!(take_mod().is_empty(), "the report sampled, not the mod");
+    }
+
+    /// Many mobs of one type over several ticks, some ticked on helper threads and merged back,
+    /// make one row for the type in each level, with every tick counted.
+    #[test]
+    fn one_row_per_type_however_many_mobs_and_threads() {
+        let who = {
+            set_sampling(true);
+            sampling()
+        };
+        let chicken = "minecraft:chicken";
+        let mut helpers = Vec::new();
+        for _ in 0..4 {
+            // A sampled server tick: mobs on this thread, mobs on two helpers.
+            for _ in 0..5 {
+                add("minecraft:overworld", chicken, start().unwrap());
+            }
+            add("minecraft:the_nether", chicken, Instant::now());
+            add("minecraft:overworld", "minecraft:bee", Instant::now());
+            for _ in 0..2 {
+                helpers.push(
+                    std::thread::spawn(move || {
+                        begin_helper(who);
+                        for _ in 0..3 {
+                            add("minecraft:overworld", chicken, start().unwrap());
+                        }
+                        end_helper()
+                    })
+                    .join()
+                    .unwrap(),
+                );
+            }
+            for sums in helpers.drain(..) {
+                merge(sums);
+            }
+        }
+        set_sampling(false);
+        let costs = take();
+        let ticks = |dim: &str, kind: &str| {
+            let rows: Vec<_> = costs
+                .iter()
+                .filter(|c| c.dimension == dim && c.kind == kind)
+                .collect();
+            assert_eq!(rows.len(), 1, "{costs:?}");
+            rows[0].mob_ticks
+        };
+        assert_eq!(ticks("minecraft:overworld", chicken), 4 * (5 + 2 * 3));
+        assert_eq!(ticks("minecraft:the_nether", chicken), 4);
+        assert_eq!(ticks("minecraft:overworld", "minecraft:bee"), 4);
+        assert_eq!(costs.len(), 3, "{costs:?}");
+    }
+
     /// The mod's samples and the report's are kept apart: each takes its own, and one
     /// stopping leaves the other sampling.
     #[test]
@@ -216,15 +338,11 @@ mod tests {
         set_mod_sampling(true);
         add(
             "minecraft:overworld",
-            (4, "minecraft:cow"),
+            "minecraft:cow",
             start().expect("mod samples"),
         );
         set_sampling(true);
-        add(
-            "minecraft:overworld",
-            (5, "minecraft:pig"),
-            start().unwrap(),
-        );
+        add("minecraft:overworld", "minecraft:pig", start().unwrap());
         set_sampling(false);
         assert!(start().is_some(), "the mod still samples");
         let report = take();
@@ -254,7 +372,7 @@ mod tests {
     #[test]
     fn calibration_keeps_the_samples() {
         set_sampling(true);
-        add("minecraft:overworld", (3, "minecraft:pig"), Instant::now());
+        add("minecraft:overworld", "minecraft:pig", Instant::now());
         let per = sample_cost_nanos();
         assert!(per > 0.0 && per < 100_000.0, "{per}");
         assert!(start().is_some(), "still sampling");

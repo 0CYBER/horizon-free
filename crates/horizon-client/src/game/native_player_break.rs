@@ -30,7 +30,7 @@ impl Game<'_> {
     /// and off a server. The player needn't reach or look at the block.
     /// Breaking from `native_destroy_block` makes it hear these breaks too:
     /// a mod keeps its own guard against breaking again from them.
-    /// API @API:player_break@.
+    /// API 575.
     pub(super) fn native_player_break_block(
         &mut self,
         uuid: u128,

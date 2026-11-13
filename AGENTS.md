@@ -34,8 +34,9 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 - Everything players run is Rust. Python/Java only for dev tools and harness drivers in `tools/`.
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
   they would change the vanilla look.
-- Small PRs (< ~500 lines). Labels: `feature` (players get something new), `skip-release` (they see no
-  change), none for a fix. Agents never add `release-now`: the maintainer decides it. Merges ship in batches of 5, or after
+- Small PRs (< ~500 lines of code; docs and test files don't count:
+  [CONTRIBUTING.md](CONTRIBUTING.md#pull-requests)). Labels: `feature` (players get something new), `skip-release`
+  (they see no change), none for a fix. Agents never add `release-now`: the maintainer decides it. Merges ship in batches of 5, or after
   6 hours ([docs/release-flow.md](docs/release-flow.md)).
 - **No hardcoded user-facing strings.** Keep UI translation-ready from the start. In the launcher (`launcher/`), wrap visible text with `tr("...")` or `trf("... {arg} ...", &[("arg", &val)])` from `crate::i18n` instead of raw string literals or `format!`. In the game, use translation keys (`Text::tr`, `lang::get`), never hardcoded English strings.
 - **Claim before you start**: comment `/claim` on the issue (no issue yet: open one, then claim it). An assigned
@@ -214,7 +215,7 @@ state stays separate from the library tests. This compiles gameplay twice for ex
 | Resource packs | L: `packs.rs` + `packs/`, `pack_screen.rs`, `atlas_sources.rs`, `sprites.rs`, `mipmap.rs`, `model_library.rs`, `font.rs`, `mobs/cem.rs` + `mobs/cem_anim.rs` (OptiFine/EMF entity models and their animations); `horizon-client-core/src/lang.rs`; crates `horizon-assets`, `horizon-optifine`; G: `packs.rs` |
 | Agent control | L: `control.rs` (socket), `bin/horizon-ctl/`; G: `control.rs`, `agent.rs`, `events.rs`, `ui_control.rs` ([docs/agent-control.md](docs/agent-control.md)) |
 | Mods | crate `horizon-mods`; G: `mods.rs`; L: `mod_content.rs`, `mod_list.rs` |
-| Horizon extras, settings | L: `extras.rs`, `graphics.rs`, `settings.rs`, `minimap.rs`; G: `extras.rs`, `tweaks.rs`, `options.rs` |
+| Horizon extras, settings | L: `extras.rs`, `graphics.rs`, `settings.rs`, `minimap.rs`; G: `extras.rs` + `extras/` (each extra's glue: `mouse_tweaks.rs`, `sorting.rs`, `pvp.rs`, `reconnect.rs`), `options.rs` |
 
 ## How `Game` is organised
 

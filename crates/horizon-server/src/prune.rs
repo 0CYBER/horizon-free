@@ -626,7 +626,9 @@ pub fn run(
             regions,
         });
     }
-    let (r, ring) = (settings.spawn_radius as i32, settings.ring as i32);
+    // A radius past i32 keeps everything rather than wrapping negative and keeping nothing.
+    let r = i32::try_from(settings.spawn_radius).unwrap_or(i32::MAX);
+    let ring = settings.ring as i32;
     let mut tallies = Vec::new();
     let mut errors = Vec::new();
     let mut committed_chunks = 0_u64;
@@ -1330,6 +1332,10 @@ pub(crate) mod tests {
 
         // The spawn radius reaches region r.2.0 (64 chunks out): everything there stays.
         s.spawn_radius = 100;
+        let all = run(&world, &s, false, 1).unwrap();
+        assert!(all.summary.contains(" 0 of "), "{}", all.report);
+        // So does a radius past i32 (it once wrapped negative and kept nothing).
+        s.spawn_radius = u32::MAX;
         let all = run(&world, &s, false, 1).unwrap();
         assert!(all.summary.contains(" 0 of "), "{}", all.report);
 

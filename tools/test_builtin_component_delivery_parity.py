@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Four built-in component send paths through real inventory packets.
+"""Built-in component send paths through real inventory packets.
 
-Primary gate is four canonical forms plus independent setup controls. Historical
+Primary gate is six canonical forms (two of them, tool and attribute modifiers, from a stack's own components) plus independent setup controls. Historical
 forms, saved canonicalization, armor trim and removal bridges remain complete,
 separately executable diagnostics; no output masks or substring component scans.
 """
@@ -17,6 +17,7 @@ import struct
 import subprocess
 import time
 import uuid
+PARITY_MANUAL = "a proof run by hand, once per side: --side java, then --side native, each with --binary BIN"  # not a harness: tools/parity.py leaves it out
 try:
     from . import anvil_dump as nbt, net_capture, test_locator_bar_parity as net
 except ImportError:
@@ -127,6 +128,18 @@ CASES=[{'label': 'trim material',
   'count': 1,
   'slot': 12,
   'key': 'case3'},
+ {'label': 'tool',
+  'item': 'minecraft:iron_pickaxe[minecraft:tool={rules:[{blocks:"minecraft:stone",speed:2.0f,correct_for_drops:true}],default_mining_speed:1.5f,damage_per_block:2}]',
+  'group': 'primary',
+  'count': 1,
+  'slot': 33,
+  'key': 'case24'},
+ {'label': 'attribute modifiers',
+  'item': 'minecraft:iron_pickaxe[minecraft:attribute_modifiers=[{type:"attack_damage",id:"base_attack_damage",amount:20.0d,operation:"add_value",slot:"mainhand"}]]',
+  'group': 'primary',
+  'count': 1,
+  'slot': 34,
+  'key': 'case25'},
  {'label': 'trim',
   'item': 'minecraft:iron_chestplate[minecraft:trim={material:"minecraft:gold",pattern:"minecraft:coast"}]',
   'group': 'h284',
@@ -329,6 +342,7 @@ def facts(build,label):
         packet={}
         if slot:
             packet={'item':slot['item'],'count':slot['count'],'removed':slot['removed'],'effective':{n:tag(t) for n,t in slot['effective'].items()},'added':[{k:v for k,v in a.items() if k!='value'}|{'value':tag(a['value'])} for a in slot['added']]}
+            packet=json.loads(json.dumps(packet))
         if c['group']=='primary':
             result[key+'/saved-components']=item.get('components',{}) if item else None
             result[key+'/packet-components']=packet
@@ -349,9 +363,9 @@ def admit(f,build,label):
         assert f[k+'/saved-item-id']==c['item'].split('[',1)[0] and f[k+'/saved-count']==c['count'],c
         assert f[k+'/actual-slot-received'] and f[k+'/packet-item']==c['item'].split('[',1)[0] and f[k+'/packet-count']==c['count'],c
         if c['group']=='primary':
-            expected={'case0':('minecraft:provides_trim_material','minecraft:gold'),'case1':('minecraft:provides_banner_patterns','#minecraft:pattern_item/globe'),'case2':('minecraft:can_place_on',{'blocks':'minecraft:dirt'}),'case3':('minecraft:can_break',{'blocks':'minecraft:stone','state':{}})}[k]
+            expected={'case0':('minecraft:provides_trim_material','minecraft:gold'),'case1':('minecraft:provides_banner_patterns','#minecraft:pattern_item/globe'),'case2':('minecraft:can_place_on',{'blocks':'minecraft:dirt'}),'case3':('minecraft:can_break',{'blocks':'minecraft:stone','state':{}}),'case24':('minecraft:tool',{'damage_per_block':2,'default_mining_speed':['f',1.5],'rules':[{'blocks':'minecraft:stone','correct_for_drops':['b',1],'speed':['f',2.0]}]}),'case25':('minecraft:attribute_modifiers',[{'amount':['d',20.0],'id':'minecraft:base_attack_damage','slot':'mainhand','type':'minecraft:attack_damage','operation':'add_value'}])}[k]
             name,value=expected;assert f[k+'/saved-components']=={name:value},(c,f[k+'/saved-components'])
-            p=f[k+'/packet-components'];assert p['removed']==[] and len(p['added'])==1 and p['added'][0]['name']==name and p['added'][0]['value']==value and p['added'][0]['raw'],(c,p)
+            p=f[k+'/packet-components'];assert p['removed']==[] and len(p['added'])==1 and p['added'][0]['name']==name and json.loads(json.dumps(p['added'][0]['value']))==value and p['added'][0]['raw'],(c,p)
     # Historical exact/partial predicates are validated by actual full official codecs,
     # and retained as whole records. Their original wire Tag types are not inferred.
     diag=json.loads((build/(label+'-diagnostics.json')).read_text())
@@ -368,7 +382,7 @@ def main():
         print(e.stdout.decode() if isinstance(e.stdout,bytes) else e.stdout)
         print(e.stderr.decode() if isinstance(e.stderr,bytes) else e.stderr)
         raise
-    (build/'program.json').write_text(json.dumps({'cases':CASES,'primary_gate':'four canonical forms+actual action/identity/load/clock/saved/slot admissions','diagnostics':'all historical advanced/armortrim/removals whole records; full original payloads+order+IDs+epochs; no all-form/receive closure','observation_ticks':0},indent=2)+'\n')
+    (build/'program.json').write_text(json.dumps({'cases':CASES,'primary_gate':'six canonical forms+actual action/identity/load/clock/saved/slot admissions','diagnostics':'all historical advanced/armortrim/removals whole records; full original payloads+order+IDs+epochs; no all-form/receive closure','observation_ticks':0},indent=2)+'\n')
     if a.side=='java':
         world=generate(java,build);f=run('java',java,client,build,world);n=admit(f,build,'java');(build/'reference.json').write_text(json.dumps(f,indent=2)+'\n');print('JAVA ADMITTED',n);return 0
     actual=run('native',native,client,build,build/'generate/world');ref=json.loads((build/'reference.json').read_text());diff={k:{'java':v,'native':actual.get(k)} for k,v in ref.items() if v!=actual.get(k)}
