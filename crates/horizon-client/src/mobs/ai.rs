@@ -3729,7 +3729,7 @@ mod same_vehicle_push_tests {
         let Some(pen) = pen else {
             return;
         };
-        let pushed = |cap: u32, crowd: &[Seen]| {
+        let pushed = |cap: u32, crowd: &[crate::mobs::Seen]| {
             let mut pusher = pen[0].clone();
             let mut events = Vec::new();
             super::super::push::with_cap(cap, || {
@@ -3749,7 +3749,7 @@ mod same_vehicle_push_tests {
             assert_eq!(pusher.pushed, if cap > 0 { ids.clone() } else { vec![] });
             ids
         };
-        let mut crowd: Vec<Seen> = pen.iter().map(|m| m.seen(None)).collect();
+        let mut crowd: Vec<crate::mobs::Seen> = pen.iter().map(|m| m.seen(None)).collect();
         assert_eq!(pushed(0, &crowd), (1..12).collect::<Vec<u32>>());
         assert_eq!(pushed(3, &crowd), vec![1, 2, 3]);
         // Chickens 1 and 2 have taken 3 pushes already: skipped, the next ones are pushed.
@@ -3792,7 +3792,7 @@ mod same_vehicle_push_tests {
                 return;
             };
             for cap in [0u32, 8] {
-                let crowd: Vec<Seen> = pen.iter().map(|m| m.seen(None)).collect();
+                let crowd: Vec<crate::mobs::Seen> = pen.iter().map(|m| m.seen(None)).collect();
                 let t = std::time::Instant::now();
                 super::super::push::with_cap(cap, || {
                     with_test_world(&crowd, |w, _| {
