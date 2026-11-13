@@ -73,6 +73,8 @@ const HURT_TICKS: i32 = 40;
 /// - Wither and warden: bosses whose fights and anger would stutter.
 /// - A target or anger: it is hunting or being hunted, and a slowed attack is a visible lag.
 /// - Hurt in the last ~2 s: it flees, retaliates or calls for help at once.
+/// - In a fluid deep enough to float in: `FloatGoal` and the brains' `Swim` jump every tick, or it
+///   sinks, drowns or burns.
 /// - In a raid: raids are balanced around raiders that act every tick.
 /// - Ridden, riding, with passengers, or led: a rider's input and a lead's pull expect a reply.
 /// - Tamed and not sitting: it follows or defends its owner, and teleports to them.
@@ -82,6 +84,7 @@ pub fn exempt(m: &Mob) -> bool {
         || m.extra.anger > 0
         || m.extra.angry_at.is_some()
         || m.hurt_time > 0
+        || m.floats()
         || (m.ai.last_hurt_by.is_some()
             && (m.age as i32).wrapping_sub(m.ai.last_hurt_by_time) <= HURT_TICKS)
         || super::raider::in_raid(m)
@@ -112,6 +115,9 @@ pub(super) fn step(
     events: &mut Vec<MobEvent>,
 ) {
     if runs_ai(m, w) {
+        if settings().is_some() {
+            count_turn(m);
+        }
         super::ai::server_ai_step(m, w, level_random, events);
         return;
     }
@@ -136,6 +142,22 @@ pub(super) fn step(
         }
     }
     m.jump_control_tick();
+}
+
+/// The tick `Mob.serverAiStep` alternates its full and partial selector updates by (`tickCount`,
+/// plus the id). With the setting on it counts the mob's AI turns instead (`count_turn`): a far
+/// mob's turns fall on ages that are all even at an even interval, which would leave an odd-id mob
+/// on the partial update forever.
+pub(super) fn selector_tick(m: &Mob) -> i64 {
+    if m.ai.dab_turns == 0 {
+        i64::from(m.age)
+    } else {
+        i64::from(m.ai.dab_turns)
+    }
+}
+
+fn count_turn(m: &mut Mob) {
+    m.ai.dab_turns = m.ai.dab_turns.checked_add(1).unwrap_or(1);
 }
 
 fn runs_ai_with(dab: &Dab, m: &Mob, nearest: Option<Vec3>) -> bool {
@@ -193,6 +215,36 @@ mod tests {
         // 60 blocks: interval 14, so ticks 0, 14, ..., 266 of 280.
         assert_eq!(deciding(&mut m, 60.0), 20);
         assert_eq!(deciding(&mut m, 5.0), 280);
+    }
+
+    /// Every AI turn over 280 ticks, as `step` would number them: whether its selectors update in full.
+    fn full_selector_turns(m: &mut Mob, distance: f64) -> Vec<bool> {
+        let nearest = Some(Vec3::new(0.5 + distance, 64.0, 0.5));
+        let mut turns = Vec::new();
+        for age in 0..280 {
+            m.age = age;
+            if runs_ai_with(&DEFAULTS, m, nearest) {
+                count_turn(m);
+                turns.push((selector_tick(m) + i64::from(m.id)) % 2 == 0 || m.age <= 1);
+            }
+        }
+        turns
+    }
+
+    #[test]
+    fn an_odd_id_far_mob_still_gets_full_selector_updates() {
+        let mut m = evoker(); // id 1
+        // 60 blocks: interval 14, every AI turn on an even age.
+        let turns = full_selector_turns(&mut m, 60.0);
+        assert_eq!(turns.len(), 20);
+        assert_eq!(turns.iter().filter(|full| **full).count(), 10);
+    }
+
+    #[test]
+    fn a_far_mob_swimming_keeps_its_ai_every_tick() {
+        let mut m = evoker();
+        m.fluids.in_lava = true;
+        assert_eq!(deciding(&mut m, 60.0), 280);
     }
 
     #[test]
