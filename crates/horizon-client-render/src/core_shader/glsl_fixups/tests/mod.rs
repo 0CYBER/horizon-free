@@ -246,6 +246,72 @@ fn thousands_of_calls_are_left_as_they_were() {
 }
 
 #[test]
+fn an_array_sized_by_a_local_int_constant_takes_its_expression() {
+    let text =
+        "void main() {\n    const int n = COUNT / 4;\n    vec4 s[n];\n    s[0] = vec4(n);\n}\n";
+    let out = size_by_int_constants(text);
+    assert!(out.contains("vec4 s[(COUNT / 4)];"), "{out}");
+    assert!(out.contains("s[0] = vec4(n);"), "{out}");
+}
+
+#[test]
+fn each_function_sizes_by_its_own_constant_and_accesses_are_kept() {
+    let text = "float f() {\n    const int n = 2;\n    float a[n];\n    a[1] = 1.0;\n    return a[n - 1];\n}\n\
+        float g() {\n    const int n = 4;\n    float b[n];\n    b[3] = 1.0;\n    float c = b[n];\n    return c;\n}\n";
+    let out = size_by_int_constants(text);
+    assert!(out.contains("float a[(2)];"), "{out}");
+    assert!(out.contains("float b[(4)];"), "{out}");
+    assert!(out.contains("b[3] = 1.0;"), "{out}");
+    assert!(out.contains("float c = b[n];"), "{out}");
+    assert!(out.contains("return a[n - 1];"), "{out}");
+}
+
+#[test]
+fn an_inner_constant_shadows_the_outer_one_only_inside_its_block() {
+    let text = "void main() {\n    const int n = 2;\n    {\n        const int n = 4;\n        float inner[n];\n    }\n\
+        float outer[n];\n}\n";
+    let out = size_by_int_constants(text);
+    assert!(out.contains("float inner[(4)];"), "{out}");
+    assert!(out.contains("float outer[(2)];"), "{out}");
+}
+
+#[test]
+fn constants_of_exclusive_branches_leave_the_text_as_it_was() {
+    let text = "void main() {\n#ifdef A\n    const int n = 2;\n#else\n    const int n = 4;\n#endif\n    float a[n];\n}\n";
+    assert_eq!(size_by_int_constants(text), text);
+}
+
+#[test]
+fn a_guarded_include_pasted_twice_still_sizes_its_arrays() {
+    let include = "#ifndef I\n#define I\nconst int bins = 2;\n#endif\n";
+    let text = format!("{include}{include}void main() {{\n    float a[bins];\n}}\n");
+    assert!(size_by_int_constants(&text).contains("float a[(2)];"));
+}
+
+#[test]
+fn arrays_sized_by_two_functions_constants_translate_to_their_own_sizes() {
+    let fsh = "#version 330\nout vec4 fragColor;\n\
+        float f() {\n    const int n = 2;\n    float a[n];\n    a[1] = 1.0;\n    return a[1];\n}\n\
+        float g() {\n    const int n = 4;\n    float b[n];\n    b[3] = 1.0;\n    return b[3];\n}\n\
+        void main() {\n    fragColor = vec4(f() + g());\n}\n";
+    let program = translate(fsh).unwrap();
+    let mut sizes: Vec<u32> = program
+        .fragment
+        .types
+        .iter()
+        .filter_map(|(_, ty)| match ty.inner {
+            naga::TypeInner::Array {
+                size: naga::ArraySize::Constant(n),
+                ..
+            } => Some(n.get()),
+            _ => None,
+        })
+        .collect();
+    sizes.sort_unstable();
+    assert_eq!(sizes, [2, 4]);
+}
+
+#[test]
 fn unsized_arrays_take_their_initializers_size() {
     let text = "const float[] w = float[](0.25, 0.5, 0.25);\n\
         const vec2 offsets[] = vec2[](vec2(1.0, 0.0), vec2(0.0, 1.0));\n\
