@@ -3051,8 +3051,8 @@ pub fn arrow_to_nbt(
         put(&mut tag, key, value);
     }
     if let Tag::Compound(map) = &mut tag {
-        map.entry("SoundEvent".into())
-            .or_insert_with(|| string("minecraft:entity.arrow.hit"));
+        let sound = a.saved_sound_event(map.get(&"SoundEvent".into()));
+        map.insert("SoundEvent".into(), sound);
         // Projectile: LeftOwner only when set; Owner as the UUID.
         map.remove(&"LeftOwner".into());
         map.remove(&"inBlockState".into());
@@ -3142,7 +3142,7 @@ pub fn arrow_from_nbt(
         a.spectral_duration = number(tag.get("Duration")).unwrap_or(200) as i32;
     }
     a.pickup_item = item;
-    a.fired_from_weapon = tag.get("weapon").and_then(item_from_nbt);
+    a.load_weapon_and_sound(tag, item_from_nbt);
     p.stuck = a.in_ground;
     Some((p, tag.get("inBlockState").cloned()))
 }
