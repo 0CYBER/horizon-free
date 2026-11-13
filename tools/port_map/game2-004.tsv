@@ -164,4 +164,4 @@ Husk.getConversionSound	port	crates/horizon-client/src/mobs/undead.rs::custom_se
 ZombieVillager.convertsInWater	port	crates/horizon-client/src/mobs/undead.rs::custom_server_ai_step	false: a zombie villager never drowns into a drowned
 SpellcasterIllager.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	SpellTicks binds to the existing live counter, default zero
 SpellcasterIllager.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	SpellTicks saves the live Int counter including zero and negative values
-Evoker.EvokerWololoSpellGoal.canUse	port	crates/horizon-client/src/mobs/illager.rs::UseSpell::can_use	wololo branch: blue sheep range scaled by visibility, floor 2
+Evoker.EvokerWololoSpellGoal.canUse	port	crates/horizon-client/src/mobs/illager.rs::UseSpell::can_use	wololo branch: blue sheep range scaled by `getVisibilityPercent` (the `isInvisible` flag or the effect; 0.07 of 16, floor 2)
