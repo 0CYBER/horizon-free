@@ -1520,7 +1520,7 @@ pub fn spawn_mobs_for_chunk_generation<L: NaturalLevel, R: RandomSource, Q: Rand
         let Some(entry) = weighted_pick(&mobs, random) else {
             continue;
         };
-        let count = sample_count(&entry, random);
+        let count = sample_count(entry, random);
         let mut group_index = 0u32;
         let mut x = xo + random.next_int_bound(16).unwrap_or(0);
         let mut z = zo + random.next_int_bound(16).unwrap_or(0);
