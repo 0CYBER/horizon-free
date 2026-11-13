@@ -153,16 +153,15 @@ fn worker_loop(weak_inner: Weak<Inner>) {
                 did_work = true;
                 run_job(&batch, i);
             }
-            if !did_work
-                && let Some(inner) = weak_inner.upgrade() {
-                    let mut queue = inner.queue.lock().unwrap_or_else(|e| e.into_inner());
-                    if let Some(front) = queue.front()
-                        && Arc::ptr_eq(front, &batch)
-                        && front.next.load(Ordering::Relaxed) >= front.count
-                    {
-                        queue.pop_front();
-                    }
+            if !did_work && let Some(inner) = weak_inner.upgrade() {
+                let mut queue = inner.queue.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(front) = queue.front()
+                    && Arc::ptr_eq(front, &batch)
+                    && front.next.load(Ordering::Relaxed) >= front.count
+                {
+                    queue.pop_front();
                 }
+            }
         }
     }
 }
@@ -194,24 +193,14 @@ pub fn compress_records_with_pool(
     let res_lock = Arc::clone(&results);
     pool.run(count, move |i| {
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compress(&recs[i])))
-            .unwrap_or_else(|_| {
-                Err(io::Error::other(
-                    "chunk compression worker panicked",
-                ))
-            });
+            .unwrap_or_else(|_| Err(io::Error::other("chunk compression worker panicked")));
         res_lock.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(res);
     });
 
     let mut guard = results.lock().unwrap_or_else(|e| e.into_inner());
     guard
         .drain(..)
-        .map(|opt| {
-            opt.unwrap_or_else(|| {
-                Err(io::Error::other(
-                    "compression slot unpopulated",
-                ))
-            })
-        })
+        .map(|opt| opt.unwrap_or_else(|| Err(io::Error::other("compression slot unpopulated"))))
         .collect()
 }
 
