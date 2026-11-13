@@ -200,6 +200,7 @@ impl Default for Entities {
     fn default() -> Self {
         Self {
             villager_lobotomize: false,
+            // Must match `mobs::villager::lobotomy::DEFAULT_INTERVAL` in horizon-client (this crate cannot depend on it).
             villager_lobotomize_check_interval: 100,
         }
     }

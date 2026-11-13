@@ -149,24 +149,26 @@ fn used_librarian_offer() -> Trader {
 }
 
 #[test]
-fn a_stuck_librarian_with_a_lectern_restocks_in_its_work_hours_and_not_without_one() {
-    for (has_lectern, day_time, restocked) in [
-        (true, 3_000, true),
-        (true, 14_000, false),
-        (false, 3_000, false),
+fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
+    // (block at the remembered site, its x, day time, restocked)
+    for (block, x, day_time, restocked) in [
+        ("minecraft:lectern", 3, 3_000, true),
+        ("minecraft:lectern", 3, 14_000, false),
+        ("minecraft:air", 3, 3_000, false),
+        ("minecraft:bell", 3, 3_000, false),
+        ("minecraft:composter", 3, 3_000, false),
+        // The villager stands at x = 0.5: a lectern in the wall beside it is in reach, one 2 blocks off is not.
+        ("minecraft:lectern", 1, 3_000, true),
+        ("minecraft:lectern", 2, 3_000, false),
+        ("minecraft:lectern", -4, 3_000, false),
     ] {
         with_built_test_world(
             &[],
             |world, registry| {
                 build(world, registry, true, None, None);
-                if has_lectern {
+                if block != "minecraft:air" {
                     world
-                        .set(
-                            3,
-                            64,
-                            0,
-                            registry.default_state("minecraft:lectern").unwrap(),
-                        )
+                        .set(x, 64, 0, registry.default_state(block).unwrap())
                         .unwrap();
                 }
             },
@@ -176,14 +178,15 @@ fn a_stuck_librarian_with_a_lectern_restocks_in_its_work_hours_and_not_without_o
                 w.game_time = 3_299;
                 w.day_time = day_time;
                 let mut m = villager(types, 1);
-                m.extra.home = Some([3, 64, 0]);
+                m.extra.variant2 = 9; // librarian
+                m.extra.home = Some([x, 64, 0]);
                 m.extra.trade = Some(Box::new(used_librarian_offer()));
                 assert!(step(&mut m, &w, 100), "stuck, so the brain is skipped");
                 let uses = m.extra.trade.as_ref().unwrap().offers[0].uses;
                 assert_eq!(
                     uses == 0,
                     restocked,
-                    "lectern {has_lectern}, day time {day_time}"
+                    "{block} at x {x}, day time {day_time}"
                 );
             },
         );

@@ -128,7 +128,8 @@ pub fn brain_tick(
 }
 
 /// `WorkAtPoi.start`'s restock for a villager whose brain is off: the job site it remembers (the
-/// brain's memory, else what it was saved or loaded with), if it is still a workstation.
+/// brain's memory, else what it was saved or loaded with), if it is still a workstation of its own
+/// profession (`PoiFilter::Held`) and within `WorkAtPoi`'s 1.73 blocks of the villager.
 fn restock_at_job_site(m: &mut Mob, w: &MobWorld) {
     let site = match villager_brain::mem_ref(m) {
         Some(mem) => mem.job_site.value(),
@@ -137,7 +138,12 @@ fn restock_at_job_site(m: &mut Mob, w: &MobWorld) {
             None => m.extra.home,
         },
     };
-    if site.is_some_and(|p| villager_brain::poi_at(w, p[0], p[1], p[2]).is_some()) {
+    let own_job_site = |p: [i32; 3]| {
+        matches!(villager_brain::poi_at(w, p[0], p[1], p[2]),
+            Some(villager_brain::Poi::Job(j)) if j == m.extra.variant2)
+            && villager_brain::closer_to_center(p, m.position, 1.73)
+    };
+    if site.is_some_and(own_job_site) {
         villager_brain::restock_if_due(m, w);
     }
 }
