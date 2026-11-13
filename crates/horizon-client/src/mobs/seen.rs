@@ -80,6 +80,7 @@ impl Mob {
             is_vehicle: equine::is_vehicle(m),
             still: m.species() == Species::HappyGhast && happy_ghast::on_still_timeout(m),
             carrying: m.rider.is_some() || m.extra.rider.is_some(),
+            collisions: 0,
             knockback_resistance: m.attrs.knockback_resistance,
             effects: m
                 .extra

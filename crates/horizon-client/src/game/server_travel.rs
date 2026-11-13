@@ -45,6 +45,9 @@ pub(super) struct Trip {
     finder: Option<PlayerSpawnFinder>,
     /// Sent by a command: the player is already where it goes.
     placed: bool,
+    /// A `tp` inside the level to chunks not loaded yet: the client's moves are ignored (it would fall
+    /// through the missing terrain) until the player is placed again where the chunks have loaded.
+    hold: bool,
     /// The level the player left for another one: the mods are told they
     /// changed dimension when the trip ends (`tell_mods_changed_dimension`).
     pub(super) left: Option<Dim>,
@@ -175,6 +178,67 @@ impl Game<'_> {
             .filter(|t| t.dim == self.dim)
             .filter_map(|t| t.gateway.and_then(GatewayJob::source_chunk))
             .collect()
+    }
+    /// A server player's `tp` inside their level, where the chunks round `target` have not loaded: vanilla loads
+    /// them before the player arrives, so the player is held as a trip holds them (their body is left alone, their
+    /// client's moves ignored) until the chunks are lit, then placed there again (#15727).
+    pub(super) fn hold_for_chunks(&mut self, conn: u32, target: Vec3) {
+        // The arrival the player was waiting for elsewhere is abandoned.
+        self.server_trips.retain(|t| !t.is(conn));
+        let (cx, cz) = (
+            (target.x.floor() as i32) >> 4,
+            (target.z.floor() as i32) >> 4,
+        );
+        if (-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
+            return;
+        }
+        self.server_trips.push(Trip {
+            conn,
+            dim: self.dim,
+            source: self.dim,
+            target,
+            end: false,
+            plan: None,
+            vehicle: None,
+            gateway: None,
+            respawn: None,
+            world_spawn: false,
+            finder: None,
+            placed: false,
+            hold: true,
+            left: None,
+        });
+    }
+    /// Before the arrivals: a hold follows the player where a mod sent them (`native_player_teleport` may cancel
+    /// a `tp` or send the player elsewhere: the guest stands where the hub put them, not at the hold's target),
+    /// and a hold that ended without its arrival (replaced by a `tp` to lit land, a trip to another level, a
+    /// respawn, a death) lets their client's moves be heard again. A portal's trip still waiting for the player
+    /// lands them itself.
+    fn release_held_arrivals(&mut self, host: &mut LanHost) {
+        let level = self.dim.id();
+        let moved: Vec<(u32, Vec3)> = self
+            .server_trips
+            .iter()
+            .filter(|t| t.hold && t.dim == self.dim)
+            .filter_map(|t| {
+                let g = host.hub.guests.iter().find(|g| g.conn == t.conn)?;
+                let at = Vec3::new(g.position[0], g.position[1], g.position[2]);
+                (g.dimension == level && at != t.target).then_some((t.conn, at))
+            })
+            .collect();
+        for (conn, at) in moved {
+            self.hold_for_chunks(conn, at);
+        }
+        for g in host.hub.guests.iter_mut().filter(|g| g.tp_held) {
+            let trips = || self.server_trips.iter().filter(|t| t.is(g.conn));
+            if trips().any(|t| t.hold) {
+                continue;
+            }
+            g.tp_held = false;
+            if !trips().any(|t| t.end || t.plan.is_some()) {
+                g.landing = false;
+            }
+        }
     }
     /// Whether `conn` is between two levels: the server leaves its body
     /// alone until it arrives.
@@ -616,6 +680,7 @@ impl Game<'_> {
             world_spawn: false,
             finder: None,
             placed: false,
+            hold: false,
             left: Some(source),
         });
         if let Err(e) = self.enter_level(Some(host), source) {
@@ -640,6 +705,7 @@ impl Game<'_> {
             world_spawn: false,
             finder: None,
             placed: false,
+            hold: false,
             left: None,
         });
     }
@@ -711,6 +777,7 @@ impl Game<'_> {
             world_spawn: true,
             finder: None,
             placed: false,
+            hold: false,
             left: None,
         });
     }
@@ -762,6 +829,7 @@ impl Game<'_> {
             world_spawn: false,
             finder: None,
             placed: false,
+            hold: false,
             left: None,
         });
     }
@@ -770,6 +838,7 @@ impl Game<'_> {
     /// around their target: the exit (the Nether portal found or built, the
     /// End platform, the Overworld's spawn column) and the teleport there.
     fn arrive_server_trips(&mut self, host: &mut LanHost) {
+        self.release_held_arrivals(host);
         let mut k = 0;
         while k < self.server_trips.len() {
             let trip = &self.server_trips[k];
@@ -782,6 +851,10 @@ impl Game<'_> {
                 (trip.target.x.floor() as i32) >> 4,
                 (trip.target.z.floor() as i32) >> 4,
             );
+            if trip.hold {
+                host.hub.guests[i].landing = true;
+                host.hub.guests[i].tp_held = true;
+            }
             if trip.dim != self.dim
                 || !(-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz)))
                 || trip
@@ -793,6 +866,10 @@ impl Game<'_> {
                 continue;
             }
             let mut trip = self.server_trips.remove(k);
+            if trip.hold {
+                host.hub.guests[i].landing = false;
+                host.hub.guests[i].tp_held = false;
+            }
             if trip.placed {
                 self.tell_mods_changed_dimension(host, trip.conn, trip.left, trip.dim);
                 continue;
@@ -889,13 +966,17 @@ impl Game<'_> {
             if let Some(vehicle) = trip.vehicle {
                 self.arrive_vehicle(trip.source, vehicle, position, yaw);
             }
-            // Player.getDimensionChangingDelay.
-            host.play.entry(trip.conn).or_default().portal.cooldown = 10;
             let g = &mut host.hub.guests[i];
             g.yaw = yaw;
-            // A new body at the exit: no fall distance or motion carried over,
-            // but the player's attributes (ServerPlayer.teleport keeps the entity).
-            g.new_body(true);
+            // A `tp` inside the level sets no portal cooldown and keeps the body it already placed
+            // (`ServerPlayer.teleportTo`): only the position is sent again.
+            if !trip.hold {
+                // Player.getDimensionChangingDelay.
+                host.play.entry(trip.conn).or_default().portal.cooldown = 10;
+                // A new body at the exit: no fall distance or motion carried over,
+                // but the player's attributes (ServerPlayer.teleport keeps the entity).
+                host.hub.guests[i].new_body(true);
+            }
             let at = [position.x, position.y, position.z];
             if portal {
                 host.hub.land(i, at);
@@ -1043,6 +1124,7 @@ impl Game<'_> {
                 world_spawn: false,
                 finder: None,
                 placed: true,
+                hold: false,
                 left: Some(source),
             });
             if let Err(e) = self.enter_level(Some(host), source) {
@@ -1274,3 +1356,6 @@ mod credits_respawn_tests {
         std::fs::remove_dir_all(scratch).unwrap();
     }
 }
+
+#[cfg(test)]
+mod hold_tests;

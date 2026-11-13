@@ -321,6 +321,13 @@ fn command(
                 entities.dab_activation_dist_mod.to_string(),
             );
     }
+    // `[entities] max_collisions`: the cap on the pushes of a mob's tick. 0 (vanilla) leaves the variable alone.
+    if entities.max_collisions > 0 {
+        command.env(
+            "HORIZON_MAX_ENTITY_COLLISIONS",
+            entities.max_collisions.to_string(),
+        );
+    }
     Ok(command)
 }
 
@@ -522,6 +529,18 @@ mod tests {
             Some("7")
         );
         assert_eq!(env(Entities::default(), "HORIZON_DAB"), None);
+        let capped = Entities {
+            max_collisions: 8,
+            ..Entities::default()
+        };
+        assert_eq!(
+            env(capped, "HORIZON_MAX_ENTITY_COLLISIONS").as_deref(),
+            Some("8")
+        );
+        assert_eq!(
+            env(Entities::default(), "HORIZON_MAX_ENTITY_COLLISIONS"),
+            None
+        );
     }
 
     #[test]

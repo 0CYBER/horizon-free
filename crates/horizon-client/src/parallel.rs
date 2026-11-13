@@ -75,6 +75,55 @@ pub fn par_map<T: Sync, R: Send>(
     par_map_on(items, min, lanes(), f)
 }
 
+/// `f` over `items` in chunks of `chunk`, in place, on the pool: the same sharing out as
+/// `horizon_threads::par_chunks_mut`, without starting threads for every call. A chunk runs on
+/// whatever thread takes it, so `f` must not depend on the order. Unlike [`par_map`] it does not
+/// wait for the parallel tick's switch (the phases that use it ran shared out before the pool
+/// existed, #8158): it shares out unless `HORIZON_SERIAL_TICK=all` or one thread is all there is.
+/// The thread-locals the tick relies on do not follow a helper.
+pub fn par_chunks_mut<T: Send>(items: &mut [T], chunk: usize, f: impl Fn(&mut [T]) + Send + Sync) {
+    let lanes = if horizon_threads::serial_tick_all() {
+        1
+    } else {
+        horizon_threads::worker_count().clamp(1, 8)
+    };
+    par_chunks_mut_on(items, chunk, lanes, f);
+}
+
+/// [`par_chunks_mut`] on `lanes` threads.
+fn par_chunks_mut_on<T: Send>(
+    items: &mut [T],
+    chunk: usize,
+    lanes: usize,
+    f: impl Fn(&mut [T]) + Send + Sync,
+) {
+    let chunk = chunk.max(1);
+    let count = items.len().div_ceil(chunk);
+    if lanes <= 1 || count < 2 {
+        for slice in items.chunks_mut(chunk) {
+            f(slice);
+        }
+        return;
+    }
+    // A thread takes a chunk whole; the lock is only held while a chunk is taken, never while
+    // it runs: the chunk is popped in a statement of its own, so the guard is gone before `f`
+    // (a guard in a `while let` scrutinee would live through the loop body).
+    let pending = Mutex::new(items.chunks_mut(chunk).collect::<Vec<_>>());
+    let work = || {
+        loop {
+            let next = pending.lock().unwrap_or_else(PoisonError::into_inner).pop();
+            let Some(slice) = next else { break };
+            f(slice);
+        }
+    };
+    pool().in_place_scope(|s| {
+        for _ in 1..lanes.min(count) {
+            s.spawn(|_| work());
+        }
+        work();
+    });
+}
+
 /// [`par_map`] on `lanes` threads.
 ///
 /// The parts are small (four a thread) and go to whichever thread is free, this one too: a helper
@@ -150,6 +199,52 @@ mod tests {
             f(&items, &mut serial);
             assert_eq!(par_map_on(&items, 1, 4, f), serial, "{n} items");
         }
+    }
+
+    /// Every chunk is handled once, whole, and its items changed in place, for item counts that
+    /// don't divide into chunks evenly.
+    #[test]
+    fn chunks_are_each_handled_once() {
+        for n in [0usize, 1, 15, 16, 17, 79, 80, 1000] {
+            let mut items: Vec<u64> = (0..n as u64).collect();
+            par_chunks_mut_on(&mut items, 16, 4, |chunk| {
+                assert!(chunk.len() <= 16);
+                for x in chunk {
+                    *x = *x * 3 + 1;
+                }
+            });
+            assert_eq!(items, (0..n as u64).map(|x| x * 3 + 1).collect::<Vec<_>>());
+        }
+    }
+
+    /// Chunks really run at the same time: one waits (bounded, so a serial run fails instead of
+    /// hanging) until another has started, and each item is still handled exactly once.
+    #[test]
+    fn chunks_overlap_and_run_once() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+        let active = AtomicUsize::new(0);
+        let overlapped = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let runs: Vec<AtomicUsize> = (0..64).map(|_| AtomicUsize::new(0)).collect();
+        let mut items: Vec<usize> = (0..64).collect();
+        par_chunks_mut_on(&mut items, 4, 4, |chunk| {
+            for &i in chunk.iter() {
+                runs[i].fetch_add(1, Ordering::SeqCst);
+            }
+            if active.fetch_add(1, Ordering::SeqCst) >= 1 {
+                overlapped.store(true, Ordering::SeqCst);
+            }
+            while !overlapped.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            active.fetch_sub(1, Ordering::SeqCst);
+        });
+        assert!(
+            overlapped.load(Ordering::SeqCst),
+            "no two chunks ran at once"
+        );
+        assert!(runs.iter().all(|r| r.load(Ordering::SeqCst) == 1));
     }
 
     /// A panic in a part reaches the caller instead of being lost on a helper.
