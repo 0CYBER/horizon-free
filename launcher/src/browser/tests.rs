@@ -123,6 +123,10 @@ fn file_names_must_be_plain() {
         "Faithful 32x.zip",
         "FreshAnimations_v1.11.1_26.1+.zip",
         "Faithful_v10.zip",
+        "Console.zip",
+        "COM10.jar",
+        "nullify.jar",
+        "Ünïcode pack.zip",
     ] {
         assert_eq!(safe_name(good), Some(good));
     }
@@ -135,6 +139,14 @@ fn file_names_must_be_plain() {
         "c:x.zip",
         "x.zip.",
         "x\n.zip",
+        "CON",
+        "nul.jar",
+        "Com1.zip",
+        "LPT9",
+        "AUX .zip",
+        "COM¹.jar",
+        "fake\u{202E}gpj.zip",
+        "a\u{200B}b.zip",
     ] {
         assert_eq!(safe_name(bad), None, "{bad:?}");
     }

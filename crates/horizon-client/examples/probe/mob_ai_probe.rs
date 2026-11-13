@@ -237,7 +237,7 @@ fn goal_name(m: &Mob, name: &str) -> String {
         "RestrictSun" => "RestrictSunGoal",
         "FleeSun" => "FleeSunGoal",
         // `Cat.CatAvoidEntityGoal`, `Fox.FoxAvoidEntityGoal`... name their subclass.
-        "AvoidEntity" if m.species() == Species::Cat => "CatAvoidEntityGoal",
+        "AvoidEntity" | "CatAvoid" if m.species() == Species::Cat => "CatAvoidEntityGoal",
         "AvoidEntity" => "AvoidEntityGoal",
         "BowAttack" => "RangedBowAttackGoal",
         "Swell" => "SwellGoal",
@@ -1208,6 +1208,7 @@ pub fn main() -> horizon_client::Result<()> {
                     dragon: None,
                     leash_boats: &[],
                     who_lookup: None,
+                    foreign: None,
                     others_grid: $grid,
                     others_index: None,
                     others_villagers: None,
