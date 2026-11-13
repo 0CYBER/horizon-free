@@ -2097,6 +2097,51 @@ mod tests {
         assert_eq!(groups, groups_for(3));
     }
 
+    /// The level random after three ticks of the herds with four cod among them, each leading a
+    /// school of `followers` (a leader rolls one in 200 on the level's stream every tick,
+    /// `aquatic::school_tick`).
+    fn level_random_after_ticks(own: bool, followers: i32) -> String {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                super::super::mob_group::OWN_RANDOM.with(|o| o.set(false));
+            }
+        }
+        let _reset = Reset;
+        super::super::mob_group::OWN_RANDOM.with(|o| o.set(own));
+        let mut game = separated_herds_game();
+        for k in 0..4 {
+            let x = 100.0 + f64::from(k) * 2.0;
+            assert!(game.run_command(&format!("summon cod {x:.1} 66 14.0")));
+            let cod = game.mobs.last_mut().unwrap();
+            assert_eq!(cod.kind.id, "minecraft:cod");
+            cod.extra.followers = followers;
+            cod.persistent = true;
+        }
+        // A mob's first tick does not run its step.
+        for _ in 0..3 {
+            game.tick_creature_entities().unwrap();
+        }
+        format!("{:?}", game.world.random)
+    }
+
+    /// With the mobs on their own random (`parallel::mobs_own_random`), a turn takes nothing from
+    /// the level's stream, so no lane waits for it: the school leaders' rolls, which move the
+    /// level random otherwise, leave it where a tick without them does.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn mobs_on_their_own_random_leave_the_level_stream_alone() {
+        assert_ne!(
+            level_random_after_ticks(false, 3),
+            level_random_after_ticks(false, 0),
+            "a school leader draws from the level random"
+        );
+        assert_eq!(
+            level_random_after_ticks(true, 3),
+            level_random_after_ticks(true, 0)
+        );
+    }
+
     /// The raiders of one raid order their hurts across it (`raids.rs`): one in each of two herds
     /// joins them, and the herd between ticks in a group of its own.
     #[test]

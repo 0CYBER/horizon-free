@@ -751,6 +751,11 @@ environment variable `HORIZON_PARALLEL_TICK=1`, for a host that gives you no way
 with a fixed startup command). With the setting off, a `HORIZON_PARALLEL_TICK` already in the server's
 environment still applies.
 
+One thing differs from the serial tick while it is on: the rolls a mob makes on the level's random (a fish
+leaving its school, a parrot imitating, a brain's durations) come from a random of the mob's own, so that mobs
+on different threads do not wait for each other. The odds are vanilla's; the values are not the ones the level's
+random would have given ([mob-islands.md](mob-islands.md#every-turn-draws-its-own-random)).
+
 ### Mob AI far from players: `[entities] dab`
 
 Off by default, because it is not vanilla's behaviour: mobs far from every player react more slowly. It is
