@@ -108,6 +108,11 @@ enabled = true               # false pauses it and keeps the webhook
 # Fights follow 26.3's rules. For 1.8.9's (no attack cooldown or sweep, 1.8 weapon damage; docs/pvp.md):
 # [combat]
 # legacy = true
+
+# Mobs push every mob they overlap, as vanilla does. A crowded pen costs the square of its crowd; to cap it
+# (the most other mobs one mob pushes per tick, pushes it receives counted; 0 = no cap, vanilla):
+# [entities]
+# max_collisions = 8
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
@@ -184,7 +189,8 @@ pub struct Config {
 /// `[entities]`: `dab = true` runs a mob's AI less often the farther it is from the nearest player (Pufferfish's
 /// dynamic activation of brain; crates/horizon-client/src/mobs/dab.rs). Off by default: it is not vanilla's
 /// behaviour. A mob farther than `dab_start_distance` blocks runs its AI every
-/// `clamp(distance² >> dab_activation_dist_mod, 1, dab_max_tick_freq)` ticks.
+/// `clamp(distance² >> dab_activation_dist_mod, 1, dab_max_tick_freq)` ticks. `max_collisions = N` limits how many
+/// other mobs one mob pushes in a tick (pushes it receives count too); 0 is vanilla's behaviour, no cap.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Entities {
@@ -192,6 +198,7 @@ pub struct Entities {
     pub dab_start_distance: u32,
     pub dab_max_tick_freq: u32,
     pub dab_activation_dist_mod: u32,
+    pub max_collisions: u32,
 }
 impl Default for Entities {
     fn default() -> Self {
@@ -200,6 +207,7 @@ impl Default for Entities {
             dab_start_distance: 12,
             dab_max_tick_freq: 20,
             dab_activation_dist_mod: 8,
+            max_collisions: 0,
         }
     }
 }
@@ -978,6 +986,19 @@ mod tests {
         assert_eq!(Config::parse(&render(&c)).unwrap(), c);
         assert!(Config::parse("[anticheat]\nenable = true\n").is_err());
         assert!(Config::parse("[anticheat.timer]\nalert = -1\n").is_err());
+    }
+
+    #[test]
+    fn the_collision_cap_is_off_unless_its_section_sets_it() {
+        assert_eq!(Config::default().entities.max_collisions, 0);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[entities]"));
+        let on = Config::parse(&format!("{TEMPLATE}\n[entities]\nmax_collisions = 8\n")).unwrap();
+        assert_eq!(on.entities.max_collisions, 8);
+        assert_eq!(Config::parse(&render(&on)).unwrap(), on);
+        let off = render(&Config::default());
+        assert!(!off.lines().any(|l| l.trim() == "[entities]"), "{off}");
+        assert!(Config::parse("[entities]\nmax_collisions = -1\n").is_err());
+        assert!(Config::parse("[entities]\nmax_collision = 8\n").is_err());
     }
 
     #[test]

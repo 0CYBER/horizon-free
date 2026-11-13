@@ -574,6 +574,15 @@ This is the file `init` writes today, and it also writes `[panel]` (`bind = "127
 each one). Unknown keys are errors, as are a typed key set again under `[properties]` and values vanilla would
 refuse. There is no `backups.before_update` setting: an update always backs up the world first (section 7).
 
+- **Entity collision cap (`[entities] max_collisions`).** Off (0) is vanilla. In a crowded pen every mob pushes
+  every mob it overlaps each tick, so the work grows with the square of the crowd (about 8 ms a tick on a
+  79-player server with crowded chicken farms). `max_collisions = N` (not in the file until you add it) makes a
+  mob push at most N other mobs per tick. The pushes a mob receives count as well: a mob that has had N this
+  tick is skipped by the others, and the counts start again every tick. The mobs pushed are the first N in
+  vanilla's order, so the result is the same from run to run. `max_entity_cramming` still counts every entity
+  in the box before the cap applies, so cramming damage is vanilla's. It covers mobs pushing mobs: players,
+  boats and minecarts push as in vanilla. It reaches the game as `HORIZON_MAX_ENTITY_COLLISIONS`, at the next
+  start; with the setting at 0 a variable already in the server's environment still applies.
 - **Import.** `horizon-server init` in a folder with a `server.properties`, or `horizon-server import
   server.properties`, reads it with vanilla's own parser (`ServerProperties`). Keys with typed fields go into
   their sections; any other key that differs from vanilla's default goes into `[properties]`. Keys left at
