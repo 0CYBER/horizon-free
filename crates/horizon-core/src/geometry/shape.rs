@@ -393,16 +393,22 @@ impl VoxelShape {
         if self.is_empty() {
             return Self::empty();
         }
-        let mut result = self.clone();
-        result.identity = Arc::new(ShapeIdentity::default());
-        result.cube = false;
-        result.coordinate_cubes = [false; 3];
-        result.coords = self.coords.moved(offset);
-        // The same occupancy decomposes into the same boxes, over coordinates
-        // moved by the same additions.
-        result.boxes = self.boxes.iter().map(|b| b.move_by(offset)).collect();
-        result.bounds = self.bounds.map(|bounds| bounds.move_by(offset));
-        result
+        // Built field by field: cloning `self` first would take and drop a
+        // reference on every `Arc` this replaces, for each block a scan keeps.
+        Self {
+            identity: Arc::new(ShapeIdentity::default()),
+            coords: self.coords.moved(offset),
+            sizes: self.sizes,
+            occupancy: Arc::clone(&self.occupancy),
+            cube: false,
+            coordinate_cubes: [false; 3],
+            // The same occupancy decomposes into the same boxes, over
+            // coordinates moved by the same additions.
+            boxes: self.boxes.iter().map(|b| b.move_by(offset)).collect(),
+            bounds: self.bounds.map(|bounds| bounds.move_by(offset)),
+            discrete_min: self.discrete_min,
+            discrete_max: self.discrete_max,
+        }
     }
     pub fn is_full(&self, x: i32, y: i32, z: i32) -> bool {
         if x < 0

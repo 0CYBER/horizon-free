@@ -123,7 +123,7 @@ pub fn brain_tick(
     events: &mut Vec<super::super::MobEvent>,
 ) {
     if !skips_brain(m, w) {
-        villager_brain::tick(m, w, lr, events);
+        super::tick_brain(m, w, lr, events);
     }
 }
 

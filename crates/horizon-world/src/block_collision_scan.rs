@@ -154,6 +154,37 @@ struct SectionFacts {
     reaches: bool,
 }
 
+/// Entries of the per-thread cache of moved full cubes.
+const MOVED_BLOCKS: usize = 256;
+type MovedBlocks = [Option<(BlockPos, VoxelShape)>; MOVED_BLOCKS];
+thread_local! {
+    static MOVED: std::cell::RefCell<Box<MovedBlocks>> =
+        std::cell::RefCell::new(Box::new(std::array::from_fn(|_| None)));
+}
+
+/// `shape.moved(offset)` for the full cube `shape` at block `p`: the same shape every time the
+/// block is scanned, so a crowd standing on one floor builds it once, not once per mob per
+/// tick. Direct-mapped by position; a miss builds it and takes the slot.
+fn moved_block(p: BlockPos, offset: Vec3, shape: &VoxelShape) -> VoxelShape {
+    let slot = (p.x.wrapping_mul(73_856_093)
+        ^ p.y.wrapping_mul(19_349_663)
+        ^ p.z.wrapping_mul(83_492_791)) as u32 as usize
+        % MOVED_BLOCKS;
+    MOVED.with(|cache| {
+        let Ok(mut cache) = cache.try_borrow_mut() else {
+            return shape.moved(offset);
+        };
+        if let Some((at, moved)) = &cache[slot]
+            && *at == p
+        {
+            return moved.clone();
+        }
+        let moved = shape.moved(offset);
+        cache[slot] = Some((p, moved.clone()));
+        moved
+    })
+}
+
 pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
     world: &'w mut W,
     context: CollisionContext<'c>,
@@ -358,11 +389,10 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                     self.cursor[2] += 1;
                 }
             }
-            let kind = relative
-                .into_iter()
-                .zip(self.sizes)
-                .filter(|(p, size)| *p == 0 || *p == size - 1)
-                .count();
+            // How many of the cell's three coordinates lie on the box's outer layer.
+            let kind = usize::from(relative[0] == 0 || relative[0] == width - 1)
+                + usize::from(relative[1] == 0 || relative[1] == height - 1)
+                + usize::from(relative[2] == 0 || relative[2] == depth - 1);
             if kind == 3 {
                 continue;
             }
@@ -450,7 +480,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                 if self.presence_only {
                     VoxelShape::block()
                 } else {
-                    shape.moved(offset)
+                    moved_block(p, offset, &shape)
                 }
             } else {
                 // Shapes whose bounds miss the box share no volume with it:

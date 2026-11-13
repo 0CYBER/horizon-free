@@ -291,10 +291,12 @@ fn load_entities() {
     }
 }
 
-/// The `[entities]` section of a `server.toml`: (`villager_lobotomize`, its check interval in ticks).
+/// The `[entities]` section of a `server.toml`: (`villager_lobotomize`, its check interval in ticks). The
+/// section's other keys (`dab`...) belong to other settings, so they are skipped here; `horizon-server` refuses
+/// typos when it reads the file.
 fn parse_entities(text: &str) -> std::result::Result<(bool, u32), String> {
     #[derive(serde::Deserialize)]
-    #[serde(default, deny_unknown_fields)]
+    #[serde(default)]
     struct Entities {
         villager_lobotomize: bool,
         villager_lobotomize_check_interval: u32,
@@ -2685,7 +2687,7 @@ mod tests {
     }
 
     #[test]
-    fn entities_section_is_off_by_default_and_refuses_typos() {
+    fn entities_section_is_off_by_default_and_keeps_the_other_settings_keys() {
         use super::parse_entities;
         assert_eq!(parse_entities(""), Ok((false, 100)));
         assert_eq!(
@@ -2694,7 +2696,12 @@ mod tests {
             ),
             Ok((true, 40))
         );
-        assert!(parse_entities("[entities]\nvillager_lobotomise = true\n").is_err());
+        assert_eq!(
+            parse_entities(
+                "[entities]\ndab = true\nmax_collisions = 8\nvillager_lobotomize = true\n"
+            ),
+            Ok((true, 100))
+        );
         assert!(parse_entities("[entities]\nvillager_lobotomize_check_interval = 0\n").is_err());
     }
 
