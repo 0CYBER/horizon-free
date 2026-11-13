@@ -235,15 +235,34 @@ def changed_paths(commit):
     return run("git", "diff", "--name-only", f"{commit}^1", commit).split()
 
 
-def pull_request(number):
-    data = gh_json("pr", "view", str(number), "--repo", REPO, "--json",
-                   "number,title,url,labels,closingIssuesReferences,author,mergedAt")
+# Pull requests asked for in one GraphQL query. One `gh pr view` per pull request ran out of the workflow token's
+# hourly quota once ~2,000 merges piled up since the last Nightly (11-08 to 11-13): every decision died half way,
+# so no Nightly could ever go out again.
+PR_BATCH = 50
+PR_FIELDS = ("number title url mergedAt author { login } labels(first: 30) { nodes { name } } "
+             "closingIssuesReferences(first: 10) { nodes { number } }")
+
+
+def pull_requests(numbers):
+    """The pull requests with these numbers, in that order: one GraphQL query per PR_BATCH of them."""
+    owner, name = REPO.split("/")
+    found, unique = {}, list(dict.fromkeys(numbers))
+    for start in range(0, len(unique), PR_BATCH):
+        chunk = unique[start:start + PR_BATCH]
+        fields = " ".join(f"p{number}: pullRequest(number: {number}) {{ {PR_FIELDS} }}" for number in chunk)
+        query = f'query {{ repository(owner: "{owner}", name: "{name}") {{ {fields} }} }}'
+        data = gh_json("api", "graphql", "-f", f"query={query}")
+        found.update((int(key[1:]), value) for key, value in data["data"]["repository"].items())
+    return [parse_pull_request(found[number]) for number in numbers]
+
+
+def parse_pull_request(data):
     return {
         "number": data["number"],
         "title": data["title"].strip(),
         "url": data["url"],
-        "labels": sorted(label["name"] for label in data["labels"]),
-        "issues": sorted(issue["number"] for issue in data.get("closingIssuesReferences") or []),
+        "labels": sorted(label["name"] for label in data["labels"]["nodes"]),
+        "issues": sorted(issue["number"] for issue in (data.get("closingIssuesReferences") or {}).get("nodes") or []),
         "author": (data.get("author") or {}).get("login", ""),
         "merged_at": dt.datetime.fromisoformat(data["mergedAt"].replace("Z", "+00:00")) if data.get("mergedAt") else None,
     }
@@ -475,11 +494,10 @@ def gather(kind, head, releases=None):
 def merged_between(kind, base, head):
     """The pull requests merged into main between base and head, with their player-facing paths ("paths")."""
     exporter_paths = exporters()
-    prs = []
-    for number, commit in merged_pull_requests(base, head):
-        pr = pull_request(number)
+    merged = merged_pull_requests(base, head)
+    prs = pull_requests([number for number, _ in merged])
+    for pr, (_, commit) in zip(prs, merged):
         pr["paths"] = [path for path in changed_paths(commit) if player_facing(path, kind, exporter_paths)]
-        prs.append(pr)
     return prs
 
 
