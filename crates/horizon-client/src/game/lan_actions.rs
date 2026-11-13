@@ -5251,22 +5251,18 @@ impl Game<'_> {
                         host.hub.sound(name, at, volume, pitch, source, None);
                     }
                 }
-                // LivingEntity.causeFallDamage, and HoneyBlock.fallOn's
-                // `entity.playSound`: Player.playSound skips the guest, whose
-                // own client plays it; everyone else hears it.
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Sound {
-                    sound,
-                    volume,
-                    pitch,
-                    ..
-                }) => {
-                    if let Some(name) = sound
-                        .player_fall_sound()
-                        .or_else(|| sound.honey_landing_sound())
-                    {
-                        let source = horizon_client::settings::sound_source(name) as i32;
-                        self.audio.play_unshared(name, Some(at), volume, pitch);
-                        host.hub.sound(name, at, volume, pitch, source, Some(conn));
+                // LivingEntity.causeFallDamage (the fall sound and
+                // playBlockFallSound), and HoneyBlock.fallOn's `entity.playSound`:
+                // Player.playSound skips the guest, whose own client plays it;
+                // everyone else hears it.
+                MotionEvent::Fall(
+                    event @ (horizon_client::landing::FallEvent::Sound { .. }
+                    | horizon_client::landing::FallEvent::BlockFallSound { .. }),
+                ) => {
+                    if let Some((name, volume, pitch)) = event.heard_fall_sound(self.res.facts()) {
+                        let source = horizon_client::settings::sound_source(&name) as i32;
+                        self.audio.play_unshared(&name, Some(at), volume, pitch);
+                        host.hub.sound(&name, at, volume, pitch, source, Some(conn));
                     }
                 }
                 // HoneyBlock.fallOn: entity event 54, including the player who
