@@ -993,9 +993,10 @@ pub struct Entities {
     send_apart_always: Option<bool>,
 }
 
-/// Clients and entities to send at which the send pass runs on several threads.
-const SEND_APART_VIEWERS: usize = 16;
-const SEND_APART_ENTITIES: usize = 64;
+/// The isolated send benchmark regresses at 120 viewers, but consistently improves
+/// 400-viewer crowds on two and four cores (docs/performance/tracker-send.md).
+const SEND_APART_VIEWERS: usize = 400;
+const SEND_APART_ENTITIES: usize = 400;
 
 /// The client sees the entity this tick, and already tracked it.
 const SEES: u8 = 1;
