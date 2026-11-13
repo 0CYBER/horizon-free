@@ -124,13 +124,13 @@ fn par_chunks_mut_on<T: Send>(
     });
 }
 
-/// [`par_map`] on `lanes` threads.
+/// [`par_map`] on `lanes` threads (a test's count, or a caller that caps them).
 ///
 /// The parts are small (four a thread) and go to whichever thread is free, this one too: a helper
 /// the machine is slow to run (the chunk workers compete for the same cores) holds the phase up by
 /// one part at most instead of an eighth of the work, and the server thread works instead of only
 /// waiting.
-fn par_map_on<T: Sync, R: Send>(
+pub fn par_map_on<T: Sync, R: Send>(
     items: &[T],
     min: usize,
     lanes: usize,

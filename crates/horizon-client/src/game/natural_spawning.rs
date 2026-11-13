@@ -35,6 +35,8 @@ use horizon_world::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod parallel;
+
 /// Natural spawning's candidate chunks (`ChunkMap.collectSpawningChunks`):
 /// the union of every player's 17×17 chunk square, in player then dx/dz
 /// order, each chunk once. `candidates` is one pass's working list (spawning
@@ -320,7 +322,8 @@ impl<'p> NearestPlayers<'p> {
 
 /// Up to this many players, a spawn start measures to every one.
 const PLAYERS_SCANNED: usize = 8;
-/// What a level reads of the game beyond its world view (`&Game`: the mobs and the server mods).
+/// What a level reads of the game beyond its world view, for the serial pass (`&Game`, which also
+/// answers the server mods) and for a lane of the parallel one ([`NoGame`]).
 pub(super) trait LevelHost {
     /// The game's mobs, scanned for a box query before the grid is built.
     fn mobs(&self) -> &[Mob];
@@ -337,6 +340,14 @@ impl LevelHost for &Game<'_> {
             entries.clear();
         }
     }
+}
+/// A lane has no `Game`: it asks no mod and finds the mobs in the shared grid.
+pub(super) struct NoGame;
+impl LevelHost for NoGame {
+    fn mobs(&self) -> &[Mob] {
+        &[]
+    }
+    fn potential_spawns(&self, _: Category, _: [i32; 3], _: &mut Vec<SpawnEntry>) {}
 }
 /// The parts of the game a level reads, as plain shared borrows (all `Sync`), so a lane's level
 /// can have them without the `Game`.
@@ -356,6 +367,9 @@ pub(super) type GameLevel<'g, 'a> = Level<'g, &'g Game<'a>>;
 pub(super) struct Level<'g, H> {
     pub(super) game: H,
     pub(super) host: SpawnHost<'g>,
+    /// The grids a pass builds once for all its lanes' levels.
+    pub(super) shared_boxes: Option<&'g MobBoxes>,
+    pub(super) shared_squares: Option<&'g PlayerSquares>,
     pub(super) w: MobWorld<'g>,
     /// Every player in the level ([`Game::level_players`]).
     pub(super) players: Vec<LevelPlayer>,
@@ -435,6 +449,9 @@ impl<H: LevelHost> Level<'_, H> {
     }
     /// The mobs not removed whose boxes may meet `area` (callers test them).
     fn mobs_near(&self, area: Aabb) -> Box<dyn Iterator<Item = MobBox> + '_> {
+        if let Some(shared) = self.shared_boxes {
+            return Box::new(shared.near(area));
+        }
         let asked = self.box_queries.get() + 1;
         self.box_queries.set(asked);
         if asked <= SCANNED_QUERIES && self.boxes.get().is_none() {
@@ -602,7 +619,10 @@ impl<H: LevelHost> NaturalLevel for Level<'_, H> {
             out.extend_from_slice(&self.nearest);
             return;
         }
-        let squares = (self.player_squares).get_or_init(|| PlayerSquares::new(&self.nearest));
+        let squares = self.shared_squares.unwrap_or_else(|| {
+            self.player_squares
+                .get_or_init(|| PlayerSquares::new(&self.nearest))
+        });
         squares.near(x, z, extent, out);
     }
     fn respawn(&self) -> Option<[i32; 3]> {
@@ -716,6 +736,8 @@ impl<'a> Game<'a> {
         GameLevel {
             game: self,
             host: self.spawn_host(),
+            shared_boxes: None,
+            shared_squares: None,
             w: self.mob_world_base(&[]),
             players,
             nearest,
@@ -946,7 +968,16 @@ impl<'a> Game<'a> {
             }
             laps.lap("sn_shuffle");
             spawn_selection::attempt_counters(false);
-            if !categories.is_empty() {
+            let lanes =
+                parallel::lanes_for(&level, scratch.candidates.len(), !categories.is_empty());
+            if let Some(lanes) = lanes {
+                let proposed =
+                    parallel::propose(&level, &state, &categories, &scratch.candidates, lanes);
+                laps.lap("sn_propose");
+                parallel::commit(&level, &mut state, proposed, &mut pending);
+                scratch.candidates.clear();
+            }
+            if lanes.is_none() && !categories.is_empty() {
                 for chunk in scratch.candidates.drain(..) {
                     // ServerChunkCache.tickSpawningChunk gates the initial chunk too.
                     if !level.can_spawn_in_chunk(chunk.0, chunk.1) {
