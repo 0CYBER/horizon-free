@@ -1,0 +1,11 @@
+{
+  "hooks": [],
+  "helpers": [
+    {"name": "terrain_surface", "target": "horizon_client::game::native_world_columns::Game<'_>::native_terrain_surface"}
+  ],
+  "rust_summary": "the terrain at columns nobody has loaded (`native_terrain_surface`).",
+  "doc_summary": "`native_terrain_surface(dimension, columns)` returns the generator's surface height, top block, water surface and biome at up to 4,096 columns, loaded or not, without creating a chunk. Bundles need \"hooks\": @API:terrain_surface@.",
+  "comments": [
+    "crates/horizon-client/src/game/native_world_columns.rs"
+  ]
+}

@@ -4494,6 +4494,17 @@ pieces.
   read as air (its tints as 0). `below + above` must be 1 to the level's height, and the read at most 1,048,576 blocks.
   The tints are the biome's own at the column's top, not blended over the biome blend radius as the game draws them, so
   near a biome border they can differ from what players see by a few blocks.
+- `native_terrain_surface(dimension, columns)` answers what the level's generator makes at each column *before its
+  features are placed*, loaded or not, and creates no chunk: `NativeTerrainColumn` holds the `height` (one above the
+  highest solid block, fluids skipped: the count of the `OceanFloor` heightmap), the top `block`, the `water` surface
+  (one above the highest fluid block over the surface, `None` where the surface is dry) and the `biome`, named in the
+  world's own biome table. The scan starts at the top of the level, so in the Nether `height` is the roof, not a
+  floor. It is the question a random teleport asks of many candidate columns before it holds a chunk for the one it
+  picks: trees, lava pools and cacti are decorated later, so read the chunk once it is loaded to check them, and the
+  top block skips the generated chunk's slope rules, so it can differ from the chunk's before any feature is placed.
+  At most 4,096 columns a call. A column is `None` where the generator finds no solid block (the End's void: a real
+  answer, do not land there) and in a world with no generator of its own; `Err` is for a client or another
+  dimension. API @API:terrain_surface@.
 
 ### Client world snapshots
 

@@ -187,6 +187,8 @@ pub struct Guest {
     /// the moves it sent from the old level are ignored, as they would be
     /// while it had a teleport to accept.
     pub landing: bool,
+    /// `landing` was set by a `tp` hold waiting for chunks (`Game::hold_for_chunks`), not by a portal.
+    pub tp_held: bool,
     pub teleport_counter: i32,
     /// `ServerPlayer.getCamera() != this`.
     pub watching: bool,
@@ -524,6 +526,7 @@ impl Guest {
             awaiting_teleport: None,
             awaiting_keeps_motion: false,
             landing: false,
+            tp_held: false,
             teleport_counter: 0,
             watching: false,
             teleport_tick: 0,
