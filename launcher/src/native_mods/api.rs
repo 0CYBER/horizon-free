@@ -134,10 +134,24 @@ fn names_mods(stage: &Path) -> bool {
         .is_ok_and(|text| text.contains("pub fn name_mods("))
 }
 
+/// The game's global allocator in the staged revision, as the generated `main` declares it:
+/// `GameAllocator` (the census or counting allocator, c61ca75) where `horizon-threads` defines it,
+/// else the plain `Allocator` an older revision (Nightly 2026-11-08 and before) has.
+fn allocator(stage: &Path) -> &'static str {
+    let current = fs::read_to_string(stage.join("crates/horizon-threads/src/lib.rs"))
+        .is_ok_and(|text| text.contains("pub const GAME_ALLOCATOR:"));
+    if current {
+        "static ALLOCATOR: horizon_threads::GameAllocator = horizon_threads::GAME_ALLOCATOR;"
+    } else {
+        "static ALLOCATOR: horizon_threads::Allocator = horizon_threads::ALLOCATOR;"
+    }
+}
+
 /// The generated executable's `main`: the trait mods of bundles `ids`, in that order, named by
 /// those ids when `named`; with Horizon's own parts registered when `official` (the revision has
-/// `horizon-official`, and the build is the game's, not the server's: its `official` feature).
-fn main_rs(ids: &[&str], named: bool, official: bool) -> String {
+/// `horizon-official`, and the build is the game's, not the server's: its `official` feature);
+/// `allocator` is the global allocator's declaration ([`allocator`]).
+fn main_rs(ids: &[&str], named: bool, official: bool, allocator: &str) -> String {
     let entries = (0..ids.len())
         .map(|i| format!("        mod_{i}::hooks(),\n"))
         .collect::<String>();
@@ -157,7 +171,7 @@ fn main_rs(ids: &[&str], named: bool, official: bool) -> String {
 #![forbid(unsafe_code)]
 
 #[global_allocator]
-static ALLOCATOR: horizon_threads::GameAllocator = horizon_threads::GAME_ALLOCATOR;
+{allocator}
 
 static MOD_API_LEVEL: [u8; horizon_mods::api_level::MARK.len()] = horizon_mods::api_level::MARK;
 
@@ -431,7 +445,7 @@ pub(super) fn stage(
     let ids: Vec<_> = mods.iter().map(|(_, bundle)| bundle.id.as_str()).collect();
     fs::write(
         game.join("src/main.rs"),
-        main_rs(&ids, names_mods(stage), official),
+        main_rs(&ids, names_mods(stage), official, allocator(stage)),
     )
     .map_err(|e| e.to_string())?;
     let root = stage.join("Cargo.toml");
@@ -510,15 +524,40 @@ mod tests {
             .lines()
             .find(|line| line.starts_with("static ALLOCATOR:"))
             .unwrap();
-        let generated = main_rs(&[], false, false);
+        // This tree as the staged revision: the declaration chosen for it is the game's own.
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let generated = main_rs(&[], false, false, super::allocator(&repo));
         assert!(generated.lines().any(|line| line == allocator));
+    }
+
+    #[test]
+    fn generated_main_uses_an_older_revisions_allocator() {
+        // Nightly 2026-11-08 (fdc87ae): horizon-threads has Allocator and ALLOCATOR, no
+        // GameAllocator (#15764).
+        let name = std::thread::current().name().unwrap().replace(':', "-");
+        let stage = super::super::tests::dir(&name);
+        let threads = stage.join("crates/horizon-threads/src");
+        fs::create_dir_all(&threads).unwrap();
+        fs::write(
+            threads.join("lib.rs"),
+            "pub type Allocator = mimalloc::MiMalloc;\npub const ALLOCATOR: Allocator = mimalloc::MiMalloc;\n",
+        )
+        .unwrap();
+        let generated = main_rs(&[], false, false, super::allocator(&stage));
+        assert!(generated.contains(
+            "static ALLOCATOR: horizon_threads::Allocator = horizon_threads::ALLOCATOR;"
+        ));
+        assert!(!generated.contains("GameAllocator"));
+        // No horizon-threads source at all reads as the older revision too.
+        fs::remove_dir_all(&stage).unwrap();
+        assert!(!super::allocator(&stage).contains("GameAllocator"));
     }
 
     #[test]
     fn generated_main_keeps_mod_order() {
         let ids = ["base", "extra"];
         for count in 0..=2 {
-            let text = main_rs(&ids[..count], false, false);
+            let text = main_rs(&ids[..count], false, false, "");
             assert!(text.contains("entry::main_with(mods)"));
             assert_eq!(text.matches("::hooks()").count(), count);
             assert!(!text.contains("name_mods"));
@@ -529,7 +568,7 @@ mod tests {
             }
         }
         // A revision that names its mods gets the ids in the same order, before main_with.
-        let named = main_rs(&ids, true, false);
+        let named = main_rs(&ids, true, false, "");
         let naming = named
             .find(r#"mod_api::name_mods(&["base", "extra"]);"#)
             .unwrap();
