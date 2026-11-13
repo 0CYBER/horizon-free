@@ -45,8 +45,8 @@ pub(super) struct Trip {
     finder: Option<PlayerSpawnFinder>,
     /// Sent by a command: the player is already where it goes.
     placed: bool,
-    /// A `tp` inside the level to chunks not loaded yet: the client's moves are ignored (it would fall
-    /// through the missing terrain) until the player is placed again where the chunks have loaded.
+    /// A command teleport to chunks not loaded yet: the client's moves are ignored until the
+    /// destination is ready, whether placed by a level change or waiting for another position packet.
     hold: bool,
     /// The level the player left for another one: the mods are told they
     /// changed dimension when the trip ends (`tell_mods_changed_dimension`).
@@ -1124,7 +1124,9 @@ impl Game<'_> {
                 world_spawn: false,
                 finder: None,
                 placed: true,
-                hold: false,
+                // The body does not tick until arrival. Letting it leave the destination before
+                // its chunks load can strand this trip and freeze its damage cooldown indefinitely.
+                hold: true,
                 left: Some(source),
             });
             if let Err(e) = self.enter_level(Some(host), source) {

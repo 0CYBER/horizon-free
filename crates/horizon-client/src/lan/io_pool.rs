@@ -7,6 +7,7 @@
 //! connection stays on one thread, so its bytes keep their order. The
 //! integrated server's own player, over an in-memory pipe, is served the same
 //! way: the pipe tells the thread when bytes arrive.
+use super::Body;
 use horizon_protocol::connection::{ConnReader, ConnWriter, Pipe, Socket};
 use mio::{Events, Interest, Poll, Registry, Token, Waker};
 use std::{
@@ -112,7 +113,7 @@ enum At {
 
 #[derive(Default)]
 struct Queue {
-    bodies: Vec<Vec<u8>>,
+    bodies: Vec<Body>,
     end: Option<End>,
     at: At,
     /// In its thread's list of outboxes to serve.
@@ -173,7 +174,7 @@ impl Outbox {
     /// follows an end, but a close overrides a disconnect still writing.
     /// Past [`MAX_PENDING`] a capped connection closes. The thread to wake, if
     /// this is the first news it has since it last looked.
-    pub(super) fn push(&self, bodies: Vec<Vec<u8>>, end: Option<End>) -> Option<&Arc<Worker>> {
+    pub(super) fn push(&self, bodies: Vec<Body>, end: Option<End>) -> Option<&Arc<Worker>> {
         let mut q = self.queue();
         match (q.at, q.end) {
             (At::Closed, _) => return None,
@@ -204,7 +205,7 @@ impl Outbox {
             .then_some(&self.worker)
     }
     /// [`Self::push`], waking the thread at once.
-    pub(super) fn send(&self, bodies: Vec<Vec<u8>>, end: Option<End>) {
+    pub(super) fn send(&self, bodies: Vec<Body>, end: Option<End>) {
         if let Some(worker) = self.push(bodies, end) {
             worker.wake();
         }
@@ -213,7 +214,7 @@ impl Outbox {
     /// What waits, for the thread: the bodies and the end after them with
     /// `room` for them, else only a close. An end stays, so that nothing is
     /// queued after it.
-    fn take(&self, room: bool) -> (Vec<Vec<u8>>, Option<End>) {
+    fn take(&self, room: bool) -> (Vec<Body>, Option<End>) {
         let mut q = self.queue();
         q.listed = false;
         match room {
@@ -568,7 +569,7 @@ impl Conn {
 
     /// Frame `bodies` into `out`, `queued` ones counted off `pending`: false
     /// if one could not be.
-    fn frame(&mut self, now: Instant, bodies: Vec<Vec<u8>>, queued: bool) -> bool {
+    fn frame(&mut self, now: Instant, bodies: Vec<Body>, queued: bool) -> bool {
         if counting_packets() {
             let ids = bodies.iter().filter_map(|b| Some((body_id(b)?, b.len())));
             self.outbox.tally(0, ids);
@@ -594,7 +595,7 @@ impl Conn {
                 return self.end(now, "Disconnected");
             }
             // The hub's own disconnect, if it was the last queued, does for this one.
-            let ours = (end.is_none()).then(|| disconnect.to_vec());
+            let ours = (end.is_none()).then(|| disconnect.to_vec().into());
             if !self.frame(now, bodies, true) || !self.frame(now, ours.into_iter().collect(), false)
             {
                 return;
@@ -683,7 +684,7 @@ impl Conn {
         }
         if !self.draining
             && let Some(body) = self.session.tick(now)
-            && self.frame(now, vec![body], false)
+            && self.frame(now, vec![body.into()], false)
         {
             self.serve(now);
         }
@@ -765,7 +766,8 @@ mod tests {
         fn send(&self, bodies: Vec<Vec<u8>>, end: Option<End>) {
             let len: usize = bodies.iter().map(Vec::len).sum();
             self.pending.fetch_add(len, Ordering::Relaxed);
-            self.outbox.send(bodies, end);
+            self.outbox
+                .send(bodies.into_iter().map(Body::from).collect(), end);
         }
         fn next(&self) -> Seen {
             self.seen.recv_timeout(Duration::from_secs(10)).unwrap()
@@ -920,7 +922,7 @@ mod tests {
         assert_eq!(served.next(), Seen::Closed);
         // Nothing after the kick, and nothing queued once closed.
         assert!(served.seen.try_recv().is_err());
-        assert!(served.outbox.push(vec![body(4, 1)], None).is_none());
+        assert!(served.outbox.push(vec![body(4, 1).into()], None).is_none());
     }
 
     #[test]

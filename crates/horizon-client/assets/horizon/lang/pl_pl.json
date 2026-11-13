@@ -385,6 +385,8 @@
   "Reuses poles; flags and pattern layers still update.": "Używa ponownie drzewców; flagi i warstwy wzoru nadal się aktualizują.",
   "Copper Golem Statues": "Posągi miedzianego golema",
   "Reuses statue geometry until its block state changes.": "Używa ponownie geometrii posągu, dopóki jego stan bloku się nie zmieni.",
+  "Parallel Tick": "Równoległy tick",
+  "Shares your world's tick among threads. Auto: only while that is faster.": "Dzieli tick Twojego świata między wątki. Auto: tylko gdy tak jest szybciej.",
   "Opaque Ice": "Nieprzezroczysty lód",
   "Draws ice in the solid pass, without its see-through texture.": "Rysuje lód w przebiegu pełnym, bez jego przezroczystej tekstury.",
   "Shaders": "Shadery",
