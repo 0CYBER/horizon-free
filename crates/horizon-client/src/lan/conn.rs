@@ -7,7 +7,7 @@
 //! thread, frame, compress and encrypt what the game queues, and keep the
 //! keep-alive schedule on their own so a long tick never times a client out.
 use super::{
-    Joined, NetEvent, Out, Shared,
+    Body, Joined, NetEvent, Out, Shared,
     data::{CORE_PACK, SyncData},
     forwarding,
     io_pool::{self, Session as _},
@@ -280,12 +280,12 @@ pub fn fake_wants_id(id: i32) -> bool {
 /// A body about to be sent to `player`, past the hooks a mod asked for ([`WATCHED`]): None
 /// when one canceled it. Bytes that don't decode, and a packet no hook changed, go out as they
 /// were; a changed one is encoded again.
-fn outgoing(player: u128, body: Vec<u8>) -> Option<Vec<u8>> {
+fn outgoing(player: u128, body: Body) -> Option<Body> {
     let watched = WATCHED.load(Ordering::Relaxed);
     if watched == 0 {
         return Some(body);
     }
-    watched_outgoing(player, body, watched)
+    watched_outgoing(player, body.into_vec(), watched).map(Body::from)
 }
 
 #[cold]
@@ -367,7 +367,7 @@ pub struct PlayerSender {
     pub undrained: Arc<Undrained>,
     /// The bytes of the bodies sent and not framed yet.
     pub pending: Arc<AtomicUsize>,
-    held: Arc<Mutex<Vec<Vec<u8>>>>,
+    held: Arc<Mutex<Vec<Body>>>,
     to: To,
     /// The connection's bytes on the wire (after compression and encryption), counted by its
     /// network thread: `horizon-report`'s network use per player. None for a test's channel.
@@ -425,10 +425,13 @@ impl PlayerSender {
             outbox.send(Vec::new(), Some(io_pool::End::Close));
         }
     }
-    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Body>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
     pub fn send(&self, body: Vec<u8>) {
+        self.send_body(body.into());
+    }
+    fn send_body(&self, body: Body) {
         if self.fake.load(Ordering::Relaxed) && !fake_wants(&body) {
             return;
         }
@@ -441,7 +444,7 @@ impl PlayerSender {
         } else {
             self.flush();
             match &self.to {
-                To::Channel(tx) => drop(tx.send(Out::Packet(body))),
+                To::Channel(tx) => drop(tx.send(Out::Packet(body.into_vec()))),
                 To::Pool(outbox, _) => outbox.send(vec![body], None),
             }
         }
@@ -466,15 +469,18 @@ impl PlayerSender {
         self.fake.load(Ordering::Relaxed)
     }
     /// Several packets in order, as [`Self::send`] each: under one lock
-    /// while the tick holds them.
-    pub fn send_many(&self, bodies: impl IntoIterator<Item = Vec<u8>>) {
+    /// while the tick holds them. Shared bodies stay shared up to the wire.
+    pub fn send_many<B: Into<Body>>(&self, bodies: impl IntoIterator<Item = B>) {
         // A mod hearing what is sent (`outgoing`) does so outside the lock.
         if !HOLDING.get() || WATCHED.load(Ordering::Relaxed) != 0 || self.is_fake() {
-            bodies.into_iter().for_each(|body| self.send(body));
+            bodies
+                .into_iter()
+                .for_each(|body| self.send_body(body.into()));
             return;
         }
         let mut held = self.held();
         for body in bodies {
+            let body = body.into();
             self.pending.fetch_add(body.len(), Ordering::Relaxed);
             held.push(body);
         }
@@ -484,7 +490,7 @@ impl PlayerSender {
         let held = std::mem::take(&mut *self.held());
         if !held.is_empty() {
             match &self.to {
-                To::Channel(tx) => drop(tx.send(Out::Packets(held))),
+                To::Channel(tx) => drop(tx.send(unshared(held))),
                 To::Pool(outbox, _) => outbox.send(held, None),
             }
         }
@@ -498,10 +504,15 @@ impl PlayerSender {
             To::Pool(outbox, _) => {
                 let body = play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode();
                 self.pending.fetch_add(body.len(), Ordering::Relaxed);
-                outbox.send(vec![body], Some(io_pool::End::Disconnect));
+                outbox.send(vec![body.into()], Some(io_pool::End::Disconnect));
             }
         }
     }
+}
+
+/// Held bodies as a test's channel gives them: each its own bytes.
+fn unshared(held: Vec<Body>) -> Out {
+    Out::Packets(held.into_iter().map(Body::into_vec).collect())
 }
 
 /// Keep (or stop keeping) every play connection's packet ids and sizes on the network threads,
@@ -527,7 +538,7 @@ pub fn flush_all<'a>(senders: impl IntoIterator<Item = &'a PlayerSender>) {
             continue;
         }
         match &s.to {
-            To::Channel(tx) => drop(tx.send(Out::Packets(held))),
+            To::Channel(tx) => drop(tx.send(unshared(held))),
             To::Pool(outbox, _) => {
                 if let Some(worker) = outbox.push(held, None)
                     && !wake.iter().any(|w| Arc::ptr_eq(w, worker))
@@ -2112,6 +2123,39 @@ mod tests {
         }
         assert!(!fake_wants_id(cb::LEVEL_CHUNK_WITH_LIGHT));
         assert!(!fake_wants_id(cb::SET_TIME));
+    }
+
+    /// Bodies shared between players reach each of them as the same bytes, in the order
+    /// they were sent among the player's own.
+    #[test]
+    fn shared_bodies_reach_every_player_in_order() {
+        let shared: Vec<Body> = [vec![1, 2, 3], vec![4]]
+            .into_iter()
+            .map(Body::shared)
+            .collect();
+        let players: Vec<_> = (0..2)
+            .map(|_| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                (PlayerSender::new(tx, Arc::default()), rx)
+            })
+            .collect();
+        {
+            let _holding = Holding::start();
+            for (i, (sender, _)) in players.iter().enumerate() {
+                sender.send(vec![9, i as u8]);
+                sender.send_many(shared.iter().cloned());
+                sender.send_many([vec![8]]);
+                assert_eq!(sender.pending.load(Ordering::Relaxed), 7);
+            }
+            flush_all(players.iter().map(|(sender, _)| sender));
+        }
+        for (i, (_, rx)) in players.iter().enumerate() {
+            let Ok(Out::Packets(bodies)) = rx.try_recv() else {
+                panic!("expected the held packets");
+            };
+            assert_eq!(bodies, [vec![9, i as u8], vec![1, 2, 3], vec![4], vec![8]]);
+            assert!(rx.try_recv().is_err());
+        }
     }
 
     #[test]

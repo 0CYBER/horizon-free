@@ -95,7 +95,7 @@ impl Hub {
 
     /// Entity tracking already builds packet bodies. Split its removal batch
     /// without decoding or changing any of its pairing/movement packets.
-    pub(super) fn hold_sound_removals(&self, conn: u32, packets: &mut Vec<Vec<u8>>) {
+    pub(super) fn hold_sound_removals(&self, conn: u32, packets: &mut Vec<super::Body>) {
         let mut order = self.sound_order.lock().unwrap();
         if order.protected.is_empty() {
             return;
@@ -128,7 +128,7 @@ impl Hub {
                 return false;
             }
             debug_assert!(packet.ids.len() < original);
-            *body = C::RemoveEntities(packet).encode();
+            *body = C::RemoveEntities(packet).encode().into();
             true
         });
     }
