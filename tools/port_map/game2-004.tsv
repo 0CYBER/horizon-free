@@ -23,9 +23,10 @@ Vindicator.setCustomName	inline	crates/horizon-client/src/mobs/illager.rs::vindi
 Vindicator.VindicatorBreakDoorGoal.canContinueToUse	port	crates/horizon-client/src/mobs/doors.rs::BreakDoor::can_continue	still in a raid, plus the base break checks
 AbstractPiglin.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	writes IsImmuneToZombification and TimeInOverworld
 AbstractPiglin.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	reads immunity, time in overworld and the pick-up flag
+Piglin.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	CannotHunt written from the live flag; the read is in mob_from_nbt
 AbstractPiglin.customServerAiStep	port	crates/horizon-client/src/mobs/piglin.rs::ai_step	gap: minor: zombification runs outside the Nether by the nether flag, not the PIGLINS_ZOMBIFY attribute
 AbstractPiglin.finishConversion	port	crates/horizon-client/src/mobs/piglin.rs::ai_step	spawns the zombified piglin with nausea and removes the old one
-Piglin.readAdditionalSaveData	port	crates/horizon-client/src/mobs/piglin.rs::read_guarded_anger	baby and inventory are read in entity_nbt::mob_from_nbt; the brain's minecraft:angry_at UUID and TTL come back through read_guarded_anger (CannotHunt still not read)
+Piglin.readAdditionalSaveData	port	crates/horizon-client/src/mobs/piglin.rs::read_guarded_anger	baby and inventory are read in entity_nbt::mob_from_nbt; the brain's minecraft:angry_at UUID and TTL come back through read_guarded_anger; CannotHunt is read in entity_nbt::mob_from_nbt's piglin branch
 Piglin.getSlot	missing		item commands stop at the open container: a piglin's own inventory slots (300 and up) are not addressable
 Piglin.defineSynchedData	skip:java		synched-data registration; Horizon keeps baby, crossbow and dancing state in Mob fields
 Piglin.createAttributes	skip:data		attribute defaults (health 16, speed 0.35, attack 5) live in data tables
@@ -163,4 +164,4 @@ Husk.getConversionSound	port	crates/horizon-client/src/mobs/undead.rs::custom_se
 ZombieVillager.convertsInWater	port	crates/horizon-client/src/mobs/undead.rs::custom_server_ai_step	false: a zombie villager never drowns into a drowned
 SpellcasterIllager.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	SpellTicks binds to the existing live counter, default zero
 SpellcasterIllager.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	SpellTicks saves the live Int counter including zero and negative values
-Evoker.EvokerWololoSpellGoal.canUse	port	crates/horizon-client/src/mobs/illager.rs::UseSpell::can_use	wololo branch: blue sheep range scaled by visibility, floor 2
+Evoker.EvokerWololoSpellGoal.canUse	port	crates/horizon-client/src/mobs/illager.rs::UseSpell::can_use	wololo branch: blue sheep range scaled by `getVisibilityPercent` (the `isInvisible` flag or the effect; 0.07 of 16, floor 2)

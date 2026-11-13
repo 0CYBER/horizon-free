@@ -1296,7 +1296,6 @@ impl Item {
                         | H::GraphicsApi
                         | H::TranslucentBatching
                         | H::HdrSmoothGradients
-                        | H::GpuCulling
                 )
                 | Item::Vanilla(
                     Opt::GuiScale
@@ -2233,9 +2232,18 @@ mod tests {
     fn presets_set_vanilla_and_horizon_options() {
         let mut s = Settings::default();
         Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480], &NONE);
+        assert_eq!(s.horizon.preset, Preset::FullPerformance);
+        assert_eq!(s.render_distance, 6);
+        assert_eq!(s.clouds, "false");
+        assert_eq!(s.horizon.resolution_scale, 75);
+        assert_eq!(s.horizon.entity_culling, EntityCullingMode::Asynchronous);
+        assert!(s.horizon.opaque_ice && s.horizon.cache_chests);
+        // The next one puts back what only Full Performance lowers.
+        Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480], &NONE);
         assert_eq!(s.horizon.preset, Preset::Performance);
         assert_eq!(s.render_distance, 8);
-        assert_eq!(s.clouds, "false");
+        assert_eq!(s.horizon.resolution_scale, 100);
+        assert!(!s.horizon.opaque_ice && s.horizon.cache_chests);
         // Any quality change leaves the preset.
         Item::Vanilla(Opt::Clouds).cycle(&mut s, false, [854, 480], &NONE);
         assert_eq!(s.horizon.preset, Preset::Custom);
@@ -2243,6 +2251,14 @@ mod tests {
         Item::Horizon(H::Preset).cycle(&mut s, true, [854, 480], &NONE);
         Item::Vanilla(Opt::Vsync).cycle(&mut s, false, [854, 480], &NONE);
         assert_eq!(s.horizon.preset, Preset::Ultra);
+        // Ultra keeps the optimizations that leave the picture as it is, and no others.
+        assert_eq!(s.horizon.entity_culling, EntityCullingMode::Asynchronous);
+        assert_eq!(s.horizon.gpu_culling, GpuCullingMode::Auto);
+        assert_eq!((s.horizon.lod_distance, s.horizon.fxaa), (128, true));
+        assert_eq!(
+            (s.horizon.resolution_scale, s.horizon.opaque_ice),
+            (100, false)
+        );
     }
 
     #[test]
@@ -2257,7 +2273,7 @@ mod tests {
         assert_eq!(seen, [2, 4, 8, 1]);
         Item::Horizon(H::ScreenshotQuality).cycle(&mut s, true, [854, 480], &NONE);
         assert_eq!(s.horizon.screenshot_quality, 8);
-        assert_eq!(s.horizon.preset, Preset::Performance);
+        assert_eq!(s.horizon.preset, Preset::FullPerformance);
     }
 
     #[test]
@@ -2305,14 +2321,6 @@ mod tests {
         let item = Item::Horizon(H::EntityCulling);
         assert_eq!(s.horizon.entity_culling, EntityCullingMode::Off);
         assert_eq!(item.label(&s, &NONE).plain(), "Entity Culling: Off");
-        for mode in EntityCullingMode::ALL {
-            s.horizon.entity_culling = mode;
-            for preset in Preset::ALL {
-                crate::graphics::apply_preset(preset, &mut s);
-                assert_eq!(s.horizon.entity_culling, mode);
-            }
-        }
-        s.horizon.entity_culling = EntityCullingMode::Off;
         let mut ui = ui();
         let r = row(&mut ui, &s, item);
         for mode in [
@@ -2341,10 +2349,6 @@ mod tests {
         assert_eq!(item.label(&s, &NONE).plain(), "Particle Culling: Off");
         for mode in ParticleCullingMode::ALL {
             s.horizon.particle_culling = mode;
-            for preset in Preset::ALL {
-                crate::graphics::apply_preset(preset, &mut s);
-                assert_eq!(s.horizon.particle_culling, mode);
-            }
             assert_eq!(
                 crate::graphics::Graphics::parse(&s.horizon.serialize()).particle_culling,
                 mode
@@ -2538,8 +2542,8 @@ mod tests {
         }
     }
 
-    /// GPU Culling: Off, On or Auto right after Cave Culling, off by default, no part of a
-    /// preset, and greyed out with its reason, reading Off, wherever it isn't offered.
+    /// GPU Culling: Off, On or Auto right after Cave Culling, off by default, and greyed out
+    /// with its reason, reading Off, wherever it isn't offered.
     #[test]
     fn gpu_culling_steps_off_on_auto_where_it_is_offered() {
         use crate::graphics::GpuCullingOffer;
@@ -2578,7 +2582,7 @@ mod tests {
             assert!(key(&mut ui, &mut s, K::Enter).is_empty());
             assert_eq!(s.horizon.gpu_culling, GpuCullingMode::On, "{offer:?}");
         }
-        // Where it is, it steps through its three values and keeps the preset.
+        // Where it is, it steps through its three values and leaves the preset.
         crate::graphics::offer_gpu_culling(GpuCullingOffer::Offered);
         assert_eq!(item.blocked(&s, &NONE), None);
         for label in ["Auto", "Off", "On"] {
@@ -2594,18 +2598,10 @@ mod tests {
         }
         item.cycle(&mut s, true, FB, &NONE);
         assert_eq!(s.horizon.gpu_culling, GpuCullingMode::Off);
-        assert_eq!(s.horizon.preset, Preset::Balanced);
+        assert_eq!(s.horizon.preset, Preset::Custom);
         // Auto says what it does.
         s.horizon.gpu_culling = GpuCullingMode::Auto;
         assert!(description(item, &s, &NONE, "").starts_with("Auto: "));
-        // No preset sets it.
-        for mode in GpuCullingMode::ALL {
-            s.horizon.gpu_culling = mode;
-            for preset in Preset::ALL {
-                crate::graphics::apply_preset(preset, &mut s);
-                assert_eq!(s.horizon.gpu_culling, mode, "{preset:?}");
-            }
-        }
     }
 
     #[test]
