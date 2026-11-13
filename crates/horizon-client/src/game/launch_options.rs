@@ -24,7 +24,8 @@ pub(super) struct Options {
     /// `--world-frames N`: exit after N frames drawn in the world (smoke runs; the world may load slowly).
     pub(super) world_frames: Option<u64>,
     pub(super) screenshot_after: Option<u64>,
-    pub(super) timeout: Duration,
+    /// `--timeout-seconds N`; see [`Options::time_limit`].
+    pub(super) timeout: Option<Duration>,
     pub(super) report: Option<PathBuf>,
     pub(super) world: Option<String>,
     pub(super) look: Option<(f32, f32)>,
@@ -35,7 +36,7 @@ pub(super) struct Options {
     pub(super) no_pause: bool,
     /// Control socket path (`--control`), for `horizon-ctl`.
     pub(super) control: Option<PathBuf>,
-    /// `HORIZON_SPIKES=MS`: print the timed spans of frames slower than MS.
+    /// `HORIZON_SPIKES=MS`: the slow ring's threshold, and spans on for every thread; nothing is logged.
     pub(super) spikes: Option<f32>,
     /// Render into a texture instead of the window (`--offscreen`), so a
     /// GPU the display cannot present from can still be benchmarked. The
@@ -62,6 +63,10 @@ pub(super) struct Options {
     pub(super) transfers: Option<horizon_client::lan::arrivals::Settings>,
     /// `--benchmark SCENARIO`: run the benchmark, write its report and quit.
     pub(super) benchmark: Option<String>,
+    /// `--benchmark-set SWITCH=VALUE`: a setting for the benchmark's run, with `--benchmark travel`.
+    pub(super) benchmark_set: Option<(String, String)>,
+    /// `--profile`: with `--benchmark`, record a .hzperf capture of the run that embeds the report.
+    pub(super) benchmark_profile: bool,
     /// `--dev-mod PATH` (repeatable): content mods always on.
     pub(super) dev_mods: Vec<PathBuf>,
     /// What this Game executes; independent of its current server connection.
@@ -161,6 +166,13 @@ impl Options {
         }
         Ok(Some(o))
     }
+    /// How long this run may last before it stops with an error: `--timeout-seconds`, else
+    /// 120 s for a frame-limited run. A run without either (a player's, or one a harness
+    /// drives over the control socket) has no limit.
+    pub(super) fn time_limit(&self) -> Option<Duration> {
+        self.timeout
+            .or(self.frames.map(|_| Duration::from_secs(120)))
+    }
     /// The command line alone: no file is read and nothing changes. `None` for `--help` and
     /// `--launch-api`, which print and end the run.
     pub(super) fn parse(mut args: impl Iterator<Item = String>) -> Result<Option<Self>> {
@@ -186,7 +198,7 @@ impl Options {
             split_in_main_window: false,
             world_frames: None,
             screenshot_after: None,
-            timeout: Duration::from_secs(120),
+            timeout: None,
             report: None,
             world: None,
             look: None,
@@ -208,6 +220,8 @@ impl Options {
             dedicated: None,
             transfers: None,
             benchmark: None,
+            benchmark_set: None,
+            benchmark_profile: false,
             dev_mods: Vec::new(),
             execution_role: execution_role::ExecutionRole::Client,
             fullscreen: false,
@@ -220,7 +234,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --transfers SETTINGS    A dedicated server takes a proxy's hand-over requests (server.toml [transfer], docs/server.md)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --session-stdin         The same account as JSON on standard input\n  --game-dir DIR          Game folder: saves, options.txt, packs, mods (default: the working directory)\n  --home DIR              Logs and crash reports (default $HORIZON_HOME, else the platform data folder)\n  --player-dir DIR        This player's own files when several play in one game folder: options.txt, logs, horizon-player.txt, servers.dat, screenshots\n  --fullscreen            Open the window fullscreen\n  --launch-api            Print the Launch API version and options as JSON (docs/api/launch.md)\n  --dev-mod PATH          A content mod (.hmod or folder) to develop: always on\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --timeout-seconds N     Exit with an error after N seconds (testing; default 120 with --frames, else none)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain, travel, ab:SWITCH), write its report to benchmarks/ and quit\n  --profile               With --benchmark: also write a performance capture (reports/*.hzperf in the game home) that embeds the report\n  --benchmark-set S=V     With --benchmark travel: set a graphics switch (gpu-culling, section-cull, section-sides, section-draws) to one of its two values first\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --transfers SETTINGS    A dedicated server takes a proxy's hand-over requests (server.toml [transfer], docs/server.md)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --session-stdin         The same account as JSON on standard input\n  --game-dir DIR          Game folder: saves, options.txt, packs, mods (default: the working directory)\n  --home DIR              Logs and crash reports (default $HORIZON_HOME, else the platform data folder)\n  --player-dir DIR        This player's own files when several play in one game folder: options.txt, logs, horizon-player.txt, servers.dat, screenshots\n  --fullscreen            Open the window fullscreen\n  --launch-api            Print the Launch API version and options as JSON (docs/api/launch.md)\n  --dev-mod PATH          A content mod (.hmod or folder) to develop: always on\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -230,6 +244,7 @@ impl Options {
                     return Ok(None);
                 }
                 "--fullscreen" => o.fullscreen = true,
+                "--profile" => o.benchmark_profile = true,
                 "--session-stdin" => o.session_stdin = true,
                 "--dedicated" => {
                     o.execution_role = execution_role::ExecutionRole::DedicatedServer;
@@ -289,7 +304,9 @@ impl Options {
                                 // A frame-limited run in every other respect; --timeout-seconds still applies.
                                 o.frames.get_or_insert(u64::MAX);
                             }
-                            "--timeout-seconds" => o.timeout = Duration::from_secs(value.parse()?),
+                            "--timeout-seconds" => {
+                                o.timeout = Some(Duration::from_secs(value.parse()?))
+                            }
                             "--smoke-report" => o.report = Some(value.into()),
                             "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
                             "--width" => o.window_size[0] = value.parse::<u32>()?.max(1),
@@ -314,13 +331,12 @@ impl Options {
                             "--player-dir" => {}
                             "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
                             "--benchmark" => {
-                                if horizon_client::benchmark::scenes(&value).is_none() {
-                                    return Err(format!(
-                                    "unknown benchmark {value}: standard, village, forest, ocean or mountain"
-                                )
-                                .into());
-                                }
+                                horizon_client::benchmark::Scenario::parse(&value)?;
                                 o.benchmark = Some(value);
+                            }
+                            "--benchmark-set" => {
+                                o.benchmark_set =
+                                    Some(horizon_client::benchmark::parse_set(&value)?)
                             }
                             "--server" | "--quickPlayMultiplayer" => o.server = Some(value),
                             "--name" => o.player_name = Some(value),
@@ -352,6 +368,44 @@ impl Options {
                 }
             }
         }
+        if o.benchmark_set.is_some() && o.benchmark.as_deref() != Some("travel") {
+            return Err("--benchmark-set needs --benchmark travel".into());
+        }
+        if o.benchmark_profile && o.benchmark.is_none() {
+            return Err("--profile needs --benchmark".into());
+        }
         Ok(Some(o))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limit(args: &[&str]) -> Option<Duration> {
+        Options::parse(args.iter().map(|a| a.to_string()))
+            .unwrap()
+            .unwrap()
+            .time_limit()
+    }
+
+    /// `--timeout-seconds` holds on every run, so a game a harness drives over the control
+    /// socket still ends when the harness is gone; frame-limited runs keep their 120 s.
+    #[test]
+    fn timeout_seconds_limits_every_run() {
+        let secs = |n| Some(Duration::from_secs(n));
+        assert_eq!(limit(&[]), None);
+        assert_eq!(limit(&["--control-socket", "c.sock"]), None);
+        assert_eq!(
+            limit(&["--control-socket", "c.sock", "--timeout-seconds", "5"]),
+            secs(5)
+        );
+        assert_eq!(limit(&["--timeout-seconds", "600"]), secs(600));
+        assert_eq!(limit(&["--frames", "10"]), secs(120));
+        assert_eq!(limit(&["--world-frames", "10"]), secs(120));
+        assert_eq!(
+            limit(&["--frames", "10", "--timeout-seconds", "30"]),
+            secs(30)
+        );
     }
 }

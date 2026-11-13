@@ -26,6 +26,22 @@ fn bits_for_palette(len: usize, min: u8) -> u8 {
     }
 }
 
+/// `BlockEntity.getPosFromTag(chunk, tag)`: a saved block entity's `x`, `y`,
+/// `z`, moved into `chunk` when the tag names another chunk. Vanilla warns
+/// about such a save and keeps only the low four bits of each coordinate, so
+/// the entity stays in the chunk that held it instead of landing in one that
+/// never did.
+pub fn block_entity_pos(pos: (i32, i32, i32), chunk: [i32; 2]) -> (i32, i32, i32) {
+    let (x, y, z) = pos;
+    if (x >> 4, z >> 4) == (chunk[0], chunk[1]) {
+        return pos;
+    }
+    log::warn!(
+        "Block entity at {x} {y} {z} found in a wrong chunk, expected position from chunk {chunk:?}"
+    );
+    (chunk[0] * 16 + (x & 15), y, chunk[1] * 16 + (z & 15))
+}
+
 #[derive(Clone, Debug)]
 pub struct PalettedContainer {
     palette: Vec<Tag>,
@@ -237,20 +253,32 @@ impl BlockState {
     }
 }
 
+/// `SerializableChunkData.postLoadChunk`: the entities a saved full chunk keeps in its own
+/// `entities` list, which `ServerLevel.addLegacyChunkEntities` adds as the chunk loads. Only a
+/// chunk last saved before 1.17 gave entities files of their own (`entities/`) has any; saving a
+/// full chunk writes no such list.
+pub fn legacy_entities(root: &Tag) -> Vec<Tag> {
+    match root.get("entities") {
+        Some(Tag::List(entities)) => entities.clone(),
+        _ => Vec::new(),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ChunkData {
     root: NamedTag,
     position: ChunkPos,
 }
 impl ChunkData {
-    pub fn new(root: NamedTag) -> io::Result<Self> {
-        let Some(Tag::Int(x)) = root.tag.get("xPos") else {
-            return Err(invalid("chunk is missing xPos"));
-        };
-        let Some(Tag::Int(z)) = root.tag.get("zPos") else {
-            return Err(invalid("chunk is missing zPos"));
-        };
-        let position = ChunkPos::new(*x, *z);
+    pub fn new(mut root: NamedTag) -> io::Result<Self> {
+        // `SerializableChunkData.parse` reads the position with
+        // `getIntOr("xPos", 0)` and `getIntOr("zPos", 0)`, so a chunk that does
+        // not carry them is the chunk at 0, 0; `Tag.asInt` also takes the
+        // narrower integer tags, not only `Int`.
+        let position = ChunkPos::new(
+            int_or_zero(&root.tag, "xPos"),
+            int_or_zero(&root.tag, "zPos"),
+        );
         let Some(Tag::Int(version)) = root.tag.get("DataVersion") else {
             return Err(invalid("chunk is missing DataVersion"));
         };
@@ -259,8 +287,18 @@ impl ChunkData {
                 "expected DataVersion {DATA_VERSION}, got {version}; data fixing is not implemented"
             )));
         }
-        let Some(Tag::List(sections)) = root.tag.get("sections") else {
-            return Err(invalid("chunk is missing sections"));
+        // `SerializableChunkData.parse` reads `getListOrEmpty("sections")`, so a
+        // chunk without one is a chunk with no sections. Keep an empty list in
+        // the tag: that is what the writer would put there, and every reader
+        // below finds it.
+        if !matches!(root.tag.get("sections"), Some(Tag::List(_))) {
+            let Tag::Compound(map) = &mut root.tag else {
+                unreachable!()
+            };
+            map.insert(key("sections"), Tag::List(Vec::new()));
+        }
+        let Tag::List(sections) = root.tag.get("sections").unwrap() else {
+            unreachable!()
         };
         let mut seen = std::collections::BTreeSet::new();
         for section in sections {
@@ -390,6 +428,17 @@ fn id_in(
     Some(id)
 }
 #[cold]
+/// `CompoundTag.getIntOr(name, 0)`: the tag as Java's `Tag.asInt` reads it,
+/// which is any integer tag, or 0.
+fn int_or_zero(tag: &Tag, name: &str) -> i32 {
+    match tag.get(name) {
+        Some(Tag::Byte(v)) => i32::from(*v),
+        Some(Tag::Short(v)) => i32::from(*v),
+        Some(Tag::Int(v)) => *v,
+        Some(Tag::Long(v)) => *v as i32,
+        _ => 0,
+    }
+}
 fn out_of_bounds() -> io::Error {
     invalid("section index out of bounds")
 }
@@ -1325,6 +1374,25 @@ mod tests {
             get_times[0][0],
             get_times[1][0],
             get_times[0][0] / get_times[1][0]
+        );
+    }
+
+    /// `BlockEntity.getPosFromTag`: a saved position in another chunk keeps its
+    /// offset inside the chunk but moves into the chunk that saved it; a
+    /// position already there is kept as it is.
+    #[test]
+    fn a_block_entity_saved_in_another_chunk_moves_into_this_one() {
+        assert_eq!(super::block_entity_pos((37, 70, -3), [0, 0]), (5, 70, 13));
+        assert_eq!(super::block_entity_pos((-1, -60, 19), [0, 0]), (15, -60, 3));
+        assert_eq!(
+            super::block_entity_pos((5, 70, 13), [0, 0]),
+            (5, 70, 13),
+            "already in the chunk"
+        );
+        // Another chunk: its own corner is chunk * 16.
+        assert_eq!(
+            super::block_entity_pos((37, 70, -3), [-2, 5]),
+            (-27, 70, 93)
         );
     }
 }

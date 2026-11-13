@@ -48,6 +48,7 @@ fn game() -> Game<'static> {
     game.block_ticks
         .add_empty_chunk(ChunkPos::new(0, 0))
         .unwrap();
+    game.load_ticking_neighbourhood(0, 0);
     assert!(game.run_command("fill 0 99 0 15 99 15 stone"));
     game
 }
@@ -77,8 +78,9 @@ fn with_stick_table(game: &mut Game<'_>, name: &str) {
     game.world_root = dir;
     game.world_tables = game.build_world_tables(false, &[]).unwrap().0;
     // World open warms the loot data with the world's packs (game.rs); the
-    // break's roll reads that copy.
-    let _ = horizon_client::structure_blocks::world_loot_data(
+    // break's roll reads that copy, here this test's own, so the stick reaches
+    // no other test's stand (#14266).
+    let _ = horizon_client::structure_blocks::load_thread_loot_data(
         &game.options.resources,
         &game.pack_files(),
     );

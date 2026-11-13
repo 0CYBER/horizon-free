@@ -55,9 +55,6 @@ fn can_attack(w: &MobWorld) -> bool {
 fn can_attack_seen(m: &mut Mob, w: &MobWorld) -> bool {
     can_attack(w) && m.sees(w, Who::Player)
 }
-fn sea_level() -> i32 {
-    63
-}
 /// `PhantomAttackPlayerTargetGoal`: every three seconds, the player
 /// within 16 blocks across and 64 up or down.
 #[derive(Clone, Debug)]
@@ -103,7 +100,7 @@ impl AttackStrategy {
             return;
         };
         let y = (t.position.y.floor() as i32 + 20 + m.random.next_int_bound(20).unwrap_or(0))
-            .max(sea_level() + 1);
+            .max(cx.w.sea_level + 1);
         m.extra.home = Some([t.position.x.floor() as i32, y, t.position.z.floor() as i32]);
     }
 }
@@ -627,5 +624,15 @@ mod anchor_save_tests {
         let stale = saved_phantom(Some([100, 64, -40]));
         let saved = mob_to_nbt(&loose, [0; 4], Some(&stale), None, |_| None);
         assert_eq!(saved.get("anchor_pos"), None, "no anchor, no key");
+    }
+
+    #[test]
+    fn a_phantoms_look_control_keeps_the_flight_pitch() {
+        let types = phantom_types();
+        let mut m = mob_from_nbt(&saved_phantom(None), &types, 3, None).unwrap();
+        // `PhantomLookControl.tick` is empty, unlike `LookControl.tick`.
+        m.head_pitch = -22.0;
+        m.look_control_tick();
+        assert_eq!(m.head_pitch, -22.0);
     }
 }

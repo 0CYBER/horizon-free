@@ -21,7 +21,12 @@ use horizon_core::{
     random::RandomSource,
 };
 use serde_json::Value;
-use std::{borrow::Cow, collections::HashMap, fs, path::Path};
+use std::{
+    borrow::{Borrow, Cow},
+    collections::HashMap,
+    fs,
+    path::Path,
+};
 
 pub use crate::biome::{SpawnCost, parse_costs, parse_entries};
 
@@ -35,7 +40,8 @@ pub fn attempt_counters(publish: bool) {
     }
     let counts = ATTEMPT_COUNTS.with(|c| c.replace([0; 2]));
     if publish {
-        crate::spans::counters(&[("sa_attempts", counts[0]), ("sa_spawns", counts[1])]);
+        horizon_perf_format::counter("natural_spawning.attempts", &[]).add(counts[0]);
+        horizon_perf_format::counter("natural_spawning.spawns", &[]).add(counts[1]);
     }
 }
 fn attempt_count(index: usize) {
@@ -879,13 +885,17 @@ impl SpawnState {
     /// `NaturalSpawner.createState`: every non-persistent entity of a
     /// spawning category in a loaded chunk adds its biome's spawn charge, its
     /// category count and (for mobs) the local caps of the players near it.
-    pub fn new<L: NaturalLevel>(
+    pub fn new<'a, L: NaturalLevel, I>(
         l: &L,
         spawnable_chunks: i32,
         players: Vec<SpawnPlayer>,
-        entities: &[Counted],
+        entities: I,
         chunk_loaded: impl Fn(i32, i32) -> bool,
-    ) -> Self {
+    ) -> Self
+    where
+        I: IntoIterator,
+        I::Item: std::borrow::Borrow<Counted<'a>>,
+    {
         let mut state = Self {
             spawnable_chunks,
             counts: [0; 8],
@@ -898,6 +908,7 @@ impl SpawnState {
             last_checked: None,
         };
         for e in entities {
+            let e = e.borrow();
             if e.is_mob && e.persistent || e.category == Category::Misc {
                 continue;
             }
@@ -914,6 +925,10 @@ impl SpawnState {
             state.counts[e.category.index()] += 1;
         }
         state
+    }
+    /// Reclaims the player buffer for reuse across passes.
+    pub fn into_players(self) -> Vec<SpawnPlayer> {
+        self.players
     }
     fn add_charge(&mut self, pos: [i32; 3], charge: f64) {
         if charge != 0.0 {
@@ -1539,6 +1554,26 @@ fn top_non_colliding<L: NaturalLevel>(l: &L, entity: &str, x: i32, z: i32) -> [i
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Attempts and spawns counted while spans are on reach the perf counters once published, and a reset publishes nothing.
+    #[test]
+    fn attempt_counters_publish_what_the_tick_counted() {
+        let attempts = horizon_perf_format::counter("natural_spawning.attempts", &[]);
+        let spawns = horizon_perf_format::counter("natural_spawning.spawns", &[]);
+        let before = (attempts.get(), spawns.get());
+        crate::spans::enable(true);
+        attempt_counters(false);
+        for _ in 0..7 {
+            attempt_count(0);
+        }
+        for _ in 0..3 {
+            attempt_count(1);
+        }
+        attempt_counters(true);
+        attempt_counters(true);
+        crate::spans::enable(false);
+        assert_eq!((attempts.get() - before.0, spawns.get() - before.1), (7, 3));
+    }
 
     /// The grid finds the players whose chunk is within 8 of a chunk on both
     /// axes, in their order, as a look at every player does.
