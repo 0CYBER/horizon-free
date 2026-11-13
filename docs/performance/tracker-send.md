@@ -11,7 +11,8 @@ without measuring: `HORIZON_SEND_BENCH=1` is also required.
 ## Prepare without running
 
 ```sh
-cargo test --locked --profile fast -p horizon-client-lib --lib --no-run
+cargo test --locked --profile fast -p horizon-client-lib --lib \
+  --features tracker-send-bench --no-run
 ```
 
 Finish compilation, correctness tests and other workloads before measuring.
@@ -24,6 +25,7 @@ for both paths; `HORIZON_SERIAL_TICK=all` must be unset.
 ```sh
 HORIZON_WORKER_THREADS=4 HORIZON_SEND_BENCH=1 \
   cargo test --locked --profile fast -p horizon-client-lib --lib \
+  --features tracker-send-bench \
   lan::entity::send_bench::tracker_send_benchmark \
   -- --ignored --exact --nocapture --test-threads=1
 ```
@@ -33,6 +35,10 @@ identical input, then alternates their execution order for twenty samples.
 Every measured tick checks packet bytes, packet order and tracking events for
 equality outside the timed region. `SEND_BENCH` lines contain raw JSON samples
 in nanoseconds; keep all rounds, including slow ones.
+
+The opt-in feature selects the executable's `horizon_threads::GameAllocator`
+for this test binary. It has no effect on normal library builds, and ordinary
+tests keep their existing allocator unless the feature is explicitly enabled.
 
 Cases cover both sides of the current thresholds (15/16/17 viewers and
 63/64/65 active entities), plus 32, 120, 400 and 600-viewer crowds. Every entity

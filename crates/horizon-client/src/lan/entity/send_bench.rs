@@ -4,6 +4,10 @@
 use super::*;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "tracker-send-bench")]
+#[global_allocator]
+static ALLOCATOR: horizon_threads::GameAllocator = horizon_threads::GAME_ALLOCATOR;
+
 struct Scene {
     level: Entities,
     entities: Vec<EntityState>,
@@ -117,6 +121,10 @@ fn tracker_send_benchmark() {
         "build with --profile fast"
     );
     assert!(
+        std::hint::black_box(cfg!(feature = "tracker-send-bench")),
+        "build with --features tracker-send-bench for the game's allocator"
+    );
+    assert!(
         !std::env::var("HORIZON_SERIAL_TICK").is_ok_and(|v| v.eq_ignore_ascii_case("all")),
         "HORIZON_SERIAL_TICK=all disables the parallel path being measured"
     );
@@ -135,6 +143,7 @@ fn tracker_send_benchmark() {
         "SEND_BENCH {}",
         serde_json::json!({
             "workers": horizon_threads::worker_count(),
+        "allocator": "horizon_threads::GameAllocator",
             "threshold_viewers": SEND_APART_VIEWERS,
             "threshold_entities": SEND_APART_ENTITIES,
         })
