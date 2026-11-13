@@ -1147,6 +1147,143 @@ fn lerp_samples_its_branches_only_where_alpha_reads_them() {
 }
 
 #[test]
+fn choices_read_their_branches_only_where_they_ask_for_them() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    /// A noise that spoils every value `sample_needed` was not asked for, and counts them.
+    #[derive(Debug)]
+    struct Spoiled(NoiseSampler, AtomicUsize);
+    impl DensitySampler for Spoiled {
+        fn sample_value(&self, c: &mut SamplerContext, p: [i32; 3]) -> Result<f32, SampleError> {
+            self.0.sample_value(c, p)
+        }
+        fn sample_volume(
+            &self,
+            context: &mut SamplerContext,
+            buffer: &mut [f32],
+            volume: DensityVolume,
+        ) -> Result<(), SampleError> {
+            self.0.sample_volume(context, buffer, volume)
+        }
+        fn sample_needed(
+            &self,
+            context: &mut SamplerContext,
+            buffer: &mut [f32],
+            volume: DensityVolume,
+            needed: &[u64],
+        ) -> Result<(), SampleError> {
+            self.0.sample_volume(context, buffer, volume)?;
+            let size_y = volume.sizes()[1];
+            for (index, value) in buffer.iter_mut().enumerate() {
+                if (needed[index / size_y] >> (index % size_y)) & 1 == 0 {
+                    *value = f32::NAN;
+                    self.1.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            Ok(())
+        }
+    }
+    let leaves: [Arc<Spoiled>; 9] = std::array::from_fn(|seed| {
+        let noise = NoiseSampler {
+            noise: Arc::new(PerlinNoise::new(&mut LegacyRandom::new(seed as i64))),
+            xz_scale: 0.07,
+            y_scale: 0.11,
+        };
+        Arc::new(Spoiled(noise, AtomicUsize::new(0)))
+    });
+    let leaf = |index: usize| -> Arc<dyn DensitySampler> { leaves[index].clone() };
+    let unary = |input, operation| -> Arc<dyn DensitySampler> {
+        Arc::new(UnarySampler { input, operation })
+    };
+    // range_choice(0, in: 1 * 2, out: interval_select(2, [3, min(4, 5), lerp(clamp(6 * 4), 7, 8)]))
+    let (range, thresholds) = ([-0.2, 0.3], [-0.15, 0.15]);
+    let clamp = UnaryOp::Clamp { min: 0.0, max: 1.0 };
+    let lerp = LerpSampler {
+        alpha: unary(unary(leaf(6), UnaryOp::Multiply(4.0)), clamp),
+        first: DensityValue::Sampler(leaf(7)),
+        second: DensityValue::Sampler(leaf(8)),
+    };
+    let minimum = BinarySampler {
+        left: leaf(4),
+        right: leaf(5),
+        operation: BinaryOp::Minimum {
+            right_min: f32::NEG_INFINITY,
+        },
+    };
+    let select = IntervalSelectSampler::new(
+        leaf(2),
+        thresholds.to_vec(),
+        vec![leaf(3), Arc::new(minimum), Arc::new(lerp)],
+    )
+    .unwrap();
+    let choice = RangeChoiceSampler {
+        input: leaf(0),
+        min_inclusive: range[0],
+        max_exclusive: range[1],
+        when_in_range: unary(leaf(1), UnaryOp::Multiply(2.0)),
+        when_out_of_range: Arc::new(select),
+    };
+    let mut context = SamplerContext::default();
+    for (sizes, minimum, steps, masks) in [
+        ([5, 49, 5], [0, -64, 0], [4, 8, 4], true),
+        ([3, 64, 2], [512, -64, -512], [4, 6, 4], true),
+        // Too tall for one bit per Y: everything is sampled.
+        ([2, 65, 2], [96, -64, 96], [4, 6, 4], false),
+    ] {
+        let volume = DensityVolume::new(sizes, minimum, steps).unwrap();
+        // Every noise over the whole volume, then the choices spelled out value by value.
+        let all: Vec<Vec<f32>> = (leaves.iter())
+            .map(|leaf| {
+                let mut values = vec![0.0; volume.size()];
+                leaf.0
+                    .sample_volume(&mut context, &mut values, volume)
+                    .unwrap();
+                values
+            })
+            .collect();
+        let expected: Vec<f32> = (0..volume.size())
+            .map(|i| {
+                let value = |leaf: usize| all[leaf][i];
+                if value(0) >= range[0] && value(0) < range[1] {
+                    value(1) * 2.0
+                } else if value(2) < thresholds[0] {
+                    value(3)
+                } else if value(2) < thresholds[1] {
+                    value(4).min(value(5))
+                } else {
+                    let alpha = (value(6) * 4.0).clamp(0.0, 1.0);
+                    if alpha == 0.0 {
+                        value(7)
+                    } else if alpha == 1.0 {
+                        value(8)
+                    } else {
+                        value(7) + alpha * (value(8) - value(7))
+                    }
+                }
+            })
+            .collect();
+        leaves
+            .iter()
+            .for_each(|leaf| leaf.1.store(0, Ordering::Relaxed));
+        let mut actual = vec![19.0; volume.size()];
+        choice
+            .sample_volume(&mut context, &mut actual, volume)
+            .unwrap();
+        assert_eq!(
+            actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            "{sizes:?} {minimum:?}"
+        );
+        // The selector and the in-range branch are read everywhere; every other noise was
+        // spared part of the volume, without changing a value above.
+        let spoiled = leaves.each_ref().map(|leaf| leaf.1.load(Ordering::Relaxed));
+        assert_eq!(spoiled[..2], [0, 0], "{sizes:?}");
+        for (leaf, &count) in spoiled.iter().enumerate().skip(2) {
+            assert_eq!(count > 0, masks, "noise {leaf} of {sizes:?}: {count}");
+        }
+    }
+}
+
+#[test]
 fn interpolation_reuses_captured_lattice_samples_bit_for_bit() {
     let noise: Arc<dyn DensitySampler> = Arc::new(NoiseSampler {
         noise: Arc::new(PerlinNoise::new(&mut LegacyRandom::new(7))),

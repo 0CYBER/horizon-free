@@ -72,5 +72,16 @@ class SaveRoundtripPathsTests(unittest.TestCase):
                 self.assertEqual(roundtrip.summarize(report), 2)
 
 
+class SaveRoundtripTimersTests(unittest.TestCase):
+    def test_elapsed_despawn_timers_do_not_hide_other_saved_state_changes(self):
+        report = [
+            ('entity.DespawnDelay @minecraft:trader_llama#57', 47384, 47375),
+            ('entity.Passengers[].DespawnDelay @minecraft:trader_llama#58', 100, 91),
+            ('entity.PersistenceRequired @minecraft:trader_llama#57', 0, 1),
+        ]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(roundtrip.summarize(report), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

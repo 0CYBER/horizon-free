@@ -17,16 +17,13 @@
 //! it: as it was before the tick when it comes later in the list, else once its turn is over.
 //!
 //! `HORIZON_PARALLEL_TICK=1` turns it on (off by default), `verify` also runs the serial loop on
-//! copies and logs a tick whose result differs. The loop stays serial with native mods loaded
-//! (their hooks can touch anything), on a tick a performance report samples, under
-//! `HORIZON_TEST_SEEDS`, with few ticking mobs, with a mob whose reach is the whole level, or when
-//! one island holds most of them, or a mob belongs to a raid (its hurt sequence is shared).
-//! An owned mob also keeps the loop serial: tame pets can teleport to a distant owner, outside
-//! the local motion bounds. Ownership is checked even for resting or sitting mobs. So does a mob
-//! holding, in either hand, or using an item that teleports its eater (`ConsumeEffect::
-//! TeleportRandomly`): the diameter is item data and the landing drops to the first ground below,
-//! so the destination is unbounded; see [`holds_teleport_consumable`].
-//! Reach changes and their behavioral proof follow `docs/mob-islands.md`.
+//! copies and logs a tick whose result differs. The loop stays serial under `HORIZON_TEST_SEEDS`,
+//! with few ticking mobs, when one island holds most of them, and while a native mod may hook a
+//! mob's turn, as the build finds it (`horizon_mod_api_gen::mob_turn`). The hooks that hand
+//! nothing back are kept and told at the join, in list order (`native_client_hooks::Deferred`).
+//! Everything else a mob can reach in its turn is in its reach: a pet's teleport to its owner, a
+//! teleporting meal, a changed speed, a wither's head targets and a warden's suspects; a raid's
+//! raiders share an island. How each bound is derived: `docs/mob-islands.md`.
 //!
 //! Whether a mob is loaded and ticking is decided at its turn, as the serial loop decides it, so
 //! every mob is given a ticking mob's reach: one moved before its turn may tick where it was resting.
@@ -121,6 +118,22 @@ fn lanes() -> usize {
     capped_lanes(horizon_client::parallel::lanes(), hardware)
 }
 
+/// Whether a native mod can run in a mob's turn, as the build found it (`HORIZON_MOB_TURN`, from
+/// `horizon_mod_api_gen::mob_turn`): then the loop stays serial. Without that finding, any trait
+/// mod counts.
+fn mods_hook_turns() -> bool {
+    match option_env!("HORIZON_MOB_TURN") {
+        Some(found) => found == "hooked",
+        None => !horizon_client::mod_api::mods().is_empty(),
+    }
+}
+
+/// Whether native mods are loaded at all: grouped turns keep the hooks that hand nothing back
+/// for the join, and skip the others (no mod hooks them while the islands run).
+fn defers() -> bool {
+    !horizon_client::mod_api::mods().is_empty()
+}
+
 /// The mobs of each group, by their place in the list, ascending.
 pub(super) struct Plan {
     groups: Vec<Vec<usize>>,
@@ -130,38 +143,48 @@ pub(super) struct Plan {
 pub(super) struct Islands<'t> {
     /// The host's own player's UUID, when one is in the level (`Game::who_by_uuid`).
     pub uuid: Option<[i32; 4]>,
-    /// Whether native mods listen: their hooks run only on the server thread.
-    pub mods: bool,
     /// A new entity-ticking test for a group's thread (`Game::entity_ticking_area`).
     pub ticking: &'t dyn Fn() -> Box<dyn Fn(i32, i32) -> bool + Send>,
 }
 
 impl Islands<'_> {
     /// The groups this tick's mobs run in; None when the loop runs serially.
-    pub(super) fn plan(&self, mobs: &[Mob], snapshot: &[Seen], turns: &Turns) -> Option<Plan> {
+    pub(super) fn plan(
+        &self,
+        mobs: &[Mob],
+        snapshot: &[Seen],
+        turns: &Turns,
+        start: &Start,
+    ) -> Option<Plan> {
         let lanes = lanes();
         if lanes < 2
-            || self.mods
+            || mods_hook_turns()
             || mobs.len() < MIN_TICKING
-            || super::super::tick_profile::start().is_some()
             || horizon_client::random_source::repeating_per_thread()
-            // Raid hurt ordering allocates process-wide sequence IDs. Until its reference
-            // effects can be isolated, neither production nor verify splits such a tick.
-            || mobs.iter().any(|m| {
-                horizon_client::mobs::raider::state(m).is_some_and(|r| r.raid_id.is_some())
+        {
+            return None;
+        }
+        // A content mod's effect ticks through the native mods (`ModEffectTicks`), which run
+        // only on the server thread.
+        if defers()
+            && mobs.iter().any(|m| {
+                m.extra
+                    .effects
+                    .iter()
+                    .any(|e| horizon_client_core::potions::is_mod_effect(e.0))
             })
         {
             return None;
         }
-        // A mob that finishes eating a teleporting item (chorus fruit by default) lands anywhere
-        // its item's diameter allows and falls to the ground there: not a bounded margin.
-        if let Some(items) = turns.base.items
-            && mobs.iter().any(|m| holds_teleport_consumable(m, items))
-        {
-            return None;
-        }
+        // Where an owner stands: the players a pet can see this tick.
+        let players: Vec<([i32; 4], Vec3)> = start
+            .player
+            .iter()
+            .chain(start.guests.iter().map(|g| &g.1))
+            .map(|p| (p.uuid, p.position))
+            .collect();
         horizon_client::spans::time("islands_plan", || {
-            islands(&reaches(mobs, snapshot, turns)?, lanes)
+            islands(&reaches(mobs, snapshot, turns, &players)?, lanes)
         })
     }
 
@@ -261,7 +284,9 @@ impl Islands<'_> {
             guest_events.extend(g.guest_events[from[4]..to[4]].iter().cloned());
         }
         let mut pushes = horizon_client::mobs::PendingPushes::default();
+        let mut deferred = Vec::new();
         for g in &mut groups {
+            deferred.append(&mut g.deferred);
             // Each member's binding and death mark as its group left them.
             for m in g.mobs.iter().map(MobSlot::mob) {
                 match g.bindings.get(&m.id) {
@@ -283,6 +308,11 @@ impl Islands<'_> {
             }
         }
         drop(groups);
+        // The mods hear the kept hooks as the serial loop told them: by turn, each turn's in order.
+        deferred.sort_by_key(|d| d.0);
+        for (_, d) in deferred {
+            horizon_client::native_client_hooks::replay(d);
+        }
         let Board { frozen, .. } = board;
         let mut merged = Group::new(
             mobs,
@@ -305,9 +335,10 @@ impl Islands<'_> {
     }
 
     /// Run `groups` at once, one thread each (the first on this one), each with this thread's
-    /// level and `tnt_explodes` rule. Their world is `turns.base` without its hooks into the game,
-    /// which can't leave this thread: native mod effects (none run: groups only run without
-    /// native mods) and the UUID lookup ([`LoopLookup`], the same answers).
+    /// level, `tnt_explodes` rule and tick profiler sampling. Their world is `turns.base` without
+    /// its hooks into the game, which can't leave this thread: native mod effects (no mob carries
+    /// a content mod's effect while mods are loaded) and the UUID lookup ([`LoopLookup`], the same
+    /// answers). The helpers' sampled costs join this thread's sums.
     fn run_threads(
         &self,
         groups: &mut [Group<&mut Mob>],
@@ -324,10 +355,13 @@ impl Islands<'_> {
         let (nearest, single_player, difficulty) =
             (turns.nearest, turns.single_player, turns.difficulty);
         let lookup = LoopLookup(self.uuid);
+        let (defers, canceled) = (defers(), turns.canceled);
+        let sampling = super::super::tick_profile::sampling();
         let run = |g: &mut Group<&mut Mob>, ticking: Box<dyn Fn(i32, i32) -> bool + Send>| {
             let foreign = Foreign {
                 board,
                 reader: Cell::new(0),
+                defers,
             };
             let mut base = rebuild();
             base.who_lookup = Some(&lookup);
@@ -340,7 +374,7 @@ impl Islands<'_> {
                 ticking: &*ticking,
                 nearest,
                 single_player,
-                canceled: &|_| false,
+                canceled: &|id| canceled(id),
                 difficulty,
                 cached_difficulty: None,
             };
@@ -403,7 +437,9 @@ impl Islands<'_> {
                             }
                         }
                         horizon_client::mobs::sulfur_cube::set_tnt_explodes(tnt);
+                        super::super::tick_profile::begin_helper(sampling);
                         horizon_client::block_contact::in_level(level, || run(g, ticking));
+                        super::super::tick_profile::end_helper()
                     })
                     .expect("a mob island's thread starts");
                 handles.push(handle);
@@ -412,10 +448,10 @@ impl Islands<'_> {
             drop(first_done);
             let mut panic = None;
             for handle in handles {
-                if let Err(payload) = handle.join()
-                    && panic.is_none()
-                {
-                    panic = Some(payload);
+                match handle.join() {
+                    Ok(costs) => super::super::tick_profile::merge(costs),
+                    Err(payload) if panic.is_none() => panic = Some(payload),
+                    Err(_) => {}
                 }
             }
             if let Some(payload) = panic {
@@ -445,13 +481,20 @@ struct Reach {
     links: Vec<u32>,
     /// Its raid: a raid's raiders order their hurts across the raid (`raider::next_hurt_seq`).
     raid: Option<i32>,
+    /// Where a teleport can take it far from `body` (a pet to its owner), and what it reads there.
+    away: Option<Away>,
 }
 
-/// Species whose tick can reach the whole level (the wither's attacks, a warden's suspects kept by
-/// UUID): the loop runs serially. The dragon isn't a `Mob` here.
-fn global(species: Species) -> bool {
-    matches!(species, Species::Wither | Species::Warden)
+/// A mob's reach at a place it can teleport to, apart from where it stands: planned as one more
+/// mob of its island standing there.
+#[derive(Clone, Debug)]
+struct Away {
+    at: (f64, f64),
+    body: Aabb,
+    sense: Aabb,
+    village_reads: Option<Aabb>,
 }
+
 /// The farthest a mob of `species` can be moved in one tick besides its motion: a teleport.
 fn jump(species: Species) -> f64 {
     match species {
@@ -462,24 +505,23 @@ fn jump(species: Species) -> f64 {
         _ => 0.0,
     }
 }
-/// Whether `m` holds in either hand, or is using, an item whose consumable has a
-/// `TeleportRandomly` effect. Judged by the item, not the species, so any mob that eats is covered
-/// (`Fox.ai_step` today). A used item is always one of the two hands, so the hands cover it.
-fn holds_teleport_consumable(m: &Mob, items: &horizon_client::items::Items) -> bool {
+/// The widest `TeleportRandomly` diameter of the items `m` holds in either hand (a used item is
+/// always one of them), whatever its species: a mob that finishes eating one (`Fox.aiStep` today)
+/// lands within half of it on each axis, then drops to the ground. None when it holds none; a
+/// diameter that isn't finite is returned as it is, and keeps the tick serial.
+fn teleport_consumable(m: &Mob, items: &horizon_client::items::Items) -> Option<f64> {
     [&m.extra.main_hand, &m.extra.off_hand]
         .into_iter()
         .flatten()
-        .any(|id| {
-            items
-                .items
-                .get(&**id)
-                .and_then(|i| i.consumable.as_ref())
-                .is_some_and(|c| {
-                    c.effects.iter().any(|e| {
-                        matches!(e, horizon_client::items::ConsumeEffect::TeleportRandomly(_))
-                    })
-                })
+        .filter_map(|id| items.items.get(&**id)?.consumable.as_ref())
+        .flat_map(|c| &c.effects)
+        .filter_map(|e| match e {
+            horizon_client::items::ConsumeEffect::TeleportRandomly(t) => {
+                Some(f64::from(t.diameter).abs())
+            }
+            _ => None,
         })
+        .reduce(|a, b| if a.is_nan() || a > b { a } else { b })
 }
 /// Mobs whose tick reads every villager's points of interest (`village_sections`,
 /// `others_tickets`).
@@ -510,11 +552,14 @@ fn union_box(a: Aabb, b: Aabb) -> Aabb {
     Aabb::new(Vec3::new(x0, y0, z0), Vec3::new(x1, y1, z1))
 }
 
-/// `MoveControl.tick` sets speed from attributes before `LivingEntity.travel` accelerates:
-/// initial velocity alone cannot bound a command-modified mob, even when it starts at rest.
-/// Keep non-default locomotion serial until the reach includes its whole-turn acceleration.
-/// Check effects separately: a slowing effect can expire during the turn and expose a speed
-/// increase that the current effective value hides. No initial role or NoAI state exempts it.
+/// The largest `speedModifier` a vanilla goal or behaviour hands the move control: a husk's spear
+/// charge on a camel husk (`SpearUseGoal`, 4.0); the others are at most 3.0 (a goat's ram). The
+/// audit is in `docs/mob-islands.md`.
+const MAX_SPEED_MODIFIER: f64 = 4.0;
+
+/// Whether `m` moves as its type does: its own and its effective movement speed, jump strength and
+/// flying speed are its type's, and no effect changes them. The `2 * |v| + SLACK` reach is set for
+/// those; [`locomotion`] bounds the others.
 fn default_locomotion(m: &Mob) -> bool {
     use horizon_client::mobs::finalize::{Attr, value};
     m.attrs.speed == m.kind.speed
@@ -532,30 +577,175 @@ fn default_locomotion(m: &Mob) -> bool {
         })
 }
 
-/// Each mob's reach; None when one reaches the whole level, has an unbounded owner destination,
-/// has unsupported locomotion, or stands nowhere. Changes to movement, reads or cross-mob writes
-/// require a conservative reach or serial fallback and a behavioral regression; verify is no safety net.
-fn reaches(mobs: &[Mob], snapshot: &[Seen], turns: &Turns) -> Option<Vec<Reach>> {
+/// The most `m`'s own locomotion can add to how far it moves in one turn, when it isn't its type's
+/// ([`default_locomotion`]: 0). Derived in `docs/mob-islands.md`: every `moveRelative` adds at most
+/// its speed argument to the velocity, which is the move control's `speed` (a goal's speed
+/// modifier times the movement or flying speed attribute), the type's air speed or a constant of
+/// at most 0.1; a jump sets the vertical velocity to the jump power; a ridden mob's jump or dash
+/// adds its push. Each speed is taken unslowed and at its highest for the turn, since an effect
+/// can end, or a witch drink Swiftness, before the mob moves. None when a value isn't finite.
+fn locomotion(m: &Mob) -> Option<f64> {
+    use horizon_client::mobs::finalize::{Attr, value};
+    if default_locomotion(m) {
+        return Some(0.0);
+    }
+    let effects = || {
+        m.extra
+            .effects
+            .iter()
+            .map(|&(effect, _, amp)| (effect, amp))
+    };
+    // Speed: +20% a level (an amplifier below 0 slows, and is left out).
+    let swift = effects()
+        .filter(|e| e.0 == "minecraft:speed")
+        .map(|e| (1.0 + 0.2 * f64::from(e.1.saturating_add(1))).max(1.0))
+        .product::<f64>()
+        * if m.species() == Species::Witch {
+            1.2
+        } else {
+            1.0
+        };
+    // `Mob.movement_speed` without what only slows it (Slowness, a drinking witch, a cold
+    // strider), with an enderman's anger and sprinting, which can start in the turn.
+    let walk = (m.attrs.speed.abs().max(m.kind.speed.abs())
+        + if m.species() == Species::Enderman {
+            f64::from(0.15f32)
+        } else {
+            0.0
+        })
+        * m.speed_bonus().abs().max(1.0)
+        * (1.0 + f64::from(0.3f32))
+        * swift;
+    let walk = walk.max(value(m, Attr::MovementSpeed).abs());
+    let fly = value(m, Attr::FlyingSpeed)
+        .abs()
+        .max(m.kind.flying_speed.abs());
+    let modifier = MAX_SPEED_MODIFIER
+        .max(m.ai.mov.speed_modifier.abs())
+        .max(m.ai.nav.speed_modifier.abs());
+    // The move control's speed this turn, or the one it left last turn.
+    let speed = (modifier * walk.max(fly)).max(f64::from(m.ai.speed).abs());
+    // One `moveRelative` of travel, and one more of a jump (a rabbit's hop) or a swimmer's climb.
+    let push = speed.max(f64::from(m.kind.air_speed).abs()).max(0.1);
+    // A ridden camel's dash: 22.2222 times its movement speed along its look, and 0.6 up.
+    let dash = if matches!(m.species(), Species::Camel | Species::CamelHusk) {
+        22.2222 * walk + 0.6
+    } else {
+        0.0
+    };
+    let boost = effects()
+        .filter(|e| e.0 == "minecraft:jump_boost")
+        .map(|e| 0.1 * f64::from(e.1.saturating_add(1)))
+        .fold(0.0, f64::max);
+    let jump = value(m, Attr::JumpStrength)
+        .abs()
+        .max(m.attrs.jump_strength.abs())
+        .max(m.kind.jump_strength.abs())
+        + boost;
+    // A ridden horse's jump pushes 0.4 forward, a sprinting jump 0.2.
+    let reach = 2.0 * push + dash + 0.4 + 0.2 + jump;
+    reach.is_finite().then_some(reach)
+}
+
+/// Where a teleport to its owner can put a pet (`tame::teleport_to_owner`): a block within 3 of the
+/// owner's on each horizontal axis and 1 vertically, the pet's feet at its bottom centre. `owners`
+/// are the players a pet can see this tick that the owner can be (`tame::owned_by`).
+fn owner_destinations(m: &Mob, owners: &[([i32; 4], Vec3)]) -> Option<Aabb> {
+    m.extra.owner?;
+    let (half, height) = (f64::from(m.width()) / 2.0, f64::from(m.height()));
+    owners
+        .iter()
+        .filter(|p| horizon_client::mobs::tame::owned_by(m.extra.owner, p.0))
+        .map(|&(_, at)| {
+            let (x, y, z) = (at.x.floor(), at.y.floor(), at.z.floor());
+            Aabb::new(
+                Vec3::new(x - 3.0 + 0.5 - half, y - 1.0, z - 3.0 + 0.5 - half),
+                Vec3::new(x + 3.0 + 0.5 + half, y + 1.0 + height, z + 3.0 + 0.5 + half),
+            )
+        })
+        .reduce(union_box)
+}
+
+/// The mob ids a warden's state keeps, whatever holds them: its anger's suspects, its brain's
+/// memories (attack and roar targets, the nearest attackable, the mobs it sees, its look target),
+/// the attackers its hurt noted and the vibration it waits on. It reads and angers them by id at
+/// any distance. Read from the state's `Debug` form so that a field added later is covered too:
+/// an id that isn't a mob of the list joins nothing.
+fn warden_links(m: &Mob, links: &mut Vec<u32>) {
+    let Some(state) = &m.extra.warden else {
+        return;
+    };
+    let text = format!("{state:?}");
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("Mob(") {
+        rest = &rest[at + 4..];
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if let Ok(id) = rest[..digits].parse() {
+            links.push(id);
+        }
+    }
+}
+
+/// Each mob's reach; None when a value is not finite or the lists don't match. Changes to movement,
+/// reads or cross-mob writes require a conservative reach and a behavioral regression; verify is
+/// no safety net. `owners`: each player a mob can see this tick, by UUID, where it stands.
+fn reaches(
+    mobs: &[Mob],
+    snapshot: &[Seen],
+    turns: &Turns,
+    owners: &[([i32; 4], Vec3)],
+) -> Option<Vec<Reach>> {
     if mobs.len() != snapshot.len() {
         return None;
     }
     let mut out = Vec::with_capacity(mobs.len());
     for (m, s) in mobs.iter().zip(snapshot) {
-        if global(s.species)
-            // TamableAnimal.tryToTeleportToOwner moves around the owner's position, at any
-            // distance. Until the plan covers those destinations and their reads, keep every
-            // owned mob serial, regardless of species, current role or sitting/leash state.
-            || m.extra.owner.is_some()
-            || !default_locomotion(m)
-            || !(m.position.x.is_finite() && m.position.y.is_finite() && m.position.z.is_finite())
+        if !(m.position.x.is_finite() && m.position.y.is_finite() && m.position.z.is_finite())
             || !(m.velocity.x.is_finite() && m.velocity.y.is_finite() && m.velocity.z.is_finite())
         {
             return None;
         }
         let (bx, bz) = (m.position.x.floor() as i32, m.position.z.floor() as i32);
         let v = m.velocity;
-        let motion = 2.0 * (v.x * v.x + v.y * v.y + v.z * v.z).sqrt() + jump(s.species) + SLACK;
-        let body = grow(s.bounds, motion);
+        // A meal that teleports: half its diameter on each axis (and the block it rounds to).
+        let meal = match turns
+            .base
+            .items
+            .and_then(|items| teleport_consumable(m, items))
+        {
+            Some(d) if !d.is_finite() => return None,
+            Some(d) => Some(d / 2.0 + 1.0),
+            None => None,
+        };
+        let motion = 2.0 * (v.x * v.x + v.y * v.y + v.z * v.z).sqrt()
+            + jump(s.species)
+            + meal.unwrap_or(0.0)
+            + locomotion(m)?
+            + SLACK;
+        let mut body = grow(s.bounds, motion);
+        // ...then the drop to the ground below the landing, as deep as the world goes.
+        if meal.is_some() {
+            let floor = f64::from(i32::MIN);
+            body = union_box(
+                body,
+                Aabb::new(
+                    Vec3::new(body.min(Axis::X), floor, body.min(Axis::Z)),
+                    Vec3::new(body.max(Axis::X), floor + 1.0, body.max(Axis::Z)),
+                ),
+            );
+        }
+        let sense_range = m.attrs.follow_range.max(MIN_SENSE) + SLACK;
+        // A pet that teleports to its owner moves on from there in the same turn.
+        let away = owner_destinations(m, owners).map(|near_owner| {
+            let body = grow(near_owner, motion);
+            let centre = |axis| (body.min(axis) + body.max(axis)) / 2.0;
+            Away {
+                at: (centre(Axis::X), centre(Axis::Z)),
+                body,
+                sense: grow(body, sense_range),
+                village_reads: reads_villages(s.species).then(|| grow(body, VILLAGE_SENSE)),
+            }
+        });
         let claims = (s.species == Species::Villager).then(|| {
             [s.job, s.bed, s.potential_job, s.meeting]
                 .into_iter()
@@ -584,24 +774,33 @@ fn reaches(mobs: &[Mob], snapshot: &[Seen], turns: &Turns) -> Option<Vec<Reach>>
         .into_iter()
         .flatten()
         .collect();
-        // A vex's owner, an evoker's or illusioner's vex.
-        if matches!(
-            s.species,
-            Species::Vex | Species::Evoker | Species::Illusioner
-        ) && m.extra.counter2 > 0
-        {
-            links.push(m.extra.counter2 as u32);
+        match s.species {
+            // A vex's owner, an evoker's or illusioner's vex.
+            Species::Vex | Species::Evoker | Species::Illusioner if m.extra.counter2 > 0 => {
+                links.push(m.extra.counter2 as u32);
+            }
+            // The side heads' targets, found by id in the level's mobs (`wither::target_pos`).
+            // A new one is picked within 20 blocks, inside its reads.
+            Species::Wither => links.extend(
+                m.extra.ints[..2]
+                    .iter()
+                    .filter(|&&id| id > 0)
+                    .map(|&id| id as u32),
+            ),
+            Species::Warden => warden_links(m, &mut links),
+            _ => {}
         }
         out.push(Reach {
             at: (m.position.x, m.position.z),
             ticking: turns.base.world.loaded(bx, bz) && (turns.ticking)(bx, bz),
             body,
-            sense: grow(body, m.attrs.follow_range.max(MIN_SENSE) + SLACK),
+            sense: grow(body, sense_range),
             village_reads: reads_villages(s.species).then(|| grow(body, VILLAGE_SENSE)),
             claims,
             id: s.id,
             links,
             raid: horizon_client::mobs::raider::state(m).and_then(|r| r.raid_id),
+            away,
         });
     }
     Some(out)
@@ -712,28 +911,33 @@ fn islands(reaches: &[Reach], lanes: usize) -> Option<Plan> {
     let mut index = FxHashMap::<u32, u32>::default();
     for (i, r) in reaches.iter().enumerate() {
         index.entry(r.id).or_insert(i as u32);
-        let key = (
-            (r.at.0 / CELL).floor() as i32,
-            (r.at.1 / CELL).floor() as i32,
-        );
-        let next = columns.len() as u32;
-        let c = *column_of.entry(key).or_insert(next);
-        if c == next {
-            columns.push(Column {
-                first: i as u32,
-                body: r.body,
-                sense: r.sense,
-                claims: r.claims,
-                village_reads: r.village_reads,
-            });
-            continue;
+        // Where it stands, then where a teleport can take it, each in its own column.
+        let away = r
+            .away
+            .iter()
+            .map(|a| (a.at, a.body, a.sense, None, a.village_reads));
+        let parts = std::iter::once((r.at, r.body, r.sense, r.claims, r.village_reads));
+        for (at, body, sense, claims, village_reads) in parts.chain(away) {
+            let key = ((at.0 / CELL).floor() as i32, (at.1 / CELL).floor() as i32);
+            let next = columns.len() as u32;
+            let c = *column_of.entry(key).or_insert(next);
+            if c == next {
+                columns.push(Column {
+                    first: i as u32,
+                    body,
+                    sense,
+                    claims,
+                    village_reads,
+                });
+                continue;
+            }
+            sets.join(columns[c as usize].first, i as u32);
+            let col = &mut columns[c as usize];
+            col.body = union_box(col.body, body);
+            col.sense = union_box(col.sense, sense);
+            col.claims = widen(col.claims, claims);
+            col.village_reads = widen(col.village_reads, village_reads);
         }
-        sets.join(columns[c as usize].first, i as u32);
-        let col = &mut columns[c as usize];
-        col.body = union_box(col.body, r.body);
-        col.sense = union_box(col.sense, r.sense);
-        col.claims = widen(col.claims, r.claims);
-        col.village_reads = widen(col.village_reads, r.village_reads);
     }
     // Columns by the cells their boxes cover.
     let (mut bodies, mut claims) = (Cells::default(), Cells::default());
@@ -848,6 +1052,8 @@ impl Board {
 pub(super) struct Foreign<'b> {
     board: &'b Board,
     pub reader: Cell<usize>,
+    /// Whether the turns keep their mod hooks for the join ([`defers`]).
+    pub defers: bool,
 }
 impl Foreign<'_> {
     /// A turn's new RNGs, including projectile RNGs and long-jump angle shuffles, follow list
@@ -890,6 +1096,19 @@ impl WhoLookup for LoopLookup {
     }
 }
 
+/// `m` without the numbers it takes from a process-wide counter, which the copies and the groups
+/// both take from: only their order among the mobs that compare them counts, and those share a
+/// group (`section_seq`: the mobs of one section, `aquatic.rs`; a raider's `hurt_seq`: its raid,
+/// `raids.rs`).
+fn without_counters(m: &Mob) -> Mob {
+    let mut m = m.clone();
+    m.extra.section_seq = 0;
+    if let Some(r) = m.extra.raider.as_deref_mut() {
+        r.hurt_seq = 0;
+    }
+    m
+}
+
 /// The first difference between the serial loop's result and the groups', if any.
 fn difference(serial: &Group<Mob>, grouped: &Group<Mob>) -> Option<String> {
     if serial.mobs.len() != grouped.mobs.len() {
@@ -899,13 +1118,7 @@ fn difference(serial: &Group<Mob>, grouped: &Group<Mob>) -> Option<String> {
             grouped.mobs.len()
         ));
     }
-    // `section_seq` comes from one counter the copies and the groups both take from: only the
-    // order of the mobs in one section counts (`aquatic.rs`), and those share a group.
-    let plain = |m: &Mob| {
-        let mut m = m.clone();
-        m.extra.section_seq = 0;
-        format!("{m:?}")
-    };
+    let plain = |m: &Mob| format!("{:?}", without_counters(m));
     for (ma, mb) in serial.mobs.iter().zip(&grouped.mobs) {
         let (a, b) = (plain(ma), plain(mb));
         if a != b {
@@ -1084,7 +1297,6 @@ mod tests {
                 let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     Islands {
                         uuid: None,
-                        mods: false,
                         ticking: &|| Box::new(|_, _| true),
                     }
                     .run(
@@ -1177,6 +1389,7 @@ mod tests {
             id,
             links: Vec::new(),
             raid: None,
+            away: None,
         }
     }
 
@@ -1272,7 +1485,7 @@ mod tests {
     /// Exercise the actual Mob/Seen-to-reach conversion, not just hand-built planner boxes.
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn actual_reaches_cover_links_villages_and_serial_fallbacks() {
+    fn actual_reaches_cover_links_villages_and_bounded_moves() {
         let mut game = super::super::super::native_machines::tests::server_game();
         game.spawn_mob("minecraft:cow", [0.5, 65.0, 0.5], true)
             .unwrap();
@@ -1305,8 +1518,10 @@ mod tests {
             difficulty: &|_| horizon_client::mobs::spawning::LocalDifficulty::new(2, 0, 0, 0.0),
             cached_difficulty: None,
         };
+        // The host player stands in the third herd.
+        let owners = [([0, 0, 0, 7], Vec3::new(2003.5, 65.0, 3.5))];
         let plan = |mobs: &[Mob], snapshot: &[Seen]| {
-            islands(&reaches(mobs, snapshot, &turns).unwrap(), 4).unwrap()
+            islands(&reaches(mobs, snapshot, &turns, &owners).unwrap(), 4).unwrap()
         };
         assert_eq!(plan(&mobs, &snapshot).groups.len(), 4);
         for relation in 0..8 {
@@ -1339,43 +1554,78 @@ mod tests {
         let of = group_of(&plan(&mobs, &snapshot), mobs.len());
         assert_eq!(of[0], of[200], "a remote bed reaches its village reader");
         assert_ne!(of[0], of[100]);
-        for species in [Species::Wither, Species::Warden] {
-            snapshot[0].species = species;
-            assert!(reaches(&mobs, &snapshot, &turns).is_none());
-        }
         snapshot[0].species = Species::Cow;
-        mobs[0].extra.owner = Some([0; 4]);
-        assert!(reaches(&mobs, &snapshot, &turns).is_none());
-        mobs[0].extra.owner = None;
+        snapshot[0].bed = None;
+        snapshot[200].species = Species::Cow;
+        assert_eq!(plan(&mobs, &snapshot).groups.len(), 4);
         let unchanged = mobs[0].clone();
-        // Locomotion attributes and effects can change acceleration even from rest and with
-        // NoAI at the start. Use the actual reach conversion rather than a helper-only check.
+        // A wither's side head keeps its target by id (`wither::target_pos`).
+        snapshot[0].species = Species::Wither;
+        mobs[0].extra.ints[1] = 100;
+        let of = group_of(&plan(&mobs, &snapshot), mobs.len());
+        assert_eq!(of[0], of[100], "a wither's head target");
+        assert_ne!(of[0], of[200]);
+        mobs[0] = unchanged.clone();
+        // A warden's suspect, kept in its anger.
+        snapshot[0].species = Species::Warden;
+        let mut warden = horizon_client::mobs::warden::Warden::default();
+        warden.anger.increase(Who::Mob(300), 80);
+        mobs[0].extra.warden = Some(Box::new(warden));
+        let of = group_of(&plan(&mobs, &snapshot), mobs.len());
+        assert_eq!(of[0], of[300], "a warden's suspect");
+        assert_ne!(of[0], of[100]);
+        snapshot[0].species = Species::Cow;
+        mobs[0] = unchanged.clone();
+        // A pet joins the mobs near its owner, and only those; another player's pet nothing.
+        mobs[0].extra.owner = Some([0, 0, 0, 7]);
+        let of = group_of(&plan(&mobs, &snapshot), mobs.len());
+        assert_eq!(of[0], of[200], "the pet's owner stands in the third herd");
+        assert_ne!(of[0], of[100]);
+        assert_ne!(of[0], of[300]);
+        mobs[0].extra.owner = Some([0, 0, 0, 8]);
+        assert_eq!(plan(&mobs, &snapshot).groups.len(), 4, "no such owner here");
+        mobs[0] = unchanged.clone();
+        // Chorus fruit: half its 16-block diameter around the mob, and down to the world's floor.
+        mobs[0]
+            .extra
+            .set_main_hand(Some("minecraft:chorus_fruit".into()));
+        let r = &reaches(&mobs, &snapshot, &turns, &owners).unwrap()[0];
+        let plain = &reaches(
+            std::slice::from_ref(&unchanged),
+            &snapshot[..1],
+            &turns,
+            &owners,
+        )
+        .unwrap()[0];
+        assert!((r.body.max(Axis::X) - plain.body.max(Axis::X) - 9.0).abs() < 1e-9);
+        assert!(r.body.min(Axis::Y) < -1e9);
+        assert_eq!(plan(&mobs, &snapshot).groups.len(), 4, "its own herd only");
+        mobs[0] = unchanged.clone();
+        // Changed locomotion grows the reach by its bound, even from rest and with NoAI: a
+        // Speed II effect by a few blocks, a speed of 128 to the next herd, not the one after.
+        mobs[0].extra.effects.push(("minecraft:speed", 100, 1));
+        let speedy = reaches(&mobs, &snapshot, &turns, &owners).unwrap()[0].body;
+        let grown = speedy.max(Axis::X) - plain.body.max(Axis::X);
+        assert!(grown > 1.0 && grown < 10.0, "{grown}");
+        assert_eq!(plan(&mobs, &snapshot).groups.len(), 4);
+        mobs[0] = unchanged.clone();
         for attr in [
             horizon_client::mobs::finalize::Attr::MovementSpeed,
             horizon_client::mobs::finalize::Attr::FlyingSpeed,
-            horizon_client::mobs::finalize::Attr::JumpStrength,
         ] {
-            horizon_client::mobs::finalize::set_base(&mut mobs[0], attr, 32.0);
+            horizon_client::mobs::finalize::set_base(&mut mobs[0], attr, 128.0);
             mobs[0].no_ai = true;
-            assert!(reaches(&mobs, &snapshot, &turns).is_none(), "{attr:?}");
-            mobs[0] = unchanged.clone();
-        }
-        for effect in [
-            "minecraft:speed",
-            "minecraft:slowness",
-            "minecraft:jump_boost",
-            "minecraft:dolphins_grace",
-        ] {
-            mobs[0].extra.effects.push((effect, 1, 1));
-            assert!(reaches(&mobs, &snapshot, &turns).is_none(), "{effect}");
+            let of = group_of(&plan(&mobs, &snapshot), mobs.len());
+            assert_eq!(of[0], of[100], "{attr:?}");
+            assert_ne!(of[0], of[200], "{attr:?}");
             mobs[0] = unchanged.clone();
         }
         mobs[0].velocity.x = f64::NAN;
-        assert!(reaches(&mobs, &snapshot, &turns).is_none());
+        assert!(reaches(&mobs, &snapshot, &turns, &owners).is_none());
         mobs[0] = unchanged;
         mobs[0].position.y = f64::NAN;
-        assert!(reaches(&mobs, &snapshot, &turns).is_none());
-        assert!(reaches(&mobs, &snapshot[..399], &turns).is_none());
+        assert!(reaches(&mobs, &snapshot, &turns, &owners).is_none());
+        assert!(reaches(&mobs, &snapshot[..399], &turns, &owners).is_none());
     }
 
     /// A later id is visible frozen without waiting; an earlier id waits for its publication,
@@ -1404,6 +1654,7 @@ mod tests {
             let foreign = Foreign {
                 board: &board,
                 reader: Cell::new(0),
+                defers: false,
             };
             assert_eq!(foreign.seen(11).unwrap().position, board.frozen[1].position);
             assert!(foreign.seen(999).is_none());
@@ -1415,6 +1666,7 @@ mod tests {
                     let publisher = Foreign {
                         board: &board,
                         reader: Cell::new(0),
+                        defers: false,
                     };
                     let mut moved = board.frozen[0].clone();
                     moved.position.x = 42.0;
@@ -1423,6 +1675,7 @@ mod tests {
                 let later = Foreign {
                     board: &board,
                     reader: Cell::new(1),
+                    defers: false,
                 };
                 assert_eq!(later.seen(10).unwrap().position.x, 42.0);
             });
@@ -1440,6 +1693,7 @@ mod tests {
                 let later = Foreign {
                     board: &missing,
                     reader: Cell::new(1),
+                    defers: false,
                 };
                 assert!(later.seen(10).is_none());
                 assert!(earlier.join().is_err());
@@ -1519,7 +1773,6 @@ mod tests {
         turns.cached_difficulty = None;
         let grouped = Islands {
             uuid: None,
-            mods: false,
             ticking: &|| Box::new(ticking),
         }
         .run(
@@ -1697,38 +1950,29 @@ mod tests {
             (if grouped > 1 { 20 } else { 0 }, 0),
             "verify checked every grouped tick, or the hardware cap kept it serial"
         );
-        // This same otherwise-splittable world must not allocate raid hurt-order IDs twice
-        // through a cloned diagnostic reference. Inactive membership is conservative too.
-        game.spawn_mob("minecraft:pillager", [2.5, 66.0, 2.5], true)
-            .unwrap();
-        let raider = game.mobs.len() - 1;
-        horizon_client::mobs::raider::state_mut(&mut game.mobs[raider]).raid_id = Some(42);
-        for active in [false, true] {
-            horizon_client::mobs::raider::state_mut(&mut game.mobs[raider]).active_raid = active;
-            for verify in [false, true] {
-                VERIFY.with(|v| v.set(verify));
-                RAN.with(|r| r.set(0));
-                CHECK.with(|c| c.set((0, 0)));
-                game.tick_creature_entities().unwrap();
-                assert_eq!(
-                    RAN.with(Cell::get),
-                    0,
-                    "raid members force serial production"
-                );
-                assert_eq!(
-                    CHECK.with(Cell::get),
-                    (0, 0),
-                    "no cloned raid reference runs"
-                );
-            }
-        }
     }
 
-    /// FollowOwnerGoal and TamableAnimalPanicGoal can teleport across otherwise separate
-    /// islands. The real loop must keep these turns serial, including verify's reference copy.
-    #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn owned_pets_teleport_between_herds_without_grouping_or_reference_ticks() {
+    /// The groups a plan of `islands` islands runs in on three requested lanes, on this machine.
+    fn groups_for(islands: usize) -> usize {
+        let lanes = capped_lanes(
+            3,
+            std::thread::available_parallelism().ok().map(usize::from),
+        );
+        if lanes > 1 { islands.min(lanes) } else { 0 }
+    }
+
+    /// Ticks `game`'s mobs `ticks` times serially and then on three lanes from the same start,
+    /// once plain and once under verify. Each grouped run leaves the mobs, the level random and
+    /// the death marks as its serial run does and creates the same RNGs, and verify finds no
+    /// difference. Each grouped run replays its own serial run's seeds: the process-wide counter
+    /// moves on between runs. `each` runs before every tick, as a goal would. Returns the groups
+    /// the first grouped tick ran in; `game` is left as the last run left it.
+    fn grouped_as_serial(
+        game: &mut Game<'static>,
+        ticks: usize,
+        what: &str,
+        each: fn(&mut Game<'static>),
+    ) -> usize {
         struct Reset;
         impl Drop for Reset {
             fn drop(&mut self) {
@@ -1737,26 +1981,74 @@ mod tests {
             }
         }
         let _reset = Reset;
+        let (mobs, random, died) = (
+            game.mobs.clone(),
+            game.world.random.clone(),
+            game.died.clone(),
+        );
+        let mut first = None;
+        for verify in [false, true] {
+            let mut expected = None;
+            let mut seeds = None;
+            for requested in [1, 3] {
+                (game.mobs, game.world.random, game.died) =
+                    (mobs.clone(), random.clone(), died.clone());
+                LANES.with(|l| l.set(Some(requested)));
+                VERIFY.with(|v| v.set(verify && requested > 1));
+                CHECK.with(|c| c.set((0, 0)));
+                let mut ran = Vec::new();
+                let tick = || {
+                    for _ in 0..ticks {
+                        each(game);
+                        RAN.with(|r| r.set(0));
+                        game.tick_creature_entities().unwrap();
+                        ran.push(RAN.with(Cell::get));
+                    }
+                };
+                if requested == 1 {
+                    seeds = Some(horizon_client::random_source::record_seeds(tick).1);
+                    assert!(
+                        ran.iter().all(|&g| g == 0),
+                        "{what}: one lane runs serially"
+                    );
+                } else {
+                    let seeds = seeds.take().unwrap();
+                    horizon_client::random_source::replay_seeds(Arc::clone(&seeds), tick);
+                    assert!(seeds.complete(), "{what}: the same new RNGs were created");
+                    first.get_or_insert(ran[0]);
+                    let grouped = ran.iter().filter(|&&g| g > 1).count();
+                    let checked = if verify { grouped } else { 0 };
+                    assert_eq!(CHECK.with(Cell::get), (checked, 0), "{what}: verify");
+                }
+                let left: Vec<String> = game
+                    .mobs
+                    .iter()
+                    .map(|m| format!("{:?}", without_counters(m)))
+                    .collect();
+                let mut died: Vec<u32> = game.died.iter().copied().collect();
+                died.sort_unstable();
+                let result = (left, format!("{:?}", game.world.random), died);
+                match &expected {
+                    Some(expected) => assert_eq!(&result, expected, "{what}: grouped as serial"),
+                    None => expected = Some(result),
+                }
+            }
+        }
+        first.unwrap()
+    }
+
+    /// A pet teleports to its owner (`FollowOwnerGoal`) from one herd into another: the plan joins
+    /// it with the herd around its owner, and the herd far from both still ticks in a group of its
+    /// own.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_pet_teleports_to_its_owner_while_a_far_herd_ticks_apart() {
         let mut game = separated_herds_game();
         // Keep the neighbors in place while pets cross the 96-block gap.
         for m in &mut game.mobs {
             m.no_ai = true;
         }
-        LANES.with(|l| l.set(Some(3)));
-        VERIFY.with(|v| v.set(true));
-        RAN.with(|r| r.set(0));
-        CHECK.with(|c| c.set((0, 0)));
-        game.tick_creature_entities().unwrap();
-        let grouped = lanes() > 1;
-        assert_eq!(
-            RAN.with(|r| r.get() > 1),
-            grouped,
-            "unowned herds can group"
-        );
-        assert_eq!(CHECK.with(Cell::get), (usize::from(grouped), 0));
         let herds = game.mobs.clone();
-        let random = game.world.random.clone();
-        let died = game.died.clone();
         for species in ["wolf", "cat", "parrot"] {
             game.mobs = herds.clone();
             game.spawn_mob(&format!("minecraft:{species}"), [2.5, 65.0, 2.5], true)
@@ -1768,165 +2060,46 @@ mod tests {
                 horizon_core::random::EntityRandom::own(horizon_core::random::LegacyRandom::new(7));
             // Its destination neighbors come later, so they must see its moved snapshot.
             game.mobs.insert(0, pet);
-            let initial = game.mobs.clone();
-            let mut expected = None;
-            let mut seeds = None;
-            for (requested, verify) in [(1, false), (3, false), (3, true)] {
-                game.mobs = initial.clone();
-                game.world.random = random.clone();
-                game.died = died.clone();
-                LANES.with(|l| l.set(Some(requested)));
-                VERIFY.with(|v| v.set(verify));
-                RAN.with(|r| r.set(0));
-                CHECK.with(|c| c.set((0, 0)));
-                let tick = || {
-                    for _ in 0..20 {
-                        game.tick_creature_entities().unwrap();
-                    }
-                };
-                if requested == 1 {
-                    seeds = Some(horizon_client::random_source::record_seeds(tick).1);
-                } else {
-                    let seeds = seeds.as_ref().unwrap();
-                    horizon_client::random_source::replay_seeds(Arc::clone(seeds), tick);
-                    assert!(seeds.complete(), "{species}: the same seeds were consumed");
-                }
-                let pet = &game.mobs[0];
-                assert!(
-                    pet.position.x > 96.0 && pet.position.x < 112.0,
-                    "{species} really teleported from the origin herd: {:?}",
-                    pet.position
-                );
-                assert_eq!(RAN.with(Cell::get), 0, "{species}: owned mobs stay serial");
-                assert_eq!(
-                    CHECK.with(Cell::get),
-                    (0, 0),
-                    "no cloned pet reference runs"
-                );
-                let mobs: Vec<_> = game
-                    .mobs
-                    .iter()
-                    .map(|m| {
-                        let mut m = m.clone();
-                        m.extra.section_seq = 0;
-                        format!("{m:?}")
-                    })
-                    .collect();
-                let result = (mobs, format!("{:?}", game.world.random), game.died.clone());
-                if let Some(expected) = &expected {
-                    assert_eq!(&result, expected, "{species}: fallback matches serial");
-                } else {
-                    expected = Some(result);
-                }
-            }
+            // The pet's herd and its owner's herd, and the third one.
+            let groups = grouped_as_serial(&mut game, 20, species, |_| {});
+            assert_eq!(groups, groups_for(2), "{species}");
+            let pet = &game.mobs[0];
+            assert!(
+                pet.position.x > 96.0 && pet.position.x < 112.0,
+                "{species} really teleported from the origin herd: {:?}",
+                pet.position
+            );
         }
     }
 
-    /// `plan` stays serial while a mob holds, in either hand, an item whose consumable teleports
-    /// its eater, whatever the species; the same mobs plan normally with a plain item.
+    /// The raiders of one raid order their hurts across it (`raids.rs`): one in each of two herds
+    /// joins them, and the herd between ticks in a group of its own.
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn plan_is_none_while_a_mob_holds_a_teleport_consumable() {
-        struct Reset;
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                LANES.with(|l| l.set(None));
-            }
+    fn a_raid_shares_one_group_beside_a_herd() {
+        let mut game = separated_herds_game();
+        for x in [2.5, 194.5] {
+            game.spawn_mob("minecraft:pillager", [x, 66.0, 2.5], true)
+                .unwrap();
+            let raider = game.mobs.len() - 1;
+            let state = horizon_client::mobs::raider::state_mut(&mut game.mobs[raider]);
+            state.raid_id = Some(42);
+            state.active_raid = true;
         }
-        let _reset = Reset;
-        let mut game = super::super::super::native_machines::tests::server_game();
-        game.spawn_mob("minecraft:cow", [0.5, 65.0, 0.5], true)
-            .unwrap();
-        let kind = Arc::clone(&game.mobs[0].kind);
-        let mut mobs: Vec<_> = (0..400)
-            .map(|i| {
-                let x = f64::from(i / 100 * 1000 + i % 8);
-                let z = f64::from(i % 100 / 8);
-                let key = (x as i32 >> 4, z as i32 >> 4);
-                if !game.world.chunks.contains_key(&key) {
-                    game.world.chunks.insert(
-                        key,
-                        Arc::new(horizon_client::chunk::Chunk::empty(key.0, key.1)),
-                    );
-                }
-                Mob::new(i, Arc::clone(&kind), Vec3::new(x, 65.0, z), 0.0)
-            })
-            .collect();
-        let snapshot: Vec<_> = mobs.iter().map(|m| m.seen(None)).collect();
-        let base = game.mob_world_base(&[]);
-        let players = super::super::super::natural_spawning::NearestPlayers::new(&[]);
-        let nearest = super::super::prep::MobsNearest::new(&players, &mobs, false);
-        let turns = Turns {
-            base: &base,
-            despawn: base.despawn_view(),
-            ticking: &|_, _| true,
-            nearest: &nearest,
-            single_player: Some(None),
-            canceled: &|_| false,
-            difficulty: &|_| horizon_client::mobs::spawning::LocalDifficulty::new(2, 0, 0, 0.0),
-            cached_difficulty: None,
-        };
-        let ticking = || -> Box<dyn Fn(i32, i32) -> bool + Send> { Box::new(|_, _| true) };
-        let islands = Islands {
-            uuid: None,
-            mods: false,
-            ticking: &ticking,
-        };
-        LANES.with(|l| l.set(Some(4)));
-        let can_group = lanes() > 1;
-        for item in ["minecraft:bread", "minecraft:apple"] {
-            mobs[7].extra.set_main_hand(Some(item.into()));
-            assert_eq!(
-                islands.plan(&mobs, &snapshot, &turns).is_some(),
-                can_group,
-                "{item} does not teleport"
-            );
-        }
-        mobs[7].extra.set_main_hand(None);
-        for (hand, off) in [("main", false), ("off", true)] {
-            let chorus = Some("minecraft:chorus_fruit".into());
-            if off {
-                mobs[7].extra.off_hand = chorus;
-            } else {
-                mobs[7].extra.set_main_hand(chorus);
-            }
-            assert!(
-                islands.plan(&mobs, &snapshot, &turns).is_none(),
-                "chorus fruit in the {hand} hand keeps the tick serial"
-            );
-            mobs[7].extra.off_hand = None;
-            mobs[7].extra.set_main_hand(None);
-        }
-        assert_eq!(islands.plan(&mobs, &snapshot, &turns).is_some(), can_group);
+        let groups = grouped_as_serial(&mut game, 20, "raid", |_| {});
+        assert_eq!(groups, groups_for(2));
     }
 
     /// A fox that finishes a chorus fruit teleports to the first ground below a point within the
-    /// item's diameter, a fall of any length: it can land in a herd the planner kept apart. The
-    /// real loop must stay serial, including verify's reference copy, and match the serial result.
+    /// item's diameter, a fall of any length: 85 blocks above one herd, it joins that herd's
+    /// island, and the two others tick apart.
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn fox_teleporting_onto_another_herd_runs_serially_without_reference_ticks() {
-        struct Reset;
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                LANES.with(|l| l.set(None));
-                VERIFY.with(|v| v.set(false));
-            }
-        }
-        let _reset = Reset;
+    fn a_fox_eating_chorus_fruit_joins_the_herd_below() {
         let mut game = separated_herds_game();
         for m in &mut game.mobs {
             m.no_ai = true;
         }
-        // Without the fox the herds really group.
-        LANES.with(|l| l.set(Some(3)));
-        VERIFY.with(|v| v.set(true));
-        RAN.with(|r| r.set(0));
-        CHECK.with(|c| c.set((0, 0)));
-        game.tick_creature_entities().unwrap();
-        let grouped = lanes() > 1;
-        assert_eq!(RAN.with(|r| r.get() > 1), grouped, "the herds can group");
-        assert_eq!(CHECK.with(Cell::get), (usize::from(grouped), 0));
         // The fox waits 85 blocks above the second herd, far outside every read of it, and
         // finishes its fruit this tick (`TICKS_SINCE_EATEN` is 600; the tick makes it 601).
         game.spawn_mob("minecraft:fox", [2.5, 65.0, 2.5], true)
@@ -1952,67 +2125,22 @@ mod tests {
         game.tick_creature_entities().unwrap();
         assert_eq!(game.mobs[0].position, Vec3::new(106.5, 150.0, 10.5));
         game.mobs[0].extra.ints[1] = 600;
-        let initial = game.mobs.clone();
-        let random = game.world.random.clone();
-        let died = game.died.clone();
-        let mut expected = None;
-        let mut seeds = None;
-        for (requested, verify) in [(1, false), (3, false), (3, true)] {
-            game.mobs = initial.clone();
-            game.world.random = random.clone();
-            game.died = died.clone();
-            LANES.with(|l| l.set(Some(requested)));
-            VERIFY.with(|v| v.set(verify));
-            RAN.with(|r| r.set(0));
-            CHECK.with(|c| c.set((0, 0)));
-            // Only the eating tick: once the fruit is gone the herds group again.
-            let tick = || game.tick_creature_entities().unwrap();
-            if requested == 1 {
-                seeds = Some(horizon_client::random_source::record_seeds(tick).1);
-            } else {
-                let seeds = seeds.as_ref().unwrap();
-                horizon_client::random_source::replay_seeds(Arc::clone(seeds), tick);
-                assert!(seeds.complete(), "the same seeds were consumed");
-            }
-            let fox = &game.mobs[0];
-            assert!(
-                fox.position.y < 100.0 && fox.extra.main_hand.is_none(),
-                "the fox ate its fruit and really teleported down to the herd: {:?}",
-                fox.position
-            );
-            assert_eq!(RAN.with(Cell::get), 0, "a teleport consumable stays serial");
-            assert_eq!(CHECK.with(Cell::get), (0, 0), "no cloned reference runs");
-            let mobs: Vec<_> = game
-                .mobs
-                .iter()
-                .map(|m| {
-                    let mut m = m.clone();
-                    m.extra.section_seq = 0;
-                    format!("{m:?}")
-                })
-                .collect();
-            let result = (mobs, format!("{:?}", game.world.random), game.died.clone());
-            if let Some(expected) = &expected {
-                assert_eq!(&result, expected, "fallback matches the serial loop");
-            } else {
-                expected = Some(result);
-            }
-        }
+        let groups = grouped_as_serial(&mut game, 1, "fox", |_| {});
+        assert_eq!(groups, groups_for(3));
+        let fox = &game.mobs[0];
+        assert!(
+            fox.position.y < 100.0 && fox.extra.main_hand.is_none(),
+            "the fox ate its fruit and really teleported down to the herd: {:?}",
+            fox.position
+        );
     }
 
-    /// MoveControl can accelerate a stationary mob beyond its initial-velocity reach. A
-    /// destination herd must still observe its pushes, without a grouped diagnostic copy.
+    /// `MoveControl` accelerates a stationary mob with a movement speed of 8 into the next herd,
+    /// 96 blocks on: its locomotion bound joins that herd, not the one past it, and the pushes
+    /// at the destination come out as serially.
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn stationary_fast_mob_reaches_another_herd_serially() {
-        struct Reset;
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                LANES.with(|l| l.set(None));
-                VERIFY.with(|v| v.set(false));
-            }
-        }
-        let _reset = Reset;
+    fn a_fast_mob_joins_only_the_herds_its_bound_reaches() {
         let mut game = separated_herds_game();
         for m in &mut game.mobs {
             m.no_ai = true;
@@ -2020,76 +2148,39 @@ mod tests {
             m.on_ground = true;
             m.velocity = Vec3::ZERO;
         }
-        // Establish that the same world normally takes the actual grouped entry point.
-        LANES.with(|l| l.set(Some(3)));
-        VERIFY.with(|v| v.set(true));
-        RAN.with(|r| r.set(0));
-        CHECK.with(|c| c.set((0, 0)));
-        game.tick_creature_entities().unwrap();
-        let grouped = lanes() > 1;
-        assert_eq!(RAN.with(|r| r.get() > 1), grouped);
-        assert_eq!(CHECK.with(Cell::get), (usize::from(grouped), 0));
         game.spawn_mob("minecraft:cow", [2.5, 65.0, 2.5], true)
             .unwrap();
         let mut fast = game.mobs.pop().unwrap();
+        // A road from its herd's floor to the next herd's, so it runs rather than falls.
+        let stone = game.pack.assets.registry.default_state("minecraft:stone");
+        for x in 20..212 {
+            for z in 0..5 {
+                game.world.set(x, 64, z, stone.unwrap()).unwrap();
+            }
+        }
         fast.on_ground = true;
         fast.velocity = Vec3::ZERO;
         fast.yaw = -90.0;
         fast.ai.goals = Default::default();
         fast.ai.targets = Default::default();
-        fast.ai.mov.set_wanted(110.0, 65.0, 2.5, 1.0);
         horizon_client::mobs::finalize::set_base(
             &mut fast,
             horizon_client::mobs::finalize::Attr::MovementSpeed,
-            96.0,
+            8.0,
         );
         // Destination mobs come later, so the serial loop applies these pushes at their turn.
         game.mobs.insert(0, fast);
-        let initial = game.mobs.clone();
-        let random = game.world.random.clone();
-        let died = game.died.clone();
-        let mut expected = None;
-        let mut seeds = None;
-        for (requested, verify) in [(1, false), (3, false), (3, true)] {
-            game.mobs = initial.clone();
-            game.world.random = random.clone();
-            game.died = died.clone();
-            LANES.with(|l| l.set(Some(requested)));
-            VERIFY.with(|v| v.set(verify));
-            RAN.with(|r| r.set(0));
-            CHECK.with(|c| c.set((0, 0)));
-            let tick = || game.tick_creature_entities().unwrap();
-            if requested == 1 {
-                seeds = Some(horizon_client::random_source::record_seeds(tick).1);
-            } else {
-                let seeds = seeds.as_ref().unwrap();
-                horizon_client::random_source::replay_seeds(Arc::clone(seeds), tick);
-                assert!(seeds.complete());
-            }
-            let fast = &game.mobs[0];
-            assert!(
-                fast.position.x > 96.0 && fast.position.x < 110.0,
-                "a stationary mob really accelerated into the destination herd: {:?}",
-                fast.position
-            );
-            assert_eq!(RAN.with(Cell::get), 0, "unsupported motion stays serial");
-            assert_eq!(CHECK.with(Cell::get), (0, 0), "no diagnostic clone runs");
-            let mobs: Vec<_> = game
-                .mobs
-                .iter()
-                .map(|m| {
-                    let mut m = m.clone();
-                    m.extra.section_seq = 0;
-                    format!("{m:?}")
-                })
-                .collect();
-            let result = (mobs, format!("{:?}", game.world.random), game.died.clone());
-            if let Some(expected) = &expected {
-                assert_eq!(&result, expected, "fast-mob fallback matches serial");
-            } else {
-                expected = Some(result);
-            }
-        }
+        // A goal sets the move control again every tick; `MoveControl.tick` lets it go after one.
+        let groups = grouped_as_serial(&mut game, 20, "fast cow", |game| {
+            game.mobs[0].ai.mov.set_wanted(110.0, 65.0, 2.5, 1.0);
+        });
+        assert_eq!(groups, groups_for(2));
+        let fast = &game.mobs[0];
+        assert!(
+            fast.position.x > 96.0,
+            "it really ran into the destination herd: {:?}",
+            fast.position
+        );
     }
 
     /// Islands are packed heaviest first, each into the lightest group.

@@ -69,6 +69,44 @@ fn set(who: u8, on: bool) {
     SAMPLING.with(|s| s.set(if on { s.get() | who } else { s.get() & !who }));
 }
 
+/// Who samples on this thread: what a helper thread running part of its mob loop samples for.
+pub(super) fn sampling() -> u8 {
+    SAMPLING.with(Cell::get)
+}
+
+/// A helper thread's sums, for the thread whose mob loop it ran part of ([`merge`]).
+pub(super) struct Sums([FxHashMap<(&'static str, usize), Cost>; 2]);
+
+/// This helper thread samples for `who` ([`sampling`] of the thread it helps), from empty sums.
+pub(super) fn begin_helper(who: u8) {
+    SAMPLING.with(|s| s.set(who));
+    COSTS.with(|c| *c.borrow_mut() = Default::default());
+}
+
+/// What this helper thread sampled since [`begin_helper`]; it samples nothing more.
+pub(super) fn end_helper() -> Sums {
+    SAMPLING.with(|s| s.set(0));
+    Sums(COSTS.with(|c| std::mem::take(&mut *c.borrow_mut())))
+}
+
+/// Add a helper thread's sums to this thread's.
+pub(super) fn merge(sums: Sums) {
+    COSTS.with(|c| {
+        let mut costs = c.borrow_mut();
+        for (into, from) in costs.iter_mut().zip(sums.0) {
+            for (key, cost) in from {
+                let sum = into.entry(key).or_insert_with(|| Cost {
+                    kind: cost.kind.clone(),
+                    nanos: 0,
+                    mob_ticks: 0,
+                });
+                sum.nanos += cost.nanos;
+                sum.mob_ticks += cost.mob_ticks;
+            }
+        }
+    });
+}
+
 /// When this tick is sampled, the start of a mob's tick.
 #[inline]
 pub(super) fn start() -> Option<Instant> {
@@ -207,6 +245,33 @@ mod tests {
             ("minecraft:zombie", 1)
         );
         assert!(take().is_empty());
+    }
+
+    /// A helper thread running part of the mob loop samples for whoever samples on the thread
+    /// it helps, and its sums join that thread's.
+    #[test]
+    fn a_helper_threads_samples_join_the_server_threads() {
+        let zombie = (1, "minecraft:zombie");
+        set_sampling(true);
+        add("minecraft:overworld", zombie, Instant::now());
+        let who = sampling();
+        let helped = std::thread::spawn(move || {
+            begin_helper(who);
+            for _ in 0..2 {
+                add("minecraft:overworld", zombie, start().expect("sampled"));
+            }
+            let sums = end_helper();
+            assert!(start().is_none(), "the helper stops sampling");
+            sums
+        })
+        .join()
+        .unwrap();
+        merge(helped);
+        set_sampling(false);
+        let costs = take();
+        assert_eq!(costs.len(), 1, "{costs:?}");
+        assert_eq!(costs[0].mob_ticks, 3);
+        assert!(take_mod().is_empty(), "the report sampled, not the mod");
     }
 
     /// The mod's samples and the report's are kept apart: each takes its own, and one

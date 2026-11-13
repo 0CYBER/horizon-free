@@ -7,6 +7,10 @@ Cases (each a fresh dedicated server, a fresh flat world and one enabled world p
 - `missing`: the same pack, but `prg:ref` references `prg:missing`, which no pack defines. Nothing uses
   `prg:ref`.
 - `cycle`: `prg:ref` references `prg:loop`, which references `prg:ref`.
+- `single_valid`, `single_missing`, `single_cycle`: the same three, with `terms` one holder alone instead of a list
+  (`HolderSetCodec` reads it as a list of one, at `.terms[0]`). The valid one is an `any_of`, which is true only
+  when its one term is evaluated.
+- `tag_missing`: `prg:ref`'s `terms` names the predicate tag `#prg:none`, which no pack defines.
 
 Each run keeps the complete server log, an archive of the exact pack bytes and independent facts:
 Ready (the `Done (` line), service (an RCON-free console probe), timeout, how the probe ended the
@@ -27,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 import lab  # noqa: E402
+PARITY_MANUAL = "a proof run by hand: --kind java --output DIR, then --kind native --output DIR2 --binary BIN"  # not a harness: tools/parity.py leaves it out
 
 META = '{"pack":{"description":"predicate reference graph","min_format":[121,0],"max_format":[121,0]}}\n'
 # 26.3 dispatches a predicate on `type`; a named reference is a holder: an id where a predicate goes.
@@ -37,6 +42,11 @@ CASES = {
     # Two predicates that reference each other; nothing uses either.
     'cycle': {'target': TARGET, 'ref': {'type': 'minecraft:all_of', 'terms': ['prg:loop']},
               'loop': {'type': 'minecraft:inverted', 'term': 'prg:ref'}},
+    'single_valid': {'target': TARGET, 'ref': {'type': 'minecraft:any_of', 'terms': 'prg:target'}},
+    'single_missing': {'target': TARGET, 'ref': {'type': 'minecraft:all_of', 'terms': 'prg:missing'}},
+    'single_cycle': {'target': TARGET, 'ref': {'type': 'minecraft:any_of', 'terms': 'prg:loop'},
+                     'loop': {'type': 'minecraft:inverted', 'term': 'prg:ref'}},
+    'tag_missing': {'target': TARGET, 'ref': {'type': 'minecraft:all_of', 'terms': '#prg:none'}},
 }
 # Commands for a Ready server; the last one says the marker only when the reference evaluates true.
 SERVICE = ['datapack list enabled', 'execute if predicate prg:target run say PRG_TARGET_TRUE',
@@ -167,7 +177,11 @@ DIAGNOSTICS = {
               '->{prg:ref@minecraft:predicate}.terms[0]: prg:loop of type minecraft:predicate is recursively called',
               'Found loot table element validation problem in {prg:ref@minecraft:predicate}.terms[0]'
               '->{prg:loop@minecraft:predicate}.term: prg:ref of type minecraft:predicate is recursively called'],
+    'tag_missing': ['Unbound tags in registry ResourceKey[minecraft:root / minecraft:predicate]: [prg:none]'],
 }
+# A lone holder is reported as the list form's first element.
+DIAGNOSTICS['single_missing'] = DIAGNOSTICS['missing']
+DIAGNOSTICS['single_cycle'] = DIAGNOSTICS['cycle']
 
 
 def check(folder, facts):
@@ -176,7 +190,7 @@ def check(folder, facts):
     assert sha(log) == facts['log_sha256'], 'sealed log changed'
     assert facts['reaped'] and not facts['timed_out'] and not facts.get('probe_error'), facts
     replies = ''.join(facts['console_reply_lines'])
-    if facts['case'] == 'valid':
+    if facts['case'] in ('valid', 'single_valid'):
         assert facts['ready'] and facts['service'], facts
         for marker in ('[Server] PRG_TARGET_TRUE', '[Server] PRG_REF_TRUE', 'file/prg (world)'):
             assert marker in replies, (marker, replies)
@@ -196,7 +210,7 @@ def main():
     a.add_argument('--output', type=Path, required=True)
     a.add_argument('--binary', type=Path)
     a.add_argument('--timeout', type=float, default=240)
-    a.add_argument('--cases', default='valid,missing,cycle')
+    a.add_argument('--cases', default=','.join(CASES))
     a.add_argument('--verify-only', action='store_true', help='check sealed outcomes without running')
     o = a.parse_args()
     failures = []

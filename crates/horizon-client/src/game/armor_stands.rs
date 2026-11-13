@@ -2709,6 +2709,7 @@ mod postbaseline_lodestone_controls {
         game.block_ticks
             .add_empty_chunk(BlockPos::new(64, 0, 64).chunk())
             .unwrap();
+        game.load_ticking_neighbourhood(0, 0);
         assert!(game.run_command("fill 64 199 64 79 199 79 stone"));
         assert!(game.run_command(&format!("summon armor_stand 65.5 200.0 65.5 {{UUID:[I;42321,0,0,102],Health:20f,NoGravity:1b,equipment:{{mainhand:{}}}}}",item("minecraft:compass",tracked,100,1))));
         let id = |n| {

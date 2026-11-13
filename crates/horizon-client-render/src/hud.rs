@@ -55,7 +55,7 @@ pub struct TextureFlags {
 impl TextureFlags {
     /// The `texture` section of a `.png.mcmeta` file, if it sets either flag.
     pub fn from_mcmeta(json: &str) -> Option<Self> {
-        let meta = crate::packs::first_json(json.as_bytes())?;
+        let meta: serde_json::Value = crate::packs::first_json(json.as_bytes()).ok()?;
         let section = meta.get("texture")?;
         let flag = |key| section.get(key).and_then(serde_json::Value::as_bool) == Some(true);
         let flags = Self {
@@ -388,7 +388,7 @@ fn strip_frame(pixels: &[u8], stride: u32, x: u32, y: u32, w: u32, h: u32) -> Ve
 }
 /// The `animation` section of a texture's `.mcmeta`.
 fn animation_of(mcmeta: Option<&str>) -> Option<AnimationMetadata> {
-    let meta = crate::packs::first_json(mcmeta?.as_bytes())?;
+    let meta: serde_json::Value = crate::packs::first_json(mcmeta?.as_bytes()).ok()?;
     AnimationMetadata::from_json(&meta.get("animation")?.to_string()).ok()
 }
 /// An animated strip's first frame: the region the mcmeta's frame size picks

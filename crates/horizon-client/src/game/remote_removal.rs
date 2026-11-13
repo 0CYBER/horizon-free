@@ -185,6 +185,93 @@ mod tests {
 
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    fn add_entity_replaces_falling_block_without_removing_other_ids() {
+        use crate::game::{
+            Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,
+        };
+        use horizon_protocol::packets::play::{self, Clientbound as C};
+
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let settings = Settings::default();
+        let loaded = load_resources(
+            root.clone(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            true,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = ExecutionRole::Client;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&root),
+            None,
+        )
+        .unwrap();
+        let (client, _server) = horizon_protocol::connection::Pipe::pair();
+        game.connect_local(client, "SpawnTest").unwrap();
+        let kind = game
+            .remote
+            .as_ref()
+            .unwrap()
+            .builtin
+            .get("minecraft:entity_type")
+            .unwrap()
+            .id("minecraft:falling_block")
+            .unwrap();
+        for (id, position) in [
+            (40, [1.0, 64.0, 2.0]),
+            (41, [3.0, 65.0, 4.0]),
+            (40, [5.0, 66.0, 6.0]),
+            (42, [7.0, 67.0, 8.0]),
+        ] {
+            game.handle_packet(C::AddEntity(play::AddEntity {
+                id,
+                uuid: id as u128,
+                kind,
+                position,
+                velocity: [0.0, -0.1, 0.0],
+                pitch: 0,
+                yaw: 0,
+                head_yaw: 0,
+                data: 0,
+            }))
+            .unwrap();
+            assert_eq!(game.falling.iter().filter(|f| f.id == id as u32).count(), 1);
+            let block = game.falling.iter().find(|f| f.id == id as u32).unwrap();
+            assert_eq!(
+                [block.position.x, block.position.y, block.position.z],
+                position
+            );
+            assert_eq!(block.velocity.y, -0.1);
+        }
+        let blocks: Vec<_> = game
+            .falling
+            .iter()
+            .map(|f| (f.id, [f.position.x, f.position.y, f.position.z]))
+            .collect();
+        assert_eq!(
+            blocks,
+            [
+                (41, [3.0, 65.0, 4.0]),
+                (40, [5.0, 66.0, 6.0]),
+                (42, [7.0, 67.0, 8.0]),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
     fn remove_entities_filters_mixed_entity_lists() {
         use crate::game::{
             Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,

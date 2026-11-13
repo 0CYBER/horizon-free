@@ -104,7 +104,7 @@ pub fn read_metadata(root: &Path) -> UiMetadata {
         let Ok(text) = horizon_core::prepared_files::read_to_string(&p) else {
             continue;
         };
-        let Some(nine_slice) = serde_json::from_str(&text)
+        let Some(nine_slice) = crate::packs::first_json(text.as_bytes())
             .ok()
             .as_ref()
             .and_then(parse_nine_slice)
@@ -2024,6 +2024,28 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_after_a_sprites_metadata_keep_its_nine_slice() {
+        // Gson stops reading after the first value, so vanilla keeps this nine slice
+        // (CozyUI+'s highlighted button, #3046).
+        let root = std::env::temp_dir().join(format!("horizon-ui-meta-{}", std::process::id()));
+        let widget = root.join("assets/minecraft/textures/gui/sprites/widget");
+        std::fs::create_dir_all(&widget).unwrap();
+        std::fs::write(
+            widget.join("button_highlighted.png.mcmeta"),
+            "{\"gui\": {\"scaling\": {\"type\": \"nine_slice\", \"width\": 80, \"height\": 20,\n\
+             \"border\": {\"left\": 34, \"top\": 8, \"right\": 34, \"bottom\": 8}}}}\n\n// 0  10\n// 1  8\n",
+        )
+        .unwrap();
+        let metadata = read_metadata(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        let slice = metadata.0["gui/sprites/widget/button_highlighted"];
+        assert_eq!(
+            (slice.width, slice.height, slice.border),
+            (80, 20, [34, 8, 34, 8])
+        );
+    }
 
     /// The quads' destination rectangles and their UVs.
     fn quads(batch: &HudBatch) -> Vec<([f32; 4], [f32; 4])> {
