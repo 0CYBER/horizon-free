@@ -15,6 +15,7 @@ use super::{
     hostile,
     nav::Navigation,
     path::{PATH_TYPES, Path},
+    push::{Cap, Verdict, root_vehicle},
     undead,
 };
 use crate::blocks::Fluid;
@@ -1749,18 +1750,6 @@ impl Mob {
 fn on_climbable(m: &Mob, w: &MobWorld) -> bool {
     m.on_climbable(w)
 }
-/// `Entity.getRootVehicle` of the mob `id` riding `vehicle`: the bottom of
-/// its stack of vehicles (itself when it rides nothing).
-fn root_vehicle(w: &MobWorld, id: u32, vehicle: Option<u32>) -> u32 {
-    let (mut root, mut next) = (id, vehicle);
-    // A stack of riders is short; the bound only guards a broken loop.
-    for _ in 0..16 {
-        let Some(v) = next else { break };
-        root = v;
-        next = w.seen(v).and_then(|s| s.vehicle);
-    }
-    root
-}
 /// `LivingEntity.aiStep`, with or without AI: a mob's motion below 0.003 on an
 /// axis stops.
 fn drop_tiny_motion(m: &mut Mob) {
@@ -1775,13 +1764,6 @@ fn drop_tiny_motion(m: &mut Mob) {
 /// pushed apart from this one (`doPush(e)` = `e.push(this)`); pushes of other
 /// mobs are `Push` events their tick picks up.
 fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    push_entities_capped(m, w, events, super::max_collisions());
-}
-/// [`push_entities`] with the server's collision cap (`cap`, 0 = none): this mob pushes at most
-/// `cap` other mobs, those it was pushed by already counted, and skips a mob that has had `cap`.
-/// The mobs pushed are the first in vanilla's order. The cramming check above counts every entity
-/// in the box, as in vanilla.
-fn push_entities_capped(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>, cap: u32) {
     m.on_climbable = on_climbable(m, w);
     if m.species() == Species::Bat {
         return;
@@ -1826,23 +1808,13 @@ fn push_entities_capped(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>, c
     {
         hurt(m, w, events, 6.0, Damage::of(DamageKind::Cramming));
     }
-    // Pushes this mob has made or taken this tick, while the cap is on.
-    let mut collisions = if cap > 0 {
-        w.seen(m.id).map_or(0, |s| s.collisions)
-    } else {
-        0
-    };
+    // The server's collision cap, after the cramming check above, which counts every entity.
+    let mut cap = Cap::new(m, w);
     for (who, at, _, same, vehicle) in targets {
-        // Only mobs pushing mobs are capped; the player is first in the list.
-        if cap > 0
-            && let Who::Mob(id) = who
-        {
-            if collisions >= cap {
-                break;
-            }
-            if w.seen(id).is_some_and(|o| o.collisions >= cap) {
-                continue;
-            }
+        match cap.check(who, w) {
+            Verdict::Push => {}
+            Verdict::Skip => continue,
+            Verdict::Stop => break,
         }
         // Warden.doPush: touching it angers it, then the push itself.
         if m.species() == Species::Warden {
@@ -1895,12 +1867,7 @@ fn push_entities_capped(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>, c
         if self_pushable {
             m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
         }
-        if cap > 0
-            && let Who::Mob(id) = who
-        {
-            collisions += 1;
-            m.pushed.push(id);
-        }
+        cap.record(m, who);
     }
 }
 /// `Mob.aiStep` -> `Mob.burnUndead`: undead burn in daylight. It runs with
@@ -3765,8 +3732,8 @@ mod same_vehicle_push_tests {
         let pushed = |cap: u32, crowd: &[Seen]| {
             let mut pusher = pen[0].clone();
             let mut events = Vec::new();
-            with_test_world(crowd, |w, _| {
-                push_entities_capped(&mut pusher, w, &mut events, cap)
+            super::super::push::with_cap(cap, || {
+                with_test_world(crowd, |w, _| push_entities(&mut pusher, w, &mut events))
             });
             let ids: Vec<u32> = events
                 .iter()
@@ -3827,13 +3794,15 @@ mod same_vehicle_push_tests {
             for cap in [0u32, 8] {
                 let crowd: Vec<Seen> = pen.iter().map(|m| m.seen(None)).collect();
                 let t = std::time::Instant::now();
-                with_test_world(&crowd, |w, _| {
-                    let mut events = Vec::new();
-                    for m in pen.iter_mut() {
-                        events.clear();
-                        push_entities_capped(m, w, &mut events, cap);
-                        m.pushed.clear();
-                    }
+                super::super::push::with_cap(cap, || {
+                    with_test_world(&crowd, |w, _| {
+                        let mut events = Vec::new();
+                        for m in pen.iter_mut() {
+                            events.clear();
+                            push_entities(m, w, &mut events);
+                            m.pushed.clear();
+                        }
+                    })
                 });
                 println!(
                     "{n} chickens, cap {cap}: {:.3} ms",

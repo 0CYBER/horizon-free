@@ -7,6 +7,8 @@
 //! behaviour, models, animations and sounds.
 mod mob_slot;
 mod pending_pushes;
+mod push;
+pub use creaking::mob_can_use_portal;
 pub use mob_slot::MobSlot;
 pub use pending_pushes::{PendingPushes, apply_mob_pushes};
 pub mod ai;
@@ -1299,8 +1301,7 @@ pub struct Mob {
     /// `Entity.needsSync`: knocked back, pushed or jumped since its server
     /// last sent it, so the next update goes out at once.
     pub needs_sync: bool,
-    /// The mobs this one pushed in its last tick, kept only while the collision cap is on
-    /// ([`max_collisions`]); the loop that ticks it counts them and clears the list.
+    /// The mobs it pushed this turn, kept while the collision cap is on (`push::Cap`).
     pub pushed: Vec<u32>,
     /// `Entity.syncPosition`: it bounced this tick (`restituteMovementAfterCollisions`),
     /// so its tracker keeps this position as a step of the next move it sends.
@@ -2431,8 +2432,7 @@ pub struct Seen {
     pub still: bool,
     /// `Entity.isVehicle`: something rides it.
     pub carrying: bool,
-    /// The mob pushes this one has given or taken so far this tick, for the cap
-    /// [`max_collisions`]. Counted only while the cap is on.
+    /// Pushes given or taken so far this tick, while the collision cap is on.
     pub collisions: u32,
 }
 impl Seen {
@@ -2587,29 +2587,11 @@ impl Mob {
         }
     }
 }
-/// `HORIZON_MAX_ENTITY_COLLISIONS` (the server's `[entities] max_collisions`): the most other mobs a
-/// mob pushes in a tick, the pushes it receives counted too. 0, or unset, is vanilla: no cap.
-pub fn max_collisions() -> u32 {
-    static CAP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *CAP.get_or_init(|| {
-        std::env::var("HORIZON_MAX_ENTITY_COLLISIONS")
-            .ok()
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(0)
-    })
-}
 /// `Entity.push` on other mobs acts at once in vanilla: a mob ticking later
 /// moves with it this tick. Takes the `Push` events aimed at mobs out of
 /// `events[from..]` into `pending`, which the caller adds to each mob's
 /// velocity before its tick (and to every mob once all have ticked). The
 /// other events keep their order.
-/// The part of `Entity.canUsePortal` a mob's own state decides: it is alive,
-/// it is not a boss that never travels, and — over `Monster.canUsePortal` —
-/// it is not a creaking bound to a heart (`Creaking.canUsePortal`). The
-/// rides and the players a side carries are the caller's half.
-pub fn mob_can_use_portal(m: &Mob) -> bool {
-    m.alive() && m.species() != Species::Wither && creaking::can_use_portal(m)
-}
 pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut PendingPushes) {
     // One pass: a crowd's tick holds a push per neighbour, and removing each
     // in place would shift the rest every time.
