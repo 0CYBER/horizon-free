@@ -112,10 +112,12 @@ fn tracker_send_benchmark() {
         eprintln!("Not measuring: explicitly set HORIZON_SEND_BENCH=1 on an idle machine.");
         return;
     }
-    assert!(!cfg!(debug_assertions), "build with --profile fast");
-    assert_ne!(
-        std::env::var("HORIZON_SERIAL_TICK").as_deref(),
-        Ok("all"),
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "build with --profile fast"
+    );
+    assert!(
+        !std::env::var("HORIZON_SERIAL_TICK").is_ok_and(|v| v.eq_ignore_ascii_case("all")),
         "HORIZON_SERIAL_TICK=all disables the parallel path being measured"
     );
     let cases = [
