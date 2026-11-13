@@ -64,6 +64,14 @@ impl Game<'_> {
             .any(|s| immune.is_some_and(|t| t.contains(&*s.item)))
     }
 
+    /// `PowderSnowBlock.canEntityWalkOnPowderSnow`'s boots half: leather boots
+    /// on the feet.
+    pub(crate) fn wears_leather_boots(&self) -> bool {
+        self.armor[3]
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:leather_boots")
+    }
+
     pub(super) fn held_slot(&self) -> usize {
         match self.hand {
             Hand::Main => self.selected,
