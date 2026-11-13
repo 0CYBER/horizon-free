@@ -41,9 +41,20 @@ fn stamp(time: SystemTime) -> String {
     )
 }
 
-/// A backup's file name: the time, and a name the owner gave (letters, digits, `-` and `_` only).
+/// A backup's file name: the time, and a name the owner gave (letters, digits, `-` and `_` only). Not
+/// `auto`: that is the automatic backups' name, and `prune` deletes the ones that carry it.
 pub fn file_name(time: SystemTime, name: Option<&str>) -> Result<String, String> {
     let name = name.unwrap_or("manual");
+    if name == AUTO {
+        return Err(format!(
+            "{AUTO:?} is the name of the automatic backups, which are deleted beyond `keep`: use another name"
+        ));
+    }
+    stamped(time, name)
+}
+
+/// `<time>-<name>.zip` for a name made of letters, digits, `-` and `_`.
+fn stamped(time: SystemTime, name: &str) -> Result<String, String> {
     if name.is_empty()
         || name.len() > 64
         || !name
@@ -171,7 +182,7 @@ pub fn prune(dir: &Path, keep: usize) -> Vec<String> {
 }
 
 pub fn auto_name(time: SystemTime) -> String {
-    file_name(time, Some(AUTO)).expect("the automatic name is valid")
+    stamped(time, AUTO).expect("the automatic name is valid")
 }
 
 /// The backup a name points at: a file in `backups/`, by its full name or the start of it.
@@ -196,8 +207,9 @@ pub fn find(dir: &Path, name: &str) -> Result<String, String> {
     }
     // The name given to `backup NAME` (or `auto`, `manual`): the newest backup with it.
     let label = format!("-{name}.zip");
+    // The whole label after the time stamp: `test` is not the end of `<stamp>-my-test.zip`.
     all.iter()
-        .find(|b| b.name.ends_with(&label))
+        .find(|b| b.name.len() == STAMP_LEN + label.len() && b.name.ends_with(&label))
         .map(|b| b.name.clone())
         .ok_or_else(|| {
             format!("no backup {name:?} in {DIR}/ (`horizon-server backups` lists them)")
@@ -562,5 +574,63 @@ mod tests {
         );
         assert_eq!(std::fs::read(&nether).unwrap(), b"nether-before");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `restore NAME` takes "the name given to `backup` (the newest with it)": the whole label after the
+    /// time stamp, not any name that happens to end the same way.
+    #[test]
+    fn a_label_matches_only_the_whole_label() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-backup-label-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(DIR)).unwrap();
+        let test = "2026-11-01_00-00-00-test.zip";
+        let my_test = "2026-11-02_00-00-00-my-test.zip";
+        let update = "2026-11-03_00-00-00-before-update.zip";
+        let nightly = "2026-11-04_00-00-00-nightly-auto.zip";
+        for name in [test, my_test, update, nightly] {
+            std::fs::write(dir.join(DIR).join(name), b"x").unwrap();
+        }
+        // The label `test` is the older file, not the newer one whose label ends with it.
+        assert_eq!(find(&dir, "test").unwrap(), test);
+        assert_eq!(find(&dir, "my-test").unwrap(), my_test);
+        assert_eq!(find(&dir, "before-update").unwrap(), update);
+        assert_eq!(find(&dir, "nightly-auto").unwrap(), nightly);
+        // A label that only ends another one names no backup.
+        assert!(find(&dir, "update").is_err());
+        assert!(find(&dir, "auto").is_err());
+        // The other ways in are as before: the file name, and a unique start of it.
+        assert_eq!(find(&dir, my_test).unwrap(), my_test);
+        assert_eq!(find(&dir, "2026-11-03").unwrap(), update);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `auto` is the automatic backups' name: a backup made by hand under it would have exactly an
+    /// automatic one's file name, and `prune` would delete it with them.
+    #[test]
+    fn a_hand_backup_cannot_take_the_automatic_name() {
+        let t = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        assert!(file_name(t, Some("auto")).is_err());
+        // The automatic name is still made, and a label that only contains `auto` is still a hand one.
+        assert_eq!(auto_name(t), "2023-11-14_22-13-20-auto.zip");
+        assert_eq!(
+            file_name(t, Some("nightly-auto")).unwrap(),
+            "2023-11-14_22-13-20-nightly-auto.zip"
+        );
+        // So `prune` can only meet automatic backups under that name.
+        let dir =
+            std::env::temp_dir().join(format!("horizon-server-hand-auto-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(DIR)).unwrap();
+        let later = t + std::time::Duration::from_secs(60);
+        let mut names = vec![auto_name(later)];
+        names.extend(file_name(t, Some("auto")));
+        for name in &names {
+            std::fs::write(dir.join(DIR).join(name), b"zip").unwrap();
+        }
+        assert_eq!(prune(&dir, 0), vec![auto_name(later)]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
