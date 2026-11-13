@@ -6441,6 +6441,22 @@ def crafter_map_extension():
                        '/scoreboard objectives remove crafter_map', '/forceload remove 0 0 15 15')
 
 
+def crafter_triggered_int():
+    """#13851: `CrafterBlockEntity` keeps `triggered` as the int it read (`containerData` slot 9) and writes it back;
+    `isTriggered` is only `== 1`. `getIntOr` reads a double as `DoubleTag.intValue`: floored, then saturated."""
+    x0, y0, z0 = 3296, 260, 3712
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': [[x0 >> 4, z0 >> 4]]},
+           cmd('/tick freeze', False)]
+    for n, value in enumerate(('-1', '0', '1', '5', '-0.5d', '1.5d', '4294967297d'), 1):
+        x = x0 + 2 * n
+        ops += [cmd(f'/setblock {x} {y0} {z0 + 8} crafter{{triggered:{value}}}', expect_result=1),
+                cmd(f'/data get block {x} {y0} {z0 + 8} triggered')]
+    ops.append(cmd(f'/data merge block {x0 + 2} {y0} {z0 + 8} {{triggered:7}}'))
+    ops.append(cmd(f'/data get block {x0 + 2} {y0} {z0 + 8} triggered'))
+    return ops + setup('/tick unfreeze', f'/fill {x0} {y0} {z0} {x0 + 15} {y0} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
+
+
 def advancement_loot_fixtures(group_names):
     advancements, tables = {}, {}
     if 'advancement world loot rewards' in group_names:
@@ -8277,6 +8293,7 @@ def groups():
         *wolf_anger_groups(cmd, setup),
         ('allay passive healing', allay_healing(cmd, setup)),
         ('crafter map extension', crafter_map_extension()),
+        ('crafter triggered int', crafter_triggered_int()),
 
 
         ('command zombie reinforcements', command_zombie_reinforcements()),
