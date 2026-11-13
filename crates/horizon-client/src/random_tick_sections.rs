@@ -421,7 +421,7 @@ mod tick_parity {
         position::{BlockPos, ChunkPos},
         random::{LegacyRandom, RandomSource},
     };
-    use horizon_world::level::{LevelAccess, LevelEvent, Ticks, data};
+    use horizon_world::level::{LevelAccess, LevelEvent, RandomTickMaskUpdate, Ticks, data};
     use std::{cell::RefCell, path::PathBuf};
 
     #[derive(Clone)]
@@ -641,7 +641,7 @@ mod tick_parity {
                             |id| behaviours.random_tick_candidate(BlockStateId(id)),
                             from,
                         )
-                        .map(|(y, mask)| (y, Some(mask)))
+                        .map(|(y, mask)| (y, RandomTickMaskUpdate::Replace(Some(mask))))
                 };
                 behaviours.tick_chunk_random_masked(&mut masked, &mut c, ChunkPos::new(x, z), next);
             }
@@ -672,7 +672,7 @@ mod tick_parity {
                     let now = level.chunks[&(x, z)].clone();
                     prep_cache
                         .next_masked((x, z), &now, &facts, candidate, from)
-                        .map(|(y, mask)| (y, Some(mask)))
+                        .map(|(y, mask)| (y, RandomTickMaskUpdate::Replace(Some(mask))))
                 };
                 behaviours.tick_chunk_random_masked(
                     &mut prepared,

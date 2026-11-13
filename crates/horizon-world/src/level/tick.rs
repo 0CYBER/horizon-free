@@ -1896,7 +1896,7 @@ impl Behaviours {
         mut next_ticking: impl FnMut(&mut L, i32) -> Option<i32>,
     ) {
         self.tick_chunk_random_masked(level, ticks, chunk, |level, from| {
-            next_ticking(level, from).map(|min_y| (min_y, None))
+            next_ticking(level, from).map(|min_y| (min_y, RandomTickMaskUpdate::Replace(None)))
         });
     }
     /// [`Self::tick_chunk_random`], where `next_ticking` may also give the
@@ -1909,7 +1909,7 @@ impl Behaviours {
         level: &mut L,
         ticks: &mut Ticks,
         chunk: ChunkPos,
-        mut next_ticking: impl FnMut(&mut L, i32) -> Option<(i32, Option<Rc<RandomTickMask>>)>,
+        mut next_ticking: impl FnMut(&mut L, i32) -> Option<(i32, RandomTickMaskUpdate)>,
     ) {
         let speed = level.game_rules().random_tick_speed;
         if speed <= 0 {
@@ -1926,18 +1926,31 @@ impl Behaviours {
             }
         }
         let mut from = level.min_y();
-        while let Some((min_y, mut mask)) =
-            next_ticking(level, from).filter(|&(y, _)| y < level.max_y())
-        {
+        let mut mask = None;
+        while let Some((min_y, update)) = next_ticking(level, from) {
+            if min_y >= level.max_y() {
+                break;
+            }
+            if let RandomTickMaskUpdate::Replace(next) = update {
+                mask = next;
+            }
             for _ in 0..speed {
                 let pos = ticks.block_random_pos(min_x, min_y, min_z, 15);
                 if mask.as_ref().is_none_or(|m| m.may_tick(pos)) {
                     self.sim(level, ticks).random_tick_at(pos);
                     // The same section as it is now; one that stopped
                     // ticking still gets the rest of its draws, unfiltered.
-                    mask = next_ticking(level, min_y)
-                        .filter(|&(y, _)| y == min_y)
-                        .and_then(|(_, m)| m);
+                    if let Some((y, update)) = next_ticking(level, min_y) {
+                        if y == min_y {
+                            if let RandomTickMaskUpdate::Replace(next) = update {
+                                mask = next;
+                            }
+                        } else {
+                            mask = None;
+                        }
+                    } else {
+                        mask = None;
+                    }
                 }
             }
             from = min_y + 16;
@@ -1991,6 +2004,15 @@ impl Behaviours {
     ) {
         self.sim(level, ticks).fluid_tick(pos);
     }
+}
+
+/// How [`Behaviours::tick_chunk_random_masked`] should update the current
+/// section mask. `Keep` reuses the mask already held by the tick loop, so a
+/// callback can answer repeated asks without cloning its `Rc`.
+#[derive(Debug)]
+pub enum RandomTickMaskUpdate {
+    Keep,
+    Replace(Option<Rc<RandomTickMask>>),
 }
 
 /// Which of a section's 4,096 blocks a random tick can do anything for
