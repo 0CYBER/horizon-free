@@ -1,10 +1,8 @@
-//! Mobs: entity types (dimensions and default attributes exported from
-//! vanilla), models (vanilla `LayerDefinitions` baked part trees) and the
-//! `Mob` entity with vanilla's AI framework: goal and target selectors with
-//! priorities and control flags (`goals`), A* pathfinding with walk, swim,
-//! fly and amphibious node evaluators (`path`, `nav`), move/look/jump/body
-//! controls (`control`), `LivingEntity` physics (`living`) and per-species
-//! behaviour, models, animations and sounds.
+//! Mobs: entity types (dimensions and default attributes exported from vanilla), models (vanilla
+//! `LayerDefinitions` baked part trees) and the `Mob` entity with vanilla's AI framework: goal and
+//! target selectors with priorities and control flags (`goals`), A* pathfinding with walk, swim,
+//! fly and amphibious node evaluators (`path`, `nav`), move/look/jump/body controls (`control`),
+//! `LivingEntity` physics (`living`) and per-species behaviour, models, animations and sounds.
 mod mob_slot;
 mod pending_pushes;
 pub use mob_slot::MobSlot;
@@ -34,6 +32,7 @@ pub mod copper_golem;
 pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
+pub mod dab;
 pub mod data;
 pub mod dolphin;
 pub mod doors;

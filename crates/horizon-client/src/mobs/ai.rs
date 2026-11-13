@@ -99,6 +99,7 @@ pub struct Ai {
     /// Ticks left during which kills count as player kills.
     pub last_hurt_by_player: i32,
     pub no_action_time: i32,
+    pub dab_turns: u32,
     pub aggressive: bool,
     pub panicking: bool,
     pub malus: [Option<f32>; PATH_TYPES],
@@ -1667,7 +1668,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         super::piglin::before_goals(m, w, level_random, events);
     }
     if m.alive() && !immobile {
-        server_ai_step(m, w, level_random, events);
+        super::dab::step(m, w, level_random, events);
     } else {
         m.ai.jumping = false;
         m.ai.xxa = 0.0;
@@ -1905,7 +1906,7 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
     br > 0.5 && m.random.next_float() * 30.0 < (br - 0.4) * 2.0 && !wet && w.can_see_sky(x, y, z)
 }
 /// Mob.serverAiStep
-fn server_ai_step(
+pub(super) fn server_ai_step(
     m: &mut Mob,
     w: &MobWorld,
     level_random: &mut LegacyRandom,
@@ -1922,8 +1923,7 @@ fn server_ai_step(
         return;
     }
     super::riders::drive(m, w);
-    let tick_count = m.age as i64;
-    let id_based = tick_count + i64::from(m.id);
+    let id_based = super::dab::selector_tick(m) + i64::from(m.id);
     let mut targets = std::mem::take(&mut m.ai.targets);
     let mut goals = std::mem::take(&mut m.ai.goals);
     {
@@ -1932,7 +1932,7 @@ fn server_ai_step(
             lr: level_random,
             events,
         };
-        if id_based % 2 != 0 && tick_count > 1 {
+        if id_based % 2 != 0 && m.age as i64 > 1 {
             targets.tick_running(m, &mut cx, false);
             goals.tick_running(m, &mut cx, false);
         } else {
