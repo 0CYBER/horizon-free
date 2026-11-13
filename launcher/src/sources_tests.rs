@@ -224,7 +224,7 @@ fn prism_native_jars_are_found_through_the_linked_folder() {
     );
     let official = Path::new("com/mojang/jtracy/1.14.38/jtracy-1.14.38-natives-windows.jar");
     assert!(!linked.join("libraries").join(official).exists());
-    let found = horizon_prepare::artifacts::launcher_library(
+    let found = horizon_platform::prepare::artifacts::launcher_library(
         &linked,
         "com.mojang:jtracy:1.14.38:natives-windows",
         official,
@@ -511,6 +511,30 @@ fn nothing_found_lists_every_folder_and_what_it_lacks() {
     ));
     // A launcher that isn't installed isn't listed.
     assert!(!error.contains("atlauncher"));
+    assert!(mojang.urls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_version_file_without_its_game_says_to_play_it_once() {
+    // What the official launcher leaves for a version picked but never played (#14286).
+    let s = Scratch::new("listed");
+    let chosen = s.0.join(".minecraft");
+    s.write(".minecraft/versions/26.3/26.3.json", MANIFEST);
+    let modrinth = s.0.join("ModrinthApp");
+    s.write("ModrinthApp/meta/versions/26.3/26.3.json", MANIFEST);
+    let known = [("Modrinth App", modrinth.clone())];
+    let mojang = Mojang::new(MANIFEST);
+    let error = resolve_with(&chosen, &known, &s.0.join("linked"), &mojang).unwrap_err();
+    let expected = format!(
+        "Minecraft 26.3 was not found. Horizon looked in:\n  \
+         {} (versions/26.3/26.3.json is here but not the game itself: play 26.3 once in that \
+         launcher to download it)\n  \
+         {} (Modrinth App: meta/versions/26.3/26.3.json is here but not the game itself: play \
+         26.3 once in that launcher to download it)\nTo fix it:\n",
+        chosen.display(),
+        modrinth.display()
+    );
+    assert!(error.starts_with(&expected), "{error}");
     assert!(mojang.urls.lock().unwrap().is_empty());
 }
 

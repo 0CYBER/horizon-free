@@ -5,6 +5,9 @@
 //! `BrewingStandScreen`); item rules live in `horizon_client::stations`.
 
 mod anvil;
+#[path = "smithing_icons.rs"]
+mod smithing_icons;
+use smithing_icons::smithing_slot_icons;
 /// Invalid measurements must not reach tooltip positioning or reserve empty space.
 fn tooltip_component_size(size: Option<[f32; 2]>) -> Option<[f32; 2]> {
     size.filter(|size| size.iter().all(|v| v.is_finite() && *v > 0.0))
@@ -272,64 +275,6 @@ const EMPTY_TEMPLATE_ICONS: [&str; 2] = [
     "smithing_template_armor_trim",
     "smithing_template_netherite_upgrade",
 ];
-/// The base and additions slot icons of the template in the smithing table:
-/// `SmithingTemplateItem.createNetheriteUpgradeTemplate` (the 11 tools and
-/// armour of `SmithingTemplateItem.createNetheriteUpgradeIconList`, then the
-/// ingot) and `SmithingTemplateItem.createArmorTrimTemplate` (the four armour
-/// pieces, then the seven trim materials), as `getBaseSlotEmptyIcons` and
-/// `getAdditionalSlotEmptyIcons` give them.
-fn smithing_slot_icons(
-    template: Option<&str>,
-) -> ([&'static str; 11], usize, [&'static str; 7], usize) {
-    let none = ([""; 11], 0, [""; 7], 0);
-    match template.map(|t| t.trim_start_matches("minecraft:")) {
-        Some("netherite_upgrade_smithing_template") => (
-            [
-                "helmet",
-                "sword",
-                "chestplate",
-                "pickaxe",
-                "leggings",
-                "axe",
-                "boots",
-                "hoe",
-                "shovel",
-                "nautilus_armor",
-                "spear",
-            ],
-            11,
-            ["ingot", "", "", "", "", "", ""],
-            1,
-        ),
-        Some(t) if t.ends_with("_armor_trim_smithing_template") => (
-            [
-                "helmet",
-                "chestplate",
-                "leggings",
-                "boots",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-            ],
-            4,
-            [
-                "ingot",
-                "redstone_dust",
-                "lapis_lazuli",
-                "quartz",
-                "diamond",
-                "emerald",
-                "amethyst_shard",
-            ],
-            7,
-        ),
-        _ => none,
-    }
-}
 
 pub(super) struct Station {
     pub(super) kind: Kind,
@@ -401,13 +346,10 @@ impl Station {
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
         Self::new(kind, pos)
     }
-    /// `StonecutterScreen.containerChanged`: without recipes to show, the
-    /// list scrolls back to the top.
+    /// `StonecutterScreen.containerChanged`: a changed input puts the list back at the top.
     pub(super) fn stonecutter_changed(&mut self) {
-        if self.inputs[0].is_none() || self.stone.recipes.is_empty() {
-            self.start = 0;
-            self.scroll = 0.0;
-        }
+        self.start = 0;
+        self.scroll = 0.0;
     }
     /// `StonecutterScreen.isScrollBarActive`.
     fn stonecutter_scrolls(&self) -> bool {
@@ -737,7 +679,7 @@ impl Game<'_> {
             return;
         };
         let creative = self.creative;
-        let data = self.stations();
+        let (enchantments, data) = (std::sync::Arc::clone(self.enchantments()), self.stations());
         let items = self.items();
         match s.kind {
             // A server's table: its data slots carry the offers, and its
@@ -745,7 +687,7 @@ impl Game<'_> {
             Kind::Enchanting if self.remote.is_some() => {
                 let enchantable = s.inputs[0]
                     .as_ref()
-                    .is_some_and(|i| stations::is_enchantable(&data.enchantments, i));
+                    .is_some_and(|i| stations::is_enchantable(&enchantments, i));
                 if !enchantable {
                     s.offers = Default::default();
                 }
@@ -753,7 +695,7 @@ impl Game<'_> {
             Kind::Enchanting => {
                 s.bookcases = self.count_bookshelves(s.pos);
                 s.offers = stations::enchant_offers(
-                    &data.enchantments,
+                    &enchantments,
                     items,
                     self.level.xp_seed,
                     s.bookcases,
@@ -767,7 +709,7 @@ impl Game<'_> {
                     .map(|i| stations::hover_name(&self.pack.names, i))
                     .unwrap_or_default();
                 s.anvil = stations::anvil_result(
-                    &data.enchantments,
+                    &enchantments,
                     items,
                     s.inputs[0].as_ref(),
                     s.inputs[1].as_ref(),
@@ -786,7 +728,7 @@ impl Game<'_> {
             }
             Kind::Grindstone => {
                 s.result = stations::grindstone_result(
-                    &data.enchantments,
+                    &enchantments,
                     items,
                     s.inputs[0].as_ref(),
                     s.inputs[1].as_ref(),
@@ -794,7 +736,7 @@ impl Game<'_> {
             }
             Kind::Smithing => {
                 s.result = data.recipes.smithing_result(
-                    &data.enchantments,
+                    &enchantments,
                     s.inputs[0].as_ref(),
                     s.inputs[1].as_ref(),
                     s.inputs[2].as_ref(),
@@ -2419,7 +2361,7 @@ impl Game<'_> {
         if display.shows("minecraft:attribute_modifiers") {
             // The item's own modifiers, then its enchantments' for each slot
             // group (`ItemStack.forEachModifier`).
-            let mut modifiers = item_info.map(|i| i.modifiers.clone()).unwrap_or_default();
+            let mut modifiers = self.items().attribute_modifiers(stack);
             modifiers.extend(e.modifier_rows(stack));
             let base = |name: &str, default| {
                 self.player
@@ -2773,10 +2715,31 @@ impl Game<'_> {
         }
         lines.splice(1..1, after_name);
         let lines = Self::resolved(&lines);
+        // `getEmptyBundleDescriptionTextHeight`: the empty bundle's description
+        // wrapped at the component's 96 pixel width, 9 pixels a line.
+        let description_lines = self
+            .gui
+            .atlas
+            .font
+            .split_lines(
+                &horizon_client::text::Text::translate(
+                    "item.minecraft.bundle.empty.description",
+                    &[],
+                ),
+                96.0,
+            )
+            .len()
+            .max(1);
         // The component's height does not depend on where it is drawn, so a
         // probe at the origin gives the box its extra height.
-        let probe =
-            horizon_client::item_tooltip::bundle_tooltip(self.items(), stack, 0.0, 0.0, 96.0);
+        let probe = horizon_client::item_tooltip::bundle_tooltip(
+            self.items(),
+            stack,
+            0.0,
+            0.0,
+            96.0,
+            description_lines,
+        );
         let bundle_extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
         let mut component = None;
         self.native_tooltip_component(stack, &mut component);
@@ -2801,6 +2764,7 @@ impl Game<'_> {
             x,
             y + text_h + 2.0,
             w,
+            description_lines,
         ) {
             self.draw_bundle_tooltip(batch, &layout);
             self.draw_bundle_selected_name(batch, &layout, x, y + text_h + 2.0, w);
@@ -3190,3 +3154,6 @@ mod brewing_tick;
 
 #[cfg(test)]
 mod brewing_changed_tests;
+
+#[cfg(test)]
+mod stonecutter_scroll_tests;

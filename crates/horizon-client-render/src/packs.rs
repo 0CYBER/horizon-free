@@ -4,9 +4,11 @@
 //! and an overlay resource root that layers the enabled packs over the
 //! vanilla resources (later packs win), so every loader sees one tree.
 mod cache;
+mod import;
 use crate::text::Style;
 use crate::{text::Text, zip::Zip};
 pub use horizon_client_core::pattern;
+pub use import::copy_pack;
 use pattern::Pattern;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -466,10 +468,20 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
 /// file with a comment after the closing brace. Gson reads past a UTF-8 byte order mark;
 /// serde_json rejects it.
 pub(crate) fn parse_meta(bytes: &[u8]) -> Option<serde_json::Value> {
-    serde_json::Deserializer::from_slice(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes))
+    first_json(bytes).ok()
+}
+/// The first JSON value of a `.mcmeta` file, as `ResourceMetadata.fromJsonStream` reads it:
+/// Gson's `TypeAdapter.read` stops after the value, so text after it (packs leave `//` notes
+/// there) is never read, and a UTF-8 byte order mark is skipped.
+pub(crate) fn first_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> serde_json::Result<T> {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    match serde_json::Deserializer::from_slice(bytes)
         .into_iter()
-        .next()?
-        .ok()
+        .next()
+    {
+        Some(value) => value,
+        None => Err(serde::de::Error::custom("empty metadata")),
+    }
 }
 /// A pack's Polytone config entries (`assets/<namespace>/polytone/config_entries/<name>.json`,
 /// in the pack's base, not its overlays) at their default values.
@@ -653,7 +665,10 @@ pub fn folder(dir: &Path, format: (i64, i64)) -> Vec<Pack> {
             let name = e.file_name().to_string_lossy().into_owned();
             let source = if path.is_dir() {
                 Source::Dir(path)
-            } else if name.ends_with(".zip") {
+            } else if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+            {
                 Source::Zip(path)
             } else {
                 return None;
@@ -815,13 +830,6 @@ fn build_overlay_uncached(
     }
     // Vanilla sits below every pack, so filters hide its files too.
     let filters: Vec<&Filter> = packs.iter().flat_map(|p| &p.filter).collect();
-    let touched_dirs: BTreeSet<String> = files
-        .keys()
-        .flat_map(|f| {
-            let parts: Vec<&str> = f.split('/').collect();
-            (1..parts.len()).map(move |n| parts[..n].join("/"))
-        })
-        .collect();
     let zips: Vec<Option<Zip>> = packs
         .iter()
         .map(|p| {
@@ -870,6 +878,21 @@ fn build_overlay_uncached(
             merged.insert(name.clone(), bytes);
         }
     }
+    add_sprite_renames(
+        vanilla,
+        &merged,
+        &filters,
+        &mut files,
+        &mut hidden,
+        dependencies,
+    );
+    let touched_dirs: BTreeSet<String> = files
+        .keys()
+        .flat_map(|f| {
+            let parts: Vec<&str> = f.split('/').collect();
+            (1..parts.len()).map(move |n| parts[..n].join("/"))
+        })
+        .collect();
     /// A zip entry to write: its pack, its name in the zip and where it goes.
     type Extract<'a> = (usize, &'a str, PathBuf);
     #[allow(clippy::too_many_arguments)]
@@ -1019,6 +1042,123 @@ fn build_overlay_uncached(
         let _ = fs::remove_dir_all(out);
     }
     extracted
+}
+/// `SingleFile` with a `sprite`: the atlas holds the resource's pixels, and the resource's
+/// `.mcmeta`, under the sprite's id. Every other sprite of the blocks and items atlases is its
+/// texture's own id, and the loaders read a model's sprite from `textures/<sprite>.png`, so the
+/// overlay gives a renamed sprite that file. ItemsAdder and Nexo packs name their models'
+/// textures only through these renames (#14485).
+///
+/// A sprite gets its resource's file only when the whole source list, in order, ends on the
+/// rename (`SpriteSourceList.list`: a later source of the same id replaces it), when the other
+/// atlas, which reads the same file, lists it from that resource too or not at all, and when it
+/// has no texture of its own. A texture that is there may be read as itself (another source's
+/// resource, an unstitched or paletted sprite's input), so no alias ever replaces one; such a
+/// sprite draws its own texture, as before aliases.
+fn add_sprite_renames(
+    vanilla: &Path,
+    merged: &BTreeMap<String, Vec<u8>>,
+    filters: &[&Filter],
+    files: &mut BTreeMap<String, (usize, Provided)>,
+    hidden: &mut BTreeSet<String>,
+    dependencies: &mut cache::Dependencies,
+) {
+    use crate::atlas_sources::{
+        SpriteOrigin, SpriteSource, decode, list, list_textures, texture_path,
+    };
+    let png = |id: &str| {
+        texture_path(Path::new(""), id, "textures")
+            .to_string_lossy()
+            .replace('\\', "/")
+    };
+    let atlases: Vec<_> = ["blocks", "items"]
+        .into_iter()
+        .filter_map(|atlas| merged.get(&format!("assets/minecraft/atlases/{atlas}.json")))
+        .filter_map(|bytes| decode(std::str::from_utf8(bytes).ok()?))
+        .collect();
+    let renamed = |source: &SpriteSource| matches!(source, SpriteSource::Single { resource, sprite: Some(sprite) } if sprite != resource);
+    if !atlases.iter().flatten().any(renamed) {
+        return;
+    }
+    // The textures a source can list: the packs' and vanilla's the packs leave visible.
+    let mut textures: Vec<String> = list_textures(vanilla)
+        .into_iter()
+        .filter(|id| {
+            let name = png(id);
+            !hidden.contains(&name) && !filters.iter().any(|f| f.blocks(&name))
+        })
+        .chain(files.keys().filter_map(|name| {
+            let (namespace, rest) = name.strip_prefix("assets/")?.split_once('/')?;
+            let path = rest.strip_prefix("textures/")?.strip_suffix(".png")?;
+            Some(format!("{namespace}:{path}"))
+        }))
+        .collect();
+    textures.sort();
+    textures.dedup();
+    // Each sprite's resource, `None` where an atlas lists it any other way.
+    let mut renames: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for sources in &atlases {
+        for (sprite, origin) in list(sources, &textures) {
+            let from = match origin {
+                SpriteOrigin::File(resource) if resource != sprite => Some(resource),
+                _ => None,
+            };
+            renames
+                .entry(sprite)
+                .and_modify(|seen| {
+                    if *seen != from {
+                        *seen = None;
+                    }
+                })
+                .or_insert(from);
+        }
+    }
+    let renames = renames
+        .into_iter()
+        .filter(|(sprite, _)| textures.binary_search(sprite).is_err())
+        .filter_map(|(sprite, resource)| Some((png(&resource?), png(&sprite))));
+    // Each resource is the file the packs give, never another rename's sprite.
+    let mut found = Vec::new();
+    for (from, to) in renames {
+        // `texture_path` names an id that would leave the root as a file that is never there.
+        if !stays_inside(&from) || !stays_inside(&to) {
+            continue;
+        }
+        let from_meta = format!("{from}.mcmeta");
+        // A pack's texture with its own `.mcmeta`, or vanilla's below every pack.
+        let (file, meta) = match files.get(&from) {
+            Some(file) => (file.clone(), files.get(&from_meta).cloned()),
+            None => {
+                let (path, meta_path) = (vanilla.join(&from), vanilla.join(&from_meta));
+                dependencies.file(&path);
+                dependencies.file(&meta_path);
+                if !path.is_file() || filters.iter().any(|f| f.blocks(&from)) {
+                    continue;
+                }
+                // `createStackMetadataFinder`: a pack's filter hides vanilla's `.mcmeta` too.
+                let meta = files.get(&from_meta).cloned().or_else(|| {
+                    (meta_path.is_file() && !filters.iter().any(|f| f.blocks(&from_meta)))
+                        .then(|| (0, (Some(meta_path), from_meta.clone())))
+                });
+                ((0, (Some(path), from.clone())), meta)
+            }
+        };
+        found.push((to, file, meta));
+    }
+    for (to, file, meta) in found {
+        let to_meta = format!("{to}.mcmeta");
+        files.insert(to, file);
+        match meta {
+            Some(meta) => {
+                hidden.remove(&to_meta);
+                files.insert(to_meta, meta);
+            }
+            None => {
+                files.remove(&to_meta);
+                hidden.insert(to_meta);
+            }
+        }
+    }
 }
 /// The most the zip packs in `packs` may unpack to in one overlay: 16 times their size on disk
 /// (real packs are mostly PNGs and JSON, a few times smaller zipped at most), at least 64 MiB
@@ -1891,6 +2031,94 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+        let _ = fs::remove_dir_all(base);
+    }
+    #[test]
+    fn a_renamed_atlas_sprite_reads_its_resource() {
+        let base =
+            std::env::temp_dir().join(format!("horizon-sprite-rename-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let write = |path: PathBuf, bytes: &[u8]| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        };
+        let vanilla = base.join("vanilla");
+        let textures = vanilla.join("assets/minecraft/textures");
+        let animation = b"{\"animation\":{}}";
+        write(textures.join("block/sea_lantern.png"), b"lantern");
+        write(textures.join("block/sea_lantern.png.mcmeta"), animation);
+        write(textures.join("item/stick.png"), b"vanilla stick");
+        write(textures.join("item/stick.png.mcmeta"), animation);
+        let meta = br#"{"pack":{"description":"d","pack_format":97}}"#;
+        let pack = base.join("packs/IA");
+        write(pack.join("pack.mcmeta"), meta);
+        write(pack.join("assets/iageneric/textures/item/box.png"), b"box");
+        // An ItemsAdder pack's items atlas: its models name only the `ia:` sprites.
+        write(
+            pack.join("assets/minecraft/atlases/items.json"),
+            br#"{"sources":[
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:0"},
+                {"type":"single","resource":"minecraft:block/sea_lantern","sprite":"ia:1199"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"minecraft:item/stick"},
+                {"type":"single","resource":"minecraft:item/stick","sprite":"ia:3"},
+                {"type":"single","resource":"iageneric:item/gone","sprite":"ia:2"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:../../../escape"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:7"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:8"},
+                {"type":"single","resource":"iageneric:item/box","sprite":"ia:9"}
+            ]}"#,
+        );
+        // A pack above it: later sources of three of those sprites, a blocks atlas that
+        // disagrees about another, and a filter hiding vanilla's animation of the stick.
+        let higher = base.join("packs/Top");
+        write(
+            higher.join("pack.mcmeta"),
+            br#"{"pack":{"description":"d","pack_format":97},
+                "filter":{"block":[{"path":"textures/item/stick\\.png\\.mcmeta"}]}}"#,
+        );
+        write(
+            higher.join("assets/minecraft/atlases/items.json"),
+            br#"{"sources":[
+                {"type":"single","resource":"minecraft:block/sea_lantern","sprite":"ia:8"},
+                {"type":"filter","pattern":{"namespace":"ia","path":"7"}}
+            ]}"#,
+        );
+        write(
+            higher.join("assets/minecraft/atlases/blocks.json"),
+            br#"{"sources":[
+                {"type":"single","resource":"minecraft:block/sea_lantern","sprite":"ia:9"}
+            ]}"#,
+        );
+        let packs = discover(&vanilla, &base.join("packs"));
+        let out = base.join("overlay");
+        build_overlay(&vanilla, &packs, &out).unwrap();
+        let read = |rel: &str| fs::read(out.join(rel)).ok();
+        let texture = |id: &str| read(&format!("assets/ia/textures/{id}.png"));
+        assert_eq!(texture("0").as_deref(), Some(&b"box"[..]));
+        assert_eq!(read("assets/ia/textures/0.png.mcmeta"), None);
+        // A vanilla resource comes with its animation.
+        assert_eq!(texture("1199").as_deref(), Some(&b"lantern"[..]));
+        assert_eq!(
+            read("assets/ia/textures/1199.png.mcmeta").as_deref(),
+            Some(&animation[..])
+        );
+        // A texture that is there stays itself: other sources may read it (here as `ia:3`'s
+        // resource; an unstitched or paletted sprite's input alike).
+        assert_eq!(
+            read("assets/minecraft/textures/item/stick.png").as_deref(),
+            Some(&b"vanilla stick"[..])
+        );
+        // ...with its `.mcmeta` only where no filter hides it.
+        assert_eq!(texture("3").as_deref(), Some(&b"vanilla stick"[..]));
+        assert_eq!(read("assets/ia/textures/3.png.mcmeta"), None);
+        // A missing resource adds nothing, and no rename leaves the overlay.
+        assert_eq!(texture("2"), None);
+        assert!(!out.join("escape.png").exists());
+        // The last source of a sprite wins: a filter drops it, a later rename replaces it.
+        assert_eq!(texture("7"), None);
+        assert_eq!(texture("8").as_deref(), Some(&b"lantern"[..]));
+        // The two atlases read one file, and disagree about `ia:9`: it gets neither.
+        assert_eq!(texture("9"), None);
         let _ = fs::remove_dir_all(base);
     }
     #[test]

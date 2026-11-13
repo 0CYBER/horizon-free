@@ -186,6 +186,52 @@ fn with_survival_game(f: impl FnOnce(&mut Game<'_>)) {
 
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn a_custom_durable_stick_wears_while_mining() {
+    with_survival_game(|game| {
+        let registry = game.pack.assets.registry;
+        let pos = [5, 63, 4];
+        let stone = registry
+            .default_state("minecraft:stone")
+            .expect("stone is registered");
+        game.world.set(pos[0], pos[1], pos[2], stone).unwrap();
+        let tool = "minecraft:tool={rules:[{blocks:\"#minecraft:mineable/pickaxe\",speed:50.0f,correct_for_drops:true}],damage_per_block:3}";
+        // `max_stack_size` keeps the stack out of vanilla's "damageable and
+        // stackable" rejection; `damage: 0` supplies the DAMAGE component a
+        // stick's prototype lacks, so the stack is damageable.
+        assert!(game.run_command(&format!(
+            "item replace entity @s weapon.mainhand with minecraft:stick[{tool},minecraft:max_stack_size=1,minecraft:max_damage=20,minecraft:damage=0]"
+        )));
+        assert_eq!(
+            game.items().stack_max_damage(game.held().unwrap()),
+            20,
+            "a non-durable prototype with MAX_DAMAGE and DAMAGE is damageable"
+        );
+        assert_eq!(game.destroy_progress(pos), 50.0 / 1.5 / 30.0);
+        game.break_block(pos).unwrap();
+        assert_eq!(game.held().unwrap().damage, 3);
+        // Even an already-max-damaged stack survives a zero effective loss:
+        // ItemStack.hurtAndBreak returns before applyDamage in that case.
+        game.held_mut().as_mut().unwrap().damage = 20;
+        game.damage_held(0);
+        assert_eq!(game.held().unwrap().damage, 20);
+        assert!(
+            game.dropped
+                .iter()
+                .any(|item| &*item.stack.item == "minecraft:cobblestone")
+        );
+        let pos = [6, 63, 4];
+        game.world.set(pos[0], pos[1], pos[2], stone).unwrap();
+        game.held_mut().as_mut().unwrap().damage = 18;
+        game.break_block(pos).unwrap();
+        assert!(
+            game.held().is_none(),
+            "the twentieth point of damage breaks the stick"
+        );
+    });
+}
+
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn efficiency_applies_to_a_same_item_swap() {
     with_survival_game(|game| {
         let registry = game.pack.assets.registry;
@@ -219,6 +265,43 @@ fn efficiency_applies_to_a_same_item_swap() {
                 (base + 10.0) / hardness / 30.0,
                 "{block} with efficiency 3"
             );
+        }
+    });
+}
+
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn a_stacks_attribute_modifiers_replace_its_items_attack_damage() {
+    with_survival_game(|game| {
+        // Player.attack reads getAttributeValue(ATTACK_DAMAGE): the base 1
+        // plus what detectEquipmentUpdates gave the player for the held stack
+        // (ItemStack.forEachModifier, the stack's ATTRIBUTE_MODIFIERS). An
+        // iron pickaxe's own modifier is +3 (ToolMaterial.IRON's 2 plus the
+        // pickaxe's 1); the stack's +20 replaces it, so the hit is 21 (#14641).
+        for (stack, damage) in [
+            ("minecraft:iron_pickaxe", 4.0),
+            (
+                "minecraft:iron_pickaxe[attribute_modifiers=[{type:\"minecraft:attack_damage\",id:\"minecraft:base_attack_damage\",amount:20.0,operation:\"add_value\",slot:\"mainhand\"}]]",
+                21.0,
+            ),
+            // Identifier.CODEC reads bare names as `minecraft:`'s: the same
+            // modifier, so the attribute the host applies it to is found.
+            (
+                "minecraft:iron_pickaxe[attribute_modifiers=[{type:\"attack_damage\",id:\"base_attack_damage\",amount:20.0,operation:\"add_value\",slot:\"mainhand\"}]]",
+                21.0,
+            ),
+            // In the off hand slot group, it does not apply to the main hand.
+            (
+                "minecraft:iron_pickaxe[attribute_modifiers=[{type:\"minecraft:attack_damage\",id:\"minecraft:base_attack_damage\",amount:20.0,operation:\"add_value\",slot:\"offhand\"}]]",
+                1.0,
+            ),
+            ("minecraft:iron_pickaxe[!attribute_modifiers]", 1.0),
+        ] {
+            assert!(game.run_command(&format!(
+                "item replace entity @s weapon.mainhand with {stack}"
+            )));
+            game.tick_hand();
+            assert_eq!(game.attack_damage(), damage, "{stack}");
         }
     });
 }

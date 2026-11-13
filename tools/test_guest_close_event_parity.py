@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+PARITY_MANUAL = "a proof run by hand: --side java --work-dir DIR, then --side native --work-dir DIR2 --binary BIN --reference DIR/vanilla.jsonl"  # not a harness: tools/parity.py leaves it out
 
 ROOT = Path(__file__).resolve().parents[1]
 

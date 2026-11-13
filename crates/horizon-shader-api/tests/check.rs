@@ -348,6 +348,15 @@ fn a_0_2_pack_is_checked_against_its_own_line() {
     let report = pack_0_2(POST, TONEMAP, "[frame]\nblend = \"linear\"\n").unwrap();
     let kinds: Vec<_> = report.stages.iter().map(|s| s.kind).collect();
     assert_eq!(kinds, [StageKind::Post, StageKind::Tonemap]);
+    // A wide-gamut pack passes the check (the game refuses it for now), and reads its space.
+    let wide = "fn tonemap(input: TonemapInput) -> vec3<f32> {\n    \
+                return vec3<f32>(dot(input.color, frame.luminance)) * f32(frame.primaries);\n}\n";
+    let frame = "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n";
+    let report = pack_0_2(POST, wide, frame).unwrap();
+    assert_eq!(
+        report.manifest.primaries,
+        horizon_shader_api::Primaries::Bt2020
+    );
     // The 0.2 prelude's display fields and colour boundary are there to use.
     let source = &report.stages[1].source;
     assert!(source.contains("    black_level: f32,\n") && source.contains("fn horizon_decode("));
@@ -487,6 +496,95 @@ fn a_0_2_pack_reads_horizon_s_structs_passes_them_along_and_builds_its_surface()
     let tonemap = "alias SurfaceData = vec3<f32>;\n\
                    fn tonemap(input: TonemapInput) -> vec3<f32> { return SurfaceData(input.color.r, 0.0, 0.0); }\n";
     pack_0_2_with_material(MATERIAL, POST, tonemap).unwrap();
+}
+
+/// A 0.2 pack of the entity stage alone.
+fn entity_pack(entity: &str) -> Result<horizon_shader_api::Report, Vec<Problem>> {
+    let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+                    [entity]\nfile = \"entity.wgsl\"\nname = \"Mobs\"\n";
+    let files = [(MANIFEST, manifest), ("entity.wgsl", entity)]
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .into();
+    check(&Pack::from_files(files).unwrap())
+}
+
+#[test]
+fn the_entity_stage_is_checked_like_the_material_s() {
+    // It reads its input, the frame, the shadow maps and the coloured-light grid.
+    let lit = "fn entity(input: EntityInput) -> Surface {\n    \
+               let p = shadow_position(input.position);\n    \
+               let sun = textureSampleCompareLevel(shadow_map, shadow_sampler, p.xy, p.z);\n    \
+               let through = textureSampleCompareLevel(shadow_map_translucent, shadow_sampler, p.xy, p.z);\n    \
+               let tinted = textureLoad(shadow_color, vec2<i32>(p.xy * vec2<f32>(textureDimensions(shadow_color))), 0);\n    \
+               let lamp = block_light_color(input.position);\n    \
+               let facing = max(dot(input.normal, frame.light_direction), 0.0) * input.shade;\n    \
+               var light = input.lightmap * (1.0 + input.emission) + lamp.rgb * lamp.a * input.light.x;\n    \
+               light += input.colored_light + sun * through * tinted.rgb * facing * f32(frame.has_shadow);\n    \
+               if input.kind == 4u || input.translucent { light *= 0.5 + input.uv.x * input.screen.y; }\n    \
+               let base = mix(input.albedo.rgb * input.tint.rgb, input.overlay.rgb, input.overlay.a);\n    \
+               return Surface(vec4<f32>(base * light, input.albedo.a * input.tint.a));\n}\n";
+    let report = entity_pack(lit).unwrap();
+    let stage = &report.stages[0];
+    assert_eq!(
+        (stage.kind, stage.label.as_str()),
+        (StageKind::Entity, "Mobs")
+    );
+    assert!(stage.reads("shadow_map") && stage.reads("block_light_colors"));
+    assert!(stage.expressions > 0 && stage.texture_reads >= 4);
+    // No block texture and no picture behind the surface here: those are the material stage's.
+    for theirs in [
+        "block_texture(input.uv)",
+        "textureLoad(opaque_color, vec2<i32>(0), 0)",
+    ] {
+        let p = entity_pack(&format!(
+            "fn entity(input: EntityInput) -> Surface {{ return Surface({theirs}); }}\n"
+        ))
+        .expect_err("should fail");
+        assert_eq!(p[0].file, "entity.wgsl", "{p:#?}");
+    }
+
+    let p = entity_pack("fn entity(input: EntityInput) -> vec4<f32> { return input.albedo; }\n")
+        .expect_err("should fail");
+    assert!(
+        p[0].message.contains(
+            "`fn entity(EntityInput) -> vec4<f32>` should be `fn entity(input: EntityInput) -> Surface`"
+        ),
+        "{p:#?}"
+    );
+    let p =
+        entity_pack("fn mob(input: EntityInput) -> Surface { return Surface(input.albedo); }\n")
+            .expect_err("should fail");
+    assert!(
+        p[0].message
+            .contains("defines no `fn entity(input: EntityInput) -> Surface`"),
+        "{p:#?}"
+    );
+
+    // Its limits are the material's.
+    let reads: String = (0..70)
+        .map(|i| format!("    c += textureLoad(shadow_color, vec2<i32>({i}, 0), 0);\n"))
+        .collect();
+    let p = entity_pack(&format!(
+        "fn entity(input: EntityInput) -> Surface {{\n    var c = input.albedo;\n{reads}    return Surface(c);\n}}\n"
+    ))
+    .expect_err("should fail");
+    assert!(
+        p[0].message.contains("texture reads; a stage may write 64"),
+        "{p:#?}"
+    );
+
+    // `EntityInput` may gain fields: read, not constructed.
+    let built = "fn entity(input: EntityInput) -> Surface {\n    \
+                 let again = EntityInput(input.albedo, input.tint, input.overlay, input.lightmap, input.shade, \
+                 input.position, input.emission, input.normal, input.kind, input.colored_light, \
+                 input.translucent, input.light, input.uv, input.screen);\n    \
+                 return Surface(again.albedo);\n}\n";
+    let p = entity_pack(built).expect_err("should fail");
+    assert_eq!(
+        refused(&p, "EntityInput"),
+        [("entity.wgsl".into(), 2)],
+        "{p:#?}"
+    );
 }
 
 #[test]

@@ -12,7 +12,7 @@
 //! copied as they were) and a file left empty is deleted. Nothing else in the world is touched: not
 //! level.dat, player data, stats or advancements.
 
-use horizon_world::{
+use horizon_platform::world::{
     nbt::{self, Limits, Tag},
     region::{ChunkRecord, RegionFile, RegionWriter, position_from_path},
 };
@@ -344,7 +344,7 @@ struct Tally {
 fn spawn_chunk(world: &Path) -> Chunk {
     let read = || -> Option<Chunk> {
         let bytes = fs::read(world.join("level.dat")).ok()?;
-        let bytes = horizon_world::compression::Compression::Gzip
+        let bytes = horizon_platform::world::compression::Compression::Gzip
             .decode(&bytes, Limits::saved().max_bytes)
             .ok()?;
         let (root, _) = nbt::read_named(&bytes, Limits::saved()).ok()?;
@@ -626,7 +626,9 @@ pub fn run(
             regions,
         });
     }
-    let (r, ring) = (settings.spawn_radius as i32, settings.ring as i32);
+    // A radius past i32 keeps everything rather than wrapping negative and keeping nothing.
+    let r = i32::try_from(settings.spawn_radius).unwrap_or(i32::MAX);
+    let ring = settings.ring as i32;
     let mut tallies = Vec::new();
     let mut errors = Vec::new();
     let mut committed_chunks = 0_u64;
@@ -873,8 +875,8 @@ pub fn write_report(dir: &Path, outcome: &Outcome) -> io::Result<PathBuf> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use horizon_core::position::ChunkPos;
-    use horizon_world::{compression::Compression, nbt::NamedTag};
+    use horizon_platform::world::ChunkPos;
+    use horizon_platform::world::{compression::Compression, nbt::NamedTag};
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("horizon-prune-{name}-{}", std::process::id()));
@@ -1330,6 +1332,10 @@ pub(crate) mod tests {
 
         // The spawn radius reaches region r.2.0 (64 chunks out): everything there stays.
         s.spawn_radius = 100;
+        let all = run(&world, &s, false, 1).unwrap();
+        assert!(all.summary.contains(" 0 of "), "{}", all.report);
+        // So does a radius past i32 (it once wrapped negative and kept nothing).
+        s.spawn_radius = u32::MAX;
         let all = run(&world, &s, false, 1).unwrap();
         assert!(all.summary.contains(" 0 of "), "{}", all.report);
 

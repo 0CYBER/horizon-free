@@ -104,7 +104,7 @@ pub fn read_metadata(root: &Path) -> UiMetadata {
         let Ok(text) = horizon_core::prepared_files::read_to_string(&p) else {
             continue;
         };
-        let Some(nine_slice) = serde_json::from_str(&text)
+        let Some(nine_slice) = crate::packs::first_json(text.as_bytes())
             .ok()
             .as_ref()
             .and_then(parse_nine_slice)
@@ -810,8 +810,14 @@ fn slider_sprites(hover: bool, active: bool, dragging: bool) -> (&'static str, &
     slider_sprites_ext(hover, active, false, false, dragging)
 }
 
-/// Track and handle sprites: the track outline shows while dragged or focused with
-/// keyboard navigation (!can_change_value), hovering or editing highlights the handle.
+/// `AbstractSliderButton.getSprite` and `getHandleSprite`: the track outline
+/// lights while the slider is focused and its value cannot change
+/// (`isActive() && isFocused() && !canChangeValue`), the handle while it is
+/// hovered or its value can change (`isActive() && (isHovered || canChangeValue)`).
+/// `canChangeValue` is set when the slider is focused with the mouse or Tab and
+/// flipped by Enter (`setFocused`, `keyPressed`): Horizon's `can_change_value`
+/// for the keyboard, and a drag for the mouse, which focuses it with the value
+/// free to change. So a dragged slider keeps its plain track.
 fn slider_sprites_ext(
     hover: bool,
     active: bool,
@@ -819,12 +825,13 @@ fn slider_sprites_ext(
     can_change_value: bool,
     dragging: bool,
 ) -> (&'static str, &'static str) {
-    let track = if dragging || (active && focused && !can_change_value) {
+    let can_change_value = can_change_value || dragging;
+    let track = if active && focused && !can_change_value {
         "gui/sprites/widget/slider_highlighted"
     } else {
         "gui/sprites/widget/slider"
     };
-    let handle = if active && (hover || can_change_value || dragging) {
+    let handle = if active && (hover || can_change_value) {
         "gui/sprites/widget/slider_handle_highlighted"
     } else {
         "gui/sprites/widget/slider_handle"
@@ -1097,6 +1104,34 @@ pub fn tooltip_menu(
     );
     tooltip_box(batch, atlas, lines, x as f32, y as f32, w, h);
 }
+/// `BelowOrAboveWidgetTooltipPositioner.positionTooltip`: a keyboard-focused widget's tooltip.
+pub fn tooltip_focused(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], rect: [f32; 4]) {
+    if lines.is_empty() {
+        return;
+    }
+    let (w, h) = tooltip_size(atlas, lines);
+    let (x, y) = focused_tooltip_position(
+        (batch.width as i32, batch.height as i32),
+        rect.map(|v| v as i32),
+        (w.ceil() as i32, h.ceil() as i32),
+    );
+    tooltip_box(batch, atlas, lines, x as f32, y as f32, w, h);
+}
+
+/// `BelowOrAboveWidgetTooltipPositioner.positionTooltip`: below, or above when it does not fit.
+fn focused_tooltip_position(screen: (i32, i32), rect: [i32; 4], size: (i32, i32)) -> (i32, i32) {
+    let [left, top, width, height] = rect;
+    let mut x = left + 3;
+    let mut y = top + height + 4;
+    if y + size.1 + 3 > screen.1 {
+        y = top - size.1 - 4;
+    }
+    if x + size.0 > screen.0 {
+        x = (left + width - size.0 - 3).max(4);
+    }
+    (x, y)
+}
+
 /// A widget's tooltip while the controller's focus is on it (Horizon's: vanilla has no gamepad
 /// input, and the hidden pointer mid-widget would put it over the widget).
 pub fn tooltip_under(batch: &mut HudBatch, atlas: &HudAtlas, lines: &[Text], rect: [f32; 4]) {
@@ -1231,6 +1266,9 @@ pub struct EditBox {
     /// Grey completion shown after the text (EditBox.setSuggestion).
     pub suggestion: Option<String>,
     pub text_color: u32,
+    /// `EditBox.setCentered`: the text starts in the middle of the box's
+    /// width, not at its left edge (`BookSignScreen`'s title).
+    pub centered: bool,
     /// `EditBox.textColorUneditable`: the colour of a box `setEditable(false)`
     /// made read-only, which still shows its value and caret.
     pub text_color_uneditable: u32,
@@ -1241,6 +1279,9 @@ pub struct EditBox {
     /// `getMessage`: what the narrator calls the box ("<message> edit box:
     /// <value>").
     pub message: String,
+    /// `EditBox.setInvertHighlightedTextColor`: a selection draws its text
+    /// inverted (the default) or in the box's own colour (`AnvilScreen`).
+    pub invert_highlighted_text_color: bool,
     /// Where a borderless box drawn in a frame of its own focuses: a controller's outline goes
     /// round the frame, not over the text.
     pub frame: Option<[f32; 4]>,
@@ -1408,7 +1449,7 @@ pub fn append_field(
         batch.text(atlas, value, x, y, color, shadow);
         cursor_x += HudBatch::text_width(atlas, value) + 1.0;
     }
-    let insert = char_len(value) >= max_chars;
+    let insert = utf16_len(value) >= max_chars;
     if insert {
         cursor_x -= 1.0;
     }
@@ -1430,6 +1471,29 @@ fn byte_index(s: &str, chars: usize) -> usize {
 }
 pub fn char_len(s: &str) -> usize {
     s.chars().count()
+}
+/// Java's `String.length()`: UTF-16 code units, the unit `EditBox.maxLength`
+/// counts. A character outside the BMP — an emoji, say — is two of them, so
+/// a box with room for one more character takes an `a` and rejects a `😀`.
+pub fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+/// The longest prefix of `s` that fits `max` UTF-16 code units without
+/// splitting a character. `EditBox.insertText` drops the half surrogate it
+/// would otherwise keep, so this is what vanilla inserts; Rust strings cannot
+/// hold the lone surrogate that `setValue`'s unguarded `substring` may leave,
+/// so a value too long by half a character keeps the whole characters before
+/// the cut.
+pub fn utf16_prefix(s: &str, max: usize) -> String {
+    let mut units = 0;
+    for (i, c) in s.char_indices() {
+        let n = c.len_utf16();
+        if units + n > max {
+            return s[..i].to_owned();
+        }
+        units += n;
+    }
+    s.to_owned()
 }
 /// `EditBox.getWordPosition(dir, from)`: the character index `dir` words away
 /// from `from`. Forward, past the rest of the word and its spaces; backward,
@@ -1529,9 +1593,11 @@ impl EditBox {
             focused_at: Instant::now(),
             suggestion: None,
             text_color: rgba(224, 224, 224, 255),
+            centered: false,
             text_color_uneditable: rgba(112, 112, 112, 255),
             editable: true,
             message: String::new(),
+            invert_highlighted_text_color: true,
             frame: None,
         }
     }
@@ -1552,6 +1618,16 @@ impl EditBox {
             self.y
         }
     }
+    /// `EditBox.updateTextPosition`: where the text starts, `(width - text
+    /// width) / 2` in for a centred box (vanilla's `textX`), else at
+    /// `text_x` (4 in from a border).
+    pub fn text_start_x(&self, text_width: f32) -> f32 {
+        if self.centered {
+            self.x + ((self.width - text_width) / 2.0).floor()
+        } else {
+            self.text_x()
+        }
+    }
     pub fn reset_blink(&mut self) {
         self.focused_at = Instant::now();
     }
@@ -1560,7 +1636,7 @@ impl EditBox {
         self.focused && (self.focused_at.elapsed().as_millis() / 300).is_multiple_of(2)
     }
     pub fn set_value(&mut self, value: &str) {
-        self.value = value.chars().take(self.max_length).collect();
+        self.value = utf16_prefix(value, self.max_length);
         self.move_cursor_to_end(false);
     }
     fn selected(&self) -> (usize, usize) {
@@ -1573,7 +1649,9 @@ impl EditBox {
         let (a, b) = self.selected();
         self.value.chars().skip(a).take(b - a).collect()
     }
-    /// EditBox.insertText: replace the selection, respecting the maximum length.
+    /// EditBox.insertText: replace the selection, respecting the maximum
+    /// length. The limit is in UTF-16 code units, as Java's `String.length()`
+    /// counts them.
     pub fn insert_text(&mut self, text: &str) {
         // `EditBox.charTyped` only inserts through `canConsumeInput`, which a
         // read-only box fails; the screens here hand typed text to this method
@@ -1583,10 +1661,17 @@ impl EditBox {
         }
         let (a, b) = self.selected();
         let filtered = crate::clipboard::filter_text(text, self.multiline);
+        let selected_units: usize = self
+            .value
+            .chars()
+            .skip(a)
+            .take(b - a)
+            .map(char::len_utf16)
+            .sum();
         let room = self
             .max_length
-            .saturating_sub(char_len(&self.value) - (b - a));
-        let insert: String = filtered.chars().take(room).collect();
+            .saturating_sub(utf16_len(&self.value) - selected_units);
+        let insert = utf16_prefix(&filtered, room);
         let (ba, bb) = (byte_index(&self.value, a), byte_index(&self.value, b));
         self.value.replace_range(ba..bb, &insert);
         let pos = a + char_len(&insert);
@@ -1634,8 +1719,13 @@ impl EditBox {
     /// EditBox.findClickedPositionInText: the character boundary under GUI `x`.
     pub fn position_at(&mut self, atlas: &HudAtlas, x: f32) -> usize {
         self.layout(atlas);
-        let room = (x.floor() - self.text_x()).min(self.inner_width());
         let rest: String = self.value.chars().skip(self.display).collect();
+        let shown: String = rest
+            .chars()
+            .take(atlas.font.fit(&rest, self.inner_width()))
+            .collect();
+        let start = self.text_start_x(atlas.font.width_text(&Text::literal(shown.as_str())));
+        let room = (x.floor() - start).min(self.inner_width());
         self.display + atlas.font.fit(&rest, room)
     }
     /// EditBox.onClick: the cursor to the pointer, extending the selection
@@ -1842,7 +1932,12 @@ impl EditBox {
                 ),
             }
         };
-        let (tx, ty) = (self.text_x(), self.text_y());
+        let start = if self.centered {
+            self.text_start_x(atlas.font.width_text(&Text::literal(displayed.as_str())))
+        } else {
+            self.text_x()
+        };
+        let (tx, ty) = (start, self.text_y());
         let mut draw_x = tx;
         if !displayed.is_empty() {
             let half = if on_screen {
@@ -1854,8 +1949,10 @@ impl EditBox {
             batch.text_styled(atlas, &t, draw_x, ty, color, true);
             draw_x += atlas.font.width_text(&t) + 1.0;
         }
+        // EditBox.extractWidgetRenderState: `value.length() >= maxLength`
+        // is Java's length, so the caret turns into a bar at the unit count.
         let insert =
-            self.cursor < char_len(&self.value) || char_len(&self.value) >= self.max_length;
+            self.cursor < char_len(&self.value) || utf16_len(&self.value) >= self.max_length;
         let mut cursor_x = draw_x;
         if !on_screen {
             cursor_x = if rel_cursor > 0 { tx + self.width } else { tx };
@@ -1887,7 +1984,11 @@ impl EditBox {
             let right = self.x + self.width;
             let (x0, x1) = (cursor_x.min(right), (hx - 1.0).min(right));
             let (a, b) = (x0.min(x1), x0.max(x1));
-            batch.text_highlight(atlas, (a, ty - 1.0, b - a, 11.0), true);
+            batch.text_highlight(
+                atlas,
+                (a, ty - 1.0, b - a, 11.0),
+                self.invert_highlighted_text_color,
+            );
         }
         if show_cursor {
             if insert {
@@ -1923,6 +2024,28 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_after_a_sprites_metadata_keep_its_nine_slice() {
+        // Gson stops reading after the first value, so vanilla keeps this nine slice
+        // (CozyUI+'s highlighted button, #3046).
+        let root = std::env::temp_dir().join(format!("horizon-ui-meta-{}", std::process::id()));
+        let widget = root.join("assets/minecraft/textures/gui/sprites/widget");
+        std::fs::create_dir_all(&widget).unwrap();
+        std::fs::write(
+            widget.join("button_highlighted.png.mcmeta"),
+            "{\"gui\": {\"scaling\": {\"type\": \"nine_slice\", \"width\": 80, \"height\": 20,\n\
+             \"border\": {\"left\": 34, \"top\": 8, \"right\": 34, \"bottom\": 8}}}}\n\n// 0  10\n// 1  8\n",
+        )
+        .unwrap();
+        let metadata = read_metadata(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        let slice = metadata.0["gui/sprites/widget/button_highlighted"];
+        assert_eq!(
+            (slice.width, slice.height, slice.border),
+            (80, 20, [34, 8, 34, 8])
+        );
+    }
 
     /// The quads' destination rectangles and their UVs.
     fn quads(batch: &HudBatch) -> Vec<([f32; 4], [f32; 4])> {
@@ -2175,15 +2298,36 @@ mod tests {
         }
     }
 
+    /// `AbstractSliderButton.getSprite`/`getHandleSprite`: a focused slider
+    /// whose value can't change lights its track, a hovered one or one whose
+    /// value can change (Tab or Enter, or the mouse's drag) lights its handle.
     #[test]
-    fn slider_track_is_outlined_only_while_dragged() {
+    fn slider_sprites_follow_focus_and_the_drag() {
+        // Hovered, at rest: plain track, lit handle.
         let (track, handle) = slider_sprites(true, true, false);
         assert_eq!(track, "gui/sprites/widget/slider");
         assert_eq!(handle, "gui/sprites/widget/slider_handle_highlighted");
+        // Dragged: still a plain track, lit handle.
         let (track, handle) = slider_sprites(true, true, true);
-        assert_eq!(track, "gui/sprites/widget/slider_highlighted");
+        assert_eq!(track, "gui/sprites/widget/slider");
         assert_eq!(handle, "gui/sprites/widget/slider_handle_highlighted");
+        // Focused with the arrow keys: the value can't change, the track lights.
+        let (track, handle) = slider_sprites_ext(false, true, true, false, false);
+        assert_eq!(track, "gui/sprites/widget/slider_highlighted");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle");
+        // Focused with Tab, or Enter pressed on it: the value can change, the handle lights.
+        let (track, handle) = slider_sprites_ext(false, true, true, true, false);
+        assert_eq!(track, "gui/sprites/widget/slider");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle_highlighted");
+        // Focused while the mouse drags: the track stays plain.
+        let (track, _) = slider_sprites_ext(true, true, true, false, true);
+        assert_eq!(track, "gui/sprites/widget/slider");
+        // Not hovered, not dragged: nothing is lit.
         let (track, handle) = slider_sprites(false, true, false);
+        assert_eq!(track, "gui/sprites/widget/slider");
+        assert_eq!(handle, "gui/sprites/widget/slider_handle");
+        // An inactive slider highlights neither, even when focused.
+        let (track, handle) = slider_sprites_ext(true, false, true, true, true);
         assert_eq!(track, "gui/sprites/widget/slider");
         assert_eq!(handle, "gui/sprites/widget/slider_handle");
     }
@@ -2521,6 +2665,33 @@ mod tests {
         assert_eq!(v, "stone");
     }
     #[test]
+    fn a_keyboard_focused_tooltip_uses_vanillas_widget_edges() {
+        let screen = (320, 240);
+        assert_eq!(
+            focused_tooltip_position(screen, [7, 160, 98, 20], (170, 40)),
+            (10, 184)
+        );
+        // Exact fit below; one pixel taller goes above.
+        assert_eq!(
+            focused_tooltip_position(screen, [7, 160, 98, 20], (170, 53)),
+            (10, 184)
+        );
+        assert_eq!(
+            focused_tooltip_position(screen, [7, 160, 98, 20], (170, 54)),
+            (10, 102)
+        );
+        // Right overflow aligns against the widget's right edge, not the screen's.
+        assert_eq!(
+            focused_tooltip_position(screen, [250, 100, 60, 20], (170, 40)),
+            (137, 124)
+        );
+        assert_eq!(
+            focused_tooltip_position((120, 240), [7, 160, 98, 20], (170, 40)),
+            (4, 184)
+        );
+    }
+
+    #[test]
     fn a_pad_focused_tooltip_hangs_from_its_widgets_bottom_left() {
         let screen = (427.0, 240.0);
         let widget = [100.0, 100.0, 150.0, 20.0];
@@ -2576,6 +2747,45 @@ mod tests {
         );
     }
 
+    /// `EditBox.maxLength` counts Java `String.length()`: UTF-16 code units.
+    /// A pasted emoji takes two of them and is never split (vanilla's
+    /// `Character.isHighSurrogate` guard drops the half it would keep).
+    #[test]
+    fn an_edit_box_maximum_counts_utf16_units() {
+        assert_eq!(utf16_len("ab😀"), 4);
+        assert_eq!(utf16_prefix("ab😀", 3), "ab");
+        assert_eq!(utf16_prefix("ab😀", 4), "ab😀");
+        let mut edit = EditBox::new(0.0, 0.0, 200.0, 20.0);
+        edit.max_length = 3;
+        edit.insert_text("ab😀");
+        assert_eq!(edit.value, "ab", "three units: a, b and one of the emoji's");
+        edit.set_value("");
+        edit.max_length = 4;
+        edit.insert_text("ab😀");
+        assert_eq!(edit.value, "ab😀", "four units, both of the emoji's");
+        // The selection's own units give their room back: with "ab"
+        // selected there are two units left, enough for the emoji, not
+        // for the emoji and the x.
+        edit.set_cursor(0, false);
+        edit.set_cursor(2, true);
+        edit.insert_text("😀x");
+        assert_eq!(edit.value, "😀😀");
+    }
+
+    /// `EditBox.setInvertHighlightedTextColor`: a selection inverts its text
+    /// unless the box asks it not to (the anvil's rename box).
+    #[test]
+    fn a_selection_inverts_its_text_unless_the_box_says_not_to() {
+        let mut edit = EditBox::new(0.0, 0.0, 100.0, 20.0);
+        assert!(edit.invert_highlighted_text_color);
+        edit.invert_highlighted_text_color = false;
+        edit.set_value("name");
+        edit.set_cursor(0, false);
+        edit.set_cursor(4, true);
+        assert_eq!(edit.selected_text(), "name");
+        assert!(!edit.invert_highlighted_text_color);
+    }
+
     /// `EditBox.setEditable(false)`: the box keeps the focus, the caret keys
     /// and copy, but `charTyped`/paste/Backspace/Delete do nothing, and Cut
     /// copies without taking the text out. A value and the caret still show,
@@ -2621,5 +2831,20 @@ mod tests {
         assert_eq!(edit.value, "namex");
         assert!(edit.key(winit::keyboard::KeyCode::Backspace, false, false));
         assert_eq!(edit.value, "name");
+    }
+
+    /// `EditBox.setCentered` (`BookSignScreen`'s title box): with the flag the
+    /// text starts `(width - text width) / 2` in, which is also where a click
+    /// maps; without it the text starts at the box's left edge.
+    #[test]
+    fn a_centred_box_starts_its_text_in_the_middle() {
+        let mut edit = EditBox::new(10.0, 0.0, 114.0, 9.0);
+        edit.bordered = false;
+        assert_eq!(edit.text_start_x(0.0), 10.0);
+        edit.centered = true;
+        assert_eq!(edit.text_start_x(0.0), 67.0);
+        assert_eq!(edit.text_start_x(18.0), 58.0);
+        // (114 - 5) / 2 = 54.5, rounded down.
+        assert_eq!(edit.text_start_x(5.0), 64.0);
     }
 }

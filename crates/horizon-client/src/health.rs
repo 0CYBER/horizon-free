@@ -58,6 +58,10 @@ pub enum Hurting<'a> {
 pub static HURT_SERVER: OnceLock<fn(Hurting<'_>, &mut f32) -> bool> = OnceLock::new();
 /// Whether [`HURT_SERVER`] canceled the hit (never while it is unset).
 pub fn hurt_server_canceled(hurting: Hurting<'_>, amount: &mut f32) -> bool {
+    // A grouped mob turn: no mod hooks it (`native_client_hooks::Deferred`).
+    if crate::native_client_hooks::deferring() {
+        return false;
+    }
     HURT_SERVER.get().is_some_and(|hook| hook(hurting, amount))
 }
 /// The game's `LivingDamageEvent.Pre` hook (`native_living_damage_pre`), set
@@ -75,6 +79,9 @@ pub fn damage_pre(hurting: Hurting<'_>, amount: &mut f32) {
     let Some(hook) = DAMAGE_PRE.get() else {
         return;
     };
+    if crate::native_client_hooks::deferring() {
+        return;
+    }
     let before = amount.to_bits();
     hook(hurting, amount);
     if amount.to_bits() != before {
@@ -87,9 +94,22 @@ pub fn damage_pre(hurting: Hurting<'_>, amount: &mut f32) {
 }
 /// [`DAMAGE_POST`] with what came off the health (nothing while it is unset).
 pub fn damage_post(hurting: Hurting<'_>, amount: f32) {
-    if let Some(hook) = DAMAGE_POST.get() {
-        hook(hurting, amount);
+    let Some(hook) = DAMAGE_POST.get() else {
+        return;
+    };
+    // A grouped mob turn keeps it for the join. Only mobs are hurt in the mob phase (players
+    // through its events, after it), so another kind is told at once.
+    if let Hurting::Mob(mob, damage) = &hurting
+        && crate::native_client_hooks::deferring()
+    {
+        crate::native_client_hooks::defer(crate::native_client_hooks::Deferred::DamagePost {
+            mob: Box::new((*mob).clone()),
+            damage: **damage,
+            amount,
+        });
+        return;
     }
+    hook(hurting, amount);
 }
 /// A knockback's strength and direction, as `LivingEntity.knockback` has them
 /// before knockback resistance is applied. The entity is pushed away from
@@ -149,6 +169,9 @@ pub fn knockback_canceled(pushed: Hurting<'_>, knock: &mut Knock) -> bool {
     let Some(hook) = KNOCKBACK.get() else {
         return false;
     };
+    if crate::native_client_hooks::deferring() {
+        return false;
+    }
     let before = *knock;
     let canceled = hook(pushed, knock);
     for (now, was) in [
@@ -512,6 +535,7 @@ impl PlayerMotion {
             status: self.status.clone(),
             blocking,
             blocked: 0.0,
+            blocking_item_used: false,
             fully_blocked: false,
             block_sound: false,
             knocked: false,
@@ -530,6 +554,7 @@ impl PlayerMotion {
         let outcome = BlockOutcome {
             hurt,
             blocked: environment.blocked,
+            blocking_item_used: environment.blocking_item_used,
             fully_blocked: environment.fully_blocked,
             sound: environment.block_sound,
             knockback: environment.knocked,
@@ -624,6 +649,7 @@ pub(crate) struct Environment<'a> {
     /// The raised blocking item, if any, and what it blocked.
     pub(crate) blocking: Option<Blocking>,
     pub(crate) blocked: f32,
+    pub(crate) blocking_item_used: bool,
     /// What it blocked covers the whole hit, as difficulty scaled it.
     pub(crate) fully_blocked: bool,
     pub(crate) block_sound: bool,
@@ -646,6 +672,18 @@ pub struct Blocking {
     pub pierce: bool,
     /// Angle between the head's view and the source position (pi without one).
     pub angle: f64,
+}
+impl Blocking {
+    /// `BlocksAttacks.resolveBlockedDamage`: what the item stops of `damage`,
+    /// nothing for a source it bypasses or an arrow that pierces it.
+    pub fn blocked(&self, damage: f32) -> f32 {
+        if damage <= 0.0 || self.bypassed || self.pierce {
+            return 0.0;
+        }
+        self.rules
+            .resolve(&mut MatchedSets, damage, self.angle)
+            .unwrap_or(0.0)
+    }
 }
 /// How many hurts `PlayerMotion::hurt_log` keeps.
 const HURT_LOG: usize = 64;
@@ -692,6 +730,8 @@ pub struct AttackRecord {
 /// The outcome of a hurt with a raised blocking item.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BlockOutcome {
+    /// `hurtBlockingItem` ran, including when reductions resolve to zero.
+    pub blocking_item_used: bool,
     pub hurt: bool,
     pub blocked: f32,
     /// `applyItemBlocking`'s `damageBlocked >= damage`, against the damage
@@ -926,6 +966,7 @@ impl HurtWorld for Environment<'_> {
         if damage <= 0.0 || b.bypassed || b.pierce {
             return Ok(0.0);
         }
+        self.blocking_item_used = true;
         self.blocked = b.rules.resolve(&mut MatchedSets, damage, b.angle)?;
         self.fully_blocked = self.blocked >= damage;
         Ok(self.blocked)
