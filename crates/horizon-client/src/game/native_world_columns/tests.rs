@@ -7,15 +7,23 @@ const OVERWORLD: &str = "minecraft:overworld";
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn terrain_columns_are_the_generators_own_surface_and_load_no_chunk() {
-    let game = game();
+    let mut game = game();
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    // A world whose biome table is not the base one (a data pack adds biomes before the vanilla
+    // ones): the generator's ids are this table's, and names are read through it.
+    let mut world_biomes = (*game.res.core.biomes).clone();
+    world_biomes.list.rotate_left(1);
+    for (id, biome) in world_biomes.list.iter().enumerate() {
+        world_biomes.index.insert(biome.name.clone(), id as u16);
+    }
     let terrain = horizon_client::vanillagen::VanillaTerrain::new(
         &root.join("worldgen"),
         game.pack.assets.registry,
-        &game.res.core.biomes,
+        &world_biomes,
         42,
     )
     .unwrap();
+    game.world_biomes = Some(std::sync::Arc::new(world_biomes.clone()));
     game.end.set_locator(Some(std::sync::Arc::new(terrain)));
     let terrain = game.end.locator().unwrap();
     // A grid across ocean and land, far from any loaded chunk.
@@ -34,7 +42,7 @@ fn terrain_columns_are_the_generators_own_surface_and_load_no_chunk() {
             "water at {x} {z}"
         );
         assert_eq!(&*got.block, &*game.res.facts().get(want.state).name);
-        assert_eq!(got.biome, game.res.biomes().name(want.biome));
+        assert_eq!(got.biome, world_biomes.name(want.biome));
     }
     assert!(
         found.iter().flatten().any(|c| c.water.is_some()),
@@ -43,6 +51,13 @@ fn terrain_columns_are_the_generators_own_surface_and_load_no_chunk() {
     assert!(
         found.iter().flatten().any(|c| c.water.is_none()),
         "dry land"
+    );
+    assert!(
+        found.iter().flatten().any(|c| {
+            let id = world_biomes.id(&c.biome);
+            game.res.biomes().name(id) != c.biome
+        }),
+        "the world's table differs from the base one, so reading the base one would name another biome"
     );
     assert!(game.world.chunks.is_empty(), "no chunk was created");
     // Only the level being ticked, and a bounded call.

@@ -209,6 +209,37 @@ impl Game<'_> {
             left: None,
         });
     }
+    /// Before the arrivals: a hold follows the player where a mod sent them (`native_player_teleport` may cancel
+    /// a `tp` or send the player elsewhere: the guest stands where the hub put them, not at the hold's target),
+    /// and a hold that ended without its arrival (replaced by a `tp` to lit land, a trip to another level, a
+    /// respawn, a death) lets their client's moves be heard again. A portal's trip still waiting for the player
+    /// lands them itself.
+    fn release_held_arrivals(&mut self, host: &mut LanHost) {
+        let level = self.dim.id();
+        let moved: Vec<(u32, Vec3)> = self
+            .server_trips
+            .iter()
+            .filter(|t| t.hold && t.dim == self.dim)
+            .filter_map(|t| {
+                let g = host.hub.guests.iter().find(|g| g.conn == t.conn)?;
+                let at = Vec3::new(g.position[0], g.position[1], g.position[2]);
+                (g.dimension == level && at != t.target).then_some((t.conn, at))
+            })
+            .collect();
+        for (conn, at) in moved {
+            self.hold_for_chunks(conn, at);
+        }
+        for g in host.hub.guests.iter_mut().filter(|g| g.tp_held) {
+            let trips = || self.server_trips.iter().filter(|t| t.is(g.conn));
+            if trips().any(|t| t.hold) {
+                continue;
+            }
+            g.tp_held = false;
+            if !trips().any(|t| t.end || t.plan.is_some()) {
+                g.landing = false;
+            }
+        }
+    }
     /// Whether `conn` is between two levels: the server leaves its body
     /// alone until it arrives.
     pub(super) fn on_server_trip(&self, conn: u32) -> bool {
@@ -802,6 +833,7 @@ impl Game<'_> {
     /// around their target: the exit (the Nether portal found or built, the
     /// End platform, the Overworld's spawn column) and the teleport there.
     fn arrive_server_trips(&mut self, host: &mut LanHost) {
+        self.release_held_arrivals(host);
         let mut k = 0;
         while k < self.server_trips.len() {
             let trip = &self.server_trips[k];
@@ -816,6 +848,7 @@ impl Game<'_> {
             );
             if trip.hold {
                 host.hub.guests[i].landing = true;
+                host.hub.guests[i].tp_held = true;
             }
             if trip.dim != self.dim
                 || !(-2..=2).all(|dz| (-2..=2).all(|dx| self.streaming.is_lit(cx + dx, cz + dz)))
@@ -830,6 +863,7 @@ impl Game<'_> {
             let mut trip = self.server_trips.remove(k);
             if trip.hold {
                 host.hub.guests[i].landing = false;
+                host.hub.guests[i].tp_held = false;
             }
             if trip.placed {
                 self.tell_mods_changed_dimension(host, trip.conn, trip.left, trip.dim);
@@ -927,13 +961,17 @@ impl Game<'_> {
             if let Some(vehicle) = trip.vehicle {
                 self.arrive_vehicle(trip.source, vehicle, position, yaw);
             }
-            // Player.getDimensionChangingDelay.
-            host.play.entry(trip.conn).or_default().portal.cooldown = 10;
             let g = &mut host.hub.guests[i];
             g.yaw = yaw;
-            // A new body at the exit: no fall distance or motion carried over,
-            // but the player's attributes (ServerPlayer.teleport keeps the entity).
-            g.new_body(true);
+            // A `tp` inside the level sets no portal cooldown and keeps the body it already placed
+            // (`ServerPlayer.teleportTo`): only the position is sent again.
+            if !trip.hold {
+                // Player.getDimensionChangingDelay.
+                host.play.entry(trip.conn).or_default().portal.cooldown = 10;
+                // A new body at the exit: no fall distance or motion carried over,
+                // but the player's attributes (ServerPlayer.teleport keeps the entity).
+                host.hub.guests[i].new_body(true);
+            }
             let at = [position.x, position.y, position.z];
             if portal {
                 host.hub.land(i, at);
@@ -1313,3 +1351,6 @@ mod credits_respawn_tests {
         std::fs::remove_dir_all(scratch).unwrap();
     }
 }
+
+#[cfg(test)]
+mod hold_tests;

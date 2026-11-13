@@ -18,8 +18,11 @@ pub struct NativeColumnBlocks {
 /// What `native_terrain_surface` found at one column of terrain nobody has loaded: the level's generator before
 /// its features (trees, ores, lava pools, cacti) are placed.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct NativeTerrainColumn {
-    /// One above the highest solid block, as `native_surface_heights` counts.
+    /// One above the highest solid block the generator scans down to, fluids skipped (the
+    /// `OceanFloor` heightmap's count). The scan starts at the top of the level, so in the Nether this is
+    /// the bedrock roof, not a floor.
     pub height: i32,
     /// The block at `height - 1`, such as `minecraft:grass_block`.
     pub block: String,
@@ -36,7 +39,7 @@ impl Game<'_> {
     /// For a server mod: what the generator makes at each of `columns` of the level `dimension` (the one being
     /// ticked) before its features are placed, whether or not the chunk is loaded: it reads the generator and
     /// creates no chunk. Decorated blocks (trees, lava, cacti) are not in it: read the chunk once it is loaded. None
-    /// for a column the generator cannot sample (a world with no generator of its own). `Err` says why nothing was
+    /// for a column with no solid block (the End's void) and where the world has no generator of its own. `Err` says why nothing was
     /// read: another dimension or a client of a server, or more than 4,096 columns (`MAX_TERRAIN_COLUMNS`). API
     /// @API:terrain_surface@.
     pub(super) fn native_terrain_surface(
@@ -56,7 +59,8 @@ impl Game<'_> {
         let started = std::time::Instant::now();
         let out = match self.end.locator() {
             Some(terrain) => {
-                let (facts, biomes) = (self.res.facts(), self.res.biomes());
+                // The generator's biome ids are the world's table (data packs may add biomes).
+                let (facts, biomes) = (self.res.facts(), world_biomes!(self));
                 let mut worker = terrain.worker();
                 columns
                     .iter()
