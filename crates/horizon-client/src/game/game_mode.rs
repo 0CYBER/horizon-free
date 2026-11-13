@@ -131,7 +131,7 @@ impl Game<'_> {
         }
         if mode == GameMode::Spectator {
             self.mining = None;
-            self.using = None;
+            self.stop_using();
             self.left = false;
             self.dismount_for_spectator();
             if let Some(p) = self.player.as_mut() {

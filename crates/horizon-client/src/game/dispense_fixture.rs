@@ -264,7 +264,7 @@ impl Game<'_> {
                 .and_then(|s| s.properties.get("triggered"))
                 .is_some_and(|v| v == "true");
             if let Some(BlockEntity::Crafter(c)) = self.world.block_entities.get_mut(&p) {
-                c.triggered = triggered;
+                c.triggered = i32::from(triggered);
                 c.state_triggered = Some(triggered);
             }
         }
@@ -319,7 +319,9 @@ impl Game<'_> {
         );
         let state = self.world.block(origin.x, origin.y, origin.z);
         let mut used = Vec::new();
-        if let Some(op) = case.get("special_attack") {
+        if let Some(op) = case.get("shield_hit") {
+            used = self.fixture_shield_hit(op)?;
+        } else if let Some(op) = case.get("special_attack") {
             used = self.fixture_special_attack(op)?;
         } else if let Some(op) = case.get("wind_burst") {
             let center = [
@@ -438,7 +440,7 @@ impl Game<'_> {
                 p.1,
                 p.2,
                 c.crafting_ticks,
-                c.triggered,
+                c.is_triggered(),
                 c.redstone_signal(),
                 disabled.join(",")
             ));
@@ -494,6 +496,68 @@ impl Game<'_> {
         }
         out.extend(used);
         out.push(format!("rng {}", self.world.random.next_long()));
+        Ok(out)
+    }
+
+    /// Actual player combat and blocking-item side effects, without a window or connection.
+    fn fixture_shield_hit(&mut self, op: &Value) -> Result<Vec<String>> {
+        let stack = parse_stack(op["item"].as_str().ok_or("shield_hit item")?)?
+            .ok_or("shield_hit requires an item")?;
+        let item = stack.item.clone();
+        self.creative = op["creative"].as_bool().unwrap_or(false);
+        self.mode = if self.creative {
+            GameMode::Creative
+        } else {
+            GameMode::Survival
+        };
+        self.player = Some(PlayerMotion::new(
+            self.motion,
+            horizon_core::geometry::Vec3::new(0.0, 0.0, 0.0),
+        )?);
+        self.yaw = 0.0;
+        self.armor = Default::default();
+        self.offhand = Some(stack);
+        self.using = Some((super::shield::OFFHAND_SLOT, 100));
+        self.combat = Default::default();
+        let before = self.stats.get("used", &item);
+        let from = horizon_core::geometry::Vec3::new(
+            0.0,
+            0.0,
+            if op["behind"].as_bool().unwrap_or(false) {
+                -1.0
+            } else {
+                1.0
+            },
+        );
+        let mut arrow = horizon_client::projectiles::Projectile::new(
+            ProjectileKind::Arrow {
+                base_damage: op["damage"].as_f64().unwrap_or(8.0),
+                critical: false,
+                effect: None,
+            },
+            from,
+            None,
+        );
+        arrow.velocity = horizon_core::geometry::Vec3::new(0.0, 0.0, 1.0);
+        arrow.arrow.as_mut().unwrap().pierce = u8::from(op["pierce"].as_bool().unwrap_or(false));
+        self.projectile_hit(
+            &arrow,
+            horizon_client::projectiles::Hit::Entity {
+                who: horizon_client::mobs::Who::Player,
+                at: horizon_core::geometry::Vec3::ZERO,
+            },
+        )?;
+        let out = vec![format!(
+            "shield health={} used={} stack={}",
+            num(f64::from(self.player.as_ref().unwrap().health.health())),
+            self.stats.get("used", &item) - before,
+            self.offhand
+                .as_ref()
+                .map_or_else(|| "-".to_owned(), |s| format!("{}:{}", s.count, s.damage))
+        )];
+        self.player = None;
+        self.offhand = None;
+        self.using = None;
         Ok(out)
     }
 
@@ -918,6 +982,7 @@ impl Game<'_> {
                         items: [stack],
                         ticks: 0,
                         playing: false,
+                        loaded_clock: false,
                     }),
                 );
             }
@@ -1378,6 +1443,9 @@ impl Game<'_> {
                 ProjectileKind::Egg => "minecraft:egg",
                 ProjectileKind::SmallFireball => "minecraft:small_fireball",
                 ProjectileKind::WindCharge => "minecraft:wind_charge",
+                ProjectileKind::Potion(_, true) => "minecraft:lingering_potion",
+                ProjectileKind::Potion(..) => "minecraft:splash_potion",
+                ProjectileKind::ExperienceBottle => "minecraft:experience_bottle",
                 _ => "minecraft:unknown_projectile",
             };
             let (p, v) = (shot.position, shot.velocity);

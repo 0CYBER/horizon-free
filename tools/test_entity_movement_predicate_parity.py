@@ -1,6 +1,7 @@
 """Actual named movement predicates over a frozen, UUID-bound unmounted pig."""
 import argparse,hashlib,json,sys
 from pathlib import Path
+PARITY_MANUAL = "a proof run by hand: --work-dir DIR --reference-only for the Java side, then --work-dir DIR2 --reference-dir DIR for the native one"  # not a harness: tools/parity.py leaves it out
 try:
  from . import test_command_exec_parity as driver
 except ImportError:

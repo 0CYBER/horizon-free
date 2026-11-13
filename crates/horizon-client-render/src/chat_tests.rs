@@ -305,6 +305,31 @@ fn locate_coordinates_fill_chat_with_teleport_without_submitting() {
     }
 }
 
+/// `EditBox.onClick`: a double click selects the word under the pointer; a
+/// single click only places the caret there.
+#[test]
+fn a_double_click_in_the_chat_box_selects_the_word() {
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &c, "", false, 0, 640, 360, full());
+    screen.type_text(&m, &c, "hello world");
+    // The pointer on the last letter: the first click places the caret there,
+    // the second takes the word.
+    let x = f64::from(screen.input.x) + f64::from(font.width("hello world")) - 1.0;
+    let y = f64::from(screen.input.y) + 2.0;
+    assert!(screen.click(&m, &c, x, y));
+    assert!((10..=11).contains(&screen.input.cursor));
+    assert_eq!(screen.input.highlight, screen.input.cursor);
+    assert!(screen.click(&m, &c, x, y));
+    assert_eq!((screen.input.highlight, screen.input.cursor), (6, 11));
+    assert_eq!(screen.input.selected_text(), "world");
+}
+
 #[test]
 fn history_arrows_recall_messages_and_restore_the_draft() {
     use winit::keyboard::KeyCode::{ArrowDown, ArrowUp};
@@ -1065,6 +1090,34 @@ fn a_server_filter_mask_hides_or_masks_the_message() {
             .filter(|s| s.text != "##")
             .all(|s| s.style.color.is_none())
     );
+}
+
+/// `ChatComponent.refreshTrimmedMessages`: a filter change lays the lines out
+/// again but keeps `chatScrollbarPos` and `newMessageSinceScroll`; only
+/// `rescaleChat` resets them, after `resetChatScroll`.
+#[test]
+fn a_chat_option_change_keeps_the_readers_place_but_a_rescale_does_not() {
+    let font = font();
+    let mut chat = Chat::default();
+    for i in 0..60 {
+        chat.add_message(
+            &font,
+            Text::literal(format!("line {i}")),
+            None,
+            ChatSource::Server,
+            0,
+            false,
+        );
+    }
+    chat.scroll = 3;
+    chat.new_since_scroll = true;
+    chat.set_abilities(&font, ChatAbilities::new(ChatVisibility::System));
+    assert_eq!(chat.scroll, 3);
+    assert!(chat.new_since_scroll);
+    let atlas = crate::hud::HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+    chat.rescale(&atlas);
+    assert_eq!(chat.scroll, 0);
+    assert!(!chat.new_since_scroll);
 }
 
 /// `SuggestionsList.extractRenderState`: the list's rectangle asks for the

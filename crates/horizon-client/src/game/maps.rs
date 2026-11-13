@@ -1161,7 +1161,7 @@ impl Game<'_> {
         let scale = 1i32 << m.scale;
         let start_x = m.center[0] / scale - 64;
         let start_z = m.center[1] / scale - 64;
-        let sea_level = 63;
+        let sea_level = horizon_world::level::sea_level_of(self.level_key());
         let quarts: Vec<[i32; 3]> = (0..128)
             .flat_map(|row| {
                 (0..128).map(move |column| {
@@ -1382,6 +1382,56 @@ impl Game<'_> {
                     "minecraft:lodestone_tracker",
                     Some(Tag::Compound(Default::default())),
                 );
+            }
+        }
+    }
+    /// `LivingEntity.aiStep` -> `EntityEquipment.tick` for the host's player
+    /// and every mob: [`Self::tick_lodestone_compasses`] and
+    /// [`Self::tick_mob_compasses`].
+    pub(super) fn tick_equipment_compasses(&mut self) {
+        self.tick_lodestone_compasses();
+        self.tick_mob_compasses();
+    }
+    /// `EntityEquipment.tick` -> `CompassItem.inventoryTick` for mobs: a
+    /// compass a mob holds in its main hand or wears loses its target when
+    /// the lodestone is gone. (A mob keeps no components for its off hand.)
+    fn tick_mob_compasses(&mut self) {
+        use horizon_client::mobs::gear;
+        const TRACKER: &str = "minecraft:lodestone_tracker";
+        let dim = self.dimension_id();
+        let gone_in = |stack: Option<&ItemStack>| {
+            stack.is_some_and(|s| {
+                s.item.as_ref() == "minecraft:compass" && lodestone_target_gone(self, s, dim)
+            })
+        };
+        let mut gone: Vec<(usize, usize)> = Vec::new();
+        for (i, m) in self.mobs.iter().enumerate() {
+            if gone_in(m.extra.main_hand_stack()) {
+                gone.push((i, gear::MAIN));
+            }
+            if let Some(g) = m.extra.gear.as_deref() {
+                for slot in [gear::HEAD, gear::CHEST, gear::LEGS, gear::FEET] {
+                    if gone_in(g.stacks[slot].as_ref()) {
+                        gone.push((i, slot));
+                    }
+                }
+            }
+        }
+        for (i, slot) in gone {
+            let m = &mut self.mobs[i];
+            if slot == gear::MAIN {
+                if let Some(mut stack) = m.extra.main_hand_stack().cloned() {
+                    stack
+                        .data_mut()
+                        .set_other(TRACKER, Some(Tag::Compound(Default::default())));
+                    m.extra.set_main_hand_stack(Some(stack));
+                }
+            } else if let Some(Some(stack)) =
+                m.extra.gear.as_deref_mut().map(|g| &mut g.stacks[slot])
+            {
+                stack
+                    .data_mut()
+                    .set_other(TRACKER, Some(Tag::Compound(Default::default())));
             }
         }
     }

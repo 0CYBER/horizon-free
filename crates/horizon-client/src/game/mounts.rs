@@ -280,7 +280,6 @@ impl Game<'_> {
                     // `hurtAndConvertOnBreak`: the stick breaks (the broken
                     // statistic and `onEquippedItemBroken`), then what is
                     // left is the rod, not a fresh plain one.
-                    self.award_stat("broken", &stack.item, 1);
                     self.player_equipment_broke(
                         horizon_world::player_inventory::EquipmentSlot::MainHand,
                         &stack,
@@ -1079,7 +1078,7 @@ fn dismount_location(
 }
 /// `Entity.getCollisionHorizontalEscapeVector`: out of the vehicle's box
 /// along `yaw`, to the edge of the square it spans.
-pub(super) fn escape_vector(vehicle_width: f64, passenger_width: f64, yaw: f32) -> Vec3 {
+fn escape_vector(vehicle_width: f64, passenger_width: f64, yaw: f32) -> Vec3 {
     // 1.0E-5F: a float literal widened to double.
     let distance = (vehicle_width + passenger_width + f64::from(1.0e-5_f32)) / 2.0;
     let radians = f64::from(yaw * 0.017_453_292);

@@ -16,6 +16,7 @@ use model_reducing::reducible_model_sprites;
 
 mod animate;
 pub mod cit_glint;
+mod gui_sprite;
 mod model_reducing;
 mod pack_text;
 pub mod pictures;
@@ -55,7 +56,7 @@ pub struct TextureFlags {
 impl TextureFlags {
     /// The `texture` section of a `.png.mcmeta` file, if it sets either flag.
     pub fn from_mcmeta(json: &str) -> Option<Self> {
-        let meta = crate::packs::first_json(json.as_bytes())?;
+        let meta: serde_json::Value = crate::packs::first_json(json.as_bytes()).ok()?;
         let section = meta.get("texture")?;
         let flag = |key| section.get(key).and_then(serde_json::Value::as_bool) == Some(true);
         let flags = Self {
@@ -388,7 +389,7 @@ fn strip_frame(pixels: &[u8], stride: u32, x: u32, y: u32, w: u32, h: u32) -> Ve
 }
 /// The `animation` section of a texture's `.mcmeta`.
 fn animation_of(mcmeta: Option<&str>) -> Option<AnimationMetadata> {
-    let meta = crate::packs::first_json(mcmeta?.as_bytes())?;
+    let meta: serde_json::Value = crate::packs::first_json(mcmeta?.as_bytes()).ok()?;
     AnimationMetadata::from_json(&meta.get("animation")?.to_string()).ok()
 }
 /// An animated strip's first frame: the region the mcmeta's frame size picks
@@ -1401,9 +1402,9 @@ impl HudAtlas {
             edition.3 = pixels;
         }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
-        // The controller's art, unless a pack brought its own (walked above, as a mod's GUI
-        // textures are).
-        for image in crate::pad_glyph::images() {
+        // The controller's art and Horizon's mark, unless a pack brought its own (walked above, as a
+        // mod's GUI textures are).
+        for image in crate::pad_glyph::images().chain(crate::mark_sprite::image()) {
             if !images.iter().any(|i| i.0 == image.0) {
                 images.push(image);
             }
@@ -2466,9 +2467,8 @@ impl HudBatch {
                     );
                 }
             }
-            InlineObject::Atlas { sprite, .. } => {
-                let key = sprite.strip_prefix("minecraft:").unwrap_or(sprite);
-                if let Some(rect) = atlas.sprites.get(key).copied() {
+            InlineObject::Atlas { .. } => {
+                if let Some(rect) = atlas.inline_object_sprite(object) {
                     self.rect_uv(x, y, 8.0, 8.0, rect, tint);
                 }
             }
@@ -3771,6 +3771,32 @@ mod tests {
         // A still texture there stays whole, as vanilla stitches it.
         let banner = atlas.sprites["custom/banner"];
         assert_eq!(banner.texels((atlas.width, atlas.height)), (16, 32));
+    }
+    #[test]
+    fn an_inline_atlas_sprite_resolves_in_its_named_atlas() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-atlas-inline-{}", std::process::id()));
+        let gui = root.join("assets/minecraft/textures/gui/sprites/boss_bar");
+        fs::create_dir_all(&gui).unwrap();
+        write_strip(
+            &gui.join("pink_background.png"),
+            16,
+            16,
+            &[[1, 2, 3, 255]],
+            None,
+        );
+        let atlas = HudAtlas::build(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        let packed = atlas.sprites["gui/sprites/boss_bar/pink_background"];
+        let missing = atlas.sprites[MISSING_SPRITE];
+        let found = atlas
+            .inline_sprite("minecraft:gui", "minecraft:boss_bar/pink_background")
+            .unwrap();
+        assert_eq!((found.u0, found.v0), (packed.u0, packed.v0));
+        let none = atlas
+            .inline_sprite("minecraft:gui", "minecraft:boss_bar/nope")
+            .unwrap();
+        assert_eq!((none.u0, none.v0), (missing.u0, missing.v0));
     }
     #[test]
     fn a_root_single_sprite_strip_taller_than_the_atlas_packs_one_frame() {

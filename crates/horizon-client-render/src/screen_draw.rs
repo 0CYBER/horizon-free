@@ -580,6 +580,15 @@ pub fn button(
         "widget/button"
     };
     sprite(out, sprite_id, x, y, w, h);
+    // `AbstractWidget.WithInactiveMessage.defaultInactiveMessage`: an inactive
+    // widget's message is -6250336 (0xFFA0A0A0), not the active white.
+    let inactive;
+    let label = if active {
+        label
+    } else {
+        inactive = label.clone().with_color(0xFFA0_A0A0);
+        &inactive
+    };
     scrolling_string_over_contents(out, m, label, x, y, w, h, 2, now_ms);
 }
 /// `Tooltip.splitTooltip` of a widget's tooltip, shown under the mouse.
@@ -855,11 +864,21 @@ impl TextField {
         self.set_highlight(m, pos);
     }
     /// `onClick`: the cursor where the mouse is (`findClickedPositionInText`).
-    pub fn click(&mut self, m: &Measure, x: f64, extend: bool) {
+    /// `EditBox.onClick` / `MultiLineEditBox.onClick`: a double click selects
+    /// the word the pointer is in (`EditBox.selectWord`), any other click
+    /// places the caret there.
+    pub fn click(&mut self, m: &Measure, x: f64, extend: bool, double: bool) {
         let pos = (x.floor() as i32 - self.text_x()).min(self.inner_width());
         let rest = sub(&self.value, self.display, chars(&self.value));
         let at = self.display + m.plain(&rest, pos, false);
-        self.move_cursor_to(m, at, extend);
+        if double {
+            let start = crate::ui::word_position(&self.value, -1, at);
+            let end = crate::ui::word_position(&self.value, 1, at);
+            self.move_cursor_to(m, start, false);
+            self.move_cursor_to(m, end, true);
+        } else {
+            self.move_cursor_to(m, at, extend);
+        }
     }
     pub fn contains(&self, x: f64, y: f64) -> bool {
         x >= self.x as f64
@@ -1149,6 +1168,33 @@ mod button_label_tests {
         let mut out = Vec::new();
         button(&mut out, m, text, 10, 20, w, 20, true, false, now_ms);
         out
+    }
+    /// `WithInactiveMessage`: a disabled button's message is grey, not white.
+    #[test]
+    fn an_inactive_buttons_label_is_grey() {
+        let atlas = atlas();
+        let m = Measure(&atlas.font);
+        let mut out = Vec::new();
+        button(
+            &mut out,
+            &m,
+            &Text::literal("Go"),
+            10,
+            20,
+            100,
+            20,
+            false,
+            false,
+            0,
+        );
+        let color = out
+            .iter()
+            .find_map(|d| match d {
+                Draw::Text { text, .. } => text.spans.iter().find_map(|s| s.style.color),
+                _ => None,
+            })
+            .expect("the label is drawn with its inactive style");
+        assert_eq!(color & 0xFF_FFFF, 0xA0_A0A0);
     }
     fn scissor_of(draws: &[Draw]) -> Option<[i32; 4]> {
         draws.iter().find_map(|d| match d {

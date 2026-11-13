@@ -222,11 +222,6 @@ impl<P: Copy, S: Copy> Lines<P, S> {
         }
         self.y += style::GROUP_GAP;
     }
-    /// A group of rows under its page's own name (`list`'s `page_name`), for pages named at run
-    /// time, such as a resource pack's config entries (`pack_options_ui`).
-    pub(crate) fn titled(&mut self, page: P, rows: Vec<S>) {
-        self.group(page, "", rows);
-    }
     /// The lines and the content's height.
     pub(crate) fn finish(self) -> (Vec<Line<P, S>>, f32) {
         (self.lines, (self.y - style::GROUP_GAP).max(0.0))
@@ -310,6 +305,9 @@ pub(crate) fn search_field(
     let frame = [x, y, clear[0] - x, h];
     search.frame = Some(frame);
     search.draw(batch, atlas, None);
+    if ui::hovered(cursor, x, y, frame[2], h) {
+        crate::widgets::text_cursor(true, true);
+    }
     if search.value.is_empty() && !focused {
         let hint = Text::literal(search.message.clone());
         batch.text_styled(atlas, &hint, x + 5.0, search.y, style::muted(), true);
@@ -349,8 +347,7 @@ pub(crate) fn plate(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, head
 }
 
 /// The list, clipped to its view: each group's panel, then its names and rows on it. `row`
-/// draws a setting at its `y`; `page_name` names a page, and a group without a name of its own
-/// (`Lines::titled`), in the player's language.
+/// draws a setting at its `y`; `page_name` names a page, in the player's language.
 pub(crate) fn list<P: Copy, S: Copy>(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
@@ -383,7 +380,6 @@ pub(crate) fn list<P: Copy, S: Copy>(
         }
         let Some(setting) = line.setting else {
             let (name, color, dy) = match line.group {
-                Some(("", _)) => (page_name(line.page), style::muted(), 3.0),
                 Some((name, _)) => (lang::get(name), style::muted(), 3.0),
                 None => (page_name(line.page), style::accent(), 4.0),
             };
@@ -949,22 +945,10 @@ pub(crate) fn dock_note(
     }
 }
 
-/// Done or Undo at the foot of the page list.
+/// Done, Undo or Apply at the foot of the page list, registered for a controller. Its label
+/// leaves `room` at its left for a controller's glyph: a button that declared its job gets one,
+/// as vanilla's do (`ui::action_button`), which a half-width Undo or Apply needs.
 pub(crate) fn foot_button(
-    batch: &mut HudBatch,
-    atlas: &HudAtlas,
-    rect: [f32; 4],
-    label: &Text,
-    cursor: (f32, f32),
-    flags: (bool, bool),
-) {
-    foot_button_with_room(batch, atlas, rect, label, cursor, flags, 0.0);
-}
-
-/// A foot button whose label leaves `room` at its left for a controller's glyph: a button that
-/// declared its job gets one, as vanilla's do (`ui::action_button`), which a half-width Undo or
-/// Apply needs.
-fn foot_button_with_room(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
     rect: [f32; 4],
@@ -2411,7 +2395,7 @@ impl<S: Screen + Default> Hosted for Shell<S> {
                 }
                 None => 0.0,
             };
-            foot_button_with_room(batch, atlas, rect, &label, cursor, flags, room);
+            foot_button(batch, atlas, rect, &label, cursor, flags, room);
         }
     }
     fn click(

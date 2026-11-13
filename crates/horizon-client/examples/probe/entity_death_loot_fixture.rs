@@ -318,6 +318,8 @@ pub fn main() -> horizon_client::Result<()> {
                         Ok(())
                     }
                     drops::Drop::Orb(v) => writeln!(out, "orb {v}"),
+                    // The star's `setExtendedLifetime` is no part of the loot.
+                    drops::Drop::Aged(s, _) => writeln!(out, "{}", line(&s)),
                 };
             }
         }
