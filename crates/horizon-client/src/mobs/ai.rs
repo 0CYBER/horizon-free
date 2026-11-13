@@ -483,7 +483,7 @@ pub fn register(m: &mut Mob) {
 /// every mob Horizon makes, a client's copies of a server's mobs included,
 /// before its saved data is read; goals tick only where the mob's AI runs.
 /// `goals::Float` keeps the navigation floating, as FloatGoal's
-/// constructor does. API @API:register_goals@.
+/// constructor does. API 432.
 #[inline(never)]
 pub fn native_register_goals(mob: &mut Mob) {
     crate::native_client_hooks::register_goals(mob);

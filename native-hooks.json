@@ -745,6 +745,1151 @@
     {
       "name": "force_chunk_in",
       "target": "horizon_client::game::native_chunk_tickets::Game<'_>::native_force_chunk_in"
+    },
+    {
+      "name": "add_toast",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_add_toast"
+    },
+    {
+      "name": "advancement_display",
+      "target": "horizon_client::game::advancements::Game<'_>::native_advancement_display"
+    },
+    {
+      "name": "block_states",
+      "target": "horizon_client::game::native_block_sprites::Game<'_>::native_block_states"
+    },
+    {
+      "name": "client_resources",
+      "target": "horizon_client::game::native_block_sprites::Game<'_>::native_client_resources"
+    },
+    {
+      "name": "block_entity_tag",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_block_entity_tag"
+    },
+    {
+      "name": "block_face_sprite",
+      "target": "horizon_client::game::native_block_sprites::Game<'_>::native_block_face_sprite"
+    },
+    {
+      "name": "boss_bar",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_boss_bar"
+    },
+    {
+      "name": "may_build",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_may_build"
+    },
+    {
+      "name": "chat_as",
+      "target": "horizon_client::game::native_server::Game<'_>::native_chat_as"
+    },
+    {
+      "name": "chat_input",
+      "target": "horizon_client::game::chat::Game<'_>::native_chat_input"
+    },
+    {
+      "name": "set_chat_input",
+      "target": "horizon_client::game::chat::Game<'_>::native_set_chat_input"
+    },
+    {
+      "name": "chunk_load_request",
+      "target": "horizon_client::game::native_chunk_tickets::Game<'_>::native_chunk_load_request"
+    },
+    {
+      "name": "chunk_load_state",
+      "target": "horizon_client::game::native_chunk_tickets::Game<'_>::native_chunk_load_state"
+    },
+    {
+      "name": "chunk_is_loaded",
+      "target": "horizon_client::game::native_chunk_tickets::Game<'_>::native_chunk_is_loaded"
+    },
+    {
+      "name": "chunk_load_release",
+      "target": "horizon_client::game::native_chunk_tickets::Game<'_>::native_chunk_load_release"
+    },
+    {
+      "name": "relight_chunks",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_relight_chunks"
+    },
+    {
+      "name": "chunk_trackers",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_chunk_trackers"
+    },
+    {
+      "name": "resend_chunk",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_resend_chunk"
+    },
+    {
+      "name": "chunk_snapshot",
+      "target": "horizon_client::game::native_chunk_snapshot::Game<'_>::native_chunk_snapshot"
+    },
+    {
+      "name": "block_map_color",
+      "target": "horizon_client::game::native_chunk_snapshot::Game<'_>::native_block_map_color"
+    },
+    {
+      "name": "biome_name",
+      "target": "horizon_client::game::native_chunk_snapshot::Game<'_>::native_biome_name"
+    },
+    {
+      "name": "biome_tint",
+      "target": "horizon_client::game::native_chunk_snapshot::Game<'_>::native_biome_tint"
+    },
+    {
+      "name": "reserve_entity_id",
+      "target": "horizon_client::game::native_client_entities::Game<'_>::native_reserve_entity_id"
+    },
+    {
+      "name": "client_entity_spawn",
+      "target": "horizon_client::game::native_client_entities::Game<'_>::native_client_entity_spawn"
+    },
+    {
+      "name": "client_entity_set",
+      "target": "horizon_client::game::native_client_entities::Game<'_>::native_client_entity_set"
+    },
+    {
+      "name": "client_entity_move",
+      "target": "horizon_client::game::native_client_entities::Game<'_>::native_client_entity_move"
+    },
+    {
+      "name": "client_entity_remove",
+      "target": "horizon_client::game::native_client_entities::Game<'_>::native_client_entity_remove"
+    },
+    {
+      "name": "client_items",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_client_items"
+    },
+    {
+      "name": "client_texture",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_client_texture"
+    },
+    {
+      "name": "menu_stacks",
+      "target": "horizon_client::game::native_menu_stacks::Game<'_>::native_menu_stacks"
+    },
+    {
+      "name": "client_fireworks",
+      "target": "horizon_client::game::native_client_particles::Game<'_>::native_client_fireworks"
+    },
+    {
+      "name": "own_inventory",
+      "target": "horizon_client::game::native_menu_stacks::Game<'_>::native_own_inventory"
+    },
+    {
+      "name": "add_particle",
+      "target": "horizon_client::game::native_client_particles::Game<'_>::native_add_particle"
+    },
+    {
+      "name": "client_chunks",
+      "target": "horizon_client::game::native_client_world::Game<'_>::native_client_chunks"
+    },
+    {
+      "name": "client_chunks_changed",
+      "target": "horizon_client::game::native_client_world::Game<'_>::native_client_chunks_changed"
+    },
+    {
+      "name": "client_biomes",
+      "target": "horizon_client::game::native_client_world::Game<'_>::native_client_biomes"
+    },
+    {
+      "name": "client_biomes_changed",
+      "target": "horizon_client::game::native_client_world::Game<'_>::native_client_biomes_changed"
+    },
+    {
+      "name": "command_info",
+      "target": "horizon_client::game::native_server::Game<'_>::native_command_info"
+    },
+    {
+      "name": "set_compass_target",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_set_compass_target"
+    },
+    {
+      "name": "create_player_file",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_create_player_file"
+    },
+    {
+      "name": "default_state",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_default_state"
+    },
+    {
+      "name": "draw_text",
+      "target": "horizon_client::game::native_block_entity_draw::Game<'_>::native_draw_text"
+    },
+    {
+      "name": "set_block_entity",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_set_block_entity"
+    },
+    {
+      "name": "block_entity_nbt",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_block_entity_nbt"
+    },
+    {
+      "name": "entities_in",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_entities_in"
+    },
+    {
+      "name": "watch_entity_data",
+      "target": "horizon_client::game::native_packets::Game<'_>::native_watch_entity_data"
+    },
+    {
+      "name": "entity_teleport_to",
+      "target": "horizon_client::game::native_entity_moves::Game<'_>::native_entity_teleport_to",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_set_rotation",
+      "target": "horizon_client::game::native_entity_moves::Game<'_>::native_entity_set_rotation",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_head_yaw",
+      "target": "horizon_client::game::native_entity_moves::Game<'_>::native_entity_head_yaw",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_set_head_yaw",
+      "target": "horizon_client::game::native_entity_moves::Game<'_>::native_entity_set_head_yaw",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_direction",
+      "target": "horizon_client::game::native_entity_moves::Game<'_>::native_entity_direction",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_dimensions",
+      "target": "horizon_client::game::native_entity_moves::Game<'_>::native_entity_dimensions",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_push",
+      "target": "horizon_client::game::native_entity_moves::Game<'_>::native_entity_push",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_is_shift_key_down",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_is_shift_key_down",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_is_crouching",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_is_crouching",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_is_sprinting",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_is_sprinting",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_is_in_water",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_is_in_water",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_is_in_lava",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_is_in_lava",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_fire_immune",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_fire_immune",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_fire_ticks",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_fire_ticks",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_air_supply",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_air_supply",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_max_air_supply",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_max_air_supply",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_is_silent",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_is_silent",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_set_silent",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_set_silent",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_is_invisible",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_is_invisible",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_pose",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_pose",
+      "receiver": "entity"
+    },
+    {
+      "name": "expect_fake_player",
+      "target": "horizon_client::game::native_view_distance::Game<'_>::native_expect_fake_player"
+    },
+    {
+      "name": "use_as_player",
+      "target": "horizon_client::game::native_machines::Game<'_>::native_use_as_player"
+    },
+    {
+      "name": "fluid_flow",
+      "target": "horizon_client::game::native_world_read::Game<'_>::native_fluid_flow"
+    },
+    {
+      "name": "draw_fluid_box",
+      "target": "horizon_client::game::native_fluid_render::Game<'_>::native_draw_fluid_box",
+      "mod_api": {}
+    },
+    {
+      "name": "health_hud_state",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_health_hud_state"
+    },
+    {
+      "name": "local_attribute",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_local_attribute"
+    },
+    {
+      "name": "hide_entity_from",
+      "target": "horizon_client::game::native_server::Game<'_>::native_hide_entity_from"
+    },
+    {
+      "name": "draw_model",
+      "target": "horizon_client::game::native_block_entity_draw::Game<'_>::native_draw_model"
+    },
+    {
+      "name": "mod_block_entity",
+      "target": "horizon_client::game::native_host_bridge::Game<'_>::native_mod_block_entity"
+    },
+    {
+      "name": "change_mod_block_entity",
+      "target": "horizon_client::game::native_host_bridge::Game<'_>::native_change_mod_block_entity"
+    },
+    {
+      "name": "item_entities",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_entities"
+    },
+    {
+      "name": "level_random",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_level_random"
+    },
+    {
+      "name": "play_sound",
+      "target": "horizon_client::game::native_host_bridge::Game<'_>::native_play_sound_in_place"
+    },
+    {
+      "name": "send_particles",
+      "target": "horizon_client::game::native_host_bridge::Game<'_>::native_send_particles_in_place"
+    },
+    {
+      "name": "block_name_in_tag",
+      "target": "horizon_client::game::native_world_read::Game<'_>::native_block_name_in_tag"
+    },
+    {
+      "name": "server_item_in_tag",
+      "target": "horizon_client::game::native_world_read::Game<'_>::native_server_item_in_tag"
+    },
+    {
+      "name": "component",
+      "target": "horizon_client::game::native_components::Game<'_>::native_component"
+    },
+    {
+      "name": "set_component",
+      "target": "horizon_client::game::native_components::Game<'_>::native_set_component"
+    },
+    {
+      "name": "remove_component",
+      "target": "horizon_client::game::native_components::Game<'_>::native_remove_component"
+    },
+    {
+      "name": "trigger_criterion",
+      "target": "horizon_client::game::native_criteria::Game<'_>::native_trigger_mod_criterion"
+    },
+    {
+      "name": "equipment",
+      "target": "horizon_client::game::native_host_bridge::Game<'_>::native_equipment"
+    },
+    {
+      "name": "sneaking",
+      "target": "horizon_client::game::native_host_bridge::Game<'_>::native_sneaking"
+    },
+    {
+      "name": "send_map",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_send_map",
+      "mod_api": {}
+    },
+    {
+      "name": "hud_mode",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_hud_mode"
+    },
+    {
+      "name": "set_hud_mode",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_set_hud_mode"
+    },
+    {
+      "name": "hurt_entity",
+      "target": "horizon_client::game::native_entities::Game<'_>::native_hurt_entity"
+    },
+    {
+      "name": "move_stack_typed",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_move_stack_typed"
+    },
+    {
+      "name": "set_inventory_typed",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_set_inventory_typed"
+    },
+    {
+      "name": "set_inventory_slot_typed",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_set_inventory_slot_typed"
+    },
+    {
+      "name": "take_stacks_typed",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_take_stacks_typed"
+    },
+    {
+      "name": "is_player_fake",
+      "target": "horizon_client::game::native_view_distance::Game<'_>::native_is_player_fake"
+    },
+    {
+      "name": "item_from_snbt",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_from_snbt"
+    },
+    {
+      "name": "has_played_before",
+      "target": "horizon_client::game::native_server::Game<'_>::native_has_played_before"
+    },
+    {
+      "name": "motd",
+      "target": "horizon_client::game::native_server::Game<'_>::native_motd"
+    },
+    {
+      "name": "broadcast_quiet",
+      "target": "horizon_client::game::native_server::Game<'_>::native_broadcast_quiet"
+    },
+    {
+      "name": "kick",
+      "target": "horizon_client::game::native_packets::Game<'_>::native_kick"
+    },
+    {
+      "name": "level_play_sound",
+      "target": "horizon_client::game::native_level_effects::Game<'_>::native_level_play_sound",
+      "receiver": "level"
+    },
+    {
+      "name": "level_send_particles",
+      "target": "horizon_client::game::native_level_effects::Game<'_>::native_level_send_particles",
+      "receiver": "level"
+    },
+    {
+      "name": "level_markers",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_level_markers"
+    },
+    {
+      "name": "level_name",
+      "target": "horizon_client::game::native_server::Game<'_>::native_level_name"
+    },
+    {
+      "name": "dimension_of_world",
+      "target": "horizon_client::game::native_server::Game<'_>::native_dimension_of_world"
+    },
+    {
+      "name": "world_of_dimension",
+      "target": "horizon_client::game::native_server::Game<'_>::native_world_of_dimension"
+    },
+    {
+      "name": "level_stats",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_level_stats"
+    },
+    {
+      "name": "level_entities",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_level_entities"
+    },
+    {
+      "name": "level_block_entities",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_level_block_entities"
+    },
+    {
+      "name": "level_seed",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_seed",
+      "receiver": "level"
+    },
+    {
+      "name": "level_difficulty",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_difficulty",
+      "receiver": "level"
+    },
+    {
+      "name": "level_game_rule",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_game_rule",
+      "receiver": "level"
+    },
+    {
+      "name": "level_weather",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_weather",
+      "receiver": "level"
+    },
+    {
+      "name": "level_is_raining",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_is_raining",
+      "receiver": "level"
+    },
+    {
+      "name": "level_is_thundering",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_is_thundering",
+      "receiver": "level"
+    },
+    {
+      "name": "level_set_day_time",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_set_day_time",
+      "receiver": "level"
+    },
+    {
+      "name": "level_set_game_rule",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_set_game_rule",
+      "receiver": "level"
+    },
+    {
+      "name": "level_set_weather",
+      "target": "horizon_client::game::native_level_world::Game<'_>::native_level_set_weather",
+      "receiver": "level"
+    },
+    {
+      "name": "has_line_of_sight",
+      "target": "horizon_client::game::native_entity_refs::Game<'_>::native_has_line_of_sight"
+    },
+    {
+      "name": "clear_between",
+      "target": "horizon_client::game::native_entity_refs::Game<'_>::native_clear_between"
+    },
+    {
+      "name": "entity_swing",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_swing",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_set_fire",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_set_fire",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_effects",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_effects",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_set_attribute_base",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_set_attribute_base",
+      "receiver": "entity"
+    },
+    {
+      "name": "entity_use_item",
+      "target": "horizon_client::game::native_entity_state::Game<'_>::native_entity_use_item",
+      "receiver": "entity"
+    },
+    {
+      "name": "lightning_bolt",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_lightning_bolt"
+    },
+    {
+      "name": "loot_odds",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_loot_odds"
+    },
+    {
+      "name": "destroy_block",
+      "target": "horizon_client::game::native_machines::Game<'_>::native_machine_destroy_block"
+    },
+    {
+      "name": "set_break_progress",
+      "target": "horizon_client::game::native_machines::Game<'_>::native_set_break_progress"
+    },
+    {
+      "name": "map_colors",
+      "target": "horizon_client::game::maps::Game<'_>::native_map_colors"
+    },
+    {
+      "name": "map_meta",
+      "target": "horizon_client::game::maps::Game<'_>::native_map_meta"
+    },
+    {
+      "name": "open_menu_with_input",
+      "target": "horizon_client::game::native_menus::Game<'_>::native_open_menu_with_input"
+    },
+    {
+      "name": "menu_contents",
+      "target": "horizon_client::game::native_menus::Game<'_>::native_menu_contents"
+    },
+    {
+      "name": "menu_cursor",
+      "target": "horizon_client::game::native_menus::Game<'_>::native_menu_cursor"
+    },
+    {
+      "name": "spawn_background_job",
+      "target": "horizon_client::game::native_tasks::Game<'_>::native_spawn_background_job"
+    },
+    {
+      "name": "spawn_task",
+      "target": "horizon_client::game::native_tasks::Game<'_>::native_spawn_task"
+    },
+    {
+      "name": "defer_main_thread",
+      "target": "horizon_client::game::native_tasks::Game<'_>::native_defer_main_thread"
+    },
+    {
+      "name": "fluid_tanks",
+      "target": "horizon_client::game::machines::native_fluids::Game<'_>::native_fluid_tanks"
+    },
+    {
+      "name": "bake_layer",
+      "target": "horizon_client::game::native_block_entity_draw::Game<'_>::native_bake_layer"
+    },
+    {
+      "name": "draw_model_part",
+      "target": "horizon_client::game::native_block_entity_draw::Game<'_>::native_draw_model_part"
+    },
+    {
+      "name": "mount",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_mount"
+    },
+    {
+      "name": "dismount",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_dismount"
+    },
+    {
+      "name": "eject_passengers",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_eject_passengers"
+    },
+    {
+      "name": "muffle_sounds",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_muffle_sounds"
+    },
+    {
+      "name": "new_map",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_new_map"
+    },
+    {
+      "name": "paint_map",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_paint_map"
+    },
+    {
+      "name": "entity_by_uuid",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_entity_by_uuid"
+    },
+    {
+      "name": "merge_entity_nbt",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_merge_entity_nbt"
+    },
+    {
+      "name": "find_entity_by_uuid",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_find_entity_by_uuid"
+    },
+    {
+      "name": "entity_nbt_in",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_entity_nbt_in"
+    },
+    {
+      "name": "set_entity_rotation",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_set_entity_rotation"
+    },
+    {
+      "name": "mob_attack",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_mob_attack"
+    },
+    {
+      "name": "mob_navigate",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_mob_navigate"
+    },
+    {
+      "name": "mob_follow",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_mob_follow"
+    },
+    {
+      "name": "mob_stop",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_mob_stop"
+    },
+    {
+      "name": "mob_navigating",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_mob_navigating"
+    },
+    {
+      "name": "mob_look_at",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_mob_look_at"
+    },
+    {
+      "name": "mob_path",
+      "target": "horizon_client::game::native_npcs::Game<'_>::native_mob_path"
+    },
+    {
+      "name": "open_chat",
+      "target": "horizon_client::game::native_net::Game<'_>::native_open_chat"
+    },
+    {
+      "name": "panel_style",
+      "target": "horizon_client::game::native_panel::Game<'_>::native_panel_style"
+    },
+    {
+      "name": "has_permission",
+      "target": "horizon_client::game::native_permissions::Game<'_>::native_has_permission"
+    },
+    {
+      "name": "primary_group",
+      "target": "horizon_client::game::native_permissions::Game<'_>::native_primary_group"
+    },
+    {
+      "name": "player_permission_value",
+      "target": "horizon_client::game::native_permissions::Game<'_>::native_player_permission_value"
+    },
+    {
+      "name": "pick_block",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_pick_block"
+    },
+    {
+      "name": "play_sound_to",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_play_sound_to"
+    },
+    {
+      "name": "attribute",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_attribute"
+    },
+    {
+      "name": "set_attribute_base",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_set_attribute_base"
+    },
+    {
+      "name": "set_attributes",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_set_attributes"
+    },
+    {
+      "name": "attribute_modifiers",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_attribute_modifiers"
+    },
+    {
+      "name": "simulate_player_move",
+      "target": "horizon_client::game::native_bots::Game<'_>::native_simulate_player_move"
+    },
+    {
+      "name": "collision_boxes",
+      "target": "horizon_client::game::native_bots::Game<'_>::native_collision_boxes"
+    },
+    {
+      "name": "player_break_block",
+      "target": "horizon_client::game::native_player_break::Game<'_>::native_player_break_block"
+    },
+    {
+      "name": "player_channels",
+      "target": "horizon_client::game::native_packets::Game<'_>::native_player_channels"
+    },
+    {
+      "name": "player_client",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_player_client"
+    },
+    {
+      "name": "player_compound",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_player_compound"
+    },
+    {
+      "name": "effects",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_effects"
+    },
+    {
+      "name": "add_effect",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_add_effect"
+    },
+    {
+      "name": "remove_effect",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_remove_effect"
+    },
+    {
+      "name": "set_effects",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_set_effects"
+    },
+    {
+      "name": "effects_v2",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_effects_v2"
+    },
+    {
+      "name": "set_effects_v2",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_set_effects_v2"
+    },
+    {
+      "name": "held_stack",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_held_stack"
+    },
+    {
+      "name": "player_equipment",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_player_equipment"
+    },
+    {
+      "name": "player_permission",
+      "target": "horizon_client::game::native_server::Game<'_>::native_player_permission"
+    },
+    {
+      "name": "player_persistent_data",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_player_persistent_data"
+    },
+    {
+      "name": "set_player_persistent_data",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_set_player_persistent_data"
+    },
+    {
+      "name": "player_stats",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_player_stats"
+    },
+    {
+      "name": "player_stat",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_player_stat"
+    },
+    {
+      "name": "set_player_stats",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_set_player_stats"
+    },
+    {
+      "name": "player_advancements",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_player_advancements"
+    },
+    {
+      "name": "set_player_advancements",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_set_player_advancements"
+    },
+    {
+      "name": "player_food",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_player_food"
+    },
+    {
+      "name": "set_player_status",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_set_player_status"
+    },
+    {
+      "name": "player_textures",
+      "target": "horizon_client::game::native_profiles::Game<'_>::native_player_textures"
+    },
+    {
+      "name": "player_head",
+      "target": "horizon_client::game::native_profiles::Game<'_>::native_player_head"
+    },
+    {
+      "name": "set_player_view_distance",
+      "target": "horizon_client::game::native_view_distance::Game<'_>::native_set_player_view_distance"
+    },
+    {
+      "name": "player_view_distance",
+      "target": "horizon_client::game::native_view_distance::Game<'_>::native_player_view_distance"
+    },
+    {
+      "name": "profile_by_name",
+      "target": "horizon_client::game::native_profiles::Game<'_>::native_profile_by_name"
+    },
+    {
+      "name": "profile_by_uuid",
+      "target": "horizon_client::game::native_profiles::Game<'_>::native_profile_by_uuid"
+    },
+    {
+      "name": "set_profile_property",
+      "target": "horizon_client::game::native_profiles::Game<'_>::native_set_profile_property"
+    },
+    {
+      "name": "refresh_player",
+      "target": "horizon_client::game::native_profiles::Game<'_>::native_refresh_player"
+    },
+    {
+      "name": "push_voice",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_push_voice"
+    },
+    {
+      "name": "collect_recipe_categories",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_collect_recipe_categories"
+    },
+    {
+      "name": "recipe_categories_changed",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_recipe_categories_changed"
+    },
+    {
+      "name": "recipe_categories_version",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_recipe_categories_version"
+    },
+    {
+      "name": "show_recipes",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_show_recipes"
+    },
+    {
+      "name": "refresh_commands",
+      "target": "horizon_client::game::native_server::Game<'_>::native_refresh_commands"
+    },
+    {
+      "name": "registry_name",
+      "target": "horizon_client::game::native_registry_name::Game<'_>::native_registry_name"
+    },
+    {
+      "name": "resend_commands",
+      "target": "horizon_client::game::native_permissions::Game<'_>::native_resend_commands"
+    },
+    {
+      "name": "send_resource_pack",
+      "target": "horizon_client::game::native_packets::Game<'_>::native_send_resource_pack"
+    },
+    {
+      "name": "pop_resource_pack",
+      "target": "horizon_client::game::native_packets::Game<'_>::native_pop_resource_pack"
+    },
+    {
+      "name": "respawn_player",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_respawn_player"
+    },
+    {
+      "name": "vehicle_of",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_vehicle_of"
+    },
+    {
+      "name": "passengers_of",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_passengers_of"
+    },
+    {
+      "name": "run_command_as",
+      "target": "horizon_client::game::native_server::Game<'_>::native_run_command_as"
+    },
+    {
+      "name": "run_command_captured",
+      "target": "horizon_client::game::native_server::Game<'_>::native_run_command_captured"
+    },
+    {
+      "name": "run_mod_command",
+      "target": "horizon_client::game::native_server::Game<'_>::native_run_mod_command"
+    },
+    {
+      "name": "draw_scene",
+      "target": "horizon_client::game::native_scene::Game<'_>::native_draw_scene"
+    },
+    {
+      "name": "apply_screen_blur",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_apply_screen_blur"
+    },
+    {
+      "name": "menu_blur_radius",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_blur_radius"
+    },
+    {
+      "name": "draw_menu_background",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_draw_menu_background"
+    },
+    {
+      "name": "tiled_sprite",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tiled_sprite"
+    },
+    {
+      "name": "send_custom_payload_to_player",
+      "target": "horizon_client::game::native_net::Game<'_>::native_send_custom_payload_to_player"
+    },
+    {
+      "name": "send_particles_to",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_send_particles_to"
+    },
+    {
+      "name": "max_players",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_max_players"
+    },
+    {
+      "name": "server_dir",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_server_dir"
+    },
+    {
+      "name": "log_file",
+      "target": "horizon_client::game::native_player_reads::Game<'_>::native_log_file"
+    },
+    {
+      "name": "log",
+      "target": "horizon_client::game::native_server::Game<'_>::native_log"
+    },
+    {
+      "name": "watch_server_packets",
+      "target": "horizon_client::game::native_packets::Game<'_>::native_watch_server_packets"
+    },
+    {
+      "name": "count_packets",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_count_packets"
+    },
+    {
+      "name": "online_mode",
+      "target": "horizon_client::game::native_server::Game<'_>::native_online_mode"
+    },
+    {
+      "name": "server_port",
+      "target": "horizon_client::game::native_server::Game<'_>::native_server_port"
+    },
+    {
+      "name": "proxy_forwarding",
+      "target": "horizon_client::game::native_server::Game<'_>::native_proxy_forwarding"
+    },
+    {
+      "name": "spans",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_spans"
+    },
+    {
+      "name": "mob_cost_sampling",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_mob_cost_sampling"
+    },
+    {
+      "name": "take_mob_costs",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_take_mob_costs"
+    },
+    {
+      "name": "biome",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_biome"
+    },
+    {
+      "name": "data_dir",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_data_dir"
+    },
+    {
+      "name": "set_biomes",
+      "target": "horizon_client::game::native_biome_colors::native_biome_edit::Game<'_>::native_set_biomes"
+    },
+    {
+      "name": "set_block_tag",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_set_block_tag"
+    },
+    {
+      "name": "set_display_name",
+      "target": "horizon_client::game::native_server::Game<'_>::native_set_display_name"
+    },
+    {
+      "name": "set_flight",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_set_flight"
+    },
+    {
+      "name": "set_game_mode",
+      "target": "horizon_client::game::native_player_state::Game<'_>::native_set_game_mode"
+    },
+    {
+      "name": "set_inventory",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_set_inventory"
+    },
+    {
+      "name": "set_inventory_slot",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_set_inventory_slot"
+    },
+    {
+      "name": "take_stacks",
+      "target": "horizon_client::game::native_inventories::Game<'_>::native_take_stacks"
+    },
+    {
+      "name": "set_list_name",
+      "target": "horizon_client::game::native_server::Game<'_>::native_set_list_name"
+    },
+    {
+      "name": "set_name_tag",
+      "target": "horizon_client::game::native_server::Game<'_>::native_set_name_tag"
+    },
+    {
+      "name": "set_player_fake",
+      "target": "horizon_client::game::native_view_distance::Game<'_>::native_set_player_fake"
+    },
+    {
+      "name": "menu_slot_roles",
+      "target": "horizon_client::game::native_slot_roles::Game<'_>::native_menu_slot_roles"
+    },
+    {
+      "name": "structure_template",
+      "target": "horizon_client::game::native_structures::Game<'_>::native_structure_template"
+    },
+    {
+      "name": "summon_with_uuid",
+      "target": "horizon_client::game::native_entities::Game<'_>::native_summon_with_uuid"
+    },
+    {
+      "name": "take_screenshot",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_take_screenshot"
+    },
+    {
+      "name": "teleport_player",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_teleport_player"
+    },
+    {
+      "name": "teleport_vehicle",
+      "target": "horizon_client::game::native_travel::Game<'_>::native_teleport_vehicle"
+    },
+    {
+      "name": "draw_terrain_model",
+      "target": "horizon_client::game::native_terrain_model::Game<'_>::native_draw_terrain_model",
+      "mod_api": {}
+    },
+    {
+      "name": "terrain_surface",
+      "target": "horizon_client::game::native_world_columns::Game<'_>::native_terrain_surface"
+    },
+    {
+      "name": "tick_times",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_tick_times"
+    },
+    {
+      "name": "tps",
+      "target": "horizon_client::game::native_diagnostics::Game<'_>::native_tps"
+    },
+    {
+      "name": "title",
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_title"
+    },
+    {
+      "name": "gui_draw_item",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_gui_draw_item"
+    },
+    {
+      "name": "gui_draw_item_with",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_gui_draw_item_with"
+    },
+    {
+      "name": "has_shift_down",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_has_shift_down"
+    },
+    {
+      "name": "has_control_down",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_has_control_down"
+    },
+    {
+      "name": "has_alt_down",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_has_alt_down"
+    },
+    {
+      "name": "is_key_down",
+      "target": "horizon_client::game::native_client_services::Game<'_>::native_is_key_down"
+    },
+    {
+      "name": "transfer_recipe_all",
+      "target": "horizon_client::game::native_recipes::Game<'_>::native_transfer_recipe_all"
+    },
+    {
+      "name": "upgrade_block_state",
+      "target": "horizon_client::game::native_world_edit::Game<'_>::native_upgrade_block_state"
+    },
+    {
+      "name": "whitelist_add",
+      "target": "horizon_client::game::native_server::Game<'_>::native_whitelist_add"
+    },
+    {
+      "name": "whitelist_remove",
+      "target": "horizon_client::game::native_server::Game<'_>::native_whitelist_remove"
+    },
+    {
+      "name": "world_border",
+      "target": "horizon_client::game::native_world_border::Game<'_>::native_world_border"
+    },
+    {
+      "name": "world_quad",
+      "target": "horizon_client::game::native_world_draw::Game<'_>::native_world_quad",
+      "mod_api": {}
+    },
+    {
+      "name": "world_text",
+      "target": "horizon_client::game::native_world_draw::Game<'_>::native_world_text",
+      "mod_api": {}
+    },
+    {
+      "name": "world_seed",
+      "target": "horizon_client::game::native_world_seed::Game<'_>::native_world_seed"
     }
   ],
   "hooks": [
@@ -5239,6 +6384,1132 @@
       "mod_api": {
         "contract": "collect",
         "out": "warp"
+      }
+    },
+    {
+      "name": "anvil_update",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_anvil_update",
+      "neoforge": "AnvilUpdateEvent",
+      "side": "both",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "canceled"
+      }
+    },
+    {
+      "name": "block_clone_item",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_clone_item",
+      "mod_api": {
+        "contract": "replace",
+        "out": "stack"
+      }
+    },
+    {
+      "name": "block_entity_accepts_fluid",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_entity_accepts_fluid",
+      "neoforge": "IFluidHandler.isFluidValid",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "block_grow",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_grow",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "block_place",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_place",
+      "neoforge": "BlockEvent.EntityPlaceEvent (Bukkit's BlockPlaceEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "block_redstone",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_redstone",
+      "neoforge": "none (NeoForge has no such event; Bukkit's BlockRedstoneEvent)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "break_speed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_break_speed",
+      "neoforge": "PlayerEvent.BreakSpeed",
+      "side": "both",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "can_build",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_can_build",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "chat_decorate",
+      "version": 1,
+      "target": "horizon_client_lib::lan::hub::chat::native_chat_decorate",
+      "neoforge": "net.neoforged.neoforge.event.ServerChatEvent (setMessage, the shown component)",
+      "side": "server",
+      "mod_api": {
+        "contract": "replace",
+        "out": "decorated"
+      }
+    },
+    {
+      "name": "chat_suggestion_applied",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_chat_suggestion_applied",
+      "side": "client",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "chunk_generate",
+      "version": 1,
+      "target": "horizon_world::worldgen::native_generate::native_chunk_generate",
+      "neoforge": "none (NeoForge has no such event, a mod registers its own ChunkGenerator; Bukkit's ChunkGenerator.generateNoise)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "client_attack",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_client_attack",
+      "neoforge": "AttackEntityEvent",
+      "side": "client",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "client_hurt",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_client_hurt",
+      "side": "client",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "client_player_network_logging_in",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_client_player_network_logging_in",
+      "neoforge": "ClientPlayerNetworkEvent.LoggingIn",
+      "side": "client",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "client_tick_pre",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_client_tick_pre",
+      "neoforge": "ClientTickEvent.Pre",
+      "side": "client",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "client_tick_post",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_client_tick_post",
+      "neoforge": "ClientTickEvent.Post",
+      "side": "client",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "console_line",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_console_line",
+      "neoforge": "none (Bukkit's ServerCommandEvent and RemoteServerCommandEvent; NeoForge's CommandEvent hears parsed commands only)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "container_accepts",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_container_accepts",
+      "neoforge": "IItemHandler.isItemValid (Capabilities.Item.BLOCK)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "creative_slot_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_creative_slot_v2",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "custom_block_fluids",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_custom_block_fluids",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "custom_fluid_tanks",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_custom_fluid_tanks",
+      "mod_api": {
+        "contract": "replace",
+        "out": "out"
+      }
+    },
+    {
+      "name": "custom_fluid_fill",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_custom_fluid_fill",
+      "mod_api": {
+        "contract": "replace",
+        "out": "out"
+      }
+    },
+    {
+      "name": "custom_fluid_drain",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_custom_fluid_drain",
+      "mod_api": {
+        "contract": "replace",
+        "out": "out"
+      }
+    },
+    {
+      "name": "custom_payload_from_client",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_custom_payload_from_client",
+      "neoforge": "none (NeoForge registers payload handlers per type; Bukkit's PluginMessageListener)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "entity_change_block_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_change_block_v2",
+      "neoforge": "none (NeoForge has no such event; Bukkit's EntityChangeBlockEvent is cancellable)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "entity_change_block_v3",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_change_block_v3",
+      "neoforge": "none (NeoForge has no such event; Bukkit's EntityChangeBlockEvent is cancellable)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "entity_data_to",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_data_to",
+      "neoforge": "none (NeoForge has no per-viewer entity data event; ProtocolLib's ENTITY_METADATA listener)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "entity_interact_specific",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_interact_specific",
+      "neoforge": "PlayerInteractEvent.EntityInteractSpecific",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "claimed"
+      }
+    },
+    {
+      "name": "entity_outline",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_entity_outline",
+      "side": "client",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "explosion_entities",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_explosion_entities",
+      "neoforge": "ExplosionEvent.Detonate (its entity list)",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "collect",
+        "out": "entities"
+      }
+    },
+    {
+      "name": "fishing_hook_landed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_fishing_hook_landed",
+      "neoforge": "none (NeoForge's ProjectileImpactEvent leaves the bobber's block contact out; Bukkit's ProjectileHitEvent for a FishHook)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "fishing_medium",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_fishing_medium",
+      "neoforge": "none (FishingHook only fishes in water; lava-fishing mods replace the hook entity)",
+      "side": "both",
+      "mod_api": {
+        "contract": "replace",
+        "out": "medium"
+      }
+    },
+    {
+      "name": "handshake",
+      "version": 1,
+      "target": "horizon_client_lib::lan::conn::native_handshake",
+      "neoforge": "none (NeoForge has no handshake event; Paper's PlayerHandshakeEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "hanging_break_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_hanging_break_v2",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "interact_entity_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_interact_entity_v2",
+      "neoforge": "PlayerInteractEvent.EntityInteract (getHand)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "inventory_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_changed",
+      "neoforge": "none (NeoForge has no inventory-change event; Bukkit's InventoryClickEvent is the nearest)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "inventory_click",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_click",
+      "neoforge": "none (Bukkit's InventoryClickEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "inventory_drag",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_inventory_drag",
+      "neoforge": "none (Bukkit's InventoryDragEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "item_after_vertical_collision",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_after_vertical_collision",
+      "side": "both",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "discard"
+      }
+    },
+    {
+      "name": "item_dropped_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_dropped_v2",
+      "neoforge": "ItemTossEvent",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "item_interact_mob",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_interact_mob",
+      "side": "server",
+      "mod_api": {
+        "contract": "replace",
+        "out": "swing"
+      }
+    },
+    {
+      "name": "item_picked_up_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_item_picked_up_v2",
+      "neoforge": "ItemEntityPickupEvent.Pre",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "canceled"
+      }
+    },
+    {
+      "name": "living_change_target",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_living_change_target",
+      "neoforge": "LivingChangeTargetEvent",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "living_damage_pre",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_living_damage_pre",
+      "neoforge": "LivingDamageEvent.Pre",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "living_damage_post",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_living_damage_post",
+      "neoforge": "LivingDamageEvent.Post",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "living_death_message",
+      "version": 1,
+      "target": "horizon_client_lib::living_death::native_living_death_message",
+      "side": "server",
+      "mod_api": {
+        "contract": "collect",
+        "out": "message"
+      }
+    },
+    {
+      "name": "living_experience_drop",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_living_experience_drop",
+      "neoforge": "LivingExperienceDropEvent",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "living_incoming_damage_v3",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_living_incoming_damage_v3",
+      "neoforge": "LivingIncomingDamageEvent",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "lod_column",
+      "version": 1,
+      "target": "horizon_world::worldgen::native_generate::native_lod_column",
+      "neoforge": "none (NeoForge has no such event; far terrain is Horizon's own)",
+      "side": "both",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "log_line",
+      "version": 1,
+      "target": "horizon_client_lib::native_client_hooks::native_log_line",
+      "neoforge": "none (a log4j appender)",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "menu_input_closed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_input_closed",
+      "neoforge": "none (NeoForge has no such event; Bukkit's InventoryCloseEvent with the inventory's contents)",
+      "side": "server",
+      "mod_api": {
+        "contract": "collect",
+        "out": "slots"
+      }
+    },
+    {
+      "name": "menu_links",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_menu_links",
+      "neoforge": "none (a Java menu adds Slots over another block's IItemHandler, as Tinkers' Construct's crafting station shows the chest beside it)",
+      "side": "server",
+      "mod_api": {
+        "contract": "collect",
+        "out": "links"
+      }
+    },
+    {
+      "name": "layer_definitions",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_layer_definitions",
+      "neoforge": "EntityRenderersEvent.RegisterLayerDefinitions",
+      "side": "client",
+      "mod_api": {
+        "contract": "collect",
+        "out": "layers"
+      }
+    },
+    {
+      "name": "permission_check",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_permission_check",
+      "neoforge": "PermissionGatherEvent.Handler (the handler a permissions mod installs answers PermissionAPI.getPermission)",
+      "side": "server",
+      "mod_api": {
+        "contract": "replace",
+        "out": "result"
+      }
+    },
+    {
+      "name": "permission_groups",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_permission_groups",
+      "side": "server",
+      "mod_api": {
+        "contract": "collect",
+        "out": "groups"
+      }
+    },
+    {
+      "name": "player_register_channels",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_register_channels",
+      "neoforge": "none (NeoForge has no channel registration event; Bukkit's PlayerRegisterChannelEvent and PlayerUnregisterChannelEvent)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_chat_v2",
+      "version": 1,
+      "target": "horizon_client_lib::lan::hub::chat::native_player_chat_v2",
+      "neoforge": "net.neoforged.neoforge.event.ServerChatEvent (ICancellableEvent), with the sender's permission level",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "player_command_level",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_command_level",
+      "neoforge": "none (NeoForge has no such event; Paper's VanillaCommandWrapper checks a minecraft.command node)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_commands_sent_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_commands_sent_v2",
+      "neoforge": "none (NeoForge has no such event; Paper's PlayerCommandSendEvent)",
+      "side": "server",
+      "mod_api": {
+        "contract": "collect",
+        "out": "names"
+      }
+    },
+    {
+      "name": "player_died_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_died_v2",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_fish_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_fish_v2",
+      "neoforge": "none (NeoForge's ItemFishedEvent fires after the loot roll, in FishingHook.retrieve; Bukkit's PlayerFishEvent with getHand)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "player_hurt_by_player",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_hurt_by_player",
+      "neoforge": "LivingIncomingDamageEvent (a player victim, a player source; Bukkit's EntityDamageByEntityEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "canceled"
+      }
+    },
+    {
+      "name": "player_inventory_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_inventory_changed",
+      "neoforge": "none (vanilla's InventoryChangeTrigger; quest and collection mods listen to ServerPlayer's container slotChanged)",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_join_message",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_join_message",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_launch_projectile_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_launch_projectile_v2",
+      "neoforge": "none (Bukkit's ProjectileLaunchEvent for a player's throw)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "player_leave_message",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_leave_message",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_logging_out",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_logging_out",
+      "neoforge": "none (Bukkit's PlayerQuitEvent; NeoForge's PlayerLoggedOutEvent comes after the removal)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_move",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_move",
+      "neoforge": "none (Bukkit's PlayerMoveEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "player_physical_trigger",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_player_physical_trigger",
+      "neoforge": "none (Bukkit's PlayerInteractEvent with Action.PHYSICAL)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "player_pre_login",
+      "version": 1,
+      "target": "horizon_client_lib::lan::conn::native_player_pre_login",
+      "neoforge": "none (Bukkit's AsyncPlayerPreLoginEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "collect",
+        "out": "defer"
+      }
+    },
+    {
+      "name": "player_profile",
+      "version": 1,
+      "target": "horizon_client_lib::lan::conn::native_player_profile",
+      "neoforge": "none (Velocity's GameProfileRequestEvent, Paper's PlayerProfile in AsyncPlayerPreLoginEvent)",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_respawn_position",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_respawn_position",
+      "neoforge": "PlayerRespawnPositionEvent",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_spawn_location",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_spawn_location",
+      "neoforge": "none (Spigot's PlayerSpawnLocationEvent)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "player_teleport",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_teleport",
+      "neoforge": "EntityTeleportEvent (Bukkit's PlayerTeleportEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "player_tick_pre",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_tick_pre",
+      "neoforge": "PlayerTickEvent.Pre",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "potion_splash_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_potion_splash_v2",
+      "neoforge": "PotionSplashEvent (cancellable there too)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "projectile_world_border",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_projectile_world_border",
+      "neoforge": "none (26.3's projectile world border collision, MC-310476)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "recipe_categories",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_recipe_categories",
+      "neoforge": "none (JEI's IRecipeCategory and IRecipeRegistration, registered through the viewer's own API)",
+      "side": "client",
+      "mod_api": {
+        "contract": "collect",
+        "out": "categories"
+      }
+    },
+    {
+      "name": "recipe_lookup",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_recipe_lookup",
+      "neoforge": "none (JEI's IRecipesGui.show and EMI's EmiApi.displayRecipes/displayUses, called by other mods through the viewer's own API)",
+      "side": "client",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "handled"
+      }
+    },
+    {
+      "name": "recipe_sources",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_recipe_sources",
+      "neoforge": "none (JEI's IRecipeTransferHandler with extra source slots, as Tinkers' Construct's crafting station takes from adjacent inventories)",
+      "side": "server",
+      "mod_api": {
+        "contract": "collect",
+        "out": "sources"
+      }
+    },
+    {
+      "name": "register_goals",
+      "version": 1,
+      "target": "horizon_client_lib::mobs::ai::native_register_goals",
+      "neoforge": "Mob.registerGoals",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "resource_pack_status_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_resource_pack_status_v2",
+      "neoforge": "none (NeoForge has no resource pack answer event; Bukkit's PlayerResourcePackStatusEvent with getID)",
+      "side": "server",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "right_click_block_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_right_click_block_v2",
+      "neoforge": "PlayerInteractEvent.RightClickBlock (getHand)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "screen_mouse_dragged_pre_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_dragged_pre_v2",
+      "neoforge": "ScreenEvent.MouseDragged.Pre",
+      "side": "client",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "canceled"
+      }
+    },
+    {
+      "name": "screen_mouse_scrolled_pre_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_mouse_scrolled_pre_v2",
+      "neoforge": "ScreenEvent.MouseScrolled.Pre",
+      "side": "client",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "canceled"
+      }
+    },
+    {
+      "name": "screen_text_field_char_typed_pre",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_text_field_char_typed_pre",
+      "side": "client",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "canceled"
+      }
+    },
+    {
+      "name": "screen_transparent_background",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_screen_transparent_background",
+      "neoforge": "ScreenEvent.Render.Pre (transparent background)",
+      "side": "client",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "canceled"
+      }
+    },
+    {
+      "name": "server_packet",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_server_packet",
+      "neoforge": "none (NeoForge has no outgoing packet event; ProtocolLib's and PacketEvents' packet listeners)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "server_packets",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_server_packets",
+      "neoforge": "none (NeoForge has no packet counting event; PacketEvents' PacketSendEvent and PacketReceiveEvent)",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "server_stopped",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_server_stopped",
+      "neoforge": "ServerStoppedEvent",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "server_tick_timed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_server_tick_timed",
+      "neoforge": "none (NeoForge has no tick timing event; spark's tick monitor and profiler)",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "sound_play",
+      "version": 1,
+      "target": "horizon_client_lib::sound_playback::native_sound_play",
+      "side": "client",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "stateful_block_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_stateful_block_entity",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "block_entity_from_state",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::GameLevel<'_>::native_block_entity_from_state",
+      "mod_api": {
+        "contract": "replace",
+        "out": "entity"
+      }
+    },
+    {
+      "name": "tab_complete_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tab_complete_v2",
+      "neoforge": "none (Bukkit's TabCompleter.onTabComplete; Brigadier's SuggestionProvider for ask_server nodes)",
+      "side": "server",
+      "mod_api": {
+        "contract": "collect",
+        "out": "suggestions"
+      }
+    },
+    {
+      "name": "tnt_primed_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tnt_primed_v2",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "toast_add",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_toast_add",
+      "neoforge": "ToastAddEvent",
+      "side": "client",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "tooltip_render_pre",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip_render_pre",
+      "neoforge": "RenderTooltipEvent.Pre",
+      "side": "client",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "trample",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_trample",
+      "neoforge": "BlockEvent.FarmlandTrampleEvent",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "vehicle_moved_v2",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_vehicle_moved_v2",
+      "neoforge": "none (NeoForge has no such event; Bukkit's VehicleMoveEvent)",
+      "side": "server",
+      "cancellable": true,
+      "mod_api": {
+        "contract": "cancel",
+        "out": "cancel"
+      }
+    },
+    {
+      "name": "wind_burst",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_wind_burst",
+      "side": "server",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "collect",
+        "out": "blocks"
+      }
+    },
+    {
+      "name": "world_submit",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_world_submit",
+      "neoforge": "RenderLevelStageEvent (textured quads and text drawn right after the particles, before the hand)",
+      "side": "client",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
+      "name": "world_primitives",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_world_primitives",
+      "neoforge": "RenderLevelStageEvent (lines, boxes, beams and text drawn at the end of the world pass, before the hand)",
+      "side": "client",
+      "cancellable": false,
+      "mod_api": {
+        "contract": "collect",
+        "out": "primitives"
       }
     }
   ]

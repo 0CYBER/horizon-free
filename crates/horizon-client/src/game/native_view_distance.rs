@@ -16,7 +16,7 @@ impl Game<'_> {
     /// leaves; a later server change (`view-distance`) keeps it. False off a
     /// server, for a player not online, and inside a guest's packet hook,
     /// where the hub is taken out (call it from a tick hook). API
-    /// @API:player_view_distance@.
+    /// 495.
     pub(super) fn native_set_player_view_distance(
         &mut self,
         uuid: u128,
@@ -35,7 +35,7 @@ impl Game<'_> {
     /// server's plus one), its packets are cut to the few a bot needs, and it does not count for
     /// natural mob spawning. The mark lasts until the player leaves. False off a server, for a
     /// player not online, and inside a guest's packet hook, where the hub is taken out (call it
-    /// from a tick hook). API @API:set_player_fake@.
+    /// from a tick hook). API 605.
     pub(super) fn native_set_player_fake(&mut self, uuid: u128, fake: bool) -> bool {
         if !self.native_authoritative() {
             return false;
@@ -48,7 +48,7 @@ impl Game<'_> {
     /// Say that a player named `name` (any case) will join as a fake player (a mod's bot with no
     /// client), or not any more. The player is then fake from its first packet on, so its join
     /// sends and builds nothing a client-less player cannot read; `native_set_player_fake` marks
-    /// a player that is already online. False off a server. API @API:expect_fake_player@.
+    /// a player that is already online. False off a server. API 602.
     pub(super) fn native_expect_fake_player(&mut self, name: &str, fake: bool) -> bool {
         if !self.native_authoritative() {
             return false;
@@ -62,7 +62,7 @@ impl Game<'_> {
     /// Whether the player `uuid` is a fake player (a mod's bot with no client): marked by
     /// `native_set_player_fake` or announced by `native_expect_fake_player`. False off a server and for
     /// a player not online. Cheap: meant for join hooks that get only a uuid. API
-    /// @API:is_player_fake@.
+    /// 603.
     pub(super) fn native_is_player_fake(&self, uuid: u128) -> bool {
         self.lan
             .as_ref()
@@ -72,7 +72,7 @@ impl Game<'_> {
     /// The view distance the player `uuid` has now: the radius of chunks it
     /// is sent (`native_set_player_view_distance`). None off a server, for a
     /// player not online, and inside a guest's packet hook. API
-    /// @API:player_view_distance@.
+    /// 495.
     pub(super) fn native_player_view_distance(&self, uuid: u128) -> Option<i32> {
         if !self.native_authoritative() {
             return None;

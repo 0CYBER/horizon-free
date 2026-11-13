@@ -66,7 +66,7 @@ impl Game<'_> {
     /// None off a server, for a player not here (another level than the one in place, a
     /// guest out of reach inside another player's hook, where the hub is taken out), dead, a
     /// spectator or riding, an input that is not a number, and when the movement code fails.
-    /// API @API:player_bots@.
+    /// API 454.
     pub(super) fn native_simulate_player_move(
         &mut self,
         uuid: u128,
@@ -151,7 +151,7 @@ impl Game<'_> {
     /// snow as for nothing standing on them). Entities and the world border are not in it. For a
     /// bot's own collision checks and pathfinding. Empty off a server, for another level than the
     /// one in place, a box that isn't a box (not numbers, or min past max), and one over about a
-    /// million blocks. API @API:player_bots@.
+    /// million blocks. API 454.
     pub(super) fn native_collision_boxes(&self, dimension: &str, aabb: [f64; 6]) -> Vec<[f64; 6]> {
         let Some(bounds) = aabb_of(aabb) else {
             return Vec::new();

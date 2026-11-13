@@ -1,5 +1,5 @@
 //! Registry names for numeric ids, for native mods (docs/native-mods.md,
-//! "Registry names", API @API:registry_name@): the item, data component,
+//! "Registry names", API 637): the item, data component,
 //! entity, sound and particle types that protocol packets carry as numbers.
 use super::Game;
 use horizon_protocol::item::Names;
@@ -14,7 +14,7 @@ impl Game<'_> {
     /// connected to (including the registries the server synced, and a mod's
     /// own data components when the server carries them); on a server, the ids
     /// it sends. None for an unknown registry, an id out of range or negative,
-    /// and while no server is connected. API @API:registry_name@.
+    /// and while no server is connected. API 637.
     pub(super) fn native_registry_name(&self, registry: &str, id: i32) -> Option<String> {
         if let Some(r) = self.remote.as_ref() {
             return SyncedNames {

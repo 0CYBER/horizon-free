@@ -314,7 +314,7 @@ pub const FLATTENING: i32 = 1519;
 /// A block state, `name` with `props` (`key`, `value`), as written at `data_version`, upgraded as the datafixers
 /// do it: a state from before the flattening comes out with its 1.13 name and properties (the table of
 /// `BlockStateData`); any other, or one the table doesn't know, is returned as it is. The numeric block ids of
-/// the oldest chunks are not read here. API @API:upgrade_block_state@.
+/// the oldest chunks are not read here. API 620.
 pub fn native_upgrade_block_state(
     name: &str,
     props: &[(String, String)],

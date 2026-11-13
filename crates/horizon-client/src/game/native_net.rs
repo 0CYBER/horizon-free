@@ -197,7 +197,7 @@ impl Game<'_> {
     /// hook (Bukkit's `Player.sendPluginMessage`). Ok means queued: a player
     /// who isn't on by then gets nothing. Nothing counts these; the bytes
     /// are the mod's to get right. An error on a client, and for a bad
-    /// channel or size. API @API:send_custom_payload_to_player@.
+    /// channel or size. API 504.
     pub(super) fn native_send_custom_payload_to_player(
         &mut self,
         player: u128,
@@ -286,7 +286,7 @@ impl Game<'_> {
     /// macro can fill in `/tp ` for the player to finish. Nothing is sent; the
     /// player edits and sends it, or presses Escape. The box keeps its limit
     /// (256 characters) and its character filter. An error with no player in a
-    /// world, or while another screen is open. API @API:open_chat@.
+    /// world, or while another screen is open. API 458.
     pub(super) fn native_open_chat(&mut self, text: &str) -> Result<(), String> {
         if self.player.is_none() {
             return Err("no player in a world".into());

@@ -41,7 +41,7 @@ impl Game<'_> {
     /// creates no chunk. Decorated blocks (trees, lava, cacti) are not in it: read the chunk once it is loaded. None
     /// for a column with no solid block (the End's void) and where the world has no generator of its own. `Err` says why nothing was
     /// read: another dimension or a client of a server, or more than 4,096 columns (`MAX_TERRAIN_COLUMNS`). API
-    /// @API:terrain_surface@.
+    /// 645.
     pub(super) fn native_terrain_surface(
         &self,
         dimension: &str,
