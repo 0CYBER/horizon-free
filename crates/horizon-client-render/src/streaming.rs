@@ -1779,10 +1779,7 @@ impl Streaming {
                                 > r4 * r4)
                         && !ranges.in_extra(x, z, 4)
                         && !ranges.in_band(x, z, 4)
-                        && !ranges.forced_chunks().any(|f| {
-                            (x - f.0).abs() <= FORCED_TERRAIN_RING
-                                && (z - f.1).abs() <= FORCED_TERRAIN_RING
-                        })
+                        && !ranges.forced_within(x, z, FORCED_TERRAIN_RING)
                 })
                 .map(|(k, _)| *k)
                 .collect();
