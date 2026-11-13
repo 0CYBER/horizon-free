@@ -78,6 +78,15 @@ The resource-backed regression gives a stationary cow a movement speed of 8: it 
 96 blocks on, and not the one after, runs into it over 20 ticks while two groups run, and matches
 the serial mobs and level random in production and verify.
 
+## Mobs that skip their AI (DAB)
+
+With `[entities] dab` on ([hosting](hosting.md)), a far mob's goals, brains and `customServerAiStep` run on some
+ticks only (`mobs/dab.rs`). The reach bounds stay valid: they bound what one turn can add to the velocity, and a
+turn without AI adds less (no goal sets a speed, the move control keeps the `speed` of its last AI tick, which the
+locomotion bound already allows). Which ticks skip depends on the mob's age and its nearest player, which the loop
+reads the same way in a group and in the serial loop (`MobsNearest`), and a skipped turn draws no level random, which
+the ordered draws allow as a turn that draws less.
+
 ## Owner teleports
 
 `TamableAnimal.tryToTeleportToOwner` (`FollowOwnerGoal`, `TamableAnimalPanicGoal`) puts a pet on
