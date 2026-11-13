@@ -144,6 +144,25 @@ with like. With the parallel tick off nothing changes, and the villager parity h
 pin vanilla's exact draws) run with it off. A test turns the switch on with
 `parallel::OWN_RANDOM_TEST`.
 
+## Every turn draws its own random
+
+The villagers were not the only mobs that draw every tick. A fish that leads a school rolls one
+in 200 on the level random on every tick (`aquatic::school_tick`), a parrot one in 400, and the
+brains of the other mobs draw their durations. Each of those draws is a barrier across the lanes:
+the mob waits until every lane has passed its place in the list. The official server's capture of
+2026-11-13 (50 players, 4 cores, about 2,500 mobs ticking) shows what that cost: 131 salmon took
+76 µs a turn and two parrots 540 µs, against 5 µs for a zombie, nearly all of it waiting, the
+process used 1.4 cores, and the loop took as long as the serial one.
+
+With `HORIZON_PARALLEL_TICK` on, a turn's level-random draws therefore come from a `LegacyRandom`
+seeded from the mob's id and the game time (`parallel::mobs_own_random`, `mob_turn_random`,
+`Group::tick`), as the villagers' brains already did, and the mob loop no longer advances the
+level random. The same reasoning holds: vanilla's odds, not its values, which no player can rely
+on since the level's stream is shared with every chunk's spawns and blocks; the mob's own entity
+random keeps vanilla's sequence; the serial loop draws the same way, so the grouped result equals
+the serial one; with the parallel tick off nothing changes. The ordered stream stays for the
+turns' new RNGs (`in_seed_order`) and the lookups by id.
+
 ## Native mods and the profiler
 
 What a mod can run in a mob's turn: `native_living_change_target`, `native_living_heal`,

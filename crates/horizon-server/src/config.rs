@@ -48,7 +48,7 @@ path = ""                    # the game program; empty: the one installed beside
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true      # start the game again when it crashes
 low_memory = false           # true: no transparent huge pages, ~60 MB less idle for ~1 % more tick time
-parallel_tick = false        # true: the server tick shares its work among helper threads (same results)
+parallel_tick = false        # true: the server tick shares its work among helper threads (docs/hosting.md)
 
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off

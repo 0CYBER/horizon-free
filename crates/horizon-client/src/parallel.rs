@@ -30,6 +30,31 @@ pub fn villagers_own_random() -> bool {
     OWN_RANDOM_TEST.load(Ordering::Relaxed) || parallel_tick() > 0
 }
 
+/// Whether a mob's turn draws the level-random rolls from a stream of its own instead of the level's.
+///
+/// A draw from the level's one stream waits until every mob before it in the list has had its turn
+/// (`OrderedDraws`), in whatever lane those run. Some mobs draw on every tick (a fish that leads a
+/// school rolls one in 200, `AbstractSchoolingFish.tick`; a parrot one in 400; brains draw their
+/// durations), so on a busy level the lanes took turns instead of running side by side. With the
+/// parallel tick on, a turn's level-random draws come from [`mob_turn_random`]: the same odds, not
+/// the values a vanilla level would give, as for the villagers' brains above. No player can rely on
+/// those values: the level's stream is shared with the spawns and the blocks of every chunk. The
+/// mob's own entity random keeps vanilla's sequence, and the serial loop draws the same way while
+/// the parallel tick is on, so which path a tick takes never changes the result.
+pub fn mobs_own_random() -> bool {
+    parallel_tick() > 0
+}
+
+/// The stream a mob's turn draws its level-random rolls from under [`mobs_own_random`]: seeded
+/// from the mob's id and the game time (a splitmix64 mix), not from a draw.
+pub fn mob_turn_random(id: u32, game_time: i64) -> horizon_core::random::LegacyRandom {
+    let mut z = (u64::from(id) << 32) ^ (game_time as u64) ^ 0x6d6f_625f_7475_726e;
+    z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    horizon_core::random::LegacyRandom::new((z ^ (z >> 31)) as i64)
+}
+
 /// A test's switch for [`villagers_own_random`], process-wide because the lanes are threads: any
 /// gameplay test running at the same time in the same binary sees villagers on their own random, so
 /// the tests that set it run alone (`--test-threads=1`).

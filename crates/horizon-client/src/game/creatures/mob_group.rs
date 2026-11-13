@@ -67,6 +67,23 @@ pub(super) struct Group<M: MobSlot> {
     /// The mod hooks its turns kept for the join, with each turn's place in the whole list (a
     /// group of the parallel tick with mods loaded: `native_client_hooks::Deferred`).
     pub deferred: Vec<(usize, horizon_client::native_client_hooks::Deferred)>,
+    /// Whether each turn draws its level-random rolls from a stream of its own, so that it waits
+    /// for no other lane (`parallel::mobs_own_random`, read once where the group is made).
+    own_random: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's switch for the groups its thread makes, over the parallel tick's.
+    pub(super) static OWN_RANDOM: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn own_random() -> bool {
+    #[cfg(test)]
+    if OWN_RANDOM.with(std::cell::Cell::get) {
+        return true;
+    }
+    horizon_client::parallel::mobs_own_random()
 }
 
 /// What decides each turn besides the group, read at the turn as the serial loop reads it.
@@ -141,6 +158,7 @@ impl<M: MobSlot> Group<M> {
             gone: Vec::new(),
             guest_events: Vec::new(),
             deferred: Vec::new(),
+            own_random: own_random(),
         }
     }
 
@@ -348,11 +366,16 @@ impl<M: MobSlot> Group<M> {
         w.controlling_player_movement = controlling_player_movement;
         self.ticked.insert(self.mobs[i].mob().id);
         let sampled = super::super::tick_profile::start_mob(&self.mobs[i].mob().kind);
+        // The level's stream is one for every lane: a turn that draws from it waits for the
+        // turns before it. On its own stream it waits for none.
+        let mut own = self
+            .own_random
+            .then(|| horizon_client::parallel::mob_turn_random(self.mobs[i].mob().id, w.game_time));
         let kept = horizon_client::mobs::riders::tick(
             &mut self.mobs,
             i,
             &w,
-            &mut self.random,
+            own.as_mut().unwrap_or(&mut self.random),
             &mut self.events,
         );
         super::super::tick_profile::end_mob(shared.level_id, sampled);
