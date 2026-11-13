@@ -2,6 +2,7 @@ import datetime as dt
 from pathlib import Path
 import tempfile
 import unittest
+import re
 from unittest import mock
 
 from tools import release_train as train
@@ -147,6 +148,27 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertFalse(train.decision("game", [], NOW, force=True, blockers=[7])[0])
         self.assertFalse(train.decision("game", [], NOW, new_line="0.3", blockers=[7])[0])
         self.assertTrue(train.decision("game", [pr(1)], NOW, blockers=[])[0])
+
+    def test_pull_requests_are_fetched_in_batches(self):
+        queries = []
+
+        def gh_json(*arguments):
+            query = arguments[-1]
+            queries.append(query)
+            numbers = [int(n) for n in re.findall(r"pullRequest\(number: (\d+)\)", query)]
+            return {"data": {"repository": {f"p{n}": {
+                "number": n, "title": f" PR {n} ", "url": f"u/{n}", "mergedAt": "2026-11-12T10:00:00Z",
+                "author": {"login": "a"}, "labels": {"nodes": [{"name": "feature"}]},
+                "closingIssuesReferences": {"nodes": [{"number": n + 1}]}} for n in numbers}}}
+
+        numbers = list(range(1, 121)) + [5]
+        with mock.patch.object(train, "gh_json", gh_json):
+            prs = train.pull_requests(numbers)
+        self.assertEqual(len(queries), 3, "120 distinct pull requests take three queries, not one call each")
+        self.assertEqual([pr["number"] for pr in prs], numbers)
+        self.assertEqual(prs[0]["title"], "PR 1")
+        self.assertEqual((prs[0]["labels"], prs[0]["issues"], prs[0]["author"]), (["feature"], [2], "a"))
+        self.assertEqual(prs[0]["merged_at"].isoformat(), "2026-11-12T10:00:00+00:00")
 
     def test_game_releases_ship_only_what_parity_main_passed(self):
         def runs(parity, checks):

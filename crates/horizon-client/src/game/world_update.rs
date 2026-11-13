@@ -376,19 +376,15 @@ impl Game<'_> {
                     (0, 0)
                 };
                 let (mut count, mut bytes) = (0, 0u64);
-                // Without the player's budgets, uploads stop once they took
-                // AUTO_UPLOAD_TIME of this frame (at least one goes): a burst of
-                // finished meshes spreads over frames, nearest first.
-                let auto = !budgeted;
-                let auto_time = if arriving {
-                    AUTO_UPLOAD_TIME_ARRIVING
-                } else {
-                    AUTO_UPLOAD_TIME
-                };
+                // Without the player's budgets, uploads stop once they took this
+                // frame's share (`UploadPace::budget`: a quarter of the recent frame
+                // time, more with a backlog, at most 2 ms; at least one goes): a burst
+                // of finished meshes spreads over frames, nearest first.
+                let auto = (!budgeted).then(|| self.upload_pace.budget(pending.len(), arriving));
                 let started = Instant::now();
                 let upload_span = horizon_client::spans::guard("upload_queue");
                 while let Some((_, mesh)) = pending.last() {
-                    if auto && count > 0 && started.elapsed() >= auto_time {
+                    if auto.is_some_and(|time| count > 0 && started.elapsed() >= time) {
                         break;
                     }
                     let size = ((mesh.solid.len() + mesh.translucent.len())

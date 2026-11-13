@@ -78,6 +78,15 @@ The resource-backed regression gives a stationary cow a movement speed of 8: it 
 96 blocks on, and not the one after, runs into it over 20 ticks while two groups run, and matches
 the serial mobs and level random in production and verify.
 
+## Mobs that skip their AI (DAB)
+
+With `[entities] dab` on ([hosting](hosting.md)), a far mob's goals, brains and `customServerAiStep` run on some
+ticks only (`mobs/dab.rs`). The reach bounds stay valid: they bound what one turn can add to the velocity, and a
+turn without AI adds less (no goal sets a speed, the move control keeps the `speed` of its last AI tick, which the
+locomotion bound already allows). Which ticks skip depends on the mob's age and its nearest player, which the loop
+reads the same way in a group and in the serial loop (`MobsNearest`), and a skipped turn draws no level random, which
+the ordered draws allow as a turn that draws less.
+
 ## Owner teleports
 
 `TamableAnimal.tryToTeleportToOwner` (`FollowOwnerGoal`, `TamableAnimalPanicGoal`) puts a pet on
@@ -114,6 +123,26 @@ within 20 blocks, inside its reads. A warden keeps its suspects, memories, noted
 pending vibration as mob ids, read and angered at any distance: every id in its state is a link.
 The suspects it keeps by UUID resolve only to the host's player during the loop, serially as in
 groups (`LoopLookup`).
+
+## Villagers draw their own random
+
+The ordered level random (above) makes a mob's first draw wait for every mob before it in the
+list, on every group. A villager's brain draws on nearly every turn (behaviour durations in
+`Timed::begin`, one-in-N rolls such as `nextInt(20) != 0`), and the result of most rolls decides
+what the villager does in the same turn, so those draws cannot be put off. With
+`HORIZON_PARALLEL_TICK` on, the brain therefore draws from a `LegacyRandom` seeded from a hash of
+the mob's id and the game time (`parallel::villagers_own_random`, `villager::tick_brain`), not
+from the level random. The seed takes no draw, so the villager's own random (movement, looks,
+sounds) keeps vanilla's sequence. No villager waits for another mob's draws, and a measured world whose
+only level-random draws were villagers' had none left to wait for.
+
+This is a deliberate departure from vanilla's draw order, accepted for the parallel tick: the
+odds of every roll are vanilla's, the values are not the ones a vanilla level would give, and the
+level random is no longer advanced by villagers. The serial loop draws the same way while the
+switch is on, so the grouped result still equals the serial result and `verify` compares like
+with like. With the parallel tick off nothing changes, and the villager parity harnesses (which
+pin vanilla's exact draws) run with it off. A test turns the switch on with
+`parallel::OWN_RANDOM_TEST`.
 
 ## Native mods and the profiler
 

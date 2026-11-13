@@ -181,21 +181,48 @@ pub struct Config {
     /// The game reads this section itself (docs/pvp.md); written only when it isn't the default.
     #[serde(default, skip_serializing_if = "Combat::is_default")]
     pub combat: Combat,
-    /// Passed to the game as `HORIZON_MAX_ENTITY_COLLISIONS`; written only when it isn't the default.
+    /// `[entities]` (docs/server.md): mob settings passed to the game; written only when it isn't the default.
     #[serde(default, skip_serializing_if = "Entities::is_default")]
     pub entities: Entities,
 }
 
-/// `[entities]`: `max_collisions = N` limits how many other mobs one mob pushes in a tick (pushes it receives
-/// count too); 0 is vanilla's behaviour, no cap (docs/server.md).
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// `[entities]`: `dab = true` runs a mob's AI less often the farther it is from the nearest player (Pufferfish's
+/// dynamic activation of brain; crates/horizon-client/src/mobs/dab.rs). Off by default: it is not vanilla's
+/// behaviour. A mob farther than `dab_start_distance` blocks runs its AI every
+/// `clamp(distance² >> dab_activation_dist_mod, 1, dab_max_tick_freq)` ticks. `max_collisions = N` limits how many
+/// other mobs one mob pushes in a tick (pushes it receives count too); 0 is vanilla's behaviour, no cap.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Entities {
+    pub dab: bool,
+    pub dab_start_distance: u32,
+    pub dab_max_tick_freq: u32,
+    pub dab_activation_dist_mod: u32,
     pub max_collisions: u32,
+}
+impl Default for Entities {
+    fn default() -> Self {
+        Self {
+            dab: false,
+            dab_start_distance: 12,
+            dab_max_tick_freq: 20,
+            dab_activation_dist_mod: 8,
+            max_collisions: 0,
+        }
+    }
 }
 impl Entities {
     fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+    fn check(&self) -> Result<(), String> {
+        if self.dab_max_tick_freq == 0 {
+            return Err("entities.dab_max_tick_freq must be at least 1".into());
+        }
+        if self.dab_activation_dist_mod > 30 {
+            return Err("entities.dab_activation_dist_mod must be 30 or less".into());
+        }
+        Ok(())
     }
 }
 
@@ -570,6 +597,7 @@ impl Config {
         self.anticheat.check()?;
         self.chat_filter.check()?;
         self.prune_chunks.check()?;
+        self.entities.check()?;
         if self.server.port == 0 {
             return Err("server.port must be a port number from 1 to 65535".into());
         }
@@ -971,6 +999,22 @@ mod tests {
         assert!(!off.lines().any(|l| l.trim() == "[entities]"), "{off}");
         assert!(Config::parse("[entities]\nmax_collisions = -1\n").is_err());
         assert!(Config::parse("[entities]\nmax_collision = 8\n").is_err());
+    }
+
+    #[test]
+    fn dab_is_off_unless_its_section_turns_it_on() {
+        assert!(!Config::default().entities.dab);
+        let off = render(&Config::default());
+        assert!(!off.lines().any(|l| l.trim() == "[entities]"), "{off}");
+        let on = Config::parse("[entities]\ndab = true\ndab_max_tick_freq = 10\n").unwrap();
+        assert!(on.entities.dab);
+        assert_eq!(on.entities.dab_start_distance, 12);
+        assert_eq!(on.entities.dab_activation_dist_mod, 8);
+        // Kept when the file is written again.
+        assert_eq!(Config::parse(&render(&on)).unwrap(), on);
+        assert!(Config::parse("[entities]\ndab_max_tick_freq = 0\n").is_err());
+        assert!(Config::parse("[entities]\ndab_activation_dist_mod = 99\n").is_err());
+        assert!(Config::parse("[entities]\ndap = true\n").is_err());
     }
 
     #[test]

@@ -60,6 +60,9 @@ impl Game<'_> {
     }
     pub(super) fn update_modifiers(&mut self, state: winit::keyboard::ModifiersState) {
         self.modifiers = state;
+        if let Some(title) = &mut self.title {
+            title.set_alt_down(state.alt_key());
+        }
         horizon_client_input::modifiers::reconcile(
             self.modifiers,
             &mut self.physical_keys,

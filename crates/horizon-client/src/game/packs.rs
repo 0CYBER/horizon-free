@@ -31,25 +31,17 @@ pub fn packs_dir() -> PathBuf {
         .unwrap_or_default()
         .join("resourcepacks")
 }
-mod folder;
-
-/// `Util.getPlatform().openPath`: the system file manager on the folder.
+/// `Blaze3D.openPath`: the desktop's handler on the folder (the default file manager).
 pub fn open_folder(dir: &Path) {
-    if let Err(e) = folder::command(dir).and_then(|mut command| command.spawn()) {
+    if let Err(e) = horizon_client::desktop::open_path(dir) {
         log::warn!("Horizon: could not open {}: {e}", dir.display());
     }
 }
-/// `Util.getPlatform().openUri`: the system browser on the link.
+/// `Blaze3D.openUri`: the system browser on the link.
 pub fn open_uri(uri: &str) {
-    // URLs need Windows' registered protocol handler, not Explorer's path
-    // handling. ShellExecute also preserves the URL as one Unicode value,
-    // without interpolating its query string into a command interpreter.
-    #[cfg(windows)]
-    if let Err(error) = open::that_detached(uri) {
+    if let Err(error) = horizon_client::desktop::open_uri(uri) {
         log::warn!("Horizon: could not open URI {uri}: {error}");
     }
-    #[cfg(not(windows))]
-    open_folder(Path::new(uri));
 }
 /// The resource root to load from: the selection and a server's packs, which go on top
 /// (`Pack.Position.TOP`, fixed), laid over `base`. `base` is the mods' content root

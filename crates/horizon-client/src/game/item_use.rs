@@ -48,7 +48,10 @@ impl Game<'_> {
         };
         self.using = Some((self.held_slot(), 0));
         self.use_duration = duration;
-        self.use_ticks_set = ticks_set;
+        self.use_start = super::using_item::UseStart {
+            ticks_set,
+            item: Some(stack.clone()),
+        };
         // `LivingEntity.startUsingItem`: `causeUseVibration(ITEM_INTERACT_START)`
         // when the use effects of the stack ask for interaction vibrations.
         self.use_vibration(&stack, "minecraft:item_interact_start");
@@ -164,8 +167,8 @@ impl Game<'_> {
         let (mut remaining, mut canceled) = (before, false);
         let hand = self.used_hand().unwrap_or(self.hand);
         self.native_living_entity_use_item_tick(stack, None, hand, &mut remaining, &mut canceled);
-        let (left, set) = tick_left(before, remaining, canceled, self.use_ticks_set);
-        self.use_ticks_set = set;
+        let (left, set) = tick_left(before, remaining, canceled, self.use_start.ticks_set);
+        self.use_start.ticks_set = set;
         self.use_duration = duration_leaving(ticks, left);
         left > 0 || !set
     }

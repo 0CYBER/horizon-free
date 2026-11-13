@@ -266,7 +266,7 @@ pub fn run(dir: &Path) -> Result<(), String> {
             dir,
             config.engine.low_memory,
             config.engine.parallel_tick,
-            config.entities.max_collisions,
+            &config.entities,
             transfers.as_deref(),
         )
         .map_err(|e| format!("{}: {e}", program.display()))?;

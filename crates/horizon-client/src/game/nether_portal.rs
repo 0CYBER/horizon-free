@@ -424,48 +424,25 @@ impl Game<'_> {
     }
     /// The nether portal blocks of the chunks within `radius` of `center`
     /// (the points of interest `PortalForcer` searches): loaded chunks as
-    /// they are, the others as saved; chunks never generated have none.
+    /// they are, the others as saved (each read once until it is saved again);
+    /// chunks never generated have none.
     fn portal_blocks(&self, center: BlockPos, radius: i32) -> Vec<BlockPos> {
         let b = self.res.behaviours();
+        let is_portal = |state| b.portal_axis(state).is_some();
         let chunk_radius = radius.div_euclid(16) + 1;
         let (cx, cz) = (center.x >> 4, center.z >> 4);
         let mut out = Vec::new();
         for z in cz - chunk_radius..=cz + chunk_radius {
             for x in cx - chunk_radius..=cx + chunk_radius {
-                let saved;
-                let chunk = match self.world.chunks.get(&(x, z)) {
-                    Some(c) => &**c,
-                    None => {
-                        match self
-                            .save
-                            .load(x, z, self.pack.assets.registry, world_biomes!(self))
-                        {
-                            Some(c) => {
-                                saved = c;
-                                &saved
-                            }
-                            None => continue,
-                        }
-                    }
-                };
-                for (s, section) in chunk.sections.iter().enumerate() {
-                    if !section.blocks.maybe_has(|v| {
-                        b.portal_axis(horizon_world::registry::BlockStateId(v))
-                            .is_some()
-                    }) {
-                        continue;
-                    }
-                    let base = self.world.bottom_y() + 16 * s as i32;
-                    for y in base..base + 16 {
-                        for lz in 0..16 {
-                            for lx in 0..16 {
-                                let (wx, wz) = (x * 16 + lx, z * 16 + lz);
-                                if b.portal_axis(chunk.block(wx, y, wz)).is_some() {
-                                    out.push(BlockPos::new(wx, y, wz));
-                                }
-                            }
-                        }
-                    }
+                match self.world.chunks.get(&(x, z)) {
+                    Some(c) => out.extend(c.blocks_where(is_portal)),
+                    None => out.extend_from_slice(&self.save.saved_portal_blocks(
+                        x,
+                        z,
+                        self.pack.assets.registry,
+                        world_biomes!(self),
+                        is_portal,
+                    )),
                 }
             }
         }
@@ -1320,8 +1297,8 @@ impl Game<'_> {
             return;
         }
         let waiting = std::mem::take(&mut self.world.loaded_entities);
-        self.resolve_arrivals();
-        self.spawn_loaded_entities();
+        horizon_client::spans::time("resolve_arrivals", || self.resolve_arrivals());
+        horizon_client::spans::time("spawn_arrivals", || self.spawn_loaded_entities());
         self.world.loaded_entities.extend(waiting);
     }
     /// Entities waiting for the loaded dimension whose exit area is loaded:
@@ -1360,7 +1337,9 @@ impl Game<'_> {
                     end_portal_rotation(into_end, [yaw, pitch], self.level.world_spawn_angle);
                 (at, motion, turn)
             } else {
-                let Some(exit) = self.nether_exit_portal(&plan) else {
+                let exit =
+                    horizon_client::spans::time("exit_portal", || self.nether_exit_portal(&plan));
+                let Some(exit) = exit else {
                     continue;
                 };
                 let (at, rotation) = self.arrival(&plan, exit);

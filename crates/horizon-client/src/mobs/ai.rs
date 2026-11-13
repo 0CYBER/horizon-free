@@ -100,6 +100,7 @@ pub struct Ai {
     /// Ticks left during which kills count as player kills.
     pub last_hurt_by_player: i32,
     pub no_action_time: i32,
+    pub dab_turns: u32,
     pub aggressive: bool,
     pub panicking: bool,
     pub malus: [Option<f32>; PATH_TYPES],
@@ -1668,7 +1669,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         super::piglin::before_goals(m, w, level_random, events);
     }
     if m.alive() && !immobile {
-        server_ai_step(m, w, level_random, events);
+        super::dab::step(m, w, level_random, events);
     } else {
         m.ai.jumping = false;
         m.ai.xxa = 0.0;
@@ -1776,9 +1777,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && (m.species() != Species::Creaking || super::creaking::can_move(m))
         && (m.species() != Species::Warden || !super::warden::digging_or_emerging(m))
         && !super::equine::is_vehicle(m);
-    // Each with whether it rides a vehicle (`Entity.isPassenger`) and
-    // whether it shares this one's root vehicle (`isPassengerOfSameVehicle`).
-    let mut targets: Vec<(Who, Vec3, bool, bool, bool)> = Vec::new();
+    let mut targets = super::world::take_push_targets();
     if let Some(p) = &w.player
         // Entity.push: passengers of the same vehicle never push each other.
         && m.rider.is_none()
@@ -1810,7 +1809,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     // The server's collision cap, after the cramming check above, which counts every entity.
     let mut cap = Cap::new(m, w);
-    for (who, at, _, same, vehicle) in targets {
+    for &(who, at, _, same, vehicle) in &targets {
         match cap.check(who, w) {
             Verdict::Push => {}
             Verdict::Skip => continue,
@@ -1869,6 +1868,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         cap.record(m, who);
     }
+    super::world::give_push_targets(targets);
 }
 /// `Mob.aiStep` -> `Mob.burnUndead`: undead burn in daylight. It runs with
 /// or without AI (`NoAI` only skips `serverAiStep`).
@@ -1903,7 +1903,7 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
     br > 0.5 && m.random.next_float() * 30.0 < (br - 0.4) * 2.0 && !wet && w.can_see_sky(x, y, z)
 }
 /// Mob.serverAiStep
-fn server_ai_step(
+pub(super) fn server_ai_step(
     m: &mut Mob,
     w: &MobWorld,
     level_random: &mut LegacyRandom,
@@ -1920,8 +1920,7 @@ fn server_ai_step(
         return;
     }
     super::riders::drive(m, w);
-    let tick_count = m.age as i64;
-    let id_based = tick_count + i64::from(m.id);
+    let id_based = super::dab::selector_tick(m) + i64::from(m.id);
     let mut targets = std::mem::take(&mut m.ai.targets);
     let mut goals = std::mem::take(&mut m.ai.goals);
     {
@@ -1930,7 +1929,7 @@ fn server_ai_step(
             lr: level_random,
             events,
         };
-        if id_based % 2 != 0 && tick_count > 1 {
+        if id_based % 2 != 0 && m.age as i64 > 1 {
             targets.tick_running(m, &mut cx, false);
             goals.tick_running(m, &mut cx, false);
         } else {
@@ -1953,7 +1952,7 @@ fn server_ai_step(
     }
     if m.species() == Species::Villager {
         // Villager.customServerAiStep: the brain, then the raid sound roll.
-        super::villager_brain::tick(m, w, level_random, events);
+        super::villager::tick_brain(m, w, level_random, events);
         if let Some(player) = super::villager::ext_mut(m).last_traded_player.take() {
             events.push(MobEvent::VillagerTrade { mob: m.id, player });
         }

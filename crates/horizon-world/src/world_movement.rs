@@ -77,7 +77,10 @@ where
         request.max_step,
         request.on_ground,
         |bounds| {
-            let mut shapes = entities.clone();
+            // A box's blocks are a few dozen shapes at most: one allocation,
+            // not the doubling a push-by-push list makes.
+            let mut shapes = Vec::with_capacity(entities.len() + 16);
+            shapes.extend_from_slice(&entities);
             if let Some(border) = world
                 .movement_border(request.entity, bounds)
                 .map_err(CollisionScanError::World)?

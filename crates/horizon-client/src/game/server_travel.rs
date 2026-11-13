@@ -596,7 +596,12 @@ impl Game<'_> {
             g.loading = true;
         }
         self.as_guest(host, conn, |g| {
-            g.trigger_dimension(source, target, [from.x, from.y, from.z])
+            g.trigger_dimension(source, target, [from.x, from.y, from.z]);
+            // ServerPlayer.teleport: stopUsingItem after the dimension change triggers; the
+            // End credits make a new player instead.
+            if !credits_respawn && source != target {
+                g.stop_using();
+            }
         });
         self.server_trips.push(Trip {
             conn,
