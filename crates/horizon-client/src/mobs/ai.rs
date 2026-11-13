@@ -1771,6 +1771,12 @@ fn drop_tiny_motion(m: &mut Mob) {
         if v.z.abs() < 0.003 { 0.0 } else { v.z },
     );
 }
+/// What [`push_entities`] pushes: who, where, whether it rides a vehicle, whether it shares
+/// this mob's root vehicle, and whether it is itself a vehicle.
+type PushTarget = (Who, Vec3, bool, bool, bool);
+thread_local! {
+    static PUSH_TARGETS: std::cell::RefCell<Vec<PushTarget>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 /// LivingEntity.pushEntities: every pushable entity overlapping the box is
 /// pushed apart from this one (`doPush(e)` = `e.push(this)`); pushes of other
 /// mobs are `Push` events their tick picks up.
@@ -1789,7 +1795,11 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && !super::equine::is_vehicle(m);
     // Each with whether it rides a vehicle (`Entity.isPassenger`) and
     // whether it shares this one's root vehicle (`isPassengerOfSameVehicle`).
-    let mut targets: Vec<(Who, Vec3, bool, bool, bool)> = Vec::new();
+    // The list is this thread's, kept between calls: a crowd would otherwise
+    // allocate one for every mob on every tick. Taken out, so a push that
+    // reaches this function again for another mob just allocates its own.
+    let mut targets = PUSH_TARGETS.with(|t| std::mem::take(&mut *t.borrow_mut()));
+    targets.clear();
     if let Some(p) = &w.player
         // Entity.push: passengers of the same vehicle never push each other.
         && m.rider.is_none()
@@ -1819,7 +1829,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     {
         hurt(m, w, events, 6.0, Damage::of(DamageKind::Cramming));
     }
-    for (who, at, _, same, vehicle) in targets {
+    for &(who, at, _, same, vehicle) in &targets {
         // Warden.doPush: touching it angers it, then the push itself.
         if m.species() == Species::Warden {
             super::warden::do_push(m, w, who, events);
@@ -1872,6 +1882,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
         }
     }
+    PUSH_TARGETS.with(|t| *t.borrow_mut() = targets);
 }
 /// `Mob.aiStep` -> `Mob.burnUndead`: undead burn in daylight. It runs with
 /// or without AI (`NoAI` only skips `serverAiStep`).
