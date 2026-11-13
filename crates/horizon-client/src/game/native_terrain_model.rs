@@ -11,7 +11,7 @@ impl Game<'_> {
     /// shading remains independent of light: fullbright shaded models remain shaded.
     /// UV shifts affect only the exact source sprite; a missing source match fails the
     /// whole call. Optional shrink is caller-specified, never inferred from an atlas guess.
-    /// API @API:terrain_model@.
+    /// API 564.
     pub(super) fn native_draw_terrain_model(
         &self,
         draw: &mut BlockEntityDraw,

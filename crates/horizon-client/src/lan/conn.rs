@@ -658,7 +658,7 @@ pub fn serve_local(
 /// "Disconnected" if it is left unset), a status ping is closed unanswered. Once for each network connection, the
 /// legacy server list ping (`0xFE`) and an integrated server's own player excepted. There is no `Game` on this
 /// thread: no helper works, and the hook must not block for long (the connection waits for it). API
-/// @API:handshake@.
+/// 466.
 #[inline(never)]
 pub fn native_handshake(
     address: std::net::SocketAddr,
@@ -943,7 +943,7 @@ fn authenticate(
 /// then, or whose sender is dropped, refuses them with a plain "Disconnected". Mods answer without waiting on
 /// each other, so loads run side by side. Once for each player who logs in over the network, the integrated
 /// server's own player excepted. There is no `Game` on this thread: no helper works. API
-/// @API:player_pre_login@.
+/// 487.
 #[inline(never)]
 pub fn native_player_pre_login(
     player: u128,
@@ -981,7 +981,7 @@ fn pre_login_refusal(
 /// characters, a signature of up to 1024): the player's own client and every player list then get the new
 /// ones. Once for each player who logs in over the network, the integrated server's own player excepted.
 /// There is no `Game` on this thread: no helper works. The hook may block for a lookup (a database's); the
-/// login waits for it, but a vanilla client gives up after 30 s of silence. API @API:player_profile@.
+/// login waits for it, but a vanilla client gives up after 30 s of silence. API 488.
 #[inline(never)]
 pub fn native_player_profile(
     player: u128,

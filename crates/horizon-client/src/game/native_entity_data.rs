@@ -92,7 +92,7 @@ impl Game<'_> {
     }
     /// The entity's name as plain text (`Entity.getName`): its custom name,
     /// a player's name, else its type's name. On a client (API
-    /// @API:client_entity_refs@), from the custom name the server synced
+    /// 428), from the custom name the server synced
     /// (`Entity.DATA_CUSTOM_NAME`) and a player's profile name. API
     /// 386.
     pub(super) fn native_entity_name(&self, entity: EntityRef) -> Option<String> {

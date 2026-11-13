@@ -37,7 +37,7 @@ pub struct NativeBlockNbt {
 }
 /// A bulk edit: block states and block predicates as commands write them (without NBT), and the runs naming them
 /// by index. `neighbour_updates` tells the neighbours of each block changed, as `set_block` does with its flags
-/// (API @API:edit_blocks_neighbour_updates@); off, none is told.
+/// (API 616); off, none is told.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct NativeBlockEdit {
     pub palette: Vec<String>,
@@ -45,13 +45,13 @@ pub struct NativeBlockEdit {
     pub runs: Vec<NativeBlockRun>,
     pub neighbour_updates: bool,
     /// Block entity data, loaded after all runs: an entry whose position holds no block entity, or whose `id`
-    /// names another type, is skipped (the block stays as the runs made it). API @API:edit_blocks_nbt@.
+    /// names another type, is skipped (the block stays as the runs made it). API 627.
     pub block_entities: Vec<NativeBlockNbt>,
 }
 
 impl Game<'_> {
     /// A block state written at `data_version`, upgraded as the datafixers do it
-    /// (`horizon_world::datafix::native_upgrade_block_state`). API @API:upgrade_block_state@.
+    /// (`horizon_world::datafix::native_upgrade_block_state`). API 620.
     pub(super) fn native_upgrade_block_state(
         &self,
         name: &str,
@@ -69,7 +69,7 @@ impl Game<'_> {
     /// Runs in chunks not loaded, and the parts of runs outside the column, are left out. The blocks changed, or
     /// why the edit was left out, with nothing changed: a level the server hasn't loaded, a client of a server, a
     /// palette entry or filter that doesn't read or carries NBT (refused), a run naming a palette entry or filter
-    /// past the end, or more than 65536 filters. API 126. Since API @API:edit_blocks_any_level@, `dimension` may be
+    /// past the end, or more than 65536 filters. API 126. Since API 615, `dimension` may be
     /// any level the server has loaded: that level is put in place for the edit (`execute in <dimension> run`),
     /// as `native_summon` does, and the one that was is put back.
     pub(super) fn native_edit_blocks(
@@ -129,7 +129,7 @@ impl Game<'_> {
     /// the others get it in a resent chunk. Returns how many chunks were lit
     /// (the ring included); 0 for another dimension, on a client. Lights every
     /// chunk it is given: call it for the chunks an edit changed, not every
-    /// tick. API @API:chunk_relight_resend@.
+    /// tick. API 634.
     pub(super) fn native_relight_chunks(&mut self, dimension: &str, chunks: &[[i32; 2]]) -> u32 {
         if !self.native_level_open(dimension) {
             return 0;
@@ -151,7 +151,7 @@ impl Game<'_> {
     /// For a server mod: the UUIDs of the players who are sent chunk `chunk`
     /// (`[x, z]`) of the level being ticked and have it, in join order: the
     /// ones to tell of a change there. Empty for another dimension and on a
-    /// client. API @API:chunk_relight_resend@.
+    /// client. API 634.
     pub(super) fn native_chunk_trackers(&self, dimension: &str, chunk: [i32; 2]) -> Vec<u128> {
         if !self.native_level_open(dimension) {
             return Vec::new();
@@ -167,7 +167,7 @@ impl Game<'_> {
     /// every player who has it, or only to `player` when given and it has the
     /// chunk. Returns how many players were sent it; 0 for a chunk not
     /// loaded, a player who does not have it, another dimension, and on a
-    /// client. API @API:chunk_relight_resend@.
+    /// client. API 634.
     pub(super) fn native_resend_chunk(
         &mut self,
         dimension: &str,
@@ -191,7 +191,7 @@ impl Game<'_> {
     }
     /// The data of the block entity at `pos` in the loaded level `dimension`, as `save` writes it without its id
     /// and position (`BlockEntity.saveWithoutMetadata`); None when there is none, or the level isn't loaded (also
-    /// on a client). Read-only: a mod that writes one sets the block again. API @API:block_entity_tag@.
+    /// on a client). Read-only: a mod that writes one sets the block again. API 614.
     pub(super) fn native_block_entity_tag(
         &mut self,
         dimension: &str,
@@ -204,7 +204,7 @@ impl Game<'_> {
     /// without its id and position (which stay): what a paste or a schematic restores (a chest's items, a sign's
     /// text) once the block is placed. True when its data changed; false also when it already holds `tag`, when
     /// there is no block entity at `pos`, and on a client. Place the block first (`native_set_block`,
-    /// `native_edit_blocks`). API @API:set_block_tag@.
+    /// `native_edit_blocks`). API 619.
     pub(super) fn native_set_block_tag(
         &mut self,
         dimension: &str,
@@ -225,7 +225,7 @@ impl Game<'_> {
     /// The first block a ray from `eye` along `dir` meets in the level being ticked, within `range` (at most
     /// `RAYCAST_MAX`), as the player's own view reads it: the block outline it crosses; with `fluids`, a fluid
     /// block counts too, at its near face (`ClipContext.Fluid.ANY`). `dir` need not be a unit vector. None on a
-    /// client, for a zero `dir`, and with no hit in range. API @API:pick_block@.
+    /// client, for a zero `dir`, and with no hit in range. API 618.
     pub(super) fn native_pick_block(
         &self,
         eye: [f64; 3],
@@ -258,7 +258,7 @@ impl Game<'_> {
     /// The entities of the loaded level `dimension` inside the box from `min` to `max` (both corners included), by
     /// id, as `native_level_entities` lists them; players the hub holds are included. Empty for a level not loaded,
     /// and on a client. Walks every entity of the level: a mod calls it for a few boxes, not every tick. API
-    /// @API:entities_in@.
+    /// 592.
     pub(super) fn native_entities_in(
         &mut self,
         dimension: &str,
@@ -274,7 +274,7 @@ impl Game<'_> {
     /// For a server mod: load SNBT `nbt` into the block entity at `pos` of the level being ticked, as the NBT of
     /// `/setblock ... {nbt}` is loaded (`id`, `x`, `y`, `z` are the block entity's own and kept). False, changing
     /// nothing: another dimension, a client, a chunk not loaded, NBT that doesn't read or isn't a compound, no block
-    /// entity at `pos`, or an `id` that isn't that block entity's type. API @API:edit_blocks_nbt@.
+    /// entity at `pos`, or an `id` that isn't that block entity's type. API 627.
     pub(super) fn native_set_block_entity(
         &mut self,
         dimension: &str,
@@ -287,7 +287,7 @@ impl Game<'_> {
     }
     /// For a server mod: the full saved NBT of the block entity at `pos` of the level being ticked, as SNBT
     /// (`/data get block`), None where there is none, in another dimension or on a client. API
-    /// @API:edit_blocks_nbt@.
+    /// 627.
     pub(super) fn native_block_entity_nbt(
         &mut self,
         dimension: &str,

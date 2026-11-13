@@ -38,15 +38,15 @@ pub struct NativeClientState {
     pub yaw: f32,
     pub pitch: f32,
     pub menu_blur: f32,
-    /// What covers the world. API @API:session_state@.
+    /// What covers the world. API 561.
     pub screen: NativeScreenKind,
     /// F3's debug screen is showing (`DebugScreenOverlay.showDebugScreen`).
-    /// API @API:session_state@.
+    /// API 561.
     pub debug_screen: bool,
-    /// The world joined, None before one is. API @API:session_state@.
+    /// The world joined, None before one is. API 561.
     pub world: Option<NativeWorldId>,
     /// The head of the bed the player sleeps in, as the server says
-    /// (`LivingEntity.getSleepingPos`). API @API:session_state@.
+    /// (`LivingEntity.getSleepingPos`). API 561.
     pub sleeping_pos: Option<[i32; 3]>,
 }
 
@@ -127,7 +127,7 @@ pub struct NativeClientEntity {
     pub head_pitch: f32,
     pub alive: bool,
     pub invisible: bool,
-    /// Its entity type (`minecraft:zombie`). API @API:client_entity_list@.
+    /// Its entity type (`minecraft:zombie`). API 558.
     pub kind: String,
     /// `Entity.getYRot` in degrees, 0 facing south and 90 west.
     pub yaw: f32,
@@ -142,13 +142,13 @@ pub struct NativeClientEntity {
 
 impl NativeClientEntity {
     /// Where this frame draws it (`Entity.getPosition(partialTick)`), given
-    /// `NativeClientState::world_partial_tick`. API @API:client_entity_list@.
+    /// `NativeClientState::world_partial_tick`. API 558.
     pub fn position_at(&self, partial_tick: f64) -> [f64; 3] {
         position_at(self.previous_position, self.position, partial_tick)
     }
 }
 
-/// A dropped item the client shows. API @API:client_entity_list@.
+/// A dropped item the client shows. API 558.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct NativeClientItem {
@@ -202,7 +202,7 @@ impl Game<'_> {
     /// vanilla's file name, and the same "Saved screenshot as" line in chat.
     /// The file it will write, as a path string; an error without a window to draw, or while
     /// another screenshot waits for the frame (F2's, an agent's, the world
-    /// icon's), which a mod's would replace. API @API:take_screenshot@.
+    /// icon's), which a mod's would replace. API 557.
     pub(super) fn native_take_screenshot(&mut self) -> Result<String, String> {
         let Some(renderer) = self.renderer.as_ref() else {
             return Err("no window to take it from".into());
@@ -283,7 +283,7 @@ impl Game<'_> {
             .collect()
     }
     /// The dropped items the server shows this window, by the same rules as
-    /// `native_client_entities`. API @API:client_entity_list@.
+    /// `native_client_entities`. API 558.
     pub(super) fn native_client_items(&self) -> Vec<NativeClientItem> {
         if !self.native_window() || self.remote.is_none() {
             return Vec::new();
@@ -304,7 +304,7 @@ impl Game<'_> {
     /// downloaded skin while the client holds it, else
     /// `native_client_resources().texture(name)`. Decodes on each call; None
     /// on a server or for a texture it can't read. API
-    /// @API:client_entity_list@.
+    /// 558.
     pub(super) fn native_client_texture(&self, texture: &str) -> Option<TexturePixels> {
         if !self.native_window() {
             return None;

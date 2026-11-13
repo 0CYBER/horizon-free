@@ -73,7 +73,7 @@ impl Game<'_> {
     /// column's height, are left out. Returns the cells changed (a cell that
     /// already holds the biome isn't), or why nothing was: another dimension,
     /// a client of a server, or a biome id the level doesn't have (the whole
-    /// call is refused, with nothing changed). API @API:set_biomes@.
+    /// call is refused, with nothing changed). API 624.
     pub(in crate::game) fn native_set_biomes(
         &mut self,
         dimension: &str,

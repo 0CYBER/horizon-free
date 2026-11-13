@@ -44,7 +44,7 @@ impl Game<'_> {
     /// `native_refresh_player` shows the change. Works from any server hook; where the hub is out of
     /// reach (inside a player's own hook) it applies at the tick's end. False on a client and for a
     /// name past 64 characters, a value past 32767 or a signature past 1024 (`GameProfile`'s
-    /// limits); true does not mean the player was found. API @API:profile_refresh@.
+    /// limits); true does not mean the player was found. API 497.
     pub(super) fn native_set_profile_property(
         &mut self,
         player: u128,
@@ -82,7 +82,7 @@ impl Game<'_> {
     /// are in (all their state kept), so their own client draws a new skin too. Queued for the end
     /// of their level's pass, so it works from any server hook; once a tick at most. A dead player
     /// is only shown again to the others (their respawn shows them the rest). False on a client;
-    /// true does not mean the player was found. API @API:profile_refresh@.
+    /// true does not mean the player was found. API 497.
     pub(super) fn native_refresh_player(&mut self, player: u128) -> bool {
         if self.remote.is_some() {
             return false;
@@ -141,7 +141,7 @@ impl Game<'_> {
     /// value (base64 JSON naming the skin and cape) and signature (None unsigned), as their player
     /// list entry carries it, `native_set_profile_property`'s edits included. None for a player who
     /// isn't on or has none (offline mode without a skin mod), on a client, and where the hub is
-    /// out of reach (inside a player's own hook). API @API:player_textures@.
+    /// out of reach (inside a player's own hook). API 494.
     pub(super) fn native_player_textures(&self, uuid: u128) -> Option<(String, Option<String>)> {
         let (_, properties) = self.online_profile(uuid)?;
         properties
@@ -153,7 +153,7 @@ impl Game<'_> {
     /// A player head of the player `uuid` (Bukkit's `SkullMeta.setOwningPlayer`): its
     /// `minecraft:profile` holds their id, and their name and properties (the skin) when they are
     /// on and the hub is in reach, so it shows their skin at once (else their name from the profile
-    /// cache, if there); a profile without properties the client resolves itself. API @API:player_textures@.
+    /// cache, if there); a profile without properties the client resolves itself. API 494.
     pub(super) fn native_player_head(&self, uuid: u128) -> ItemStack {
         let (name, properties) = self.online_profile(uuid).map_or(
             (self.native_profile_by_uuid(uuid), Vec::new()),
@@ -180,7 +180,7 @@ impl Game<'_> {
     /// network lookup, vanilla's `GameProfileCache.get`): one who is on, else one in a dedicated
     /// server's profile cache (`usercache.json`: who joined in the last month, and names its
     /// commands looked up). Their id and their name as written. Asks no profile service and makes
-    /// up no offline player; None when nobody is found. API @API:profile_cache@.
+    /// up no offline player; None when nobody is found. API 496.
     pub(super) fn native_profile_by_name(&self, name: &str) -> Option<(u128, String)> {
         let online = self.lan.as_ref().and_then(|host| {
             host.hub
@@ -195,7 +195,7 @@ impl Game<'_> {
     }
 
     /// The name of the player `uuid`: one who is on, else one in a dedicated server's profile
-    /// cache, as `native_profile_by_name`. API @API:profile_cache@.
+    /// cache, as `native_profile_by_name`. API 496.
     pub(super) fn native_profile_by_uuid(&self, uuid: u128) -> Option<String> {
         self.online_profile(uuid)
             .map(|(name, _)| name)

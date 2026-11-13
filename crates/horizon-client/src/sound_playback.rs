@@ -9,7 +9,7 @@ use crate::sound_engine::SoundPlayback;
 /// Changed values must be finite, volume nonnegative and pitch positive;
 /// invalid edits cancel that operation (an update stops the sound). No Host,
 /// world borrow or reverb/DSP surface is supplied. Runs on the game thread.
-/// API @API:sound_play@.
+/// API 451.
 #[inline(never)]
 pub fn native_sound_play(
     sound: &SoundPlayback<'_>,

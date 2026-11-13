@@ -94,7 +94,7 @@ impl Game<'_> {
     /// `native_server_packet`, decoded, until the server stops; there is no
     /// switching it off, so one mod can't silence another's. Until a mod calls
     /// this, nothing is decoded or copied. Any thread, any time, a client
-    /// included (where nothing is sent). @API:server_packet@.
+    /// included (where nothing is sent). 548.
     pub(super) fn native_watch_server_packets(&self) {
         horizon_client::lan::conn::WATCHED
             .fetch_or(horizon_client::lan::conn::WATCH_ALL, Ordering::Relaxed);
@@ -103,7 +103,7 @@ impl Game<'_> {
     /// (`ClientboundSetEntityDataPacket`) reaches `native_entity_data_to`,
     /// until the server stops; only that packet is decoded for it. As
     /// `native_watch_server_packets`, it cannot be switched off and works
-    /// from any thread. @API:entity_data_to@.
+    /// from any thread. 521.
     pub(super) fn native_watch_entity_data(&self) {
         horizon_client::lan::conn::WATCHED.fetch_or(
             horizon_client::lan::conn::WATCH_ENTITY_DATA,
@@ -115,7 +115,7 @@ impl Game<'_> {
     /// registered them: what Bukkit's `Player.getListeningPluginChannels` gives. Horizon keeps
     /// at most 128 names of at most 256 bytes, printable ASCII with a `:`. Empty for a player
     /// who isn't on, on a client, and inside a player's own hook, the hub being out then
-    /// (`native_player_register_channels` names what changed). @API:player_channels@.
+    /// (`native_player_register_channels` names what changed). 541.
     pub(super) fn native_player_channels(&self, player: u128) -> Vec<String> {
         let Some(host) = &self.lan else {
             return Vec::new();
@@ -139,7 +139,7 @@ impl Game<'_> {
     /// the answer. False when the player isn't on, on a client, for an empty
     /// URL, one past 32767 characters or a hash past 40. Works from
     /// `native_server_tick` and the player's own hooks, as `native_send`.
-    /// @API:resource_packs@.
+    /// 545.
     pub(super) fn native_send_resource_pack(
         &mut self,
         player: u128,
@@ -165,7 +165,7 @@ impl Game<'_> {
     /// has for None (`ClientboundResourcePackPopPacket`, Bukkit's
     /// `Player.removeResourcePack` and `removeResourcePacks`); the client
     /// reloads without it. False when the player isn't on or on a client, as
-    /// `native_send`. @API:resource_packs@.
+    /// `native_send`. 545.
     pub(super) fn native_pop_resource_pack(&mut self, player: u128, id: Option<u128>) -> bool {
         self.native_send(player, C::ResourcePackPop(ResourcePackPop { id }))
     }
@@ -175,7 +175,7 @@ impl Game<'_> {
     /// end, from any server hook, the kicked player's own included. True when it is queued:
     /// false on a client, in a world nobody else can join, and for a player who isn't on when
     /// the hub can tell (a player gone by the tick's end is not kicked either).
-    /// @API:kick@.
+    /// 528.
     pub(super) fn native_kick(&mut self, player: u128, reason: &Text) -> bool {
         if self.remote.is_some() || (self.serving.is_none() && self.options.dedicated.is_none()) {
             return false;
