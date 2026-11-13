@@ -1787,9 +1787,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && (m.species() != Species::Creaking || super::creaking::can_move(m))
         && (m.species() != Species::Warden || !super::warden::digging_or_emerging(m))
         && !super::equine::is_vehicle(m);
-    // Each with whether it rides a vehicle (`Entity.isPassenger`) and
-    // whether it shares this one's root vehicle (`isPassengerOfSameVehicle`).
-    let mut targets: Vec<(Who, Vec3, bool, bool, bool)> = Vec::new();
+    let mut targets = super::world::take_push_targets();
     if let Some(p) = &w.player
         // Entity.push: passengers of the same vehicle never push each other.
         && m.rider.is_none()
@@ -1819,7 +1817,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     {
         hurt(m, w, events, 6.0, Damage::of(DamageKind::Cramming));
     }
-    for (who, at, _, same, vehicle) in targets {
+    for &(who, at, _, same, vehicle) in &targets {
         // Warden.doPush: touching it angers it, then the push itself.
         if m.species() == Species::Warden {
             super::warden::do_push(m, w, who, events);
@@ -1872,6 +1870,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
         }
     }
+    super::world::give_push_targets(targets);
 }
 /// `Mob.aiStep` -> `Mob.burnUndead`: undead burn in daylight. It runs with
 /// or without AI (`NoAI` only skips `serverAiStep`).
