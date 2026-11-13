@@ -477,6 +477,7 @@ mod trial_visuals;
 mod trident;
 mod tutorial;
 mod ui_control;
+mod upload_pace;
 mod use_hand;
 mod using_item;
 mod vault;
@@ -626,13 +627,6 @@ use winit::{
     window::{CursorGrabMode, Window, WindowId},
 };
 
-/// The time a frame spends uploading chunk meshes when the player set no
-/// Chunk Updates or Upload Budget: a burst past it waits for the next frames.
-const AUTO_UPLOAD_TIME: Duration = Duration::from_millis(2);
-/// `AUTO_UPLOAD_TIME` while the view's terrain is still arriving (a world's
-/// open, a teleport): the meshes waiting then are the view itself, not edits
-/// to it, so a frame gives them more of its time to fill the view sooner.
-const AUTO_UPLOAD_TIME_ARRIVING: Duration = Duration::from_millis(6);
 /// A frame's finished meshes up to this many upload at once, unqueued.
 const AUTO_UPLOADS_AT_ONCE: usize = 8;
 /// The most changed columns far terrain waits on behind a mod's hold (`Game::lod_held`): past
@@ -2499,8 +2493,8 @@ struct Game<'a> {
     /// `getUseDuration` when that use started, as a mod left it
     /// (`game/item_use.rs`): consumables and mod items count to it.
     use_duration: i32,
-    /// A mod's `Start` or `Tick` set that use's ticks left (`game/item_use.rs`).
-    use_ticks_set: bool,
+    /// What that use began with (`useItem`) and whether a mod set its ticks left (`item_use.rs`).
+    use_start: using_item::UseStart,
     /// The crossbow charge's start and middle loading sounds played so far
     /// (`game/crossbow.rs`): each charge plays each of them once, however
     /// far a mod's tick moved the charge at a time.
@@ -2852,6 +2846,7 @@ struct Game<'a> {
     native_mod_screen: Option<String>,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
+    upload_pace: upload_pace::UploadPace,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::Frustum>,
     /// Whether the renderer's section-occlusion graph is active for this view.
@@ -5677,7 +5672,7 @@ impl Game<'_> {
             self.lan_synced_since(from);
             horizon_client::spans::time("tick_lecterns", || self.tick_lecterns());
             horizon_client::spans::time("tick_maps", || self.tick_maps());
-            self.tick_lodestone_compasses();
+            self.tick_equipment_compasses();
             horizon_client::spans::time("tick_bolts", || self.tick_bolts());
             horizon_client::spans::time("tick_fishing", || self.tick_fishing());
             self.ordered_before(ordered_tick::Batch::Tridents)?;
@@ -11063,6 +11058,7 @@ impl Game<'_> {
                     let elapsed = now.duration_since(self.previous);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
+                    self.upload_pace.frame(elapsed);
                     self.studio_fly(elapsed);
                     // Arrow-key camera controls belong to gameplay; chat and
                     // other screens use the same keys for their own navigation.
@@ -11593,7 +11589,7 @@ impl<'a> Game<'a> {
             },
             using: None,
             use_duration: 0,
-            use_ticks_set: false,
+            use_start: Default::default(),
             crossbow_sounds: [false; 2],
             view: Default::default(),
             limiter: horizon_client::window::FramerateLimiter::new(0),
@@ -11792,6 +11788,7 @@ impl<'a> Game<'a> {
             async_particle_culler: RefCell::new(Default::default()),
             pack_shadow_casters: (false, false),
             pending_uploads: Vec::new(),
+            upload_pace: Default::default(),
             frame_graph: Default::default(),
             extras: Default::default(),
             pvp: Default::default(),

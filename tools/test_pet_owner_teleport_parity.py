@@ -6,8 +6,10 @@ vanilla generated first, with Alice an operator. Three standing wolves she owns 
 held by a pig that never moves (NoAI), one sitting in a boat. She then teleports 40 blocks away.
 `TamableAnimal.shouldTryTeleportToOwner` (12 blocks or more) sends a pet to its owner unless `unableToMoveToOwner`:
 ordered to sit, `isPassenger`, `mayBeLeashed` or an owner who is a spectator. So only the free wolf comes to her.
-Whether each wolf is within 6 blocks of Alice afterwards is compared (where exactly a teleported wolf lands is a random
-draw, not under test).
+Whether each wolf is within 16 blocks of Alice afterwards is compared. Where exactly a teleported wolf lands is a random
+draw, not under test, and so is what it does next: a tame wolf still strolls (`WaterAvoidingRandomStrollGoal`, up to 10
+blocks) and only follows its owner back from 10 blocks (`FollowOwnerGoal`), teleporting again from 12. A wolf that came
+can be 6 to 12 blocks from her a few seconds later, in vanilla as in Horizon; a wolf that stayed behind is 28 or more.
 """
 import re
 import sys
@@ -35,10 +37,12 @@ SCRIPT = [
 ]
 # Where `away` puts Alice.
 AWAY = (0.5, -60.0, 40.5)
+# A wolf this close came to her: past the 12 blocks a pet teleports from, short of the 28 a wolf left behind keeps.
+NEAR = 16.0
 
 
 def shown(lines):
-    """Whether each wolf ended within 6 blocks of Alice, from its `Pos`."""
+    """Whether each wolf ended within `NEAR` blocks of Alice, from its `Pos`."""
     out = []
     for line in lines:
         parts = line.split(' ', 3)
@@ -49,7 +53,7 @@ def shown(lines):
         position = [float(v) for v in re.findall(r'"text":"(-?[0-9.]+)","color":"gold"', line)]
         if len(position) != 3:
             continue
-        near = sum((a - b) ** 2 for a, b in zip(position, AWAY)) <= 36.0
+        near = sum((a - b) ** 2 for a, b in zip(position, AWAY)) <= NEAR * NEAR
         out.append(f'{parts[0]} {parts[1]} {"near" if near else "behind"}')
     return out
 
