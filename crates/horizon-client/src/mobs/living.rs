@@ -395,8 +395,12 @@ impl MobWorld<'_> {
     /// Whether the block's collision shape (empty context) has a box meeting `area`.
     fn block_collides_with(&self, x: i32, y: i32, z: i32, area: Aabb) -> bool {
         let offset = Vec3::new(f64::from(x), f64::from(y), f64::from(z));
-        self.block_shape(x, y, z)
-            .is_some_and(|shape| shape.boxes().iter().any(|b| b.move_by(offset).intersects(area)))
+        self.block_shape(x, y, z).is_some_and(|shape| {
+            shape
+                .boxes()
+                .iter()
+                .any(|b| b.move_by(offset).intersects(area))
+        })
     }
     fn block_shape(&self, x: i32, y: i32, z: i32) -> Option<horizon_core::geometry::VoxelShape> {
         let mut scene = SceneCollisions {
