@@ -2827,38 +2827,55 @@ impl SaveDir {
     }
     /// A record as saved: the pending write first, then the region file.
     fn read_record_raw(&self, folder: &str, x: i32, z: i32) -> Option<NamedTag> {
+        self.try_read_record_raw(folder, x, z).ok().flatten()
+    }
+    /// `read_record_raw`, telling a record that isn't there (`Ok(None)`) from a read that failed
+    /// (`Err`, already reported): the second may succeed on a later read.
+    fn try_read_record_raw(
+        &self,
+        folder: &str,
+        x: i32,
+        z: i32,
+    ) -> std::result::Result<Option<NamedTag>, ()> {
         let pending = self
             .pending
             .lock()
-            .ok()?
+            .map_err(|_| ())?
             .get(&(Folder::of(folder), x, z))
             .map(|(_, r)| r.clone());
         if let Some(record) = pending {
-            return record.tag().map(|t| (*t).clone());
+            return Ok(record.tag().map(|t| (*t).clone()));
         }
         let cache = match Folder::of(folder) {
             Folder::Region => &self.regions,
             Folder::Entities => &self.entity_regions,
             Folder::Poi => &self.poi_regions,
         };
-        match read_region_record(&self.root, cache, folder, x, z) {
-            Ok(record) => record,
+        read_region_record(&self.root, cache, folder, x, z).map_err(|e| {
+            crate::chunk_io::report_load_failure(&self.root, x, z, &e);
+        })
+    }
+    /// A record brought to the current version (`upgrade_record`); `Err` when that failed.
+    fn try_read_record(
+        &self,
+        folder: &str,
+        x: i32,
+        z: i32,
+    ) -> std::result::Result<Option<NamedTag>, ()> {
+        let Some(mut record) = self.try_read_record_raw(folder, x, z)? else {
+            return Ok(None);
+        };
+        match self.upgrade_record(Folder::of(folder), &mut record) {
+            Ok(()) => Ok(Some(record)),
             Err(e) => {
                 crate::chunk_io::report_load_failure(&self.root, x, z, &e);
-                None
+                Err(())
             }
         }
     }
     /// A record brought to the current version (`upgrade_record`).
     fn read_record(&self, folder: &str, x: i32, z: i32) -> Option<NamedTag> {
-        let mut record = self.read_record_raw(folder, x, z)?;
-        match self.upgrade_record(Folder::of(folder), &mut record) {
-            Ok(()) => Some(record),
-            Err(e) => {
-                crate::chunk_io::report_load_failure(&self.root, x, z, &e);
-                None
-            }
-        }
+        self.try_read_record(folder, x, z).ok().flatten()
     }
     fn upgrade_record(&self, folder: Folder, record: &mut NamedTag) -> Result<()> {
         upgrade_record(folder, record, || {
@@ -2868,12 +2885,28 @@ impl SaveDir {
         })
     }
     pub fn load(&self, x: i32, z: i32, registry: &BlockRegistry, biomes: &Biomes) -> Option<Chunk> {
-        let root = self.read_record("region", x, z)?;
+        self.try_load(x, z, registry, biomes).ok().flatten()
+    }
+    /// `load`, telling a chunk that isn't saved as a full chunk (`Ok(None)`) from a read that
+    /// failed (`Err`): a later read may succeed.
+    fn try_load(
+        &self,
+        x: i32,
+        z: i32,
+        registry: &BlockRegistry,
+        biomes: &Biomes,
+    ) -> std::result::Result<Option<Chunk>, ()> {
+        let Some(root) = self.try_read_record("region", x, z)? else {
+            return Ok(None);
+        };
         let tables = self.tables.get().map(|t| &**t);
-        let mut chunk = decode_with(&root, registry, biomes, tables, self.shape.column())?;
+        let Some(mut chunk) = decode_with(&root, registry, biomes, tables, self.shape.column())
+        else {
+            return Ok(None);
+        };
         load_light(&root.tag, &mut chunk, self.shape.sky_light);
         chunk.entities = horizon_world::chunk::legacy_entities(&root.tag);
-        Some(chunk)
+        Ok(Some(chunk))
     }
     /// A saved full chunk read for a player's far ring (`lan::far`), as `load` but past the gameplay
     /// region cache, and only where the region file lists it (no file opened where there is none).

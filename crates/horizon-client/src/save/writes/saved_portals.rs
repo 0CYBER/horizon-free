@@ -17,6 +17,12 @@ struct Kept {
     writes: u64,
 }
 
+/// The blocks of a chunk without a portal: one allocation shared by every such chunk.
+fn none() -> Arc<[BlockPos]> {
+    static NONE: std::sync::OnceLock<Arc<[BlockPos]>> = std::sync::OnceLock::new();
+    NONE.get_or_init(|| Arc::new([])).clone()
+}
+
 impl SavedPortals {
     /// The folder queued these chunks to be written: a search reads them again from now on (the
     /// queued records are already where a read finds them).
@@ -56,11 +62,25 @@ impl SaveDir {
             }
             Err(_) => u64::MAX,
         };
-        let found: Arc<[BlockPos]> = match self.load(x, z, registry, biomes) {
-            Some(chunk) => chunk.blocks_where(&is_portal).into(),
-            None => Arc::new([]),
-        };
-        if let Ok(mut kept) = self.outstanding.portals.0.lock()
+        // A read that failed finds none now, but isn't kept: the next search reads it again.
+        let (found, confirmed): (Arc<[BlockPos]>, bool) =
+            match self.try_load(x, z, registry, biomes) {
+                Ok(Some(chunk)) => {
+                    let blocks = chunk.blocks_where(&is_portal);
+                    (
+                        if blocks.is_empty() {
+                            none()
+                        } else {
+                            blocks.into()
+                        },
+                        true,
+                    )
+                }
+                Ok(None) => (none(), true),
+                Err(()) => (none(), false),
+            };
+        if confirmed
+            && let Ok(mut kept) = self.outstanding.portals.0.lock()
             && kept.writes == writes
         {
             if kept.chunks.len() >= KEPT {
@@ -127,6 +147,26 @@ mod tests {
         assert!(
             save.saved_portal_blocks(40, 40, assets.registry, &biomes, is_portal)
                 .is_empty()
+        );
+        // A record that fails to read isn't kept as having none: once reads recover, so does the
+        // search. Break the compression ID of the chunk's record, query, restore it, query again.
+        let region = dir.join("region/r.0.-1.mca");
+        let saved = std::fs::read(&region).unwrap();
+        let mut broken = saved.clone();
+        let sector = u32::from_be_bytes([
+            0,
+            saved[4 * (3 + 32 * 30)],
+            saved[4 * (3 + 32 * 30) + 1],
+            saved[4 * (3 + 32 * 30) + 2],
+        ]);
+        broken[sector as usize * 4096 + 4] = 0;
+        let fresh = SaveDir::new(dir.clone(), LevelShape::OVERWORLD);
+        std::fs::write(&region, &broken).unwrap();
+        assert!(found(&fresh).is_empty());
+        std::fs::write(&region, &saved).unwrap();
+        assert_eq!(
+            found(&fresh),
+            [BlockPos::new(49, 71, -30), BlockPos::new(49, 72, -30)]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
