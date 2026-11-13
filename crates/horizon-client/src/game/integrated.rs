@@ -474,6 +474,7 @@ impl Game<'_> {
         ));
         self.world_biomes_base = self.world_biomes.clone();
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
+        horizon_client::parallel::set_setting(settings.horizon.parallel_tick);
         let flags = Arc::new(Flags::default());
         flags
             .render_distance
@@ -759,10 +760,17 @@ impl Game<'_> {
                         self.tick_server_measured(true)?;
                     } else {
                         self.follow_distances(flags);
+                        let cpu = horizon_client::spans::thread_cpu();
                         let started = Instant::now();
                         self.tick_server_measured(false)?;
                         // MinecraftServer.tickServer's tick times, for /tick query.
                         self.clock.record(started.elapsed());
+                        // Parallel Tick's Auto decides here, between ticks, how the next one runs.
+                        let on_cpu = horizon_client::spans::thread_cpu().zip(cpu);
+                        horizon_client::parallel::after_tick(
+                            started.elapsed().as_secs_f32() * 1000.0,
+                            on_cpu.map(|(end, start)| (end - start).as_secs_f32() * 1000.0),
+                        );
                         self.debug_charts.log_tick(started, started.elapsed());
                         flags.smoothed_tick_ms.store(
                             self.debug_charts.smoothed_tick_ms.to_bits(),
