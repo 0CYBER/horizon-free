@@ -13,8 +13,9 @@ use horizon_client::{
         seen_grid::SeenGrid,
         spawn_rules::SpawnLevel,
         spawn_selection::{
-            self, Category, Counted, Heightmap, NaturalLevel, PlayerSquares, SpawnCost,
-            SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureAt, StructureSpawns,
+            self, Category, Counted, Heightmap, NaturalLevel, PlayerSquares, SpawnBuffers,
+            SpawnCost, SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureAt,
+            StructureSpawns,
         },
     },
 };
@@ -48,6 +49,8 @@ pub(super) struct SpawnScratch {
     stale: Vec<bool>,
     /// Reusable buffer for spawn players across ticks to avoid heap allocation.
     pub(super) spawn_players: Vec<SpawnPlayer>,
+    /// The spawn state's allocations, reused across ticks.
+    pub(super) spawn_buffers: SpawnBuffers,
 }
 impl SpawnScratch {
     fn chunk(p: &LevelPlayer) -> (i32, i32) {
@@ -886,9 +889,15 @@ impl<'a> Game<'a> {
                 }));
             let spawn_players = std::mem::take(&mut scratch.spawn_players);
             laps.lap("sn_materialize");
-            let mut state = SpawnState::new(&level, spawnable, spawn_players, counted, |cx, cz| {
-                self.world.chunks.contains_key(&(cx, cz))
-            });
+            let buffers = std::mem::take(&mut scratch.spawn_buffers);
+            let mut state = SpawnState::new_in(
+                &level,
+                spawnable,
+                spawn_players,
+                buffers,
+                counted,
+                |cx, cz| self.world.chunks.contains_key(&(cx, cz)),
+            );
             laps.lap("sn_state");
             last_state = state.counts();
             let categories = if spawn_mobs {
@@ -930,7 +939,7 @@ impl<'a> Game<'a> {
                     );
                 }
             }
-            scratch.spawn_players = state.into_players();
+            (scratch.spawn_players, scratch.spawn_buffers) = state.into_parts();
         }
         horizon_threads::work::clear_work();
         spawn_selection::attempt_counters(true);

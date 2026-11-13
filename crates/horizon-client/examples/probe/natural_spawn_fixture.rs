@@ -867,7 +867,7 @@ pub fn main() -> horizon_client::Result<()> {
                         bits(p[0]),
                         bits(p[1]),
                         bits(p[2]),
-                        yaw_text(&t, yaw)
+                        yaw_text(t, yaw)
                     ),
                 })
             };
