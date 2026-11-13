@@ -93,3 +93,16 @@ impl Mob {
         }
     }
 }
+
+impl Seen {
+    /// `LivingEntity.getVisibilityPercent` for a mob target: 1, or
+    /// ×0.7×armor cover (at least 0.1) while `isInvisible`. A mob does not
+    /// sneak (`isShiftKeyDown` is a player's) and its `getArmorCoverPercentage`
+    /// is 0, which the 0.1 floor turns into 0.07 - the sheep the evoker looks
+    /// for has no armour, and no worn `mob_visibility` either. `invisible` is
+    /// the flag or the effect: Horizon does not model vanilla's
+    /// `updateInvisibilityStatus` sync of the effect into the flag.
+    pub fn visibility_percent(&self) -> f64 {
+        if self.invisible { 0.7 * 0.1 } else { 1.0 }
+    }
+}

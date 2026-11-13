@@ -864,11 +864,21 @@ impl TextField {
         self.set_highlight(m, pos);
     }
     /// `onClick`: the cursor where the mouse is (`findClickedPositionInText`).
-    pub fn click(&mut self, m: &Measure, x: f64, extend: bool) {
+    /// `EditBox.onClick` / `MultiLineEditBox.onClick`: a double click selects
+    /// the word the pointer is in (`EditBox.selectWord`), any other click
+    /// places the caret there.
+    pub fn click(&mut self, m: &Measure, x: f64, extend: bool, double: bool) {
         let pos = (x.floor() as i32 - self.text_x()).min(self.inner_width());
         let rest = sub(&self.value, self.display, chars(&self.value));
         let at = self.display + m.plain(&rest, pos, false);
-        self.move_cursor_to(m, at, extend);
+        if double {
+            let start = crate::ui::word_position(&self.value, -1, at);
+            let end = crate::ui::word_position(&self.value, 1, at);
+            self.move_cursor_to(m, start, false);
+            self.move_cursor_to(m, end, true);
+        } else {
+            self.move_cursor_to(m, at, extend);
+        }
     }
     pub fn contains(&self, x: f64, y: f64) -> bool {
         x >= self.x as f64

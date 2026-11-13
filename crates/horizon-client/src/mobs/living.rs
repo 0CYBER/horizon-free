@@ -874,9 +874,16 @@ impl Mob {
         let scene = SceneCollisions {
             world: w.world,
             binding: w.collision,
-            subject: self.kind.flags.lava_walker.then(|| PowderSnowSubject {
+            // PowderSnowBlock.getCollisionShape asks every entity for its fall
+            // distance, the walkable-mob tag and leather boots on its feet.
+            subject: Some(PowderSnowSubject {
                 fall_distance: self.fall_distance,
-                lava_walker: true,
+                leather_boots: self.extra.feet.as_deref() == Some("minecraft:leather_boots")
+                    && self.extra.armor[3].as_ref().is_none_or(|s| s.count > 0),
+                walkable_type: w
+                    .data
+                    .entity_has("minecraft:powder_snow_walkable_mobs", &self.kind.id),
+                lava_walker: self.kind.flags.lava_walker,
                 ..Default::default()
             }),
         };

@@ -967,13 +967,14 @@ impl Game<'_> {
                     }
                     // `ItemEntity.hurtServer`: the damage comes off `Health`
                     // (5 to start) in f32 and the item is destroyed at zero, so
-                    // a survivor keeps the health the blast left it. The nether
-                    // star is `ItemStack.canBeHurtBy`'s explosion exception, and
-                    // a blast with a source entity under `mobGriefing` off never
+                    // a survivor keeps the health the blast left it. A stack whose
+                    // `damage_resistant` covers the blast (the nether star's
+                    // `#is_explosion`) is skipped (`ItemStack.canBeHurtBy`), and a
+                    // blast with a source entity under `mobGriefing` off never
                     // reaches here (`items_ignore`).
                     EntityHandle::Item(i) => {
-                        let item = &mut self.dropped[i];
-                        if &*item.stack.item != "minecraft:nether_star" {
+                        if !self.item_resistant_to(i, damage_type) {
+                            let item = &mut self.dropped[i];
                             item.health = (item.health as f32 - amount) as i32;
                             destroyed = item.health <= 0;
                             if destroyed {
