@@ -574,6 +574,19 @@ This is the file `init` writes today, and it also writes `[panel]` (`bind = "127
 each one). Unknown keys are errors, as are a typed key set again under `[properties]` and values vanilla would
 refuse. There is no `backups.before_update` setting: an update always backs up the world first (section 7).
 
+- **`[entities]`: villagers that cannot move.** Not vanilla, so off. `villager_lobotomize = true` makes the
+  engine skip the brain of a villager that is *stuck*, and `villager_lobotomize_check_interval = 100` (ticks)
+  is how often each villager is rechecked (staggered by id). The game reads the section itself, and
+  `init` leaves it out until it is set. A villager is stuck when it rides something, or when the cells it can walk to
+  (a free block at its height, down a fall of up to 3, or one block up with room above; beds and slabs count as
+  cells it can step onto) number at most 6 and no door villagers open leads out. So a 1×1 cell, a 1×2 cell with a bed, or a
+  pocket with a workstation are stuck whatever covers the head; a room of 3×3, open ground, or a cell with a door
+  are not; a sleeping villager never is. A stuck villager skips its brain (sensors,
+  behaviours, schedule, gossip spreading, sleep, farming, breeding, panic, point-of-interest searches) and
+  keeps gravity, damage, despawning, trading with its XP and level-ups, and its trades. Its job site
+  stays: while it would work (ticks 2000 to 9000 of the day) it restocks as `WorkAtPoi` does, every 300 ticks with a
+  workstation still there, at most twice a day. When the cell opens, the next recheck gives it its brain
+  back. A villager that was never free does not claim a job site or a bed.
 - **Entity collision cap (`[entities] max_collisions`).** Off (0) is vanilla. In a crowded pen every mob pushes
   every mob it overlaps each tick, so the work grows with the square of the crowd (about 8 ms a tick on a
   79-player server with crowded chicken farms). `max_collisions = N` (not in the file until you add it) makes a

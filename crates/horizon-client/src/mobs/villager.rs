@@ -302,7 +302,11 @@ pub struct Ext {
     pub brain: Option<Box<super::villager_brain::Brain>>,
     /// Saved memories awaiting the first brain initialization.
     pub saved_memories: Option<Box<super::villager_brain::Memories>>,
+    /// `[entities] villager_lobotomize`: whether the last check found the villager stuck
+    /// (`villager_lobotomy`). Not saved; `None` until the first check.
+    pub lobotomized: Option<bool>,
 }
+pub mod lobotomy;
 pub fn ext(m: &Mob) -> Option<&Ext> {
     m.extra.villager.as_deref()
 }

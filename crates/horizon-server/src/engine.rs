@@ -513,7 +513,7 @@ mod tests {
             dab_start_distance: 16,
             dab_max_tick_freq: 10,
             dab_activation_dist_mod: 7,
-            max_collisions: 0,
+            ..Entities::default()
         };
         assert_eq!(env(on.clone(), "HORIZON_DAB").as_deref(), Some("1"));
         assert_eq!(
