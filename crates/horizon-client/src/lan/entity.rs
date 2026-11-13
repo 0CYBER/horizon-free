@@ -988,7 +988,15 @@ pub struct Entities {
     /// One entity's packets and their bodies, kept between entities.
     packets: Vec<play::Clientbound>,
     bodies: Vec<Vec<u8>>,
+    /// Tests: the send pass on several threads (true) or in order (false) whatever the counts.
+    #[cfg(test)]
+    send_apart_always: Option<bool>,
 }
+
+/// The isolated send benchmark regresses at 120 viewers, but consistently improves
+/// 400-viewer crowds on two and four cores (docs/performance/tracker-send.md).
+const SEND_APART_VIEWERS: usize = 400;
+const SEND_APART_ENTITIES: usize = 400;
 
 /// The client sees the entity this tick, and already tracked it.
 const SEES: u8 = 1;
@@ -1409,12 +1417,43 @@ impl Entities {
                 self.pairs[index] = true;
             }
         }
-        for (index, e) in entities.iter().enumerate() {
-            // Nothing to send and nobody to pair with: what the pass below
-            // would do with it (an unchanged leash) is nothing.
-            if self.quiet[index] && !self.pairs[index] {
-                continue;
-            }
+        // The entities with something to send or someone to pair with: an unchanged leash
+        // is all the pass below would do with the rest, which is nothing.
+        let active: Vec<usize> = (0..entities.len())
+            .filter(|&index| !self.quiet[index] || self.pairs[index])
+            .collect();
+        if self.send_apart(viewers.len(), active.len()) {
+            self.send_on_threads(entities, riding, viewers, &active);
+        } else {
+            self.send_in_order(entities, riding, viewers, &active);
+        }
+        // ChunkMap.removeEntity for the ones no longer in the level.
+        if self.states.len() > stamped {
+            self.states.retain(|s| s.seen == now);
+        }
+    }
+
+    /// Whether this tick's send pass runs on several threads: with many clients and many
+    /// entities to send (a crowd, each player tracked by every other).
+    fn send_apart(&self, viewers: usize, active: usize) -> bool {
+        #[cfg(test)]
+        if let Some(apart) = self.send_apart_always {
+            return apart;
+        }
+        viewers >= SEND_APART_VIEWERS && active >= SEND_APART_ENTITIES
+    }
+
+    /// The send pass of [`Self::tick`], one entity after the other: its changes made once and
+    /// sent to every client tracking it, and the clients that start tracking it paired with it.
+    fn send_in_order(
+        &mut self,
+        entities: &[&EntityState],
+        riding: &Riding,
+        viewers: &mut [Viewer],
+        active: &[usize],
+    ) {
+        for &index in active {
+            let e = entities[index];
             let s = self.states.at_mut(self.states.slot_of_index(index));
             self.packets.clear();
             // Paired as it joined, then its first changes go to everyone
@@ -1487,16 +1526,123 @@ impl Entities {
                 }
             }
         }
-        // ChunkMap.removeEntity for the ones no longer in the level.
-        if self.states.len() > stamped {
-            self.states.retain(|s| s.seen == now);
+    }
+
+    /// [`Self::send_in_order`] in two steps on several threads, the same bytes in the same
+    /// order for each client: each entity's packets made and encoded once (an entity's state
+    /// is its own), then each client's packets, entity by entity (a client's list and tracker
+    /// are its own).
+    fn send_on_threads(
+        &mut self,
+        entities: &[&EntityState],
+        riding: &Riding,
+        viewers: &mut [Viewer],
+        active: &[usize],
+    ) {
+        /// One entity's part of the tick: its changes and its pairing, encoded.
+        struct Made<'s> {
+            index: usize,
+            state: &'s mut ServerEntity,
+            changes: Vec<Vec<u8>>,
+            pairing: Option<Vec<Vec<u8>>>,
+            synced: bool,
         }
+        let Self {
+            states,
+            pairs,
+            is_moved,
+            synced: synced_ranges,
+            flags,
+            ..
+        } = self;
+        let mut made: Vec<Made> = states
+            .of_indices_mut(active)
+            .into_iter()
+            .zip(active)
+            .map(|(state, &index)| Made {
+                index,
+                state,
+                changes: Vec::new(),
+                pairing: None,
+                synced: false,
+            })
+            .collect();
+        let (pairs, is_moved, synced_ranges) = (&*pairs, &*is_moved, &*synced_ranges);
+        horizon_threads::par_chunks_mut(&mut made, 64, |part| {
+            let mut packets = Vec::new();
+            for m in part {
+                let (s, e) = (&mut *m.state, entities[m.index]);
+                packets.clear();
+                // As in `send_in_order`: paired as it joined, its first changes go out with
+                // the pairing; an idle one sends only its leash.
+                m.synced = s.added
+                    && e.kind != "minecraft:player"
+                    && !s.arrow
+                    && synced_ranges
+                        .iter()
+                        .any(|&(after, through)| e.id > after && e.id <= through);
+                if !s.added || m.synced {
+                    if e.idle && !is_moved[m.index] && !e.needs_sync {
+                        s.send_leash(e, &mut packets);
+                    } else {
+                        s.send_changes(e, riding, &mut packets);
+                    }
+                }
+                s.added = false;
+                encode_all(&packets, &mut m.changes);
+                if pairs[m.index]
+                    && !e.bare
+                    && let Some(kind) = s.kind
+                {
+                    packets.clear();
+                    s.pairing(e, kind, riding, &mut packets);
+                    m.pairing = Some(packets.iter().map(play::Clientbound::encode).collect());
+                }
+            }
+        });
+        // Nothing to send and nobody to pair with.
+        made.retain(|m| !m.changes.is_empty() || m.pairing.is_some());
+        let made = &made;
+        let mut clients: Vec<(&mut Viewer, &Vec<u8>)> = viewers.iter_mut().zip(&*flags).collect();
+        horizon_threads::par_chunks_mut(&mut clients, 4, |part| {
+            for (v, flags) in part {
+                for m in made {
+                    let f = flags[m.index];
+                    if f & TRACKS != 0 {
+                        v.out.extend(m.changes.iter().cloned());
+                    } else if f & SEES != 0
+                        && let Some(pairing) = &m.pairing
+                    {
+                        v.out.extend(pairing.iter().cloned());
+                        if m.synced {
+                            v.out.extend(m.changes.iter().cloned());
+                        }
+                        let id = entities[m.index].id;
+                        if v.tracker
+                            .seen
+                            .insert(id, Arc::clone(&m.state.tracked))
+                            .is_none()
+                        {
+                            v.tracker.events.push(TrackEvent {
+                                start: true,
+                                entity: id,
+                                tracked: Arc::clone(&m.state.tracked),
+                            });
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 
 #[cfg(test)]
 mod late_pair_tests;
 mod slab;
+
+#[cfg(test)]
+#[path = "entity/send_bench.rs"]
+mod send_bench;
 
 #[cfg(test)]
 mod tests {
@@ -1538,6 +1684,132 @@ mod tests {
             watching: false,
             hidden: None,
         }
+    }
+
+    /// The send pass on several threads gives every client the bytes and tracking events of the
+    /// pass in order: a crowd of players with mobs, arrows and items walking, crossing sections,
+    /// joining (some synced as they join), leaving, idling, going bare and changing their data.
+    #[test]
+    fn send_on_threads_matches_send_in_order() {
+        let mut seed = 0x853c_49e6_748f_ea9b_u64;
+        let mut next = move |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        let kinds = [
+            "minecraft:zombie",
+            "minecraft:sheep",
+            "minecraft:arrow",
+            "minecraft:item",
+        ];
+        let chunks: crate::fast_hash::FxHashSet<(i32, i32)> =
+            (-6..6).flat_map(|x| (-6..6).map(move |z| (x, z))).collect();
+        let mut compared = 0;
+        for level in 0..12 {
+            let mut both = [Entities::default(), Entities::default()];
+            both[0].send_apart_always = Some(false);
+            both[1].send_apart_always = Some(true);
+            let players = 2 + next(40) as i32;
+            let mut trackers: [Vec<Tracker>; 2] =
+                std::array::from_fn(|_| (0..players).map(|_| Tracker::default()).collect());
+            let mut outs: [Vec<Vec<Vec<u8>>>; 2] =
+                std::array::from_fn(|_| vec![Vec::new(); players as usize]);
+            let mut all: Vec<EntityState> = (0..players + 30 + next(200) as i32)
+                .map(|i| {
+                    let mut e = state((next(1000) as f64 / 1000.0 - 0.5) * 120.0);
+                    e.id = 1 + i;
+                    e.uuid = 1 + i as u128;
+                    e.position[2] = (next(1000) as f64 / 1000.0 - 0.5) * 120.0;
+                    if i >= players {
+                        e.kind = kinds[next(4) as usize].into();
+                    } else {
+                        e.kind = "minecraft:player".into();
+                    }
+                    e
+                })
+                .collect();
+            let mut next_id = all.len() as i32 + 1;
+            for tick in 0..25 {
+                let mut synced = Vec::new();
+                if next(3) == 0 {
+                    let mut e = state((next(1000) as f64 / 1000.0 - 0.5) * 60.0);
+                    (e.id, e.uuid) = (next_id, next_id as u128);
+                    e.kind = kinds[next(4) as usize].into();
+                    synced.push((next_id - 1, next_id));
+                    next_id += 1;
+                    all.push(e);
+                }
+                if next(3) == 0 && all.len() > players as usize + 1 {
+                    let at =
+                        players as usize + next((all.len() - players as usize) as u64) as usize;
+                    all.remove(at);
+                }
+                for e in &mut all {
+                    if next(3) != 0 {
+                        e.position[0] += (next(1000) as f64 / 1000.0 - 0.5) * 3.0;
+                        e.position[2] += (next(1000) as f64 / 1000.0 - 0.5) * 3.0;
+                        e.yaw = next(360) as f32;
+                        e.head_yaw = next(360) as f32;
+                    }
+                    e.on_ground = next(4) != 0;
+                    e.idle = e.kind != "minecraft:player" && next(5) == 0;
+                    e.needs_sync = next(10) == 0;
+                    e.bare = e.idle && next(2) == 0;
+                    if next(6) == 0 {
+                        e.meta = vec![(0, serializer::BYTE, Value::Byte(next(4) as i8))];
+                    }
+                    e.velocity = [next(3) as f64 * 0.1, 0.0, 0.0];
+                }
+                let refs: Vec<&EntityState> = all.iter().collect();
+                let moved: Vec<bool> = (0..players).map(|_| tick == 0 || next(2) == 0).collect();
+                for side in 0..2 {
+                    let level_side = &mut both[side];
+                    level_side.synced.clone_from(&synced);
+                    for out in &mut outs[side] {
+                        out.clear();
+                    }
+                    let mut viewers: Vec<Viewer> = trackers[side]
+                        .iter_mut()
+                        .zip(outs[side].iter_mut())
+                        .enumerate()
+                        .map(|(k, (tracker, out))| Viewer {
+                            entity_id: 1 + k as i32,
+                            spectator: false,
+                            permission: 0,
+                            moved: moved[k],
+                            position: all[k].position,
+                            view_distance: 2 + (k as i32 % 4),
+                            chunks: &chunks,
+                            tracker,
+                            out,
+                            gone: None,
+                        })
+                        .collect();
+                    level_side.tick(&refs, &Riding::default(), &mut viewers, |_| Some(5));
+                }
+                let events = |trackers: &mut Vec<Tracker>| -> Vec<Vec<(bool, i32)>> {
+                    trackers
+                        .iter_mut()
+                        .map(|t| {
+                            t.take_events()
+                                .iter()
+                                .map(|e| (e.start, e.entity))
+                                .collect()
+                        })
+                        .collect()
+                };
+                let [first, second] = &mut trackers;
+                assert_eq!(events(first), events(second), "level {level}, tick {tick}");
+                assert_eq!(outs[0], outs[1], "level {level}, tick {tick}");
+                compared += outs[0].iter().map(Vec::len).sum::<usize>();
+            }
+        }
+        assert!(
+            compared > 20_000,
+            "the clients were sent their entities ({compared})"
+        );
     }
 
     #[test]
