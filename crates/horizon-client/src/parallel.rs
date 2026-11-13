@@ -16,6 +16,27 @@ pub fn parallel_tick() -> u8 {
     })
 }
 
+/// Whether a villager's brain draws from the villager's own random instead of the level's.
+///
+/// The level random is one stream, so a draw has to wait for every mob before it (`OrderedDraws`),
+/// and a villager's brain draws on nearly every turn (behaviour durations, one-in-N rolls).
+/// With the parallel tick on, those draws come from a stream seeded from the villager's own, so
+/// no villager waits on another mob and the lanes run apart. That is the one place the parallel
+/// tick departs from vanilla's draw order: the villagers' rolls have the same odds but not the
+/// same values a vanilla level would give them. The seed is derived from the mob's id and the game
+/// time, so the villager's entity random keeps vanilla's sequence. The serial loop does the same while the parallel
+/// tick is on, so which path a tick takes never changes the result.
+pub fn villagers_own_random() -> bool {
+    OWN_RANDOM_TEST.load(Ordering::Relaxed) || parallel_tick() > 0
+}
+
+/// A test's switch for [`villagers_own_random`], process-wide because the lanes are threads: any
+/// gameplay test running at the same time in the same binary sees villagers on their own random, so
+/// the tests that set it run alone (`--test-threads=1`).
+#[doc(hidden)]
+pub static OWN_RANDOM_TEST: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// How many threads a phase may share its work among: `horizon-threads`' count (at most 8) while
 /// the parallel tick is on, else 1.
 pub fn lanes() -> usize {
