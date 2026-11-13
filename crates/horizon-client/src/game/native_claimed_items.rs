@@ -219,6 +219,7 @@ impl Game<'_> {
         };
         self.native_input.start(&id, item, slot);
         self.using = Some((slot, 0));
+        self.use_start.item = self.held().cloned();
         true
     }
     /// `tick_used_item` for a claimed item: counts the ticks held and ends
