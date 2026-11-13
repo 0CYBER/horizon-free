@@ -150,7 +150,7 @@ paths, `lan_e2e`, a screenshot for anything visible) before it merges. Risky mea
 - world generation (`worldgen/`): seeds must keep generating the same terrain;
 - the launcher's installs and updates, or the mod runtime;
 - the harnesses themselves (`tools/test_*_parity.py`, the Java oracles): a wrong harness hides regressions;
-- over ~500 lines, or `parity` failed, was skipped or ran no harness for gameplay code.
+- over ~500 lines of code ([what counts](../CONTRIBUTING.md#pull-requests)), or `parity` failed, was skipped or ran no harness for gameplay code.
 
 Unsure? Add `needs-proof`: it costs a few hours, a broken release costs more.
 
