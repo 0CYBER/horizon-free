@@ -72,46 +72,6 @@ thread_local! {
     static FAIL_TURN: Cell<Option<usize>> = const { Cell::new(None) };
 }
 
-/// TEMP-DIAG: what each lane did in a grouped tick, and what the server thread did around them.
-#[cfg(test)]
-pub(super) mod diag {
-    use std::sync::Mutex;
-    #[derive(Clone, Debug, Default)]
-    pub struct Lane {
-        pub server: bool,
-        pub mobs: usize,
-        pub busy_ns: u64,
-        pub cpu_ns: u64,
-        pub waited_ns: u64,
-    }
-    #[derive(Clone, Debug, Default)]
-    pub struct Tick {
-        pub setup_ns: u64,
-        pub threads_ns: u64,
-        pub join_wait_ns: u64,
-        pub merge_ns: u64,
-        pub groups: Vec<usize>,
-        pub lanes: Vec<Lane>,
-    }
-    pub static LAST: Mutex<Tick> = Mutex::new(Tick {
-        setup_ns: 0,
-        threads_ns: 0,
-        join_wait_ns: 0,
-        merge_ns: 0,
-        groups: Vec::new(),
-        lanes: Vec::new(),
-    });
-    /// The last plan's (ticking mobs, island weights heaviest first).
-    pub static ISLANDS: Mutex<(usize, Vec<usize>)> = Mutex::new((0, Vec::new()));
-    pub static PLAN_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    pub fn thread_cpu_ns() -> u64 {
-        std::fs::read_to_string("/proc/thread-self/schedstat")
-            .ok()
-            .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
-            .unwrap_or(0)
-    }
-}
-
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FailAt {
@@ -223,17 +183,9 @@ impl Islands<'_> {
             .chain(start.guests.iter().map(|g| &g.1))
             .map(|p| (p.uuid, p.position))
             .collect();
-        #[cfg(test)]
-        let began = std::time::Instant::now();
-        let planned = horizon_client::spans::time("islands_plan", || {
+        horizon_client::spans::time("islands_plan", || {
             islands(&reaches(mobs, snapshot, turns, &players)?, lanes)
-        });
-        #[cfg(test)]
-        diag::PLAN_NS.store(
-            began.elapsed().as_nanos() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        planned
+        })
     }
 
     /// The loop's turns in the plan's groups, each on its own thread, put back together as the
@@ -256,14 +208,6 @@ impl Islands<'_> {
             turns.cached_difficulty = None;
             (serial, seeds)
         });
-        #[cfg(test)]
-        let setup_began = std::time::Instant::now();
-        #[cfg(test)]
-        {
-            let mut d = diag::LAST.lock().unwrap();
-            *d = diag::Tick::default();
-            d.groups = plan.groups.iter().map(Vec::len).collect();
-        }
         let n = mobs.len();
         let lanes = plan.groups.len();
         let draws = OrderedDraws::new(&start.random, lanes);
@@ -308,10 +252,6 @@ impl Islands<'_> {
         #[cfg(test)]
         RAN.with(|r| r.set(lanes));
         let mut board = Board::new(snapshot, &groups, Arc::clone(&draws));
-        #[cfg(test)]
-        {
-            diag::LAST.lock().unwrap().setup_ns = setup_began.elapsed().as_nanos() as u64;
-        }
         self.run_threads(
             &mut groups,
             &board,
@@ -319,8 +259,6 @@ impl Islands<'_> {
             shared,
             serial.as_ref().map(|s| &s.1),
         );
-        #[cfg(test)]
-        let merge_began = std::time::Instant::now();
         // Each mob's entries, in list order: the turns' ranges in its group.
         let mut place = vec![(0u32, 0u32); n];
         for (gi, g) in groups.iter().enumerate() {
@@ -388,10 +326,6 @@ impl Islands<'_> {
         (merged.keep, merged.pushes, merged.snapshot) = (keep, pushes, frozen);
         (merged.dead, merged.corpses, merged.gone) = (dead, corpses, gone);
         merged.guest_events = guest_events;
-        #[cfg(test)]
-        {
-            diag::LAST.lock().unwrap().merge_ns = merge_began.elapsed().as_nanos() as u64;
-        }
         if let Some((serial, seeds)) = serial {
             let diff = difference(&serial, &merged)
                 .or_else(|| (!seeds.complete()).then(|| "new RNG allocation counts differ".into()));
@@ -444,11 +378,6 @@ impl Islands<'_> {
                 difficulty,
                 cached_difficulty: None,
             };
-            #[cfg(test)]
-            let (began, cpu0) = {
-                horizon_core::random::take_waited();
-                (std::time::Instant::now(), diag::thread_cpu_ns())
-            };
             if let Some(seeds) = seeds {
                 horizon_client::random_source::replay_seeds(Arc::clone(seeds), || {
                     g.run(&mut turns, shared, Some(&foreign));
@@ -456,14 +385,6 @@ impl Islands<'_> {
             } else {
                 g.run(&mut turns, shared, Some(&foreign));
             }
-            #[cfg(test)]
-            diag::LAST.lock().unwrap().lanes.push(diag::Lane {
-                server: g.global[0] == 0,
-                mobs: g.mobs.len(),
-                busy_ns: began.elapsed().as_nanos() as u64,
-                cpu_ns: diag::thread_cpu_ns() - cpu0,
-                waited_ns: horizon_core::random::take_waited().as_nanos() as u64,
-            });
         };
         let tickings: Vec<_> = groups.iter().map(|_| (self.ticking)()).collect();
         let mut parts = groups.iter_mut().zip(tickings);
@@ -523,12 +444,8 @@ impl Islands<'_> {
                     .expect("a mob island's thread starts");
                 handles.push(handle);
             }
-            #[cfg(test)]
-            let own_began = std::time::Instant::now();
             run(first, first_ticking);
             drop(first_done);
-            #[cfg(test)]
-            let own_done = std::time::Instant::now();
             let mut panic = None;
             for handle in handles {
                 match handle.join() {
@@ -536,12 +453,6 @@ impl Islands<'_> {
                     Err(payload) if panic.is_none() => panic = Some(payload),
                     Err(_) => {}
                 }
-            }
-            #[cfg(test)]
-            {
-                let mut d = diag::LAST.lock().unwrap();
-                d.join_wait_ns = own_done.elapsed().as_nanos() as u64;
-                d.threads_ns = own_began.elapsed().as_nanos() as u64;
             }
             if let Some(payload) = panic {
                 std::panic::resume_unwind(payload);
@@ -1075,12 +986,6 @@ fn islands(reaches: &[Reach], lanes: usize) -> Option<Plan> {
         });
         islands[k].1.push(i);
         islands[k].0 += usize::from(r.ticking);
-    }
-    #[cfg(test)]
-    {
-        let mut w: Vec<usize> = islands.iter().map(|i| i.0).collect();
-        w.sort_unstable_by(|a, b| b.cmp(a));
-        *diag::ISLANDS.lock().unwrap() = (ticking, w);
     }
     let largest = islands.iter().map(|i| i.0).max().unwrap_or(0);
     if largest * 4 > ticking * 3 {
@@ -2313,224 +2218,5 @@ mod tests {
         let of = group_of(&plan, list.len());
         assert_ne!(of[0], of[200]);
         assert_eq!(of[200], of[300], "both small herds fill the lighter group");
-    }
-
-    /// A level shaped like a busy survival server: many small chicken farms, bee and villager
-    /// clusters, sulfur cubes, and monsters scattered between them, all far apart. Prints, for
-    /// each lane setting (alternating tick by tick), the mob phase's wall time, CPU time and the
-    /// server thread's wait, and where the lanes spent their time.
-    ///
-    /// `PM_LANES=1,4 PM_TICKS=300 PM_WARM=60 PM_FARMS=40 PM_CHICKENS=18`, run with
-    /// `--ignored --exact --nocapture --test-threads=1`.
-    #[test]
-    #[ignore = "a measurement; needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn pm_shaped_bench() {
-        let var = |k: &str, d: usize| {
-            std::env::var(k)
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(d)
-        };
-        let (ticks, warm) = (var("PM_TICKS", 300), var("PM_WARM", 60));
-        let lane_settings: Vec<usize> = std::env::var("PM_LANES")
-            .unwrap_or_else(|_| "1,4".into())
-            .split(',')
-            .filter_map(|v| v.parse().ok())
-            .collect();
-        horizon_client::parallel::OWN_RANDOM_TEST
-            .store(var("PM_OWN", 0) == 1, std::sync::atomic::Ordering::Relaxed);
-        let farms = var("PM_FARMS", 40);
-        let per_farm = var("PM_CHICKENS", 18);
-        let mut game = super::super::super::native_machines::tests::server_game();
-        game.build_registries();
-        game.set_allow_commands(true);
-        let span = 800;
-        let mid = f64::from(span) / 2.0;
-        game.player = Some(
-            horizon_client::motion::PlayerMotion::new(game.motion, Vec3::new(mid, 65.0, mid))
-                .unwrap(),
-        );
-        for x in -3..=(span / 16 + 3) {
-            for z in -3..=(span / 16 + 3) {
-                game.world
-                    .chunks
-                    .insert((x, z), Arc::new(horizon_client::chunk::Chunk::empty(x, z)));
-            }
-        }
-        game.update_chunk_tickets();
-        let _ = game.run_command("difficulty normal");
-        let stone = game
-            .pack
-            .assets
-            .registry
-            .default_state("minecraft:stone")
-            .unwrap();
-        // Cells of 80 blocks, shuffled by a fixed generator; each cluster takes one.
-        let mut state = 0x2545_f491_4f6c_dd1d_u64;
-        let mut next = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
-        let mut cells: Vec<(i32, i32)> = (0..9)
-            .flat_map(|x| (0..9).map(move |z| (x, z)))
-            .map(|(x, z)| (40 + x * 80, 40 + z * 80))
-            .collect();
-        for i in (1..cells.len()).rev() {
-            cells.swap(i, (next() % (i as u64 + 1)) as usize);
-        }
-        let mut cluster = |game: &mut Game<'static>, kind: &str, count: usize, extra: &str| {
-            let (cx, cz) = cells.pop().expect("a free cell");
-            for x in cx..cx + 12 {
-                for z in cz..cz + 12 {
-                    game.world.set(x, 64, z, stone).unwrap();
-                }
-            }
-            for k in 0..count {
-                let x = f64::from(cx) + 1.0 + (k % 10) as f64 * 1.0;
-                let z = f64::from(cz) + 1.0 + (k / 10) as f64 * 1.0;
-                let c = format!("summon {kind} {x:.2} 66 {z:.2} {extra}");
-                assert!(game.run_command(c.trim()), "{c}");
-            }
-        };
-        for _ in 0..farms {
-            cluster(&mut game, "chicken", per_farm, "");
-        }
-        for _ in 0..var("PM_BEE_GROUPS", 8) {
-            cluster(&mut game, "bee", var("PM_BEES", 95), "");
-        }
-        for _ in 0..var("PM_VILLAGES", 3) {
-            cluster(&mut game, "villager", var("PM_VILLAGERS", 90), "");
-        }
-        for _ in 0..var("PM_CUBE_GROUPS", 6) {
-            cluster(&mut game, "sulfur_cube", var("PM_CUBES", 24), "");
-        }
-        // Monsters scattered anywhere, one by one.
-        for k in 0..var("PM_MONSTERS", 120) {
-            let kind = ["husk", "husk", "skeleton", "spider", "creeper"][k % 5];
-            let x = 20.0 + (next() % (span as u64 - 40)) as f64;
-            let z = 20.0 + (next() % (span as u64 - 40)) as f64;
-            let (bx, bz) = (x as i32, z as i32);
-            for dx in 0..3 {
-                for dz in 0..3 {
-                    game.world.set(bx + dx, 64, bz + dz, stone).unwrap();
-                }
-            }
-            if !game.run_command(&format!("summon {kind} {x:.2} 66 {z:.2}")) {
-                eprintln!("summon {kind} {x:.2} 66 {z:.2} failed");
-            }
-        }
-        let _ = game.run_command("difficulty normal");
-        let mut by_kind = std::collections::BTreeMap::<String, usize>::new();
-        for m in &game.mobs {
-            *by_kind.entry(format!("{:?}", m.kind.species)).or_default() += 1;
-        }
-        eprintln!("mobs: {} {by_kind:?}", game.mobs.len());
-        struct Reset;
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                LANES.with(|l| l.set(None));
-                horizon_client::parallel::OWN_RANDOM_TEST
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-        let _reset = Reset;
-        #[derive(Default)]
-        struct Sum {
-            n: usize,
-            grouped: usize,
-            wall: Vec<f64>,
-            cpu: f64,
-            join: f64,
-            plan: f64,
-            setup: f64,
-            merge: f64,
-            lanes: Vec<(f64, f64, f64, f64, f64)>,
-            groups: Vec<usize>,
-        }
-        let mut sums: Vec<Sum> = lane_settings.iter().map(|_| Sum::default()).collect();
-        for t in 0..warm + ticks {
-            let which = t % lane_settings.len();
-            LANES.with(|l| l.set(Some(lane_settings[which])));
-            RAN.with(|r| r.set(0));
-            diag::LAST.lock().unwrap().lanes.clear();
-            let cpu0 = diag::thread_cpu_ns();
-            let began = std::time::Instant::now();
-            game.tick_creature_entities().unwrap();
-            let wall = began.elapsed().as_secs_f64() * 1e3;
-            let mut cpu = (diag::thread_cpu_ns() - cpu0) as f64 / 1e6;
-            if t < warm {
-                continue;
-            }
-            let s = &mut sums[which];
-            s.n += 1;
-            s.wall.push(wall);
-            s.plan += diag::PLAN_NS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6;
-            let ran = RAN.with(Cell::get);
-            if ran > 0 {
-                s.grouped += 1;
-                let d = diag::LAST.lock().unwrap().clone();
-                s.join += d.join_wait_ns as f64 / 1e6;
-                s.setup += d.setup_ns as f64 / 1e6;
-                s.merge += d.merge_ns as f64 / 1e6;
-                for l in &d.lanes {
-                    if !l.server {
-                        cpu += l.cpu_ns as f64 / 1e6;
-                    }
-                }
-                let mut ls: Vec<_> = d.lanes.clone();
-                ls.sort_by_key(|l| (!l.server, std::cmp::Reverse(l.mobs)));
-                if s.lanes.len() < ls.len() {
-                    s.lanes.resize(ls.len(), (0.0, 0.0, 0.0, 0.0, 0.0));
-                }
-                for (acc, l) in s.lanes.iter_mut().zip(&ls) {
-                    acc.0 += l.busy_ns as f64 / 1e6;
-                    acc.1 += l.cpu_ns as f64 / 1e6;
-                    acc.2 += l.waited_ns as f64 / 1e6;
-                    acc.3 += l.mobs as f64;
-                    acc.4 += 1.0;
-                }
-                s.groups = d.groups.clone();
-            }
-            s.cpu += cpu;
-        }
-        let (ticking, weights) = diag::ISLANDS.lock().unwrap().clone();
-        eprintln!(
-            "ticking {ticking}, {} islands, heaviest {:?}",
-            weights.len(),
-            &weights[..weights.len().min(12)]
-        );
-        for (s, lanes) in sums.iter_mut().zip(&lane_settings) {
-            s.wall.sort_by(|a, b| a.total_cmp(b));
-            let q = |p: f64| s.wall[((s.wall.len() - 1) as f64 * p) as usize];
-            let n = s.n as f64;
-            let g = s.grouped.max(1) as f64;
-            eprintln!(
-                "lanes {lanes}: wall mean {:.2} p50 {:.2} p95 {:.2} | cpu {:.2} | grouped {}/{} | plan {:.2} setup {:.2} server-join-wait {:.2} merge {:.2} (per grouped tick)",
-                s.wall.iter().sum::<f64>() / n,
-                q(0.5),
-                q(0.95),
-                s.cpu / n,
-                s.grouped,
-                s.n,
-                s.plan / n,
-                s.setup / g,
-                s.join / g,
-                s.merge / g
-            );
-            eprintln!("  group sizes (last grouped tick) {:?}", s.groups);
-            for (i, l) in s.lanes.iter().enumerate() {
-                let k = l.4.max(1.0);
-                eprintln!(
-                    "  lane {i}{}: mobs {:.0} busy {:.2} ms, cpu {:.2} ms, waited on draws {:.2} ms",
-                    if i == 0 { " (server)" } else { "" },
-                    l.3 / k,
-                    l.0 / k,
-                    l.1 / k,
-                    l.2 / k
-                );
-            }
-        }
     }
 }

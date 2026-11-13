@@ -14,27 +14,6 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-thread_local! {
-    /// Nanoseconds this thread has spent waiting for other lanes' items to finish.
-    static WAITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// The time this thread has spent waiting on other lanes since it last asked (for the first draw
-/// of an item, a lookup of a mob in another group, a new seed), and starts the count again.
-pub fn take_waited() -> std::time::Duration {
-    std::time::Duration::from_nanos(WAITED.with(|w| w.replace(0)))
-}
-
-/// Adds the time since it was made to this thread's wait count when dropped; made only once a
-/// wait is certain, so a wait that isn't needed costs nothing.
-struct Waiting(std::time::Instant);
-impl Drop for Waiting {
-    fn drop(&mut self) {
-        let ns = self.0.elapsed().as_nanos() as u64;
-        WAITED.with(|w| w.set(w.get().saturating_add(ns)));
-    }
-}
-
 /// The shared stream and where each lane is.
 #[derive(Debug)]
 pub struct OrderedDraws {
@@ -111,7 +90,6 @@ impl OrderedDraws {
         if ready() {
             return;
         }
-        let _waiting = Waiting(std::time::Instant::now());
         for _ in 0..SPINS {
             std::hint::spin_loop();
             if ready() {
@@ -126,6 +104,9 @@ impl OrderedDraws {
             }
         }
         self.sleepers.fetch_add(1, Ordering::SeqCst);
+        // The `ready` loads are Acquire: this fence pairs with the waker's SeqCst store and
+        // `sleepers` load, so a weakly ordered CPU cannot see a stale lane and no sleeper.
+        std::sync::atomic::fence(Ordering::SeqCst);
         let mut guard = self.parked.lock().unwrap_or_else(PoisonError::into_inner);
         while !ready() {
             // The timeout only guards against a wake that was missed; `wake` takes this lock.
