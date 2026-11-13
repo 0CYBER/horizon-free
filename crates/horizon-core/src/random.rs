@@ -5,7 +5,7 @@ mod owner;
 mod positional;
 mod worldgen;
 pub use hash::{seed_from_hash, seed_from_hash_utf16};
-pub use ordered::{LaneDone, OrderedDraws};
+pub use ordered::{LaneDone, OrderedDraws, take_waited};
 pub use owner::{EntityPositional, EntityRandom, LevelPositional, LevelRandom};
 pub use positional::{
     LegacyPositionalRandom, PositionalRandom, XoroshiroPositionalRandom, java_string_hash,

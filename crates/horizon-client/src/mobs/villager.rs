@@ -1079,6 +1079,22 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
     }
 }
 
+/// The villager's brain tick. While the parallel mob tick is on it draws from the villager's own random, so
+/// that no other mob's turn is waited for (`parallel::villagers_own_random`); the level's random otherwise.
+pub fn tick_brain(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut horizon_core::random::LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
+    if crate::parallel::villagers_own_random() {
+        let mut own = horizon_core::random::LegacyRandom::new(m.random.next_long());
+        super::villager_brain::tick(m, w, &mut own, events);
+    } else {
+        super::villager_brain::tick(m, w, level_random, events);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
