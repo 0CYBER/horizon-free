@@ -64,11 +64,13 @@ fn room_exceeds(m: &Mob, w: &MobWorld, cap: usize) -> bool {
         m.position.z.floor() as i32,
     ];
     let mut seen = vec![(0, 0, 0)];
+    // Cells it stands on a half block (a bed, a slab) in: one block up from there is not a jump.
+    let mut low = std::collections::HashSet::new();
     let mut next = 0;
     while next < seen.len() {
         let cell = seen[next];
         next += 1;
-        let head_room = w.no_collision(at((cell.0, cell.1 + 1, cell.2)));
+        let head_room = !low.contains(&cell) && w.no_collision(at((cell.0, cell.1 + 1, cell.2)));
         for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             let side = (cell.0 + dx, cell.1, cell.2 + dz);
             let door = [0, 1].iter().any(|dy| {
@@ -94,6 +96,12 @@ fn room_exceeds(m: &Mob, w: &MobWorld, cap: usize) -> bool {
                     if drop > 3 {
                         return true;
                     }
+                }
+                // Standing higher than where it started, on a surface at least a quarter block below the cell's
+                // top: a bed or a slab, not a full step.
+                let quarter = Vec3::new(0.0, -0.25, 0.0);
+                if c.1 > 0 && w.no_collision(at(*c).move_by(quarter)) {
+                    low.insert(*c);
                 }
                 if !seen.contains(c) {
                     seen.push(*c);
