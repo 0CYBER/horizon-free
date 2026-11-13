@@ -153,8 +153,8 @@ fn worker_loop(weak_inner: Weak<Inner>) {
                 did_work = true;
                 run_job(&batch, i);
             }
-            if !did_work {
-                if let Some(inner) = weak_inner.upgrade() {
+            if !did_work
+                && let Some(inner) = weak_inner.upgrade() {
                     let mut queue = inner.queue.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(front) = queue.front()
                         && Arc::ptr_eq(front, &batch)
@@ -163,7 +163,6 @@ fn worker_loop(weak_inner: Weak<Inner>) {
                         queue.pop_front();
                     }
                 }
-            }
         }
     }
 }
@@ -196,8 +195,7 @@ pub fn compress_records_with_pool(
     pool.run(count, move |i| {
         let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| compress(&recs[i])))
             .unwrap_or_else(|_| {
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
+                Err(io::Error::other(
                     "chunk compression worker panicked",
                 ))
             });
@@ -209,8 +207,7 @@ pub fn compress_records_with_pool(
         .drain(..)
         .map(|opt| {
             opt.unwrap_or_else(|| {
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
+                Err(io::Error::other(
                     "compression slot unpopulated",
                 ))
             })
