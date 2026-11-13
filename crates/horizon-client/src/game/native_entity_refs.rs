@@ -3,7 +3,7 @@
 //! into an `EntityRef`, and each `native_entity_*` helper reads the entity a
 //! handle names. On a server the entities are those of the level in place
 //! (the one a hook runs in) and the server's players, whatever their level.
-//! On a client (API @API:client_entity_refs@) they are the entities the
+//! On a client (API 428) they are the entities the
 //! server shows this window, read from what it synced: positions, rotations,
 //! types, UUIDs, custom names and equipment, never saved data or tags. With
 //! no world open, or for a handle of an earlier open (on a client, of an
@@ -62,7 +62,7 @@ impl Game<'_> {
     /// The entity `id` (the id events carry) as a handle for the `entity_*`
     /// methods: None with no world open, or for no such entity in the level
     /// in place or among the server's players. On a client (API
-    /// @API:client_entity_refs@), any entity the server shows this window,
+    /// 428), any entity the server shows this window,
     /// this window's own player included. API 373.
     pub(super) fn native_entity(&self, id: u32) -> Option<EntityRef> {
         let epoch = match &self.remote {
@@ -162,7 +162,7 @@ impl Game<'_> {
     /// (`Entity.getEyeY`), against `ClipContext.Block.COLLIDER` shapes with `from_entity` as the collision context
     /// and no fluids, and it counts only when the two stand in the same level and no more than 128 blocks apart.
     /// False also for an unknown entity, a client, and a level other than the one being ticked (the level it can
-    /// answer for). API @API:line_of_sight@.
+    /// answer for). API 643.
     pub(super) fn native_has_line_of_sight(&self, from_entity: u32, to_entity: u32) -> bool {
         if !self.native_level_open(self.dim.id()) {
             return false;
@@ -190,7 +190,7 @@ impl Game<'_> {
     /// `Level.clip` with `ClipContext.Block.COLLIDER`, no fluids and no entity (`CollisionContext.empty()`), as a
     /// mod's own ray: true when the segment from `from` to `to` meets no block's collider (a miss). Only the level
     /// being ticked is answered; another dimension, and a client, give false, since reaching another loaded level
-    /// needs a mutable borrow this read takes without one. API @API:line_of_sight@.
+    /// needs a mutable borrow this read takes without one. API 643.
     pub(super) fn native_clear_between(
         &self,
         dimension: &str,

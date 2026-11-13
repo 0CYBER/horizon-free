@@ -20,10 +20,12 @@ use std::{
     },
 };
 
+mod biomes;
 mod step_1_20_6;
 mod step_1_21_1;
 mod step_1_21_10;
 mod step_1_21_11;
+mod step_1_21_3;
 mod step_1_21_4;
 mod step_1_21_5;
 mod step_1_21_6;
@@ -81,6 +83,8 @@ pub struct ClientSession {
     entities: Mutex<HashMap<i32, (i32, u128)>>,
     /// The hotbar slot the client holds (0..=8), for the swap a 1.21.3 client's `pick_item` becomes.
     held: AtomicU8,
+    /// Pinned biome ids -> the client's, once its biome registry lost entries its release lacks (biomes.rs).
+    biomes: Mutex<Option<biomes::BiomeMap>>,
 }
 
 /// A position, yaw and pitch.
@@ -169,6 +173,7 @@ impl ClientSession {
             teleports: Mutex::new(VecDeque::new()),
             entities: Mutex::new(HashMap::new()),
             held: AtomicU8::new(0),
+            biomes: Mutex::new(None),
         }
     }
     fn hold(&self, slot: i32) {
@@ -245,6 +250,11 @@ impl ClientSession {
         };
         use packet_ids::play::serverbound as sb;
         let payload = match (state, pinned) {
+            (State::Configuration, packet_ids::configuration::serverbound::SELECT_KNOWN_PACKS)
+                if biomes::own_core_pack(self.version) =>
+            {
+                biomes::core_pack_up(self.version, &payload)?
+            }
             (State::Play, sb::ACCEPT_TELEPORTATION) => self.accept_teleport(&payload)?,
             // 26.3 inserted CHANGE_DESTROY_DIRECTION at 1: 26.2's actions past 0 are one up.
             (State::Play, sb::PLAYER_ACTION) => {
@@ -299,6 +309,16 @@ impl ClientSession {
             _ => state,
         };
         self.writing.store(to_u8(next), Ordering::Release);
+        let rebiomed;
+        let payload = match self.biomes_down(state, id, payload)? {
+            // A registry the client's release doesn't synchronise is not sent.
+            Some(p) if p.is_empty() => return Ok(None),
+            Some(p) => {
+                rebiomed = p;
+                &rebiomed[..]
+            }
+            None => payload,
+        };
         // 1.21.1 has no entity_position_sync: the teleport it stands in for is sent under teleport_entity's id.
         let synced = if self.version.at_most(ServerVersion::V1_21_1) {
             step_1_21_1::entity_position_sync(state, id, payload)?
@@ -487,6 +507,12 @@ impl ClientSession {
         {
             payload = next;
         }
+        // 1.21.2 and 1.21.3 (one protocol): 1.21.4's two additions go.
+        if v == ServerVersion::V1_21_3
+            && let Some(next) = step_1_21_3::clientbound(state, id, &payload)?
+        {
+            payload = next;
+        }
         // 1.21.1 is older than 1.21.2 and than 1.21.4: its packets are brought down after those, and before 1.20.6's.
         if v.at_most(ServerVersion::V1_21_1)
             && let Some(next) = step_1_21_1::clientbound(state, id, &payload)?
@@ -608,6 +634,68 @@ fn layout_then_ids(
 }
 
 impl ClientSession {
+    /// The client's own core pack offered, its biome registry without what its release lacks, and the
+    /// biome ids after it renumbered (biomes.rs, #15138). `None`: the pinned payload goes on as it is.
+    fn biomes_down(&self, state: State, id: i32, payload: &[u8]) -> Result<Option<Vec<u8>>> {
+        use packet_ids::{configuration::clientbound as cfg, play::clientbound as cb};
+        if !biomes::own_core_pack(self.version) {
+            return Ok(None);
+        }
+        let map = || {
+            self.biomes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        };
+        Ok(match (state, id) {
+            (State::Configuration, cfg::REGISTRY_DATA)
+                if biomes::absent_registry(self.version, payload)? =>
+            {
+                return Ok(Some(Vec::new()));
+            }
+            (State::Configuration, cfg::SELECT_KNOWN_PACKS) => {
+                Some(biomes::core_pack_down(self.version, payload)?)
+            }
+            (State::Configuration, cfg::REGISTRY_DATA) => {
+                match biomes::registry_data(self.version, payload)? {
+                    Some((p, m)) => {
+                        *self.biomes.lock().unwrap_or_else(|e| e.into_inner()) = Some(m);
+                        Some(p)
+                    }
+                    None => None,
+                }
+            }
+            (State::Configuration, cfg::UPDATE_TAGS) => match map() {
+                Some(m) => {
+                    let mut p = configuration::Clientbound::decode(id, payload)?;
+                    if let configuration::Clientbound::UpdateTags(t) = &mut p {
+                        biomes::tags(&m, &mut t.registries);
+                    }
+                    Some(strip_id(p.encode()))
+                }
+                None => None,
+            },
+            (State::Play, cb::UPDATE_TAGS) => match map() {
+                Some(m) => {
+                    let mut p = play::Clientbound::decode(id, payload)?;
+                    if let play::Clientbound::UpdateTags(t) = &mut p {
+                        biomes::tags(&m, &mut t.registries);
+                    }
+                    Some(strip_id(p.encode()))
+                }
+                None => None,
+            },
+            (State::Play, cb::LEVEL_CHUNK_WITH_LIGHT) => match (map(), self.version.ids()) {
+                (Some(m), Some(ids)) => Some(biomes::level_chunk(&m, ids.state_bits().1, payload)?),
+                _ => None,
+            },
+            (State::Play, cb::CHUNKS_BIOMES) => match map() {
+                Some(m) => Some(biomes::chunks_biomes(&m, payload)?),
+                None => None,
+            },
+            _ => None,
+        })
+    }
     /// A `player_position` on its way: the client accepts it later by its id alone.
     fn teleporting(&self, payload: &[u8]) -> Result<()> {
         let mut r = Reader::new(payload);
@@ -893,6 +981,87 @@ mod tests {
 
     // Expected ids are read off the 26.2 and 26.3 packets and registries reports by hand, not from the
     // generated tables.
+
+    /// #15138: a 26.2 client is offered `minecraft:core` 26.2 (so it loads its own registry data), its
+    /// answer reaches the server as the pinned pack, and its biome registry loses `dappled_forest`.
+    #[test]
+    fn a_26_2_client_knows_its_own_core_pack_and_gets_its_own_biomes() {
+        use packet_ids::configuration::{clientbound as cfg_cb, serverbound as cfg_sb};
+        let s = ClientSession::new(ServerVersion::V26_2);
+        s.reading
+            .store(to_u8(State::Configuration), Ordering::Release);
+        s.writing
+            .store(to_u8(State::Configuration), Ordering::Release);
+        let pack = |version: &str| configuration::SelectKnownPacks {
+            packs: vec![configuration::KnownPack {
+                namespace: "minecraft".into(),
+                id: "core".into(),
+                version: version.into(),
+            }],
+        };
+        let encode = |p: &configuration::SelectKnownPacks| {
+            let mut w = Writer::new();
+            configuration::SelectKnownPacks::write(p, &mut w);
+            w.data
+        };
+        let sent = s
+            .clientbound(&body(
+                cfg_cb::SELECT_KNOWN_PACKS,
+                &encode(&pack(crate::GAME_VERSION)),
+            ))
+            .unwrap()
+            .unwrap();
+        let mut r = Reader::new(&sent);
+        r.varint().unwrap();
+        let offered = configuration::SelectKnownPacks::read(&mut r).unwrap();
+        assert_eq!(offered, pack("26.2"));
+        let old_id = ServerVersion::V26_2
+            .serverbound_id(State::Configuration, cfg_sb::SELECT_KNOWN_PACKS)
+            .unwrap();
+        let (pinned, reply) = s
+            .serverbound(old_id, encode(&pack("26.2")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(pinned, cfg_sb::SELECT_KNOWN_PACKS);
+        assert_eq!(
+            configuration::SelectKnownPacks::read(&mut Reader::new(&reply)).unwrap(),
+            pack(crate::GAME_VERSION)
+        );
+        let names = [
+            "minecraft:badlands",
+            "minecraft:dappled_forest",
+            "minecraft:the_void",
+        ];
+        let mut w = Writer::new();
+        configuration::RegistryData::write(
+            &configuration::RegistryData {
+                registry: "minecraft:worldgen/biome".into(),
+                entries: names
+                    .iter()
+                    .map(|n| configuration::RegistryEntry {
+                        id: (*n).into(),
+                        data: None,
+                    })
+                    .collect(),
+            },
+            &mut w,
+        );
+        let sent = s
+            .clientbound(&body(cfg_cb::REGISTRY_DATA, &w.data))
+            .unwrap()
+            .unwrap();
+        let mut r = Reader::new(&sent);
+        r.varint().unwrap();
+        let biomes = configuration::RegistryData::read(&mut r).unwrap();
+        assert_eq!(
+            biomes
+                .entries
+                .iter()
+                .map(|e| e.id.as_str())
+                .collect::<Vec<_>>(),
+            ["minecraft:badlands", "minecraft:the_void"]
+        );
+    }
 
     #[test]
     fn an_effect_an_older_client_lacks_is_not_sent() {

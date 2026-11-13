@@ -306,7 +306,7 @@ pub(crate) fn ingredient_test(
 /// message's further lines after newlines. Every message the file gets, from the client or a
 /// dedicated server, from the first lines on; lines the flood limit leaves out are not heard.
 /// There is no `Game`: keep what you need and act on it in another hook. A mod that panics
-/// here is not called again. API @API:log_line@.
+/// here is not called again. API 471.
 #[inline(never)]
 pub fn native_log_line(level: &str, thread: &str, message: &str, line: &str) {
     log_line(level, thread, message, line);

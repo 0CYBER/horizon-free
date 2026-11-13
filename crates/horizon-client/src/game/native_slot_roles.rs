@@ -1,5 +1,5 @@
 //! What each slot of the open menu is for (docs/native-mods.md, "Slot roles", API
-//! @API:slot_roles@): the player's hotbar and main inventory, plain storage, a crafting grid,
+//! 621): the player's hotbar and main inventory, plain storage, a crafting grid,
 //! a result, armour, or a machine's own input. Inventory mods (drags, the wheel, sorting,
 //! quick-stack) ask this instead of keeping their own list of menu type ids and slot ranges,
 //! so they work in the crafting table and in content mods' menu types as in a chest.
@@ -121,7 +121,7 @@ impl Game<'_> {
     /// number (the numbers `ContainerClick` carries, as `native_menu_stacks` lists the stacks):
     /// the menu's own slots, then the player's inventory and hotbar. None on a server, while no
     /// server-opened menu is up (the window's own inventory, creative), and for a menu whose
-    /// slots the client doesn't lay out (a lectern). API @API:slot_roles@.
+    /// slots the client doesn't lay out (a lectern). API 621.
     pub(super) fn native_menu_slot_roles(&self) -> Option<Vec<NativeSlotRole>> {
         let (_, menu) = self.remote.as_ref()?.menu.as_ref()?;
         let local = self.container_kind();

@@ -4,8 +4,10 @@ use horizon_perf_format::v1::{
     DimensionCounts, EntityCost, Side, TypeCount, WorkerKind, Workers, WorldSnapshot,
 };
 
-/// Entity types costed in a snapshot, costliest first.
-pub const ENTITY_COSTS_KEPT: usize = 40;
+/// Rows costed in a snapshot, costliest first: one per entity type in each level, so this covers
+/// every vanilla type (about 130) in the three built-in levels with room for more levels. A cap
+/// that cut real types would drop whole types from the table; this only guards the capture's size.
+pub const ENTITY_COSTS_KEPT: usize = 512;
 
 /// One level's chunks and its entities and block entities by registry id.
 #[derive(Clone, Debug, Default, PartialEq)]

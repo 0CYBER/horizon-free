@@ -177,7 +177,7 @@ impl Game<'_> {
     /// either order) as they are now, to read on any thread, shared with the world rather than copied. On a client
     /// of a server it is what the server sent. `Err`, taking nothing, on a server, which has no client world, or for
     /// an area of more than 66,049 chunks (the square a render distance of 128 loads). API
-    /// @API:client_world_snapshots@.
+    /// 455.
     pub(super) fn native_client_chunks(
         &self,
         from: [i32; 2],
@@ -193,7 +193,7 @@ impl Game<'_> {
     /// world differs from the snapshot's now: written to since it was taken (blocks, biomes or light, even a write
     /// that left them the same), or loaded or unloaded where the snapshot had them the other way. Empty when the
     /// snapshot's blocks and biomes are the world's; their tints are `native_client_biomes_changed`'s. API
-    /// @API:client_world_snapshots@.
+    /// 455.
     pub(super) fn native_client_chunks_changed(
         &self,
         snapshot: &NativeClientChunks,
@@ -202,7 +202,7 @@ impl Game<'_> {
     }
 
     /// For a client mod: the biome table the client world's terrain is drawn with, for the ids its snapshots read.
-    /// None on a server. API @API:client_world_snapshots@.
+    /// None on a server. API 455.
     pub(super) fn native_client_biomes(&self) -> Option<NativeClientBiomes> {
         self.native_window()
             .then(|| NativeClientBiomes(self.worker_context().biomes.clone()))
@@ -211,7 +211,7 @@ impl Game<'_> {
     /// For a client mod: whether the terrain is now drawn with another biome table than `biomes`: a mod recoloured
     /// the biomes (`native_refresh_biome_colors`, a season), the resources loaded again or another world opened.
     /// Then what was tinted from `biomes` is out of date, even where no chunk changed. API
-    /// @API:client_world_snapshots@.
+    /// 455.
     pub(super) fn native_client_biomes_changed(&self, biomes: &NativeClientBiomes) -> bool {
         // `biomes` holds its table, so the game replaces it rather than edit it: the same allocation is the same table.
         !Arc::ptr_eq(&biomes.0, &self.worker_context().biomes)

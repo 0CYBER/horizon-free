@@ -9,7 +9,7 @@ const OWNER: &str = "test:loader";
 // Far from the spawn the game starts around, so nothing else holds it.
 const FAR: [i32; 2] = [200, 200];
 
-fn game() -> Game<'static> {
+pub(in crate::game) fn game() -> Game<'static> {
     let root = std::path::PathBuf::from(
         std::env::var_os("HORIZON_TEST_RESOURCES")
             .expect("set HORIZON_TEST_RESOURCES to prepared resources"),

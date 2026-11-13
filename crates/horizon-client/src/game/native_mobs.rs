@@ -160,7 +160,7 @@ impl Game<'_> {
     /// chunk unloads: its id. None for a kind the game doesn't know, a
     /// position outside `/summon`'s bounds or in a chunk that isn't
     /// loaded (it would never tick or be saved), or a monster on peaceful (it
-    /// would despawn at once). API 37. Since API @API:npc_any_level@,
+    /// would despawn at once). API 37. Since API 535,
     /// `dimension` may be any level the server has loaded, which is put in
     /// place for the spawn (`execute in <dimension> run summon`), so a
     /// `native_server_tick` hook spawns too; a level not loaded is refused.

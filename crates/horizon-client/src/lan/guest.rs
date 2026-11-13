@@ -187,6 +187,8 @@ pub struct Guest {
     /// the moves it sent from the old level are ignored, as they would be
     /// while it had a teleport to accept.
     pub landing: bool,
+    /// `landing` was set by a `tp` hold waiting for chunks (`Game::hold_for_chunks`), not by a portal.
+    pub tp_held: bool,
     pub teleport_counter: i32,
     /// `ServerPlayer.getCamera() != this`.
     pub watching: bool,
@@ -457,6 +459,17 @@ pub struct Guest {
     pub recipes_unlocked: Vec<String>,
 }
 
+/// The index of the guest on connection `conn`. Guests join in connection order and usually
+/// stay in it, so a binary search finds most; one out of order (a player arriving from another
+/// level) is found by the scan. A connection is on one guest only, so the search can only find
+/// the guest the scan would (`Hub::guest` with a crowd: thousands of lookups a tick).
+pub fn find(guests: &[Guest], conn: u32) -> Option<usize> {
+    match guests.binary_search_by_key(&conn, |g| g.conn) {
+        Ok(i) => Some(i),
+        Err(_) => guests.iter().position(|g| g.conn == conn),
+    }
+}
+
 impl Guest {
     pub fn new(j: Joined, entity_id: i32, position: [f64; 3], view_distance: i32) -> Self {
         Self {
@@ -513,6 +526,7 @@ impl Guest {
             awaiting_teleport: None,
             awaiting_keeps_motion: false,
             landing: false,
+            tp_held: false,
             teleport_counter: 0,
             watching: false,
             teleport_tick: 0,

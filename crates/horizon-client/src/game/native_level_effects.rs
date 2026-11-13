@@ -22,7 +22,7 @@ impl Game<'_> {
     /// `ServerLevel.playSound(null, ...)` does: `source` indexes
     /// `SoundSource` (`master` 0, `blocks` 4...). A `minecraft:` event must be
     /// registered; a mod's goes by name and is heard where its resources
-    /// define it. True means queued, not heard. API @API:level_effects@.
+    /// define it. True means queued, not heard. API 568.
     pub(super) fn native_level_play_sound(
         &mut self,
         level: LevelRef,
@@ -53,7 +53,7 @@ impl Game<'_> {
     /// a Gaussian times `spread`, and `speed` scales their motion (a zero
     /// count sends one particle moving along `spread`). Block particle types
     /// need `state`; item, trail and vibration particles aren't supported.
-    /// True means queued, not drawn. API @API:level_effects@.
+    /// True means queued, not drawn. API 568.
     pub(super) fn native_level_send_particles(
         &mut self,
         level: LevelRef,

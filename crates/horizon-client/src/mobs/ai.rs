@@ -15,6 +15,7 @@ use super::{
     hostile,
     nav::Navigation,
     path::{PATH_TYPES, Path},
+    push::{Cap, Verdict, root_vehicle},
     undead,
 };
 use crate::blocks::Fluid;
@@ -99,6 +100,7 @@ pub struct Ai {
     /// Ticks left during which kills count as player kills.
     pub last_hurt_by_player: i32,
     pub no_action_time: i32,
+    pub dab_turns: u32,
     pub aggressive: bool,
     pub panicking: bool,
     pub malus: [Option<f32>; PATH_TYPES],
@@ -482,7 +484,7 @@ pub fn register(m: &mut Mob) {
 /// every mob Horizon makes, a client's copies of a server's mobs included,
 /// before its saved data is read; goals tick only where the mob's AI runs.
 /// `goals::Float` keeps the navigation floating, as FloatGoal's
-/// constructor does. API @API:register_goals@.
+/// constructor does. API 432.
 #[inline(never)]
 pub fn native_register_goals(mob: &mut Mob) {
     crate::native_client_hooks::register_goals(mob);
@@ -1667,7 +1669,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
         super::piglin::before_goals(m, w, level_random, events);
     }
     if m.alive() && !immobile {
-        server_ai_step(m, w, level_random, events);
+        super::dab::step(m, w, level_random, events);
     } else {
         m.ai.jumping = false;
         m.ai.xxa = 0.0;
@@ -1749,18 +1751,6 @@ impl Mob {
 fn on_climbable(m: &Mob, w: &MobWorld) -> bool {
     m.on_climbable(w)
 }
-/// `Entity.getRootVehicle` of the mob `id` riding `vehicle`: the bottom of
-/// its stack of vehicles (itself when it rides nothing).
-fn root_vehicle(w: &MobWorld, id: u32, vehicle: Option<u32>) -> u32 {
-    let (mut root, mut next) = (id, vehicle);
-    // A stack of riders is short; the bound only guards a broken loop.
-    for _ in 0..16 {
-        let Some(v) = next else { break };
-        root = v;
-        next = w.seen(v).and_then(|s| s.vehicle);
-    }
-    root
-}
 /// `LivingEntity.aiStep`, with or without AI: a mob's motion below 0.003 on an
 /// axis stops.
 fn drop_tiny_motion(m: &mut Mob) {
@@ -1787,9 +1777,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         && (m.species() != Species::Creaking || super::creaking::can_move(m))
         && (m.species() != Species::Warden || !super::warden::digging_or_emerging(m))
         && !super::equine::is_vehicle(m);
-    // Each with whether it rides a vehicle (`Entity.isPassenger`) and
-    // whether it shares this one's root vehicle (`isPassengerOfSameVehicle`).
-    let mut targets: Vec<(Who, Vec3, bool, bool, bool)> = Vec::new();
+    let mut targets = super::world::take_push_targets();
     if let Some(p) = &w.player
         // Entity.push: passengers of the same vehicle never push each other.
         && m.rider.is_none()
@@ -1819,7 +1807,14 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     {
         hurt(m, w, events, 6.0, Damage::of(DamageKind::Cramming));
     }
-    for (who, at, _, same, vehicle) in targets {
+    // The server's collision cap, after the cramming check above, which counts every entity.
+    let mut cap = Cap::new(m, w);
+    for &(who, at, _, same, vehicle) in &targets {
+        match cap.check(who, w) {
+            Verdict::Push => {}
+            Verdict::Skip => continue,
+            Verdict::Stop => break,
+        }
         // Warden.doPush: touching it angers it, then the push itself.
         if m.species() == Species::Warden {
             super::warden::do_push(m, w, who, events);
@@ -1871,7 +1866,9 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         if self_pushable {
             m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
         }
+        cap.record(m, who);
     }
+    super::world::give_push_targets(targets);
 }
 /// `Mob.aiStep` -> `Mob.burnUndead`: undead burn in daylight. It runs with
 /// or without AI (`NoAI` only skips `serverAiStep`).
@@ -1906,7 +1903,7 @@ fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
     br > 0.5 && m.random.next_float() * 30.0 < (br - 0.4) * 2.0 && !wet && w.can_see_sky(x, y, z)
 }
 /// Mob.serverAiStep
-fn server_ai_step(
+pub(super) fn server_ai_step(
     m: &mut Mob,
     w: &MobWorld,
     level_random: &mut LegacyRandom,
@@ -1923,8 +1920,7 @@ fn server_ai_step(
         return;
     }
     super::riders::drive(m, w);
-    let tick_count = m.age as i64;
-    let id_based = tick_count + i64::from(m.id);
+    let id_based = super::dab::selector_tick(m) + i64::from(m.id);
     let mut targets = std::mem::take(&mut m.ai.targets);
     let mut goals = std::mem::take(&mut m.ai.goals);
     {
@@ -1933,7 +1929,7 @@ fn server_ai_step(
             lr: level_random,
             events,
         };
-        if id_based % 2 != 0 && tick_count > 1 {
+        if id_based % 2 != 0 && m.age as i64 > 1 {
             targets.tick_running(m, &mut cx, false);
             goals.tick_running(m, &mut cx, false);
         } else {
@@ -1956,7 +1952,7 @@ fn server_ai_step(
     }
     if m.species() == Species::Villager {
         // Villager.customServerAiStep: the brain, then the raid sound roll.
-        super::villager_brain::tick(m, w, level_random, events);
+        super::villager::lobotomy::brain_tick(m, w, level_random, events);
         if let Some(player) = super::villager::ext_mut(m).last_traded_player.take() {
             events.push(MobEvent::VillagerTrade { mob: m.id, player });
         }
@@ -3708,6 +3704,111 @@ mod same_vehicle_push_tests {
         assert_eq!(velocity, Vec3::ZERO, "its rider pushes the camel");
         let (pushed, _) = push(true).unwrap();
         assert_eq!(pushed, vec![3], "the camel pushes the zombie");
+    }
+
+    /// The server's collision cap (`[entities] max_collisions`): in a pen of twelve chickens one
+    /// pushes every other (11) with no cap, and exactly the first N in vanilla's order with a cap
+    /// of N, skipping a chicken that already had N pushes this tick.
+    #[test]
+    fn a_mob_in_a_crowded_pen_pushes_at_most_the_cap() {
+        let mut pen = None;
+        with_test_world(&[], |_, types| {
+            let chicken = |id: u32| {
+                // All inside one another's boxes, none exactly on the pusher.
+                let at = Vec3::new(0.5 + f64::from(id) * 0.02, 64.0, 0.5);
+                Mob::new(
+                    id,
+                    std::sync::Arc::new(types.types["minecraft:chicken"].clone()),
+                    at,
+                    0.0,
+                )
+            };
+            pen = Some((0..12).map(chicken).collect::<Vec<_>>());
+        });
+        let Some(pen) = pen else {
+            return;
+        };
+        let pushed = |cap: u32, crowd: &[crate::mobs::Seen]| {
+            let mut pusher = pen[0].clone();
+            let mut events = Vec::new();
+            super::super::push::with_cap(cap, || {
+                with_test_world(crowd, |w, _| push_entities(&mut pusher, w, &mut events))
+            });
+            let ids: Vec<u32> = events
+                .iter()
+                .filter_map(|e| match e {
+                    MobEvent::Push {
+                        target: Who::Mob(id),
+                        ..
+                    } => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            // What the loop reports for the counts that follow.
+            assert_eq!(pusher.pushed, if cap > 0 { ids.clone() } else { vec![] });
+            ids
+        };
+        let mut crowd: Vec<crate::mobs::Seen> = pen.iter().map(|m| m.seen(None)).collect();
+        assert_eq!(pushed(0, &crowd), (1..12).collect::<Vec<u32>>());
+        assert_eq!(pushed(3, &crowd), vec![1, 2, 3]);
+        // Chickens 1 and 2 have taken 3 pushes already: skipped, the next ones are pushed.
+        crowd[1].collisions = 3;
+        crowd[2].collisions = 3;
+        assert_eq!(pushed(3, &crowd), vec![3, 4, 5]);
+        // The pusher's own count includes what it received: two left of three.
+        crowd[0].collisions = 1;
+        assert_eq!(pushed(3, &crowd), vec![3, 4]);
+        crowd[0].collisions = 3;
+        assert!(pushed(3, &crowd).is_empty());
+        // Off, the counts are not read.
+        assert_eq!(pushed(0, &crowd), (1..12).collect::<Vec<u32>>());
+    }
+
+    /// MSPT of one tick of a crowded chicken pen with the cap off and at 8 (run by hand with
+    /// `--ignored --nocapture`; needs the vanilla data). It measures the pushes a mob gives; the
+    /// received counts the mob loop adds are not simulated.
+    #[test]
+    #[ignore]
+    fn collision_cap_cost() {
+        for n in [50u32, 100, 200] {
+            let mut pen = None;
+            with_test_world(&[], |_, types| {
+                let ty = std::sync::Arc::new(types.types["minecraft:chicken"].clone());
+                pen = Some(
+                    (0..n)
+                        .map(|id| {
+                            let at = Vec3::new(
+                                0.5 + f64::from(id % 7) * 0.05,
+                                64.0,
+                                0.5 + f64::from(id / 7 % 7) * 0.05 + f64::from(id) * 0.0001,
+                            );
+                            Mob::new(id, ty.clone(), at, 0.0)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            });
+            let Some(mut pen) = pen else {
+                return;
+            };
+            for cap in [0u32, 8] {
+                let crowd: Vec<crate::mobs::Seen> = pen.iter().map(|m| m.seen(None)).collect();
+                let t = std::time::Instant::now();
+                super::super::push::with_cap(cap, || {
+                    with_test_world(&crowd, |w, _| {
+                        let mut events = Vec::new();
+                        for m in pen.iter_mut() {
+                            events.clear();
+                            push_entities(m, w, &mut events);
+                            m.pushed.clear();
+                        }
+                    })
+                });
+                println!(
+                    "{n} chickens, cap {cap}: {:.3} ms",
+                    t.elapsed().as_secs_f64() * 1e3
+                );
+            }
+        }
     }
 
     #[test]

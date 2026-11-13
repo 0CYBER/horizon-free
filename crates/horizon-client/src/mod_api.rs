@@ -42,7 +42,8 @@ pub use crate::game::{
     NativeCriterion, NativeDataMapType, NativeExperienceOrb, NativeFalling, NativeHeightmap,
     NativeHeldItem, NativeHit, NativeItemEntity, NativeMapDecoration, NativeMapInfo,
     NativeMobRender, NativeModEvent, NativePlayer, NativePlayerRender, NativeReloadListener,
-    NativeShake, NativeStructureBlock, NativeStructureTemplate, NativeWorldDraw,
+    NativeShake, NativeStructureBlock, NativeStructureTemplate, NativeTerrainColumn,
+    NativeWorldDraw,
 };
 pub use crate::gamerules::Value as GameRuleValue;
 /// What a mod asks of the terrain's picture each frame (`native_world_hold`). API 414.
@@ -92,7 +93,7 @@ pub use horizon_protocol::packets::play::Clientbound as ClientboundPlayPacket;
 pub use horizon_protocol::packets::play::Serverbound as ServerboundPlayPacket;
 pub use horizon_world::consumable::UseAnimation;
 /// Vanilla's `TagParser`: the tag an SNBT text holds and the bytes it read
-/// (`ItemStack::from_nbt` reads an item from it). API @API:item_from_snbt@.
+/// (`ItemStack::from_nbt` reads an item from it). API 527.
 pub use horizon_world::nbt::parse_snbt;
 pub use horizon_world::player_inventory::EquipmentSlot;
 pub use horizon_world::{
@@ -113,7 +114,7 @@ pub use horizon_world::{
 pub use serde_json;
 use serde_json::{Map, Value};
 /// The slot range a menu's input slots take (`native_open_menu_with_input`).
-/// API @API:menu_input@.
+/// API 533.
 pub use std::ops::Range;
 use std::time::Duration;
 /// The window events `input_key` hands over (`winit::event::KeyEvent`) and their key types.
@@ -590,7 +591,7 @@ pub struct NativeZoom {
 }
 
 /// A boss bar a server mod shows one player (`native_boss_bar`), as Bukkit's
-/// `BossBar` holds it. API @API:boss_bar@.
+/// `BossBar` holds it. API 517.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NativeBossBar {
     pub name: Text,
@@ -610,7 +611,7 @@ pub struct NativeBossBar {
 
 /// One open level of a server, counted for a diagnostics mod (`native_level_stats`): Bukkit's
 /// `World.getLoadedChunks`, `getForceLoadedChunks`, `getEntities` and `Chunk.getTileEntities`
-/// in numbers. API @API:level_stats@.
+/// in numbers. API 529.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct NativeLevelStats {
@@ -630,7 +631,7 @@ pub struct NativeLevelStats {
 }
 
 /// What one mob type cost one level's ticks while a mod sampled them
-/// (`native_take_mob_costs`). API @API:server_tick_timed@.
+/// (`native_take_mob_costs`). API 550.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct NativeMobCost {
@@ -647,7 +648,7 @@ pub struct NativeMobCost {
 /// Where a fishing bobber outside water floats and fishes, as a mod's
 /// `native_fishing_medium` answers it: lava, the void under an island, a
 /// cloud. Below `surface` the bobber floats and fishes as in still water,
-/// above it it falls as anywhere else. API @API:fishing_medium@.
+/// above it it falls as anywhere else. API 578.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NativeFishingMedium {
     /// The height the bobber floats at (world Y), as water's surface is.
@@ -690,7 +691,7 @@ pub struct NativeServerPlayer {
     pub address: String,
     /// The connection's round-trip time in milliseconds, as the keep-alive measured it and the
     /// player list shows it (`ServerCommonPacketListenerImpl.latency`). The fields below are API
-    /// @API:server_player_state@; 0, false or None where the server does not hold them.
+    /// 506; 0, false or None where the server does not hold them.
     pub latency: i32,
     /// The protocol version the client connected with (the server's own: others are refused).
     pub protocol: i32,
@@ -719,20 +720,20 @@ pub struct NativeServerPlayer {
     /// (`native_hide_player`).
     pub hidden: Option<u8>,
     /// A fake player: a mod's bot with no client (`native_set_player_fake`), so a mod need not
-    /// build anything for it that only a client could show. API @API:server_player_fake@.
+    /// build anything for it that only a client could show. API 604.
     pub fake: bool,
     /// Whether the player is using an item (`LivingEntity.isUsingItem`), and blocking with a
-    /// shield (using one). API @API:server_player_state@.
+    /// shield (using one). API 506.
     pub using_item: bool,
     pub blocking: bool,
     /// Sprinting (`Player.isSprinting`) and gliding with an elytra (`isFallFlying`).
-    /// API @API:server_player_state@.
+    /// API 506.
     pub sprinting: bool,
     pub gliding: bool,
 }
 
 /// What a player's client told the server about itself, and what the server sent it
-/// (`native_player_client`). API @API:player_client@.
+/// (`native_player_client`). API 475.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct NativeClientInfo {
@@ -769,7 +770,7 @@ pub struct NativeCommand {
     /// The operator level a player needs to see and run it (0: everyone).
     pub level: u8,
     /// The permission node that decides instead, when set
-    /// ([`NativeCommand::permission`]). API @API:command_permission@.
+    /// ([`NativeCommand::permission`]). API 462.
     pub permission: Option<String>,
     /// Whether the usage replaces vanilla's command of its name
     /// ([`NativeCommand::replace_vanilla`]).
@@ -802,7 +803,7 @@ impl NativeCommand {
     /// player's level, and without one the level decides as before. Each
     /// usage has its own node: a command's root is shown when any of its
     /// usages is allowed, and a line runs as the usage its words match.
-    /// API @API:command_permission@.
+    /// API 462.
     pub fn permission(mut self, node: &str) -> Self {
         self.permission = Some(node.to_owned());
         self

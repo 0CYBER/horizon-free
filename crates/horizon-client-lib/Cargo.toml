@@ -114,6 +114,8 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 
 [features]
 default = ["audio", "controllers"]
+# Dev-only: the ignored tracker-send benchmark uses the executable's allocator.
+tracker-send-bench = []
 # Sound output. Without it (and `controllers`) the program links neither libasound nor libudev on
 # Linux: the server build (`--no-default-features`, released as horizon-engine; docs/server.md).
 audio = ["horizon-client-render/audio"]

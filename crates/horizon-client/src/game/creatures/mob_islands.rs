@@ -2072,6 +2072,76 @@ mod tests {
         }
     }
 
+    /// With the villagers on their own random (`parallel::villagers_own_random`), villagers in one
+    /// herd tick in groups beside the other herds and leave the mobs and the level random as the
+    /// serial loop does, since the serial loop draws the same way while the switch is on.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn villagers_on_their_own_random_tick_in_groups_as_serial() {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                horizon_client::parallel::OWN_RANDOM_TEST
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let _reset = Reset;
+        horizon_client::parallel::OWN_RANDOM_TEST.store(true, std::sync::atomic::Ordering::Relaxed);
+        let mut game = separated_herds_game();
+        for k in 0..12 {
+            let x = 4.0 + f64::from(k % 6) * 2.0;
+            let z = 14.0 + f64::from(k / 6) * 2.0;
+            assert!(game.run_command(&format!("summon villager {x:.1} 66 {z:.1}")));
+        }
+        let groups = grouped_as_serial(&mut game, 30, "villagers", |_| {});
+        assert_eq!(groups, groups_for(3));
+    }
+
+    /// The level random after three ticks of the herds with four cod among them, each leading a
+    /// school of `followers` (a leader rolls one in 200 on the level's stream every tick,
+    /// `aquatic::school_tick`).
+    fn level_random_after_ticks(own: bool, followers: i32) -> String {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                super::super::mob_group::OWN_RANDOM.with(|o| o.set(false));
+            }
+        }
+        let _reset = Reset;
+        super::super::mob_group::OWN_RANDOM.with(|o| o.set(own));
+        let mut game = separated_herds_game();
+        for k in 0..4 {
+            let x = 100.0 + f64::from(k) * 2.0;
+            assert!(game.run_command(&format!("summon cod {x:.1} 66 14.0")));
+            let cod = game.mobs.last_mut().unwrap();
+            assert_eq!(cod.kind.id, "minecraft:cod");
+            cod.extra.followers = followers;
+            cod.persistent = true;
+        }
+        // A mob's first tick does not run its step.
+        for _ in 0..3 {
+            game.tick_creature_entities().unwrap();
+        }
+        format!("{:?}", game.world.random)
+    }
+
+    /// With the mobs on their own random (`parallel::mobs_own_random`), a turn takes nothing from
+    /// the level's stream, so no lane waits for it: the school leaders' rolls, which move the
+    /// level random otherwise, leave it where a tick without them does.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn mobs_on_their_own_random_leave_the_level_stream_alone() {
+        assert_ne!(
+            level_random_after_ticks(false, 3),
+            level_random_after_ticks(false, 0),
+            "a school leader draws from the level random"
+        );
+        assert_eq!(
+            level_random_after_ticks(true, 3),
+            level_random_after_ticks(true, 0)
+        );
+    }
+
     /// The raiders of one raid order their hurts across it (`raids.rs`): one in each of two herds
     /// joins them, and the herd between ticks in a group of its own.
     #[test]

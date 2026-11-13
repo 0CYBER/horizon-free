@@ -789,10 +789,10 @@ impl Hub {
     }
 
     pub fn guest(&self, conn: u32) -> Option<&Guest> {
-        self.guests.iter().find(|g| g.conn == conn)
+        super::guest::find(&self.guests, conn).map(|i| &self.guests[i])
     }
     pub fn guest_mut(&mut self, conn: u32) -> Option<&mut Guest> {
-        self.guests.iter_mut().find(|g| g.conn == conn)
+        super::guest::find(&self.guests, conn).map(|i| &mut self.guests[i])
     }
 
     /// The network id of a name in a built-in or synchronized registry.
