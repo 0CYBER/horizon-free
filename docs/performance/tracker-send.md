@@ -68,7 +68,7 @@ Measured commit `06a4eabbc7fc9b0e11f7dabdb403d85b74c4816c`, optimized
 `fast` library test binary with `tracker-send-bench` (the game's allocator),
 Rust 1.99.1. Host: AMD Ryzen 5 5600X, six physical cores / twelve logical CPUs.
 Runs were pinned to physical CPUs 0/1, then 0/1/2/3 (four-core run first), with
-worker counts of two and four. No builds ran beside the measurements. Load
+worker counts of two and four. No agent-started builds ran beside the measurements. Load
 averages at the starts were 3.0 and 5.8 across the twelve logical CPUs; shared-host
 activity was not suspended, so these results establish this fixture's crossover,
 not an exact prediction for another machine or a complete server.
