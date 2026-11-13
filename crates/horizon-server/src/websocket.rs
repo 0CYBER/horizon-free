@@ -213,6 +213,13 @@ impl Socket {
                 }
                 n => u64::from(n),
             };
+            // RFC 6455 5.5: a control frame (close, ping, pong) comes whole, with at most 125
+            // bytes, as Netty's decoder that vanilla uses insists.
+            if opcode >= 8 && (!fin || length > 125) {
+                return Err(invalid(
+                    "a control frame must be whole and at most 125 bytes",
+                ));
+            }
             if length > MAX_MESSAGE as u64 || message.len() + length as usize > MAX_MESSAGE {
                 return Err(invalid("the message is longer than 65536 bytes"));
             }
@@ -335,6 +342,27 @@ mod tests {
         let mut text = [0u8; 4];
         client.read_exact(&mut text).unwrap();
         assert_eq!(&text, &[0x81, 2, b'o', b'k']);
+    }
+
+    #[test]
+    fn control_frames_must_be_whole_and_short() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        for (sent, ok) in [
+            (frame(true, PING, &[7; 125]), true),
+            (frame(true, PING, &[7; 126]), false),
+            (frame(false, PING, b"hi"), false),
+            (frame(false, CLOSE, &1000u16.to_be_bytes()), false),
+        ] {
+            let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let socket = Socket::new(Link::plain(&listener.accept().unwrap().0).unwrap()).unwrap();
+            client.write_all(&sent).unwrap();
+            client.write_all(&frame(true, TEXT, b"after")).unwrap();
+            let read = socket.read_text();
+            assert_eq!(read.is_ok(), ok, "{:?}", &sent[..2]);
+            if ok {
+                assert_eq!(read.unwrap().as_deref(), Some("after"));
+            }
+        }
     }
 
     #[test]

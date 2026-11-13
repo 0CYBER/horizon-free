@@ -33,18 +33,39 @@ impl Game<'_> {
     /// `ItemStack.hurtAndBreak` takes `points` of its durability (Unbreaking
     /// may save it). Callers skip creative.
     pub(super) fn wear_glider(&mut self, points: u32) {
-        let gliding = gliding_pieces(self.res.items(), &self.armor);
-        let pieces: Vec<usize> = (0..4).filter(|&i| gliding[i]).collect();
-        if pieces.is_empty() {
+        let items = self.res.items();
+        let gliding = gliding_pieces(items, &self.armor);
+        let hand = |stack: Option<&ItemStack>, slot: &str| {
+            stack.is_some_and(|s| horizon_client::item_sync::can_glide_using(s, slot, items))
+        };
+        // `EquipmentSlot.VALUES` order: mainhand, offhand, feet, legs, chest,
+        // head (`armor` is head, chest, legs, feet). `Ok` is a hand slot.
+        let mut slots: Vec<std::result::Result<usize, usize>> = Vec::new();
+        if hand(self.inventory[self.selected].as_ref(), "mainhand") {
+            slots.push(Ok(self.selected));
+        }
+        if hand(self.offhand.as_ref(), "offhand") {
+            slots.push(Ok(shield::OFFHAND_SLOT));
+        }
+        slots.extend([3, 2, 1, 0].into_iter().filter(|&i| gliding[i]).map(Err));
+        if slots.is_empty() {
             return;
         }
         // `Util.getRandom(slotsWithGliders, this.random)`: the entity's own
         // random, which never touches the level's stream.
-        let pick = random_source::entity().next_int_bound(pieces.len() as i32);
-        let pick = pieces[pick.unwrap_or(0) as usize];
-        if let Some(stack) = self.armor[pick].clone() {
+        let pick = random_source::entity().next_int_bound(slots.len() as i32);
+        let pick = slots[pick.unwrap_or(0) as usize];
+        let stack = match pick {
+            Ok(slot) => self.stack_in(slot).cloned(),
+            Err(i) => self.armor[i].clone(),
+        };
+        if let Some(stack) = stack {
             let loss = self.wear(&stack, points);
-            if let Some(piece) = self.armor[pick].as_mut() {
+            let worn = match pick {
+                Ok(slot) => self.stack_in_mut(slot).as_mut(),
+                Err(i) => self.armor[i].as_mut(),
+            };
+            if let Some(piece) = worn {
                 piece.damage += loss;
             }
         }
@@ -62,6 +83,14 @@ impl Game<'_> {
             .iter()
             .flatten()
             .any(|s| immune.is_some_and(|t| t.contains(&*s.item)))
+    }
+
+    /// `PowderSnowBlock.canEntityWalkOnPowderSnow`'s boots half: leather boots
+    /// on the feet.
+    pub(crate) fn wears_leather_boots(&self) -> bool {
+        self.armor[3]
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:leather_boots")
     }
 
     pub(super) fn held_slot(&self) -> usize {

@@ -362,6 +362,48 @@ impl Game<'_> {
         }
     }
 
+    /// `ItemStack.canBeHurtBy` is false: the dropped item's `damage_resistant`
+    /// (its own components, else its item's) holds the damage type `source`.
+    pub(in crate::game) fn item_resistant_to(&self, index: usize, source: &str) -> bool {
+        let registry = &self.motion.health.damage;
+        // Use the same defaults and stack patch as the component resolver,
+        // including defaults changed by native mods and removed components.
+        let components =
+            self.pack
+                .item_renderer
+                .models
+                .components(&horizon_client::item_render::stack_view(
+                    &self.dropped[index].stack,
+                ));
+        let matches = |value: &str| {
+            let (tag, value) = value
+                .strip_prefix('#')
+                .map_or((false, value), |v| (true, v));
+            let name = if value.contains(':') {
+                value.to_owned()
+            } else {
+                format!("minecraft:{value}")
+            };
+            if tag {
+                registry
+                    .id(source)
+                    .is_some_and(|id| registry.in_tag(id, &name))
+            } else {
+                source == name
+            }
+        };
+        match components
+            .get("minecraft:damage_resistant")
+            .and_then(|v| v.get("types"))
+        {
+            Some(serde_json::Value::String(value)) => matches(value),
+            Some(serde_json::Value::Array(values)) => {
+                values.iter().any(|v| v.as_str().is_some_and(matches))
+            }
+            _ => false,
+        }
+    }
+
     /// `ItemEntity.hurtServer`: the item branch reached by `DamageCommand.damage`.
     fn command_damage_item(
         &mut self,
@@ -394,46 +436,9 @@ impl Game<'_> {
         {
             return false;
         }
-        // Use the same defaults and stack patch as the component resolver,
-        // including defaults changed by native mods and removed components.
-        let components =
-            self.pack
-                .item_renderer
-                .models
-                .components(&horizon_client::item_render::stack_view(
-                    &self.dropped[index].stack,
-                ));
-        let resistant = |source: &str| {
-            let matches = |value: &str| {
-                let (tag, value) = value
-                    .strip_prefix('#')
-                    .map_or((false, value), |v| (true, v));
-                let name = if value.contains(':') {
-                    value.to_owned()
-                } else {
-                    format!("minecraft:{value}")
-                };
-                if tag {
-                    registry
-                        .id(source)
-                        .is_some_and(|id| registry.in_tag(id, &name))
-                } else {
-                    source == name
-                }
-            };
-            match components
-                .get("minecraft:damage_resistant")
-                .and_then(|v| v.get("types"))
-            {
-                Some(serde_json::Value::String(value)) => matches(value),
-                Some(serde_json::Value::Array(values)) => {
-                    values.iter().any(|v| v.as_str().is_some_and(matches))
-                }
-                _ => false,
-            }
-        };
-        if resistant(damage_type)
-            || registry.in_tag(kind, "minecraft:is_fire") && resistant("minecraft:in_fire")
+        if self.item_resistant_to(index, damage_type)
+            || registry.in_tag(kind, "minecraft:is_fire")
+                && self.item_resistant_to(index, "minecraft:in_fire")
         {
             return false;
         }
