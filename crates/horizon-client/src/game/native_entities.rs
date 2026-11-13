@@ -209,7 +209,7 @@ impl Game<'_> {
     /// client's copy of the world, for a position outside
     /// `/summon`'s bounds, a chunk that isn't loaded, a kind Horizon can't
     /// load, or one a mod kept out (`native_entity_join_level`). API
-    /// 59. Since API @API:npc_any_level@, `dimension` may be any level the
+    /// 59. Since API 535, `dimension` may be any level the
     /// server has loaded, which is put in place for the summon (`execute in
     /// <dimension> run summon`); a level not loaded is refused.
     pub(super) fn native_summon(
@@ -272,7 +272,7 @@ impl Game<'_> {
     /// passenger in `nbt` is held by an entity of the level
     /// (`ServerLevel.tryAddFreshEntityWithPassengers`: `/summon` fails with
     /// "duplicate UUIDs"); nothing is spawned then. API
-    /// @API:summon_with_uuid@.
+    /// 633.
     pub(super) fn native_summon_with_uuid(
         &mut self,
         dimension: &str,
@@ -379,7 +379,7 @@ impl Game<'_> {
     /// Removes entity `id`, one Horizon keeps without simulating, as `/kill`
     /// does (it drops nothing and isn't saved). False for no such entity or
     /// another dimension. Mobs go with `native_remove_mob`. API
-    /// 59. Since API @API:remove_projectiles@ it also takes projectiles
+    /// 59. Since API 543 it also takes projectiles
     /// (arrows, tridents, snowballs, eggs, pearls, fireballs, wind charges,
     /// llama spit, shulker bullets, firework rockets) as `/kill` does, and a
     /// server player's fishing bobber (`Entity.discard`; the player in place's,
@@ -413,7 +413,7 @@ impl Game<'_> {
     /// hooks (`native_living_incoming_damage` and its versions) hear it. Whether it was hurt:
     /// false for an invulnerable, dead or creative target, another dimension, an entity that
     /// isn't living, an attacker that isn't there, or an amount that isn't a finite number.
-    /// API @API:hurt_entity@.
+    /// API 524.
     pub(super) fn native_hurt_entity(
         &mut self,
         dimension: &str,

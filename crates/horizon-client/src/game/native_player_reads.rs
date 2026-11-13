@@ -16,7 +16,7 @@ impl Game<'_> {
     /// What the player's client told the server (brand, `ClientInformation`) and what the server
     /// sent it, as Paper's `getClientBrandName`, `locale` and `getClientViewDistance` read it.
     /// None for a player who is not on, while the hub is out of reach, and on a client.
-    /// API @API:player_client@.
+    /// API 475.
     pub(super) fn native_player_client(&self, uuid: u128) -> Option<NativeClientInfo> {
         let (_, g) = self.hub_guest(uuid)?;
         Some(NativeClientInfo {
@@ -34,7 +34,7 @@ impl Game<'_> {
     /// The player's statistics as vanilla saves them (`players/stats/<uuid>.json`:
     /// `{"stats": {"minecraft:custom": {"minecraft:jump": 3}}, "DataVersion": ..}`), as
     /// Bukkit's `getStatistic` reads them. None for a player who is not on and on a client.
-    /// API @API:player_records@.
+    /// API 489.
     pub(super) fn native_player_stats(&self, uuid: u128) -> Option<serde_json::Value> {
         if self.acting(uuid) {
             return Some(self.stats.to_json());
@@ -45,7 +45,7 @@ impl Game<'_> {
 
     /// One statistic of the player: its type and key (`minecraft:custom`,
     /// `minecraft:jump`; `custom`, `jump` mean the same), 0 when never counted. None for a
-    /// player who is not on and on a client. API @API:player_records@.
+    /// player who is not on and on a client. API 489.
     pub(super) fn native_player_stat(&self, uuid: u128, stat_type: &str, key: &str) -> Option<i32> {
         let stats = if self.acting(uuid) {
             &self.stats
@@ -71,7 +71,7 @@ impl Game<'_> {
     /// `native_player_stats` gives (HuskSync's restore of a saved player). They are saved
     /// with the player and all go to the client at its next request, as after a join;
     /// scoreboard objectives that count a statistic are not told. False for a player who is
-    /// not on and on a client. API @API:player_records@.
+    /// not on and on a client. API 489.
     pub(super) fn native_set_player_stats(
         &mut self,
         uuid: u128,
@@ -106,7 +106,7 @@ impl Game<'_> {
     /// The player's advancement progress as vanilla saves it (`players/advancements/<uuid>
     /// .json`: each advancement's obtained criteria with their dates and `done`), as Bukkit's
     /// `getAdvancementProgress` reads it. None for a player who is not on and on a client.
-    /// API @API:player_records@.
+    /// API 489.
     pub(super) fn native_player_advancements(&self, uuid: u128) -> Option<serde_json::Value> {
         let progress = if self.acting(uuid) {
             &self.adv.progress
@@ -121,7 +121,7 @@ impl Game<'_> {
     /// when the file loads (`PlayerAdvancements.applyFrom`). The client is sent every
     /// advancement's progress again with the player's next tick; one newly done shows its toast,
     /// as a grant would, but gives no rewards. False for a player who is not on and on a client.
-    /// API @API:player_records@.
+    /// API 489.
     pub(super) fn native_set_player_advancements(
         &mut self,
         uuid: u128,
@@ -153,35 +153,35 @@ impl Game<'_> {
 
     /// The server's player limit (`max-players`, as `/list` shows it), as Bukkit's
     /// `Server.getMaxPlayers`. None while the hub is out of reach and on a client.
-    /// API @API:server_files@.
+    /// API 505.
     pub(super) fn native_max_players(&self) -> Option<u32> {
         let host = self.lan.as_ref()?;
         Some(host.hub.lan.shared.max_players().min(u32::MAX as usize) as u32)
     }
 
     /// The dedicated server's folder (where `server.properties` is), absolute. None
-    /// elsewhere. API @API:server_files@.
+    /// elsewhere. API 505.
     pub(super) fn native_server_dir(&self) -> Option<PathBuf> {
         self.options.dedicated.as_ref()?;
         std::env::current_dir().ok()
     }
 
     /// The log file this run writes (`logs/latest.log` of the server's or the game's folder),
-    /// absolute; None when it logs to the terminal only. API @API:server_files@.
+    /// absolute; None when it logs to the terminal only. API 505.
     pub(super) fn native_log_file(&self) -> Option<PathBuf> {
         horizon_client::logging::latest_path()
     }
 
     /// The stack in the player's main hand, components and all (Bukkit's
     /// `getEquipment().getItemInMainHand()`). None for an empty hand, a player who is not on
-    /// and on a client. API @API:player_equipment@.
+    /// and on a client. API 480.
     pub(super) fn native_held_stack(&self, uuid: u128) -> Option<ItemStack> {
         self.native_player_equipment(uuid, EquipmentSlot::MainHand)
     }
 
     /// The stack in one of the player's equipment slots (`LivingEntity.getItemBySlot`), from
     /// any server hook, the acting player's or another's. None for an empty slot, for `Body`
-    /// and `Saddle`, for a player who is not on and on a client. API @API:player_equipment@.
+    /// and `Saddle`, for a player who is not on and on a client. API 480.
     pub(super) fn native_player_equipment(
         &self,
         uuid: u128,

@@ -22,7 +22,7 @@ impl Game<'_> {
     /// (`native_block_entity_update_tag`, merged into `nbt`), with no item
     /// slots. None for another kind of block entity, a block with none, and
     /// on a server for the one ticking now, which is out of the world (as
-    /// for `native_with_mod_block_entity`). API @API:host_bridge@.
+    /// for `native_with_mod_block_entity`). API 416.
     pub(super) fn native_mod_block_entity(&self, pos: [i32; 3]) -> Option<ModBlockEntity> {
         match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
             Some(BlockEntity::Mod(m)) if !m.id.is_empty() => Some(ModBlockEntity::clone(m)),
@@ -36,7 +36,7 @@ impl Game<'_> {
     /// comparators read it again when its items changed. False, with
     /// `change` not run, where `native_with_mod_block_entity` finds none.
     /// Call `native_block_entity_sync` too when what clients draw changed.
-    /// API @API:host_bridge@.
+    /// API 416.
     pub(super) fn native_change_mod_block_entity(
         &mut self,
         pos: [i32; 3],
@@ -51,7 +51,7 @@ impl Game<'_> {
     /// (`Level.playSound` with no player): a machine's hum from its block
     /// entity's tick. `source` is the `SoundSource` ordinal (4 for
     /// `BLOCKS`). True when queued, not heard; false off a server and where
-    /// the level host's `play_sound` refuses. API @API:host_bridge@.
+    /// the level host's `play_sound` refuses. API 416.
     pub(super) fn native_play_sound_in_place(
         &mut self,
         sound: &str,
@@ -71,7 +71,7 @@ impl Game<'_> {
     /// see `count` particles spread by `spread` (a zero count sends one
     /// moving `speed` along `spread`). `state` is the block of block
     /// particles. True when accepted; false off a server and where the level
-    /// host's `send_particles` refuses. API @API:host_bridge@.
+    /// host's `send_particles` refuses. API 416.
     pub(super) fn native_send_particles_in_place(
         &mut self,
         options: &ParticleOptions,
@@ -93,7 +93,7 @@ impl Game<'_> {
     /// (`LivingEntity.getItemBySlot`): on a client the player's own, as
     /// goggles worn or a tank on the back show their overlay; on a server the
     /// acting player's. None for an empty slot, and for `Body` and `Saddle`,
-    /// which a player has none of. API @API:host_bridge@.
+    /// which a player has none of. API 416.
     pub(super) fn native_equipment(&self, slot: EquipmentSlot) -> Option<ItemStack> {
         match slot {
             // The selected slot, not `held`: that is the acting hand, the off hand's stack during
@@ -114,7 +114,7 @@ impl Game<'_> {
     /// wrench that picks a block up rather than turning it, a crank turned
     /// backwards. On a server the acting guest's, as their use runs
     /// (`as_guest` holds sneak for them); on a client the player's own key.
-    /// API @API:host_bridge@.
+    /// API 416.
     pub(super) fn native_sneaking(&self) -> bool {
         self.keys.held(Action::Sneak)
     }

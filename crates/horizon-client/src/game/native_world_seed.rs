@@ -9,7 +9,7 @@ impl Game<'_> {
     /// The world's seed, as `/seed` prints it (`WorldOptions.seed`, Bukkit's
     /// `World.getSeed`): every level of the world generates from it, and
     /// `native_chunk_generate` gets the same value. None off a server: a
-    /// client only knows a hash of its server's seed. API @API:world_seed@.
+    /// client only knows a hash of its server's seed. API 556.
     pub(super) fn native_world_seed(&self) -> Option<i64> {
         self.native_authoritative().then_some(self.level.seed)
     }

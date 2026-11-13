@@ -2,7 +2,7 @@
 //! `EntityRef` (docs/native-mods.md, "Entity and level handles", #7387):
 //! velocity, ground, box, eyes and view. They read the entity a handle names
 //! as `native_entity_refs.rs` finds it, and return `None` (or `false`) for a
-//! stale handle. On a client (API @API:client_entity_refs@) they read the
+//! stale handle. On a client (API 428) they read the
 //! entities the server shows the window, and nothing moves one.
 use super::entity::{Entity as _, EntityHandle, with_entity, with_entity_mut};
 use super::{Game, commands::Target};

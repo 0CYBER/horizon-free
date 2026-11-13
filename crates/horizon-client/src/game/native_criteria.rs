@@ -91,7 +91,7 @@ impl Game<'_> {
 
     /// `native_trigger_criterion` with its test behind a reference, as a
     /// trait mod calls it through `dyn Host`: the same players, criteria and
-    /// answer. API @API:host_bridge@.
+    /// answer. API 416.
     pub(super) fn native_trigger_mod_criterion(
         &mut self,
         uuid: u128,

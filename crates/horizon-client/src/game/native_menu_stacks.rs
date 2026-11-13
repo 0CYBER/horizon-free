@@ -1,9 +1,9 @@
 //! The stacks of a server-opened menu for native client mods
 //! (docs/native-mods.md, "Entity and level handles", API
-//! @API:client_entity_refs@): what the window shows in each slot, as the
+//! 428): what the window shows in each slot, as the
 //! server last synced it, where `NativeScreenView` only counts the slots; and
 //! the player's own inventory, which is the same whichever menu is open
-//! (API @API:client_own_inventory@).
+//! (API 635).
 use super::Game;
 use horizon_client::items::ItemStack;
 
@@ -14,7 +14,7 @@ impl Game<'_> {
     /// own slots, then the player's inventory and hotbar below it. An empty
     /// slot is None. None on a server, while no server-opened menu is up (the
     /// window's own inventory, creative), and for a menu whose slots the
-    /// client doesn't lay out (a lectern). API @API:client_entity_refs@.
+    /// client doesn't lay out (a lectern). API 428.
     pub(super) fn native_menu_stacks(&mut self) -> Option<Vec<Option<ItemStack>>> {
         let (_, menu) = self.remote.as_ref()?.menu.clone()?;
         let slots: Vec<usize> = (0..).map_while(|s| Self::menu_slot(&menu, s)).collect();
@@ -31,7 +31,7 @@ impl Game<'_> {
     /// whichever menu is open, a server-opened one or the window's own
     /// inventory; it is what the server last synced, so before its first
     /// sync every slot is None. None on a server. API
-    /// @API:client_own_inventory@.
+    /// 635.
     pub(super) fn native_own_inventory(&mut self) -> Option<Vec<Option<ItemStack>>> {
         self.remote.as_ref()?;
         Some(self.inventory.iter().take(36).cloned().collect())

@@ -32,7 +32,7 @@ impl Game<'_> {
     /// (a harvester storing them); without, they pop as item entities and the
     /// list is empty. Nothing drops where `doTileDrops` is off. None, with
     /// nothing broken, for air, an unloaded block and off a server.
-    /// API @API:machine_breaking@.
+    /// API 418.
     pub(super) fn native_machine_destroy_block(
         &mut self,
         pos: [i32; 3],
@@ -72,7 +72,7 @@ impl Game<'_> {
     /// crack away. A machine passes an id of its own that no entity has (a
     /// negative one), the same each time, so a new stage replaces its old one;
     /// a crack not renewed for 400 ticks fades. Off a server nothing happens.
-    /// API @API:machine_breaking@.
+    /// API 418.
     pub(super) fn native_set_break_progress(&mut self, breaker: i32, pos: [i32; 3], progress: i32) {
         if !self.native_authoritative() {
             return;
@@ -98,7 +98,7 @@ impl Game<'_> {
     /// None, with nothing used, off a server and while a player's action is
     /// being run (from inside a player's hook: run it from a block entity's
     /// tick).
-    /// API @API:fake_player@.
+    /// API 417.
     pub(super) fn native_use_as_player(
         &mut self,
         stack: ItemStack,
