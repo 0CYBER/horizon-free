@@ -574,6 +574,18 @@ This is the file `init` writes today, and it also writes `[panel]` (`bind = "127
 each one). Unknown keys are errors, as are a typed key set again under `[properties]` and values vanilla would
 refuse. There is no `backups.before_update` setting: an update always backs up the world first (section 7).
 
+- **`[entities]`: villagers that cannot move.** Not vanilla, so off. `villager_lobotomize = true` makes the
+  engine skip the brain of a villager that is *stuck*, and `villager_lobotomize_check_interval = 100` (ticks)
+  is how often each villager is rechecked (staggered by id). The game reads the section itself, and
+  `init` leaves it out until it is set. A villager is stuck when it rides something, or when none of the four
+  blocks beside it lets its box in: a free block at its height, one block higher with room above it (a jump up),
+  or a door villagers open. A villager in a 1×1 cell is stuck whatever covers its head; one in the open, or with
+  a gap or a door in its cell, is not; a sleeping villager never is. A stuck villager skips its brain (sensors,
+  behaviours, schedule, gossip spreading, sleep, farming, breeding, panic, point-of-interest searches) and
+  keeps gravity, damage, despawning, trading with its XP and level-ups, and its trades. Its job site
+  stays: while it would work (ticks 2000 to 9000 of the day) it restocks as `WorkAtPoi` does, every 300 ticks with a
+  workstation still there, at most twice a day. When the cell opens, the next recheck gives it its brain
+  back. A villager that was never free does not claim a job site or a bed.
 - **Import.** `horizon-server init` in a folder with a `server.properties`, or `horizon-server import
   server.properties`, reads it with vanilla's own parser (`ServerProperties`). Keys with typed fields go into
   their sections; any other key that differs from vanilla's default goes into `[properties]`. Keys left at

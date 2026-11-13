@@ -108,6 +108,12 @@ enabled = true               # false pauses it and keeps the webhook
 # Fights follow 26.3's rules. For 1.8.9's (no attack cooldown or sweep, 1.8 weapon damage; docs/pvp.md):
 # [combat]
 # legacy = true
+
+# Villagers that cannot move (a trading hall's cells, or riding) skip their brain, which cuts the lag of big halls;
+# they keep trading and restocking (docs/server.md). Not vanilla, so off. To turn it on:
+# [entities]
+# villager_lobotomize = true
+# villager_lobotomize_check_interval = 100   # ticks between rechecks of whether a villager can move
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
@@ -176,6 +182,32 @@ pub struct Config {
     /// The game reads this section itself (docs/pvp.md); written only when it isn't the default.
     #[serde(default, skip_serializing_if = "Combat::is_default")]
     pub combat: Combat,
+    /// The game reads this section itself (docs/server.md); written only when it isn't the default.
+    #[serde(default, skip_serializing_if = "Entities::is_default")]
+    pub entities: Entities,
+}
+
+/// `[entities]`: `villager_lobotomize = true` skips the brain of villagers that cannot move (stuck in a cell,
+/// riding something), rechecked every `villager_lobotomize_check_interval` ticks. The game reads it from the
+/// same file (game/dedicated.rs, `load_entities`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Entities {
+    pub villager_lobotomize: bool,
+    pub villager_lobotomize_check_interval: u32,
+}
+impl Default for Entities {
+    fn default() -> Self {
+        Self {
+            villager_lobotomize: false,
+            villager_lobotomize_check_interval: 100,
+        }
+    }
+}
+impl Entities {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// `[combat]`: `legacy = true` resolves the players' melee hits by 1.8.9's rules (no attack cooldown or sweep,
@@ -545,6 +577,9 @@ impl Config {
         self.panel.address()?;
         self.api.check()?;
         self.transfer.check()?;
+        if self.entities.villager_lobotomize_check_interval == 0 {
+            return Err("entities.villager_lobotomize_check_interval must be above zero".into());
+        }
         self.discord.check()?;
         self.anticheat.check()?;
         self.chat_filter.check()?;
@@ -681,7 +716,13 @@ pub fn render(config: &Config) -> String {
         set(&mut doc, section, field, &table[section][field]);
     }
     let mut text = doc.to_string();
-    for section in ["anticheat", "chat_filter", "prune_chunks", "combat"] {
+    for section in [
+        "anticheat",
+        "chat_filter",
+        "prune_chunks",
+        "combat",
+        "entities",
+    ] {
         if let Some(settings) = table.get(section) {
             let mut only = toml::Table::new();
             only.insert(section.into(), settings.clone());
@@ -945,6 +986,27 @@ mod tests {
         assert!(!off.lines().any(|l| l.trim() == "[combat]"), "{off}");
         assert!(Config::parse("[combat]\nlegacy = 1\n").is_err());
         assert!(Config::parse("[combat]\nlegcy = true\n").is_err());
+    }
+
+    #[test]
+    fn villager_lobotomize_is_off_unless_its_section_turns_it_on() {
+        let off = Config::default().entities;
+        assert!(!off.villager_lobotomize);
+        assert_eq!(off.villager_lobotomize_check_interval, 100);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[entities]"));
+        let on = Config::parse(&format!(
+            "{TEMPLATE}\n[entities]\nvillager_lobotomize = true\nvillager_lobotomize_check_interval = 40\n"
+        ))
+        .unwrap();
+        assert!(on.entities.villager_lobotomize);
+        assert_eq!(on.entities.villager_lobotomize_check_interval, 40);
+        // Kept when the file is written again, and left out while off.
+        assert_eq!(Config::parse(&render(&on)).unwrap(), on);
+        let text = render(&Config::default());
+        assert!(!text.lines().any(|l| l.trim() == "[entities]"), "{text}");
+        assert!(Config::parse("[entities]\nvillager_lobotomize = 1\n").is_err());
+        assert!(Config::parse("[entities]\nvillager_lobotomise = true\n").is_err());
+        assert!(Config::parse("[entities]\nvillager_lobotomize_check_interval = 0\n").is_err());
     }
 
     #[test]
