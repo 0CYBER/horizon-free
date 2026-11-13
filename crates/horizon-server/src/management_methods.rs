@@ -9,7 +9,7 @@ use crate::{
     engine,
     management::{self, Failure, INTERNAL_ERROR, invalid_params},
 };
-use horizon_server_files::properties::{ServerProperties, SystemEntropy};
+use horizon_platform::server_files::properties::{ServerProperties, SystemEntropy};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -98,7 +98,7 @@ pub fn call(shared: &Shared, client: u32, short: &str, argument: &Value) -> Resu
             game.operator_user_permission_level(client, None)
         }
         "serversettings/operator_user_permission_level/set" => {
-            game.operator_user_permission_level(client, Some(management_int(argument)?))
+            game.operator_user_permission_level(client, Some(permission_level(argument)?))
         }
         "serversettings/force_game_mode" => game.force_game_mode(client, None),
         "serversettings/force_game_mode/set" => game.force_game_mode(
@@ -269,21 +269,19 @@ fn uuid(id: u128) -> String {
     )
 }
 
-/// A UUID as `UUID.fromString` takes it (8-4-4-4-12 hex digits), or the 32 undashed digits of `UUIDUtil`'s
-/// lenient codec; anything else (a short id, a sign, dashes anywhere) is no UUID.
+/// A UUID as `PlayerDto`'s codec, `UUIDUtil.STRING_CODEC` (`UUID.fromString`), takes it: 8-4-4-4-12 hex
+/// digits. 32 undashed digits are no UUID there (nor in `UUIDUtil.LENIENT_CODEC`), and neither is a short id,
+/// a sign or dashes anywhere else here.
 fn parse_uuid(text: &str) -> Option<u128> {
-    let digits = match text.len() {
-        32 => text.to_owned(),
-        36 => {
-            let parts: Vec<&str> = text.split('-').collect();
-            let lengths: Vec<usize> = parts.iter().map(|p| p.len()).collect();
-            if lengths != [8, 4, 4, 4, 12] {
-                return None;
-            }
-            parts.concat()
-        }
-        _ => return None,
-    };
+    if text.len() != 36 {
+        return None;
+    }
+    let parts: Vec<&str> = text.split('-').collect();
+    let lengths: Vec<usize> = parts.iter().map(|p| p.len()).collect();
+    if lengths != [8, 4, 4, 4, 12] {
+        return None;
+    }
+    let digits = parts.concat();
     digits
         .bytes()
         .all(|b| b.is_ascii_hexdigit())
@@ -400,19 +398,14 @@ fn ip(value: &Value) -> Result<Value, Failure> {
     Ok(json!({ "ip": ip }))
 }
 
-/// An `OperatorDto`: the player, and the permission level (0 to 4) and bypass when given.
+/// An `OperatorDto`: the player, and the permission level (clamped to 0 to 4) and bypass when given.
 fn operator(value: &Value) -> Result<Value, Failure> {
     let Some(dto) = value.get("player") else {
         return Err(invalid_params("No key player"));
     };
     let level = match value.get("permissionLevel") {
         None => None,
-        Some(level) => Some(
-            level
-                .as_i64()
-                .filter(|l| (0..=4).contains(l))
-                .ok_or_else(|| invalid_params(format!("Not a valid permission level: {level}")))?,
-        ),
+        Some(level) => Some(permission_level(level)?),
     };
     let bypass = match value.get("bypassesPlayerLimit") {
         None => None,
@@ -428,8 +421,14 @@ fn operator(value: &Value) -> Result<Value, Failure> {
 fn component(message: &Value) -> Option<Value> {
     if let Some(key) = message["translatable"].as_str() {
         let mut c = json!({ "translate": key });
+        // Vanilla's Message takes its parameters as strings: plain text here too, never a
+        // selector, score or nbt component that tellraw would resolve with the console's rights.
         if let Some(with) = message["translatableParams"].as_array() {
-            c["with"] = Value::Array(with.clone());
+            c["with"] = Value::Array(
+                with.iter()
+                    .map(|p| json!({ "text": p.as_str().unwrap_or_default() }))
+                    .collect(),
+            );
         }
         return Some(c);
     }
@@ -501,6 +500,12 @@ fn management_int(value: &Value) -> Result<i32, Failure> {
             })
     };
     parsed.ok_or_else(|| invalid_params(format!("Not a number: {value}")))
+}
+
+/// `PermissionLevel.INT_CODEC`: `Codec.INT` ([`management_int`]), then `PermissionLevel.byId`, whose `ByIdMap`
+/// clamps to 0 (`ALL`) through 4 (`OWNERS`). Any number is a level; anything else is not.
+fn permission_level(value: &Value) -> Result<i32, Failure> {
+    Ok(management_int(value)?.clamp(0, 4))
 }
 
 /// The running game, through its control endpoint.
@@ -1007,8 +1012,8 @@ impl Game<'_> {
     /// `ServerStateService.status`.
     fn status(&self) -> Value {
         let version = json!({
-            "name": horizon_core::version::VERSION_ID,
-            "protocol": horizon_core::version::PROTOCOL_VERSION,
+            "name": horizon_platform::version::VERSION_ID,
+            "protocol": horizon_platform::version::PROTOCOL_VERSION,
         });
         let players = if self.running() {
             self.online().ok()
@@ -1037,12 +1042,16 @@ impl Game<'_> {
             let Some(name) = self.find(&online, &kick["player"])? else {
                 continue;
             };
+            // The reason ends the control channel's line: a newline in it would be a request of
+            // its own (any console command), which the management protocol never offers.
             let reason = kick.get("message").and_then(component).map(|c| {
                 c["text"]
                     .as_str()
                     .or(c["translate"].as_str())
                     .unwrap_or_default()
-                    .to_owned()
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .collect::<String>()
             });
             let line = match reason {
                 Some(reason) if !reason.is_empty() => format!("kick {name} {reason}"),
@@ -1089,17 +1098,18 @@ impl Game<'_> {
 struct Lists<'a>(&'a Path);
 
 impl Lists<'_> {
-    fn load<E: horizon_server_files::user_lists::Entry>(
+    fn load<E: horizon_platform::server_files::user_lists::Entry>(
         &self,
         file: &str,
-    ) -> horizon_server_files::user_lists::UserList<E> {
-        let mut list = horizon_server_files::user_lists::UserList::new(self.0.join(file));
+    ) -> horizon_platform::server_files::user_lists::UserList<E> {
+        let mut list = horizon_platform::server_files::user_lists::UserList::new(self.0.join(file));
         let _ = list.load();
         list
     }
 
     fn allowlist(&self) -> Value {
-        let list: horizon_server_files::user_lists::WhiteList = self.load("whitelist.json");
+        let list: horizon_platform::server_files::user_lists::WhiteList =
+            self.load("whitelist.json");
         list.entries()
             .iter()
             .map(|e| json!({ "id": uuid(e.user.id), "name": e.user.name }))
@@ -1107,7 +1117,7 @@ impl Lists<'_> {
     }
 
     fn operators(&self) -> Value {
-        let list: horizon_server_files::user_lists::OpList = self.load("ops.json");
+        let list: horizon_platform::server_files::user_lists::OpList = self.load("ops.json");
         list.entries()
             .iter()
             .map(|e| {
@@ -1121,7 +1131,8 @@ impl Lists<'_> {
     }
 
     fn bans(&self) -> Value {
-        let list: horizon_server_files::user_lists::BanList = self.load("banned-players.json");
+        let list: horizon_platform::server_files::user_lists::BanList =
+            self.load("banned-players.json");
         list.entries()
             .iter()
             .map(|b| {
@@ -1132,7 +1143,8 @@ impl Lists<'_> {
     }
 
     fn ip_bans(&self) -> Value {
-        let list: horizon_server_files::user_lists::IpBanList = self.load("banned-ips.json");
+        let list: horizon_platform::server_files::user_lists::IpBanList =
+            self.load("banned-ips.json");
         list.entries()
             .iter()
             .map(|b| ban(("ip", json!(b.user)), &b.reason, &b.source, b.expires))
@@ -1206,8 +1218,11 @@ mod tests {
         let id = |s: &str| player_dto(&serde_json::json!({ "id": s })).map(|(id, _)| id);
         let want = Some(0x0123_4567_89ab_cdef_0123_4567_89ab_cdefu128);
         assert_eq!(id("01234567-89ab-cdef-0123-456789abcdef").unwrap(), want);
-        assert_eq!(id("0123456789abcdef0123456789abcdef").unwrap(), want);
+        assert_eq!(id("01234567-89AB-CDEF-0123-456789ABCDEF").unwrap(), want);
         for bad in [
+            // PlayerDto reads its id with UUIDUtil.STRING_CODEC (UUID.fromString): vanilla answers
+            // `Invalid UUID string` for the 32 undashed digits.
+            "0123456789abcdef0123456789abcdef",
             "abc",
             "1",
             "+123456789abcdef0123456789abcdef",
@@ -1220,6 +1235,19 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn translatable_parameters_are_plain_text() {
+        let message = json!({
+            "translatable": "chat.type.announcement",
+            "translatableParams": ["Server", {"selector": "@e"}, 3],
+        });
+        assert_eq!(
+            component(&message).unwrap(),
+            json!({"translate": "chat.type.announcement",
+                "with": [{"text": "Server"}, {"text": ""}, {"text": ""}]})
+        );
+    }
 
     fn shared() -> std::sync::Arc<Shared> {
         let dir = std::env::temp_dir().join(format!(
@@ -1417,7 +1445,11 @@ status-heartbeat-interval=0
             operator(&json!({ "player": { "name": "Kim0" }, "permissionLevel": 2 })).unwrap(),
             json!({ "player": { "id": null, "name": "Kim0" }, "permissionLevel": 2, "bypassesPlayerLimit": null })
         );
-        assert!(operator(&json!({ "player": { "name": "Kim0" }, "permissionLevel": 5 })).is_err());
+        // PermissionLevel.INT_CODEC clamps (a_permission_level_is_clamped_as_vanillas_codec_reads_it).
+        assert_eq!(
+            operator(&json!({ "player": { "name": "Kim0" }, "permissionLevel": 5 })).unwrap()["permissionLevel"],
+            4
+        );
         assert!(
             operator(&json!({ "player": { "name": "Kim0" }, "bypassesPlayerLimit": 1 })).is_err()
         );
@@ -1437,5 +1469,33 @@ status-heartbeat-interval=0
             json!({ "jsonrpc": "2.0", "id": null, "result": {
                 "started": false, "version": { "name": "26.3", "protocol": 777 } } })
         );
+    }
+
+    /// `PermissionLevel.INT_CODEC` (an `OperatorDto`'s `permissionLevel`, and
+    /// `serversettings/operator_user_permission_level/set`): `Codec.INT`, then `PermissionLevel.byId`, whose
+    /// `ByIdMap` clamps. Vanilla's codec gives 5 and 100 as 4, -1 as 0, 2.7 as 2, and refuses "2".
+    #[test]
+    fn a_permission_level_is_clamped_as_vanillas_codec_reads_it() {
+        for (sent, level) in [
+            (json!(5), 4),
+            (json!(100), 4),
+            (json!(-1), 0),
+            (json!(2.0), 2),
+            (json!(2.7), 2),
+            (json!(4), 4),
+        ] {
+            assert_eq!(permission_level(&sent).unwrap(), level, "{sent}");
+            let op =
+                operator(&json!({ "player": { "name": "Kim" }, "permissionLevel": sent })).unwrap();
+            assert_eq!(op["permissionLevel"], json!(level), "{sent}");
+        }
+        for sent in [json!("2"), json!(true)] {
+            assert!(permission_level(&sent).is_err(), "{sent}");
+            let op = operator(&json!({ "player": { "name": "Kim" }, "permissionLevel": sent }));
+            assert!(op.is_err(), "{sent}");
+        }
+        // No level: the server's default is the game's to fill in.
+        let op = operator(&json!({ "player": { "name": "Kim" } })).unwrap();
+        assert_eq!(op["permissionLevel"], Value::Null);
     }
 }

@@ -39,11 +39,13 @@ pub fn text_with_backdrop(
     background: u32,
 ) {
     if background != 0 {
+        // GuiGraphicsExtractor.textWithBackdrop adds two pixels around the
+        // text's advance and the font's nine-pixel line height.
         out.push(fill(
             x - 2,
             y - 2,
             x + w + 2,
-            y + 9 + 2,
+            y + 11,
             multiply(background, color),
         ));
     }
@@ -583,6 +585,9 @@ pub const BOSS_BAR_STEP: i32 = 10 + 9;
 pub const BOSS_BAR_HEIGHT: i32 = 5;
 /// A boss bar's sprite width, in GUI px; it is centred on the view.
 pub const BOSS_BAR_WIDTH: i32 = 182;
+/// Half the hotbar's width, in GUI px (`Hud`'s `screenWidth / 2 - 91`): the status rows above it
+/// span the same.
+pub const HOTBAR_HALF_WIDTH: i32 = 91;
 
 /// How many of `n` boss bars `BossHealthOverlay.extractRenderState` draws on a view `h` GUI px
 /// tall: it stops once the next bar's top reaches a third of the height (integer division,
@@ -1479,5 +1484,29 @@ mod boss_bar_room_tests {
                 .max();
             assert_eq!(bottom, Some(boss_bars_bottom(h, bars.len())), "height {h}");
         }
+    }
+}
+#[cfg(test)]
+mod backdrop_tests {
+    use super::*;
+
+    /// `GuiGraphicsExtractor.textWithBackdrop`: two pixels around the advance
+    /// and the nine-pixel font line, independently of glyph-background drawing.
+    #[test]
+    fn the_backdrop_frames_the_text_by_two_pixels() {
+        let mut out = Vec::new();
+        text_with_backdrop(
+            &mut out,
+            Text::literal("X"),
+            10,
+            20,
+            6,
+            u32::MAX,
+            0xFF00_0000,
+        );
+        let Some(GuiDraw::Fill { x0, y0, x1, y1, .. }) = out.first() else {
+            panic!("a backdrop is a fill first");
+        };
+        assert_eq!((*x0, *y0, *x1, *y1), (8, 18, 18, 31));
     }
 }

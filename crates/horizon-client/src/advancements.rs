@@ -1517,15 +1517,23 @@ fn predicate_references(
                 .unwrap_or("");
             match &*full(kind) {
                 "minecraft:inverted" => predicate_references(&v["term"], w, active),
-                "minecraft:all_of" | "minecraft:any_of" => v["terms"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
+                "minecraft:all_of" | "minecraft:any_of" => terms(v)
+                    .iter()
                     .try_for_each(|v| predicate_references(v, w, active)),
                 _ => Ok(()),
             }
         }
         _ => Ok(()),
+    }
+}
+
+/// `terms` as `HolderSetCodec` reads it: a list, or one holder alone; a `#tag` is not expanded.
+fn terms(v: &Value) -> &[Value] {
+    match &v["terms"] {
+        Value::Array(list) => list,
+        Value::Null => &[],
+        Value::String(tag) if tag.starts_with('#') => &[],
+        one => std::slice::from_ref(one),
     }
 }
 
@@ -1547,16 +1555,8 @@ pub fn conditions_with(
                 .unwrap_or("");
             match &*full(ty) {
                 "minecraft:inverted" => !conditions_with(&v["term"], ctx, test),
-                "minecraft:all_of" => v["terms"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .all(|t| conditions_with(t, ctx, test)),
-                "minecraft:any_of" => v["terms"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .any(|t| conditions_with(t, ctx, test)),
+                "minecraft:all_of" => terms(v).iter().all(|t| conditions_with(t, ctx, test)),
+                "minecraft:any_of" => terms(v).iter().any(|t| conditions_with(t, ctx, test)),
                 _ => test(v, ctx),
             }
         }
@@ -1989,13 +1989,13 @@ mod tests {
     }
     /// The criteria an inventory change and a recipe unlock test, on vanilla's tree:
     /// `cargo test -p horizon-client --lib -- --ignored --nocapture index_on_vanilla_tree`
-    /// with HORIZON_RESOURCES set to the prepared resources.
+    /// with HORIZON_TEST_RESOURCES set to the prepared resources.
     #[test]
-    #[ignore = "needs the prepared resources"]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn index_on_vanilla_tree() {
-        let Some(root) = std::env::var_os("HORIZON_RESOURCES").map(std::path::PathBuf::from) else {
-            return;
-        };
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
         let data = root.join("data");
         let t = std::time::Instant::now();
         let tree = Tree::load(&data);

@@ -9,6 +9,7 @@ use horizon_client::{
     collisions::SceneCollisions,
 };
 use horizon_client::{
+    entities::nameplate::NameplateDistances,
     hud::HudBatch,
     mobs::{Anim, Brain, Mob, MobType},
     mouse::Rotation,
@@ -280,18 +281,18 @@ impl Game<'_> {
     /// front of) it, pulled in where visual shapes are in the way. Returns the
     /// position, yaw and pitch to render from.
     pub(super) fn camera_view(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32)> {
-        if self.studio_freecam.active {
+        if self.studio.flying() {
             return Some((
-                self.studio_freecam.position,
-                self.studio_freecam.yaw,
-                self.studio_freecam.pitch,
+                self.studio.freecam.position,
+                self.studio.freecam.yaw,
+                self.studio.freecam.pitch,
             ));
         }
         // Minecraft.cameraEntity: a server's spectator camera on a mob or
         // another player.
-        let (entity, descending, entity_kind) = match self.camera_mob() {
-            Some(m) => (
-                super::remote_camera::mob_camera_entity(m),
+        let (entity, descending, entity_kind) = match self.camera_entity() {
+            Some(e) => (
+                e,
                 false,
                 horizon_world::collision_context::EntityContextKind::Living,
             ),
@@ -311,8 +312,8 @@ impl Game<'_> {
             }
         };
         let mut view = self.view;
-        // An emote pulls the camera back from the player's face (`game/emotes.rs`).
-        let pull = self.emote_camera_pull(partial);
+        // A hook may pull the camera back (an emote, from the player's face).
+        let pull = self.hooks_camera_distance(partial);
         let kind = match self.camera_type {
             CameraType::FirstPerson => horizon_client::camera::CameraType::FirstPerson,
             CameraType::ThirdPersonBack => horizon_client::camera::CameraType::ThirdPersonBack,
@@ -365,6 +366,17 @@ impl Game<'_> {
             view.y_rot,
             view.x_rot,
         ))
+    }
+    /// `Camera.rotation()` as the quads of particles take it: the frame's camera (a
+    /// bed's, a front view's, a mod's), not the player's own yaw and pitch.
+    pub(super) fn particle_rotation(&self) -> glam::Quat {
+        if self.studio.flying() {
+            return self.camera_orientation();
+        }
+        let (yaw, pitch) = self
+            .posed_rotation
+            .unwrap_or((self.view.y_rot, self.view.x_rot));
+        super::camera_rotation(CameraType::FirstPerson, yaw, pitch)
     }
     /// The player as `Camera.alignWithEntity` sees it.
     fn player_camera_entity(&mut self) -> Option<CameraEntity> {
@@ -449,11 +461,17 @@ impl Game<'_> {
     /// Keep the player's model in step with the player (`LivingEntity.tick`
     /// body turning, `WalkAnimationState`, the swing and the pose).
     pub(super) fn tick_player_model(&mut self) {
-        let scale = self
-            .player
-            .as_mut()
-            .and_then(|p| p.attribute("minecraft:scale").ok())
-            .unwrap_or(1.0) as f32;
+        let (scale, nameplate) = self.player.as_mut().map_or_else(
+            || (1.0, NameplateDistances::default()),
+            |p| {
+                let scale = p.attribute("minecraft:scale").unwrap_or(1.0) as f32;
+                let nameplate = NameplateDistances {
+                    name_tag: p.attribute("minecraft:name_tag_distance").ok(),
+                    below_name: p.attribute("minecraft:below_name_distance").ok(),
+                };
+                (scale, nameplate)
+            },
+        );
         let Some(p) = self.player.as_ref() else {
             self.player_model = None;
             return;
@@ -516,6 +534,7 @@ impl Game<'_> {
         };
         m.extra.ints[1] = bed;
         m.extra.model_scale = scale;
+        m.set_nameplate(nameplate);
         // The crouch flag is still last tick's here.
         let (from, at) =
             player_model_positions(previous_position, position, m.extra.crouching, crouching);
@@ -643,8 +662,9 @@ impl Game<'_> {
     /// The model's old pitch is the player's `xRotO`, which the turn moves
     /// with `xRot` (`turn_rotation`).
     pub(super) fn turn_player(&mut self, xo: f64, yo: f64) {
-        if self.studio_freecam.active {
-            self.studio_freecam
+        if self.studio.flying() {
+            self.studio
+                .freecam
                 .turn((xo * 0.15) as f32, (yo * 0.15) as f32);
             return;
         }
@@ -697,7 +717,7 @@ impl Game<'_> {
     /// `LevelExtractor`'s skip of the camera entity: the player's own body
     /// is drawn unless the camera is in first person, or while it sleeps.
     pub(super) fn own_body_in_view(&self) -> bool {
-        !self.camera_type.first_person() || self.sleeping.is_some() || self.studio_freecam.active
+        !self.camera_type.first_person() || self.sleeping.is_some() || self.studio.flying()
     }
     /// Whether the player's own model shows in the world view (its body or,
     /// while invisible, only its armour and held items).
@@ -800,19 +820,8 @@ impl Game<'_> {
                 packed,
                 out,
             );
-            if super::cosmetics::enabled() {
-                let base = horizon_client::mobs::render::base_transform(m, alpha as f32, camera);
-                self.cosmetics_geometry(
-                    m,
-                    true,
-                    base,
-                    Some(camera),
-                    alpha as f32,
-                    packed,
-                    false,
-                    out,
-                );
-            }
+            let world = horizon_hooks::players::Pass::World;
+            self.own_layers_geometry(m, world, camera, alpha as f32, packed, out);
             self.player_elytra_geometry(m, chest, camera, alpha as f32, packed, out);
             self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
             self.shoulder_parrots_geometry(m, camera, alpha as f32, packed, out);
@@ -926,10 +935,8 @@ impl Game<'_> {
             240 | 240 << 8,
             &mut verts,
         );
-        if super::cosmetics::enabled() {
-            let base = horizon_client::mobs::render::base_transform(&m, 1.0, camera);
-            self.cosmetics_geometry(&m, true, base, None, 1.0, 240 | 240 << 8, false, &mut verts);
-        }
+        let picture = horizon_hooks::players::Pass::Picture;
+        self.own_layers_geometry(&m, picture, camera, 1.0, 240 | 240 << 8, &mut verts);
         // `WingsLayer` draws through `RenderTypes.armorCutoutNoCull`: the
         // wings' faces show from both sides (the elytra texture is empty on
         // the face that looks at the body).

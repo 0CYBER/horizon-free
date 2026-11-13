@@ -33,6 +33,18 @@ pub(super) fn chat_tree(
         None => horizon_client::command::vanilla::game_dispatcher(),
     }
 }
+/// The arguments of a typed `/profiler` the client answers itself: only when the chat tree's `profiler` is Horizon's, else the server or mod that owns the name runs it.
+fn horizon_profiler_args<'a>(
+    message: &'a str,
+    server_tree: Option<&horizon_client::command::Dispatcher>,
+) -> Option<&'a str> {
+    let args = message
+        .strip_prefix('/')
+        .and_then(super::profile_capture::profiler_args)?;
+    server_tree
+        .is_none_or(|tree| tree.has_horizon_profiler())
+        .then_some(args)
+}
 use winit::{
     event::KeyEvent,
     keyboard::{KeyCode, PhysicalKey},
@@ -155,7 +167,7 @@ impl Game<'_> {
             Some(tree) => tree,
             None => horizon_client::command::vanilla::game_dispatcher(),
         };
-        with_studio_commands(&with_native_commands(base, &names))
+        with_studio_commands(&with_native_commands(base, &names)).with_profiler()
     }
 }
 
@@ -255,8 +267,8 @@ pub struct UiState {
     /// What this frame's HUD shows that Horizon's overlays keep clear of (`Game::hud_room`),
     /// set by `hud_layers` before anything draws.
     pub room: horizon_client::hud_kit::room::Room,
-    /// Path of an F2 screenshot waiting for its frame.
-    pub screenshot_message: Option<std::path::PathBuf>,
+    /// F2 screenshots not written yet: each reports in chat once its PNG is.
+    pub screenshot_messages: Vec<std::path::PathBuf>,
     /// The options screens.
     pub options: horizon_client::options_ui::OptionsUi,
     /// The prepared resources before resource packs are layered on.
@@ -1278,7 +1290,7 @@ impl Game<'_> {
         let ctrl = self.has_control_down_with_quirk();
         let shift = self.has_shift_down();
         // PvP & HUD's chat search: Ctrl+F starts and stops it, Enter stops it (sends nothing).
-        if self.settings.extras.pvp.chat.search
+        if self.pvp_chat().search
             && match key {
                 KeyCode::KeyF => ctrl,
                 KeyCode::Enter | KeyCode::NumpadEnter => self.pvp.chat_search,
@@ -1403,6 +1415,12 @@ impl Game<'_> {
             return;
         }
         self.ui.chat.add_recent(&message);
+        if let Some(args) =
+            horizon_profiler_args(&message, self.remote.as_ref().map(|r| &r.chat_tree))
+        {
+            self.profiler_chat(args);
+            return;
+        }
         // On a server (single player's own included) the server runs it,
         // unless a client mod owns the command.
         if self.remote.is_some() {
@@ -1487,7 +1505,7 @@ impl Game<'_> {
             cursor.1 as f64,
         );
         // PvP & HUD's copy on click: a message where the click has nothing else to do.
-        if self.settings.extras.pvp.chat.copy
+        if self.pvp_chat().copy
             && !self.has_shift_down()
             && style.as_ref().is_none_or(|s| s.click.is_none())
             && let Some(message) =
@@ -1530,6 +1548,14 @@ impl Game<'_> {
                 }
             }
             Some(ClickEvent::RunCommand(command)) => self.click_command(&command),
+            Some(ClickEvent::Profiler(command)) => {
+                if let Some(args) = command
+                    .strip_prefix('/')
+                    .and_then(super::profile_capture::profiler_args)
+                {
+                    self.profiler_chat(args);
+                }
+            }
             // Screen.defaultHandleGameClickEvent: the dialog opens over the
             // screen, and closes back to it.
             Some(ClickEvent::ShowDialog(dialog)) => self.show_dialog_ref(&dialog),
@@ -1665,7 +1691,7 @@ impl Game<'_> {
     /// Chat lines over the HUD (focused while the chat screen is open).
     pub(super) fn draw_chat(&mut self, batch: &mut HudBatch) {
         let focused = self.screen == Screen::Chat;
-        let options = self.settings.extras.pvp.chat;
+        let options = self.pvp_chat();
         self.ui.chat.set_qol(&self.gui.atlas, options.qol());
         // A search ends with its option; a chat closed some other way ends it in keep_chat_draft.
         if self.pvp.chat_search && self.ui.chat_screen.is_none() {
@@ -1982,15 +2008,17 @@ impl Game<'_> {
         if std::fs::create_dir_all(&dir).is_err() {
             return None;
         }
-        let name = screenshot_name(&dir);
+        // A screenshot still being written has no file yet: its name is taken all the same.
+        let name = screenshot_name(&dir, &self.ui.screenshot_messages);
         let renderer = self.renderer.as_mut()?;
         let path = dir.join(name);
         renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
             path: path.clone(),
             size: None,
             scaled: true,
+            background: true,
         });
-        self.ui.screenshot_message = Some(path.clone());
+        self.ui.screenshot_messages.push(path.clone());
         Some(path)
     }
     /// `Minecraft.handleGlobalKeyPress`'s screenshot branch: the
@@ -2014,12 +2042,23 @@ impl Game<'_> {
         self.take_screenshot();
         true
     }
-    /// After a frame: report a finished F2 screenshot in chat.
-    pub(super) fn finish_screenshot(&mut self, result: &std::result::Result<[u32; 2], String>) {
-        let Some(path) = self.ui.screenshot_message.take() else {
+    /// A screenshot written on its thread: F2's reports in chat. Any other was the world
+    /// icon's (`tick_world_icon`): a failure tries again a second later, as
+    /// `tryTakeScreenshotIfNeeded` does.
+    pub(super) fn finish_screenshot(&mut self, saved: horizon_client::gfx::SavedScreenshot) {
+        let Some(at) = self
+            .ui
+            .screenshot_messages
+            .iter()
+            .position(|p| *p == saved.path)
+        else {
+            if let Err(error) = saved.result {
+                log::warn!("Horizon: couldn't save the world icon: {error}");
+            }
             return;
         };
-        let message = match result {
+        let path = self.ui.screenshot_messages.remove(at);
+        let message = match &saved.result {
             Ok(_) => {
                 log::info!("Saved screenshot to {}", path.display());
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -2055,7 +2094,7 @@ fn chat_box_text(text: &str) -> String {
         .filter(|&ch| ch >= ' ' && ch != '\u{7f}' && ch != '§')
         .collect()
 }
-pub fn screenshot_name(dir: &std::path::Path) -> String {
+pub fn screenshot_name(dir: &std::path::Path, pending: &[std::path::PathBuf]) -> String {
     // Util.getFilenameFormattedDateTime: the local date and time.
     let base = chrono::Local::now().format("%Y-%m-%d_%H.%M.%S").to_string();
     let mut n = 1;
@@ -2065,7 +2104,8 @@ pub fn screenshot_name(dir: &std::path::Path) -> String {
         } else {
             format!("{base}_{n}.png")
         };
-        if !dir.join(&name).exists() {
+        let path = dir.join(&name);
+        if !path.exists() && !pending.contains(&path) {
             return name;
         }
         n += 1;
@@ -2086,6 +2126,29 @@ const LINK_COPY: usize = 1;
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_typed_profiler_is_the_clients_unless_the_server_owns_the_name() {
+        let vanilla = horizon_client::command::vanilla::game_dispatcher();
+        let ours = vanilla.with_profiler();
+        assert_eq!(
+            super::horizon_profiler_args("/profiler share", Some(&ours)),
+            Some(" share")
+        );
+        assert_eq!(super::horizon_profiler_args("/profiler", None), Some(""));
+        assert_eq!(
+            super::horizon_profiler_args("/profilers", Some(&ours)),
+            None
+        );
+        let mut server = vanilla.clone();
+        let node = server.literal(0, "profiler");
+        server.executes(node, "server:profiler");
+        let theirs = server.with_profiler();
+        assert_eq!(
+            super::horizon_profiler_args("/profiler share", Some(&theirs)),
+            None
+        );
+    }
+
     /// A mod's text reaches the chat box as typing would leave it: emoji and
     /// accents stay, control characters, DEL and the section sign go.
     #[test]
@@ -2105,6 +2168,25 @@ mod tests {
         assert!(should_discard_draft(ChatExit::Intentional, false));
         assert!(!should_discard_draft(ChatExit::Intentional, true));
         assert!(should_discard_draft(ChatExit::Done, true));
+    }
+
+    /// `Screenshot.getFile` picks the first free name of the second; an F2
+    /// screenshot still being written on its thread has no file yet, so a
+    /// second press in the same second takes the next name, not the same one.
+    #[test]
+    fn a_screenshot_being_written_keeps_its_name() {
+        let dir = std::env::temp_dir().join(format!("horizon-shots-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = screenshot_name(&dir, &[]);
+        let second = screenshot_name(&dir, &[dir.join(&first)]);
+        assert_ne!(first, second);
+        // Unless the clock turned to the next second in between.
+        let same_second = second.starts_with(first.trim_end_matches(".png"));
+        assert!(
+            !same_second || second == first.replace(".png", "_2.png"),
+            "{second}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -2661,7 +2743,7 @@ mod damage_type_registry_tests {
         let pack = dir.join("datapacks/model");
         let types = pack.join("data/example/damage_type");
         std::fs::create_dir_all(&types).unwrap();
-        std::fs::write(pack.join("pack.mcmeta"), "{}").unwrap();
+        std::fs::write(pack.join("pack.mcmeta"), r#"{"pack":{"description":""}}"#).unwrap();
         std::fs::write(
             types.join("test.json"),
             r#"{"message_id":"example.test","scaling":"never","exhaustion":0.0}"#,

@@ -444,7 +444,13 @@ impl Animation {
     }
 
     /// `run` for the entity `id` in the frame `counter`, whose parameters `fill` writes.
-    fn run_with(&self, id: u32, counter: u32, fill: impl FnOnce(&mut [f32]), poses: &mut Poses) {
+    pub(super) fn run_with(
+        &self,
+        id: u32,
+        counter: u32,
+        fill: impl FnOnce(&mut [f32]),
+        poses: &mut Poses,
+    ) {
         let preview = IN_GUI.get();
         SLOTS.with_borrow_mut(|slots| {
             slots.clear();
@@ -617,8 +623,14 @@ fn params(m: &Mob, s: &State, frame: &Frame, rule_index: f32, slots: &mut [f32])
             PosX => m.position.x as f32,
             PosY => m.position.y as f32,
             PosZ => m.position.z as f32,
-            RotX => m.head_pitch,
-            RotY => m.body_yaw,
+            // EMF's getEntityRX/RY: radians, lerped within the tick (`Mth.rotLerp`) from the
+            // pitch and the body yaw. A pack's turn-in-place counter-rotation reads it.
+            RotX => (m.previous_head_pitch
+                + super::living::wrap(m.head_pitch - m.previous_head_pitch) * s.partial)
+                .to_radians(),
+            RotY => (m.previous_body_yaw
+                + super::living::wrap(m.body_yaw - m.previous_body_yaw) * s.partial)
+                .to_radians(),
             Id => m.id as f32,
             // OptiFine's `time` loops at 27720 ticks to keep float precision.
             Time => (frame.time % 27720.0) as f32,
@@ -630,8 +642,9 @@ fn params(m: &Mob, s: &State, frame: &Frame, rule_index: f32, slots: &mut [f32])
             PlayerX => frame.player[0] as f32,
             PlayerY => frame.player[1] as f32,
             PlayerZ => frame.player[2] as f32,
-            PlayerRotX => frame.player_rot[0],
-            PlayerRotY => frame.player_rot[1],
+            // EMF's getPlayerRX/RY: radians too.
+            PlayerRotX => frame.player_rot[0].to_radians(),
+            PlayerRotY => frame.player_rot[1].to_radians(),
             // The model's matching random-model rule (`optifine/cem/<name>.properties`),
             // whose number the animations read: a grazing cow reads 2.
             RuleIndex => rule_index,
@@ -677,7 +690,7 @@ fn params(m: &Mob, s: &State, frame: &Frame, rule_index: f32, slots: &mut [f32])
                 super::Species::Fox => super::fox::flag(m, super::fox::SITTING),
                 super::Species::Panda => super::panda::is_sitting(m),
                 super::Species::Camel | super::Species::CamelHusk => super::camel::sitting(m),
-                _ => m.extra.sitting,
+                _ => m.extra.sitting_pose,
             }),
             Tamed => flag(m.extra.tame),
             Sprinting => flag(m.extra.sprinting),
@@ -984,7 +997,7 @@ mod tests {
     fn the_flags_come_from_the_synced_mob_fields() {
         let mut m = mob();
         m.ai.aggressive = true;
-        m.extra.sitting = true;
+        m.extra.sitting_pose = true;
         m.extra.tame = true;
         m.extra.sprinting = true;
         m.extra.crouching = true;
@@ -1018,6 +1031,24 @@ mod tests {
             poses.get("root")[0],
             (31 + 64 + 128 + 256 + 512 + 2048 + 8192 + 16384) as f32
         );
+    }
+
+    /// EMF's `rot_x`/`rot_y`: radians, lerped within the tick the short way round. A body
+    /// turning from 170 to -170 degrees reads 180 halfway, not -0.
+    #[test]
+    fn rot_y_and_rot_x_are_lerped_radians() {
+        let mut m = mob();
+        (m.previous_body_yaw, m.body_yaw) = (170.0, -170.0);
+        (m.previous_head_pitch, m.head_pitch) = (10.0, 30.0);
+        let model = bone("root", vec![]);
+        let animation = animate(&model, &[("root.tx", "rot_y"), ("root.ty", "rot_x")]);
+        let mut s = still();
+        s.partial = 0.5;
+        let mut poses = Poses::new(&model);
+        animation.run_in(&Frame::default(), &m, &s, &mut poses);
+        let [x, y] = [poses.get("root")[0], poses.get("root")[1]];
+        assert!((x - std::f32::consts::PI).abs() < 1e-4, "rot_y read {x}");
+        assert!((y - 20f32.to_radians()).abs() < 1e-4, "rot_x read {y}");
     }
 
     #[test]

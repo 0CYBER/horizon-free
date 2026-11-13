@@ -50,6 +50,11 @@ fn readiness_ms(mark: &AtomicU32) -> Option<u32> {
     (ms != u32::MAX).then_some(ms)
 }
 
+/// The adapter's name, once the renderer has one.
+pub fn gpu_name() -> Option<String> {
+    crate::gfx::adapter().map(|gpu| gpu.name)
+}
+
 /// The screen the window is on: size in physical pixels, refresh rate, scale.
 pub fn set_display(width: u32, height: u32, refresh_hz: u32, scale: f64) {
     *DISPLAY.lock().unwrap_or_else(|e| e.into_inner()) = Some(Display {
@@ -60,28 +65,10 @@ pub fn set_display(width: u32, height: u32, refresh_hz: u32, scale: f64) {
     });
 }
 
-/// The screen `window` is on, else the primary one, else the only one: right after the window
-/// is made, Wayland doesn't say yet which screen it is on.
-pub fn monitor(window: &winit::window::Window) -> Option<winit::monitor::MonitorHandle> {
-    let only = || {
-        let mut all = window.available_monitors();
-        all.next().filter(|_| all.next().is_none())
-    };
-    window
-        .current_monitor()
-        .or_else(|| window.primary_monitor())
-        .or_else(only)
-}
-
-/// Keeps [`monitor`]'s size, refresh rate and scale for the items' `system.display`.
+/// Keeps the screen `window` is on ([`crate::window::display`]) for the items' `system.display`.
 pub fn note_display(window: &winit::window::Window) {
-    if let Some(m) = monitor(window) {
-        set_display(
-            m.size().width,
-            m.size().height,
-            m.refresh_rate_millihertz().map_or(0, |r| r.div_ceil(1000)),
-            m.scale_factor(),
-        );
+    if let Some(d) = crate::window::display(window) {
+        set_display(d.width, d.height, d.refresh_hz.unwrap_or(0), d.scale);
     }
 }
 

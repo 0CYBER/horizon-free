@@ -681,11 +681,28 @@ pub(super) fn level_shapes(
         .collect();
     let mut shapes = LevelShapes::VANILLA;
     if enabled.is_empty() {
+        horizon_world::level::set_sea_levels(Vec::new());
         return shapes;
     }
     // What the packs leave out is logged when the generator reads them.
     let (overrides, _) =
         horizon_client::datapack::worldgen_overrides(&enabled, |b| biomes.contains(b));
+    // The sea levels of the noise settings the packs replace, for this world only.
+    horizon_world::level::set_sea_levels(
+        [
+            "minecraft:overworld",
+            "minecraft:the_nether",
+            "minecraft:the_end",
+        ]
+        .into_iter()
+        .filter_map(|level| {
+            Some((
+                horizon_core::LevelKey::builtin_or_overworld(level),
+                overrides.level_sea_level(level)?,
+            ))
+        })
+        .collect(),
+    );
     for level in [
         "minecraft:overworld",
         "minecraft:the_nether",
@@ -804,6 +821,17 @@ pub(super) fn make_streaming(
             }
         }
     });
+    // The level's sea level is its generator's (`ChunkGenerator.getSeaLevel`); a superflat
+    // generator's is -63 (`FlatLevelSource.getSeaLevel`).
+    let register_sea_level = |sea_level: i32| {
+        horizon_world::level::register_sea_level(
+            horizon_core::LevelKey::builtin_or_overworld(dim.id()),
+            sea_level,
+        );
+    };
+    if flat.is_some() || flat_vanilla.is_some() {
+        register_sea_level(-63);
+    }
     let mut streaming = if let Some(inner) = debug {
         Streaming::new(
             Arc::new(Persistent {
@@ -888,7 +916,13 @@ pub(super) fn make_streaming(
                 }
             })?;
         inner.add_mod_signs(res.facts());
+        register_sea_level(inner.sea_level());
         let inner = Arc::new(inner);
+        // The first mob a fresh chunk generates needs the mob data: read it now,
+        // off the server's tick (#13857). The End's chunks generate none.
+        if dim != Dim::End {
+            inner.load_structure_mobs_behind();
+        }
         if dim == Dim::Overworld && structures {
             inner.search_rings_behind();
         }
@@ -940,8 +974,12 @@ pub(super) fn make_streaming(
         .horizon
         .leaf_culling_effective(&settings.resource_packs);
     streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
-    streaming.sky_light = dim != Dim::Nether;
-    streaming.nether_shading = dim == Dim::Nether;
+    let facts = horizon_world::dimension_type::DimensionFacts::of_builtin_level(
+        horizon_core::LevelKey::builtin_or_overworld(dim.id()),
+    );
+    streaming.sky_light = facts.height.has_skylight;
+    streaming.nether_shading =
+        facts.cardinal_light == horizon_world::dimension_type::CardinalLight::Nether;
     // A server draws nothing: neither the integrated server nor the
     // dedicated one meshes sections.
     streaming.mesh = options.execution_role.is_client();

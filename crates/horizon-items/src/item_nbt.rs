@@ -4,7 +4,8 @@ use horizon_client_core::nbt_value::{number, string, text};
 use horizon_world::nbt::Tag;
 use std::sync::Arc;
 
-/// The two measured saved forms of `BlockPredicate.CODEC`. Operate only on
+/// The two measured saved forms of `BlockPredicate.CODEC`, and the `Identifier`s
+/// of `attribute_modifiers` written whole. Operate only on
 /// the fresh ItemStack save, never its model or the shared live component view.
 fn canonical_saved_adventure_predicates(components: &mut Tag) {
     fn predicate(value: &mut Tag) {
@@ -38,6 +39,20 @@ fn canonical_saved_adventure_predicates(components: &mut Tag) {
             Some(Tag::List(predicates)) => predicates.iter_mut().for_each(predicate),
             Some(value) => predicate(value),
             None => {}
+        }
+    }
+    // `Attribute.CODEC` and `Identifier.CODEC` read a bare name as `minecraft:`'s
+    // and write it back whole, so a stack given `attack_damage` saves as
+    // `minecraft:attack_damage` (#14641).
+    if let Some(Tag::List(entries)) = components.get_mut("minecraft:attribute_modifiers") {
+        for entry in entries.iter_mut() {
+            for key in ["type", "id"] {
+                if let Some(Tag::String(name)) = entry.get_mut(key) {
+                    let named =
+                        horizon_world::datafix::dynamic::namespaced(&name.to_string_lossy());
+                    *name = named.as_str().into();
+                }
+            }
         }
     }
 }
@@ -470,6 +485,45 @@ mod h285_saved_adventure_tests {
                 .get("minecraft:can_break"),
             Some(&raw),
             "retained source gap, not a Java parity assertion"
+        );
+    }
+    /// `Attribute.CODEC` and `Identifier.CODEC` save a bare name as
+    /// `minecraft:`'s: vanilla's `/item replace` of `type:"attack_damage"`
+    /// saves `type:"minecraft:attack_damage"` (checked against the 26.3 server
+    /// by `test_builtin_component_delivery_parity`, #14641).
+    #[test]
+    fn a_bare_attribute_and_modifier_name_save_namespaced() {
+        let entry = |attribute: &str, id: &str| {
+            parse(&format!(
+                r#"{{type:"{attribute}",id:"{id}",amount:20.0d,operation:"add_value",slot:"mainhand"}}"#
+            ))
+        };
+        let mut stack = ItemStack::new("minecraft:iron_pickaxe", 1);
+        stack.data_mut().set_other(
+            "minecraft:attribute_modifiers",
+            Some(Tag::List(vec![
+                entry("attack_damage", "base_attack_damage"),
+                entry("minecraft:armor", "mod:x"),
+            ])),
+        );
+        let saved = item_to_nbt(&stack);
+        assert_eq!(
+            saved
+                .get("components")
+                .unwrap()
+                .get("minecraft:attribute_modifiers"),
+            Some(&Tag::List(vec![
+                entry("minecraft:attack_damage", "minecraft:base_attack_damage"),
+                entry("minecraft:armor", "mod:x"),
+            ]))
+        );
+        // The live stack keeps what it was given: only the save is canonical.
+        assert_eq!(
+            stack.data().unwrap().other("minecraft:attribute_modifiers"),
+            Some(&Tag::List(vec![
+                entry("attack_damage", "base_attack_damage"),
+                entry("minecraft:armor", "mod:x"),
+            ]))
         );
     }
 }

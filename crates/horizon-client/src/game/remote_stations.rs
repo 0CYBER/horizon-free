@@ -67,6 +67,16 @@ impl Game<'_> {
             menu.set_slot(env, i, stack);
             Some(true)
         });
+        if internal == super::stations::INPUT
+            && let Some(s) = self
+                .station
+                .as_mut()
+                .filter(|s| s.kind == Kind::Stonecutter)
+        {
+            // The client menu's `Slot.set` on the input runs the screen's
+            // listener (`StonecutterMenu.container.setChanged`).
+            s.stonecutter_changed();
+        }
         // AnvilScreen.slotChanged: the box shows the new input's name, which
         // its responder sends.
         self.remote_anvil_rename();

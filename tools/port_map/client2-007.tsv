@@ -25,7 +25,7 @@ ParticleDescription.fromJson	port	crates/horizon-client-render/src/particles.rs:
 ParticleEngine.makeParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	every provider arm; a VibrationSignal option has to carry its destination, and ParticleEngine::vibration is the client's own spawner
 ParticleEngine.createParticleGroup	skip:other		no render-type groups: ParticleEngine::render draws every particle in one pass, and the ITEM_PICKUP group is tick_pickups
 ParticleEngine.countParticles	skip:debug		
-ParticleEngine.hasSpaceInParticleLimit	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::create	the only capped type is `ParticleLimit.SPORE_BLOSSOM`: a spore blossom air particle past `SPORE_BLOSSOM_LIMIT` (1000) is dropped in `create`, counted by scanning the live and queued particles instead of vanilla's counted map
+ParticleEngine.hasSpaceInParticleLimit	port	crates/horizon-client-render/src/particles/spawn.rs::ParticleEngine::create	the only capped type is `ParticleLimit.SPORE_BLOSSOM`: a spore blossom air particle past `SPORE_BLOSSOM_LIMIT` (1000) is dropped in `create`, counted by scanning the live and queued particles instead of vanilla's counted map
 ParticleEngine.clearParticles	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::clear	clears emitters, live and pending particles; no limit counts to clear
 ParticleGroup.tickParticles	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::tick	ticks live particles and drops the removed ones
 ParticleGroup.tickParticle	skip:debug		crash-report wrapper around particle.tick
@@ -43,7 +43,7 @@ PortalParticle.getQuadSize	port	crates/horizon-client-render/src/particles.rs::P
 PortalParticle.getLightCoords	port	crates/horizon-client-render/src/particles.rs::Particle::light_coords	Light::AgeEmission4: block light plus age^4 emission
 PortalParticle.tick	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::tick_particle	Behaviour::Portal: eases from the start point along the velocity
 PortalParticle.Provider.createParticle	inline	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	Portal arm
-QuadParticleGroup.extractRenderState	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::render	gap: minor: no frustum point test; every live particle is drawn
+QuadParticleGroup.extractRenderState	port	crates/horizon-client-render/src/particles/view_cull.rs::ParticleEngine::render_in_view	the frustum point test on each particle's position this tick, on the frustum pulled back 3 blocks
 ReversePortalParticle.getQuadSize	port	crates/horizon-client-render/src/particles.rs::Particle::quad_size	Size::ReversePortal
 ReversePortalParticle.tick	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::tick_particle	Behaviour::ReversePortal
 ReversePortalParticle.ReversePortalProvider.createParticle	inline	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	ReversePortal branch of the Portal arm

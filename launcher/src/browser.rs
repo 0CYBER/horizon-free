@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 /// The Minecraft version Horizon plays: the pinned version, so a port's regenerated
 /// `crates/horizon-core/src/version.rs` moves it with everything else (docs/version-ports.md).
-pub const GAME: &str = horizon_core::version::VERSION_ID;
+pub const GAME: &str = horizon_platform::version::VERSION_ID;
 
 /// What a project is, as far as Horizon is concerned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -440,7 +440,26 @@ pub fn safe_name(name: &str) -> Option<&str> {
         && name.chars().all(|c| {
             !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
         });
-    ok.then_some(name)
+    // Windows opens a device for CON, NUL.jar, COM1.zip and so on, whatever follows the first dot.
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|port| {
+            stem.strip_prefix(port).is_some_and(|n| {
+                let mut digits = n.chars();
+                matches!(digits.next(), Some('0'..='9' | '¹' | '²' | '³'))
+                    && digits.next().is_none()
+            })
+        });
+    // Bidirectional and invisible marks that make a shown name read as another.
+    let disguised = name.chars().any(|c| {
+        matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+    });
+    (ok && !device && !disguised).then_some(name)
 }
 
 #[cfg(test)]

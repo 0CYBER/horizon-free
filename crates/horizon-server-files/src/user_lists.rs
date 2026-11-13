@@ -89,18 +89,7 @@ pub fn parse_date(s: &str) -> Option<i64> {
     }
     let (y, mo, da) = (num(d[0])?, num(d[1])?, num(d[2])?);
     let (h, mi, se) = (num(t[0])?, num(t[1])?, num(t[2])?);
-    let zone = zone.trim();
-    let sign = match zone.as_bytes().first()? {
-        b'+' => 1,
-        b'-' => -1,
-        _ => return None,
-    };
-    let digits = &zone[1..];
-    if digits.len() != 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let offset =
-        sign * (digits[..2].parse::<i64>().ok()? * 60 + digits[2..].parse::<i64>().ok()?);
+    let offset = zone_offset(zone.trim_start())?;
     // Lenient month and day arithmetic, checked: the file is edited by hand, and a value past what
     // milliseconds since 1970 hold is no date (None, as an unparsable one) rather than a wrapped one.
     let months = y.checked_mul(12)?.checked_add(mo.checked_sub(1)?)?;
@@ -119,6 +108,47 @@ pub fn parse_date(s: &str) -> Option<i64> {
         .checked_add(se)?
         .checked_sub(offset * 60)?;
     seconds.checked_mul(1000)
+}
+
+/// The `Z` field of that lenient parse, in minutes east of UTC: `+hhmm` / `-hhmm` (exactly four digits,
+/// hours to 23, minutes to 59), `GMT` alone or `GMT+h:mm` / `GMT-hh:mm`, or `UTC`, the names in any case.
+/// What follows the zone is left unread, as `DateFormat.parse(String)` leaves it. Other zone names
+/// (`EST`...) are not read here.
+fn zone_offset(zone: &str) -> Option<i64> {
+    let digits = |text: &str| text.bytes().all(|b| b.is_ascii_digit());
+    let minutes_east = |sign: &str, hours: &str, minutes: &str| -> Option<i64> {
+        let (h, m) = (hours.parse::<i64>().ok()?, minutes.parse::<i64>().ok()?);
+        (h <= 23 && m <= 59).then_some(if sign == "-" {
+            -(h * 60 + m)
+        } else {
+            h * 60 + m
+        })
+    };
+    let name = zone.get(..3).unwrap_or_default();
+    if name.eq_ignore_ascii_case("utc") {
+        return Some(0);
+    }
+    if name.eq_ignore_ascii_case("gmt") {
+        let rest = &zone[3..];
+        let Some(sign @ ("+" | "-")) = rest.get(..1) else {
+            return Some(0);
+        };
+        // `h:mm` or `hh:mm`.
+        let (hours, after) = rest[1..].split_once(':')?;
+        let minutes = after.get(..2)?;
+        if !matches!(hours.len(), 1 | 2) || !digits(hours) || !digits(minutes) {
+            return None;
+        }
+        return minutes_east(sign, hours, minutes);
+    }
+    let sign @ ("+" | "-") = zone.get(..1)? else {
+        return None;
+    };
+    let hhmm = zone.get(1..5)?;
+    if !digits(hhmm) {
+        return None;
+    }
+    minutes_east(sign, &hhmm[..2], &hhmm[2..])
 }
 
 /// One list entry kind.
@@ -488,6 +518,71 @@ mod tests {
             "2026-10-12 08:00:00 +0000"
         );
         assert_eq!(parse_date("forever"), None);
+    }
+
+    /// `SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.ROOT).parse`, as `BanListEntry` and
+    /// `CachedUserNameToIdResolver` read their dates. Every value is what vanilla's own format gave for
+    /// "2026-10-12 08:00:00 <zone>" (a Java run on OpenJDK 25), None where it threw `ParseException`.
+    #[test]
+    fn parse_date_matches_simple_date_format() {
+        for (zone, millis) in [
+            ("+0000", Some(1791792000000)),
+            ("-0000", Some(1791792000000)),
+            ("+0200", Some(1791784800000)),
+            ("-1230", Some(1791837000000)),
+            ("+2359", Some(1791705660000)),
+            ("-2359", Some(1791878340000)),
+            ("+0059", Some(1791788460000)),
+            ("+2400", None),
+            ("+0075", None),
+            ("+020", None),
+            ("+02:00", None),
+            ("+02 00", None),
+            ("+02000", Some(1791784800000)),
+            ("+0200 extra", Some(1791784800000)),
+            ("+0200abc", Some(1791784800000)),
+            ("UTC", Some(1791792000000)),
+            ("utc", Some(1791792000000)),
+            ("UTCabc", Some(1791792000000)),
+            ("UTC+02:00", Some(1791792000000)),
+            ("GMT", Some(1791792000000)),
+            ("gmt", Some(1791792000000)),
+            ("GMTx", Some(1791792000000)),
+            ("GMT +02:00", Some(1791792000000)),
+            ("GMT+02:00", Some(1791784800000)),
+            ("gmt+02:00", Some(1791784800000)),
+            ("GMT+2:30", Some(1791783000000)),
+            ("GMT-5:30", Some(1791811800000)),
+            ("GMT+23:59", Some(1791705660000)),
+            ("GMT-23:59", Some(1791878340000)),
+            ("GMT-00:00", Some(1791792000000)),
+            ("GMT+12:00x", Some(1791748800000)),
+            ("GMT+02:005", Some(1791784800000)),
+            ("GMT+24:00", None),
+            ("GMT+2:60", None),
+            ("GMT+2", None),
+            ("GMT+02", None),
+            ("GMT+0200", None),
+            ("GMT+2:3", None),
+            ("GMT+002:00", None),
+            ("GMT+", None),
+            ("GMT+x", None),
+            ("Z", None),
+            ("UT", None),
+            ("CET", None),
+        ] {
+            assert_eq!(
+                parse_date(&format!("2026-10-12 08:00:00 {zone}")),
+                millis,
+                "{zone:?}"
+            );
+        }
+        // The zone comes after any run of spaces, as the date and the time do.
+        assert_eq!(
+            parse_date("2026-10-12 08:00:00  +0200"),
+            Some(1791784800000)
+        );
+        assert_eq!(parse_date("2026-10-12 08:00:00"), None);
     }
 
     #[test]
