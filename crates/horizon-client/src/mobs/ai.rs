@@ -1775,6 +1775,13 @@ fn drop_tiny_motion(m: &mut Mob) {
 /// pushed apart from this one (`doPush(e)` = `e.push(this)`); pushes of other
 /// mobs are `Push` events their tick picks up.
 fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    push_entities_capped(m, w, events, super::max_collisions());
+}
+/// [`push_entities`] with the server's collision cap (`cap`, 0 = none): this mob pushes at most
+/// `cap` other mobs, those it was pushed by already counted, and skips a mob that has had `cap`.
+/// The mobs pushed are the first in vanilla's order. The cramming check above counts every entity
+/// in the box, as in vanilla.
+fn push_entities_capped(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>, cap: u32) {
     m.on_climbable = on_climbable(m, w);
     if m.species() == Species::Bat {
         return;
@@ -1819,7 +1826,24 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     {
         hurt(m, w, events, 6.0, Damage::of(DamageKind::Cramming));
     }
+    // Pushes this mob has made or taken this tick, while the cap is on.
+    let mut collisions = if cap > 0 {
+        w.seen(m.id).map_or(0, |s| s.collisions)
+    } else {
+        0
+    };
     for (who, at, _, same, vehicle) in targets {
+        // Only mobs pushing mobs are capped; the player is first in the list.
+        if cap > 0
+            && let Who::Mob(id) = who
+        {
+            if collisions >= cap {
+                break;
+            }
+            if w.seen(id).is_some_and(|o| o.collisions >= cap) {
+                continue;
+            }
+        }
         // Warden.doPush: touching it angers it, then the push itself.
         if m.species() == Species::Warden {
             super::warden::do_push(m, w, who, events);
@@ -1870,6 +1894,12 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         if self_pushable {
             m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
+        }
+        if cap > 0
+            && let Who::Mob(id) = who
+        {
+            collisions += 1;
+            m.pushed.push(id);
         }
     }
 }
@@ -3708,6 +3738,109 @@ mod same_vehicle_push_tests {
         assert_eq!(velocity, Vec3::ZERO, "its rider pushes the camel");
         let (pushed, _) = push(true).unwrap();
         assert_eq!(pushed, vec![3], "the camel pushes the zombie");
+    }
+
+    /// The server's collision cap (`[entities] max_collisions`): in a pen of twelve chickens one
+    /// pushes every other (11) with no cap, and exactly the first N in vanilla's order with a cap
+    /// of N, skipping a chicken that already had N pushes this tick.
+    #[test]
+    fn a_mob_in_a_crowded_pen_pushes_at_most_the_cap() {
+        let mut pen = None;
+        with_test_world(&[], |_, types| {
+            let chicken = |id: u32| {
+                // All inside one another's boxes, none exactly on the pusher.
+                let at = Vec3::new(0.5 + f64::from(id) * 0.02, 64.0, 0.5);
+                Mob::new(
+                    id,
+                    std::sync::Arc::new(types.types["minecraft:chicken"].clone()),
+                    at,
+                    0.0,
+                )
+            };
+            pen = Some((0..12).map(chicken).collect::<Vec<_>>());
+        });
+        let Some(pen) = pen else {
+            return;
+        };
+        let pushed = |cap: u32, crowd: &[Seen]| {
+            let mut pusher = pen[0].clone();
+            let mut events = Vec::new();
+            with_test_world(crowd, |w, _| {
+                push_entities_capped(&mut pusher, w, &mut events, cap)
+            });
+            let ids: Vec<u32> = events
+                .iter()
+                .filter_map(|e| match e {
+                    MobEvent::Push {
+                        target: Who::Mob(id),
+                        ..
+                    } => Some(*id),
+                    _ => None,
+                })
+                .collect();
+            // What the loop reports for the counts that follow.
+            assert_eq!(pusher.pushed, if cap > 0 { ids.clone() } else { vec![] });
+            ids
+        };
+        let mut crowd: Vec<Seen> = pen.iter().map(|m| m.seen(None)).collect();
+        assert_eq!(pushed(0, &crowd), (1..12).collect::<Vec<u32>>());
+        assert_eq!(pushed(3, &crowd), vec![1, 2, 3]);
+        // Chickens 1 and 2 have taken 3 pushes already: skipped, the next ones are pushed.
+        crowd[1].collisions = 3;
+        crowd[2].collisions = 3;
+        assert_eq!(pushed(3, &crowd), vec![3, 4, 5]);
+        // The pusher's own count includes what it received: two left of three.
+        crowd[0].collisions = 1;
+        assert_eq!(pushed(3, &crowd), vec![3, 4]);
+        crowd[0].collisions = 3;
+        assert!(pushed(3, &crowd).is_empty());
+        // Off, the counts are not read.
+        assert_eq!(pushed(0, &crowd), (1..12).collect::<Vec<u32>>());
+    }
+
+    /// MSPT of one tick of a crowded chicken pen with the cap off and at 8 (run by hand with
+    /// `--ignored --nocapture`; needs the vanilla data). It measures the pushes a mob gives; the
+    /// received counts the mob loop adds are not simulated.
+    #[test]
+    #[ignore]
+    fn collision_cap_cost() {
+        for n in [50u32, 100, 200] {
+            let mut pen = None;
+            with_test_world(&[], |_, types| {
+                let ty = std::sync::Arc::new(types.types["minecraft:chicken"].clone());
+                pen = Some(
+                    (0..n)
+                        .map(|id| {
+                            let at = Vec3::new(
+                                0.5 + f64::from(id % 7) * 0.05,
+                                64.0,
+                                0.5 + f64::from(id / 7 % 7) * 0.05 + f64::from(id) * 0.0001,
+                            );
+                            Mob::new(id, ty.clone(), at, 0.0)
+                        })
+                        .collect::<Vec<_>>(),
+                );
+            });
+            let Some(mut pen) = pen else {
+                return;
+            };
+            for cap in [0u32, 8] {
+                let crowd: Vec<Seen> = pen.iter().map(|m| m.seen(None)).collect();
+                let t = std::time::Instant::now();
+                with_test_world(&crowd, |w, _| {
+                    let mut events = Vec::new();
+                    for m in pen.iter_mut() {
+                        events.clear();
+                        push_entities_capped(m, w, &mut events, cap);
+                        m.pushed.clear();
+                    }
+                });
+                println!(
+                    "{n} chickens, cap {cap}: {:.3} ms",
+                    t.elapsed().as_secs_f64() * 1e3
+                );
+            }
+        }
     }
 
     #[test]

@@ -239,6 +239,7 @@ pub fn spawn(
     dir: &Path,
     low_memory: bool,
     parallel_tick: bool,
+    max_collisions: u32,
     transfers: Option<&str>,
 ) -> std::io::Result<Child> {
     command(
@@ -247,6 +248,7 @@ pub fn spawn(
         dir,
         low_memory,
         parallel_tick,
+        max_collisions,
         transfers,
     )?
     .spawn()
@@ -259,6 +261,7 @@ fn command(
     dir: &Path,
     low_memory: bool,
     parallel_tick: bool,
+    max_collisions: u32,
     transfers: Option<&str>,
 ) -> std::io::Result<Command> {
     // The game runs in the server folder, so a folder given relative to ours (`--dir srv`) would put its
@@ -300,6 +303,10 @@ fn command(
     // the variable alone, so one the operator set still works.
     if parallel_tick {
         command.env("HORIZON_PARALLEL_TICK", "1");
+    }
+    // `[entities] max_collisions`: the cap on the pushes of a mob's tick. 0 (vanilla) leaves the variable alone.
+    if max_collisions > 0 {
+        command.env("HORIZON_MAX_ENTITY_COLLISIONS", max_collisions.to_string());
     }
     Ok(command)
 }
@@ -426,6 +433,7 @@ mod tests {
                 &dir,
                 low_memory,
                 false,
+                0,
                 None,
             )
             .unwrap();
@@ -448,6 +456,7 @@ mod tests {
                 &dir,
                 false,
                 parallel_tick,
+                0,
                 None,
             )
             .unwrap();
@@ -461,6 +470,29 @@ mod tests {
     }
 
     #[test]
+    fn the_collision_cap_reaches_the_game_only_when_it_is_set() {
+        let cap = |max_collisions| {
+            let dir = std::env::temp_dir();
+            let command = command(
+                Path::new("horizon-client"),
+                &dir,
+                &dir,
+                false,
+                false,
+                max_collisions,
+                None,
+            )
+            .unwrap();
+            command
+                .get_envs()
+                .find(|(k, _)| *k == "HORIZON_MAX_ENTITY_COLLISIONS")
+                .and_then(|(_, v)| v.map(|v| v.to_owned()))
+        };
+        assert_eq!(cap(8).as_deref(), Some(std::ffi::OsStr::new("8")));
+        assert_eq!(cap(0), None);
+    }
+
+    #[test]
     fn transfers_reach_the_game_only_when_they_are_on() {
         let args = |transfers: Option<&str>| {
             let dir = std::env::temp_dir();
@@ -470,6 +502,7 @@ mod tests {
                 &dir,
                 false,
                 false,
+                0,
                 transfers,
             )
             .unwrap();
@@ -653,6 +686,7 @@ mod tests {
                 &server,
                 false,
                 false,
+                0,
                 None,
             ) {
                 Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {

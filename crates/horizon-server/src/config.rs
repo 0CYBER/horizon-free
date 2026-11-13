@@ -108,6 +108,11 @@ enabled = true               # false pauses it and keeps the webhook
 # Fights follow 26.3's rules. For 1.8.9's (no attack cooldown or sweep, 1.8 weapon damage; docs/pvp.md):
 # [combat]
 # legacy = true
+
+# Mobs push every mob they overlap, as vanilla does. A crowded pen costs the square of its crowd; to cap it
+# (the most other mobs one mob pushes per tick, pushes it receives counted; 0 = no cap, vanilla):
+# [entities]
+# max_collisions = 8
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
@@ -176,6 +181,22 @@ pub struct Config {
     /// The game reads this section itself (docs/pvp.md); written only when it isn't the default.
     #[serde(default, skip_serializing_if = "Combat::is_default")]
     pub combat: Combat,
+    /// Passed to the game as `HORIZON_MAX_ENTITY_COLLISIONS`; written only when it isn't the default.
+    #[serde(default, skip_serializing_if = "Entities::is_default")]
+    pub entities: Entities,
+}
+
+/// `[entities]`: `max_collisions = N` limits how many other mobs one mob pushes in a tick (pushes it receives
+/// count too); 0 is vanilla's behaviour, no cap (docs/server.md).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Entities {
+    pub max_collisions: u32,
+}
+impl Entities {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// `[combat]`: `legacy = true` resolves the players' melee hits by 1.8.9's rules (no attack cooldown or sweep,
@@ -681,7 +702,13 @@ pub fn render(config: &Config) -> String {
         set(&mut doc, section, field, &table[section][field]);
     }
     let mut text = doc.to_string();
-    for section in ["anticheat", "chat_filter", "prune_chunks", "combat"] {
+    for section in [
+        "anticheat",
+        "chat_filter",
+        "prune_chunks",
+        "combat",
+        "entities",
+    ] {
         if let Some(settings) = table.get(section) {
             let mut only = toml::Table::new();
             only.insert(section.into(), settings.clone());
@@ -931,6 +958,19 @@ mod tests {
         assert_eq!(Config::parse(&render(&c)).unwrap(), c);
         assert!(Config::parse("[anticheat]\nenable = true\n").is_err());
         assert!(Config::parse("[anticheat.timer]\nalert = -1\n").is_err());
+    }
+
+    #[test]
+    fn the_collision_cap_is_off_unless_its_section_sets_it() {
+        assert_eq!(Config::default().entities.max_collisions, 0);
+        assert!(!TEMPLATE.lines().any(|l| l.trim() == "[entities]"));
+        let on = Config::parse(&format!("{TEMPLATE}\n[entities]\nmax_collisions = 8\n")).unwrap();
+        assert_eq!(on.entities.max_collisions, 8);
+        assert_eq!(Config::parse(&render(&on)).unwrap(), on);
+        let off = render(&Config::default());
+        assert!(!off.lines().any(|l| l.trim() == "[entities]"), "{off}");
+        assert!(Config::parse("[entities]\nmax_collisions = -1\n").is_err());
+        assert!(Config::parse("[entities]\nmax_collision = 8\n").is_err());
     }
 
     #[test]

@@ -1299,6 +1299,9 @@ pub struct Mob {
     /// `Entity.needsSync`: knocked back, pushed or jumped since its server
     /// last sent it, so the next update goes out at once.
     pub needs_sync: bool,
+    /// The mobs this one pushed in its last tick, kept only while the collision cap is on
+    /// ([`max_collisions`]); the loop that ticks it counts them and clears the list.
+    pub pushed: Vec<u32>,
     /// `Entity.syncPosition`: it bounced this tick (`restituteMovementAfterCollisions`),
     /// so its tracker keeps this position as a step of the next move it sends.
     pub sync_position: bool,
@@ -2428,6 +2431,9 @@ pub struct Seen {
     pub still: bool,
     /// `Entity.isVehicle`: something rides it.
     pub carrying: bool,
+    /// The mob pushes this one has given or taken so far this tick, for the cap
+    /// [`max_collisions`]. Counted only while the cap is on.
+    pub collisions: u32,
 }
 impl Seen {
     /// Whether `canBeCollidedWith` can ever hold for this kind: the slots
@@ -2580,6 +2586,17 @@ impl Mob {
             _ => "misc",
         }
     }
+}
+/// `HORIZON_MAX_ENTITY_COLLISIONS` (the server's `[entities] max_collisions`): the most other mobs a
+/// mob pushes in a tick, the pushes it receives counted too. 0, or unset, is vanilla: no cap.
+pub fn max_collisions() -> u32 {
+    static CAP: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("HORIZON_MAX_ENTITY_COLLISIONS")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0)
+    })
 }
 /// `Entity.push` on other mobs acts at once in vanilla: a mob ticking later
 /// moves with it this tick. Takes the `Push` events aimed at mobs out of
@@ -3064,6 +3081,7 @@ impl Mob {
             horizontal_collision: false,
             vertical_collision_below: false,
             needs_sync: false,
+            pushed: Vec::new(),
             sync_position: false,
             gear_knockback_resistance: None,
             hurt_time: 0,
