@@ -715,6 +715,31 @@ impl Chunk {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         BlockStateId(self.get(x, y, z))
     }
+    /// The blocks that `matches`, section by section from the bottom, each section's in y, z, x
+    /// order. A section whose palette holds none is skipped.
+    pub fn blocks_where(
+        &self,
+        matches: impl Fn(BlockStateId) -> bool,
+    ) -> Vec<horizon_core::position::BlockPos> {
+        let mut out = Vec::new();
+        for (s, section) in self.sections.iter().enumerate() {
+            if !section.blocks.maybe_has(|v| matches(BlockStateId(v))) {
+                continue;
+            }
+            let base = self.min_y + 16 * s as i32;
+            for y in base..base + 16 {
+                for lz in 0..16 {
+                    for lx in 0..16 {
+                        let (wx, wz) = (self.x * 16 + lx, self.z * 16 + lz);
+                        if matches(self.block(wx, y, wz)) {
+                            out.push(horizon_core::position::BlockPos::new(wx, y, wz));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
     /// The highest y where `matches`, scanning down. Sections holding only
     /// `skip` are passed over whole: `matches` must be false for it.
     pub fn highest(&self, skip: u32, mut matches: impl FnMut(i32) -> bool) -> Option<i32> {

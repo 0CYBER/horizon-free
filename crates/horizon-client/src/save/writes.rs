@@ -1,6 +1,8 @@
 //! The writer thread: what a folder queues to be written, and waiting for it to be on disk.
 use super::*;
 
+mod saved_portals;
+
 /// The background thread that encodes chunks and writes them into the region files, in
 /// submission order.
 pub(super) struct Writer {
@@ -15,6 +17,8 @@ pub(super) struct Outstanding {
     chunks: AtomicUsize,
     pub(super) error: Mutex<Option<String>>,
     done: Condvar,
+    /// What the folder's writes make stale: the portal blocks a search read from saved chunks.
+    portals: saved_portals::SavedPortals,
 }
 
 impl SaveDir {
@@ -48,6 +52,10 @@ impl SaveDir {
                     batch.push((key, record, seq));
                 }
             }
+            // After the pending writes: a search reads the new chunks from here on.
+            self.outstanding
+                .portals
+                .written(folder, batch.iter().map(|(key, _, _)| *key));
             *self
                 .outstanding
                 .count
