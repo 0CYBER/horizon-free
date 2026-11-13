@@ -10,7 +10,7 @@
 //! and `Villager.restock` on `WorkAtPoi`'s schedule (see [`skips_brain`]).
 use super::super::villager_brain;
 use super::super::{Mob, MobWorld};
-use horizon_core::geometry::{Aabb, Vec3};
+use horizon_core::geometry::Vec3;
 use horizon_core::random::LegacyRandom;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -32,38 +32,79 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
-/// Whether the villager cannot move: it rides something (`isPassenger`), or none of the four blocks
-/// around its feet lets it in. A neighbour lets it in when its own box fits there at the same height
-/// (a step down or a drop included), or one block higher with room above itself (a jump up), or
-/// when a door villagers open (`mob_interactable_doors`) is in the way. A sleeping villager is
-/// never stuck: the brain has to wake it. A trapdoor or slab over its head does not matter; only
-/// the room around it does.
+/// The most cells a stuck villager can reach. A trading hall's cell often holds a bed or a
+/// workstation's neighbour, so "no free neighbour" is too strict: a villager that can only shuffle
+/// around a small pocket is as good as stuck.
+pub const MAX_ROOM: usize = 6;
+
+/// Whether the villager cannot go anywhere: it rides something (`isPassenger`), or the cells it can
+/// walk to from where it stands (see [`room_exceeds`]) number at most [`MAX_ROOM`]. A sleeping
+/// villager is never stuck: the brain has to wake it. A trapdoor or slab over its head does not
+/// matter; only the room around it does.
 pub fn is_stuck(m: &Mob, w: &MobWorld) -> bool {
     if m.extra.mount.is_some() {
         return true;
     }
-    if super::sleeping(m) {
-        return false;
-    }
+    !super::sleeping(m) && !room_exceeds(m, w, MAX_ROOM)
+}
+
+/// Whether the villager can reach more than `cap` cells, or leave the pocket at all. A search from
+/// its box over the four horizontal moves, as its navigation takes them: to a cell its box fits in,
+/// then down while it falls (a drop of more than 3 blocks, or a way out through a door villagers
+/// open (`mob_interactable_doors`), counts as leaving), or one block up when there is room above
+/// both cells (a jump). Beds (0.56 high) and slabs are cells it can step onto; walls, fences and
+/// closed trapdoors are not.
+fn room_exceeds(m: &Mob, w: &MobWorld, cap: usize) -> bool {
     let own = m.bounds();
-    let up = |b: Aabb| b.move_by(Vec3::new(0.0, 1.0, 0.0));
-    // The room to jump up from here: its box one block higher.
-    let headroom = w.no_collision(up(own));
+    let at =
+        |c: (i32, i32, i32)| own.move_by(Vec3::new(f64::from(c.0), f64::from(c.1), f64::from(c.2)));
     let feet = [
         m.position.x.floor() as i32,
         m.position.y.floor() as i32,
         m.position.z.floor() as i32,
     ];
-    ![(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(dx, dz)| {
-        let there = own.move_by(Vec3::new(f64::from(dx), 0.0, f64::from(dz)));
-        if w.no_collision(there) || headroom && w.no_collision(up(there)) {
-            return true;
+    let mut seen = vec![(0, 0, 0)];
+    let mut next = 0;
+    while next < seen.len() {
+        let cell = seen[next];
+        next += 1;
+        let head_room = w.no_collision(at((cell.0, cell.1 + 1, cell.2)));
+        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let side = (cell.0 + dx, cell.1, cell.2 + dz);
+            let door = [0, 1].iter().any(|dy| {
+                let name = w.block_name(feet[0] + side.0, feet[1] + side.1 + dy, feet[2] + side.2);
+                name.ends_with("_door") && w.has_tag("minecraft:mob_interactable_doors", name)
+            });
+            if door {
+                return true;
+            }
+            let mut to = if w.no_collision(at(side)) {
+                Some(side)
+            } else if head_room && w.no_collision(at((side.0, side.1 + 1, side.2))) {
+                Some((side.0, side.1 + 1, side.2))
+            } else {
+                None
+            };
+            if let Some(c) = &mut to {
+                // Falls to the floor: a drop of more than 3 blocks leaves the pocket.
+                let mut drop = 0;
+                while w.no_collision(at((c.0, c.1 - 1, c.2))) {
+                    c.1 -= 1;
+                    drop += 1;
+                    if drop > 3 {
+                        return true;
+                    }
+                }
+                if !seen.contains(c) {
+                    seen.push(*c);
+                    if seen.len() > cap {
+                        return true;
+                    }
+                }
+            }
         }
-        [0, 1].iter().any(|dy| {
-            let name = w.block_name(feet[0] + dx, feet[1] + dy, feet[2] + dz);
-            name.ends_with("_door") && w.has_tag("minecraft:mob_interactable_doors", name)
-        })
-    })
+    }
+    false
 }
 
 /// `Brain.tick` for a villager, unless it is stuck (see [`skips_brain`]).

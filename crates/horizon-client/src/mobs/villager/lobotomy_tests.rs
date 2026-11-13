@@ -209,3 +209,51 @@ fn a_released_villager_gets_its_brain_back_at_its_next_check() {
         },
     );
 }
+
+/// A walled pocket on the stone floor: `cells` (x, z) are open, every block around them is stone
+/// two high, and `furnish` puts blocks (a bed, a workstation) into the pocket.
+fn pocket_is_stuck(cells: &[(i32, i32)], furnish: &[(i32, i32, &str)]) -> Option<bool> {
+    let mut result = None;
+    with_built_test_world(
+        &[],
+        |world, registry| {
+            build(world, registry, false, None, None);
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            for x in -3..=4 {
+                for z in -3..=3 {
+                    if !cells.contains(&(x, z)) {
+                        for y in [64, 65] {
+                            world.set(x, y, z, stone).unwrap();
+                        }
+                    }
+                }
+            }
+            for &(x, z, block) in furnish {
+                world
+                    .set(x, 64, z, registry.default_state(block).unwrap())
+                    .unwrap();
+            }
+        },
+        |w, types| result = Some(is_stuck(&villager(types, 1), w)),
+    )
+    .then_some(())?;
+    result
+}
+
+#[test]
+fn a_villager_with_a_bed_or_a_second_cell_is_still_stuck_but_a_room_is_not() {
+    let Some(two) = pocket_is_stuck(&[(0, 0), (1, 0)], &[]) else {
+        return;
+    };
+    assert!(two, "two cells");
+    // A bed next to it (a half block it can step onto).
+    assert_eq!(
+        pocket_is_stuck(&[(0, 0), (1, 0), (2, 0)], &[(1, 0, "minecraft:red_bed")]),
+        Some(true)
+    );
+    // 3×3 cells: it can wander, so it keeps its brain.
+    let room: Vec<_> = (-1..=1)
+        .flat_map(|x| (-1..=1).map(move |z| (x, z)))
+        .collect();
+    assert_eq!(pocket_is_stuck(&room, &[]), Some(false));
+}

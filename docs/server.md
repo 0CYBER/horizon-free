@@ -577,10 +577,11 @@ refuse. There is no `backups.before_update` setting: an update always backs up t
 - **`[entities]`: villagers that cannot move.** Not vanilla, so off. `villager_lobotomize = true` makes the
   engine skip the brain of a villager that is *stuck*, and `villager_lobotomize_check_interval = 100` (ticks)
   is how often each villager is rechecked (staggered by id). The game reads the section itself, and
-  `init` leaves it out until it is set. A villager is stuck when it rides something, or when none of the four
-  blocks beside it lets its box in: a free block at its height, one block higher with room above it (a jump up),
-  or a door villagers open. A villager in a 1×1 cell is stuck whatever covers its head; one in the open, or with
-  a gap or a door in its cell, is not; a sleeping villager never is. A stuck villager skips its brain (sensors,
+  `init` leaves it out until it is set. A villager is stuck when it rides something, or when the cells it can walk to
+  (a free block at its height, down a fall of up to 3, or one block up with room above; beds and slabs count as
+  cells it can step onto) number at most 6 and no door villagers open leads out. So a 1×1 cell, a 1×2 cell with a bed, or a
+  pocket with a workstation are stuck whatever covers the head; a room of 3×3, open ground, or a cell with a door
+  are not; a sleeping villager never is. A stuck villager skips its brain (sensors,
   behaviours, schedule, gossip spreading, sleep, farming, breeding, panic, point-of-interest searches) and
   keeps gravity, damage, despawning, trading with its XP and level-ups, and its trades. Its job site
   stays: while it would work (ticks 2000 to 9000 of the day) it restocks as `WorkAtPoi` does, every 300 ticks with a
