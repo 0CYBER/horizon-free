@@ -299,10 +299,12 @@ impl Launcher {
 
     pub(crate) fn native_consent(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        // A build refused for consent with no native mod enabled names none: the generic text.
+        // A build refused for consent with no native mod enabled, or with several ("a, b is a
+        // native mod" reads wrong), names none: the generic text.
         let name = self
             .pending_consent
             .as_ref()
+            .filter(|p| !matches!(p, PendingConsent::Build(ids) if ids.len() > 1))
             .map(PendingConsent::name)
             .filter(|name| !name.is_empty());
         let bytes = horizon_launcher::rust_toolchain::host().map(|host| host.download_bytes());
