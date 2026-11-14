@@ -300,7 +300,8 @@ struct Unpacker {
 impl Unpacker {
     fn new(device: &wgpu::Device, capacity: u64) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Ray tracing: unpack sections"),
+            // No colon: DXC (DirectX 12) takes the label for a file name and fails to read it.
+            label: Some("Unpack sections"),
             source: wgpu::ShaderSource::Wgsl(unpack_shader().into()),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
