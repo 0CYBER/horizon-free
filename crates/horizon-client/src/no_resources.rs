@@ -258,14 +258,21 @@ mod tests {
 
     /// A Ui over a `size` window at GUI scale 1, the cursor at `cursor` pixels.
     fn with_ui<R>(size: [u32; 2], cursor: (f32, f32), f: impl FnOnce(&mut Ui) -> R) -> R {
-        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
-            (std::path::Path::new("/nonexistent/horizon-test-assets")).to_owned(),
-        ))
-        .unwrap();
-        let mut batch = HudBatch::scratch(size);
-        let cursor = (cursor.0 / batch.scale, cursor.1 / batch.scale);
-        let mut ui = Ui::new(&atlas, &mut batch, cursor);
-        f(&mut ui)
+        // Fonts cache glyphs internally, so reuse the atlas only on this test thread.
+        // Window size and cursor still belong to a fresh batch for every call.
+        thread_local! {
+            static ATLAS: HudAtlas = HudAtlas::build(
+                &horizon_assets::resource_source::ResourceSource::directory(
+                    std::path::Path::new("/nonexistent/horizon-test-assets").to_owned(),
+                ),
+            ).unwrap();
+        }
+        ATLAS.with(|atlas| {
+            let mut batch = HudBatch::scratch(size);
+            let cursor = (cursor.0 / batch.scale, cursor.1 / batch.scale);
+            let mut ui = Ui::new(atlas, &mut batch, cursor);
+            f(&mut ui)
+        })
     }
 
     /// A hook's answer, with the game's own Horizon strings and another page.
