@@ -360,9 +360,9 @@ class PrReadyTests(unittest.TestCase):
                                                   "docs/native-client.md"}, 120), [])
         self.assertEqual(pr_ready.scope_warnings({"crates/horizon-theme/src/lib.rs", "launcher/src/theme.rs"}, 10), [])
         warnings = pr_ready.scope_warnings({"crates/horizon-client/src/game.rs", "launcher/src/main.rs",
-                                            ".github/workflows/ci.yml"}, 900)
+                                            ".github/workflows/ci.yml"}, 3200)
         self.assertEqual(len(warnings), 2)
-        self.assertIn("900 lines of code: over 500", warnings[0])
+        self.assertIn("3200 lines of code: over 3000", warnings[0])
         self.assertEqual(warnings[1], "mixes CI, game, launcher")
 
     def test_documentation_and_tests_are_not_counted_in_the_size(self):
@@ -372,6 +372,57 @@ class PrReadyTests(unittest.TestCase):
         self.assertFalse(pr_ready.reviewed("tests/test_pr_ready.py"))
         self.assertFalse(pr_ready.reviewed("tools/test_food_parity.py"))
         self.assertFalse(pr_ready.reviewed("crates/horizon-core/tests/jmath.rs"))
+
+    def size_skipped(self, before, after):
+        """(moved, inline tests) for files given as {path: text} before and after, through a -U0 diff."""
+        import difflib
+        diff = ""
+        for path in sorted(set(before) | set(after)):
+            body = list(difflib.unified_diff(before.get(path, "").splitlines(), after.get(path, "").splitlines(),
+                                             lineterm="", n=0))[2:]
+            diff += f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n" + "\n".join(body) + "\n"
+        return pr_ready.skipped_lines(diff, lambda path: before.get(path), lambda path: after.get(path))
+
+    FUNCTION = "".join(f"    let value_{n} = compute({n});\n" for n in range(48))
+    FUNCTION = "fn heavy() {\n" + FUNCTION + "}\n"
+
+    def test_moving_a_function_between_files_counts_nothing(self):
+        before = {"crates/a/src/lib.rs": "fn keep() {}\n" + self.FUNCTION, "crates/b/src/lib.rs": "fn other() {}\n"}
+        after = {"crates/a/src/lib.rs": "fn keep() {}\n", "crates/b/src/lib.rs": "fn other() {}\n" + self.FUNCTION}
+        self.assertEqual(self.size_skipped(before, after), (100, 0))
+
+    def test_a_move_with_an_edit_counts_the_edit(self):
+        before = {"a.rs": "fn keep() {}\n" + self.FUNCTION, "b.rs": ""}
+        edited = self.FUNCTION.replace("compute(10)", "compute(11)").replace("compute(30)", "compute(31)")
+        after = {"a.rs": "fn keep() {}\n", "b.rs": edited}
+        moved, tests = self.size_skipped(before, after)
+        total = 2 * len(self.FUNCTION.splitlines())
+        self.assertEqual(tests, 0)
+        self.assertEqual(total - moved, 4)  # the two edited lines, once removed and once added
+
+    def test_short_runs_are_not_moves(self):
+        before = {"a.rs": "fn one() {}\nfn two() {}\n", "b.rs": ""}
+        after = {"a.rs": "", "b.rs": "fn one() {}\nfn two() {}\n"}
+        self.assertEqual(self.size_skipped(before, after), (0, 0))
+
+    def test_an_added_inline_test_module_is_not_counted(self):
+        source = ("fn real() -> u32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n"
+                  "    #[test]\n    fn it_works() {\n        assert_eq!(real(), 1);\n    }\n}\n")
+        moved, tests = self.size_skipped({"src/lib.rs": ""}, {"src/lib.rs": source})
+        self.assertEqual((moved, tests), (0, 9))  # 13 lines minus `fn real` (3) and the blank line
+
+    def test_braces_in_strings_and_comments_stay_inside_the_test_module(self):
+        source = ('fn real() {}\n#[cfg(test)]\nmod tests {\n    // a stray } in a comment\n'
+                  '    /* and { another */\n    const BRACE: &str = "}}";\n    const RAW: &str = r#"} " }"#;\n'
+                  "    const CHAR: char = '}';\n    fn lifetime<'a>(x: &'a str) {}\n}\nfn after() {}\n")
+        self.assertEqual(pr_ready.test_module_ranges(source), [(2, 10)])
+        self.assertEqual(pr_ready.test_module_ranges("#[cfg(test)]\nmod tests;\nfn a() {}\n"), [])
+        self.assertEqual(pr_ready.test_module_ranges("#[cfg(all(test, unix))]\npub mod t {\n}\n"), [(1, 3)])
+
+    def test_a_removed_inline_test_module_is_not_counted(self):
+        before = "fn real() {}\n#[cfg(test)]\nmod tests {\n    fn a() {}\n    fn b() {}\n}\n"
+        moved, tests = self.size_skipped({"src/lib.rs": before}, {"src/lib.rs": "fn real() {}\n"})
+        self.assertEqual((moved, tests), (0, 5))
 
     def test_cargo_lock_changes_only_with_a_manifest(self):
         self.assertIsNone(pr_ready.lock_problem({"crates/horizon-core/src/lib.rs"}))

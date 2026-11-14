@@ -52,7 +52,7 @@ from tools import parity, process_tree, release_train  # noqa: E402
 from tools.ci import rust_changes  # noqa: E402
 
 RBUILD = Path.home() / "fleet" / "rbuild"
-LINE_LIMIT = 500
+LINE_LIMIT = 3000
 # What rbuild's login shell needs on each fleet machine before cargo (it adds sccache itself). The ThinkPad no
 # longer builds (2026-10-26: it keeps the AI pool and a few services; Linux work goes to playhorizon's runner).
 HOST_SETUP = {
@@ -222,6 +222,194 @@ def line_counts(base, changed):
             except (UnicodeDecodeError, OSError):
                 pass
     return counts
+
+
+RAW_STRING = re.compile(r'b?r(#*)"')
+
+
+def mask_rust(text):
+    """text with comments and the insides of string and char literals blanked (newlines kept), so braces can be
+    counted. Good enough for real code, not a parser: a macro that builds unbalanced braces out of tokens can
+    still confuse it."""
+    out = list(text)
+    n, i = len(text), 0
+
+    def blank(start, end):
+        for k in range(start, min(end, n)):
+            if out[k] != "\n":
+                out[k] = " "
+
+    while i < n:
+        c = text[i]
+        raw = RAW_STRING.match(text, i) if c in "rb" and not (i and (text[i - 1].isalnum() or text[i - 1] == "_")) \
+            else None
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            blank(i, end)
+            i = end
+        elif text.startswith("/*", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth, j = depth + 1, j + 2
+                elif text.startswith("*/", j):
+                    depth, j = depth - 1, j + 2
+                else:
+                    j += 1
+            blank(i, j)
+            i = j
+        elif raw:
+            end = text.find('"' + raw.group(1), raw.end())
+            end = n if end < 0 else end + 1 + len(raw.group(1))
+            blank(raw.end(), end)
+            i = end
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            blank(i + 1, j)
+            i = j + 1
+        elif c == "'":
+            if text.startswith("'\\", i):
+                end = text.find("'", i + 3)
+                end = n if end < 0 else end + 1
+                blank(i + 1, end - 1)
+                i = end
+            elif i + 2 < n and text[i + 2] == "'":
+                blank(i + 1, i + 2)
+                i += 3
+            else:
+                i += 1  # a lifetime
+        else:
+            i += 1
+    return "".join(out)
+
+
+TEST_MODULE = re.compile(r"#\s*\[\s*cfg\s*\(\s*(?:test|all\s*\(\s*test\b[^\]]*?)\)\s*\]"
+                         r"(?:\s*#\s*\[[^\]]*\])*\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+
+
+def test_module_ranges(text):
+    """The (first, last) line numbers, counting from 1, of each inline `#[cfg(test)] mod name { ... }` in Rust
+    source: from the attribute to the closing brace. `#[cfg(all(test, ...))]` counts too. `mod name;` is one line
+    and is not a range."""
+    masked = mask_rust(text)
+    ranges = []
+    for match in TEST_MODULE.finditer(masked):
+        depth, j = 1, match.end()
+        while j < len(masked) and depth:
+            depth += {"{": 1, "}": -1}.get(masked[j], 0)
+            j += 1
+        if depth == 0:
+            ranges.append((masked.count("\n", 0, match.start()) + 1, masked.count("\n", 0, j - 1) + 1))
+    return ranges
+
+
+def diff_segments(diff):
+    """Parse `git diff -U0` text into runs of changed lines: [(path, "-" or "+", [(line number, text), ...])]. Line
+    numbers are the old file's for "-" and the new file's for "+"."""
+    segments, path, old_path, in_hunk, old, new, current = [], None, None, False, 0, 0, None
+    for row in diff.split("\n"):
+        if row.startswith("diff --git "):
+            in_hunk, current = False, None
+        elif not in_hunk and row.startswith("--- "):
+            old_path = row[4:].split("\t")[0].removeprefix("a/")
+        elif not in_hunk and row.startswith("+++ "):
+            path = row[4:].split("\t")[0].removeprefix("b/")
+            path = old_path if path == "/dev/null" else path
+        elif row.startswith("@@"):
+            header = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)", row)
+            in_hunk, old, new, current = True, int(header.group(1)), int(header.group(2)), None
+        elif in_hunk and row[:1] in ("-", "+"):
+            side = row[0]
+            if current is None or current[1] != side:
+                current = (path, side, [])
+                segments.append(current)
+            current[2].append((old if side == "-" else new, row[1:]))
+            old, new = old + (side == "-"), new + (side == "+")
+        elif not in_hunk or row[:1] != "\\":
+            current = None
+    return segments
+
+
+def moved_lines(segments, window=3):
+    """The (segment number, position) of every changed line that was moved: a run of lines removed in one place
+    and added in another with the same text, whitespace ignored, like `git diff --color-moved`. A run counts when
+    it holds at least `window` meaningful lines (three or more characters; braces and blanks move along inside a
+    run but never make one). Each line is matched once. A start that matches more than 20 places is skipped."""
+    sides = {"-": [], "+": []}  # (stripped text, segment number, position) in diff order
+    for number, (_, side, lines) in enumerate(segments):
+        for position, (_, text) in enumerate(lines):
+            sides[side].append(("".join(text.split()), number, position))
+    removed, added = sides["-"], sides["+"]
+    seeds = {}
+    for index in range(len(added) - window + 1):
+        chunk = added[index:index + window]
+        if chunk[0][1] == chunk[-1][1]:
+            seeds.setdefault(tuple(item[0] for item in chunk), []).append(index)
+    marked = {"-": [False] * len(removed), "+": [False] * len(added)}
+
+    def run_length(i, j):
+        k = 0
+        while (i + k < len(removed) and j + k < len(added) and not marked["-"][i + k] and not marked["+"][j + k]
+               and removed[i + k][0] == added[j + k][0] and removed[i + k][1] == removed[i][1]
+               and added[j + k][1] == added[j][1]):
+            k += 1
+        return k
+
+    i = 0
+    while i <= len(removed) - window:
+        candidates = seeds.get(tuple(item[0] for item in removed[i:i + window]), [])
+        runs = [(run_length(i, j), j) for j in candidates] if len(candidates) <= 20 else []
+        length, j = max(runs, default=(0, 0))
+        if sum(len(item[0]) >= 3 for item in removed[i:i + length]) >= window:
+            for k in range(length):
+                marked["-"][i + k] = marked["+"][j + k] = True
+            i += length
+        else:
+            i += 1
+    return {(item[1], item[2]) for side in "-+" for item, flag in zip(sides[side], marked[side]) if flag}
+
+
+def skipped_lines(diff, old_source, new_source):
+    """(moved, inline tests): how many changed lines of the reviewed paths in a `git diff -U0` don't count towards
+    the size. old_source and new_source give a path's text before and after, or None if it did not exist."""
+    segments = [segment for segment in diff_segments(diff) if reviewed(segment[0])]
+    inline = set()
+    for number, (path, side, lines) in enumerate(segments):
+        text = (old_source if side == "-" else new_source)(path) if path.endswith(".rs") else None
+        ranges = test_module_ranges(text) if text and "test" in text else []
+        inline |= {(number, position) for position, (line, _) in enumerate(lines)
+                   if any(first <= line <= last for first, last in ranges)}
+    # Inline test lines are out already, so they are not offered as moves.
+    rest = [(path, side, [line for position, line in enumerate(lines) if (number, position) not in inline])
+            for number, (path, side, lines) in enumerate(segments)]
+    return len(moved_lines(rest)), len(inline)
+
+
+def skipped_in_branch(base, changed):
+    """skipped_lines for the branch: the diff since base, plus untracked files as all-added."""
+    def old_source(path):
+        try:
+            return git("show", f"{base}:{path}")
+        except subprocess.CalledProcessError:
+            return None
+
+    def new_source(path):
+        try:
+            return (ROOT / path).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            return None
+
+    diff = git("-c", "core.quotePath=false", "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", base)
+    for path in git("ls-files", "--others", "--exclude-standard", "-z").split("\0"):
+        text = new_source(path) if path in changed else None
+        if text:
+            lines = text.splitlines()
+            diff += f"\ndiff --git a/{path} b/{path}\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{len(lines)} @@\n"
+            diff += "\n".join("+" + line for line in lines)
+    return skipped_lines(diff, old_source, new_source)
 
 
 def packages():
@@ -599,15 +787,20 @@ def finish(step, verbose):
 MARK = {"pass": "✅", "fail": "❌", "skip": "➖", "list": "➖", "warn": "⚠️"}
 
 
-def block(args, base, merge_base, changed, counts, steps, label, elapsed):
+def block(args, base, merge_base, changed, counts, steps, label, elapsed, skipped=(0, 0)):
     where = socket.gethostname().split(".")[0] if args.host == "local" else args.host
     flags = "".join(f" --{flag}" for flag in ("quick", "harnesses") if getattr(args, flag)) + \
         ("" if args.host == "local" else f" --host {args.host}") + ("" if base == "origin/main" else f" --base {base}")
     added, removed = (sum(count[i] for count in counts.values()) for i in (0, 1))
-    warnings = scope_warnings(changed, sum(sum(count) for path, count in counts.items() if reviewed(path)))
+    moved, inline = skipped
+    counted = sum(sum(count) for path, count in counts.items() if reviewed(path)) - moved - inline
+    warnings = scope_warnings(changed, counted)
+    not_counted = " and ".join(f"{number:,} {what}" for number, what in ((moved, "moved lines"), (inline, "inline-test lines"))
+                               if number)
     lines = [f"**pr_ready** (`tools/pr_ready.py{flags}` on {where}, against {base} at {merge_base[:9]}, "
              f"{duration(elapsed)})", "", "| Check | Result |", "| --- | --- |",
              f"| Scope | {'⚠️' if warnings else '✅'} {len(changed)} files, +{added} −{removed}"
+             + (f" (not counted: {not_counted})" if not_counted else "")
              + "".join(f"; {warning}" for warning in warnings) + " |"]
     for step in steps:
         took = f" ({duration(step.seconds)})" if step.seconds else ""
@@ -635,6 +828,7 @@ def main():
         parser.error(f"no merge base with {args.base} (git fetch?)")
     merge_base = git("merge-base", "HEAD", args.base).strip()
     counts = line_counts(merge_base, changed)
+    skipped = skipped_in_branch(merge_base, changed)
     crates_of, libraries, dependencies = packages() if any(workspace_rust(p) for p in changed) else ({}, set(), {})
     steps = plan(args, args.base, changed, crates_of, libraries, dependencies)
     print(f"pr_ready: {len(changed)} files changed since {args.base}; checks on {args.host}", file=sys.stderr, flush=True)
@@ -651,7 +845,7 @@ def main():
 
     label = suggested_label(changed, release_train.exporters())
     print(block(args, args.base, merge_base, sorted(changed), counts, steps, label,
-                time.monotonic() - started))
+                time.monotonic() - started, skipped))
     return 1 if any(step.status == "fail" for step in steps) else 0
 
 
