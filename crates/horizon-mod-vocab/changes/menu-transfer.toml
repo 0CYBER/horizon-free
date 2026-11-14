@@ -1,0 +1,3 @@
+ids = ["hook:menu_transfer", "method:MenuPart::menu_transfer", "type:MenuTransferEvent", "method:prelude::RecipesClientHost::transfer_recipe_id"]
+why = "A recipe viewer's \"+\" can reach a mod machine's menu: the client sends a transfer by recipe id (transfer_recipe_id) and the server asks the open mod menu type's part (menu_transfer) before its own grid transfer; the viewer's dry run rides the existing horizon:recipe_check channel. A solo world and a LAN host's own player get the same ask on the game's server side. Vanilla menus are never asked."
+migrate = "Nothing to change: additive. A mod machine implements MenuPart::menu_transfer and returns None to keep the grid transfer."

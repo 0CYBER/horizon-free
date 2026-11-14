@@ -220,7 +220,17 @@ pub(super) fn load_item_data(root: &Path, role: ExecutionRole) -> horizon_client
     } else {
         inventory.client_ids().collect()
     };
-    let context = LoadContext::new(role.data_load_origin(), Arc::new(inputs), ids);
+    // Registration, the initial item-data load and its later table readers
+    // belong to one startup publication, not separate settings events.
+    let context = match mod_api::__private::RegistrationData::initial_settings_snapshot() {
+        Some(settings) => LoadContext::from_settings_snapshot(
+            role.data_load_origin(),
+            Arc::new(inputs),
+            ids,
+            settings,
+        ),
+        None => LoadContext::new(role.data_load_origin(), Arc::new(inputs), ids),
+    };
 
     Ok(ItemData::load(root, context)?)
 }
@@ -1439,13 +1449,16 @@ impl Game<'_> {
         });
     }
 
-    /// Build this game's loop context over the loaded registries and the mods'
-    /// current settings. Called where a resource generation starts or reloads: a
-    /// client at window start and after a resource reload, a server when it starts
-    /// its mods and on `/reload`. A client hands a second one to its audio; a
-    /// server publishes one for its world generation.
+    /// Publish the initial generation's captured settings to its loop readers.
+    /// An integrated server has a distinct origin and captures its own inputs.
     pub(super) fn refresh_loop_context(&mut self) -> horizon_client::Result<()> {
-        let context = self.prepare_loop_context(&self.options.resources)?;
+        let role = self.options.execution_role;
+        let load = self.res.core.item_data.context();
+        let context = if load.origin() == role.data_load_origin() {
+            self.loop_context_readers(load.captured_loop_context(role.loop_side()))
+        } else {
+            self.prepare_loop_context(&self.options.resources)?
+        };
         self.install_loop_context(context);
         Ok(())
     }
@@ -1462,19 +1475,25 @@ impl Game<'_> {
             inventory.client_ids().collect()
         };
         let item_data = self.res.core.item_data.context();
+        Ok(self.loop_context_readers(item_data.loop_context(side, ids.iter().copied())))
+    }
+
+    fn loop_context_readers(
+        &self,
+        context: horizon_world::native_load_context::LoopContext,
+    ) -> PreparedLoopContext {
+        let game = Arc::new(context);
         let audio = self
             .options
             .execution_role
             .is_client()
-            .then(|| item_data.loop_context(side, ids.iter().copied()));
-        let worldgen = self
-            .is_logical_server()
-            .then(|| item_data.worldgen_context(ids.iter().copied()));
-        Ok(PreparedLoopContext {
-            game: Arc::new(item_data.loop_context(side, ids.iter().copied())),
+            .then(|| game.as_ref().clone());
+        let worldgen = self.is_logical_server().then(|| game.worldgen_context());
+        PreparedLoopContext {
+            game,
             audio,
             worldgen,
-        })
+        }
     }
 
     pub(super) fn install_loop_context(&mut self, context: PreparedLoopContext) {

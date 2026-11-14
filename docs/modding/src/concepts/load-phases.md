@@ -119,5 +119,14 @@ are absent from the snapshot rather than reported as read errors.
 | 16 MiB for the snapshot, before trimming | Values exceeding the remaining budget are omitted. |
 | 4,096 enumerated names per package | A package exceeding the budget is omitted entirely. |
 
-Capture proceeds in sorted package-ID and key-name order. The game emits one warning per
-refusal class per snapshot. These limits apply to scalar settings, not mod data files.
+Capture proceeds in sorted package-ID and key-name order. Missing settings directories and
+empty settings produce no warning. A capture with refusals emits one warning naming each
+known omitted key, its mod and its reason; an inaccessible or incompletely enumerated
+directory is identified by scope instead of inventing a key. Enumeration-limit diagnostics
+name the entries visited within the bounded scan; the entire package is still omitted.
+Initial registration, item-data loading, table preload and loop publication share one
+captured settings snapshot rather than rescanning it on each startup thread. The game,
+audio and world-generation readers retain that generation's immutable snapshot without
+recapturing or repeating diagnostics. A new capture reports new refusals,
+even if an earlier generation already warned. These limits apply to scalar settings, not
+mod data files.

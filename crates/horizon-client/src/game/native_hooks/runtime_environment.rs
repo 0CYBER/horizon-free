@@ -8,6 +8,9 @@ impl Game<'_> {
     pub(in crate::game) fn game_version(&self) -> &'static str {
         crate::entry::runtime_environment::get().game_version()
     }
+    pub(in crate::game) fn server_data_version(&self) -> i32 {
+        horizon_core::version::DATA_VERSION
+    }
     pub(in crate::game) fn horizon_version(&self) -> &'static str {
         crate::entry::runtime_environment::get().horizon_version()
     }
@@ -19,3 +22,7 @@ impl Game<'_> {
 #[cfg(test)]
 #[path = "runtime_environment/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_environment/server_data_version_tests.rs"]
+mod server_data_version_tests;

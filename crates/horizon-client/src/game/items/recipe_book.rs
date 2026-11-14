@@ -194,6 +194,11 @@ fn sprite(name: &str) -> String {
 }
 
 impl Game<'_> {
+    /// A viewer's transfer of a recipe by id, into a mod menu or a grid.
+    pub(in crate::game) fn transfer_recipe_id(&mut self, recipe: &str, max: bool) {
+        self.transfer_viewer_recipe_id(recipe, max);
+    }
+
     /// The vanilla book the open screen has, if any.
     pub(super) fn active_book(&self) -> Option<BookType> {
         if self.screen != Screen::Inventory || self.station.is_some() {
@@ -1316,6 +1321,92 @@ impl Game<'_> {
         self.recipe_ui.ghost.clear();
         self.place_book_recipe(BookType::Crafting, index, all);
     }
+    /// Whether the open menu is a content mod's menu type (a machine's, with or without a grid):
+    /// the server's menu on a server, the block's own in a solo world or on a LAN host.
+    fn mod_menu_open(&self) -> bool {
+        self.remote_menu_type()
+            .and_then(horizon_client::containers::mod_menu_type)
+            .is_some()
+            || self.local_mod_menu().is_some()
+    }
+    /// The content mod menu type and block of the menu this player has open when the game is
+    /// its own server (a solo world, a LAN host's own player): the block container's menu type.
+    fn local_mod_menu(&self) -> Option<(&'static str, [i32; 3])> {
+        if self.remote.is_some() {
+            return None;
+        }
+        let k = self.container?;
+        Some((self.mod_menu_at(k)?, [k.0, k.1, k.2]))
+    }
+    /// `menu_transfer` for this player's own mod menu when the game is its own server: the same
+    /// server-side ask a guest's transfer gets (`guest_menu_transfer`), on the same thread.
+    /// None when no part listens (vanilla menus never ask) or no mod menu is open here.
+    fn local_menu_transfer(
+        &mut self,
+        recipe: &str,
+        max: bool,
+        dry_run: bool,
+    ) -> Option<RecipeTransferResult> {
+        if !mod_api::__private::has_part_hook(mod_api::HookId::MenuTransfer) {
+            return None;
+        }
+        let (menu, pos) = self.local_mod_menu()?;
+        if !mod_api::__private::menu_listens(mod_api::HookId::MenuTransfer, menu) {
+            return None;
+        }
+        let mut result = None;
+        self.native_menu_transfer(mod_api::__private::MenuTransferCall {
+            player: self.own_uuid(),
+            menu,
+            pos: Some(pos),
+            recipe,
+            max,
+            dry_run,
+            result: &mut result,
+        });
+        result
+    }
+    /// A viewer's transfer of a recipe by id (`transfer_recipe_id`): sent to the server, whose
+    /// `menu_transfer` parts on a mod menu answer first, then its grid transfer. Only a server
+    /// that takes viewer transfers is asked: elsewhere it shows as not into this menu.
+    pub(super) fn transfer_viewer_recipe_id(&mut self, recipe: &str, max: bool) {
+        self.panel.transfer_warning = None;
+        let open = self.screen == Screen::Inventory
+            && !self.spectator()
+            && (self.mod_menu_open() || self.mod_recipe_screen());
+        if !open {
+            self.show_transfer_result(RecipeTransferResult::NotIntoMenu);
+            return;
+        }
+        if self.remote.is_none() {
+            // The game is its own server: the mod menu's part answers first, as on a server,
+            // then the grid transfer.
+            if let Some(answer) = self.local_menu_transfer(recipe, max, false) {
+                self.show_transfer_result(answer);
+                return;
+            }
+            self.local_grid_transfer(recipe, max);
+            return;
+        }
+        if !self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.recipe_viewer.transfer)
+        {
+            self.show_transfer_result(RecipeTransferResult::NotIntoMenu);
+            return;
+        }
+        let mut request = horizon_protocol::buf::Writer::new();
+        request.varint(self.remote_menu_id());
+        request.string(recipe);
+        request.u8(u8::from(max));
+        self.send(horizon_protocol::packets::play::Serverbound::CustomPayload(
+            horizon_protocol::packets::configuration::CustomPayload {
+                channel: horizon_client::lan::recipes::TRANSFER_CHANNEL.into(),
+                data: request.data,
+            },
+        ));
+    }
     /// A viewer's transfer of one set of ingredients.
     pub(super) fn transfer_viewer_recipe(&mut self, display_id: i32) {
         self.panel.transfer_warning = None;
@@ -1366,10 +1457,20 @@ impl Game<'_> {
             ));
             return;
         }
+        // The game is its own server: a mod menu's part answers first, as on a server.
+        if let Some(answer) = self.local_menu_transfer(&id, false, false) {
+            self.show_transfer_result(answer);
+            return;
+        }
+        self.local_grid_transfer(&id, false);
+    }
+    /// The game's own grid transfer of `id` into this player's menu when the game is its own
+    /// server (what a server runs when no `menu_transfer` part answers).
+    fn local_grid_transfer(&mut self, id: &str, max: bool) {
         use horizon_client::menu::place::TransferError;
         let mut result = Err(TransferError::Unavailable);
         self.menu_session(|menu, env, _| {
-            result = menu.transfer_recipe(env, &id, false);
+            result = menu.transfer_recipe(env, id, max);
             Some(result.is_ok())
         });
         self.show_transfer_result(horizon_client::lan::recipes::transfer_result(result));
@@ -1403,7 +1504,7 @@ impl Game<'_> {
         if let Ok(Some((container, result))) =
             horizon_client::lan::recipes::decode_transfer_reply(data)
             && container == self.remote_menu_id()
-            && self.mod_recipe_screen()
+            && (self.mod_recipe_screen() || self.mod_menu_open())
             && self.panel.recipes.is_some()
         {
             match horizon_client::lan::recipes::byte_result(result) {
@@ -1444,6 +1545,19 @@ impl Game<'_> {
         &mut self,
         display_id: i32,
     ) -> Option<RecipeTransferCheck> {
+        // The game is its own server: a mod menu's part answers the dry run, as
+        // `horizon:recipe_check` asks it on a server; with none the check is as before.
+        if self.remote.is_none() && self.mod_menu_open() {
+            self.ensure_book();
+            let id = (self.recipe_ui.book.as_ref())
+                .and_then(|book| book.entries.iter().find(|e| e.display_id == display_id))
+                .map(|e| e.id.clone())?;
+            let result = self.local_menu_transfer(&id, false, true)?;
+            return Some(RecipeTransferCheck {
+                result,
+                missing_cells: Vec::new(),
+            });
+        }
         if !self.mod_recipe_screen() || !self.remote.as_ref().is_some_and(|r| r.recipe_viewer.check)
         {
             return None;

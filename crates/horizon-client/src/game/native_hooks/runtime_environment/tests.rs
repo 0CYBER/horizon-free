@@ -302,11 +302,12 @@ fn run(wasm: bool) {
         assert_eq!(
             observed.messages,
             [mod_api::Text::literal(format!(
-                "runtime_environment|{:?}|{}|{}|{}",
+                "runtime_environment|{:?}|{}|{}|{}|{}",
                 expected.dist(),
                 expected.game_version(),
                 expected.horizon_version(),
                 expected.game_tests_enabled(),
+                horizon_core::version::DATA_VERSION,
             ))],
             "compiled guest must finish registration and later Host reads without a trap"
         );

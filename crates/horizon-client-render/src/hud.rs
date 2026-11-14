@@ -16,6 +16,7 @@ use model_reducing::reducible_model_sprites;
 
 mod animate;
 pub mod cit_glint;
+mod clip_corner;
 mod gui_sprite;
 mod menu_pictures;
 mod model_reducing;
@@ -869,9 +870,9 @@ impl HudAtlas {
     pub fn build_over(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
         Self::build_over_with_image(root, defaults, false)
     }
-    /// The atlas above, with a slot for a native mod's own image
-    /// (`horizon/modimage`) only when `mod_image` says a mod is loaded that
-    /// draws one: the slot costs 4 MiB of pixels, so a game without native
+    /// The atlas above, with a slot for a client mod's own image
+    /// (`horizon/modimage`) only when `mod_image` says a client mod is loaded,
+    /// native or wasm: the slot costs 4 MiB of pixels, so a game without
     /// mods holds none of them.
     pub fn build_over_with_image(
         root: &ResourceSource,
@@ -903,7 +904,7 @@ impl HudAtlas {
             crate::minimap::SIZE as u32,
             Vec::new(),
         ));
-        // A mod's own image (native `mod_image`), only when a mod is loaded.
+        // A mod's own image (`mod_image`), only when a client mod is loaded.
         if mod_image {
             images.push((
                 MOD_IMAGE_SPRITE.into(),
@@ -2007,23 +2008,20 @@ impl HudBatch {
                 continue;
             }
             let t = |p: f32, lo: f32, hi: f32| if hi == lo { 0.0 } else { (p - lo) / (hi - lo) };
-            let uv = |x: f32, y: f32| {
-                let (s, r) = (t(x, x_lo, x_hi), t(y, y_lo, y_hi));
-                std::array::from_fn(|i| {
-                    let top = tl.uv[i] + (tr.uv[i] - tl.uv[i]) * s;
-                    let bottom = bl.uv[i] + (br.uv[i] - bl.uv[i]) * s;
-                    top + (bottom - top) * r
-                })
+            let corner = |x, y| {
+                clip_corner::clip_corner(
+                    [tl, tr, br, bl],
+                    [x, y],
+                    [t(x, x_lo, x_hi), t(y, y_lo, y_hi)],
+                )
             };
-            self.quad(
-                [[cx0, cy0], [cx1, cy0], [cx1, cy1], [cx0, cy1]],
-                [uv(cx0, cy0), uv(cx1, cy0), uv(cx1, cy1), uv(cx0, cy1)],
-                tl.color,
-            );
-            let end = self.vertices.len();
-            for v in &mut self.vertices[end - 6..] {
-                v.text = tl.text;
-            }
+            let c = [
+                corner(cx0, cy0),
+                corner(cx1, cy0),
+                corner(cx1, cy1),
+                corner(cx0, cy1),
+            ];
+            self.vertices.extend([0, 1, 2, 0, 2, 3].map(|i| c[i]));
         }
         moved.push(self.vertices.len() as u32);
         let at = |v: u32| moved[((v as usize).saturating_sub(start) / 6).min(moved.len() - 1)];
@@ -3118,7 +3116,7 @@ mod tests {
         assert!(atlas.object_skins.is_empty());
     }
 
-    /// The mod image slot is paid only by a game with a native mod loaded.
+    /// The mod image slot is paid only by a game with a client mod loaded.
     #[test]
     fn the_mod_image_slot_exists_only_when_a_mod_is_loaded() {
         let root = Path::new("/nonexistent/horizon-test-assets");
@@ -3354,6 +3352,58 @@ mod tests {
             batch.blends,
             [(0..batch.vertices.len() as u32, Blend::Additive)]
         );
+    }
+
+    #[test]
+    fn clip_since_keeps_the_depth_of_an_item_or_scene_face() {
+        let mut batch = HudBatch::scratch([320, 240]);
+        let start = batch.vertices.len();
+        // Two axis-aligned model faces at different depths, as an item model or a
+        // `draw_scene` picture leaves them after `depth_since`.
+        let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        batch.quad_3d(
+            [
+                [0.0, 0.0, 1.0],
+                [8.0, 0.0, 1.0],
+                [8.0, 8.0, 1.0],
+                [0.0, 8.0, 1.0],
+            ],
+            uv,
+            u32::MAX,
+        );
+        batch.quad_3d(
+            [
+                [2.0, 2.0, 3.0],
+                [6.0, 2.0, 3.0],
+                [6.0, 6.0, 5.0],
+                [2.0, 6.0, 5.0],
+            ],
+            uv,
+            u32::MAX,
+        );
+        batch.depth_since(start, [0.0, 0.0, 320.0, 240.0]);
+        let before = batch.vertices.clone();
+        assert!(before.iter().any(|v| v.depth > 0.0));
+        // A clip containing both faces leaves every attribute as it was.
+        batch.clip_since(start, 0.0, 0.0, 16.0, 16.0);
+        assert_eq!(batch.vertices.len(), before.len());
+        for (v, w) in batch.vertices.iter().zip(&before) {
+            assert_eq!((v.pos, v.color, v.text), (w.pos, w.color, w.text));
+            let near = |a: f32, b: f32| (a - b).abs() < 1e-6;
+            assert!(near(v.depth, w.depth), "depth {} vs {}", v.depth, w.depth);
+            assert!(near(v.uv[0], w.uv[0]) && near(v.uv[1], w.uv[1]));
+        }
+        // A clip cutting the sloped face keeps its depth across the cut.
+        batch.clip_since(start, 0.0, 0.0, 16.0, 4.0);
+        let sloped: Vec<_> = batch.vertices[6..]
+            .iter()
+            .map(|v| (v.pos[1], v.depth))
+            .collect();
+        let at = |y: f32| before[6..].iter().find(|v| v.pos[1] == y).unwrap().depth;
+        for (y, depth) in sloped {
+            let want = at(2.0) + (at(6.0) - at(2.0)) * (y - 2.0) / 4.0;
+            assert!((depth - want).abs() < 1e-6, "y {y}: {depth} vs {want}");
+        }
     }
 
     /// Write a PNG `width x height` whose `frames` stacked rows are solid
