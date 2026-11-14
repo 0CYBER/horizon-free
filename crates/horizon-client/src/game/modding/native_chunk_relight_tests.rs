@@ -1,5 +1,5 @@
-//! `level.relight_chunks` and `chunk.resend` through the public handles, with a literal test for
-//! each refusal.
+//! `level.relight_chunks` (queued, not lit) and `chunk.resend` through the public handles, with a
+//! literal test for each refusal.
 
 use super::native_entity_refs::tests::{with_client_game, with_game};
 use horizon_client::chunk::Chunk;
@@ -33,31 +33,32 @@ fn stale(level: LevelRef) -> LevelRef {
     LevelRef::new(WorldEpoch::new(level.epoch().get() + 1), level.dimension())
 }
 
-/// Blocks written straight into a chunk are lit at once, and only the chunk with all eight
-/// neighbours counts; a chunk far from any loaded one is none.
+/// A relight is queued at once, nothing is lit during the call, and the count is the columns
+/// queued (the loaded ring included); a chunk far from any loaded one queues none.
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-fn a_mod_relights_the_chunks_it_wrote() {
+fn a_mod_queues_the_chunks_it_wrote() {
     with_game(|game| {
         roofed(game);
         let level = game.level(game.dim.id()).unwrap();
-        let (x, z) = (100 * 16 + 8, 100 * 16 + 8);
-        assert_eq!(level.relight_chunks(game, &[[100, 100]]), Ok(1));
-        assert!(
-            game.world.light(x, 90, z) >> 4 < 15,
-            "shaded under the roof"
-        );
-        assert_eq!(game.world.light(x, 110, z) >> 4, 15, "open sky above it");
+        game.world.dirty_light.clear();
+        assert_eq!(level.relight_chunks(game, &[[100, 100]]), Ok(9));
+        assert_eq!(game.world.dirty_light.len(), 9);
+        assert!(game.world.dirty_light.contains(&(100, 100)));
+        // Asked again before the light update: nothing new is queued.
+        assert_eq!(level.relight_chunks(game, &[[100, 100]]), Ok(0));
         assert_eq!(level.relight_chunks(game, &[[400, 400]]), Ok(0));
+        assert_eq!(game.world.dirty_light.len(), 9);
     });
 }
 
-/// 256 chunks are taken and 257 are refused, whole: nothing is lit.
+/// 256 chunks are taken and 257 are refused, whole: nothing is queued.
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn relight_chunks_refuses_more_than_256_chunks() {
     with_game(|game| {
         let level = game.level(game.dim.id()).unwrap();
+        game.world.dirty_light.clear();
         let chunks: Vec<[i32; 2]> = (0..257).map(|i| [400 + i, 400]).collect();
         assert_eq!(level.relight_chunks(game, &chunks[..256]), Ok(0));
         assert_eq!(
@@ -67,6 +68,27 @@ fn relight_chunks_refuses_more_than_256_chunks() {
                 max: 256
             })
         );
+        assert!(game.world.dirty_light.is_empty());
+    });
+}
+
+/// A full light queue refuses a call whole, and `max` says what fits now.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn relight_chunks_refuses_a_call_that_overfills_the_queue() {
+    with_game(|game| {
+        roofed(game);
+        let level = game.level(game.dim.id()).unwrap();
+        game.world.dirty_light.clear();
+        game.world
+            .dirty_light
+            .extend((0..4096 - 18).map(|i| (1000 + i, 1000)));
+        assert_eq!(
+            level.relight_chunks(game, &[[100, 100], [100, 100], [100, 100]]),
+            Err(ChunkRefusal::TooManyChunks { asked: 3, max: 2 })
+        );
+        assert_eq!(level.relight_chunks(game, &[[100, 100]]), Ok(9));
+        assert_eq!(game.world.dirty_light.len(), 4096 - 18 + 9);
     });
 }
 
@@ -86,8 +108,7 @@ fn a_stale_handle_is_refused_by_name() {
     });
 }
 
-/// A level that is open but not the one being ticked is `NotInPlace`, and queues and lights
-/// nothing.
+/// A level that is open but not the one being ticked is `NotInPlace`, and queues nothing.
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn another_level_is_not_in_place() {

@@ -1,7 +1,6 @@
 //! Refusals when a mod relights or resends chunks of a server level.
 
-/// Why `level.relight_chunks` or `chunk.resend` did nothing: no light was worked out and no
-/// chunk was queued.
+/// Why `level.relight_chunks` or `chunk.resend` did nothing: no chunk was queued.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -14,11 +13,11 @@ pub enum ChunkRefusal {
     NotInPlace,
     /// `chunk.resend` of a chunk that is not loaded.
     NotLoaded,
-    /// `relight_chunks` was given more chunks than it lights in one call.
+    /// `relight_chunks` was given more chunks than it may queue now.
     TooManyChunks {
         /// The chunks given.
         asked: u32,
-        /// The most one call takes: 256.
+        /// The most a call takes now: 256, less while the level's light queue is nearly full.
         max: u32,
     },
 }

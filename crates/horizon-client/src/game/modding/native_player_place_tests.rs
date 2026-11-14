@@ -18,6 +18,8 @@ fn api_state(game: &super::Game<'_>, name: &str) -> mod_api::BlockState {
 }
 
 fn loaded(game: &mut super::Game<'_>) {
+    // The write is `level_set_block`'s, which an authoritative server only takes.
+    game.options.dedicated = Some(Vec::new());
     game.world.chunks.insert(
         (0, 0),
         std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),

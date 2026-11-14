@@ -2,8 +2,12 @@
 //! runs of blocks up columns at once, straight into the chunks.
 use super::Game;
 
-/// The most chunks one `level.relight_chunks` call lights (each brings its ring of eight).
+/// The most chunks one `level.relight_chunks` call queues (each brings its ring of eight).
 const RELIGHT_MAX: usize = 256;
+/// The most columns waiting in the level's light queue (`World::dirty_light`, 8 bytes each, and
+/// each takes a 3x3 region snapshot only when a worker picks it up) before a call is refused:
+/// a mod cannot grow the queue, or the snapshots the workers hold, past this.
+const RELIGHT_QUEUE_MAX: usize = 4096;
 
 impl Game<'_> {
     /// For a server mod: the runs made at once, straight into the chunks of the authoritative level `dimension`
@@ -45,32 +49,37 @@ impl Game<'_> {
             Ok(_) => Ok(()),
         }
     }
-    /// `chunks` of the level in place, and the loaded ring around them, lit again now
-    /// (`Streaming::relight_now`): how many were lit.
+    /// `chunks` of the level in place, and the loaded ring around them, queued to be lit again whole
+    /// with the level's light edits (`World::dirty_light`, as `edit_blocks` queues): the light jobs
+    /// run at the next light update, never on this call. How many columns were newly queued (the
+    /// ring included, columns already waiting not counted). A call that would take the queue past
+    /// `RELIGHT_QUEUE_MAX` columns is refused whole.
     pub(super) fn level_relight_chunks(
         &mut self,
         level: mod_api::LevelRef,
         chunks: &[[i32; 2]],
     ) -> Result<u32, mod_api::ChunkRefusal> {
         self.chunk_write_gate(level)?;
-        if chunks.len() > RELIGHT_MAX {
+        let room = RELIGHT_QUEUE_MAX.saturating_sub(self.world.dirty_light.len());
+        let max = RELIGHT_MAX.min(room / 9);
+        if chunks.len() > max {
             return Err(mod_api::ChunkRefusal::TooManyChunks {
                 asked: chunks.len().min(u32::MAX as usize) as u32,
-                max: RELIGHT_MAX as u32,
+                max: max as u32,
             });
         }
-        let mut columns: Vec<(i32, i32)> = chunks
-            .iter()
-            .flat_map(|&[x, z]| {
-                (-1..=1).flat_map(move |dz| {
-                    (-1..=1).map(move |dx| (x.wrapping_add(dx), z.wrapping_add(dz)))
-                })
-            })
-            .filter(|key| self.world.chunks.contains_key(key))
-            .collect();
-        columns.sort_unstable();
-        columns.dedup();
-        Ok(self.streaming.relight_now(&mut self.world, &columns) as u32)
+        let mut queued = 0;
+        for &[x, z] in chunks {
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    let key = (x.wrapping_add(dx), z.wrapping_add(dz));
+                    if self.world.chunks.contains_key(&key) && self.world.dirty_light.insert(key) {
+                        queued += 1;
+                    }
+                }
+            }
+        }
+        Ok(queued)
     }
     /// The chunk queued to go whole to its watchers at the end of the tick, as an
     /// `edit_blocks` chunk does (`World::bulk_log`).

@@ -1156,16 +1156,21 @@ pub trait LevelsBackendMut {
     #[access(WorldOnly)]
     fn level_send_block_updated(&mut self, level: LevelRef, pos: [i32; 3]) -> bool;
     /// Side: server.
-    /// Lights the loaded chunks `chunks` (chunk coordinates) of the level in place again, whole,
-    /// from their blocks, and the loaded chunks around them, at once on the calling thread, as
-    /// the light jobs of `edit_blocks` do later on the workers: for a mod that wrote blocks by
-    /// other means and needs the light before the chunks go out (`chunk_resend`). A chunk that
-    /// is not loaded, or lacks one of its eight neighbours, is left out and not counted. The
-    /// light that changed goes to the players who see that chunk's border, as any relight's
-    /// does. It lights every chunk it is given, so call it for the chunks an edit changed, not
-    /// every tick. Returns how many chunks were lit, the ring included. Each refusal lights
-    /// nothing and is named by `ChunkRefusal`: `Stale`, `Client`, `NotInPlace` (a level that
-    /// is not the one being ticked) and `TooManyChunks` (more than 256 given).
+    /// Queues the loaded chunks `chunks` (chunk coordinates) of the level in place, and the loaded
+    /// chunks around them, to be lit again whole from their blocks, for a mod that wrote blocks by
+    /// other means (`edit_blocks` queues the same relight for its own chunks). Accepted at once and
+    /// never lit during the call: the light jobs run at the level's next light update, as those of `edit_blocks` and
+    /// `level_check_light` do, and a column whose eight
+    /// neighbours are not all loaded waits until they are. The light that changed goes to the
+    /// players who see that chunk's border, as any relight's does. There is no completion event
+    /// and no per-call count of finished chunks: a mod that needs the new light reads it on a
+    /// later tick (`level_brightness`), and `chunk_resend` sends the chunk with whatever light has
+    /// landed by the end of that tick. Returns how many columns were queued, the ring included; a
+    /// column not loaded, or already waiting in the queue, is not counted. The queue is bounded
+    /// (4096 columns in all, and 256 chunks a call): a call that would pass either is refused
+    /// whole with `TooManyChunks`, whose `max` is how many chunks a call may take now. Each
+    /// refusal queues nothing and is named by `ChunkRefusal`: `Stale`, `Client`, `NotInPlace` (a
+    /// level that is not the one being ticked) and `TooManyChunks`.
     #[access(WorldOnly)]
     fn level_relight_chunks(
         &mut self,

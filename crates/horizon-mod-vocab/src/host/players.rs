@@ -977,17 +977,21 @@ pub trait PlayersBackendMut {
         state: BlockState,
     ) -> Result<(), PlayerWorldRefusal>;
     /// Side: server.
-    /// Writes `state` at `pos` in `level` as the player placed it, the write of vanilla's
-    /// `BlockItem.place` for a state the mod already chose (an editor's or a schematic's):
-    /// `setBlock` with the placement's flags, so the neighbours hear of it and, unless
-    /// `update_neighbour_shapes` is false, their shapes update (fences, walls and stairs
-    /// connect), then `Block.setPlacedBy` with the player as placer (a bed places its head, a
-    /// door its upper half). A new block gets its block entity; the same block in another state
-    /// keeps its own and what is in it. No sound, game event or item use. The state is written
-    /// as given. Refuses, writing nothing, with `PlayerWorldRefusal`: `Client`, `Stale`,
-    /// `Dead`, `StaleLevel`, `OtherLevel` (not the level in place, where the player is),
-    /// `UnknownState`, `OutOfWorld`, `NotLoaded` and `Unchanged` (that state already stands
-    /// there).
+    /// Writes `state` at `pos` in `level` for the player, for a state the mod already chose
+    /// (an editor's or a schematic's). It is `level_set_block` with a placement's flags
+    /// (`NEIGHBORS | CLIENTS`, plus `KNOWN_SHAPE` when `update_neighbour_shapes` is false; without
+    /// it the neighbours' shapes update, so fences, walls and stairs connect), so the block entity
+    /// follows that write's rules, and then `Block.setPlacedBy` of the block that stands there, run in
+    /// the player's turn (a bed places its head, a door its upper half). Nothing else of vanilla's `BlockItem.place`
+    /// or `useOn` runs: no check that the block may be placed there (survival, entity
+    /// obstruction, build permission, spawn protection), no `placed_block` advancement trigger or
+    /// statistic, no place sound, no game event, no item used or consumed, and `setPlacedBy` is
+    /// not given the player as placer. The player is only whose turn `setPlacedBy` runs in, so it is
+    /// not "as player" in the sense of a use-on. The state is written as given. Refuses, writing
+    /// nothing, with `PlayerWorldRefusal`: `Client`, `Stale`, `Dead`, `StaleLevel`, `OtherLevel`
+    /// (not the level in place, where the player is), `UnknownState`, `OutOfWorld`, `NotLoaded`
+    /// and `Unchanged` (that state already stands there, or the write was refused as
+    /// `level_set_block` returns false).
     #[access(WorldOnly)]
     fn player_place_block(
         &mut self,
