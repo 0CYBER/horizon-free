@@ -66,6 +66,8 @@ The HLSL backend writes an ordinary level-zero texture sample as `SampleLevel(..
 comparison textures keep `SampleCmpLevelZero`; HLSL has no ordinary `SampleLevelZero` method.
 The shared interpolation defaults also compile with `glsl-in` alone, without needing the
 SPIR-V or WGSL frontend to enable them.
+The HLSL backend's texture-sampling offset cast preserves the offset's scalar or vector width,
+including `int` for 1D and `int3` for 3D textures instead of always using `int2`.
 
 ## DirectX Shader Compiler
 

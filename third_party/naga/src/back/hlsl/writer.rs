@@ -4242,8 +4242,14 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
                 }
 
                 if let Some(offset) = offset {
-                    write!(self.out, ", ")?;
-                    write!(self.out, "int2(")?; // work around https://github.com/microsoft/DirectXShaderCompiler/issues/5082#issuecomment-1540147807
+                    let suffix = match *func_ctx.resolve_type(offset, &module.types) {
+                        TypeInner::Scalar(_) => "",
+                        TypeInner::Vector { size, .. } => common::vector_size_str(size),
+                        _ => unreachable!(), // validated offsets are signed scalars or vectors
+                    };
+                    // Work around https://github.com/microsoft/DirectXShaderCompiler/issues/5082#issuecomment-1540147807
+                    // without changing the validated offset's width.
+                    write!(self.out, ", int{suffix}(")?;
                     self.write_const_expression(module, offset, func_ctx.expressions)?;
                     write!(self.out, ")")?;
                 }
