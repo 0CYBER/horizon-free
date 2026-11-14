@@ -23,7 +23,8 @@ fn gui_render_post(&self, _: &dyn ClientHost, event: &mut GuiRenderPostEvent<'_>
   A negative width or height, or an inner clip outside the outer one, clips everything.
 - **One hook call.** The clips belong to the hook call that opened them. One still open when the call returns
   is closed then, so it also cuts what later listeners of the same call draw: close what you open.
-- **Scenes.** A scene from `draw_scene` keeps its own box and is not cut by a clip.
+- **Depth.** Item models and scenes from `draw_scene` are cut too, to both their own box and the clip, and
+  keep their depth: a cut face still draws in front of or behind its neighbours as it did uncut.
 - **Refusals.** Both return `Result<(), GuiClipRefusal>` and change nothing when they refuse:
   `NotFinite` (a coordinate or size is NaN or infinite), `TooDeep` (64 clips are already open in this call)
   and `NoneOpen` (`pop_clip` with nothing open). The enum is `#[non_exhaustive]`.
