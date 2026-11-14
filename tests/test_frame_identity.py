@@ -1,4 +1,5 @@
 """The frame identity harness's PNG comparison: pixels decide, not how the encoder filtered its rows."""
+import json
 import math
 import re
 import struct
@@ -108,6 +109,12 @@ class SessionCheckTests(unittest.TestCase):
     def shot(self, name, rows=None):
         encode(self.dir / name, 4, 4, 8, rows or self.rows, 0)
 
+    def loaded(self, *sessions):
+        """Each session's log with its pack's load line, as the game prints it."""
+        for name in sessions:
+            pack = identity.SESSIONS[name][1]['HORIZON_SHADER_PACK']
+            (self.dir / f'{name}.log').write_text(f'INFO shader pack {pack} 1.0.0: Warm horizon in 12 ms\n')
+
     def test_a_missing_scene_cannot_pass_when_other_screenshots_exist(self):
         scenes = identity.SESSIONS['vanilla'][2]
         for scene in scenes[1:]:
@@ -129,6 +136,7 @@ class SessionCheckTests(unittest.TestCase):
         for scene in hdr_scenes:
             self.shot(f'golden_hour_hdr.{scene}.png')
             self.shot(f'golden_hour_hdr.{scene}-hdr.png')
+        self.loaded('golden_hour', 'golden_hour_hdr')
         problems = identity.session_checks(self.dir, ['vanilla', 'golden_hour', 'golden_hour_hdr', 'hdr_toggle'])
         self.assertEqual(sorted(problems), sorted(
             [f'golden_hour.{s}: the same as without the pack: it didn\'t run' for s in scenes]
@@ -149,8 +157,22 @@ class SessionCheckTests(unittest.TestCase):
             self.shot(f'hdr_toggle.{scene}.png')
             self.shot(f'hdr_toggle.{scene}-hdr.png')
             self.shot(f'hdr_toggle.off.{scene}.png')
+        self.loaded('golden_hour', 'golden_hour_hdr')
         self.assertEqual(identity.session_checks(
             self.dir, ['vanilla', 'golden_hour', 'golden_hour_hdr', 'hdr_toggle']), [])
+
+    def test_a_terrain_pack_session_needs_its_pack_and_labpbr_maps_in_the_log(self):
+        # 🤖 Agent: relief is shot only with the pack, so no picture without it shows whether the pack ran.
+        for scene in identity.SESSIONS['terrain_pack'][2]:
+            self.shot(f'terrain_pack.{scene}.png')
+        log = self.dir / 'terrain_pack.log'
+        log.write_text('INFO shader pack golden_hour_0_2 1.0.0: Warm horizon in 12 ms\n')
+        self.assertEqual(identity.session_checks(self.dir, ['terrain_pack']), [
+            'terrain_pack: the log has no load line of shader pack frame_identity_terrain',
+            'terrain_pack: no LabPBR maps were loaded'])
+        log.write_text('INFO Horizon: LabPBR maps at 16 px, 900 layers\n'
+                       'INFO shader pack frame_identity_terrain 1.0.0: Terrain, Colour in 40 ms\n')
+        self.assertEqual(identity.session_checks(self.dir, ['terrain_pack']), [])
 
     def test_float_oit_must_change_the_float_picture(self):
         for scene in identity.SESSIONS['float_hdr'][2]:
@@ -248,6 +270,24 @@ class HdrGateTests(unittest.TestCase):
         for scene in ('sun', 'hud_sun'):
             self.assertIn(f'float_unlit.{scene}: the SDR screenshot isn\'t HDR off\'s within rounding', lifted)
             self.assertIn(f'float_unlit.{scene}: the HDR shot isn\'t its SDR screenshot\'s picture: 4 pixels', lifted)
+
+
+class ReliefPackTests(unittest.TestCase):
+    def test_the_normal_maps_hold_the_heights_and_lean_down_their_slopes(self):
+        folder = Path(tempfile.mkdtemp()) / 'relief'
+        identity.relief_pack(folder)
+        width, height, bpp, raw, (depth, colour) = identity.read_png(
+            folder / 'assets/minecraft/textures/block/stone_n.png')
+        self.assertEqual((width, height, depth, colour), (16, 16, 8, 6))
+        rows = identity.unfilter(width, height, bpp, raw)
+        texel = lambda x, y: tuple(rows[y][4 * x:4 * x + 4])
+        # 🤖 Agent: The top of a bump: flat, at full height. Halfway down its east side, at height 0.55, the
+        # normal leans east (r above 128) and not along y.
+        self.assertEqual(texel(0, 0), (128, 128, 255, 255))
+        r, g, _, a = texel(2, 0)
+        self.assertGreater(r, 160)
+        self.assertEqual((g, a), (128, 140))
+        self.assertEqual(json.loads((folder / 'pack.mcmeta').read_text())['pack']['min_format'], 97)
 
 
 class BaseTests(unittest.TestCase):
