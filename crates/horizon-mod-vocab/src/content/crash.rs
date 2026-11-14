@@ -84,7 +84,7 @@ pub struct ConvertedCall {
 // no wire: process-local crash attribution uses static runtime identities; not a hook payload.
 /// The packages one native runtime declared it loaded.
 ///
-/// A runtime that hosts converted code (Portizon's wasm packages, a Java interpreter running
+/// A runtime that hosts converted code (a converter's wasm packages, a Java interpreter running
 /// jars) builds this once from the packages it loaded and keeps it while they run. A call into
 /// a package goes through the [`ConvertedPackage`] this registry hands out for an id it
 /// declared, so guest code cannot name a package from another mod. The runtime's own `[mod] id`

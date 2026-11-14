@@ -6,15 +6,17 @@ use crate::*;
 pub trait RecipesHost {
     /// Side: both.
     /// Published asset/data read: available in Setup, Reloading and World.
-    /// The recipes of type `kind` (`minecraft:smelting`, `mymod:crusher`), vanilla's
+    /// The recipes of registered recipe type `kind` (`minecraft:crafting`, `mymod:crusher`), vanilla's
     /// types and mods' own alike, from `data/<namespace>/recipe/*.json` of vanilla,
     /// the content mods (`.hmod`) and the world's data packs, in file order: each
     /// one typed (`Recipe`: its ingredients, results, group, cooking time and
     /// experience, or its stonecutting, smithing or special crafting rule),
-    /// with its file as JSON for a mod's own type. Dynamic rules are not fixed
+    /// with its file as JSON for a mod's own type. The file's type field names its
+    /// serializer; this can differ from the reported recipe kind. Dynamic rules are not fixed
     /// outputs; use `LevelRef::recipe_for` for engine-matchable recipe types.
-    /// Cache mod-owned types once per load/reload and match those in mod memory;
-    /// the host returns RecipeLookupError::NotMatchable for such types. These are the
+    /// Registered crafting kinds match through LevelRef::recipe_for. Cache other mod-owned
+    /// types once per load/reload and match those in mod memory; those return
+    /// RecipeLookupError::NotMatchable. These are the
     /// recipes in force (`RecipeManager.getAllRecipesFor`): data packs merged and
     /// load conditions held, so a pack's override or removal shows. A data pack
     /// changes them on `/reload`, so look them up again when you need them. Empty
@@ -96,6 +98,16 @@ pub trait RecipesClientHost {
     /// without requiring the recipe to be learned. The screen shows any refusal.
     #[access(WorldOnly)]
     fn transfer_recipe(&mut self, book_id: i32);
+    /// Side: client.
+    /// A viewer's "+" for a recipe by its id, into the open menu: a machine's mod menu as
+    /// well as a crafting grid. The server asks the `menu_transfer` part of the open mod menu's
+    /// type first, then makes the game's own grid transfer; the screen shows the result as for
+    /// `transfer_recipe`. `max` moves as many sets as the items allow (Shift). Shown as
+    /// `NotIntoMenu` with no container screen open, in spectator mode, and on a server that
+    /// doesn't take viewer transfers. In a solo world or on a LAN host the game is the server:
+    /// its own player's transfer takes the same path, part first, then the grid.
+    #[access(WorldOnly)]
+    fn transfer_recipe_id(&mut self, recipe: &str, max: bool);
     /// Side: client.
     /// What `transfer_recipe(book_id)` would do now, worked out by the server
     /// without moving anything: the player's inventory, the grid and every

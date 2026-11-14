@@ -2,7 +2,7 @@
 //! NeoForge 26.3's `ItemAccess.forPlayerSlot`. A slot is the storage it shows, so a write through
 //! [`ItemPlace::MenuSlot`] is a write to that storage, journaled once, through its own handler,
 //! under the slot's own rules.
-use crate::{EntityRef, ItemPlace, LevelRef, MenuRef};
+use crate::{EntityRef, ItemPlace, LevelRef, MenuRef, MenuSlotPlace};
 
 /// What a menu slot shows: where [`MenuRef::slot_backing`] says its stack lives.
 #[non_exhaustive]
@@ -36,6 +36,10 @@ pub enum MenuSlotBacking {
     CraftResult,
     /// Slot `.0` of a mod's chest menu (`open_menu`).
     Native(usize),
+    /// A container slot of a mod menu type opened with no block, backed by storage that is not a
+    /// block entity ([`PlayerRef::back_mod_menu_slots`](crate::PlayerRef::back_mod_menu_slots)):
+    /// a held item's contents or an entity's item handler. Only such a slot has this backing.
+    Place(MenuSlotPlace),
 }
 
 impl MenuRef {

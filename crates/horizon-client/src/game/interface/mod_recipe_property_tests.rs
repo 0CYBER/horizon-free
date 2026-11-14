@@ -61,6 +61,7 @@ mod tests {
                         "pot:menu",
                         0,
                         stack,
+                        horizon_client::menu::SlotContext::default(),
                         true,
                         64,
                         64,

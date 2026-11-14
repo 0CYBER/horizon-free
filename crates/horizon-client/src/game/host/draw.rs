@@ -2,10 +2,26 @@
 use crate::game::{Game, api_values::TryIntoEngine};
 use mod_api::{prelude::*, *};
 
-/// [`DrawContext`] on the game's `crate::hud::HudBatch`.
+/// [`DrawContext`] on the game's `crate::hud::HudBatch`: one per hook call.
 pub(crate) struct GameDrawContext<'a, 'g> {
     pub(crate) game: &'a Game<'g>,
     pub(crate) surface: &'a mut crate::hud::HudBatch,
+    /// The call's open clips (`push_clip`), closed when the call returns.
+    clips: crate::game::gui_clips::GuiClips,
+}
+impl<'a, 'g> GameDrawContext<'a, 'g> {
+    pub(crate) fn new(game: &'a Game<'g>, surface: &'a mut crate::hud::HudBatch) -> Self {
+        Self {
+            game,
+            surface,
+            clips: Default::default(),
+        }
+    }
+}
+impl Drop for GameDrawContext<'_, '_> {
+    fn drop(&mut self) {
+        self.clips.close_all(self.surface);
+    }
 }
 impl DrawContext for GameDrawContext<'_, '_> {
     fn size(&self) -> [f32; 2] {
@@ -78,6 +94,12 @@ impl DrawContext for GameDrawContext<'_, '_> {
         self.game
             .native_draw_scene(&mut *self.surface, rect, &blocks, view)
     }
+    fn push_clip(&mut self, rect: [f32; 4]) -> Result<(), GuiClipRefusal> {
+        self.clips.push(self.surface, rect)
+    }
+    fn pop_clip(&mut self) -> Result<(), GuiClipRefusal> {
+        self.clips.pop(self.surface)
+    }
     fn draw_menu_background(&mut self, rect: [f32; 4], in_world: bool) {
         self.game
             .native_draw_menu_background(&mut *self.surface, rect, in_world)
@@ -114,6 +136,14 @@ impl DrawContext for GameDrawContext<'_, '_> {
 pub(crate) struct GameBlockEntityDrawContext<'a, 'g> {
     pub(crate) game: &'a Game<'g>,
     pub(crate) surface: &'a mut crate::game::native_block_entity_draw::BlockEntityDraw,
+}
+impl<'a, 'g> GameBlockEntityDrawContext<'a, 'g> {
+    pub(crate) fn new(
+        game: &'a Game<'g>,
+        surface: &'a mut crate::game::native_block_entity_draw::BlockEntityDraw,
+    ) -> Self {
+        Self { game, surface }
+    }
 }
 impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
     fn push(&mut self) {
@@ -241,6 +271,14 @@ pub(crate) struct GameCameraDrawContext<'a, 'g> {
     pub(crate) game: &'a Game<'g>,
     pub(crate) surface: &'a mut crate::screen_effects::CameraQuads,
 }
+impl<'a, 'g> GameCameraDrawContext<'a, 'g> {
+    pub(crate) fn new(
+        game: &'a Game<'g>,
+        surface: &'a mut crate::screen_effects::CameraQuads,
+    ) -> Self {
+        Self { game, surface }
+    }
+}
 impl CameraDrawContext for GameCameraDrawContext<'_, '_> {
     fn quad(&mut self, corners: [[f32; 3]; 4], argb: u32) -> bool {
         self.game
@@ -255,6 +293,14 @@ impl CameraDrawContext for GameCameraDrawContext<'_, '_> {
 pub(crate) struct GameWorldDrawContext<'a, 'g> {
     pub(crate) game: &'a Game<'g>,
     pub(crate) surface: &'a mut crate::world_geometry::WorldGeometry,
+}
+impl<'a, 'g> GameWorldDrawContext<'a, 'g> {
+    pub(crate) fn new(
+        game: &'a Game<'g>,
+        surface: &'a mut crate::world_geometry::WorldGeometry,
+    ) -> Self {
+        Self { game, surface }
+    }
 }
 impl WorldDrawContext for GameWorldDrawContext<'_, '_> {
     fn draw_instance_group(&mut self, group: InstanceGroupRef) -> Result<(), GroupError> {

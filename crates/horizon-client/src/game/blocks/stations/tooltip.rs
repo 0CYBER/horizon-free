@@ -49,10 +49,7 @@ impl Game<'_> {
         };
         let before = place;
         let mut cancel = false;
-        let mut draw = crate::game::host::draw::GameDrawContext {
-            game: self,
-            surface: batch,
-        };
+        let mut draw = crate::game::host::draw::GameDrawContext::new(self, batch);
         self.native_render_tooltip_pre(mod_api::__private::RenderTooltipPreCall {
             draw: &mut draw,
             stack: stack.as_ref(),

@@ -179,11 +179,13 @@ fn difference_preserves_component_base_candidates_and_concrete_base_test() {
 }
 #[test]
 fn mod_owned_recipe_type_skips_engine_component_validation() {
-    let loaded = recipe(
-        &Items::empty(),
-        serde_json::json!({"type":"fixture:owned","ingredients":[{"type":"neoforge:components","items":"minecraft:stone","components":{"!fixture:not_registered":{}}}]}),
-    );
-    assert_eq!(loaded.by_type["fixture:owned"].len(), 1);
+    mod_platform::testing::with_recipe_types(&["fixture:owned"], || {
+        let loaded = recipe(
+            &Items::empty(),
+            serde_json::json!({"type":"fixture:owned","ingredients":[{"type":"neoforge:components","items":"minecraft:stone","components":{"!fixture:not_registered":{}}}]}),
+        );
+        assert_eq!(loaded.by_type["fixture:owned"].len(), 1);
+    });
 }
 #[test]
 fn cooking_tests_non_simple_candidates_outside_default_list_in_recipe_order() {

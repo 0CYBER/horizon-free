@@ -41,7 +41,7 @@ fn native_host_returns_typed_recipe_rules() {
     struct Recipes(Arc<[Recipe]>);
     impl mod_api::prelude::RecipesHost for Recipes {
         fn recipes_of_type(&self, kind: &str) -> Arc<[Recipe]> {
-            if kind == "minecraft:crafting_transmute" {
+            if kind == "minecraft:crafting" {
                 self.0.clone()
             } else {
                 Arc::from([])
@@ -52,7 +52,7 @@ fn native_host_returns_typed_recipe_rules() {
     mod_api::impl_host_areas!(Recipes, except(recipes));
     let mut recipe = Recipe::new(
         "test:recipe",
-        "minecraft:crafting_transmute",
+        "minecraft:crafting",
         Arc::new(serde_json::json!({"source": "test"})),
     );
     recipe.rule = Some(RecipeRule::Transmute {
@@ -64,7 +64,7 @@ fn native_host_returns_typed_recipe_rules() {
         result: RecipeTemplate::new(None, 3, None),
     });
     let host = Recipes(Arc::from([recipe]));
-    let view = (&host as &dyn Host).recipes_of_type("minecraft:crafting_transmute");
+    let view = (&host as &dyn Host).recipes_of_type("minecraft:crafting");
     let Some(RecipeRule::Transmute {
         input,
         material,
@@ -154,6 +154,10 @@ fn server_services_forward_commands_messages_and_player_identity() {
     let host: &mut dyn ServerHost = &mut server;
     assert!(host.commands().run_command("list"));
     assert!(!host.commands().run_command("missing"));
+    let result = host.commands().run_command_with_output("list");
+    assert!(result.success);
+    assert!(result.feedback.is_empty());
+    assert!(!host.commands().run_command_with_output("missing").success);
     host.commands().feedback(Text::literal("answer")).unwrap();
     host.messages()
         .broadcast(Text::literal("everyone"))
@@ -162,7 +166,7 @@ fn server_services_forward_commands_messages_and_player_identity() {
     let player = host.players().acting_player().unwrap();
     assert_eq!(host.players().server_players(), [player]);
     assert_eq!((player.uuid(), player.entity().id()), (7, 42));
-    assert_eq!(server.commands.ran, ["list", "missing"]);
+    assert_eq!(server.commands.ran, ["list", "missing", "list", "missing"]);
     assert_eq!(server.commands.feedback, [Text::literal("answer")]);
     assert_eq!(
         server.messages.broadcast_lines(),

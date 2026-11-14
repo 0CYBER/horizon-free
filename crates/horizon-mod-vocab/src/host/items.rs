@@ -95,6 +95,42 @@ pub trait ItemsServerHost {
     /// is empty, no longer held, or not a scratch place.
     #[access(WorldOnly)]
     fn scratch_take(&mut self, tx: &Transaction, place: &ItemPlace) -> Option<ItemStack>;
+    /// Side: server.
+    /// Holds `stack` outside the world in a two-slot copy whose item may change, in the open
+    /// transaction `tx`: the [`ItemPlace::ScratchSlots`] a dispensed fluid container runs in
+    /// (`DispenseFluidContainer`), `stack` in its first slot. It lives as a
+    /// [`scratch_stack`](Self::scratch_stack) place does. None where `tx` is not open.
+    #[access(WorldOnly)]
+    fn scratch_slots(
+        &mut self,
+        tx: &Transaction,
+        stack: ItemStack,
+    ) -> Result<Option<ItemPlace>, StackWriteError>;
+    /// Side: server.
+    /// Takes both slots out of two-slot place `place`, in `tx`, ending the place: what the
+    /// first holds and what the second caught. None where it is no longer held or not a
+    /// two-slot place.
+    #[access(WorldOnly)]
+    fn scratch_take_slots(
+        &mut self,
+        tx: &Transaction,
+        place: &ItemPlace,
+    ) -> Option<(Option<ItemStack>, Option<ItemStack>)>;
+    /// Side: server.
+    /// `DefaultDispenseItemBehavior.consumeWithRemainder`: one of `stack` is used and
+    /// `remainder` replaces it, a single `stack` by becoming it, else into the dispenser at
+    /// `pos` (`DispenserBlockEntity.insertItem`) or, where it doesn't fit, out of its front with
+    /// the click and smoke. What the slot holds then. A client, another dimension or an unloaded
+    /// chunk keeps `stack` unchanged.
+    #[access(WorldOnly)]
+    fn dispense_with_remainder(
+        &mut self,
+        dimension: &str,
+        pos: [i32; 3],
+        facing: Direction,
+        stack: ItemStack,
+        remainder: ItemStack,
+    ) -> Result<Option<ItemStack>, StackWriteError>;
 }
 /// The client host's methods of the `items` area, implemented by the game and reached through [`crate::ClientHost`].
 #[horizon_mod_api_macros::host_area]

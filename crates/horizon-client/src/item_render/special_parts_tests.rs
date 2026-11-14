@@ -9,7 +9,8 @@ use horizon_assets::{
 use std::fs;
 
 /// A for a stack of one, B for more, tinted; a stack of three names a model no pack has, and one
-/// of four is refused (the renderer failed). The answer is prepared by the renderer that draws it.
+/// of four is refused (the renderer failed); stacks of six and seven draw A tinted white and grey
+/// (encoded 0.5). The answer is prepared by the renderer that draws it.
 struct Pan<'r>(&'r ItemRenderer);
 impl ItemEnv for Pan<'_> {
     fn special_model_parts(
@@ -34,11 +35,19 @@ impl ItemEnv for Pan<'_> {
                 pose: horizon_assets::math::Mat4::IDENTITY.scale([2.0; 3]),
                 ..part("spt:item/a")
             }],
+            6 | 7 => vec![SpecialPart {
+                tints: vec![[WHITE, GREY][stack.count as usize - 6]],
+                ..part("spt:item/a")
+            }],
             _ => vec![part("spt:item/b")],
         };
         Some(self.0.prepare_parts(base, &parts))
     }
 }
+
+/// White and an encoded 0.5 grey, packed vanilla-space ARGB.
+const WHITE: i32 = 0xFFFF_FFFF_u32 as i32;
+const GREY: i32 = 0xFF80_8080_u32 as i32;
 
 /// `n` separated 4-pixel cubes, every face tinted by index 0.
 fn cubes(n: usize) -> String {
@@ -94,6 +103,16 @@ fn renderer(root: &std::path::Path, b_cubes: usize) -> ItemRenderer {
         "assets/spt/items/cube.json",
         r#"{"model":{"type":"minecraft:model","model":"spt:item/a"}}"#,
     );
+    // Cube A tinted white or grey by vanilla's constant tint source.
+    for (name, tint) in [("white_cube", WHITE), ("grey_cube", GREY)] {
+        write(
+            root,
+            &format!("assets/spt/items/{name}.json"),
+            &format!(
+                r#"{{"model":{{"type":"minecraft:model","model":"spt:item/a","tints":[{{"type":"minecraft:constant","value":{tint}}}]}}}}"#
+            ),
+        );
+    }
     write(
         root,
         "assets/spt/items/stranger.json",
@@ -238,5 +257,81 @@ fn a_registered_special_model_draws_its_renderers_resource_models() {
         &Pan(&reloaded),
     );
     assert_eq!(quads(&reloaded, &state).len(), 18);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Row 5 of the matrix (`docs/design/mod-api/resource-renderers.md`), an old state across a
+/// reload. A part's quads are CPU vertices submitted every frame, not prepared GPU models, so the
+/// state's own `Arc<BakedItemModel>` is the only lease and there is no retirement step: a state
+/// resolved before a reload still draws its 12 quads after it, the old baked model is released
+/// exactly once, when the last state holding it drops, and a new resolve draws the reload's 18.
+#[test]
+#[ignore = "daily"]
+fn an_old_state_draws_across_a_reload_and_releases_its_models_once() {
+    let root = std::env::temp_dir().join(format!(
+        "horizon-special-parts-lease-{}",
+        std::process::id()
+    ));
+    register_special_model_types(vec!["spt:pan".into()]);
+    let before = renderer(&root, 2);
+    let resolve = |renderer: &ItemRenderer| {
+        renderer.resolve(
+            &stack("spt:pan", 2),
+            DisplayContext::Gui,
+            None,
+            None,
+            0,
+            &Pan(renderer),
+        )
+    };
+    let (old, also_old) = (resolve(&before), resolve(&before));
+    let LayerGeometry::Quads(b) = &old.layers[0].geometry else {
+        panic!("not quads: {:?}", old.layers[0].geometry);
+    };
+    let b = Arc::downgrade(b);
+    let after = renderer(&root, 3);
+    drop(before);
+    assert_eq!(quads(&after, &old).len(), 12);
+    assert_eq!(quads(&after, &resolve(&after)).len(), 18);
+    assert_eq!(b.strong_count(), 2, "the two old states hold the old B");
+    drop(old);
+    assert_eq!(b.strong_count(), 1);
+    assert_eq!(quads(&after, &also_old).len(), 12);
+    drop(also_old);
+    assert_eq!(b.strong_count(), 0, "the old B outlived its last state");
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Row 11 of the matrix, a part's tint. It is packed vanilla-space ARGB, as an item model's
+/// tints are: white and an encoded 0.5 reach the vertices as the colour vanilla's constant tint
+/// source gives the same cube, not decoded, so the frame decodes them once (vanilla's power 2.2:
+/// shader values 1 and about 0.21763764, pinned by `gfx::linear_blend_tests`). A value above 1 has
+/// no input.
+#[test]
+#[ignore = "daily"]
+fn a_parts_tint_reaches_the_vertices_as_a_vanilla_tint_does() {
+    let root =
+        std::env::temp_dir().join(format!("horizon-special-parts-tint-{}", std::process::id()));
+    register_special_model_types(vec!["spt:pan".into()]);
+    let renderer = renderer(&root, 2);
+    let colours = |item: &str, count| {
+        let state = renderer.resolve(
+            &stack(item, count),
+            DisplayContext::Gui,
+            None,
+            None,
+            0,
+            &Pan(&renderer),
+        );
+        quads(&renderer, &state)
+            .iter()
+            .map(|q| q.color)
+            .collect::<Vec<_>>()
+    };
+    for (count, vanilla, argb) in [(6, "spt:white_cube", WHITE), (7, "spt:grey_cube", GREY)] {
+        let part = colours("spt:pan", count);
+        assert_eq!(part, colours(vanilla, 1), "{vanilla}");
+        assert_eq!(part, vec![argb as u32; 6], "{vanilla}");
+    }
     fs::remove_dir_all(root).unwrap();
 }

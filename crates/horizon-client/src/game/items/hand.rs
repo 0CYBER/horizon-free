@@ -8,7 +8,21 @@ use horizon_client::{
     Result,
     attack_strength::HeldStack,
     first_person::{Hand, HandWorld, Hit, SwingAnimation, UseResult, swing_duration},
+    input_queue::{ClickQueue, QueueLimits},
+    interaction_input::{Button, click_queue},
     items::ItemStack,
+};
+
+/// The local player's empty attack and use click queues, bounded as a server's client's are
+/// (`CLICK_QUEUES`).
+pub(super) const ATTACK_CLICKS: ClickQueue = click_queue(Button::Attack);
+pub(super) const USE_CLICKS: ClickQueue = click_queue(Button::Use);
+/// The bounds of `Game::hotbar_presses`: each selection from the queue takes 64 number keys, oldest
+/// first, and 1024 wait at most. A player presses a few a tick.
+pub(super) const HOTBAR_PRESSES: QueueLimits = QueueLimits {
+    name: "number keys",
+    max_len: 1024,
+    per_tick: 64,
 };
 use horizon_core::geometry::{Aabb, Vec3};
 
@@ -235,8 +249,8 @@ impl Game<'_> {
             error: None,
         });
         self.clicks.destroying = destroying;
-        self.attack_clicks = 0;
-        self.use_clicks = 0;
+        self.attack_clicks.clear();
+        self.use_clicks.clear();
         self.request_remote_mining_stop();
         self.mining = None;
     }
@@ -315,7 +329,7 @@ impl Game<'_> {
     }
     /// `handleKeybinds`' number keys (`keyHotbarSlots[i].consumeClick`).
     pub(super) fn select_queued_hotbar(&mut self) {
-        for slot in std::mem::take(&mut self.hotbar_presses) {
+        for slot in self.hotbar_presses.take_tick() {
             self.selected = slot;
         }
     }
@@ -390,9 +404,10 @@ impl Game<'_> {
     /// The attack and use part of `Minecraft.tick` for the local player:
     /// attack clicks since the last tick and the held attack button.
     pub(super) fn tick_local_hand(&mut self) -> Result<()> {
-        let attack_clicks = std::mem::take(&mut self.attack_clicks);
-        let use_clicks = std::mem::take(&mut self.use_clicks);
         if self.screen == Screen::Playing && self.title.is_none() && self.sleeping.is_none() {
+            // Up to each queue's bound; the rest act on the next ticks.
+            let attack_clicks = self.attack_clicks.take_tick();
+            let use_clicks = self.use_clicks.take_tick();
             let mut clicks = std::mem::take(&mut self.clicks);
             // keyAttack.isDown(); playing implies the grabbed mouse here
             // (scripts under --control hold buttons without grabbing it).
@@ -446,6 +461,8 @@ impl Game<'_> {
             // Minecraft.tick: a screen keeps the attack from starting, and
             // opening it released the keys (`KeyMapping.releaseAll`).
             self.clicks.miss_time = 10000;
+            self.attack_clicks.clear();
+            self.use_clicks.clear();
             self.hotbar_presses.clear();
         }
         let d = &self.clicks.destroying;

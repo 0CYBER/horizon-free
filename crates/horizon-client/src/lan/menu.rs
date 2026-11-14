@@ -181,6 +181,9 @@ pub enum NativeMenuEvent {
     /// The menu closed: by the player, by the server, another opened, or
     /// the player left.
     Closed { uuid: u128, window: i32 },
+    /// The storage a mod backed the menu's slots with was written (the game's notice): its
+    /// slots are looked at again once the write is done.
+    PlacesChanged { uuid: u128, window: i32 },
 }
 
 /// The y of the key a chest minecart's or chest boat's items are kept under
@@ -480,6 +483,8 @@ pub struct View<'a> {
     pub hidden: &'a [usize],
     /// The context the hooks fired inside a click are given.
     pub loop_context: &'a LoopContext,
+    /// The parts' one copy of the container for this click (`menu_slot_rules`).
+    pub slot_snapshot: crate::menu::SlotSnapshot,
 }
 
 impl View<'_> {
@@ -505,6 +510,7 @@ impl View<'_> {
         }
     }
     pub fn set(&mut self, i: usize, item: Option<ItemStack>) {
+        self.slot_snapshot.clear();
         match &mut self.container {
             Some(c) if i < c.len() => c[i] = item,
             Some(c) => {
@@ -513,6 +519,43 @@ impl View<'_> {
             }
             None => self.guest.set_menu_slot(i, item),
         }
+    }
+    /// Map the flattened server slots to the same containers and indices as prediction.
+    fn slot_context(&self, i: usize) -> (usize, crate::menu::SlotContext<'_>) {
+        let slots = self.container.as_deref().unwrap_or_default();
+        let menu = self.guest.menu.as_ref();
+        let crafting = menu
+            .and_then(|menu| menu.mod_type)
+            .and_then(|menu| menu.crafting);
+        let mut context = crate::menu::SlotContext {
+            player: Some(self.guest.uuid),
+            pos: menu.and_then(|menu| menu.pos).map(|(x, y, z)| [x, y, z]),
+            container: crate::menu::lan_container(i, self.container.as_deref()),
+            slots,
+            snapshot: Some(&self.slot_snapshot),
+            ..Default::default()
+        };
+        let mut index = if i < slots.len() {
+            i
+        } else {
+            player_slot(i - slots.len())
+        };
+        if let Some(crafting) = crafting {
+            let range = crafting.grid_slots();
+            context.grid = slots.get(range.clone()).unwrap_or_default();
+            context.result = slots
+                .get(crafting.result..crafting.result + 1)
+                .unwrap_or_default();
+            context.main_crafting = Some(crafting);
+            if i < slots.len() && range.contains(&i) {
+                context.container = mod_api::MenuContainer::Grid;
+                index = i - range.start;
+            } else if i < slots.len() && i == crafting.result {
+                context.container = mod_api::MenuContainer::Result;
+                index = 0;
+            }
+        }
+        (index, context)
     }
     /// Whether the slot takes part in clicks at all.
     fn enabled(&self, i: usize) -> bool {
@@ -547,18 +590,13 @@ impl View<'_> {
         else {
             return (own, max.min(item_max));
         };
-        let index = self.container.as_ref().map_or(i, |c| {
-            if i < c.len() {
-                i
-            } else {
-                player_slot(i - c.len())
-            }
-        });
+        let (index, context) = self.slot_context(i);
         crate::menu::apply_menu_slot_rules(
             rules.slot_rules(),
             &menu.registry_id,
             index,
             stack,
+            context,
             own,
             max,
             item_max,
@@ -742,17 +780,13 @@ fn move_to(
                 .as_ref()
                 .filter(|_| view.container.is_some())
             {
-                let c = view.container.as_ref().unwrap();
-                let index = if i < c.len() {
-                    i
-                } else {
-                    player_slot(i - c.len())
-                };
+                let (index, context) = view.slot_context(i);
                 if !crate::menu::apply_menu_slot_rules(
                     rules.slot_rules(),
                     &menu.registry_id,
                     index,
                     &stack,
+                    context,
                     true,
                     u32::MAX,
                     rules.max_stack(&stack.item).max(1),
@@ -1531,6 +1565,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -1562,6 +1597,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -1605,6 +1641,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -1649,6 +1686,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -1724,6 +1762,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
         // Left click with stone in hand over the refused bundle: nothing goes in.
@@ -1758,6 +1797,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
         let mut bundle = ItemStack::new("minecraft:bundle", 1);
@@ -1851,8 +1891,50 @@ pub(crate) mod tests {
             });
         }
         assert_eq!(slots.get(&world, &g, 0), planks);
-        let read = slots.read(&world, &g).unwrap();
+        let mut read = slots.read(&world, &g).unwrap();
         assert_eq!((&read[0], read[1].is_some()), (&planks, true));
+        {
+            use mod_api::MenuContainer::{Grid, Main, Player, Result};
+            let mut view = View {
+                guest: &mut g,
+                container: Some(&mut read),
+                shulker: false,
+                container_limits: Vec::new(),
+                hidden: &[],
+                slot_snapshot: Default::default(),
+                loop_context: crate::test_resources::server_loop_context(),
+            };
+            let (index, context) = view.slot_context(2);
+            assert_eq!((index, context.container), (1, Grid));
+            assert_eq!(
+                context.slot(Grid, 0).unwrap().item.as_ref(),
+                "minecraft:oak_log"
+            );
+            assert_eq!(context.slot(Result, 0).unwrap().count, 4);
+            assert!(context.slot(Main, 1).is_none());
+            assert!(context.slot(Main, 0).is_none());
+            let (index, context) = view.slot_context(0);
+            assert_eq!((index, context.container), (0, Result));
+            let (index, context) = view.slot_context(5);
+            assert_eq!((index, context.container), (9, Player));
+            let builds = std::cell::Cell::new(0);
+            let build = || {
+                builds.set(builds.get() + 1);
+                mod_api::MenuSlotContext::new(None, None, Vec::new())
+            };
+            view.slot_snapshot.get_or_init(build);
+            view.slot_snapshot.get_or_init(build);
+            assert_eq!(builds.get(), 1);
+            view.set(1, Some(ItemStack::new("minecraft:birch_log", 3)));
+            let (_, context) = view.slot_context(1);
+            assert_eq!(
+                context.slot(Grid, 0).unwrap().item.as_ref(),
+                "minecraft:birch_log"
+            );
+            assert_eq!(context.slot(Grid, 0).unwrap().count, 3);
+            context.snapshot.unwrap().get_or_init(build);
+            assert_eq!(builds.get(), 2, "a mutation starts a fresh snapshot");
+        }
         slots.write(&mut world, &mut g, read);
         let Some(BlockEntity::Mod(m)) = world.block_entities.get(&k) else {
             panic!("not a mod's");
@@ -2003,6 +2085,7 @@ pub(crate) mod tests {
                 shulker: false,
                 container_limits: Vec::new(),
                 hidden: &[],
+                slot_snapshot: Default::default(),
                 loop_context: &crate::test_resources::loop_context(
                     horizon_world::native_load_context::LoopSide::Server,
                 ),
@@ -2044,6 +2127,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &hidden,
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2068,6 +2152,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
         view.guest.carried = Some(ItemStack::new("minecraft:stone", 8));
@@ -2102,6 +2187,7 @@ pub(crate) mod tests {
                     shulker: false,
                     container_limits: Vec::new(),
                     hidden: &[],
+                    slot_snapshot: Default::default(),
                     loop_context: crate::test_resources::server_loop_context(),
                 };
                 menu.load_slot(0, view.get(0));
@@ -2153,6 +2239,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2273,6 +2360,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
         let (drops, _) = click(&mut view, &mut None, 0, 0, input::SWAP, &rules);
@@ -2313,6 +2401,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2368,6 +2457,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2417,6 +2507,7 @@ pub(crate) mod tests {
                 shulker,
                 container_limits: Vec::new(),
                 hidden: &[],
+                slot_snapshot: Default::default(),
                 loop_context: &crate::test_resources::loop_context(
                     horizon_world::native_load_context::LoopSide::Server,
                 ),
@@ -2466,6 +2557,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2548,6 +2640,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2592,6 +2685,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2632,6 +2726,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2675,6 +2770,7 @@ pub(crate) mod tests {
                     shulker: false,
                     container_limits: Vec::new(),
                     hidden: &[],
+                    slot_snapshot: Default::default(),
                     loop_context: &crate::test_resources::loop_context(
                         horizon_world::native_load_context::LoopSide::Server,
                     ),
@@ -2711,6 +2807,7 @@ pub(crate) mod tests {
                     shulker: false,
                     container_limits: Vec::new(),
                     hidden: &[],
+                    slot_snapshot: Default::default(),
                     loop_context: &crate::test_resources::loop_context(
                         horizon_world::native_load_context::LoopSide::Server,
                     ),
@@ -2745,6 +2842,7 @@ pub(crate) mod tests {
                 shulker: false,
                 container_limits: Vec::new(),
                 hidden: &[],
+                slot_snapshot: Default::default(),
                 loop_context: &context,
             };
             view.guest.carried = Some(stack.clone());
@@ -2760,6 +2858,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &context,
         };
         view.set(36, Some(stack.clone()));
@@ -2823,6 +2922,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2872,6 +2972,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: vec![Some(10); 3],
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &context,
         };
         view.guest.carried = Some(ItemStack::new("minecraft:stick", 20));
@@ -2911,6 +3012,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2961,6 +3063,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),

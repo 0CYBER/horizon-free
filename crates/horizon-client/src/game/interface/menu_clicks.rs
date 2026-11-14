@@ -416,6 +416,7 @@ impl Game<'_> {
             self.remote_menu_type()
         };
         menu.set_registry_id(menu_id);
+        menu.set_block_pos(self.container.map(|(x, y, z)| [x, y, z]));
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
         if matches!(kind, Kind::Mount(_)) {
             menu.mount = self.mount_menu_entity();
@@ -843,7 +844,7 @@ impl Game<'_> {
                 crafted += 1;
                 // `ResultSlot.onTake` (native_item_crafted): recipe, stack taken, grid before.
                 let player = self.native_acting_id();
-                let id = format!("minecraft:{recipe}");
+                let id = horizon_client::crafting::qualified(&recipe);
                 self.native_item_crafted(player, &id, &taken, &ingredients);
                 self.tutorial_get_item(Some(&taken));
                 self.award_stat("crafted", &made.0, made.1 as i32);
