@@ -122,7 +122,7 @@ impl Game<'_> {
         )
     }
 
-    fn native_client_menu_name(&self, menu: MenuRef) -> Option<&str> {
+    pub(super) fn native_client_menu_name(&self, menu: MenuRef) -> Option<&str> {
         let remote = self.remote.as_ref().filter(|remote| remote.logged_in)?;
         let epoch = self.native_lifecycle.epoch()?;
         (menu.fields().player.fields().entity.epoch() == epoch
@@ -229,6 +229,7 @@ impl Game<'_> {
     pub(super) fn menu_slot_count(&self, menu: MenuRef) -> Option<usize> {
         if self.remote.is_some() {
             let name = self.native_client_menu_name(menu)?;
+            Self::inventory_screen_slot(name, 0)?;
             return Some(
                 (0..)
                     .map_while(|slot| Self::inventory_screen_slot(name, slot))

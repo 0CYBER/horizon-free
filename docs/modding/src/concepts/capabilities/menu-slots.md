@@ -282,3 +282,15 @@ Return `None` to hand the transfer on to the game's grid transfer (`NotIntoMenu`
 crafting grid). A dry run, the viewer's check, must move nothing. Vanilla menu types are never asked. A solo
 world and a LAN host's own player get the same contract: the game is the server there and asks the part of the
 player's open block menu before its own grid transfer, on the same thread.
+
+`menu.slot_kinds(host)` is a client read in menu index order, with exactly
+`slot_count` entries. It describes the client's layout and content declaration,
+not the server's backing or acceptance rules. `Player(index)` uses hotbar 0–8,
+main 9–35, armour 36–39 (feet to head), off hand 40. Container equipment is
+`Equipment`; linked storage is `Storage`. Workstations without a classified layout (anvil, enchanting table, loom,
+and similar types) return `Other` for every slot, including player slots. A game menu with no known client slot count returns `None`, as do
+stale or foreign handles, missing content types, and calls without an open menu
+or outside a world. Creative returns the underlying inventory menu's 46 slots,
+never creative tab wrappers; read the screen type to distinguish them.
+The answer is stable for one open menu. Cache it: each read builds one Vec
+from the layout table and content declaration, with one allocation.
