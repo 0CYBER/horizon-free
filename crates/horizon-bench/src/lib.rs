@@ -179,6 +179,10 @@ impl Frames {
             let slowest = &times[n - ((n as f64 * share).ceil() as usize).max(1)..];
             1000.0 * slowest.len() as f64 / slowest.iter().sum::<f64>()
         };
+        let median = |ms: &[f32]| {
+            let times = sorted(ms);
+            (!times.is_empty()).then(|| round(percentile(&times, 0.5)))
+        };
         let mut histogram = vec![0; HISTOGRAM_EDGES_MS.len()];
         for &t in &times {
             histogram[HISTOGRAM_EDGES_MS.partition_point(|&edge| edge <= t).max(1) - 1] += 1;
@@ -196,8 +200,8 @@ impl Frames {
             p99_ms: round(percentile(&times, 0.99)),
             p999_ms: round(percentile(&times, 0.999)),
             max_ms: round(times[n - 1]),
-            cpu_p50_ms: (!cpu_ms.is_empty()).then(|| round(percentile(&sorted(cpu_ms), 0.5))),
-            gpu_p50_ms: (!gpu_ms.is_empty()).then(|| round(percentile(&sorted(gpu_ms), 0.5))),
+            cpu_p50_ms: median(cpu_ms),
+            gpu_p50_ms: median(gpu_ms),
             histogram,
         })
     }
@@ -415,6 +419,28 @@ mod tests {
         assert_eq!(f.histogram.iter().sum::<u64>(), 1000);
         assert_eq!((f.cpu_p50_ms, f.gpu_p50_ms), (None, None));
         assert_eq!(Frames::of("x", 0, &[], &[], &[]), None);
+    }
+
+    #[test]
+    fn auxiliary_medians_use_only_finite_samples() {
+        let invalid = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+        let mixed = [f32::INFINITY, 9.0, f32::NAN, 3.0];
+        for (cpu, gpu, expected) in [
+            (invalid.as_slice(), invalid.as_slice(), (None, None)),
+            (invalid.as_slice(), mixed.as_slice(), (None, Some(3.0))),
+            (mixed.as_slice(), invalid.as_slice(), (Some(3.0), None)),
+            (mixed.as_slice(), mixed.as_slice(), (Some(3.0), Some(3.0))),
+        ] {
+            let frames = Frames::of("flight", 0, &[10.0, 20.0], cpu, gpu).unwrap();
+            assert_eq!((frames.cpu_p50_ms, frames.gpu_p50_ms), expected);
+            assert_eq!(
+                (frames.frames, frames.p50_ms, frames.max_ms),
+                (2, 10.0, 20.0)
+            );
+            let json = serde_json::to_value(&frames).unwrap();
+            assert_eq!(json.get("cpu_p50_ms").is_some(), expected.0.is_some());
+            assert_eq!(json.get("gpu_p50_ms").is_some(), expected.1.is_some());
+        }
     }
 
     #[test]
