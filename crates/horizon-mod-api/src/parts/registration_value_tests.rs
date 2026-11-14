@@ -154,6 +154,10 @@ fn server_services_forward_commands_messages_and_player_identity() {
     let host: &mut dyn ServerHost = &mut server;
     assert!(host.commands().run_command("list"));
     assert!(!host.commands().run_command("missing"));
+    let result = host.commands().run_command_with_output("list");
+    assert!(result.success);
+    assert!(result.feedback.is_empty());
+    assert!(!host.commands().run_command_with_output("missing").success);
     host.commands().feedback(Text::literal("answer")).unwrap();
     host.messages()
         .broadcast(Text::literal("everyone"))
@@ -162,7 +166,7 @@ fn server_services_forward_commands_messages_and_player_identity() {
     let player = host.players().acting_player().unwrap();
     assert_eq!(host.players().server_players(), [player]);
     assert_eq!((player.uuid(), player.entity().id()), (7, 42));
-    assert_eq!(server.commands.ran, ["list", "missing"]);
+    assert_eq!(server.commands.ran, ["list", "missing", "list", "missing"]);
     assert_eq!(server.commands.feedback, [Text::literal("answer")]);
     assert_eq!(
         server.messages.broadcast_lines(),

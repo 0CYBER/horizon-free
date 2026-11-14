@@ -137,6 +137,31 @@ pub trait Commands {
             crate::world::phase::LoadAccess::WorldOnly,
         )
     }
+    /// Side: server.
+    /// `run_command` with its feedback kept: the same line, source and run
+    /// path (one leading slash is dropped here), answering with whether it
+    /// ran without failing (`success`, what `run_command` returns) and what the
+    /// console would have printed for it as plain text (`feedback`, as a mod
+    /// that answers a remote console wants; Paper's `Server.dispatchCommand`
+    /// with a capturing `CommandSender`). The feedback of the command alone is
+    /// kept, never the lines other code logs meanwhile; a call made while
+    /// another one runs captures its own lines and the outer capture goes on
+    /// unchanged. At most 256 lines of 4096 bytes each
+    /// come back (a longer line is cut at a character boundary). A command that ran and failed
+    /// is `success: false` with its message in `feedback`. A line run where no server
+    /// is open to players, or empty once its whitespace and slash are
+    /// dropped, runs nothing and is `success: false` with no feedback, exactly as
+    /// `run_command` answers `false` for it; no refusal type tells those
+    /// apart from a failed command, as `run_command` has none either. The
+    /// dedicated console's own commands (`stop`, `op`, `whitelist`, `ban`...)
+    /// are not reached: they answer as an unknown command.
+    fn run_command_with_output(&mut self, line: &str) -> CommandResult {
+        crate::world::phase::unprovided(
+            "Commands::run_command_with_output",
+            "run_command_with_output",
+            crate::world::phase::LoadAccess::WorldOnly,
+        )
+    }
 }
 /// The levels service, reached through its host.
 pub trait Levels {
