@@ -52,7 +52,9 @@ mod tests {
     #[test]
     fn native_progress_limits_redirected_rust_downloads_to_start_and_end() {
         let progress = native_progress(false);
-        let fractions = [0.0, 0.01, 0.97, 0.971, 0.974, 0.98, 1.0, 1.0];
+        let fractions = [
+            0.0, 0.0, 0.01, 0.97, 0.5, 0.971, 0.974, 0.98, 0.9999, 1.0, 1.0,
+        ];
         let labels: Vec<_> = fractions
             .into_iter()
             .filter_map(|done| progress(native_mods::Step::Rust(done)))
@@ -60,8 +62,14 @@ mod tests {
         assert_eq!(
             labels,
             [
-                native_mods::Step::Rust(0.0).label(),
-                native_mods::Step::Rust(1.0).label(),
+                format!(
+                    "Downloading Rust {} (once): 0%",
+                    horizon_launcher::rust_toolchain::VERSION
+                ),
+                format!(
+                    "Downloading Rust {} (once): 100%",
+                    horizon_launcher::rust_toolchain::VERSION
+                ),
             ]
         );
     }
@@ -69,17 +77,32 @@ mod tests {
     #[test]
     fn native_progress_keeps_detailed_terminal_downloads() {
         let progress = native_progress(true);
-        for done in [0.0, 0.97, 0.971, 0.974, 0.98, 1.0] {
-            let step = native_mods::Step::Rust(done);
-            assert_eq!(progress(step.clone()), Some(step.label()));
+        for (done, percent) in [
+            (0.0, 0),
+            (0.97, 97),
+            (0.971, 97),
+            (0.974, 97),
+            (0.98, 98),
+            (1.0, 100),
+        ] {
+            assert_eq!(
+                progress(native_mods::Step::Rust(done)),
+                Some(format!(
+                    "Downloading Rust {} (once): {percent}%",
+                    horizon_launcher::rust_toolchain::VERSION
+                ))
+            );
         }
         for done in [0, 1, 97, 100] {
             let step = native_mods::Step::Tools {
                 build: "sdk".into(),
-                done,
-                total: 100,
+                done: done * 1_000_000,
+                total: 100_000_000,
             };
-            assert_eq!(progress(step.clone()), Some(step.label()));
+            assert_eq!(
+                progress(step),
+                Some(format!("Getting the mod tools for sdk: {done} of 100 MB"))
+            );
         }
     }
 
@@ -91,36 +114,53 @@ mod tests {
             done,
             total,
         };
-        for (done, shown) in [
-            (0, true),
-            (1, false),
-            (97, false),
-            (100, true),
-            (100, false),
+        for (done, expected) in [
+            (0, Some("Getting the mod tools for first: 0 of 100 MB")),
+            (1, None),
+            (97, None),
+            (50, None),
+            (99, None),
+            (100, Some("Getting the mod tools for first: 100 of 100 MB")),
+            (100, None),
         ] {
-            let step = tools("first", done, 100);
-            assert_eq!(progress(step.clone()), shown.then(|| step.label()));
+            assert_eq!(
+                progress(tools("first", done * 1_000_000, 100_000_000)),
+                expected.map(str::to_owned)
+            );
         }
-        let next = tools("second", 20, 100);
-        assert_eq!(progress(next.clone()), Some(next.label()));
-        assert_eq!(progress(tools("second", 50, 100)), None);
-        let complete = tools("second", 100, 100);
-        assert_eq!(progress(complete.clone()), Some(complete.label()));
-        let unknown = tools("third", 0, 0);
-        assert_eq!(progress(unknown.clone()), Some(unknown.label()));
+        assert_eq!(
+            progress(tools("second", 20_000_000, 100_000_000)),
+            Some("Getting the mod tools for second: 20 of 100 MB".into())
+        );
+        assert_eq!(progress(tools("second", 50_000_000, 100_000_000)), None);
+        assert_eq!(
+            progress(tools("second", 100_000_000, 100_000_000)),
+            Some("Getting the mod tools for second: 100 of 100 MB".into())
+        );
+        assert_eq!(
+            progress(tools("third", 0, 0)),
+            Some("Getting the mod tools for third: 0 of 1 MB".into())
+        );
         assert_eq!(progress(tools("third", 0, 0)), None);
-        let complete = tools("third", 100, 100);
-        assert_eq!(progress(complete.clone()), Some(complete.label()));
+        assert_eq!(
+            progress(tools("third", 100_000_000, 100_000_000)),
+            Some("Getting the mod tools for third: 100 of 100 MB".into())
+        );
     }
 
     #[test]
     fn native_progress_keeps_phase_order_and_restarts_download_reporting() {
         use native_mods::Step;
         let progress = native_progress(false);
-        let first = Step::Rust(0.97);
-        assert_eq!(progress(first.clone()), Some(first.label()));
+        assert_eq!(
+            progress(Step::Rust(0.97)),
+            Some(format!(
+                "Downloading Rust {} (once): 97%",
+                horizon_launcher::rust_toolchain::VERSION
+            ))
+        );
         assert_eq!(progress(Step::Rust(0.98)), None);
-        for step in [
+        let labels: Vec<_> = [
             Step::PrebuiltMods,
             Step::Compile {
                 done: 1,
@@ -137,8 +177,26 @@ mod tests {
             Step::Install,
             Step::Rust(0.0),
             Step::Rust(1.0),
-        ] {
-            assert_eq!(progress(step.clone()), Some(step.label()));
-        }
+        ]
+        .into_iter()
+        .filter_map(progress)
+        .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Compiling the mods against the prebuilt game".to_owned(),
+                "Compiling the game (optimized): 1 of 2 crates, now first".to_owned(),
+                "Compiling the game (optimized): 2 of 2 crates, now second".to_owned(),
+                "Installing the build".to_owned(),
+                format!(
+                    "Downloading Rust {} (once): 0%",
+                    horizon_launcher::rust_toolchain::VERSION
+                ),
+                format!(
+                    "Downloading Rust {} (once): 100%",
+                    horizon_launcher::rust_toolchain::VERSION
+                ),
+            ]
+        );
     }
 }

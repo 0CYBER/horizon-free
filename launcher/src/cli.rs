@@ -31,7 +31,7 @@ fn parse_storage_row(value: &str) -> Result<ClearStorage, String> {
             .ok_or_else(|| tr("Unknown").into())
     }
 }
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[derive(Parser)]
