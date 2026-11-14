@@ -1,1 +1,1 @@
-pub use crate::entity::mobs::{PathComputationType, PathType, Pose};
+pub use crate::entity::mobs::{MoveToPathError, PathComputationType, PathNode, PathType, Pose};
