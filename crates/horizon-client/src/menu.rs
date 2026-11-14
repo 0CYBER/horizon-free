@@ -2116,13 +2116,14 @@ impl Menu {
             return;
         }
         if self.state.slots[s].role == Role::StoneResult {
-            // StonecutterMenu's result onTake: awardUsedRecipes, one input
-            // used up, the result again for the selected recipe.
+            // StonecutterMenu's result onTake: onCraftedBy, awardUsedRecipes, one
+            // input used up, the result again for the selected recipe.
+            self.crafted_by(taken, taken.count as i32);
             if let Some(r) = self.state.stone.used {
-                self.state.crafted.push((
-                    env.station_recipes.stonecutting[r].id.clone(),
-                    vec![self.state.containers[MAIN][0].clone()],
-                ));
+                let id = env.station_recipes.stonecutting[r].id.clone();
+                self.state
+                    .crafted
+                    .push((id, vec![self.state.containers[MAIN][0].clone()]));
             }
             if self.remove(env, 0, 1).is_some() {
                 self.stone_setup_result(env, self.state.data[0]);
@@ -2165,9 +2166,10 @@ impl Menu {
             return;
         }
         if self.state.slots[s].role == Role::CombineResult {
-            // SmithingMenu.onTake: the `ItemSmithedEvent` hook, then
+            // SmithingMenu.onTake: onCraftedBy, the `ItemSmithedEvent` hook, then
             // awardUsedRecipes, then one of each input.
             if self.state.kind == Kind::Smithing {
+                self.crafted_by(taken, taken.count as i32);
                 let inputs = [0, 1, 2].map(|i| self.state.containers[MAIN][i].clone());
                 if self.state.item_smithed_hook
                     && env.loop_context.side() == LoopSide::Server
@@ -3012,8 +3014,8 @@ impl Menu {
             return None;
         }
         if after_take || matches!(self.state.kind, Kind::Inventory | Kind::Crafting) {
-            // A merchant result reports the stack it moved, a crafting result the copy it
-            // takes (which Item.onCraftedBy may still change).
+            // A merchant, stonecutter or smithing result reports what its move left behind, a
+            // crafting result the copy it takes (which Item.onCraftedBy may still change).
             self.take_after_quick_move(env, index, &mut clicked, &mut stack);
         }
         // What the result slot's move left over is dropped.
@@ -3064,15 +3066,8 @@ impl Menu {
     /// `MerchantResultSlot.checkTakeAchievements`: award the tallied count, then reset it.
     fn merchant_check_take_achievements(&mut self, stack: &ItemStack) {
         self.touch();
-        // ItemStack.getItem returns AIR for the emptied quick-move remainder.
-        let item = if stack.count == 0 {
-            "minecraft:air".into()
-        } else {
-            stack.item.clone()
-        };
-        self.state
-            .crafted_counts
-            .push((item, std::mem::take(&mut self.state.merchant_remove_count)));
+        let n = std::mem::take(&mut self.state.merchant_remove_count);
+        self.crafted_by(stack, n);
     }
 
     /// `MerchantResultSlot.onTake`: the payment is taken and the merchant
@@ -4721,8 +4716,7 @@ pub(crate) mod tests {
         // full air and takes no damage.
         let mut air = 300;
         for _ in 0..300 {
-            let hurt =
-                crate::breathing::own_air(&after, 1, "minecraft:cod", &mut air, false, 300, true);
+            let hurt = crate::breathing::own_air(&after, 1, "minecraft:cod", &mut air, false, 300);
             assert_eq!(hurt, None);
         }
         assert_eq!(air, 300);
@@ -4735,17 +4729,28 @@ pub(crate) mod tests {
         };
         let mut air = -19;
         let drowned =
-            crate::breathing::drown(&after, 3, "minecraft:player", &mut air, gasp, true).unwrap();
+            crate::breathing::drown(&after, 3, "minecraft:player", &mut air, 300, gasp, true)
+                .unwrap();
         assert_eq!((drowned.damage, drowned.bubbles, air), (Some(3.0), 0, 0));
-        // A listener's `consume` of `i32::MAX` saturates instead of overflowing:
-        // a water animal past -20 only loses air, another kind drowns.
+        // A listener's `consume` of `i32::MAX` saturates instead of overflowing;
+        // water animals at or below -20 air drown and reset their air to zero.
+        assert_eq!(
+            crate::breathing::apply(
+                -19,
+                300,
+                crate::breathing::Breath {
+                    can_breathe: false,
+                    consume: i32::MAX,
+                    refill: 0,
+                },
+            ),
+            (0, true)
+        );
         let mut air = -19;
-        let hurt =
-            crate::breathing::own_air(&after, 4, "minecraft:salmon", &mut air, false, 300, true);
-        assert_eq!((hurt, air), (None, i32::MIN));
+        let hurt = crate::breathing::own_air(&after, 4, "minecraft:salmon", &mut air, false, 300);
+        assert_eq!((hurt, air), (Some(3.0), 0));
         let mut air = -19;
-        let hurt =
-            crate::breathing::own_air(&after, 4, "minecraft:salmon", &mut air, false, 6000, false);
+        let hurt = crate::breathing::own_air(&after, 4, "minecraft:dolphin", &mut air, false, 4800);
         assert_eq!((hurt, air), (Some(3.0), 0));
         // A server's block menu: the game's `stillValid` answer arrives first and
         // the parts on its mod menu type may change it; a vanilla menu type never
@@ -5125,6 +5130,7 @@ pub(crate) mod tests {
         });
     }
 
+    mod crafted_stat_tests;
     mod mod_grid_tests;
 
     /// Extra sources (`native_recipe_sources`) count as more inventory: the

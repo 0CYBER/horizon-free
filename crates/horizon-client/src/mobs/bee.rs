@@ -52,6 +52,21 @@ pub struct Bee {
     pub validate_flower_cooldown: i32,
     /// `BeeGoToHiveGoal.blacklistedTargets`: the last three hives it gave up on.
     pub hive_blacklist: Vec<[i32; 3]>,
+    /// What `sting` took from the bee before the victim's `hurtServer` answer
+    /// was known, put back by `sting_refused`.
+    undo: Option<StungUndo>,
+}
+/// `Bee.doHurtTarget`'s sting, kept until the game says whether the victim's
+/// `hurtServer` reported a hurt.
+#[derive(Clone, Debug)]
+struct StungUndo {
+    flags: u8,
+    anger_end: i64,
+    angry_at: Option<Who>,
+    last_hurt_by: Option<Who>,
+    last_hurt_by_ref: Option<[i32; 4]>,
+    last_hurt_by_time: i32,
+    target: Option<Who>,
 }
 impl Default for Bee {
     fn default() -> Self {
@@ -74,6 +89,7 @@ impl Default for Bee {
             validate_hive_cooldown: 0,
             validate_flower_cooldown: 0,
             hive_blacklist: Vec::new(),
+            undo: None,
         }
     }
 }
@@ -345,7 +361,9 @@ pub fn hurt(m: &mut Mob) {
     set_pollinating(m, false);
 }
 /// `Bee.doHurtTarget`: a sting for the attack damage, poison on normal (10 s)
-/// and hard (18 s), then the bee has stung and calms down.
+/// and hard (18 s), then the bee has stung and calms down. The game applies
+/// the stinger and the poison, and the sound, only when the hit lands
+/// (`MobEvent::Sting`); a refused hit puts the stinger and the anger back.
 pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
     let from = [m.position.x, m.position.y, m.position.z];
     let amount = (m.attrs.attack_damage as i32) as f32;
@@ -362,35 +380,49 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
         from: Some(from),
         attacker_species: Some(Species::Bee),
     };
-    match who {
-        Who::Player => {
-            cx.events
-                .push(cx.w.route_player_event(MobEvent::StingPlayer {
-                    amount,
-                    from,
-                    poison_ticks: seconds * 20,
-                }));
-        }
-        Who::Mob(id) if seconds > 0 => cx.events.push(MobEvent::AttackMobWithEffect {
-            target: id,
-            amount,
-            source,
-            effect: "minecraft:poison",
-            ticks: seconds * 20,
-            amplifier: 0,
-        }),
-        Who::Mob(id) => cx.events.push(MobEvent::AttackMob {
-            target: id,
-            amount,
-            source,
-        }),
-    }
+    cx.events.push(cx.w.route_player_event(MobEvent::Sting {
+        target: who,
+        amount,
+        poison_ticks: seconds * 20,
+        source,
+    }));
+    // `setHasStung(true)` and `stopBeingAngry`, which vanilla runs inside the
+    // bee's tick: `Bee.tick`'s roll and the goals after the sting read them
+    // before the game can hear whether the victim took the hit.
+    let undo = StungUndo {
+        flags: get(m).map_or(0, |b| b.flags),
+        anger_end: get(m).map_or(-1, |b| b.anger_end),
+        angry_at: get(m).and_then(|b| b.angry_at),
+        last_hurt_by: m.ai.last_hurt_by,
+        last_hurt_by_ref: m.ai.last_hurt_by_ref,
+        last_hurt_by_time: m.ai.last_hurt_by_time,
+        target: m.ai.target,
+    };
     set_has_stung(m, true);
     stop_being_angry_with_world(m, Some(cx.w));
-    if !m.silent {
-        cx.events
-            .push(MobEvent::Sound("entity.bee.sting", from, 1.0, 1.0));
-    }
+    st(m).undo = Some(undo);
+}
+/// `Bee.doHurtTarget`'s sting landed: the stinger and the calm-down stay.
+/// Returns whether its sting is heard: `Entity.playSound` skips a silent
+/// entity.
+pub fn sting_landed(m: &mut Mob) -> bool {
+    st(m).undo = None;
+    !m.silent
+}
+/// `Bee.doHurtTarget`'s sting was refused (`hurtServer` reported no hurt): the
+/// bee keeps the stinger and the anger `sting` took from it.
+pub fn sting_refused(m: &mut Mob) {
+    let Some(undo) = st(m).undo.take() else {
+        return;
+    };
+    m.ai.last_hurt_by = undo.last_hurt_by;
+    m.ai.last_hurt_by_ref = undo.last_hurt_by_ref;
+    m.ai.last_hurt_by_time = undo.last_hurt_by_time;
+    m.ai.target = undo.target;
+    let b = st(m);
+    b.flags = undo.flags;
+    b.anger_end = undo.anger_end;
+    b.angry_at = undo.angry_at;
 }
 
 // --- places -------------------------------------------------------------------
@@ -1397,7 +1429,7 @@ mod tests {
 
     /// `Bee.doHurtTarget` on Normal: a mob is poisoned for 10 seconds (200 ticks).
     #[test]
-    fn a_bee_sting_poisons_a_mob_for_ten_seconds_on_normal() {
+    fn a_bee_sting_asks_for_ten_seconds_of_poison_on_normal() {
         with_test_world(&[], |w, _| {
             let mut m = bee();
             let mut events = Vec::new();
@@ -1410,11 +1442,9 @@ mod tests {
             sting(&mut m, Who::Mob(9), &mut cx);
             assert!(events.iter().any(|e| matches!(
                 e,
-                MobEvent::AttackMobWithEffect {
-                    target: 9,
-                    effect: "minecraft:poison",
-                    ticks: 200,
-                    amplifier: 0,
+                MobEvent::Sting {
+                    target: Who::Mob(9),
+                    poison_ticks: 200,
                     ..
                 }
             )));

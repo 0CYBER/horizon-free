@@ -34,7 +34,7 @@ impl Game<'_> {
 
     /// `PlayerList.getPlayers` but the player in place: the guests who
     /// joined the world.
-    fn command_players(&self) -> impl Iterator<Item = &Guest> {
+    pub(in crate::game) fn command_players(&self) -> impl Iterator<Item = &Guest> {
         let acting = self.lan_acting;
         self.lan
             .iter()

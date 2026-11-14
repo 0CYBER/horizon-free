@@ -1789,7 +1789,7 @@ fn axolotl_air_supply(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>) {
     }
     let breathes = m.fluids.in_water || in_rain(m, w);
     let (cx, max) = (w.loop_context, super::axolotl::MAX_AIR);
-    if let Some(damage) = own_air(cx, m.id, &m.kind.id, &mut m.air, breathes, max, false) {
+    if let Some(damage) = own_air(cx, m.id, &m.kind.id, &mut m.air, breathes, max) {
         m.damage(level, damage, Damage::of(DamageKind::DryOut));
     }
 }
@@ -1809,7 +1809,7 @@ fn nautilus_air_supply(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>) {
         return;
     }
     let (cx, wet) = (w.loop_context, m.fluids.in_water);
-    if let Some(damage) = own_air(cx, m.id, &m.kind.id, &mut m.air, wet, MAX_AIR, false) {
+    if let Some(damage) = own_air(cx, m.id, &m.kind.id, &mut m.air, wet, MAX_AIR) {
         m.damage(level, damage, Damage::of(DamageKind::DryOut));
     }
 }
@@ -1973,7 +1973,7 @@ fn base_tick(
             nautilus_air_supply(m, w, level);
         } else if m.kind.flags.needs_water {
             let (cx, wet) = (w.loop_context, m.fluids.in_water);
-            if let Some(damage) = own_air(cx, m.id, &m.kind.id, &mut m.air, wet, 300, true) {
+            if let Some(damage) = own_air(cx, m.id, &m.kind.id, &mut m.air, wet, 300) {
                 m.damage(level, damage, Damage::of(DamageKind::Drown));
             }
         } else {
@@ -1991,15 +1991,30 @@ fn base_tick(
             let nautilus = m.has_effect("minecraft:breath_of_the_nautilus");
             let drowns = submerged && !can_breathe_under_water(m) && !water_breathing && !nautilus;
             let held = submerged && nautilus && !water_breathing;
+            let max = m.max_air_supply();
             let vanilla = Breath {
                 can_breathe: !drowns,
                 consume: if keeps_its_air(m) { 0 } else { 1 },
-                refill: if drowns || held { 0 } else { 4 },
+                // `increaseAirSupply`: four a tick, except the dolphin's own, which
+                // hands back the whole 4800 maximum however little air it has.
+                refill: if drowns || held {
+                    0
+                } else if m.species() == Species::Dolphin {
+                    max.saturating_sub(m.air)
+                } else {
+                    4
+                },
             };
             let breath = breathe(w.loop_context, m.id, &m.kind.id, vanilla);
-            if let Some(drowning) =
-                drown(w.loop_context, m.id, &m.kind.id, &mut m.air, breath, true)
-            {
+            if let Some(drowning) = drown(
+                w.loop_context,
+                m.id,
+                &m.kind.id,
+                &mut m.air,
+                max,
+                breath,
+                true,
+            ) {
                 events.push(MobEvent::Drown {
                     mob: m.id,
                     at: [m.position.x, m.position.y, m.position.z],
@@ -2337,7 +2352,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &mut 
     }
     // Monster.aiStep: updateNoActionTime (Raider: always +2).
     if is_monster(m.species())
-        && (super::raider::is_raider(m.species()) || super::hostile::mob_brightness(m, w) > 0.5)
+        && (super::raider::is_raider(m.species()) || super::hostile::magic_value(m, w) > 0.5)
     {
         // A Java `int`: past `i32::MAX` it wraps, as there.
         m.ai.no_action_time = m.ai.no_action_time.wrapping_add(2);
@@ -6814,6 +6829,72 @@ mod air_tests {
             return;
         };
         assert_eq!(air, 4790);
+    }
+
+    /// `Dolphin.increaseAirSupply` hands back the whole 4800 maximum, so under Water
+    /// Breathing a submerged dolphin is at 4800 on the next tick. An ordinary mob
+    /// still climbs four at a time to 300, and a fish's own handler fills it to
+    /// 300 in water. Air above the maximum is left alone.
+    #[test]
+    fn a_dolphin_refills_to_its_own_maximum() {
+        let build = |world: &mut crate::world::World,
+                     registry: &horizon_world::registry::BlockRegistry| {
+            world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
+            );
+            let water = registry.default_state("minecraft:water").unwrap();
+            for x in 0..=4 {
+                for z in 0..=4 {
+                    for y in 0..=8 {
+                        world.set(x, y, z, water).unwrap();
+                    }
+                }
+            }
+        };
+        let ran = crate::mobs::world::with_built_test_world(&[], build, |w, types| {
+            let after = |id: &str, start: i32, breathing: bool| {
+                let kind = std::sync::Arc::new(types.types[id].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(2.5, 3.0, 2.5), 0.0);
+                if breathing {
+                    m.add_effect("minecraft:water_breathing", 100, 0);
+                }
+                m.air = start;
+                let mut events = Vec::new();
+                let mut test_level = crate::health::TestLevel::new(0);
+                base_tick(&mut m, w, &mut test_level.level(), &mut events);
+                (m.air, m.health)
+            };
+            assert_eq!(after("minecraft:dolphin", 100, true), (4800, 10.0));
+            assert_eq!(after("minecraft:dolphin", 4800, false).0, 4799);
+            assert_eq!(after("minecraft:dolphin", 5000, true).0, 5000);
+            assert_eq!(after("minecraft:zombie", 100, true).0, 104);
+            assert_eq!(after("minecraft:zombie", 299, true).0, 300);
+            assert_eq!(after("minecraft:cod", 100, false).0, 300);
+        });
+        let _ = ran;
+    }
+
+    /// `WaterAnimal.handleAirSupply` asks `shouldTakeDrowningDamage`, which is
+    /// `getAirSupply() <= -20`: a cod out of water with `{Air:-25}` still drowns, is
+    /// reset to 0 and takes the 2.
+    #[test]
+    fn a_water_creature_below_minus_twenty_still_drowns() {
+        let ran = crate::mobs::world::with_test_world(&[], |w, types| {
+            let drowned = |start: i32| {
+                let kind = std::sync::Arc::new(types.types["minecraft:cod"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.air = start;
+                let health = m.health;
+                let mut events = Vec::new();
+                let mut test_level = crate::health::TestLevel::new(0);
+                base_tick(&mut m, w, &mut test_level.level(), &mut events);
+                (health - m.health, m.air)
+            };
+            assert_eq!(drowned(-25), (2.0, 0));
+            assert_eq!(drowned(-20), (2.0, 0));
+        });
+        let _ = ran;
     }
 
     /// A copper golem is in `#can_breathe_under_water`: its air stays full.

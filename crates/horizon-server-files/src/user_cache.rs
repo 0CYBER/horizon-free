@@ -5,7 +5,7 @@
 use crate::{
     json::{self, Json},
     profiles::valid_player_name,
-    user_lists::{NameAndId, format_date, parse_date},
+    user_lists::{NameAndId, format_date, parse_date, read_utf8},
 };
 use horizon_java_properties::{civil_from_days, days_from_civil, now_millis};
 use std::{collections::HashMap, path::PathBuf};
@@ -60,7 +60,7 @@ impl UserCache {
             resolve_offline_users: true,
         };
         let mut warnings = Vec::new();
-        let entries = match std::fs::read_to_string(&cache.file) {
+        let entries = match read_utf8(&cache.file) {
             Ok(text) => cache.parse(&text, &mut warnings),
             Err(_) => Vec::new(),
         };
@@ -279,6 +279,26 @@ mod tests {
             c.to_json(),
             r#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Notch","expiresOn":"2099-01-01 00:00:00 +0000"},{"uuid":"61699b2e-d327-4a01-9f1e-0ea8c3f06bc6","name":"Alex","expiresOn":"2099-01-01 00:00:00 +0000"}]"#
         );
+    }
+
+    /// `CachedUserNameToIdResolver.load` reads through the same UTF-8 reader as the lists: a byte that is
+    /// not UTF-8 becomes U+FFFD and the rest of the cache stays.
+    #[test]
+    fn a_byte_that_is_not_utf8_is_replaced_not_a_missing_cache() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-usercache-latin1-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("usercache.json");
+        let mut bytes = br#"[{"uuid":"069a79f4-44e9-4726-a5be-fca90e38aaf5","name":"Caf"#.to_vec();
+        bytes.extend(b"\xE9\",\"expiresOn\":\"2099-01-01 00:00:00 +0000\"}]");
+        std::fs::write(&file, &bytes).unwrap();
+        let (c, warnings) = UserCache::load(&file);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            c.find_by_name("Caf\u{fffd}").map(|u| u.name),
+            Some("Caf\u{fffd}".into())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

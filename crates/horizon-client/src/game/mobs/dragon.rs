@@ -3275,8 +3275,8 @@ impl Game<'_> {
             let attack = self.current_attack();
             let causing = self.dragon.as_ref().map_or(0, |d| d.id as i32);
             if let Some(id) = self.health_resources.damage.id("minecraft:mob_attack")
-                && let Ok(outcome) =
-                    self.hurt_player_equipment(id, 5.0, blocking, false, causing, false, &attack)
+                && let Ok(outcome) = self
+                    .hurt_player_equipment(id, 5.0, blocking, false, causing, false, &attack, None)
             {
                 self.combat.forget_noted(outcome.canceled);
                 self.after_block(

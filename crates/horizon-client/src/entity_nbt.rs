@@ -1388,11 +1388,7 @@ pub fn mob_to_nbt(
                 string(crate::mobs::copper_golem::WEATHER[m.extra.variant.min(3) as usize]),
             );
         }
-        // Ghast.addAdditionalSaveData; Horizon's ghast fires power 1 whatever
-        // is saved, so a loaded value is kept as is.
-        "minecraft:ghast" => {
-            map.entry("ExplosionPower".into()).or_insert(Tag::Byte(1));
-        }
+        "minecraft:ghast" => crate::mobs::nether::to_nbt(m, map),
         _ => {}
     }
     if m.species() == S::Frog {
@@ -2068,6 +2064,9 @@ fn mob_from_nbt_at(
         m.max_swell = number(tag.get("Fuse")).unwrap_or(30) as i16 as i32;
         // `getByteOr("ExplosionRadius", 3)`: any numeric tag, as a byte.
         m.extra.explosion_radius = number(tag.get("ExplosionRadius")).unwrap_or(3) as i8;
+    }
+    if m.species() == crate::mobs::Species::Ghast {
+        crate::mobs::nether::from_nbt(&mut m, tag);
     }
     // InventoryCarrier.readInventoryFromTag, using the existing occupied-stack model.
     let carrier_slots = match m.species() {

@@ -1,6 +1,7 @@
 BossHealthOverlay.extractBar	port	crates/horizon-client-render/src/hud_overlays.rs::boss_overlay	background bar, then progress at the lerped width; the notch overlay only when not PROGRESS
 BossHealthOverlay.shouldDarkenScreen	port	crates/horizon-client/src/boss_overlay.rs::BossOverlay::should_darken	any bar asks to darken
 Button.Builder.build	skip:java		builder: makes a Plain button and sets its tooltip
+ChatComponent.extractRenderState	port	crates/horizon-client-render/src/chat.rs::Chat::layout	messages, the scrollbar and Chat Delay's chat.queue row (our search and restricted prompts are Chat::draw's)
 ChatComponent.forEachLine	port	crates/horizon-client-render/src/chat.rs::Chat::layout	visible lines bottom-up with the alpha filter, inlined in layout
 ChatComponent.addMessageToDisplayQueue	port	crates/horizon-client-render/src/chat.rs::Chat::add_lines	wrap at width/scale, keep the scroll when chatting, trim to 100 lines
 ChatComponent.addMessageToQueue	port	crates/horizon-client-render/src/chat.rs::Chat::add_message	newest first, trimmed to 100 messages

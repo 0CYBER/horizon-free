@@ -214,8 +214,8 @@ use {
         fluid::FluidState,
         level::{
             Behaviours, BucketContent, EntityQuery, Landing, LevelAccess, LevelEvent, PlaceContext,
-            PlaceOutcome, PlacementContext, PlayerContext, PlayerEffect, Ticks,
-            flags as level_flags,
+            PlaceOutcome, PlacementContext, PlayerContext, PlayerEffect, RandomTickMaskUpdate,
+            Ticks, flags as level_flags,
         },
         registry::BlockStateId,
     },
@@ -3512,6 +3512,8 @@ impl Game<'_> {
                         1044 => Some(("minecraft:block.smithing_table.use", 1.0)),
                         // LevelEvent.SOUND_PAGE_TURN (a lectern's page).
                         1043 => Some(("minecraft:item.book.page_turn", 1.0)),
+                        // LevelEvent.SOUND_PHANTOM_BITE: a phantom's bite.
+                        1039 => Some(("minecraft:entity.phantom.bite", 0.3)),
                         // LevelEvent.SOUND_SPLASH_POTION and its instant twin.
                         1053 | 1054 => Some(("minecraft:entity.splash_potion.break", 1.0)),
                         _ => None,
@@ -3529,12 +3531,9 @@ impl Game<'_> {
                                 let r = self.particles.level_random();
                                 2.6 + (r.next_float() - r.next_float()) * 0.8
                             }
-                            1045 | 1046 | 1047 | 1052 => {
-                                self.particles.level_random().next_float() * 0.1 + 0.9
-                            }
-                            1053 | 1054 => {
-                                // LevelEventHandler's client random: impact audio
-                                // must not change the server's bottle XP stream.
+                            1039 | 1045 | 1046 | 1047 | 1052 | 1053 | 1054 => {
+                                // LevelEventHandler draws these from the client
+                                // level's random, not the server's.
                                 self.particles.level_random().next_float() * 0.1 + 0.9
                             }
                             1029 | 1030 | 1042 | 1043 | 1044 => {
@@ -3558,6 +3557,7 @@ impl Game<'_> {
                                 | 1027
                                 | 1029
                                 | 1030
+                                | 1039
                                 | 1045
                                 | 1052
                                 | 1053
@@ -6752,9 +6752,7 @@ impl Game<'_> {
             .filter(|s| cauldron_interactions::snapshot().contains_block(&s.name))
             .cloned()?;
         let above = self.world.block(pos[0], pos[1] + 1, pos[2]);
-        let under_water = registry
-            .state(above)
-            .is_some_and(|s| s.name == "minecraft:water");
+        let under_water = cauldrons::is_under_water(self.res.facts(), above);
         Some((state, under_water))
     }
 
@@ -7046,7 +7044,7 @@ impl Game<'_> {
                 return Ok(UseResult::Pass);
             };
             // `BucketItem.use`: `level.mayInteract` and `mayUseItemAt`.
-            if !self.may_build() && !self.can_place_on_in_adventure(hit.pos) {
+            if self.bucket_use_refused(hit.pos) {
                 return Ok(UseResult::Fail);
             }
             let mut canceled = false;
@@ -7097,7 +7095,7 @@ impl Game<'_> {
         };
         let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
         if let Some((content, sound, mob)) = bucket {
-            if !self.may_build() && !self.can_place_on_in_adventure(hit.pos) {
+            if self.bucket_use_refused(hit.pos) {
                 return Ok(UseResult::Fail);
             }
             let target = self.bucket_target(content, &hit);
@@ -7155,9 +7153,7 @@ impl Game<'_> {
                 );
             }
             self.trigger_block("minecraft:placed_block", target, stack);
-            if !self.creative {
-                *self.held_mut() = Some(ItemStack::new("minecraft:bucket", 1));
-            }
+            self.bucket_emptied(&stack.item);
             return Ok(UseResult::Success { swing: true });
         }
         if self.use_block_transformer(stack, &hit)? {
@@ -7655,7 +7651,8 @@ impl Game<'_> {
             }
         }
         if self.lie_in_bed(head) {
-            self.award_custom_stat("sleep_in_bed", 1);
+            let bed = self.world.block(head[0], head[1], head[2]);
+            self.award_custom_stat(self.slept_in_bed_stat(bed), 1);
             self.trigger_player("minecraft:slept_in_bed");
             self.stats.reset("custom", "minecraft:time_since_rest");
         }

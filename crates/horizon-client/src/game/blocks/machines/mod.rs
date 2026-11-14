@@ -289,6 +289,19 @@ impl Containers<'_> {
             .map_or(64, |i| i.max_stack)
             .max(1)
     }
+    /// `Container.getMaxStackSize(stack)` of a container: the container's own
+    /// limit, at most the item's. `ComposterBlock.InputContainer` (levels 0 to
+    /// 6) and `OutputContainer` (level 8, `READY`), `JukeboxBlockEntity` and
+    /// `ChiseledBookShelfBlockEntity` override `getMaxStackSize` to 1; every
+    /// other container keeps the `Container` default of 99. A composter's
+    /// level 7 is `EmptyContainer` (99), which takes nothing through a face.
+    fn max_stack_in(&self, view: &View, stack: &ItemStack) -> u32 {
+        let container = match view.kind {
+            Kind::Composter(0..=6) | Kind::Composter(8) | Kind::Jukebox | Kind::Bookshelf => 1,
+            _ => 99,
+        };
+        container.min(self.max_stack(stack))
+    }
     /// `HopperBlockEntity.getBlockContainer` (double chests combined, right half
     /// first). `blocked_chests`: `ChestBlock.getContainer(.., false)` returns
     /// nothing for a blocked chest (`isChestBlockedAt`: a redstone conductor
@@ -1925,6 +1938,15 @@ impl Game<'_> {
         }
         self.suck_item_entities(None, hopper, min, max)
     }
+    /// `MinecartHopper.tick`'s `tryConsumeItems` for whichever path ticks the
+    /// cart. `ServerLevel.tickNonPassenger` ticks the vehicle, then its
+    /// passengers, so a ridden cart pulls too; Horizon ticks that one in its
+    /// rider's turn (`tick_cart_riding`). `alive` is `isAlive` after the move.
+    pub(super) fn hopper_cart_tick(&mut self, cart: &mut super::minecarts::Minecart, alive: bool) {
+        if alive && cart.kind == super::minecarts::CartKind::Hopper && cart.enabled {
+            self.hopper_cart_suck(cart);
+        }
+    }
     /// `MinecartHopper.tick`'s `tryConsumeItems` (`suckInItems`) for an enabled
     /// hopper minecart: one item from the container above, else the item
     /// entities over it or touching it, each tick without a cooldown.
@@ -2900,6 +2922,10 @@ mod part_front_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "hopper_cart_rider_tests.rs"]
+mod hopper_cart_rider_tests;
 
 #[cfg(test)]
 mod hopper_cart_transfer_tests {

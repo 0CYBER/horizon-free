@@ -8,7 +8,8 @@
 
 ## Kind
 
-<!-- Tick one: it sets the pull request's label (CONTRIBUTING.md "Pull requests"). -->
+<!-- Tick one: it sets the pull request's label (CONTRIBUTING.md "Pull requests"). Start the title with it too:
+     `kind(area): what changes`, for example `parity(mobs): ...`. -->
 
 - [ ] parity: Horizon now does what vanilla 26.3 does
 - [ ] bug: a crash or a breakage

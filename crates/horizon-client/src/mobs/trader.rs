@@ -274,24 +274,31 @@ pub fn within_home(m: &Mob) -> bool {
     ];
     super::goals::within_home(home, radius, pos)
 }
-/// `MoveTowardsRestrictionGoal`.
+/// `MoveTowardsRestrictionGoal`, also the guardian's priority-5 goal.
 #[derive(Clone, Debug)]
-struct MoveTowardsRestriction {
+pub(crate) struct MoveTowardsRestriction {
     speed: f64,
     wanted: [f64; 3],
+    /// `setFlags(MOVE, LOOK)`, which `Guardian.registerGoals` adds to it.
+    look: bool,
 }
 impl MoveTowardsRestriction {
-    fn new(speed: f64) -> Self {
+    pub(crate) fn new(speed: f64) -> Self {
         Self {
             speed,
             wanted: [0.0; 3],
+            look: false,
         }
+    }
+    pub(crate) fn looking(mut self) -> Self {
+        self.look = true;
+        self
     }
 }
 impl Goal for MoveTowardsRestriction {
     goal_clone!();
     fn flags(&self) -> u8 {
-        MOVE
+        if self.look { MOVE | LOOK } else { MOVE }
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if within_home(m) {

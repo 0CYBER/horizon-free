@@ -636,20 +636,20 @@ impl Game<'_> {
                 });
             }
         }
-        if viewer.here
-            && let Some((id, name, progress)) = self.raid_boss_at(viewer.at, viewer.alive)
-        {
-            out.push(Offer {
-                id: bossbar::stable_uuid(&format!("raid:{id}")),
-                name,
-                progress,
-                color: 2,
-                overlay: 2,
-                darken: false,
-                music: false,
-                fog: false,
-                scope: Scope::Level(self.dim),
-            });
+        if viewer.here {
+            for (id, name, progress) in self.raid_bars_at(viewer.uuid) {
+                out.push(Offer {
+                    id: bossbar::stable_uuid(&format!("raid:{id}")),
+                    name,
+                    progress,
+                    color: 2,
+                    overlay: 2,
+                    darken: false,
+                    music: false,
+                    fog: false,
+                    scope: Scope::Level(self.dim),
+                });
+            }
         }
         out
     }

@@ -13,6 +13,7 @@
 use super::{
     Game,
     entity::{Entity, EntityHandle, with_entity, with_entity_mut},
+    minecarts::CartHit,
     move_gate::MoveWho,
 };
 use horizon_client::collisions::{
@@ -164,7 +165,7 @@ impl Game<'_> {
             if let Some(i) = self.boats.iter().position(|b| b.id == id) {
                 self.hurt_boat(i, 1.0, false);
             } else if let Some(i) = self.carts.iter().position(|c| c.id == id) {
-                self.hurt_cart(i, 1.0, false, false);
+                self.hurt_cart(i, 1.0, false, false, CartHit::default());
             }
         }
     }

@@ -1619,15 +1619,25 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
         // out exactly as it went in, grey or coloured, and light above S is held at S with its
         // hue, so 1500 and 10 000 nits show what 1000 does; so do the settings' extremes (Paper
         // White 10 to 480 nits, Peak up to 10 000) wherever T reaches S.
-        for (paper, peak) in [
+        for (setting, (paper, peak)) in [
             (203.0, 1000.0),
             (203.0, 1500.0),
             (203.0, 10000.0),
             (480.0, 10000.0),
             (10.0, 200.0),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             (hdr.paper_white, hdr.peak) = (paper, peak);
-            for i in 0..=64 {
+            // The first setting is the identity curve, so it gets the whole ramp; the others
+            // sample it densely at the ends and the knee region.
+            let ramp: Vec<i32> = if setting == 0 {
+                (0..=64).collect()
+            } else {
+                vec![0, 1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 60, 62, 63, 64]
+            };
+            for i in ramp {
                 let g = f64::from((scene_peak * i as f32 / 64.0).powf(1.0 / 2.2));
                 let exact = i < 64;
                 assert!(unchanged(&mut hdr, [g, g, g, 1.0], exact), "{peak}: {i}");

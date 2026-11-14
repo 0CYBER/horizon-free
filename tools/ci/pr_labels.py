@@ -5,11 +5,13 @@
     pr_labels.py create [--apply]          creates the kind and area labels the repository lacks
     pr_labels.py backfill [--apply]        labels the open pull requests once; prints what it would do without --apply
 
-Kind: the box ticked in the template's "Kind" list. One label, added only when the pull request has no kind label yet;
-unticking the box that set it and ticking another swaps them. A label someone set by hand is never removed.
+Kind: the box ticked in the template's "Kind" list, else the title's `kind(area): ` prefix (`fix` and `feat` count as
+`bug` and `feature`). One label, added only when the pull request has no kind label yet; unticking the box (or
+changing the title's kind) that set it swaps them. A ticked box wins over the title. A label someone set by hand is
+never removed.
 `feature` keeps its release meaning (listed under New, docs/release-flow.md).
-Areas: from the paths the pull request changes (docs/architecture.md), at most 3, each with a tenth of the changed
-lines or more. Added, never removed.
+Areas: the area labels the title names (`perf(chunks,rendering): ...`), then the paths the pull request changes
+(docs/architecture.md), at most 3, each with a tenth of the changed lines or more. Added, never removed.
 
 The workflow runs on `pull_request_target` from main: this script reads the event file and the API's list of changed
 files, never a pull request's code.
@@ -78,6 +80,22 @@ AREAS = [
 AREA_RES = [(label, re.compile(paths)) for label, _, paths in AREAS]
 MAX_AREAS = 3
 KIND_LINE = re.compile(r"^\s*[-*]\s*\[([ xX])\]\s*\**`?(\w+)`?", re.M)
+# A title's prefix, `kind(area): what changes` (CONTRIBUTING.md "Pull requests"): `parity(mobs): ...`, `perf: ...`.
+TITLE = re.compile(r"^\s*(\w+)(?:\(([^)]*)\))?\s*:\s*\S")
+TITLE_ALIASES = {"fix": "bug", "feat": "feature"}  # Conventional Commits' words
+AREA_LABELS = {label for label, _, _ in AREAS}
+
+
+def titled(title: str | None) -> tuple[str | None, list[str]]:
+    """(kind label, area labels) from a title's `kind(area): ` prefix; (None, []) when it has none."""
+    m = TITLE.match(title or "")
+    if not m:
+        return None, []
+    kind = ({word: label for word, label, _ in KINDS} | TITLE_ALIASES).get(m.group(1).lower())
+    if kind is None:
+        return None, []  # "Nether portals: ..." or "Controllers: ..." is a plain title
+    names = [a.strip().lower() for a in (m.group(2) or "").split(",")]
+    return kind, [a for a in dict.fromkeys(names) if a in AREA_LABELS][:MAX_AREAS]
 
 
 def ticked(body: str | None) -> list[str]:
@@ -106,12 +124,20 @@ def areas(files: list[tuple[str, int]]) -> list[str]:
     return big[:MAX_AREAS]
 
 
-def kind_change(body: str | None, old_body: str | None, have: set[str]) -> tuple[str | None, str | None]:
-    """(label to add, label to remove) for the description's kind. One ticked box only; else nothing."""
-    now = ticked(body)
+def kind_of(body: str | None, title: str | None) -> list[str]:
+    """The kind a pull request states: its one ticked box, else its title's prefix."""
+    if len(boxes := ticked(body)) == 1:
+        return boxes
+    return [kind] if (kind := titled(title)[0]) else []
+
+
+def kind_change(body: str | None, old_body: str | None, have: set[str], title: str | None = None,
+                old_title: str | None = None) -> tuple[str | None, str | None]:
+    """(label to add, label to remove) for the stated kind. One ticked box or a title prefix; else nothing."""
+    now = kind_of(body, title)
     if len(now) != 1 or now[0] in have:
         return None, None
-    before = ticked(old_body)
+    before = kind_of(old_body, old_title)
     kinds_on = have & KIND_LABELS
     if not kinds_on:
         return now[0], None
@@ -165,11 +191,15 @@ def plan_event(event: dict, files: list[tuple[str, int]] | None) -> tuple[list[s
     """(labels to add, label to remove) for one pull_request_target event. `files` is None when they didn't change."""
     pr = event["pull_request"]
     have = {l["name"] for l in pr.get("labels", [])}
-    old_body = ((event.get("changes") or {}).get("body") or {}).get("from")
-    if event.get("action") == "edited" and old_body is None:
-        old_body = pr.get("body")  # a title edit: the tick didn't move
-    add, remove = kind_change(pr.get("body"), old_body, have)
+    changes = event.get("changes") or {}
+    old_body = (changes.get("body") or {}).get("from")
+    old_title = (changes.get("title") or {}).get("from")
+    if event.get("action") == "edited":
+        old_body = pr.get("body") if old_body is None else old_body  # a title edit: the tick didn't move
+        old_title = pr.get("title") if old_title is None else old_title  # a body edit: the title didn't move
+    add, remove = kind_change(pr.get("body"), old_body, have, pr.get("title"), old_title)
     new = [add] if add else []
+    new += [a for a in titled(pr.get("title"))[1] if a not in have and a not in new]
     if files is not None:
         new += [a for a in areas(files) if a not in have and a not in new]
     return new, remove
@@ -191,8 +221,8 @@ def event(api) -> int:
 
 def guess_kind(title: str, body: str | None, files: list[tuple[str, int]]) -> str | None:
     """The kind of an open pull request without a ticked box, only where it is clear; None when unsure."""
-    if (t := ticked(body)) and len(t) == 1:
-        return t[0]
+    if len(k := kind_of(body, title)) == 1:
+        return k[0]
     paths = [p for p, _ in files]
     if paths and all(p.endswith(".md") or p.startswith("docs/") for p in paths):
         return "documentation"
@@ -214,7 +244,7 @@ def backfill(api, apply: bool) -> list[tuple[int, list[str]]]:
         add = []
         if not have & KIND_LABELS and (k := guess_kind(pr["title"], pr["body"], files)):
             add.append(k)
-        add += [a for a in areas(files) if a not in have]
+        add += [a for a in titled(pr["title"])[1] + areas(files) if a not in have and a not in add]
         if add:
             out.append((pr["number"], add))
             if apply:

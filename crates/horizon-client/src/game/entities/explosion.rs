@@ -425,6 +425,37 @@ impl Game<'_> {
             )
         })
     }
+    /// `Explosion.getIndirectSourceEntity` as the kind that caused it: a
+    /// primed TNT's owner, the mob whose blast it is, or a projectile's owner.
+    /// An explicit crystal or cart cause has no indirect source (`Explosion`'s
+    /// switch).
+    fn blast_indirect_source(&self) -> Option<Who> {
+        if self.combat.explicit_explosion_cause.is_some() {
+            return None;
+        }
+        if let Some((id, _)) = &self.combat.blast_owner {
+            if self.combat.blast_owner_player {
+                return Some(Who::Player);
+            }
+            // `PrimedTnt.getOwner` is an `EntityReference`: a removed owner
+            // does not resolve, though the TNT still saves its UUID.
+            return self
+                .mobs
+                .iter()
+                .any(|m| m.id == *id && !m.removed)
+                .then_some(Who::Mob(*id));
+        }
+        if let Some(id) = self.combat.explosion_owner {
+            return self
+                .mobs
+                .iter()
+                .any(|m| m.id == id && !m.removed)
+                .then_some(Who::Mob(id));
+        }
+        // The exploding mob itself: `Explosion.getIndirectSourceEntity` names
+        // it directly, even after its own tick marked it removed.
+        self.combat.explosion_source.map(Who::Mob)
+    }
     /// `ServerExplosion.getSeenPercent` for an entity box.
     pub(in crate::game) fn seen_percent(
         &self,
@@ -1018,9 +1049,7 @@ impl Game<'_> {
         // (as `retain` does), and a destroyed boat or cart shifts its list, so
         // `gone` counts how far.
         let blast = Blast {
-            vehicles_ignore: self.combat.explicit_explosion_cause.is_none()
-                && self.combat.blast_owner.is_none()
-                && self.blast_attacker().is_some()
+            vehicles_ignore: matches!(self.blast_indirect_source(), Some(Who::Mob(_)))
                 && !self
                     .ui
                     .rules
@@ -1028,6 +1057,9 @@ impl Game<'_> {
             items_ignore: items_ignore_explosion(self.blast_griefs(), interaction),
             spared: exploding.filter(|_| self.combat.explosion_source_named),
         };
+        // `VehicleEntity.hurtServer` credits its ENTITY_DAMAGE to
+        // `DamageSource.getEntity`, which for a blast is its indirect source.
+        let blast_by = self.explosion_kill_credit();
         let mut destroyed_contents = Vec::new();
         macro_rules! blocked_damage {
             ($id:expr, $kind:expr) => {{
@@ -1224,7 +1256,13 @@ impl Game<'_> {
                             else {
                                 continue;
                             };
-                            self.hurt_cart(i, amount, false, true);
+                            self.hurt_cart(
+                                i,
+                                amount,
+                                false,
+                                true,
+                                super::minecarts::CartHit::attributed(blast_by),
+                            );
                         }
                     }
                     // `VehicleEntity.hurtServer`: damage * 10, broken past 40.
@@ -1893,19 +1931,12 @@ impl Game<'_> {
             let rot = r.next_double() * f64::from(std::f32::consts::TAU);
             let fuse = r.next_int_bound(20).unwrap_or(0) + 10;
             // TntBlock.wasExploded hands the new TNT the blast's indirect
-            // source, so a chain reaction keeps a primed TNT's owner, player or mob.
-            let (owner, guest) = match &self.combat.explicit_explosion_cause {
-                // A crystal/cart's explicit DamageSource does not change
-                // Explosion.getIndirectSourceEntity, which is null for them.
-                Some(_) => (None, None),
-                None => match &self.combat.blast_owner {
-                    Some(_) if self.combat.blast_owner_player => {
-                        (Some(Who::Player), self.combat.blast_guest)
-                    }
-                    Some((id, _)) => (Some(Who::Mob(*id)), None),
-                    // The mob that causes it (a creeper, a mod blast's source).
-                    None => (self.blast_attacker().map(|(id, _)| Who::Mob(id)), None),
-                },
+            // source, so a chain reaction keeps a primed TNT's owner or the
+            // mob whose blast primed it.
+            let (owner, guest) = match self.blast_indirect_source() {
+                Some(Who::Player) => (Some(Who::Player), self.combat.blast_guest),
+                Some(Who::Mob(id)) => (Some(Who::Mob(id)), None),
+                None => (None, None),
             };
             self.add_primed_tnt(
                 BlockPos::new(pos[0], pos[1], pos[2]),
@@ -3133,3 +3164,7 @@ mod explicit_source_tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "tests/explosion_mob_source_tests.rs"]
+mod explosion_mob_source_tests;

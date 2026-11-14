@@ -309,7 +309,7 @@ fn disabled_tnt_rule_discards_primed_carts_but_keeps_unprimed_ticks() {
                     // A burning arrow cannot explode this unprimed cart, but
                     // MinecartTNT.hurtServer still forwards its ordinary damage.
                     let before = game.carts[0].damage;
-                    game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false);
+                    game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false, None, None);
                     assert_eq!(game.carts[0].damage, before + 10.0);
                 }
             });
@@ -385,8 +385,14 @@ fn destroyed_carts_retain_authoritative_state_and_retire_their_registration() {
 
                 match mode {
                     0 => game.tick_carts(),
-                    1 => game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false),
-                    _ => game.hurt_cart(0, 5.0, true, false),
+                    1 => game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false, None, None),
+                    _ => game.hurt_cart(
+                        0,
+                        5.0,
+                        true,
+                        false,
+                        crate::game::minecarts::CartHit::default(),
+                    ),
                 }
                 assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
                 assert!(game.entity(71).is_none());
@@ -656,7 +662,13 @@ fn a_bound_tnt_cart_keeps_its_join_when_damage_primes_it() {
         ));
         let expected: Vec<_> = game.carts.iter().map(|c| (c.id, c.join)).collect();
         let join = game.carts[0].join;
-        game.hurt_cart(0, 5.0, false, true);
+        game.hurt_cart(
+            0,
+            5.0,
+            false,
+            true,
+            crate::game::minecarts::CartHit::default(),
+        );
         assert_eq!(
             game.carts
                 .iter()
@@ -720,7 +732,13 @@ fn terminal_vehicle_damage_and_native_removal_retire_residency() {
                 ));
                 if mode == 0 {
                     if cart {
-                        game.hurt_cart(0, 5.0, true, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            true,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, true));
                     }

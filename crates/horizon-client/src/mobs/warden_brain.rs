@@ -520,11 +520,11 @@ fn sense_entities(m: &mut Mob, w: &MobWorld) {
     let attackable = list
         .iter()
         .copied()
-        .find(|&e| e == Who::Player && warden::can_target(w, e))
+        .find(|&e| e == Who::Player && warden::can_target(w, m.id, e))
         .or_else(|| {
             list.iter()
                 .copied()
-                .find(|&e| e != Who::Player && warden::can_target(w, e))
+                .find(|&e| e != Who::Player && warden::can_target(w, m.id, e))
         });
     let mm = mem(m);
     mm.mobs.set_list(list.clone());
@@ -849,7 +849,7 @@ impl B {
                 let Some(target) = warden::entity_angry_at(m, cx.w) else {
                     return false;
                 };
-                if !warden::can_target(cx.w, target) {
+                if !warden::can_target(cx.w, m.id, target) {
                     return false;
                 }
                 let mm = mem(m);
@@ -977,7 +977,7 @@ impl B {
                     return false;
                 };
                 let alive = cx.w.target_info(target).is_some_and(|t| t.alive);
-                let can = warden::can_target(cx.w, target);
+                let can = warden::can_target(cx.w, m.id, target);
                 let angry = warden::anger_level(m).is_angry();
                 if can && alive && angry {
                     return true;
@@ -1249,7 +1249,7 @@ impl B {
                 mem(m).is_sniffing.clear();
                 let w = cx.w;
                 if let Some(entity) = mem(m).nearest_attackable.value()
-                    && warden::can_target(w, entity)
+                    && warden::can_target(w, m.id, entity)
                     && let Some(info) = w.target_info(entity)
                 {
                     if closer_than(m, info.position, 6.0, 20.0) {

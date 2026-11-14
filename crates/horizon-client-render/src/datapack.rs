@@ -122,20 +122,42 @@ pub fn discover(world: &Path) -> Vec<DataPack> {
 /// `FolderRepositorySource.loadPacks`: packs in Create World's temporary
 /// folder or a world's data-pack directory, with required folder metadata.
 pub fn discover_folder(dir: &Path) -> Vec<DataPack> {
+    discover_folder_with(dir, &crate::packs::DirectoryValidator::game())
+}
+/// [`discover_folder`] under an explicit `allowed_symlinks.txt` validator.
+pub(crate) fn discover_folder_with(
+    dir: &Path,
+    validator: &crate::packs::DirectoryValidator,
+) -> Vec<DataPack> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut packs = Vec::new();
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let path = e.path();
+        // `PackDetector.detectPackResources`: a link, or a pack holding one, is
+        // not a pack unless the validator allows the target; the id stays the
+        // entry's name while the contents come from the target.
+        let path = match crate::packs::detected_pack_path(&e.path(), validator) {
+            Ok(Some(path)) => path,
+            Ok(None) => continue,
+            Err(err) => {
+                log::warn!(
+                    "Failed to read properties of '{}', ignoring: {err}",
+                    e.path().display()
+                );
+                continue;
+            }
+        };
         if path.is_dir() && folder_metadata_present(&path) {
             packs.push(DataPack {
                 id: format!("file/{name}"),
                 source: ResourceSource::directory(path),
                 selection: None,
             });
-        } else if name.ends_with(".zip")
+        } else if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().ends_with(".zip"))
             && let Ok(z) = Zip::open(&path)
             && z.contains("pack.mcmeta")
         {
@@ -656,7 +678,15 @@ pub fn parse_function(id: &str, text: &str) -> Result<Function, String> {
             });
         }
         if let Some(m) = line.strip_prefix('$') {
-            for p in macro_parameters(m)? {
+            let names = macro_parameters(m)?;
+            // `StringTemplate.fromString`: a `$` line with no `$(…)` is not a
+            // macro, and fails the whole file rather than running unchanged.
+            if names.is_empty() {
+                return Err(format!(
+                    "Can't parse function line {number}: '{m}': No variables in macro"
+                ));
+            }
+            for p in names {
                 if !parameters.contains(&p) {
                     parameters.push(p);
                 }
@@ -1734,6 +1764,55 @@ mod tests {
         // A plain function needs no arguments.
         let plain = parse_function("a:p", "say 1").unwrap();
         assert_eq!(plain.instantiate(None).unwrap(), ["say 1"]);
+    }
+
+    /// `StringTemplate.fromString` throws "No variables in macro" for a `$`
+    /// line with no `$(…)`, so `FunctionBuilder.addMacro` fails and
+    /// `ServerFunctionLibrary.reload` leaves the whole file out: `/function`
+    /// reports it unknown instead of running the line unchanged.
+    #[test]
+    fn a_macro_line_without_a_variable_drops_the_whole_file() {
+        let dir = std::env::temp_dir().join(format!("hz-datapack-macro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pack = dir.join("datapacks/macros");
+        let write = |p: &str, t: &str| {
+            let path = pack.join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, t).unwrap();
+        };
+        write(
+            "pack.mcmeta",
+            "{\"pack\":{\"description\":\"Macros\",\"pack_format\":1}}",
+        );
+        // A plain line before and after does not save the file.
+        write(
+            "data/t/function/novar.mcfunction",
+            "say before\n$say hello\nsay after\n",
+        );
+        write("data/t/function/lone.mcfunction", "$\n");
+        // A `$` not followed by `(` is text, not a variable.
+        write(
+            "data/t/function/dollar.mcfunction",
+            "$say $(who) costs $5\n",
+        );
+        write("data/t/function/plain.mcfunction", "say plain\n");
+        let packs = discover(&dir);
+        let store = DataStore::load(&[&packs[0]]);
+        for id in ["t:novar", "t:lone"] {
+            assert!(!store.functions.contains_key(id), "{id} was registered");
+            assert!(
+                store
+                    .errors
+                    .iter()
+                    .any(|(e, m)| e == id && m.contains("No variables in macro")),
+                "{id} has no load error: {:?}",
+                store.errors
+            );
+        }
+        let dollar = &store.functions["t:dollar"];
+        assert_eq!(dollar.parameters, ["who"]);
+        assert!(store.functions.contains_key("t:plain"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

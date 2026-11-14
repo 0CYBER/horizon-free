@@ -2,6 +2,7 @@
 //! `/particle`, `/attribute`, `/ride` and `/spreadplayers`.
 use super::{Arg, Context, Game, R, Target, err, wrap_degrees};
 use crate::game::living_attributes::AttributeWrite;
+use crate::game::minecarts::CartHit;
 use horizon_client::{
     mobs::{Damage, DamageKind, MobEvent, NamedDamage, Who, finalize},
     scoreboard_cmd::{Holder, Tracker},
@@ -136,7 +137,8 @@ impl Game<'_> {
             "player_attack" => DamageKind::PlayerAttack,
             "mace_smash" => DamageKind::MaceSmash,
             "spear" => DamageKind::Spear,
-            "mob_attack" | "mob_attack_no_aggro" => DamageKind::MobAttack,
+            "mob_attack" => DamageKind::MobAttack,
+            "mob_attack_no_aggro" => DamageKind::MobAttackNoAggro,
             "arrow" => DamageKind::Arrow,
             "thrown" | "mob_projectile" => DamageKind::Thrown,
             "fireball" | "unattributed_fireball" => DamageKind::Fireball,
@@ -396,6 +398,7 @@ impl Game<'_> {
     }
 
     /// `VehicleEntity.hurtServer`: report acceptance even when the vehicle survives.
+    /// `by` is the `DamageSource`'s direct entity, `causing` its causing entity.
     fn command_damage_vehicle(
         &mut self,
         target: Target,
@@ -459,11 +462,15 @@ impl Game<'_> {
                 .iter()
                 .position(|b| b.id == id)
                 .is_some_and(|i| self.hurt_boat_result(i, amount, creative).is_some()),
-            Target::Cart(_) => self
-                .carts
-                .iter()
-                .position(|c| c.id == id)
-                .is_some_and(|i| self.hurt_cart_result(i, amount, creative, ignites)),
+            Target::Cart(_) => self.carts.iter().position(|c| c.id == id).is_some_and(|i| {
+                self.hurt_cart_result(
+                    i,
+                    amount,
+                    creative,
+                    ignites,
+                    CartHit::command(direct, causing),
+                )
+            }),
             _ => false,
         }
     }
@@ -1088,6 +1095,18 @@ impl Game<'_> {
                 let Some(key) = player.attributes.key(attribute) else {
                     return Err(no_attribute(&name, &description));
                 };
+                // Every arm below starts from an instance or a supplier value,
+                // and vanilla's `getAttributeInstance` (modifier add/remove,
+                // base set), `getEntityWithAttribute` (the gets) and
+                // `resetBaseValue` all throw `no_attribute` when the supplier
+                // creates none: a player has no `minecraft:follow_range`.
+                if !player
+                    .attributes
+                    .has_attribute(Some(key.clone()))
+                    .unwrap_or(false)
+                {
+                    return Err(no_attribute(&name, &description));
+                }
                 let unavailable = |_| no_attribute(&name, &description);
                 match id {
                     "attribute.get" | "attribute.base.get" => {
@@ -2216,6 +2235,10 @@ fn command_operation(ctx: &Context) -> horizon_world::attributes::Operation {
 }
 
 #[cfg(test)]
+#[path = "attribute_missing_tests.rs"]
+mod attribute_missing_tests;
+
+#[cfg(test)]
 mod allay_owner_damage_tests {
     use crate::game::native_entity_refs::tests::with_game_at;
     use horizon_client::mobs::{Damage, Mob};
@@ -2810,5 +2833,111 @@ impl Game<'_> {
         let table = &self.stations().professions;
         let state = self.pack.assets.registry.state(state)?;
         table.pois.name(table.pois.classify(state)?)
+    }
+}
+
+#[cfg(test)]
+mod attribute_modifier_command_tests {
+    use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
+    use horizon_client::chunk::Chunk;
+    use horizon_client::motion::PlayerMotion;
+    use horizon_client_core::nbt_value::text;
+    use horizon_core::geometry::Vec3;
+    use horizon_core::nbt::Tag;
+    use horizon_core::position::ChunkPos;
+    use std::sync::Arc;
+
+    fn with_game(test: impl FnOnce(&mut Game<'_>)) {
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let settings = Settings::default();
+        let loaded = load_resources(
+            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            crate::game::execution_role::ExecutionRole::IntegratedServer,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.game_dir = Some(
+            std::path::PathBuf::from(std::env::var_os("HORIZON_HOME").unwrap()).join(format!(
+                "attribute-modifier-{:?}",
+                std::thread::current().id()
+            )),
+        );
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+                root.clone(),
+            )),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(game.run_command("difficulty normal"));
+        assert!(game.run_command("forceload add 0 0"));
+        test(&mut game);
+    }
+
+    /// `AttributeCommand.addModifier` uses `AttributeInstance.addPermanentModifier`;
+    /// `AttributeInstance.pack` saves only permanent modifiers. A command
+    /// modifier must therefore be in the player's saved list and survive a reload.
+    #[test]
+    #[ignore = "daily"]
+    fn a_command_modifier_is_saved_with_the_player() {
+        with_game(|game| {
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+            assert!(game.run_command(
+                "attribute @s minecraft:step_height modifier add test:a 0.4 add_value"
+            ));
+            assert_eq!(
+                game.player
+                    .as_mut()
+                    .unwrap()
+                    .attribute("minecraft:step_height")
+                    .unwrap(),
+                1.0
+            );
+            let saved = game.player.as_ref().unwrap().saved_attributes();
+            let holds = match &saved {
+                Tag::List(instances) => instances.iter().any(|entry| {
+                    text(entry.get("id")).as_deref() == Some("minecraft:step_height")
+                        && matches!(
+                            entry.get("modifiers"),
+                            Some(Tag::List(modifiers))
+                                if modifiers
+                                    .iter()
+                                    .any(|m| text(m.get("id")).as_deref() == Some("test:a"))
+                        )
+                }),
+                _ => false,
+            };
+            assert!(holds, "saved attributes: {saved:?}");
+            let mut back = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
+            back.apply_saved_attributes(Some(&saved)).unwrap();
+            assert_eq!(
+                back.attribute("minecraft:step_height").unwrap(),
+                1.0,
+                "saved attributes: {saved:?}"
+            );
+        });
     }
 }

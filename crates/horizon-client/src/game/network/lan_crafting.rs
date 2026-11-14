@@ -242,6 +242,7 @@ impl Game<'_> {
         let brewed_potion_takes = std::mem::take(&mut menu.brewed_potion_takes);
         let crafted = std::mem::take(&mut menu.crafted);
         let item_crafted = std::mem::take(&mut menu.item_crafted);
+        let crafted_counts = std::mem::take(&mut menu.crafted_counts);
         menu.drops.clear();
         let host = self.lan.as_mut()?;
         host.hub
@@ -249,6 +250,15 @@ impl Game<'_> {
             .update(gi, |guest| store_player(menu, guest));
         let guest = &host.hub.guests[gi];
         let (conn, uuid, entity_id) = (guest.conn, guest.uuid, guest.entity_id);
+        // `ItemStack.onCraftedBy`'s `Stats.ITEM_CRAFTED` count, before the
+        // recipe the take used.
+        if !crafted_counts.is_empty() {
+            self.as_guest(conn, |g| {
+                for (item, count) in crafted_counts {
+                    g.award_stat("crafted", &item, count);
+                }
+            });
+        }
         if !brewed.is_empty() || !brewed_potion_takes.is_empty() {
             self.as_guest(conn, |g| {
                 for stack in &brewed_potion_takes {
@@ -2085,6 +2095,10 @@ mod recipe_check_tests {
 #[cfg(test)]
 #[path = "lan_crafting/lending_tests.rs"]
 mod lending_tests;
+
+#[cfg(test)]
+#[path = "lan_crafting/stonecutter_stat_tests.rs"]
+mod stonecutter_stat_tests;
 
 #[cfg(test)]
 mod empty_ingredient_placement_tests {

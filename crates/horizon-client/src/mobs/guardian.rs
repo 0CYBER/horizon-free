@@ -11,6 +11,7 @@ use super::{
     },
     nav::NavKind,
     path::PathType,
+    trader::MoveTowardsRestriction,
 };
 use crate::health::DamageLevel;
 use horizon_core::geometry::trig::Mth;
@@ -46,6 +47,7 @@ pub fn register(m: &mut Mob) {
     }
     let g = &mut m.ai.goals;
     g.add(4, GuardianAttack { attack_time: 0 });
+    g.add(5, MoveTowardsRestriction::new(1.0).looking());
     g.add(7, Stroll::new(1.0).interval(if elder { 400 } else { 80 }));
     g.add(8, LookAtPlayer::new(8.0));
     g.add(9, RandomLookAround::default());
@@ -252,13 +254,12 @@ pub fn tail_and_spikes(m: &mut Mob) {
         a.v[SPIKES] += (1.0 - a.v[SPIKES]) * 0.06;
     }
 }
-/// `Guardian.aiStep`: the client animations, air, flopping on land, the
-/// beam's clock, and the spikes' thorns.
+/// `Guardian.aiStep`: the client animations, air, flopping on land and the
+/// beam's clock. The spikes are in [`hurt_server`].
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if !m.alive() {
         return;
     }
-    let moving = m.extra.flag2;
     let in_water = m.fluids.in_water;
     tail_and_spikes(m);
     client_tick(m);
@@ -297,39 +298,47 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if let Some(look) = look {
         look_at(m, look);
     }
-    // Guardian.hurtServer: a still guardian's spikes hurt a melee attacker.
-    if m.hurt_time == 10
-        && !moving
-        && let Some((d, _)) = m.last_damage
-        && matches!(
+}
+/// `Guardian.hurtServer`: a guardian that is not moving hurts the living thing
+/// that hit it for 2, before `LivingEntity.hurtServer`'s guards (a blow it
+/// refuses draws the spikes too). `#avoids_guardian_thorns` (magic, thorns,
+/// explosions) is exempt, and so is a projectile: its direct entity is not
+/// living, though its owner is what `Damage::attacker` names. The kinds below
+/// are the ones whose direct entity is the living attacker itself (a player's
+/// blow, a mob's melee, a bee's sting, a warden's boom).
+pub fn hurt_server(m: &mut Mob, d: &Damage) {
+    if m.extra.flag2
+        || !matches!(
             d.kind,
             DamageKind::PlayerAttack
                 | DamageKind::MaceSmash
                 | DamageKind::Spear
                 | DamageKind::MobAttack
+                | DamageKind::MobAttackNoAggro
+                | DamageKind::Sting
+                | DamageKind::SonicBoom
         )
     {
-        let from = [m.position.x, m.position.y, m.position.z];
-        match d.attacker {
-            Some(Who::Player) => {
-                events.push(w.route_initial_player_event(MobEvent::DamagePlayer {
-                    amount: 2.0,
-                    from,
-                    kind: "minecraft:thorns",
-                }))
-            }
-            Some(Who::Mob(id)) => events.push(MobEvent::DamageMob {
-                target: id,
-                amount: 2.0,
-                source: Damage {
-                    kind: DamageKind::Thorns,
-                    attacker: Some(Who::Mob(m.id)),
-                    from: Some(from),
-                    attacker_species: Some(m.species()),
-                },
-            }),
-            None => {}
-        }
+        return;
+    }
+    let from = [m.position.x, m.position.y, m.position.z];
+    match d.attacker {
+        Some(Who::Player) => m.outbox.push(MobEvent::DamagePlayer {
+            amount: 2.0,
+            from,
+            kind: "minecraft:thorns",
+        }),
+        Some(Who::Mob(id)) => m.outbox.push(MobEvent::DamageMob {
+            target: id,
+            amount: 2.0,
+            source: Damage {
+                kind: DamageKind::Thorns,
+                attacker: Some(Who::Mob(m.id)),
+                from: Some(from),
+                attacker_species: Some(m.species()),
+            },
+        }),
+        None => {}
     }
 }
 /// `GuardianModel.setupAnim`'s eye: it follows `look` (the attack target's
