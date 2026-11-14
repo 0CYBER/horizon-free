@@ -16,9 +16,12 @@ pub(crate) struct GuiClips(Vec<(usize, [f32; 4])>);
 impl GuiClips {
     /// Opens a clip of `rect` (`[x, y, w, h]`, GUI pixels) at the batch's next vertex.
     pub(crate) fn push(&mut self, batch: &HudBatch, rect: [f32; 4]) -> Result<(), GuiClipRefusal> {
+        if !rect.iter().all(|v| v.is_finite()) {
+            return Err(GuiClipRefusal::NotFinite);
+        }
         let [x, y, w, h] = rect;
         let (x1, y1) = (x + w.max(0.0), y + h.max(0.0));
-        if ![x, y, x1, y1].iter().all(|v| v.is_finite()) {
+        if ![x1, y1].iter().all(|v| v.is_finite()) {
             return Err(GuiClipRefusal::NotFinite);
         }
         if self.0.len() >= MAX_OPEN {
@@ -141,6 +144,10 @@ mod tests {
         for rect in [
             [f32::NAN, 0.0, 1.0, 1.0],
             [0.0, 0.0, f32::INFINITY, 1.0],
+            [0.0, 0.0, f32::NAN, 1.0],
+            [0.0, 0.0, f32::NEG_INFINITY, 1.0],
+            [0.0, 0.0, 1.0, f32::NAN],
+            [0.0, 0.0, 1.0, f32::NEG_INFINITY],
             [f32::MAX, 0.0, f32::MAX, 1.0],
         ] {
             assert_eq!(clips.push(&batch, rect), Err(GuiClipRefusal::NotFinite));
