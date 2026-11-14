@@ -69,7 +69,11 @@ impl Menu {
     /// player, the menu's block (`set_block_pos`), `s`'s container and the menu's own
     /// containers, with the menu's snapshot cell.
     pub(super) fn slot_context<'s>(&'s self, env: &Env, s: usize) -> SlotContext<'s> {
-        let container = self.state.slots.get(s).map_or(PLAYER, |slot| slot.container);
+        let container = self
+            .state
+            .slots
+            .get(s)
+            .map_or(PLAYER, |slot| slot.container);
         SlotContext {
             player: env.player,
             pos: self.state.block_pos,

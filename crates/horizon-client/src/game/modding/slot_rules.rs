@@ -36,7 +36,11 @@ impl SlotRules for Game<'_> {
                     .map(|slot| slot.as_ref().and_then(|stack| stack.try_into_api().ok()))
                     .collect()
             };
-            let slots = vec![copy(context.slots), copy(context.grid), copy(context.result)];
+            let slots = vec![
+                copy(context.slots),
+                copy(context.grid),
+                copy(context.result),
+            ];
             mod_api::MenuSlotContext::new(context.player, context.pos, slots)
         };
         // A plan's copy made for another player or block (an env changed without a mutation)

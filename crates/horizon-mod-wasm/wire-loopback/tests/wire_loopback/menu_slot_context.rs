@@ -41,10 +41,18 @@ fn menu_slot_context_reads_the_same_through_the_wire() {
     let stack = ItemStack::new(super::prepared_equip::helmet(), 1).unwrap();
     let filled = Some(stack.clone());
     let pos = Some([1, 64, -3]);
-    let main = |player, pos, slots| (MenuContainer::Main, MenuSlotContext::new(player, pos, slots));
+    let main = |player, pos, slots| {
+        (
+            MenuContainer::Main,
+            MenuSlotContext::new(player, pos, slots),
+        )
+    };
     let grid = |result| {
         let slots = vec![vec![None], vec![filled.clone(), None], vec![result]];
-        (MenuContainer::Grid, MenuSlotContext::new(Some(7), pos, slots))
+        (
+            MenuContainer::Grid,
+            MenuSlotContext::new(Some(7), pos, slots),
+        )
     };
     let contexts = [
         main(Some(7), pos, vec![vec![None, filled.clone()]]),
@@ -84,6 +92,14 @@ fn menu_slot_context_reads_the_same_through_the_wire() {
     }
     assert_eq!(
         answers,
-        [(true, 2), (false, 3), (false, 1), (false, 1), (false, 1), (false, 2), (true, 3)]
+        [
+            (true, 2),
+            (false, 3),
+            (false, 1),
+            (false, 1),
+            (false, 1),
+            (false, 2),
+            (true, 3)
+        ]
     );
 }

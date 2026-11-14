@@ -69,7 +69,12 @@ fn recipes_place_in_a_mod_crafting_grid_as_in_the_table() {
 #[test]
 fn slot_rules_read_a_mod_grid_slot_and_the_result() {
     use mod_api::MenuContainer::{Grid, Result};
-    type Asked = (usize, mod_api::MenuContainer, Option<(String, u32)>, Option<(String, u32)>);
+    type Asked = (
+        usize,
+        mod_api::MenuContainer,
+        Option<(String, u32)>,
+        Option<(String, u32)>,
+    );
     #[derive(Default)]
     struct GridRules(std::cell::RefCell<Vec<Asked>>, std::cell::Cell<u32>);
     impl SlotRules for GridRules {
