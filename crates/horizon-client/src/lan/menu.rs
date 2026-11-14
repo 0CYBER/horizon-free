@@ -181,6 +181,9 @@ pub enum NativeMenuEvent {
     /// The menu closed: by the player, by the server, another opened, or
     /// the player left.
     Closed { uuid: u128, window: i32 },
+    /// The storage a mod backed the menu's slots with was written (the game's notice): its
+    /// slots are looked at again once the write is done.
+    PlacesChanged { uuid: u128, window: i32 },
 }
 
 /// The y of the key a chest minecart's or chest boat's items are kept under
