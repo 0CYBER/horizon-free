@@ -9,6 +9,7 @@ pub(crate) mod biome_modifier;
 pub(crate) mod biome_region;
 pub(crate) mod biome_source;
 pub(crate) mod chunk_generator;
+pub(crate) mod chunk_refusal;
 pub(crate) mod clock_adjustment;
 pub(crate) mod criteria;
 pub(crate) mod custom_spawners;

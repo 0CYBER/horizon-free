@@ -3415,6 +3415,7 @@ mod tests {
                     mod_api::Command::new("typed data <word:word> <number:number> <enabled:boolean> <item:item> <pos:block_pos>"),
                     mod_api::Command::new("typed opt [value:integer]"),
                     mod_api::Command::new("typed repeat <value:player> <value:integer>"),
+                    mod_api::Command::new("typed at <pos:vec3>"),
                     mod_api::Command::op("protected <who:player>", 4),
                 ]);
             }
@@ -3503,13 +3504,18 @@ mod tests {
                         "typed data console 3 true dirt ^0.5 ^0.5 ^0.5"
                     ));
                     assert!(game.perform_native_console_command("typed repeat guest13 3"));
+                    assert!(game.perform_native_console_command("typed at 1 64.25 ~1"));
+                    // A point is three numbers: two, or text, is a parse error and is not heard
+                    // (the count of 12 heard lines below holds neither).
+                    game.perform_native_console_command("typed at 1 64.25");
+                    game.perform_native_console_command("typed at 1 up 3");
                     assert!(game.command_source.is_none(), "console source restored");
                     game.as_guest(12, |game| {
                         assert!(game.native_run_command("execute as guest13 run typed opt 13"))
                     })
                     .unwrap();
                     let heard = heard.lock().unwrap();
-                    assert_eq!(heard.len(), 11);
+                    assert_eq!(heard.len(), 12);
                     let first = &heard[0].1;
                     assert_eq!(first.literals, ["typed", "give"]);
                     assert_eq!(first.argument("who"), Some(&Value::Player(other)));
@@ -3556,6 +3562,12 @@ mod tests {
                     );
                     assert_eq!(heard[9].1.arguments[0].value, Value::Player(other));
                     assert_eq!(heard[9].1.argument("value"), Some(&Value::Integer(3)));
+                    // `1 64.25 ~1`: a whole x is a block centre (1.5), y is as typed, and `~1`
+                    // is one block from the console's z.
+                    assert_eq!(
+                        heard[10].1.argument("pos"),
+                        Some(&Value::Vec3([1.5, 64.25, -2.0]))
+                    );
                 });
             },
         );

@@ -41,6 +41,7 @@ pub mod menu;
 pub mod menu_extra_rev;
 #[cfg(test)]
 mod payload_bounds_tests;
+pub mod player_shown;
 pub mod playerdata;
 pub mod prediction;
 pub mod recipes;
