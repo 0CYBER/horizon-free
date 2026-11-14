@@ -277,9 +277,9 @@ def tests_passed(output):
 
 
 def unittest_passed(output):
-    failed = re.search(r"^(FAILED \(.*\))$", output, re.M)
+    outcome = re.search(r"^((?:OK|FAILED) \(.*\))$", output, re.M)
     ran = re.search(r"^Ran (\d+) tests?", output, re.M)
-    return f"{ran.group(1) if ran else '?'} run, {failed.group(1)}" if failed else f"{ran.group(1)} passed" if ran else ""
+    return f"{ran.group(1) if ran else '?'} run, {outcome.group(1)}" if outcome else f"{ran.group(1)} passed" if ran else ""
 
 
 def parity_summary(output):
