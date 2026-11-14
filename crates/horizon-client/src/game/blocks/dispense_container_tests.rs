@@ -36,6 +36,7 @@ impl Hooks for Containers {
             "minecraft:bucket",
             "minecraft:water_bucket",
             "minecraft:paper",
+            "minecraft:glass_bottle",
         ] {
             let key = r.item_key(item);
             r.item_part(key, Container);
@@ -51,6 +52,60 @@ impl Hooks for Containers {
                 )
             },
         );
+        r.item_capability(
+            &ITEM_FLUIDS,
+            "minecraft:glass_bottle",
+            |_: &mut dyn ServerHost, place: &ItemPlace| {
+                Some(Box::new(Jug(place.clone())) as Box<dyn ResourceHandler<FluidResource>>)
+            },
+        );
+    }
+}
+
+/// An empty glass bottle a bucket of water turns into a potion: a mod's handler that acts on
+/// every container its place shows, as one written for a single container may.
+struct Jug(ItemPlace);
+impl ResourceHandler<FluidResource> for Jug {
+    fn size(&self, _: &mut dyn ServerHost) -> usize {
+        1
+    }
+    fn resource(&self, _: &mut dyn ServerHost, _: usize) -> Option<FluidResource> {
+        None
+    }
+    fn amount(&self, _: &mut dyn ServerHost, _: usize) -> u32 {
+        0
+    }
+    fn capacity(&self, _: &mut dyn ServerHost, _: usize, _: &FluidResource) -> u32 {
+        1000
+    }
+    fn insert(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &Transaction,
+        _: usize,
+        _: &FluidResource,
+        amount: u32,
+    ) -> u32 {
+        if amount < 1000 {
+            return 0;
+        }
+        let potion = mod_api::__private::item_key("minecraft:potion").unwrap();
+        let potion = ItemResource::of(&mod_api::ItemStack::new(potion, 1).unwrap());
+        let all = self.0.amount(host);
+        match self.0.exchange(host, tx, &potion, all) == all {
+            true => 1000,
+            false => 0,
+        }
+    }
+    fn extract(
+        &self,
+        _: &mut dyn ServerHost,
+        _: &Transaction,
+        _: usize,
+        _: &FluidResource,
+        _: u32,
+    ) -> u32 {
+        0
     }
 }
 
@@ -203,5 +258,30 @@ fn a_container_that_could_give_picks_up_first_and_its_event_comes_before_the_cli
         let given = dispense(game, full.unwrap());
         assert_eq!(front(game), state(game, "minecraft:water"));
         assert_eq!(item(&given), Some(("minecraft:paper".into(), 1)));
+    });
+}
+
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+fn a_stack_of_custom_containers_gives_their_handler_one_at_a_time() {
+    with_dispenser(|game, _| {
+        set_front(game, "minecraft:water");
+        let left = dispense(game, ItemStack::new("minecraft:glass_bottle", 3));
+        // The handler turned every container it saw: one, not the stack.
+        assert_eq!(item(&left), Some(("minecraft:glass_bottle".into(), 2)));
+        assert_eq!(front(game), state(game, "minecraft:air"));
+        let pos = (DISPENSER[0], DISPENSER[1], DISPENSER[2]);
+        let held: Vec<_> = game
+            .world
+            .block_entities
+            .get(&pos)
+            .unwrap()
+            .slots()
+            .iter()
+            .flatten()
+            .map(|stack| (stack.item.to_string(), stack.count))
+            .collect();
+        assert_eq!(held, [("minecraft:potion".to_owned(), 1)]);
+        assert!(game.dropped.is_empty());
     });
 }

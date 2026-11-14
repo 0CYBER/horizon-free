@@ -243,9 +243,10 @@ pub fn try_place_fluid(
 
 /// NeoForge's `DispenseFluidContainer`: a dispenser's answer for a fluid container, which a
 /// container's [`dispense_item`](crate::ItemPart::dispense_item) part returns (it is no default:
-/// vanilla's buckets keep their own behaviours). One of `event.stack` runs in a two-slot copy
-/// whose item may change ([`ItemPlace::ScratchSlots`]), so an empty container may become a
-/// full one of another item. It picks up from the block in front first
+/// vanilla's buckets keep their own behaviours). `event.stack` runs in a two-slot copy whose
+/// item may change ([`ItemPlace::ScratchSlots`]), reached one item at a time
+/// ([`ItemPlace::OneByOne`]): the container's handler sees one container, and an empty one may
+/// become a full one of another item. It picks up from the block in front first
 /// ([`try_pickup_fluid`], its `FLUIDS` reached from the dispenser's side), and places a bucket
 /// of what it holds there ([`try_place_fluid`], unvalidated, as a bucket) only where nothing
 /// was picked up; the fluid's sound and game event go out as the transfer commits, before the
@@ -271,7 +272,9 @@ pub fn dispense_container(
             .ok()
             .flatten()
             .ok_or(())?;
-        let item = copy.capability(host, &ITEM_FLUIDS).ok_or(())?;
+        // The container's handler sees one container at a time, whatever the stack.
+        let one = ItemPlace::OneByOne(Box::new(copy.clone()));
+        let item = one.capability(host, &ITEM_FLUIDS).ok_or(())?;
         let transferred = try_pickup_fluid(host, &item, None, level, front, side).is_some()
             || try_place_fluid(host, &item, None, level, front, false).is_some();
         match transferred {
