@@ -209,6 +209,34 @@ class SdkAssetTests(unittest.TestCase):
                 archives.append([(dist / name).read_bytes() for name in names])
         self.assertEqual(archives[0], archives[1])
 
+    def test_parallel_pack_matches_serial_with_spawn(self):
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out = self.out(root, 1000)
+            serial, parallel = root / "serial", root / "parallel"
+            serial.mkdir()
+            identity = json.loads((out / prebuilt_game.IDENTITY).read_text())
+            for kind, names in prebuilt_game.archives(out, identity["slices"]).items():
+                prebuilt_game.tar_xz(out, names, serial / f"{kind}-{identity['target']}-server.tar.xz")
+            prebuilt_game.tar_xz(out, [".", *prebuilt_game.BUILD_DATA], serial / prebuilt_game.BUILD_DATA_ARCHIVE)
+            with patch.object(prebuilt_game, "ProcessPoolExecutor", side_effect=lambda **kwargs:
+                              ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn"), **kwargs)):
+                self.pack(out, parallel)
+            for archive in serial.iterdir():
+                self.assertEqual(archive.read_bytes(), (parallel / archive.name).read_bytes(), archive.name)
+
+    def test_worker_failure_names_archive_and_stops_surface_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out = self.out(root, 1000)
+            dist = root / "dist"
+            (dist / prebuilt_game.BUILD_DATA_ARCHIVE).mkdir(parents=True)
+            with self.assertRaisesRegex(SystemExit, "build-data.tar.xz"):
+                self.pack(out, dist)
+            self.assertFalse((dist / "surface.json").exists())
+
     def test_check_refuses_slices_naming_absent_or_shared_files(self):
         api = [*self.API, *prebuilt_game.API_BUILD_DATA, prebuilt_game.NATIVE_MODS_TEMPLATE]
         for change, why in (({"api": [*api, "deps/libgone-1.rmeta"]}, "absent files"),

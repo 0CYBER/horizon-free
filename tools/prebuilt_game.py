@@ -18,6 +18,7 @@ The folder holds compiler outputs and game-owned registry patch crates, never va
 """
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
 import hashlib
 import json
 import lzma
@@ -803,9 +804,16 @@ def pack(out: Path, dist: Path, stage_tool: Path | None = None) -> None:
         sys.exit(f"{out} is not this source's package (format {package_format(ROOT)}, commit {head()})")
     dist.mkdir(parents=True, exist_ok=True)
     suffix = "-server" if identity["side"] == "server" else ""
-    for kind, names in archives(out, identity["slices"]).items():
-        tar_xz(out, names, dist / f"{kind}-{identity['target']}{suffix}.tar.xz")
-    tar_xz(out, [".", *BUILD_DATA], dist / BUILD_DATA_ARCHIVE)
+    jobs = {dist / f"{kind}-{identity['target']}{suffix}.tar.xz": names
+            for kind, names in archives(out, identity["slices"]).items()}
+    jobs[dist / BUILD_DATA_ARCHIVE] = [".", *BUILD_DATA]
+    # Each archive keeps its single xz stream; only independent archives run concurrently.
+    with ProcessPoolExecutor(max_workers=len(jobs)) as pool:
+        pending = {archive: pool.submit(tar_xz, out, names, archive) for archive, names in jobs.items()}
+        failures = [f"{archive.name}: {error}" for archive, future in pending.items()
+                    if (error := future.exception()) is not None]
+    if failures:
+        sys.exit("SDK archive compression failed: " + "; ".join(failures))
     command = ([str(stage_tool.resolve())] if stage_tool is not None else
                ["cargo", "run", "--locked", "--release", "-q", "-p", "horizon-mod-api-gen", "--bin", "horizon-stage", "--"])
     run(command + ["surface", str(ROOT), str(dist / SURFACE)], cwd=ROOT)
