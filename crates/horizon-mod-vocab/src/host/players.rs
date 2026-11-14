@@ -858,4 +858,16 @@ pub trait PlayersBackendMut {
         player: PlayerRef,
         input: PlayerInput,
     ) -> Option<SimulatedMove>;
+    /// Side: server.
+    /// Respawns a dead player as their client's Respawn button does
+    /// (`ServerGamePacketListenerImpl.handleClientCommand`'s `PERFORM_RESPAWN`, then
+    /// `PlayerList.respawn`): at their respawn point, else the world spawn, with
+    /// `player_respawned` heard. It is a call for outside every player's hook, and it
+    /// returns once the player is alive again. Each refusal changes nothing and is named by
+    /// `RespawnRefusal`, checked in this order: `Client`, `InPlayerHook` (a player's state is
+    /// swapped in; call it from `server_tick`), `Stale` (no player on this server behind the
+    /// handle), `NoConnection` (a fake player, or the world's own player in a single-player
+    /// world) and `Alive`.
+    #[access(WorldOnly)]
+    fn player_respawn(&mut self, player: PlayerRef) -> Result<(), RespawnRefusal>;
 }
