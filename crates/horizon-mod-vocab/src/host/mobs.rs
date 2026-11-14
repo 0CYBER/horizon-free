@@ -114,11 +114,12 @@ pub trait MobsBackend {
     #[access(WorldOnly)]
     fn mob_no_ai(&self, mob: MobRef) -> Option<bool>;
     /// Side: server.
-    /// Whether a mod paused the mob's AI with `set_brain_frozen`. False for a
-    /// mob no mod froze, whether or not it has `NoAI`. None for a stale or
-    /// unavailable mob, anything but a mob, the dragon, or on a client.
+    /// Whether a mod paused the mob's AI step with `set_ai_paused`. False
+    /// for a mob no mod paused, whether or not it has `NoAI`. None for a
+    /// stale or held-out handle, anything but a mob, the dragon, or on a
+    /// client.
     #[access(WorldOnly)]
-    fn mob_brain_frozen(&self, mob: MobRef) -> Option<bool>;
+    fn mob_ai_paused(&self, mob: MobRef) -> Option<bool>;
     /// Side: server.
     /// `Mob.getRestrictCenter`: the restriction's block position, kept
     /// after `clear_restriction` and after a load (`[0, 0, 0]` for a mob
@@ -315,23 +316,23 @@ pub trait MobsBackendMut {
     #[access(WorldOnly)]
     fn mob_set_no_ai(&mut self, mob: MobRef, no_ai: bool) -> bool;
     /// Side: server.
-    /// Pauses (`true`) or resumes the mob's own AI while its physics runs on,
-    /// as Apothic Spawners' movable no-AI modifier does in Java. A frozen mob
-    /// skips `Mob.serverAiStep` whole: its Brain's sensors, activities and
-    /// behaviours, its goal and target selectors, its navigation and its
-    /// move, look and jump controls. `LivingEntity.aiStep` still runs as for
-    /// an immobile mob (`isImmobile`): no input, so it travels with gravity,
-    /// through fluids, and is pushed and knocked back; its brain's memories
-    /// stay as they were and resume with it. What a species does outside
-    /// `serverAiStep` (a piglin's hurt reaction, the undead's daylight burn,
-    /// ageing) still runs, as with `NoAI`, which this neither reads nor sets.
-    /// Not saved, as vanilla has no such flag, and not carried through a
-    /// conversion: a mod that keeps it stores it in an attachment and freezes
-    /// again in `entity_join_level`, which fires for a loaded chunk's mobs
-    /// too. Nothing in a mob's own tick resolves, as its copy is held out
-    /// there. Refused, with nothing changed, as `BrainFreezeRefusal` names.
+    /// Pauses (`true`) or resumes the mob's AI step while its physics runs
+    /// on, as vanilla's `isImmobile` does (a dying mob, a stunned ravager).
+    /// A paused mob skips `Mob.serverAiStep` whole: its Brain or its goal and
+    /// target selectors, its navigation and its move, look and jump
+    /// controls, for brain and goal mobs alike. `LivingEntity.aiStep` still
+    /// runs with every move input (`xxa`, `yya`, `zza`) and the jump flag
+    /// zeroed, so it travels with gravity, through fluids, and is pushed,
+    /// knocked back, hurt and killed. Its path, move target, target, running
+    /// goals and brain memories are kept and resume on the next AI step; the
+    /// navigation timeout does not count the pause. `NoAI` is neither read nor
+    /// written, and the per-species `isNoAi` checks outside the AI step still
+    /// read only `NoAI`. Saved with the entity as an attachment-style value
+    /// (`horizon:attachments`, `horizon` / `ai_paused`), never a vanilla key,
+    /// and read back on load. Refused, with nothing changed, as
+    /// `MobAiPauseRefusal` names.
     #[access(WorldOnly)]
-    fn mob_set_brain_frozen(&mut self, mob: MobRef, frozen: bool) -> Result<(), BrainFreezeRefusal>;
+    fn mob_set_ai_paused(&mut self, mob: MobRef, paused: bool) -> Result<(), MobAiPauseRefusal>;
     /// Side: server.
     /// `Mob.setBaby` through the species' setter: ageable mobs use their
     /// baby start age (`-48000` for sniffers, otherwise `-24000`) or `0`,

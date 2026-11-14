@@ -1,2 +1,0 @@
-ids = ["type:BrainFreezeRefusal", "handle:MobRef::set_brain_frozen", "handle:MobRef::brain_frozen"]
-why = "Adds MobRef::set_brain_frozen and MobRef::brain_frozen (#4478): a mod pauses a mob's AI, its Brain's sensors, activities and behaviours and its goal selectors (Mob.serverAiStep), while LivingEntity.aiStep keeps running with no input, so gravity, fluids, pushes and knockback still apply, as Apothic Spawners' movable no-AI modifier does in Java. Refusals are named. Not saved: vanilla has no such flag."

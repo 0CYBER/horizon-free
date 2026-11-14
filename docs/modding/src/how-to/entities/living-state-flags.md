@@ -77,21 +77,21 @@ attribute, navigation and AI changes. Their age is saved as `Age` where the kind
 such as zombies and piglins, keep their non-growing baby state instead. A species with no baby form refuses
 `set_baby` without changing anything. Neither `set_baby` nor `set_no_ai` changes `PersistenceRequired`.
 
-`brain_frozen`/`set_brain_frozen` pause a mob's own AI while its physics runs on, as Apothic Spawners' movable
-no-AI modifier does in Java. A frozen mob skips `Mob.serverAiStep` whole: its Brain's sensors, activities and
-behaviours, its goal and target selectors, its navigation and its controls. `LivingEntity.aiStep` runs as for an
-immobile mob (`isImmobile`), with no input, so it still falls, swims and is pushed and knocked back, which `NoAI`
-does not allow. It works for Brain mobs (piglins, villagers, axolotls, goats), which have no goals to remove, as
-for goal mobs. Its memories and goals stay and resume with it. `NoAI` is neither read nor set. The flag is not
-saved, since vanilla has no such flag. A mod that keeps it stores it in an attachment and freezes the mob again
-from `entity_join_level`, which also fires for a loaded chunk's mobs. A refusal is a `BrainFreezeRefusal`:
-`NoMob` (a stale handle, a mob held out for its own tick, a client) or `NotAMob` (a player, an armor stand,
-the dragon). Both change nothing.
+`ai_paused`/`set_ai_paused` pause a mob's AI step while its physics runs on, as vanilla's `isImmobile` does for a
+dying mob or a stunned ravager. A paused mob skips `Mob.serverAiStep` whole: its Brain or its goal and target
+selectors, its navigation and its controls, for brain mobs (allays, piglins, villagers) and goal mobs alike.
+`LivingEntity.aiStep` runs with every move input and the jump flag zeroed, so it still falls, swims, is pushed,
+knocked back, hurt and killed, which `NoAI` does not allow. Its path, move target, target, running goals and brain
+memories are kept and resume on the next AI step, and the navigation timeout does not count the pause. `NoAI` is
+neither read nor written. The pause is saved with the mob as an attachment-style value (`horizon:attachments`,
+`horizon` / `ai_paused`, never a vanilla key) and read back on load. A refusal is a `MobAiPauseRefusal`: `Stale`
+(another epoch's handle or no such entity), `Client`, `HeldOut` (a mob held out of the level for its own tick),
+`NoAiStep` (the dragon and its parts) or `NotAMob` (a player, an armor stand). None changes anything.
 
 ```rust
-// A spawner's movable no-AI mob, on spawn and again on load.
+// A spawner's movable no-AI mob: paused once, and still paused after a reload.
 if let Some(mob) = host.mob(entity) {
-    let _ = mob.set_brain_frozen(host, true);
+    let _ = mob.set_ai_paused(host, true);
 }
 ```
 

@@ -437,7 +437,7 @@ pub struct Ai {
     /// Ticks left during which kills count as player kills.
     pub last_hurt_by_player: i32,
     pub no_action_time: i32,
-    pub brain_frozen: bool, // A mod paused serverAiStep (`MobRef::set_brain_frozen`); not saved.
+    pub ai_paused: bool, // A mod paused serverAiStep (`MobRef::set_ai_paused`): mobs/ai_pause.rs.
     pub dab_turns: u32,
     pub aggressive: bool,
     pub panicking: bool,
@@ -2367,11 +2367,11 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level: &mut DamageLevel<'_>, events: &mut 
     drop_tiny_motion(m);
     m.ai.xxa *= 0.98;
     m.ai.zza *= 0.98;
-    // LivingEntity.isImmobile, no serverAiStep or input: a stunned ravager, a rearing horse, a frozen brain.
-    let immobile = (m.species() == Species::Ravager && super::ravager::immobile(m))
+    // LivingEntity.isImmobile, no serverAiStep or input: a stunned ravager, a rearing horse, a paused mob.
+    let immobile = super::ai_pause::hold(m, w)
+        || (m.species() == Species::Ravager && super::ravager::immobile(m))
         || super::equine::immobile(m)
-        || m.species() == Species::Mannequin
-        || m.ai.brain_frozen;
+        || m.species() == Species::Mannequin;
     if matches!(m.species(), Species::Piglin | Species::Hoglin) && m.alive() {
         super::piglin::before_goals(m, w, level.random(), events);
     }
