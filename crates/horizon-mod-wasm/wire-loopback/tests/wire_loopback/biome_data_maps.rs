@@ -1,7 +1,7 @@
 use super::*;
 use mod_api::__private::game::BackendRefOf;
 use mod_api::prelude::KeysHost;
-use mod_api::{Backend, BackendRef, BiomeKey, DataMap, DataMapError, Host, Tag};
+use mod_api::{Backend, BackendRef, BiomeKey, BiomeKeyError, DataMap, DataMapError, Host, Tag};
 struct Biomes {
     keys: mod_api::__private::BiomeKeys,
     value: &'static str,
@@ -20,8 +20,8 @@ impl mod_api::prelude::KeysHost for Biomes {
 impl Backend for Biomes {}
 mod_api::impl_backend_areas!(Biomes, except(keys, data_maps));
 impl mod_api::prelude::KeysBackend for Biomes {
-    fn biome_key_id(&self, key: BiomeKey) -> String {
-        self.keys.id(key).expect("stale biome key").to_owned()
+    fn biome_key_id(&self, key: BiomeKey) -> Result<String, BiomeKeyError> {
+        self.keys.id(key).map(str::to_owned)
     }
 }
 impl mod_api::prelude::DataMapsBackend for Biomes {
@@ -57,8 +57,8 @@ impl mod_api::prelude::KeysHost for Unavailable {
 impl Backend for Unavailable {}
 mod_api::impl_backend_areas!(Unavailable, except(keys, data_maps));
 impl mod_api::prelude::KeysBackend for Unavailable {
-    fn biome_key_id(&self, _: BiomeKey) -> String {
-        String::new()
+    fn biome_key_id(&self, _: BiomeKey) -> Result<String, BiomeKeyError> {
+        Err(BiomeKeyError::Unavailable)
     }
 }
 impl mod_api::prelude::DataMapsBackend for Unavailable {
@@ -80,7 +80,7 @@ impl DataMap for VillagerTypes {
 }
 fn assert_biomes(host: &dyn Host, value: &str) {
     let plains = host.biome_key("minecraft:plains").unwrap();
-    assert_eq!(plains.id(host), "minecraft:plains");
+    assert_eq!(plains.id(host), Ok("minecraft:plains".into()));
     assert_eq!(host.biome_key("test:nope"), None);
     assert_eq!(
         plains.data(host, &VillagerTypes),
@@ -103,7 +103,10 @@ fn biome_data_maps_native_and_wire_loopback() {
         let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
         for value in ["minecraft:plains", "minecraft:savanna"] {
             let host = Biomes {
-                keys: mod_api::__private::BiomeKeys::new(["minecraft:plains", "minecraft:desert"]),
+                keys: mod_api::__private::BiomeKeys::new(
+                    1,
+                    ["minecraft:plains", "minecraft:desert"],
+                ),
                 value,
             };
             assert_biomes(&host, value);
@@ -118,6 +121,37 @@ fn biome_data_maps_native_and_wire_loopback() {
                 out.into_bytes()
             })));
             assert_biomes(&guest::Guest, value);
+            // World A remains alive while its token is sent to receiving world B.
+            let other = Biomes {
+                keys: mod_api::__private::BiomeKeys::new(2, ["minecraft:plains"]),
+                value,
+            };
+            let foreign = other.biome_key("minecraft:plains").unwrap();
+            assert_eq!(foreign.id(&host), Err(BiomeKeyError::WrongGeneration));
+            assert_eq!(
+                foreign.id(&guest::Guest),
+                Err(BiomeKeyError::WrongGeneration)
+            );
+            assert_eq!(
+                foreign.data(&host, &VillagerTypes),
+                Err(DataMapError::InvalidKey)
+            );
+            assert_eq!(
+                foreign.data(&guest::Guest, &VillagerTypes),
+                Err(DataMapError::InvalidKey)
+            );
+            let expired = {
+                let old = mod_api::__private::BiomeKeys::new(3, ["minecraft:plains"]);
+                old.key("minecraft:plains").unwrap()
+            };
+            assert_eq!(
+                expired.id(&guest::Guest),
+                Err(BiomeKeyError::WrongGeneration)
+            );
+            assert_eq!(
+                expired.data(&guest::Guest, &VillagerTypes),
+                Err(DataMapError::InvalidKey)
+            );
             let key = host.biome_key("minecraft:plains").unwrap();
             assert_eq!(
                 key.data(&Unavailable, &VillagerTypes),
@@ -134,6 +168,7 @@ fn biome_data_maps_native_and_wire_loopback() {
                 out.into_bytes()
             })));
             assert_eq!(guest::Guest.biome_key("minecraft:plains"), None);
+            assert_eq!(key.id(&guest::Guest), Err(BiomeKeyError::Unavailable));
             assert_eq!(
                 key.data(&guest::Guest, &VillagerTypes),
                 Err(DataMapError::Unavailable)

@@ -73,7 +73,7 @@ mod entry {
         /// The registry's id.
         const REGISTRY: &'static str;
         /// The entry's full registry id.
-        fn id(&self, backend: &dyn Backend) -> String;
+        fn id(&self, backend: &dyn Backend) -> Result<String, DataMapError>;
     }
 }
 
@@ -83,8 +83,8 @@ macro_rules! typed_entries {
         impl DataMapEntry for $key {}
         impl entry::Entry for $key {
             const REGISTRY: &'static str = $registry;
-            fn id(&self, backend: &dyn Backend) -> String {
-                backend.$id(*self)
+            fn id(&self, backend: &dyn Backend) -> Result<String, DataMapError> {
+                Ok(backend.$id(*self))
             }
         }
         impl $key {
@@ -109,7 +109,6 @@ macro_rules! typed_entries {
     )+};
 }
 typed_entries! {
-    BiomeKey => "minecraft:worldgen/biome", biome_key_id;
     ItemKey => "minecraft:item", item_key_id;
     BlockKey => "minecraft:block", block_key_id;
     FluidKey => "minecraft:fluid", fluid_key_id;
@@ -118,11 +117,32 @@ typed_entries! {
     EnchantmentKey => "minecraft:enchantment", enchantment_key_id;
     BlockEntityTypeKey => "minecraft:block_entity_type", block_entity_type_key_id;
 }
+impl DataMapEntry for BiomeKey {}
+impl entry::Entry for BiomeKey {
+    const REGISTRY: &'static str = "minecraft:worldgen/biome";
+    fn id(&self, backend: &dyn Backend) -> Result<String, DataMapError> {
+        backend.biome_key_id(*self).map_err(|error| match error {
+            crate::BiomeKeyError::Unavailable => DataMapError::Unavailable,
+            crate::BiomeKeyError::WrongGeneration => DataMapError::InvalidKey,
+        })
+    }
+}
+impl BiomeKey {
+    /// Read this biome's data as for [`ItemKey::data`]. Expired or foreign tokens
+    /// return [`DataMapError::InvalidKey`]; no installed registry returns `Unavailable`.
+    pub fn data<M: DataMap<Entry = BiomeKey>>(
+        self,
+        host: &dyn Host,
+        map: &M,
+    ) -> Result<Option<M::Value>, DataMapError> {
+        data(&self, host, map)
+    }
+}
 impl DataMapEntry for ProfessionKey {}
 impl entry::Entry for ProfessionKey {
     const REGISTRY: &'static str = "minecraft:villager_profession";
-    fn id(&self, _: &dyn Backend) -> String {
-        self.0.to_string()
+    fn id(&self, _: &dyn Backend) -> Result<String, DataMapError> {
+        Ok(self.0.to_string())
     }
 }
 impl ProfessionKey {
@@ -148,6 +168,8 @@ pub enum DataMapError {
     /// No mod registered the map for the entry's registry in the current data load
     /// (`data_map_types`).
     UnknownType,
+    /// The key is expired, belongs to another world, or was never issued by this generation.
+    InvalidKey,
     /// The entry's value is not one the map's [`DataMap::decode`] takes.
     Undecodable,
 }
@@ -164,7 +186,7 @@ fn data<M: DataMap>(
     map: &M,
 ) -> Result<Option<M::Value>, DataMapError> {
     let backend = crate::backend_of(host).ok_or_else(DataMapError::no_backend)?;
-    let id = entry::Entry::id(entry, backend);
+    let id = entry::Entry::id(entry, backend)?;
     let registry = <M::Entry as entry::Entry>::REGISTRY;
     match backend.data_map_value(registry, &id, map.id())? {
         Some(value) => map

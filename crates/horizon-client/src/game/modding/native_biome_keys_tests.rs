@@ -43,7 +43,7 @@ fn biome_key_world_install_reload_and_unavailable_sides() {
                     .unwrap()
                     .0;
                 let plains = game.biome_key("minecraft:plains").unwrap();
-                assert_eq!(plains.id(game), "minecraft:plains");
+                assert_eq!(plains.id(game), Ok("minecraft:plains".into()));
                 assert_eq!(game.biome_key("test:nope"), None);
                 assert_eq!(
                     plains.data(game, &VillagerTypes),
@@ -59,18 +59,10 @@ fn biome_key_world_install_reload_and_unavailable_sides() {
                     Ok(None)
                 );
                 if let Some(old) = previous {
-                    assert!(
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| old.id(game)))
-                            .is_err()
-                    );
-                    assert!(
-                        game.world_tables
-                            .as_ref()
-                            .unwrap()
-                            .data_maps
-                            .biome_keys
-                            .id(old)
-                            .is_none()
+                    assert_eq!(old.id(game), Err(mod_api::BiomeKeyError::WrongGeneration));
+                    assert_eq!(
+                        old.data(game, &VillagerTypes),
+                        Err(DataMapError::InvalidKey)
                     );
                 }
                 previous = Some(plains);

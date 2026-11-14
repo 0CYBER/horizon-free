@@ -160,10 +160,14 @@ keep vanilla's own lists. A block the maps don't name keeps vanilla's behaviour.
 yet ([#3359](https://github.com/arismoko/horizon/issues/3359)).
 
 `host.biome_key("minecraft:plains")` resolves a `BiomeKey` in the installed
-server world registry. Its `id(host)` returns the canonical biome id, and
+server world registry. Its `id(host)` returns `Ok(canonical_id)`, and
 `data(host, &map)` reads maps whose `DataMap::Entry` is `BiomeKey`, including
 `neoforge:villager_types` in `minecraft:worldgen/biome`. Missing entries return
 `Ok(None)`. Lookup returns `None` on clients and before world data is installed;
 data maps there return `DataMapError::Unavailable`. Reacquire biome keys after
-reload: tokens from earlier generations are refused at the host boundary.
+reload: tokens from earlier generations or another world return
+`BiomeKeyError::WrongGeneration` from `id`, or `DataMapError::InvalidKey` from
+`data`. An unavailable host returns `BiomeKeyError::Unavailable` from `id`.
+Validation uses the receiving host’s installed snapshot, so a mod retaining a
+key across reload receives an error without panicking the server.
 Native and wasm use the same generated route and installed snapshot.

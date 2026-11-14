@@ -1,64 +1,67 @@
 //! World-owned biome registry identities.
 use crate::Host;
 use std::collections::BTreeMap;
-use std::sync::{Arc, LazyLock, Mutex, Weak};
 
 /// A biome registry entry in one installed world data generation.
 /// Obtain it with `host.biome_key("minecraft:plains")`; reacquire after reload.
-// no wire: explicit u32 slot codec in wire_types.rs validates host-issued tokens on the host.
+// no wire: explicit slot and generation codec in wire_types.rs carries opaque tokens; the receiving backend validates its own snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub struct BiomeKey(pub(crate) u32);
+pub struct BiomeKey(pub(crate) u32, pub(crate) u64);
 
 impl BiomeKey {
-    /// This entry's canonical id. A stale key is a boundary error.
-    pub fn id(self, host: &dyn Host) -> String {
+    /// This entry's canonical id, or a named refusal from the receiving world's snapshot.
+    pub fn id(self, host: &dyn Host) -> Result<String, BiomeKeyError> {
         crate::backend_of(host)
-            .map(|backend| backend.biome_key_id(self))
-            .unwrap_or_default()
-    }
-    #[cfg(any(not(target_arch = "wasm32"), test))]
-    pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
-        let tokens = TOKENS.lock().unwrap();
-        tokens
-            .get(&slot)
-            .and_then(Weak::upgrade)
-            .map(|_| Self(slot))
-            .ok_or("stale or unknown BiomeKey slot")
+            .ok_or(BiomeKeyError::Unavailable)?
+            .biome_key_id(self)
     }
 }
 
-static TOKENS: LazyLock<Mutex<BTreeMap<u32, Weak<String>>>> = LazyLock::new(Default::default);
-static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Why a biome key cannot be read against this host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum BiomeKeyError {
+    /// The token is not in this installed generation: expired, from another world,
+    /// or never issued. These cases cannot be distinguished from the opaque token.
+    WrongGeneration,
+    /// No server world registry is installed on this host.
+    Unavailable,
+}
+impl crate::NoBackend for BiomeKeyError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
 
 /// Engine-owned identities of one world data snapshot; dropping it invalidates its tokens.
 // no wire: engine-owned snapshot storage, never passed to mods.
 #[non_exhaustive]
 #[derive(Default)]
 pub struct BiomeKeys {
+    generation: u64,
     names: BTreeMap<String, BiomeKey>,
-    ids: BTreeMap<u32, Arc<String>>,
+    ids: BTreeMap<u32, String>,
 }
 impl BiomeKeys {
-    /// Prepare a new generation from the world's registry, before installation.
-    pub fn new<'a>(ids: impl IntoIterator<Item = &'a str>) -> Self {
-        let mut result = Self::default();
-        let mut tokens = TOKENS.lock().unwrap();
-        tokens.retain(|_, id| id.strong_count() != 0);
-        for id in ids {
+    /// Prepare the engine's unique world-data generation from its registry before installation.
+    /// The engine must supply a fresh generation for every candidate, across worlds and reloads.
+    pub fn new<'a>(generation: u64, ids: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut result = Self {
+            generation,
+            ..Self::default()
+        };
+        for (index, id) in ids.into_iter().enumerate() {
             if result.names.contains_key(id) {
                 continue;
             }
-            let slot = NEXT
-                .try_update(
-                    std::sync::atomic::Ordering::Relaxed,
-                    std::sync::atomic::Ordering::Relaxed,
-                    |n| n.checked_add(1),
-                )
-                .expect("biome key slots exhausted");
-            let name = Arc::new(id.to_owned());
-            tokens.insert(slot, Arc::downgrade(&name));
-            result.names.insert(id.to_owned(), BiomeKey(slot));
+            let Ok(slot) = u32::try_from(index) else {
+                break;
+            };
+            let name = id.to_owned();
+            result
+                .names
+                .insert(id.to_owned(), BiomeKey(slot, generation));
             result.ids.insert(slot, name);
         }
         result
@@ -68,8 +71,14 @@ impl BiomeKeys {
         self.names.get(id).copied()
     }
     /// Refuse tokens issued by any other world or data generation.
-    pub fn id(&self, key: BiomeKey) -> Option<&str> {
-        self.ids.get(&key.0).map(|id| id.as_str())
+    pub fn id(&self, key: BiomeKey) -> Result<&str, BiomeKeyError> {
+        if key.1 != self.generation {
+            return Err(BiomeKeyError::WrongGeneration);
+        }
+        self.ids
+            .get(&key.0)
+            .map(String::as_str)
+            .ok_or(BiomeKeyError::WrongGeneration)
     }
 }
 

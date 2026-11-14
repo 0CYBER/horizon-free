@@ -403,6 +403,7 @@ impl Game<'_> {
         let data_maps = native_data_maps::DataMaps::load(&data_map_types, &overlay, &registries)
             .with_builtins(builtin)
             .with_biome_keys(mod_api::__private::BiomeKeys::new(
+                horizon_client::datapack_net::next_session(),
                 self.world_biomes
                     .as_ref()
                     .unwrap_or_else(|| self.res.biomes())

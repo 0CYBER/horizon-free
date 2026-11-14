@@ -67,9 +67,9 @@ pub trait KeysHost {
 #[horizon_mod_api_macros::host_area]
 pub trait KeysBackend {
     /// Side: server. Canonical biome id in the installed world generation.
-    /// A token from another world or reload is a boundary error.
+    /// A token from another world or reload returns `BiomeKeyError::WrongGeneration`.
     #[access(WorldOnly)]
-    fn biome_key_id(&self, key: BiomeKey) -> String;
+    fn biome_key_id(&self, key: BiomeKey) -> Result<String, BiomeKeyError>;
     /// Side: both.
     /// The canonical block id retained by the load-owned registration slot. An invalid slot
     /// is a boundary error, including when a wasm guest supplies it.
