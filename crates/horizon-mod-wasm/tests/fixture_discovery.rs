@@ -13,7 +13,6 @@ fn fixture_modules_are_sorted_and_preserve_support_file_layout() {
         "lib.rs",
         "points.rs",
         "strict_math_vectors.rs",
-        "notes.txt",
     ] {
         std::fs::write(root.join(name), "").unwrap();
     }
@@ -22,9 +21,9 @@ fn fixture_modules_are_sorted_and_preserve_support_file_layout() {
         fixture_build::modules(root).unwrap(),
         format!(
             "#[path = {:?}]\npub mod apple;\n#[path = {:?}]\nmod strict_math_checks;\n#[path = {:?}]\npub mod zebra;\n",
-            absolute.join("apple.rs").to_string_lossy(),
-            absolute.join("strict_math_checks.rs").to_string_lossy(),
-            absolute.join("zebra.rs").to_string_lossy(),
+            absolute.join("apple.rs").to_str().unwrap(),
+            absolute.join("strict_math_checks.rs").to_str().unwrap(),
+            absolute.join("zebra.rs").to_str().unwrap(),
         )
     );
 }
@@ -32,7 +31,7 @@ fn fixture_modules_are_sorted_and_preserve_support_file_layout() {
 #[test]
 fn fixture_modules_refuse_unsupported_layout_by_name() {
     let directory = tempfile::tempdir().unwrap();
-    for name in ["mod.rs", "nested"] {
+    for name in ["mod.rs", "nested", "notes.txt", "extensionless"] {
         let path = directory.path().join(name);
         if name == "nested" {
             std::fs::create_dir(&path).unwrap();
@@ -47,6 +46,25 @@ fn fixture_modules_refuse_unsupported_layout_by_name() {
             std::fs::remove_file(path).unwrap();
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn fixture_modules_refuse_non_utf8_ancestor_by_name() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory
+        .path()
+        .join(std::ffi::OsString::from_vec(b"non_utf8_\xff".to_vec()));
+    std::fs::create_dir(&root).unwrap();
+    let module = root.join("guest.rs");
+    std::fs::write(&module, "").unwrap();
+
+    let error = fixture_build::modules(&root).unwrap_err();
+    assert!(error.contains("guest module path is not UTF-8"), "{error}");
+    assert!(error.contains("non_utf8_"), "{error}");
+    assert!(error.contains("guest.rs"), "{error}");
 }
 
 #[test]

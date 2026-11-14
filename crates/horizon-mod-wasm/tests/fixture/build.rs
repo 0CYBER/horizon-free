@@ -15,11 +15,15 @@ pub fn modules(directory: &Path) -> Result<String, String> {
                 path.display()
             ));
         }
-        if path.extension().is_some_and(|extension| extension == "rs")
-            && !path.file_name().is_some_and(|name| {
-                name == "lib.rs" || name == "points.rs" || name == "strict_math_vectors.rs"
-            })
-        {
+        if !path.extension().is_some_and(|extension| extension == "rs") {
+            return Err(format!(
+                "{}: expected a Rust guest module file (.rs)",
+                path.display()
+            ));
+        }
+        if !path.file_name().is_some_and(|name| {
+            name == "lib.rs" || name == "points.rs" || name == "strict_math_vectors.rs"
+        }) {
             paths.push(path);
         }
     }
@@ -33,6 +37,9 @@ pub fn modules(directory: &Path) -> Result<String, String> {
         let absolute = path
             .canonicalize()
             .map_err(|error| format!("{}: {error}", path.display()))?;
+        let absolute = absolute
+            .to_str()
+            .ok_or_else(|| format!("{}: guest module path is not UTF-8", absolute.display()))?;
         // Keep the math checker's original private visibility; registrations stay public.
         let visibility = if name == "strict_math_checks" {
             ""
@@ -41,7 +48,7 @@ pub fn modules(directory: &Path) -> Result<String, String> {
         };
         code.push_str(&format!(
             "#[path = {:?}]\n{visibility}mod {name};\n",
-            absolute.to_string_lossy()
+            absolute
         ));
     }
     Ok(code)
