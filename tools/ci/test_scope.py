@@ -10,6 +10,7 @@ A change outside every package directory, such as Cargo.lock, .github/ or tools/
 import argparse
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -79,7 +80,8 @@ class Workspace:
         root = metadata["workspace_root"]
 
         def relative(path):
-            return os.path.relpath(os.path.normpath(path), root)
+            # Repository paths in `/` form on every platform, as git and under() name them.
+            return Path(os.path.relpath(os.path.normpath(path), root)).as_posix()
 
         names = [package["name"] for package in metadata["packages"]]
         home = {p["name"]: relative(os.path.dirname(p["manifest_path"])) for p in metadata["packages"]}
@@ -89,7 +91,7 @@ class Workspace:
                 source = relative(target["src_path"])
                 # horizon-client-lib builds horizon-client's files: all of that package's folder counts.
                 folder = max((d for d in home.values() if under(source, d)), key=len, default=None)
-                self.dirs[package["name"]].add(folder or os.path.dirname(source))
+                self.dirs[package["name"]].add(folder or posixpath.dirname(source))
         self.home = home
         self.dependents = {name: set() for name in names}
         for package in metadata["packages"]:
@@ -145,7 +147,7 @@ def reads(workspace):
     "../.." in a file with CARGO_MANIFEST_DIR is the repository root or crates/, reported as "." or "crates".
     """
     tracked = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
-    known = {"."} | {t for path in tracked if path for t in [path, *map(str, Path(path).parents)]}
+    known = {"."} | {t for path in tracked if path for t in [path, *(p.as_posix() for p in Path(path).parents)]}
     found = {}
     for file in tracked:
         owners = workspace.owners(file) if file.endswith(".rs") else ()
@@ -161,12 +163,12 @@ def reads(workspace):
                     continue
                 if ROOT_JOIN.match(literal):
                     # A walk up from the manifest folder: the repository root, or crates/ for its siblings.
-                    candidates = {os.path.normpath(os.path.join(home, stripped))} & {".", "crates"} if manifest else set()
+                    candidates = {posixpath.normpath(posixpath.join(home, stripped))} & {".", "crates"} if manifest else set()
                     candidates = {c for c in candidates if c != home}
                 elif stripped.strip("./"):
-                    candidates = {os.path.normpath(os.path.join(base, stripped)) for base in (home, os.path.dirname(file))}
+                    candidates = {posixpath.normpath(posixpath.join(base, stripped)) for base in (home, posixpath.dirname(file))}
                     if "/" in literal and not literal.startswith(".") or literal in ROOT_FILES:
-                        candidates.add(os.path.normpath(stripped))
+                        candidates.add(posixpath.normpath(stripped))
                     candidates = {c for c in candidates if c in known and not c.startswith("..")
                                   and not any(under(c, d) or under(d, c) for d in workspace.dirs[name])}
                 else:
