@@ -3794,17 +3794,27 @@ mod tests {
     #[test]
     fn packed_pixels_come_back_the_same() {
         // Compression needs pixel bytes, not a resource reload's map/skin slots,
-        // font rasterization and full-size atlas. Keep a multi-row RGBA image
-        // with transparent, opaque and translucent pixels and repeated patterns.
+        // font rasterization and full-size atlas. Cover both literal bytes and
+        // backreferences: transparent runs, solid rows, repeated patterned rows
+        // and varied RGBA rows, with a buffer just beyond the 64 KiB window.
         let mut atlas = HudAtlas::fonts(&ResourceSource::default()).unwrap();
         atlas.width = 128;
-        atlas.height = 128;
+        atlas.height = 160;
         atlas.pixels = (0..atlas.width * atlas.height)
-            .flat_map(|i| [i as u8, (i / 128) as u8, 255 - i as u8, i as u8])
+            .flat_map(|i| {
+                let x = (i % atlas.width) as u8;
+                match i / atlas.width {
+                    0..32 => [0; 4],
+                    32..64 => [40, 80, 120, 255],
+                    64..96 => [x, x.wrapping_mul(3), 255 - x, 128],
+                    _ => [i as u8, (i / 128) as u8, 255 - i as u8, i as u8],
+                }
+            })
             .collect();
         let built = atlas.pixels.clone();
         atlas.pack_pixels();
         assert!(atlas.pixels.is_empty());
+        assert!(atlas.packed.as_ref().unwrap().wait().len() < built.len());
         assert!(atlas.pixels() == built.as_slice());
         // Packing again keeps the same image.
         atlas.pack_pixels();
