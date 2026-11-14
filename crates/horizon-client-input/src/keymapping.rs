@@ -2,12 +2,22 @@
 //! sprint, attack and use can be toggled instead of held).
 use std::collections::HashMap;
 
+/// The bound of a mapping's pending clicks: its count's largest value. Nothing in the engine
+/// drains them in a loop; a mod's `consumeClick` takes one a call.
+const MAPPING_CLICKS: crate::input_queue::QueueLimits = crate::input_queue::QueueLimits {
+    name: "key mapping clicks",
+    max_len: i32::MAX as usize,
+    per_tick: 1,
+};
+
 /// One mapping's runtime state. `toggle` is `Some(restore)` for a
 /// `ToggleKeyMapping` (with its `shouldRestore` flag), `None` for a plain one.
 #[derive(Clone, Debug)]
 pub struct KeyState {
     pub is_down: bool,
     click_count: i32,
+    /// A click was refused at the largest count, and the log said so.
+    click_refused: bool,
     released_by_screen_when_down: bool,
     toggle: Option<bool>,
     keyboard: bool,
@@ -22,6 +32,7 @@ impl KeyState {
         Self {
             is_down: false,
             click_count: 0,
+            click_refused: false,
             released_by_screen_when_down: false,
             toggle: None,
             keyboard: true,
@@ -36,9 +47,14 @@ impl KeyState {
             ..Self::plain()
         }
     }
-    /// `KeyMapping.click`: one more pending click.
+    /// `KeyMapping.click`: one more pending click. At the largest count the click is refused
+    /// instead of wrapping (vanilla's `clickCount++` would).
     pub fn click(&mut self) {
-        self.click_count += 1;
+        let count = self.click_count.saturating_add(1);
+        if count == self.click_count {
+            crate::input_queue::refuse(&mut self.click_refused, MAPPING_CLICKS);
+        }
+        self.click_count = count;
     }
     /// `consumeClick`.
     pub fn consume_click(&mut self) -> bool {
@@ -615,5 +631,17 @@ mod tests {
         assert!(!k.is_down);
         assert!(k.should_restore_state_on_screen_closed(true));
         assert!(!k.should_restore_state_on_screen_closed(true));
+    }
+
+    /// A mapping's pending clicks stop at the largest count instead of wrapping.
+    #[test]
+    fn pending_clicks_stop_at_the_largest_count() {
+        let mut key = KeyState::plain();
+        key.click_count = i32::MAX - 1;
+        key.click();
+        key.click();
+        assert_eq!(key.pending_clicks(), i32::MAX);
+        assert!(key.consume_click());
+        assert_eq!(key.pending_clicks(), i32::MAX - 1);
     }
 }
