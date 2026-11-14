@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Bevægelse",
+  "Reduced": "Reduceret",
+  "Full": "Fuld",
+  "Aa Text": "Aa Tekst",
+  "Prepare & play": "Forbered og spil",
+  "Name it, pick what it plays, then an icon.": "Giv den et navn, vælg hvad den spiller, og så en ikon.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis for alle. Hvert tema har et lyst og et mørkt udseende og husker accentfarven, du vælger under det.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Reduceret stopper himlen, nedtoningerne og glidningerne; knapper reagerer stadig med det samme. System følger din computers indstilling.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Lys eller mørk, tema, accentfarve, glas, sløring og forsiden baggrund vender tilbage til, hvordan Horizon leveres.",
+  "The launcher's look is back to how Horizon ships": "Launcherens udseende er tilbage til, hvordan Horizon leveres",
+  "The launcher's look is reset for now, but it could not be saved": "Launcherens udseende er nulstillet lige nu, men det kunne ikke gemmes",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Glas og Sløring former de matte paneler i det mørke udseende; det lyse tegner massieve hvide paneler.",
+  "Performance mode draws solid panels, without glass or blur.": "Ydeevnetilstand tegner massive paneler, uden glas eller sløring.",
+  "This theme's night draws solid panels, without glass or blur.": "Denne temas nattegner massive paneler, uden glas eller sløring."
 }

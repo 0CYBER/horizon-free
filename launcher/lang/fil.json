@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Kilusan",
+  "Reduced": "Pinaliit",
+  "Full": "Buong",
+  "Aa Text": "Aa Teksto",
+  "Prepare & play": "Maghanda at maglaro",
+  "Name it, pick what it plays, then an icon.": "Pangalanan ito, piliin kung ano ang nilalaro nito, tapos icon.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Libre para sa lahat. May light at dark na hitsura ang bawat tema at naalala nito ang accent na pinili mo sa ilalim nito.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Ang Pinaliit pinapatigil ang langit, ang mga fade at ang mga slide; agad pa ring sumasagot ang mga button. Sinusundan ng System ang setting ng computer mo.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Light o dark, tema, kulay ng accent, glass, blur at background ng Bahay babalik sa default ng Horizon.",
+  "The launcher's look is back to how Horizon ships": "Babalik sa default ng Horizon ang hitsura ng launcher",
+  "The launcher's look is reset for now, but it could not be saved": "Na-reset muna ang hitsura ng launcher, pero hindi na-save",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Hinuhubog ng Glass at Blur ang mga frosted panel ng dark na hitsura; ang light naman, solid na puting panel ang ginagamit.",
+  "Performance mode draws solid panels, without glass or blur.": "Gumagamit ang Mode ng performance ng solid na panel, walang glass o blur.",
+  "This theme's night draws solid panels, without glass or blur.": "Solid na panel ang gabi ng temang ito, walang glass o blur."
 }

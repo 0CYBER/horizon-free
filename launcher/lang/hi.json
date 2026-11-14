@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "थीम",
+  "Motion": "मोशन",
+  "Reduced": "कम",
+  "Full": "पूरा",
+  "Aa Text": "Aa टेक्स्ट",
+  "Prepare & play": "तैयार करें और खेलें",
+  "Name it, pick what it plays, then an icon.": "इसे नाम दें, चुनें कि यह क्या चलाए, फिर एक आइकन।",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "सबके लिए मुफ़्त। हर थीम का एक लाइट और एक डार्क रूप होता है, और वह उसके नीचे आपके चुने एक्सेंट रंग को याद रखती है।",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "कम आकाश, फेड और स्लाइड को रोकता है; बटन फिर भी तुरंत जवाब देते हैं। सिस्टम आपके कंप्यूटर की सेटिंग का अनुसरण करता है।",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "लाइट या डार्क, थीम, एक्सेंट रंग, ग्लास, ब्लर और होम की पृष्ठभूमि Horizon के मूल रूप में लौट आते हैं।",
+  "The launcher's look is back to how Horizon ships": "लॉन्चर का रूप Horizon के मूल रूप में वापस आ गया है",
+  "The launcher's look is reset for now, but it could not be saved": "लॉन्चर का रूप अभी के लिए रीसेट हो गया है, लेकिन सहेजा नहीं जा सका",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "ग्लास और ब्लर डार्क रूप के फ्रॉस्टेड पैनल बनाते हैं; लाइट रूप ठोस सफ़ेद पैनल बनाता है।",
+  "Performance mode draws solid panels, without glass or blur.": "प्रदर्शन मोड बिना ग्लास या ब्लर के ठोस पैनल बनाता है।",
+  "This theme's night draws solid panels, without glass or blur.": "इस थीम की रात बिना ग्लास या ब्लर के ठोस पैनल बनाती है।"
 }

@@ -273,7 +273,7 @@ impl Launcher {
     }
 
     /// Where the instance's native mods stand, read again only when what it depends on changes.
-    fn native_state_of(&self, instance: &instances::Instance) -> State {
+    pub(super) fn native_state_of(&self, instance: &instances::Instance) -> State {
         let version = self.version_of(instance).cloned();
         let home = self.mods.home();
         let profile = Profile::Optimized;
@@ -566,7 +566,7 @@ impl Launcher {
     }
 
     /// Each turned-on native mod's route; filesystem and release reads never run while drawing.
-    fn native_routes(&self, cx: &mut Context<Self>) -> native_mods::Routes {
+    pub(super) fn native_routes(&self, cx: &mut Context<Self>) -> native_mods::Routes {
         let home = self.mods.home();
         let plays = self
             .selected_instance()

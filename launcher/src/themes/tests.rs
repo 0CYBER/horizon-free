@@ -15,7 +15,7 @@ fn every_accent_reads_as_well_as_the_violet() {
         NIGHT.blocks(),
         DAWN.blocks(),
         NORD_DARK.blocks(),
-        NORD_LIGHT.blocks(),
+        TAIGA_NIGHT.blocks(),
     ] {
         for accent in Accent::ALL
             .into_iter()
@@ -67,11 +67,12 @@ fn colours_go_to_hsl_and_back() {
 }
 
 #[test]
-fn nord_text_reads_over_its_sky() {
+fn every_theme_palette_reads_over_its_sky() {
     use horizon_theme::night::{over, UNCARDED_STOPS};
 
-    for p in [NORD_DARK, NORD_LIGHT] {
-        let look = if p.dark { "dark" } else { "light" };
+    let palettes = THEMES.iter().filter_map(|t| t.palette.map(|p| (t.id, *p)));
+    for (id, p) in palettes {
+        let look = format!("{id} {}", if p.dark { "dark" } else { "light" });
         let texts = [
             ("ink", p.ink),
             ("ink_soft", p.ink_soft),
@@ -196,4 +197,23 @@ fn a_typed_colour_is_worn_as_is_and_survives_settings_json() {
     let (h, s, l) = hsl(Accent::custom(120.).rgb());
     let (_, vs, vl) = hsl(0x6b4bff);
     assert!((h - 120.).abs() < 1. && (s - vs).abs() < 0.02 && (l - vl).abs() < 0.02);
+}
+
+#[test]
+fn each_theme_brings_back_its_own_accent() {
+    let mut kept = std::collections::BTreeMap::new();
+    assert_eq!(starting_accent(None, &kept), Accent::VIOLET);
+    assert_eq!(starting_accent(Some("sunrise"), &kept).rgb(), 0xc2366f);
+    kept.insert("sunrise".to_string(), Accent::TEAL);
+    kept.insert(HORIZON.to_string(), Accent::PINK);
+    assert_eq!(starting_accent(Some("sunrise"), &kept), Accent::TEAL);
+    assert_eq!(starting_accent(None, &kept), Accent::PINK);
+    // A theme this launcher doesn't know is Horizon's own.
+    assert_eq!(accent_key(Some("from_the_future")), HORIZON);
+    assert_eq!(
+        starting_accent(Some("from_the_future"), &kept),
+        Accent::PINK
+    );
+    // The older themes keep their ids.
+    assert!(theme(Some("first_light")).is_some() && theme(Some("nord")).is_some());
 }

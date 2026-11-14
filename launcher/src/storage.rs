@@ -249,7 +249,7 @@ impl Storage {
     }
 }
 
-pub(crate) fn allocated_bytes(path: &Path) -> Result<u64, Error> {
+pub fn allocated_bytes(path: &Path) -> Result<u64, Error> {
     walk(path, &mut HashSet::new())
 }
 

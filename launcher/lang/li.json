@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Thema",
+  "Motion": "Beweging",
+  "Reduced": "Vermindert",
+  "Full": "Vol",
+  "Aa Text": "Aa Teks",
+  "Prepare & play": "Veurbereide en speule",
+  "Name it, pick what it plays, then an icon.": "Gee'm 'ne naam, keus wat t'r sjpeult, dan e ikoon.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis veurilder. Elk thema heet 'n liechte en 'n duustere uterlik en oonthèlt 't accent det se d'r oonder keus.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Vermindert stop de loch, 't vervaage en 't sjiere; knöpke geve direk antjwoord. Systeem volg de insjtelling vaan eur computer.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Liech of duuster, thema, accentkleur, glaas, vervaag en d'n achtergrónd vaan Thoes goon trök nao wie Horizon weurt verstuurd.",
+  "The launcher's look is back to how Horizon ships": "'t Uterlik vaan de launcher is trök nao wie Horizon weurt verstuurd",
+  "The launcher's look is reset for now, but it could not be saved": "'t Uterlik vaan de launcher is veur noe trökgesjtèld, mer 't kos neet weure opgeslage",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Glaas en Vervaag vörme de matte panneel van 't duustere uterlik; 't liechte teikent massief witte panneel.",
+  "Performance mode draws solid panels, without glass or blur.": "Prestatiemodus teikent massief panneel, zoonder glaas of vervaag.",
+  "This theme's night draws solid panels, without glass or blur.": "De nach van dit thema teikent massief panneel, zoonder glaas of vervaag."
 }

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Тема",
+  "Motion": "Движење",
+  "Reduced": "Намалено",
+  "Full": "Целосно",
+  "Aa Text": "Aa Текст",
+  "Prepare & play": "Подгответе и играјте",
+  "Name it, pick what it plays, then an icon.": "Именувајте го, изберете што игра, па икона.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Бесплатно за сите. Секоја тема има светол и темен изглед и ја памти бојата на акцентот што ќе ја изберете во неа.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Наменото го запира небото, избледнувањата и лизгањата; копчињата веднаш одговараат. Системот ја следи поставката на вашиот компјутер.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Светло или темно, темата, бојата на акцент, стаклото, замаглувањето и позадината на Дома се враќаат како што ги испорачува Horizon.",
+  "The launcher's look is back to how Horizon ships": "Изгледот на стартувачот е повторно како што го испорачува Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "Изгледот на стартувачот е ресетиран засега, но не беше зачуван",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Стакло и Замаглување ги обликуваат матните панели на темниот изглед; светлиот црта полни бели панели.",
+  "Performance mode draws solid panels, without glass or blur.": "Режимот за перформанси црта полни панели, без стакло и замаглување.",
+  "This theme's night draws solid panels, without glass or blur.": "Ноќта на оваа тема црта полни панели, без стакло и замаглување."
 }

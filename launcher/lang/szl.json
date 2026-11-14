@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Motyw",
+  "Motion": "Ruch",
+  "Reduced": "Zmińszōny",
+  "Full": "Fulgny",
+  "Aa Text": "Aa Tekst",
+  "Prepare & play": "Przigotuj i graj",
+  "Name it, pick what it plays, then an icon.": "Nadoj mu miano, ôbierz co ôdpalŏ, potym ikōna.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Za darmo dlŏ wszyjskich. Kŏżdy motyw mo jasny i ćmawy wyglōnd i spamiyntuje akcyntowo farbã, keryj pod nim ôbierzesz.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Zmińszōny zastawio niebo, znicynia i posuwa; knopfle odpowiadajōm hned. Systymowany idzie za sztalōngiem kōmputra.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Jasny abo ćmawy, motyw, akcyntowo farba, szkło, rozmycie i tło Dōmu wracajōm do tego, z czym Horizon przichodzi.",
+  "The launcher's look is back to how Horizon ships": "Wyglōnd ôdpalacza wrōciōł do tego, z czym Horizon przichodzi",
+  "The launcher's look is reset for now, but it could not be saved": "Wyglōnd ôdpalacza je na terŏz resetniynty, ale niy ś dało go spamiyntować",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Szkło i Rozmycie fōrmujōm matowe panele ćmawego wyglōndu; jasny rysuje cołke białe panele.",
+  "Performance mode draws solid panels, without glass or blur.": "Tryb wydajności rysuje cołke panele, bez szkła i rozmyciŏ.",
+  "This theme's night draws solid panels, without glass or blur.": "Noc tego motywu rysuje cołke panele, bez szkła i rozmyciŏ."
 }

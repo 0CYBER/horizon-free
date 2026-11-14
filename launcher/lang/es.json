@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Movimiento",
+  "Reduced": "Reducido",
+  "Full": "Completo",
+  "Aa Text": "Aa Texto",
+  "Prepare & play": "Preparar y jugar",
+  "Name it, pick what it plays, then an icon.": "Ponle nombre, elige qué ejecuta y luego un icono.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Gratis para todos. Cada tema tiene un aspecto claro y otro oscuro, y recuerda el color de acento que elijas en él.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Reducido detiene el cielo, los fundidos y los deslizamientos; los botones responden al instante. Sistema sigue la configuración de tu equipo.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Claro u oscuro, el tema, el color de acento, el cristal, el desenfoque y el fondo de Inicio vuelven a como viene Horizon.",
+  "The launcher's look is back to how Horizon ships": "El aspecto del launcher vuelve a como viene Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "El aspecto del launcher se ha restablecido por ahora, pero no se pudo guardar",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Cristal y Desenfoque dan forma a los paneles esmerilados del aspecto oscuro; el claro dibuja paneles blancos sólidos.",
+  "Performance mode draws solid panels, without glass or blur.": "Modo rendimiento dibuja paneles sólidos, sin cristal ni desenfoque.",
+  "This theme's night draws solid panels, without glass or blur.": "La noche de este tema dibuja paneles sólidos, sin cristal ni desenfoque."
 }

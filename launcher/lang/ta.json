@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "கருப்பொருள்",
+  "Motion": "அசைவு",
+  "Reduced": "குறைக்கப்பட்டது",
+  "Full": "முழுமை",
+  "Aa Text": "Aa உரை",
+  "Prepare & play": "தயார் செய்து விளையாடு",
+  "Name it, pick what it plays, then an icon.": "பெயரிடுங்கள், எதை இயக்குகிறது என்று தேர்ந்தெடுங்கள், பிறகு ஒரு ஐகான்.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "அனைவருக்கும் இலவசம். ஒவ்வொரு கருப்பொருளுக்கும் ஒளி மற்றும் இருள் தோற்றம் உண்டு, அதன் கீழ் நீங்கள் தேர்ந்தெடுக்கும் அழுத்த நிறத்தை நினைவில் கொள்ளும்.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "குறைக்கப்பட்டது வானத்தை, மங்கல்களை, நழுவுதல்களை நிறுத்தும்; பொத்தான்கள் இன்னும் உடனே பதிலளிக்கும். கணினி உங்கள் கணினியின் அமைப்பைப் பின்பற்றும்.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "ஒளி அல்லது இருள், கருப்பொருள், அழுத்த நிறம், கண்ணாடி, மங்கல் மற்றும் முகப்பின் பின்னணி Horizon வழங்கும் நிலைக்குத் திரும்பும்.",
+  "The launcher's look is back to how Horizon ships": "துவக்கியின் தோற்றம் Horizon வழங்கும் நிலைக்குத் திரும்பிவிட்டது",
+  "The launcher's look is reset for now, but it could not be saved": "துவக்கியின் தோற்றம் இப்போது மீட்டமைக்கப்பட்டுள்ளது, ஆனால் சேமிக்க முடியவில்லை",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "கண்ணாடியும் மங்கலும் இருள் தோற்றத்தின் பனிப்பூச்சு பேனல்களை வடிவமைக்கின்றன; ஒளி தோற்றம் திட வெள்ளை பேனல்களை வரையும்.",
+  "Performance mode draws solid panels, without glass or blur.": "செயல்திறன் பயன்முறை கண்ணாடி அல்லது மங்கல் இன்றி திட பேனல்களை வரையும்.",
+  "This theme's night draws solid panels, without glass or blur.": "இந்தக் கருப்பொருளின் இரவு கண்ணாடி அல்லது மங்கல் இன்றி திட பேனல்களை வரையும்."
 }

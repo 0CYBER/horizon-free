@@ -17,6 +17,9 @@ mod glass_server_dialog;
 #[path = "glass_servers.rs"]
 mod glass_servers;
 use glass_servers::glass_setting_row;
+#[path = "servers_format.rs"]
+mod servers_format;
+use servers_format::{backup_label, bytes, uptime};
 
 /// One consent boundary for every launcher-managed start/restart route.
 fn run_managed_server(
@@ -76,10 +79,16 @@ pub(super) enum Field {
     AccentHex,
     /// The Shop's gift recipient (`wardrobe_page/shop/basket.rs`).
     ShopGift,
+    /// The Wardrobe's search through what the player owns (`wardrobe_page.rs`).
+    WardrobeSearch,
+    /// A Java instance's own JVM arguments and window size (the instance sheet's Launch).
+    JavaArgs,
+    WindowWidth,
+    WindowHeight,
 }
 
 impl Field {
-    const ALL: [Field; 24] = [
+    const ALL: [Field; 28] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -104,6 +113,10 @@ impl Field {
         Field::DeleteServer,
         Field::AccentHex,
         Field::ShopGift,
+        Field::WardrobeSearch,
+        Field::JavaArgs,
+        Field::WindowWidth,
+        Field::WindowHeight,
     ];
 }
 
@@ -414,48 +427,6 @@ pub(super) fn keep_running_through_update() {
 /// The player's own name, to let them in on a friends-only server: the Microsoft account that plays.
 fn own_name(accounts: &Accounts) -> Option<String> {
     accounts.selected().map(|a| a.name.clone())
-}
-
-fn bytes(n: u64) -> String {
-    match n {
-        0..1_000_000 => format!("{} kB", n.div_ceil(1000)),
-        1_000_000..1_000_000_000 => format!("{:.1} MB", n as f64 / 1e6),
-        _ => format!("{:.2} GB", n as f64 / 1e9),
-    }
-}
-
-/// A backup's date and kind from its name (`2026-10-19_11-28-57-manual.zip`, UTC), for people.
-fn backup_label(b: &Backup) -> (String, String) {
-    let stem = b.name.trim_end_matches(".zip");
-    let (when, kind) = match stem.get(..19) {
-        Some(when) if stem.len() > 20 => (when, &stem[20..]),
-        _ => return (stem.to_string(), String::new()),
-    };
-    let (date, time) = when.split_once('_').unwrap_or((when, ""));
-    let label = format!("{date} {} UTC", time.replace('-', ":"));
-    let kind = match kind {
-        "auto" => "Automatic".to_string(),
-        "manual" => "Made by hand".to_string(),
-        "before-update" => "Before an update".to_string(),
-        // horizon-server writes the tag with dashes (before-v2026-10-19-10).
-        k if k.starts_with("before-v")
-            && k[8..].chars().all(|c| c.is_ascii_digit() || c == '-') =>
-        {
-            format!("Before updating to {}", k[7..].replace('-', "."))
-        }
-        k if k.starts_with("before-") => format!("Before updating to {}", &k[7..]),
-        k => k.to_string(),
-    };
-    (label, kind)
-}
-
-fn uptime(secs: u64) -> String {
-    match secs {
-        0..60 => format!("{secs} s"),
-        60..3600 => format!("{} min", secs / 60),
-        3600..86_400 => format!("{} h {:02} min", secs / 3600, secs / 60 % 60),
-        _ => format!("{} d {} h", secs / 86_400, secs / 3600 % 24),
-    }
 }
 
 impl Launcher {
@@ -1113,6 +1084,7 @@ impl Launcher {
                         f,
                         Field::InstanceModsFilter
                             | Field::ConsoleSearch
+                            | Field::WardrobeSearch
                             | Field::Motd
                             | Field::Port
                             | Field::Token
@@ -1169,6 +1141,7 @@ impl Launcher {
                             f,
                             Field::InstanceModsFilter
                                 | Field::ConsoleSearch
+                                | Field::WardrobeSearch
                                 | Field::AccentHex
                                 | Field::Motd
                                 | Field::Port
@@ -1302,6 +1275,10 @@ impl Launcher {
             | Field::InstanceVersion
             | Field::InstanceModsFilter
             | Field::ConsoleSearch
+            | Field::WardrobeSearch
+            | Field::JavaArgs
+            | Field::WindowWidth
+            | Field::WindowHeight
             | Field::DeleteServer
             | Field::AccentHex => {}
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv | Field::PostExit => {

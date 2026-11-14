@@ -185,7 +185,7 @@ than Pixelify. Hover and focus are vanilla's white edge.
 - **Pixel art drawn in code.** The stone behind the pages is close shades of the page colour
   (`TILE_SHADES`), never Minecraft's stone; the landscape is a banded sky, a sun cut in slices like
   the mark, hills and square trees (a sunset in dark, a dawn in light). The launcher bakes them in
-  `launcher/src/art.rs` at the window's scale so each texel covers whole device pixels; the website
+  `launcher/scenery/src/art.rs` at the window's scale so each texel covers whole device pixels; the website
   draws them in its `scripts/art.mjs`.
 - **Icons**: Pixelarticons (MIT), 24 unit pixel SVGs in `crates/horizon-theme/icons/pixel/`, tinted
   with the text colour.
@@ -243,7 +243,7 @@ Light); `tokens.css` carries them as `--night-*`. The game's menus don't use it.
 
 - **Motion that means something**: the sky drifts slowly and stops when the window is hidden or
   unfocused; the interface moves only to show cause and effect (a row arrives where it was added,
-  progress fills). Reduced motion: nothing moves. The launcher's sky (`launcher/src/sky.rs`) moves
+  progress fills). Reduced motion: nothing moves. The launcher's sky (`launcher/scenery/src/sky.rs`) moves
   in whole texels on a half-second beat, so it asks for two frames a second at most;
   `HORIZON_LAUNCHER_MOTION=off` stills it, `always` keeps it moving unfocused (for recordings).
 - **Copy says what happens** ("Downloads 26.3 and Java 21, about 600 MB"), never praises.
@@ -308,7 +308,7 @@ colour, state and motion. Its tokens are `horizon_theme::glass`; `tokens.css` ca
 as `--glass-*`.
 
 - **The scene is the background**: a pixel sunset over three ridges with trees, clouds, stars, a
-  meteor now and then and fireflies (`launcher/src/scene.rs`), a port of the website's
+  meteor now and then and fireflies (`launcher/scenery/src/scene.rs`), a port of the website's
   `HorizonScene` with its seeds and sums, so a window shows the picture the mockup shows at the
   same size. It eases with the pointer and stops 10 s after the window loses focus;
   `HORIZON_LAUNCHER_MOTION` works as for Night. Dark appearance only so far; Light keeps the dawn.

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Tema",
+  "Motion": "Beweging",
+  "Reduced": "Fermindere",
+  "Full": "Fol",
+  "Aa Text": "Aa Tekst",
+  "Prepare & play": "Tariede en boartsje",
+  "Name it, pick what it plays, then an icon.": "Ju oan, kies wat it boartset, dan in byldkaiker.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Fergees foar elkenien. Elk tema hat in ljochte en in dûnker uterlik en ûnthâldt de accentkleur dy't jo derby kieze.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Fermindere stopet de loft, it ferdizenjen en it glydzjen; knoppen antwurdzje daliks. Systeem folget de ynstelling fan jo kompjûter.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Ljocht of dûnker, tema, accentkleur, glês, dizigens en de eftergrûn fan Thús geane werom nei hoe't Horizon levere wurdt.",
+  "The launcher's look is back to how Horizon ships": "It uterlik fan de launcher is wer werom by hoe't Horizon levere wurdt",
+  "The launcher's look is reset for now, but it could not be saved": "It uterlik fan de launcher is no weromset, mar it koe net bewarre wurde",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Glês en Dizigens foarmje de matte panielen fan it dûnkere uterlik; it ljochte tekenet massyf wite panielen.",
+  "Performance mode draws solid panels, without glass or blur.": "Prestaasjemodus tekenet massyf panielen, sûnder glês of dizigens.",
+  "This theme's night draws solid panels, without glass or blur.": "De nacht fan dit tema tekenet massyf panielen, sûnder glês of dizigens."
 }

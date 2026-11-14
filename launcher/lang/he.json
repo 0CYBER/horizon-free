@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "ערכת נושא",
+  "Motion": "תנועה",
+  "Reduced": "מופחתת",
+  "Full": "מלאה",
+  "Aa Text": "Aa טקסט",
+  "Prepare & play": "הכן ושחק",
+  "Name it, pick what it plays, then an icon.": "תנו לה שם, בחרו מה היא מפעילה, ואז סמל.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "חינם לכולם. לכל ערכת נושא יש מראה בהיר ומראה כהה, והיא זוכרת את צבע ההדגשה שתבחרו בה.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "מופחתת עוצרת את השמיים, את הדהייה ואת ההחלקות; כפתורים עדיין עונים מיד. מערכת עוקבת אחר ההגדרה של המחשב שלכם.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "בהיר או כהה, ערכת נושא, צבע הדגשה, זכוכית, טשטוש והרקע של בית חוזרים לברירת המחדל של Horizon.",
+  "The launcher's look is back to how Horizon ships": "המראה של המשגר חזר לברירת המחדל של Horizon",
+  "The launcher's look is reset for now, but it could not be saved": "המראה של המשגר אופס לעת עתה, אך לא ניתן היה לשמור אותו",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "זכוכית וטשטוש מעצבים את הפאנלים המטושטשים של המראה הכהה; הבהיר מצייר פאנלים לבנים אחידים.",
+  "Performance mode draws solid panels, without glass or blur.": "מצב ביצועים מצייר פאנלים אחידים, בלי זכוכית ובלי טשטוש.",
+  "This theme's night draws solid panels, without glass or blur.": "הלילה של ערכת הנושא הזו מצייר פאנלים אחידים, בלי זכוכית ובלי טשטוש."
 }

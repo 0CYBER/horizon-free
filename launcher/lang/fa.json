@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "پوسته",
+  "Motion": "حرکت",
+  "Reduced": "کاهش‌یافته",
+  "Full": "کامل",
+  "Aa Text": "Aa متن",
+  "Prepare & play": "آماده‌سازی و بازی",
+  "Name it, pick what it plays, then an icon.": "نامش را بگذارید، انتخاب کنید چه چیزی اجرا کند، بعد یک نماد.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "برای همه رایگان. هر پوسته یک ظاهر روشن و یک ظاهر تیره دارد و رنگ تاکیدی را که زیر آن انتخاب کنید به خاطر می‌سپارد.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "کاهش‌یافته آسمان، محوشدگی‌ها و لغزش‌ها را متوقف می‌کند؛ دکمه‌ها همچنان بی‌درنگ پاسخ می‌دهند. سیستم از تنظیم رایانه شما پیروی می‌کند.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "روشن یا تیره، پوسته، رنگ تاکیدی، شیشه، تاری و پس‌زمینه صفحه اصلی به حالت پیش‌فرض Horizon برمی‌گردند.",
+  "The launcher's look is back to how Horizon ships": "ظاهر لانچر به حالتی که Horizon با آن می‌آید بازگشت",
+  "The launcher's look is reset for now, but it could not be saved": "ظاهر لانچر فعلاً بازنشانی شده، اما ذخیره نشد",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "شیشه و تاری پنل‌های مات ظاهر تیره را شکل می‌دهند؛ ظاهر روشن پنل‌های سفید یکدست می‌کشد.",
+  "Performance mode draws solid panels, without glass or blur.": "حالت عملکرد پنل‌های یکدست می‌کشد، بدون شیشه یا تاری.",
+  "This theme's night draws solid panels, without glass or blur.": "شب این پوسته پنل‌های یکدست می‌کشد، بدون شیشه یا تاری."
 }

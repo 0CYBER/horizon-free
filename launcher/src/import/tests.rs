@@ -46,6 +46,7 @@ fn maker(root: &Path) -> impl Fn(&str) -> Result<Instance, String> + '_ {
             icon: None,
             group: None,
             version: None,
+            channel: Default::default(),
             native_profile: crate::native_mods::Profile::Optimized,
             played: Duration::ZERO,
             last_played: None,

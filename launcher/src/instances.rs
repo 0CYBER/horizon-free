@@ -137,6 +137,23 @@ fn saved_profile<'de, D: serde::Deserializer<'de>>(
     Ok(serde_json::from_value(serde_json::Value::deserialize(deserializer)?).ok())
 }
 
+/// Which builds an instance's "latest" follows. Missing in a saved instance: Nightly, so nobody
+/// is moved to an older build.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Channel {
+    Stable,
+    #[default]
+    Nightly,
+}
+
+// An unknown channel must not invalidate unrelated instance metadata.
+fn saved_channel<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Channel>, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(deserializer)?).ok())
+}
+
 /// The player's choices about one instance.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Meta {
@@ -150,6 +167,13 @@ pub struct Meta {
     /// launcher's own version, which follows updates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// The builds "latest" means for it; missing is [`Channel::Nightly`].
+    #[serde(
+        default,
+        deserialize_with = "saved_channel",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub channel: Option<Channel>,
     /// This instance's saved native build choice; missing or unknown starts at Optimized.
     #[serde(
         default,
@@ -259,6 +283,8 @@ pub struct Instance {
     pub group: Option<String>,
     /// Its pinned Horizon version, if any (`Meta::version`).
     pub version: Option<String>,
+    /// Which builds it follows when it keeps no version.
+    pub channel: Channel,
     /// Its saved native build choice, or Optimized before the player chooses one.
     pub native_profile: crate::native_mods::Profile,
     pub played: Duration,
@@ -363,6 +389,7 @@ fn list_in(game_home: &Path, data: &Path) -> Vec<Instance> {
                 icon: meta.icon,
                 group: meta.group,
                 version: meta.version,
+                channel: meta.channel.unwrap_or_default(),
                 native_profile: meta
                     .native_profile
                     .unwrap_or(crate::native_mods::Profile::Optimized),

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Thema",
+  "Motion": "Symudiad",
+  "Reduced": "Lleihau",
+  "Full": "Llawn",
+  "Aa Text": "Aa Testun",
+  "Prepare & play": "Paratoi a chwarae",
+  "Name it, pick what it plays, then an icon.": "Enwi ef, dewis beth mae'n chwarae, yna eicon.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Am ddim i bawb. Mae gan bob thema wedd olau a gwedd dywyll, ac mae'n cofio'r lliw acen rydych chi'n ei ddewis o'i dan.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Lleihau yn stopio'r awyr, y pylu a'r llithro; mae botymau'n ateb ar unwaith. Mae System yn dilyn gosodiad eich cyfrifiadur.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Golau neu dywyll, thema, lliw acen, gwydr, cymylu a chefndir Cartref yn mynd yn ôl i'r ffordd mae Horizon yn dod.",
+  "The launcher's look is back to how Horizon ships": "Mae golwg y lansiwr yn ôl i'r ffordd mae Horizon yn dod",
+  "The launcher's look is reset for now, but it could not be saved": "Mae golwg y lansiwr wedi'i hailosod am y tro, ond ni chydafeiddiwyd hi",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Mae Gwydr a Chymylu yn siapio paneli rhewllyd y wedd dywyll; mae'r un olau yn tynnu paneli gwyn solet.",
+  "Performance mode draws solid panels, without glass or blur.": "Mae modd perfformiad yn tynnu paneli solet, heb wydr na chymylu.",
+  "This theme's night draws solid panels, without glass or blur.": "Mae nos y thema hon yn tynnu paneli solet, heb wydr na chymylu."
 }

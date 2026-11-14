@@ -45,13 +45,9 @@ fn kind_id(prefix: &str, kind: DataKind) -> &'static str {
     }
 }
 
-/// Where a switch would be: the ping has none.
-fn always_on(t: &Theme) -> Div {
-    caps(tr("Always on")).flex_none().text_color(t.muted)
-}
-
-/// The "I'm playing" ping on the first-run question, laid out as the switches' rows.
-fn ping_row(t: &Theme) -> Div {
+/// The "I'm playing" ping on the first-run question, laid out as the switches' rows, with its
+/// switch.
+fn ping_row(toggle: Stateful<Div>, t: &Theme) -> Div {
     div()
         .flex()
         .items_start()
@@ -77,7 +73,7 @@ fn ping_row(t: &Theme) -> Div {
                         .child(tr(telemetry::PING)),
                 ),
         )
-        .child(always_on(t))
+        .child(toggle)
 }
 
 /// The exact JSON, in mono, scrolling inside a plate.
@@ -111,6 +107,17 @@ fn json_view(view: &(String, String), t: &Theme, scroll: &Scrollbar) -> Div {
 }
 
 impl Launcher {
+    /// The "I'm playing" ping's switch (`Settings::ping_off`), on by default.
+    pub(crate) fn ping_switch(&self, id: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
+        switch(id, !self.settings.ping_off, &self.theme).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.settings.ping_off = !this.settings.ping_off;
+                this.save_settings();
+                cx.notify();
+            },
+        ))
+    }
+
     /// Whether the question covers the window: not answered for this consent version, and the
     /// opening is over.
     pub(crate) fn asking_consent(&self) -> bool {
@@ -200,7 +207,7 @@ impl Launcher {
                     .border_t_1()
                     .border_color(t.rule)
                     .children(rows)
-                    .child(ping_row(&t)),
+                    .child(ping_row(self.ping_switch("ask-ping", cx), &t)),
             )
             .child(text(theme::CAPTION).text_color(t.muted).child(tr(telemetry::NEVER)))
             .child(
@@ -299,7 +306,7 @@ impl Launcher {
             telemetry::SWITCHES.len() + 1,
             tr(telemetry::PING_NAME),
             Some(div().child(tr(telemetry::PING)).into_any_element()),
-            Some(always_on(&t).into_any_element()),
+            Some(self.ping_switch("data-ping", cx).into_any_element()),
             &t,
         ));
         let waiting = horizon_telemetry::outbox::pending(&telemetry::home()).len();

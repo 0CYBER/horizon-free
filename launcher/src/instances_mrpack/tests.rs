@@ -90,6 +90,7 @@ fn a_modded_pack_fills_the_instance_it_is_imported_into() {
             icon: None,
             group: None,
             version: None,
+            channel: Default::default(),
             native_profile: crate::native_mods::Profile::Optimized,
             played: std::time::Duration::ZERO,
             last_played: None,

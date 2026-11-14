@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "Сэдэв",
+  "Motion": "Хөдөлгөөн",
+  "Reduced": "Багасгасан",
+  "Full": "Бүрэн",
+  "Aa Text": "Aa Текст",
+  "Prepare & play": "Бэлтгээд тоглох",
+  "Name it, pick what it plays, then an icon.": "Нэр өг, юу тоглохыг нь сонго, дараа нь дүрс.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "Бүх хүнд үнэгүй. Сэдэв бүр гэрэлт болон бараан төрхтэй бөгөөд түүний дор сонгосон онцлох өнгөө санадаг.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "Багасгасан тэнгэр, унгах болон гулгалтыг зогсооно; товчлуурууд шууд хариулна. Систем таны компьютерийн тохиргоог дагана.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "Гэрэлт эсвэл бараан, сэдэв, онцлох өнгө, шил, бүдгэрүүлэлт болон Нүүр хуудасны дэвсгэр Horizon-ы анхдагч байдалд буцна.",
+  "The launcher's look is back to how Horizon ships": "Эхлүүлэгчийн харагдах байдал Horizon-ы анхдагч байдалд буцлаа",
+  "The launcher's look is reset for now, but it could not be saved": "Эхлүүлэгчийн харагдах байдал одоогоор сэргээгдсэн, гэхдээ хадгалагдаагүй",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "Шил болон Бүдгэрүүлэлт бараан төрхийн бүдэгрүүлсэн панелийг хэлбэржүүлнэ; гэрэлт нь цагаан хатуу панель зурна.",
+  "Performance mode draws solid panels, without glass or blur.": "Гүйцэтгэлийн горим шил, бүдгэрүүлэлтгүй хатуу панель зурна.",
+  "This theme's night draws solid panels, without glass or blur.": "Энэ сэдэвийн шөнө шил, бүдгэрүүлэлтгүй хатуу панель зурна."
 }

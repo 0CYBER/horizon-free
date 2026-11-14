@@ -46,11 +46,7 @@ impl Launcher {
                 == Some(tr(
                     "A native build or cache cleanup is running. Try again when it finishes.",
                 ));
-        let mut card = crate::glass::plate(horizon_theme::glass::radius::PANEL)
-            .flex()
-            .flex_col()
-            .p(px(16.))
-            .gap(px(12.));
+        let mut card = div().flex().flex_col().p(px(8.)).gap(px(12.));
         let total = self.storage_report.as_ref().map_or_else(
             || tr("Calculating…").to_string(),
             |report| storage::format_bytes(report.rows.iter().map(|row| row.remaining_bytes).sum()),

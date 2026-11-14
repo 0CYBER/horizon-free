@@ -1360,5 +1360,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "ธีม",
+  "Motion": "การเคลื่อนไหว",
+  "Reduced": "ลดลง",
+  "Full": "เต็ม",
+  "Aa Text": "Aa ข้อความ",
+  "Prepare & play": "เตรียมแล้วเล่น",
+  "Name it, pick what it plays, then an icon.": "ตั้งชื่อ เลือกว่าเล่นอะไร แล้วเลือกไอคอน",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "ฟรีสำหรับทุกคน ทุกธีมมีทั้งหน้าตาแบบสว่างและแบบมืด และจำสีเน้นที่คุณเลือกไว้ใต้ธีมนั้น",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "แบบลดลงจะหยุดท้องฟ้า เอฟเฟกต์จางและการเลื่อน แต่ปุ่มยังตอบสนองทันที แบบระบบตามการตั้งค่าของคอมพิวเตอร์",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "สว่างหรือมืด ธีม สีเน้น กระจก ความเบลอ และพื้นหลังหน้าแรกจะกลับเป็นค่าเริ่มต้นของ Horizon",
+  "The launcher's look is back to how Horizon ships": "หน้าตาของลันเชอร์กลับเป็นค่าเริ่มต้นของ Horizon แล้ว",
+  "The launcher's look is reset for now, but it could not be saved": "หน้าตาของลันเชอร์ถูกรีเซ็ตไว้ชั่วคราว แต่บันทึกไม่สำเร็จ",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "กระจกและความเบลอกำหนดแผงแบบกระจกฝ้าของหน้าตามืด ส่วนแบบสว่างวาดแผงสีขาวทึบ",
+  "Performance mode draws solid panels, without glass or blur.": "โหมดประสิทธิภาพวาดแผงทึบ ไม่มีกระจกหรือความเบลอ",
+  "This theme's night draws solid panels, without glass or blur.": "กลางคืนของธีมนี้วาดแผงทึบ ไม่มีกระจกหรือความเบลอ"
 }

@@ -1352,5 +1352,20 @@
   "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.": "This prebuilt game has no API route. Update Horizon and rebuild the mods against this game.",
   "The prebuilt game's API file list names {file}, which is not a plain path.": "The prebuilt game's API file list names {file}, which is not a plain path.",
   "The prebuilt game is missing its API files: {files}.": "The prebuilt game is missing its API files: {files}.",
-  "Native mods route: {route}.": "Native mods route: {route}."
+  "Native mods route: {route}.": "Native mods route: {route}.",
+  "Theme": "ຮູບແບບ",
+  "Motion": "ການເຄື່ອນໄຫວ",
+  "Reduced": "ຫຼຸດຜ່ອນ",
+  "Full": "ເຕັມ",
+  "Aa Text": "Aa ຂໍ້ຄວາມ",
+  "Prepare & play": "ກະກຽມ ແລະ ຫຼິ້ນ",
+  "Name it, pick what it plays, then an icon.": "ຕັ້ງຊື່, ເລືອກວ່າມັນຫຼິ້ນຫຍັງ, ແລ້ວເລືອກໄອຄອນ.",
+  "Free for everyone. Each theme has a light and a dark look and remembers the accent you pick under it.": "ຟຣີສຳລັບທຸກຄົນ. ແຕ່ລະຮູບແບບມີທັງແບບແຈ້ງ ແລະ ແບບມືດ ແລະ ຈື່ຈຳສີເນັ້ນທີ່ເຈົ້າເລືອກຢູ່ໃນນັ້ນ.",
+  "Reduced stops the sky, the fades and the slides; buttons still answer at once. System follows your computer's setting.": "ແບບຫຼຸດຜ່ອນຈະຢຸດທ້ອງຟ້າ, ການເຟດ ແລະ ການເລື່ອນ; ປຸ່ມຍັງຕອບສະໜອງທັນທີ. ແບບລະບົບຕາມການຕັ້ງຄ່າຂອງຄອມພິວເຕີເຈົ້າ.",
+  "Light or dark, theme, accent colour, glass, blur and Home's background go back to how Horizon ships.": "ແຈ້ງ ຫຼື ມືດ, ຮູບແບບ, ສີເນັ້ນ, ແກ້ວ, ຄວາມມົວ ແລະ ພື້ນຫຼັງໜ້າບ້ານ ຈະກັບຄືນເປັນຄ່າເລີ່ມຕົ້ນຂອງ Horizon.",
+  "The launcher's look is back to how Horizon ships": "ໜ້າຕາຂອງຕົວເປີດກັບຄືນເປັນຄ່າເລີ່ມຕົ້ນຂອງ Horizon ແລ້ວ",
+  "The launcher's look is reset for now, but it could not be saved": "ໜ້າຕາຂອງຕົວເປີດຖືກຣີເຊັດໄປກ່ອນ, ແຕ່ບໍ່ສາມາດບັນທຶກໄດ້",
+  "Glass and Blur shape the dark appearance's frosted panels; the light one draws solid white panels.": "ແກ້ວ ແລະ ຄວາມມົວ ປັບຮູບແບບແຜງຝ້າມົວຂອງໂໝດມືດ; ໂໝດແຈ້ງວາດແຜງສີຂາວທັນໆ.",
+  "Performance mode draws solid panels, without glass or blur.": "ໂໝດປະສິດທິພາບວາດແຜງທັນໆ, ບໍ່ມີແກ້ວຫຼືຄວາມມົວ.",
+  "This theme's night draws solid panels, without glass or blur.": "ກາງຄືນຂອງຮູບແບບນີ້ວາດແຜງທັນໆ, ບໍ່ມີແກ້ວຫຼືຄວາມມົວ."
 }

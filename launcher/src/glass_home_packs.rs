@@ -10,14 +10,20 @@ use horizon_launcher::packs::{self, Kind as PackKind, Pack};
 use horizon_theme::glass::{fill, ink, radius};
 
 impl Launcher {
-    /// Home's Packs tab: the selected instance's resource packs, then its shader packs.
-    pub(super) fn glass_packs(&mut self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    /// Home's Resource packs or Shaders tab: the selected instance's packs of that `kind`.
+    pub(super) fn glass_packs(
+        &mut self,
+        kind: PackKind,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<Div>> {
         let t = self.theme;
         let instance = self.selected_instance()?;
         let (home, name) = (instance.home.clone(), instance.name.clone());
         self.load_packs_list(home.clone());
-        let resource = self.game_packs.resource.clone();
-        let shader = self.game_packs.shader.clone();
+        let (resource, shader) = match kind {
+            PackKind::Resource => (self.game_packs.resource.clone(), Vec::new()),
+            PackKind::Shader => (Vec::new(), self.game_packs.shader.clone()),
+        };
         let count = resource.len() + shader.len();
         // The whole tab takes dropped packs, lit as a row under the pointer while one is over it.
         let mut body = div()
@@ -46,9 +52,14 @@ impl Launcher {
                     ui::empty()
                         .flex()
                         .gap(px(4.))
-                        .child(tr(
-                            "No resource packs. Find them on the Mods page under Modrinth.",
-                        ))
+                        .child(match kind {
+                            PackKind::Resource => {
+                                tr("No resource packs. Find them on the Mods page under Modrinth.")
+                            }
+                            PackKind::Shader => {
+                                tr("No shaders. Find them on the Mods page under Modrinth.")
+                            }
+                        })
                         .child(ui::link("packs-add", tr("Add pack…")).on_click(add())),
                 ),
             );
@@ -60,7 +71,7 @@ impl Launcher {
                 &[("count", &count.to_string()), ("name", &name)],
             ),
         };
-        let folder = home.join(PackKind::Resource.folder());
+        let folder = home.join(kind.folder());
         body = body.child(
             ui::list_head(note).child(
                 div()
