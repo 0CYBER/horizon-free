@@ -169,3 +169,27 @@ client a close, which centres the mouse again; `MenuReplace::InPlace` sends none
 one's place and the mouse stays where it is. Opening from the player's inventory sends no close either way.
 `player.open_mod_menu` takes the same `replace` for a content mod's menu type
 ([machine menu data](../../how-to/world/machine-menu-data.md)).
+
+## Recipe transfer into a mod menu
+
+A recipe viewer's "+" calls `RecipesClientHost::transfer_recipe_id(recipe, max)` (or `transfer_recipe(book_id)`
+for a recipe-book recipe). The game's own transfer fills crafting grids only, so for a machine's menu the
+server first asks the `MenuPart` of the open mod menu type:
+
+```rust,ignore
+fn menu_transfer(
+    &self,
+    host: &mut dyn mod_api::ServerHost,
+    event: &mut mod_api::MenuTransferEvent<'_>,
+) -> Option<mod_api::RecipeTransferResult> {
+    // Look up event.recipe, check event.player's inventory, and unless event.dry_run
+    // move one set (as many as fit with event.max) into the block entity at event.pos.
+    let _ = (host, event);
+    Some(mod_api::RecipeTransferResult::Moves)
+}
+```
+
+Return `None` to hand the transfer on to the game's grid transfer (`NotIntoMenu` for a menu without a
+crafting grid). A dry run, the viewer's check, must move nothing. Vanilla menu types are never asked. A solo
+world and a LAN host's own player get the same contract: the game is the server there and asks the part of the
+player's open block menu before its own grid transfer, on the same thread.

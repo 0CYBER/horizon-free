@@ -4859,6 +4859,10 @@ impl Game<'_> {
     pub(in crate::game) fn transfer_recipe(&mut self, book_id: i32) {
         self.transfer_viewer_recipe(book_id);
     }
+    /// A viewer's transfer of a recipe by id, into a mod menu or a grid.
+    pub(in crate::game) fn transfer_recipe_id(&mut self, recipe: &str, max: bool) {
+        self.transfer_viewer_recipe_id(recipe, max);
+    }
     /// Creative mode only: gives the player `count` of `item`
     /// (`minecraft:diamond`) as taking it from the creative inventory does
     /// (`ServerboundSetCreativeModeSlot`): the selected slot first, then the
