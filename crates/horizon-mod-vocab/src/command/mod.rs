@@ -91,6 +91,9 @@ pub enum CommandArgumentValue {
     /// A `block_pos` argument resolved from world, relative or local coordinates.
     /// Resolution does not load chunks or require the block to be loaded.
     BlockPos([i32; 3]),
+    /// A `vec3` argument (`Vec3Argument.vec3()`) resolved from world, relative or local
+    /// coordinates: a whole x or z number is the block's centre (`1` is 1.5), y is as typed.
+    Vec3([f64; 3]),
     /// A custom argument type's canonical value: the registered type's id
     /// (`mymod:machine`) and what its parser returned for the typed text.
     Custom {

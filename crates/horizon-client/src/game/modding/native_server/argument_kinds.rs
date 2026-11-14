@@ -10,7 +10,7 @@ use std::{
 
 /// The argument kinds a native usage may name, each with a [`parser`]; `resource:<registry>`
 /// and `mod_id` come on top.
-pub(super) const KINDS: [&str; 11] = [
+pub(super) const KINDS: [&str; 12] = [
     "word",
     "text",
     "integer",
@@ -22,6 +22,7 @@ pub(super) const KINDS: [&str; 11] = [
     "players",
     "item",
     "block_pos",
+    "vec3",
 ];
 
 /// The custom argument types the mods registered, by namespaced id, for the command tree being
@@ -148,6 +149,12 @@ pub(super) fn parser(kind: &str) -> Option<(&'static str, Value, ArgType)> {
         }
         "item" => ("minecraft:item_stack", Value::Null, ArgType::Item),
         "block_pos" => ("minecraft:block_pos", Value::Null, ArgType::BlockPos),
+        // `Vec3Argument.vec3()`: whole x and z numbers are block centres.
+        "vec3" => (
+            "minecraft:vec3",
+            Value::Null,
+            ArgType::Vec3 { center: true },
+        ),
         _ => return None,
     })
 }
