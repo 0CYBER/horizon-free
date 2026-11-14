@@ -228,8 +228,10 @@ From then on `MenuRef::slot_backing` names the slot `MenuSlotBacking::Place(plac
 menu, and an `ItemPlace::MenuSlot` write, go through that storage's own handler in one transaction, so an aborted
 transaction leaves it as it was. The client sees ordinary synced slots; there is no new packet. Nothing runs per tick:
 the slots are mirrored after each click on the menu and after each `ItemPlace` write to the player's places (their hand,
-a container held there, the menu's slots), and only the slots that changed are written. Before each click and at each
-such change the menu checks its places: it closes once one stops resolving (the backpack left the hand, the entity is
+a container held there, the menu's slots), and only the slots that changed are written. These writes queue a change
+notice, deduplicated per menu; there is no next-tick scan. A handler changed independently of an `ItemPlace` write
+is checked and mirrored at the next click, not automatically on the next tick. Before each click and at each
+change notice the menu checks its places: it closes once one stops resolving (the backpack left the hand, the entity is
 gone), or once a `HeldItem` hand no longer holds the stack bound when the slots were backed (another stack put in its
 place, another hotbar slot selected). Stacks are values, so the bound stack is told apart by its item and components
 other than its contents. Slots past `places` stay the mod's own (`menu_clicked`). A drag, a number-key swap, a
