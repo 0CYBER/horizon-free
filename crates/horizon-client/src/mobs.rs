@@ -3548,7 +3548,7 @@ impl Mob {
     pub fn new_remote(id: u32, kind: Arc<MobType>, position: Vec3, yaw: f32) -> Self {
         Self::remote_with_random(id, kind, position, yaw, entity_random(id, position))
     }
-    fn remote_with_random(
+    pub(crate) fn remote_with_random(
         id: u32,
         kind: Arc<MobType>,
         position: Vec3,

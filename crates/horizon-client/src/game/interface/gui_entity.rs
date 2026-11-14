@@ -86,6 +86,10 @@ impl Game<'_> {
         entity: &GuiEntity,
         view: GuiEntityView,
     ) -> Result<(), GuiEntityError> {
+        // A client's call: a logical server (the integrated server thread too) has no screen.
+        if self.is_logical_server() {
+            return Err(GuiEntityError::Unavailable);
+        }
         if !view.is_drawable() {
             return Err(GuiEntityError::BadView);
         }
@@ -104,6 +108,10 @@ impl Game<'_> {
     ) -> Result<(), GuiEntityError> {
         let rect = view.rect;
         let centre = [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0];
+        // Finite view values can still overflow once combined: refused before any vertex.
+        if !centre.iter().all(|v| v.is_finite()) {
+            return Err(GuiEntityError::BadView);
+        }
         let turned = turn(view.look, centre);
         let mut existing;
         let mob: &mut Mob = match entity {
@@ -135,7 +143,14 @@ impl Game<'_> {
             * Mat4::from_translation(Vec3::new(0.0, height / 2.0 + view.offset_y, 0.0))
             * Mat4::from_rotation_z(std::f32::consts::PI)
             * Mat4::from_rotation_x(turned.3.to_radians());
+        if !gui.is_finite() {
+            return Err(GuiEntityError::BadView);
+        }
         seen_quads(&scratch.verts, gui, &mut scratch.quads);
+        let placed = |q: &SeenQuad| q.0.is_finite() && q.1.iter().flatten().all(|v| v.is_finite());
+        if !scratch.quads.iter().all(placed) {
+            return Err(GuiEntityError::BadView);
+        }
         let start = batch.vertices.len();
         for &(_, p, uv, color) in &scratch.quads {
             batch.quad_3d(p, uv, color);
@@ -160,7 +175,9 @@ impl Game<'_> {
             return Ok(at);
         }
         let mob = if data.is_empty() {
-            Mob::new(u32::MAX, ty.clone(), Position::ZERO, 0.0)
+            // Built for drawing only, as a client's copy of a server's mob: no mod part's
+            // `register_goals` or behaviour registration runs for a screen's entity.
+            Mob::new_remote(u32::MAX, ty.clone(), Position::ZERO, 0.0)
         } else {
             let named = JavaString::from(kind);
             if data
@@ -172,7 +189,7 @@ impl Game<'_> {
             let mut tag = data.clone();
             tag.insert("id".into(), Tag::String(named));
             tag.remove(&JavaString::from("Pos"));
-            horizon_client::entity_nbt::mob_from_nbt(
+            horizon_client::entity_nbt::mob_from_nbt_remote(
                 &Tag::Compound(tag),
                 types,
                 u32::MAX,
@@ -195,18 +212,21 @@ impl Game<'_> {
     /// `mob`'s geometry around its feet, as the world draws it: a mod's
     /// renderer for its type in place of its model, else the model; then the
     /// mods' layers. Full bright, seen from its own position.
-    fn gui_entity_geometry(&self, mob: &Mob, out: &mut Vec<Vertex>) {
+    pub(in crate::game) fn gui_entity_geometry(&self, mob: &Mob, out: &mut Vec<Vertex>) {
         let p = mob.position;
         let camera = DVec3::new(p.x, p.y, p.z);
-        if self.mod_living_renderer_geometry(mob, 1.0, camera, FULL_BRIGHT, out) {
-            return;
-        }
-        let atlas = &self.gui.atlas;
-        let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let added = self.mod_layers(mob);
         let mut parts = None;
+        // A mod's renderer for the type draws in place of the model only: the mods' layers
+        // still follow, as in the world.
+        let modded = self.mod_living_renderer_geometry(mob, 1.0, camera, FULL_BRIGHT, out);
+        let atlas = &self.gui.atlas;
+        let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         // A screen's entity: custom entity model animations see is_in_gui = 1.
         horizon_client::mobs::cem_anim::in_gui(|| {
+            if modded {
+                return;
+            }
             horizon_client::mobs::render::render_with_hidden(
                 mob,
                 1.0,
@@ -357,6 +377,17 @@ mod tests {
             assert_eq!(refused(&GuiEntity::existing(stale), view), Err(GuiEntityError::NoEntity));
             let empty = GuiEntityView::new([26.0, 8.0, 26.0, 78.0], 30.0, 0.0, look);
             assert_eq!(refused(&zombie, empty), Err(GuiEntityError::BadView));
+            // Finite values whose sums or products overflow are refused too, drawing nothing.
+            let huge = [
+                GuiEntityView::new([f32::MAX / 2.0, 0.0, f32::MAX, 100.0], 30.0, 0.0, look),
+                GuiEntityView::new([0.0, f32::MAX / 2.0, 100.0, f32::MAX], 30.0, 0.0, look),
+                GuiEntityView::new([0.0, 0.0, 100.0, 100.0], f32::MAX, 0.0, look),
+                GuiEntityView::new([0.0, 0.0, 100.0, 100.0], 30.0, f32::MAX, look),
+            ];
+            for view in huge {
+                assert!(view.is_drawable(), "{:?}", view.rect);
+                assert_eq!(refused(&zombie, view), Err(GuiEntityError::BadView), "{:?}", view.rect);
+            }
             assert_eq!(batch.vertices.len(), before);
         });
     }
