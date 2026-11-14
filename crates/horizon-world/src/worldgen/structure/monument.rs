@@ -129,7 +129,7 @@ fn room_box(direction: Direction, index: i32, w: i32, h: i32, d: i32) -> Boundin
 /// `StructurePiece(StructurePieceType, CompoundTag)`'s orientation, which
 /// `StructurePiece.createTag` writes as `Direction.get2DDataValue` or -1 for none:
 /// `Direction.from2DDataValue` wraps other values (`Mth.abs(data % 4)`).
-fn saved_orientation(tag: &crate::nbt::Tag) -> Option<Direction> {
+fn saved_orientation(tag: &horizon_core::nbt::Tag) -> Option<Direction> {
     let data = super::saved_legacy::int(tag, "O");
     (data != -1).then(|| {
         [
@@ -146,11 +146,11 @@ impl MonumentBuilding {
     /// again from `seed`, as its own world seed and chunk name it. `None` for a tag without
     /// the box, which vanilla's `StructurePiece` constructor throws on (dropping the piece).
     pub fn regenerate_after_load(
-        tag: &crate::nbt::Tag,
+        tag: &horizon_core::nbt::Tag,
         chunk: ChunkPos,
         seed: i64,
     ) -> Option<Self> {
-        let crate::nbt::Tag::IntArray(box_corners) = tag.get("BB")? else {
+        let horizon_core::nbt::Tag::IntArray(box_corners) = tag.get("BB")? else {
             return None;
         };
         // `BoundingBox.CODEC` reads exactly its six ints: minX, minY, minZ, maxX, maxY, maxZ.
@@ -1521,7 +1521,7 @@ mod tests {
     /// generator builds them (`OceanMonumentStructure.regeneratePiecesAfterLoad`).
     #[test]
     fn saved_monument_reads_the_top_piece_and_regenerates_its_rooms() {
-        let (mut registry_tag, _) = crate::nbt::parse_snbt(
+        let (mut registry_tag, _) = horizon_core::nbt::parse_snbt(
             r#"{DataVersion:0,states:[
             {id:"minecraft:air"},{id:"minecraft:cave_air"},{id:"minecraft:void_air"},
             {id:"minecraft:water",properties:{level:"0"}},
