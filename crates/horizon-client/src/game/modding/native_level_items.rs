@@ -42,16 +42,16 @@ impl Game<'_> {
     /// `pos` (three draws from the level random, made for an empty stack and
     /// with `block_drops` off too), with its own random motion and the
     /// default pickup delay of 10 ticks. None, with nothing spawned, for an
-    /// empty stack or an unknown item, with the `block_drops` rule off, on a
-    /// client, for a stale handle, a level not in place, or an item a mod
-    /// kept out (`native_entity_join_level`).
+    /// empty stack or an unknown item, with the `block_drops` rule off, on a client,
+    /// for a stale handle, a level not in place, once the entity ids run out (the level random is
+    /// not drawn from), or an item a mod kept out (`native_entity_join_level`).
     pub(super) fn level_pop_resource(
         &mut self,
         level: LevelRef,
         pos: [i32; 3],
         stack: ItemStack,
     ) -> Option<EntityRef> {
-        if !self.level_in_place(level) {
+        if !self.level_in_place(level) || self.entity_ids_exhausted() {
             return None;
         }
         let at = spill::pop_position(&mut self.world.random, pos);

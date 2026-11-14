@@ -1,5 +1,5 @@
 //! Accepted melee hits on special targets and their shared attacker tail.
-use super::{dragon::Hurt, *};
+use super::{dragon::Hurt, minecarts::CartHit, *};
 use horizon_client::mobs::DamageKind;
 
 impl Game<'_> {
@@ -84,7 +84,7 @@ impl Game<'_> {
         if !crate::game::entity::damage_level_of!(self, scoped).invulnerability_check(
             horizon_client::health::Hurting::Entity(id, kind, source),
             vanilla,
-        ) && self.hurt_cart_result(i, damage, self.creative, burning)
+        ) && self.hurt_cart_result(i, damage, self.creative, burning, CartHit::player())
             && damage > 0.0
         {
             let (knockback, _) = self.extra_knockback(kind, scale);

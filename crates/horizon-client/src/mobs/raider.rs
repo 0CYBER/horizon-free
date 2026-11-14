@@ -203,7 +203,7 @@ pub fn wear_banner(m: &mut Mob) {
 pub enum Reason {
     /// Natural spawning: one leader in 17, and witches stay out of raids.
     Natural,
-    /// Commands, eggs and other spawns: one leader in 17.
+    /// Commands, eggs, conversions and other spawns: one leader in 17.
     Other,
     Patrol,
     Event,

@@ -77,6 +77,16 @@ impl PaintingVariants {
         let id = horizon_client::save::text(stack.data()?.other("minecraft:painting/variant"))?;
         self.get(&horizon_world::datafix::dynamic::namespaced(&id))
     }
+    /// `VariantUtils.readVariant` then `Painting.defineSynchedData`'s
+    /// `VariantUtils.getAny`: a saved id that does not resolve, or none at all,
+    /// leaves the registry's first variant in place. `Identifier.CODEC` reads a
+    /// bare id in the `minecraft` namespace.
+    pub fn saved_or_default(&self, id: Option<&str>) -> Option<Variant> {
+        id.map(horizon_world::datafix::dynamic::namespaced)
+            .and_then(|id| self.get(&id))
+            .or_else(|| self.all.first())
+            .cloned()
+    }
 }
 fn overlaps(a: ([f64; 3], [f64; 3]), b: ([f64; 3], [f64; 3])) -> bool {
     (0..3).all(|i| a.0[i] < b.1[i] && b.0[i] < a.1[i])
@@ -340,7 +350,7 @@ impl Game<'_> {
         }
         best
     }
-    /// `Painting.hurtServer` -> kill and `dropItem`. False when a mod kept it
+    /// `BlockAttachedEntity.hurtServer` -> `kill` and `dropItem`. False when a mod kept it
     /// (`native_hanging_break`): it stays at `index`.
     pub(super) fn break_painting(&mut self, index: usize, by_player: bool) -> bool {
         self.break_painting_by(
@@ -349,15 +359,36 @@ impl Game<'_> {
             by_player.then_some(super::commands::Target::Player),
         )
     }
+    /// `BlockAttachedEntity.kill`: `ENTITY_DIE` at the painting, then `dropItem`.
     pub(super) fn break_painting_by(
         &mut self,
         index: usize,
         by_player: bool,
         source: Option<super::commands::Target>,
     ) -> bool {
+        let Some((p, at)) = self.remove_painting(index, by_player) else {
+            return false;
+        };
+        // BlockAttachedEntity.kill, before dropItem.
+        self.entity_killed_event_by(at, source);
+        self.drop_painting(p, at, by_player);
+        true
+    }
+    /// `BlockAttachedEntity.tick`: a painting whose `survives()` failed is
+    /// `discard()`ed and drops its item, with no game event.
+    pub(super) fn discard_painting(&mut self, index: usize) -> bool {
+        let Some((p, at)) = self.remove_painting(index, false) else {
+            return false;
+        };
+        self.drop_painting(p, at, false);
+        true
+    }
+    /// The removal `kill` and `discard` share: the mod hook, the entity, its
+    /// chunk's save mark and the centre of its box.
+    fn remove_painting(&mut self, index: usize, by_player: bool) -> Option<(Painting, [f64; 3])> {
         let pos = self.paintings[index].pos;
         if self.hanging_break_cancelled("minecraft:painting", pos, by_player) {
-            return false;
+            return None;
         }
         let p = self.paintings.remove(index);
         let (lo, hi) = p.bounds();
@@ -367,19 +398,22 @@ impl Game<'_> {
             (lo[2] + hi[2]) / 2.0,
         ];
         self.world.modified.insert((p.pos[0] >> 4, p.pos[2] >> 4));
-        // BlockAttachedEntity.kill, before dropItem.
-        self.entity_killed_event_by(at, source);
+        Some((p, at))
+    }
+    /// `Painting.dropItem`: the break sound, then the item unless drops are off
+    /// or the player who broke it has infinite materials.
+    fn drop_painting(&mut self, p: Painting, at: [f64; 3], by_player: bool) {
         if !self
             .ui
             .rules
             .bool_at(horizon_client::gamerules::vanilla::ENTITY_DROPS)
         {
-            return true;
+            return;
         }
         self.audio
             .play("minecraft:entity.painting.break", Some(at), 1.0, 1.0);
         if by_player && self.creative {
-            return true;
+            return;
         }
         let stack = ItemStack {
             item: Arc::from("minecraft:painting"),
@@ -393,7 +427,6 @@ impl Game<'_> {
             [0.0; 3],
             10,
         );
-        true
     }
     /// BlockAttachedEntity.tick: check survival every 100 ticks.
     pub(super) fn tick_paintings(&mut self) {
@@ -411,7 +444,7 @@ impl Game<'_> {
             if self.paintings[i].check_interval >= 100 {
                 self.paintings[i].check_interval = 0;
                 let p = self.paintings[i].clone();
-                if !self.painting_survives(&p) && self.break_painting(i, false) {
+                if !self.painting_survives(&p) && self.discard_painting(i) {
                     continue;
                 }
             }

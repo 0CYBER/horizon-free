@@ -23,8 +23,9 @@ impl InteractionResult {
 
     /// Whether the interaction swings the player's arm.
     ///
-    /// In vanilla, InteractionResult.SUCCESS swings (swing source CLIENT),
-    /// while CONSUME consumes the action without swinging (swing source SERVER).
+    /// In vanilla, `InteractionResult.SUCCESS` and `SUCCESS_SERVER` swing (swing
+    /// sources `PREDICTED` and `SERVER_ONLY`), while `CONSUME` consumes the action
+    /// without swinging (swing source `NONE`).
     pub fn should_swing(self) -> bool {
         matches!(self, Self::Success)
     }
@@ -88,6 +89,12 @@ pub struct PlayerContext {
     pub can_eat: bool,
     /// `Player.canUseGameMasterBlocks` (creative operator).
     pub game_master: bool,
+    /// `ServerPlayer.RespawnConfig.respawnData` when that point is in the level
+    /// being clicked and the level lets a respawn anchor set spawn
+    /// (`RespawnAnchorBlock.canSetSpawn`): `useWithoutItem` compares the clicked
+    /// anchor against it (`isSamePosition`) on that path, and explodes instead
+    /// anywhere else.
+    pub respawn_point: Option<BlockPos>,
 }
 
 /// Player-side effects of an interaction, reported through
@@ -386,7 +393,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                         return Pass;
                     }
                     self.player_effect(pos, state, PlayerEffect::RespawnAnchor);
-                    Success
+                    // RespawnAnchorBlock.useWithoutItem: the anchor already set
+                    // as the player's respawn point is CONSUME (no swing); a new
+                    // one is SUCCESS_SERVER.
+                    if player.respawn_point == Some(pos) {
+                        Consume
+                    } else {
+                        Success
+                    }
                 }
                 Class::Light => {
                     if player.game_master {
@@ -595,6 +609,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             let test = pos.offset(dx, dy, dz);
             if b.is_air(self.state(test))
                 && !b.is_air(self.below_state(test))
+                && self.level.within_world_border(test)
                 && self.is_inside_build_height(test.y)
             {
                 // BlockUtil.packDifferenceInPosition(pos, test, 16, 8, 16)

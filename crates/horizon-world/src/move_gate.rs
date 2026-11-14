@@ -20,13 +20,15 @@ pub enum MoveDecision {
     Skip,
 }
 
-/// One physical `Entity.move` invocation (#2414): the mover's cause and the
-/// decision taken for it. Created pending, armed at the move moment by the
-/// client's `move_gate::arm`, and then handed to the kind's physics, which
-/// resolves its collision through the same client module.
+/// One physical `Entity.move` invocation (#2414): the mover's cause, the
+/// movement it asked for, and the decision taken. Created pending, armed at
+/// the move moment by the client's `move_gate::arm`, and then handed to the
+/// kind's physics, which resolves its collision through the same client
+/// module.
 #[derive(Clone, Copy, Debug)]
 pub struct MoveGate {
     cause: MoverType,
+    requested: Vec3,
     decision: MoveDecision,
 }
 
@@ -36,6 +38,7 @@ impl MoveGate {
     pub const fn new() -> Self {
         Self {
             cause: MoverType::SelfMovement,
+            requested: Vec3::ZERO,
             decision: MoveDecision::Run(Vec3::ZERO),
         }
     }
@@ -45,7 +48,27 @@ impl MoveGate {
     /// this; from PR 1b it fires the `entity_move` hook first.
     pub fn arm(&mut self, cause: MoverType, movement: Vec3) {
         self.cause = cause;
+        self.requested = movement;
         self.decision = MoveDecision::Run(movement);
+    }
+
+    /// Decide the invocation runs with this movement instead of the armed
+    /// one: a listener's replacement (PR 1b). The request it overrides stays
+    /// what [`Self::overridden`] measures against.
+    pub fn decide(&mut self, movement: Vec3) {
+        self.decision = MoveDecision::Run(movement);
+    }
+
+    /// Whether a listener's decision is not what the move asked for: a
+    /// cancel, or a replacement with a different movement. The game layer
+    /// reads this flag instead of comparing deltas — the ruling's «a cancel
+    /// or a replacement sends a correction» (#2414) holds however small the
+    /// move, so the sites that send corrections key on it, not on distance.
+    pub fn overridden(&self) -> bool {
+        match self.decision {
+            MoveDecision::Run(delta) => delta != self.requested,
+            MoveDecision::Skip => true,
+        }
     }
 
     /// The cause the gate was armed with.

@@ -14,8 +14,9 @@ permissions:
   contents: read
 jobs:
   label:
-    # Title-only edits change nothing: skip them before a runner starts.
-    if: github.event.action != 'edited' || github.event.changes.body != null
+    # Edits that change neither the description nor the title (the kind and areas they state) change nothing: skip
+    # them before a runner starts.
+    if: github.event.action != 'edited' || github.event.changes.body != null || github.event.changes.title != null
     # One of our small runners (horizon-light), out of GitHub's pool: it runs main's script only (above), so a fork's
     # pull request runs none of its code there (docs/ci-runners.md). SELF_HOSTED_CI=off: GitHub's runners.
     runs-on: ${{ vars.SELF_HOSTED_CI != 'off' && fromJSON('["self-hosted", "linux", "horizon-light"]') || 'ubuntu-latest' }}

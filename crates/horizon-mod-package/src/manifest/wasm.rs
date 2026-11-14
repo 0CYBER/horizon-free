@@ -4,7 +4,7 @@ use sha2::{Digest, Sha512};
 /// The most a `mod.wasm` may weigh.
 pub const MAX_WASM: u64 = 64 << 20;
 
-/// A wasm mod's `[wasm]` section, written by `cargo horizon-mod build --wasm` (or Portizon),
+/// A wasm mod's `[wasm]` section, written by `cargo horizon-mod build --wasm` (or a mod converter),
 /// never by hand: what its one `mod.wasm` is and what it was built and linked against.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(try_from = "Fields")]
@@ -116,7 +116,7 @@ impl Wasm {
         &self.linked
     }
 
-    /// The converter that made it from a Java mod (`portizon@<commit>`), when it has no
+    /// The converter that made it from a Java mod (`<converter>@<commit>`), when it has no
     /// Rust source of its own.
     pub fn built_with(&self) -> Option<&str> {
         self.built_with.as_deref()

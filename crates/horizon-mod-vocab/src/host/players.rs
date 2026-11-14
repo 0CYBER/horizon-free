@@ -24,6 +24,24 @@ pub trait PlayersServerHost {
     /// Create or retrieve a connectionless player for the level currently in place.
     #[access(WorldOnly)]
     fn fake_player(&mut self, level: LevelRef, uuid: u128, name: &str) -> Option<PlayerRef>;
+    /// Side: server.
+    /// The most players who may be on at once (`PlayerList.getMaxPlayers`,
+    /// `max-players`), as the server list shows it and logins are refused
+    /// beyond. None where no server is open to players (a client, or a server
+    /// nobody can join): the one reason there is none.
+    #[access(WorldOnly)]
+    fn server_max_players(&self) -> Option<u32>;
+    /// Side: server.
+    /// Sets the player limit from the next login and server list ping on
+    /// (Paper's `Server.setMaxPlayers`); players already on stay, even when
+    /// they are more than the new limit. `server.properties` is not changed,
+    /// so a restart goes back to its `max-players`. Writes nothing and refuses
+    /// with `PlayerLimitRefusal::NotOpen` where no server is open to players,
+    /// and with `TooHigh { maximum }` for a limit above `i32::MAX`, as vanilla
+    /// keeps the limit in an `int` (Paper's `setMaxPlayers` takes one). Zero is
+    /// taken: it lets nobody else on.
+    #[access(WorldOnly)]
+    fn server_set_max_players(&mut self, max_players: u32) -> Result<(), PlayerLimitRefusal>;
 }
 /// The client host's methods of the `players` area, implemented by the game and reached through [`crate::ClientHost`].
 #[horizon_mod_api_macros::host_area]
@@ -604,6 +622,29 @@ pub trait PlayersBackendMut {
         pos: Option<[i32; 3]>,
         replace: MenuReplace,
     ) -> Result<Option<i32>, OpenMenuError>;
+    /// Side: server.
+    /// Backs the container slots of the mod menu `window` that `player_open_mod_menu` opened
+    /// for the player with storage that is not a block entity (#3385; NeoForge's
+    /// `StackCopySlot` and `ResourceHandlerSlot`): `places[n]` is what slot `n` shows. From then
+    /// on a click or shift-click on those slots, and an `ItemPlace::MenuSlot` write, go through
+    /// that storage's own handler, journalled; the client sees ordinary synced slots, mirrored
+    /// after each click and each write through an `ItemPlace` of that storage, never each tick.
+    /// A slot past `places` stays the mods' own (`native_menu_clicked`). The menu closes once a
+    /// place stops resolving (the backpack left the hand, the entity is gone) or a held stack is
+    /// no longer the one bound when the slots were backed, checked before each click and at
+    /// each change notice. A `MenuSlotPlace::HeldItem` locks the inventory slot holding that
+    /// stack while the menu is open, so it can't go into itself. Backing again replaces the
+    /// places; a slot no longer backed (an empty list, a shorter one) is emptied, never left
+    /// holding the copy it showed. A [`MenuSlotBackRefusal`], and nothing changes, for a player
+    /// not online or a window that is not their open menu, a menu that is not a blockless mod
+    /// menu, more places than its container slots, or a place that doesn't resolve now.
+    #[access(WorldOnly)]
+    fn player_back_mod_menu_slots(
+        &mut self,
+        player: PlayerRef,
+        window: i32,
+        places: Vec<MenuSlotPlace>,
+    ) -> Result<(), MenuSlotBackRefusal>;
     /// Side: server.
     /// Sends the player `uuid` the whole picture of map `map_id`: 128 x 128
     /// colours (`MapColor` ids times 4 plus the shade, row by row), scale 0,

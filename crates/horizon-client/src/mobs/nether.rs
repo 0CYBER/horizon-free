@@ -192,7 +192,13 @@ pub fn blaze_anim(s: &State, p: &mut Poses) {
     p.xrot("head", s.x_rot.to_radians());
 }
 
+/// `Ghast.explosionPower`'s `Extra::ints` slot (a named field would grow
+/// `mobs.rs`, which is over the file-size limit).
+const EXPLOSION_POWER: usize = 0;
+
 pub fn register_ghast(m: &mut Mob) {
+    // `Ghast.explosionPower = 1` until a save or a command sets it.
+    m.extra.ints[EXPLOSION_POWER] = 1;
     m.ai.mov.kind = MoveKind::Custom;
     let g = &mut m.ai.goals;
     g.add(5, RandomFloatAround);
@@ -205,6 +211,20 @@ pub fn register_ghast(m: &mut Mob) {
                 .is_some_and(|p| (p.position.y - m.position.y).abs() <= 4.0)
         }),
     );
+}
+/// `Ghast.addAdditionalSaveData`: `putByte("ExplosionPower", (byte)explosionPower)`,
+/// the power the blast of the fireball it shoots uses (`LargeFireball.onHit`).
+pub fn to_nbt(m: &Mob, map: &mut horizon_core::nbt::Compound) {
+    map.insert(
+        "ExplosionPower".into(),
+        horizon_core::nbt::Tag::Byte(m.extra.ints[EXPLOSION_POWER] as i8),
+    );
+}
+/// `Ghast.readAdditionalSaveData`: `getByteOr("ExplosionPower", (byte)1)`, any
+/// numeric tag narrowed to a byte.
+pub fn from_nbt(m: &mut Mob, tag: &horizon_core::nbt::Tag) {
+    m.extra.ints[EXPLOSION_POWER] =
+        i32::from(crate::save::number(tag.get("ExplosionPower")).unwrap_or(1) as i8);
 }
 /// `Ghast.GhastMoveControl`: a push toward the wanted point every few ticks.
 pub fn ghast_move_control(m: &mut Mob, w: &MobWorld) {
@@ -379,7 +399,9 @@ impl Goal for GhastShoot {
                     m.position.z + view[1] * 4.0,
                 );
                 cx.events.push(MobEvent::Projectile(Projectile::fireball(
-                    ProjectileKind::LargeFireball { power: 1 },
+                    ProjectileKind::LargeFireball {
+                        power: m.extra.ints[EXPLOSION_POWER],
+                    },
                     start,
                     Some(Who::Mob(m.id)),
                     dir,
@@ -401,3 +423,6 @@ pub fn ghast_anim(s: &State, p: &mut Poses) {
         }
     }
 }
+#[cfg(test)]
+#[path = "nether_ghast_power_tests.rs"]
+mod nether_ghast_power_tests;

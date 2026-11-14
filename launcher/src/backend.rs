@@ -3684,7 +3684,7 @@ fn remove_abandoned_stages(work: &Path, now: std::time::SystemTime, alive: impl 
 
 /// Whether process `pid` is running. One this user may not look at counts as running.
 #[cfg(unix)]
-fn process_alive(pid: u32) -> bool {
+pub(crate) fn process_alive(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
@@ -3696,7 +3696,7 @@ fn process_alive(pid: u32) -> bool {
 
 /// Whether process `pid` is running. One this user may not look at counts as running.
 #[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
+pub(crate) fn process_alive(pid: u32) -> bool {
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, ERROR_ACCESS_DENIED, STILL_ACTIVE,
     };
@@ -5232,10 +5232,10 @@ pub fn {f}("
                 build.contains(&format!("asset: {game}")),
                 "game-build.yml builds no {game}"
             );
-            // Signed (SHA256SUMS), then published. Windows ARM64's build may fail without holding the
-            // Nightly, so both steps name it again where they check that it was built.
+            // Signed (SHA256SUMS), then published. Windows ARM64's and, for a snapshot, Intel
+            // macOS's build may fail without holding the release, so both steps name them again.
             let named = nightly.matches(&format!("dist/{game}")).count();
-            let optional = (os, arch) == ("windows", "aarch64");
+            let optional = matches!((os, arch), ("windows", "aarch64") | ("macos", "x86_64"));
             assert!(
                 named == 2 || (optional && named > 2),
                 "nightly-build.yml must sign and publish {game} ({os} {arch})"

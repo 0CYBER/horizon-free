@@ -558,7 +558,7 @@ mod tests {
             assert_eq!(iron.ingredients.len(), 1);
             assert!(iron.ingredients[0].items.contains("minecraft:raw_iron"));
             assert_eq!(iron.results[0].item.as_ref(), "minecraft:iron_ingot");
-            let shaped = game.recipes_of_type("minecraft:crafting_shaped");
+            let shaped = game.recipes_of_type("minecraft:crafting");
             let bucket = shaped
                 .iter()
                 .find(|recipe| recipe.id == "minecraft:bucket")

@@ -326,6 +326,9 @@ pub struct Chat {
     history_file: Option<std::path::PathBuf>,
     scroll: usize,
     new_since_scroll: bool,
+    /// `ChatComponent`'s delayed queue size (`ChatListener.queueSize`): the
+    /// `chat.queue` row under the messages, while Chat Delay holds some.
+    pub queue: usize,
     pub options: ChatOptions,
     /// The smooth chat extra: a new line slides in from the left while it
     /// fades in, instead of appearing whole.
@@ -349,6 +352,25 @@ pub struct Chat {
     /// The tests' clock in place of the local time.
     #[cfg(test)]
     clock: Option<(u8, u8)>,
+}
+/// `ChatComponent.QUEUE_EXPAND_ID`: the queue row's click event, handled by
+/// the chat screen itself (`ChatListener.acceptNextDelayedMessage`).
+pub const QUEUE_EXPAND_ID: &str = "minecraft:internal/expand_chat_queue";
+
+/// `ChatComponent`'s queue row: how many messages Chat Delay holds, with the
+/// style that shows the next one (a click, and `chat.queue.tooltip` on hover).
+pub fn queue_line(queued: usize) -> Text {
+    Text::translate("chat.queue", &[Text::literal(queued.to_string())]).with_style(&Style {
+        click: Some(ClickEvent::Custom {
+            id: QUEUE_EXPAND_ID.into(),
+            payload: None,
+        }),
+        hover: Some(std::sync::Arc::new(Text::translate(
+            "chat.queue.tooltip",
+            &[],
+        ))),
+        ..Style::default()
+    })
 }
 impl Chat {
     pub fn lines_per_page(&self, focused: bool) -> usize {
@@ -885,8 +907,58 @@ impl Chat {
                 ));
             }
         }
+        if self.queue > 0 {
+            // ChatComponent: the queue row under the messages, a background
+            // band and the count at half text opacity.
+            out.push(hud_layout::fill(
+                -2,
+                chat_bottom,
+                max_width + 4,
+                chat_bottom + 9,
+                hud_layout::as8(background_opacity) << 24,
+            ));
+            out.push(GuiDraw::Text {
+                text: queue_line(self.queue),
+                x: 0,
+                y: chat_bottom + 1,
+                color: hud_layout::white(0.5 * text_opacity),
+                shadow: true,
+            });
+        }
         out.push(GuiDraw::Pop);
         out
+    }
+    /// `ChatComponent`'s queue row under the cursor while the chat is open: the
+    /// style of its glyph (`queue_line`'s click and hover).
+    pub fn queue_style_at(
+        &self,
+        font: &crate::font::Font,
+        height: i32,
+        x: f64,
+        y: f64,
+    ) -> Option<Style> {
+        if self.queue == 0 || self.lines.is_empty() {
+            return None;
+        }
+        let o = &self.options;
+        let scale = o.scale as f32;
+        let chat_bottom = hud_layout::floor((height - 40) as f32 / scale);
+        let (mouse_x, mouse_y) = (x / f64::from(scale) - 4.0, y / f64::from(scale));
+        if mouse_y < f64::from(chat_bottom + 1) || mouse_y >= f64::from(chat_bottom + 10) {
+            return None;
+        }
+        let line = queue_line(self.queue);
+        let mut x = mouse_x;
+        if x < 0.0 {
+            return None;
+        }
+        for (c, style) in line.resolve_legacy().chars() {
+            x -= f64::from(font.advance(c, style));
+            if x < 0.0 {
+                return Some(style.clone());
+            }
+        }
+        None
     }
     /// Draws [`Chat::layout`] into the HUD batch, and with the chat screen
     /// open the restricted prompt above the lines.

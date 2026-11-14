@@ -1,0 +1,2 @@
+# Incoming process sampling test starts a child process.
+horizon-system tests::a_process_has_resident_memory_and_cpu_time lib daily child-process

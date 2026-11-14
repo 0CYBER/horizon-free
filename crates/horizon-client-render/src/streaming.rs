@@ -1015,10 +1015,10 @@ impl<G: ChunkGenerator> Source for Jobs<G> {
         });
     }
     fn all_idle(&self) {
-        // No worker needs retained mesh capacity now. Drop it outside the
-        // pool lock; the pool then asks the allocator to return freed pages.
+        // No worker needs its kept meshes or light scratch: freed outside the pool lock.
         let meshes = std::mem::take(&mut *self.shared.meshes.lock().unwrap());
         drop(meshes);
+        crate::light::release_scratch();
         self.generator.all_idle();
     }
 }
@@ -1963,10 +1963,7 @@ impl Streaming {
                                 > r4 * r4)
                         && !ranges.in_extra(x, z, 4)
                         && !ranges.in_band(x, z, 4)
-                        && !ranges.forced.iter().any(|f| {
-                            (x - f.0).abs() <= FORCED_TERRAIN_RING
-                                && (z - f.1).abs() <= FORCED_TERRAIN_RING
-                        })
+                        && !ranges.forced_within(x, z, FORCED_TERRAIN_RING)
                 })
                 .map(|(k, _)| *k)
                 .collect();
@@ -5008,11 +5005,21 @@ mod cover_tests {
                 band: None,
             };
             let (scan, buckets) = (ranges(None), ranges(Some(&cover)));
-            // Around each area, and on a coarse lattice over the whole spread.
-            let near = extra.iter().flat_map(|&((cx, cz), _)| {
-                (-80..=80)
-                    .step_by(7)
-                    .flat_map(move |dz| (-80..=80).step_by(7).map(move |dx| (cx + dx, cz + dz)))
+            // Around each area, and on a coarse lattice over the whole spread. A debug build
+            // takes every third lattice point, shifted by case so the points still fall at
+            // different positions against the 64-block bucket edges.
+            let step = if cfg!(debug_assertions) { 21 } else { 7 };
+            let shift = if cfg!(debug_assertions) {
+                (case % 21) as i32
+            } else {
+                0
+            };
+            let near = extra.iter().flat_map(move |&((cx, cz), _)| {
+                (-80 + shift..=80).step_by(step).flat_map(move |dz| {
+                    (-80 + shift..=80)
+                        .step_by(step)
+                        .map(move |dx| (cx + dx, cz + dz))
+                })
             });
             let lattice = (-3200..=3200)
                 .step_by(97)

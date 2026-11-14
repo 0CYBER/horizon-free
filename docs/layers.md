@@ -38,7 +38,7 @@ Credits:
   Horizon's own parts from another repository as a launcher plugin.
 - **Martipops** (controllers, splitscreen): the compositor's place in the engine, and where controllers,
   splitscreen, Replay Studio, PvP & HUD and a UI page API go.
-- **Contributors at the 2026-11-08 stage:** the file-size rule, the single list of addresses, sponsors in the
+- **Contributors at the 2026-11-08 stage:** the single list of addresses, sponsors in the
   Horizon layer, a platform that exposes what vanilla already uses, and extras as native mods.
 
 ## The rule
@@ -428,7 +428,7 @@ pub fn connect(address: impl Into<String>);                   // from a Title pa
 - Rows are rebuilt when the page is drawn or acted on, like the engine's own pages: no cost while no page is
   open.
 - The engine keeps native mods' pages (`Page::NativeMod`) as they are. Both kinds sit in one module that
-  `options_ui.rs` calls: `options_ui.rs` is over 3000 lines and doesn't grow.
+  `options_ui.rs` calls.
 
 ### HUD drawing (`horizon_platform::hud`)
 
@@ -593,7 +593,7 @@ Generated files and `third_party/` are not checked. Test code doesn't count eith
 build doesn't compile it: inline `#[cfg(test)] mod name { ... }` modules. Filenames such as `tests.rs`
 or `<name>_tests.rs` do not exempt a file; other `#[cfg(test)]` items count.
 
-## The check
+## The checks
 
 `python3 tools/check_layers.py` runs in CI's verify job and in `tools/pr_ready.py`. It reads the `cargo metadata` of the
 four workspaces `tools/layers.json` lists (the game, `launcher/`, `crates/horizon-mod-registry/` and
@@ -611,6 +611,9 @@ gives every crate its layer. It fails when:
 Each failure names the section of this page that applies. An `allowed` or `optional` entry that has no dependency
 left is only reported: take it out when you like. `--list` prints every crate's layer and the upward dependencies
 left.
+
+`python3 tools/check_addresses.py` (horizon-rust/horizon#12990) checks the built-in addresses
+([below](#built-in-addresses)); it runs in CI's verify job and in `tools/pr_ready.py` too.
 
 ### Today's exceptions
 
@@ -683,7 +686,6 @@ These are not addresses:
   code is just as wrong, and so is Horizon code that reaches into the engine instead of the platform.
 - Horizon features in the game are behind `horizon-extras`, and nothing new names a Horizon crate below it.
 - No new built-in address outside `horizon-addresses`.
-- No file over 3000 lines grows.
 
 ## Plan
 

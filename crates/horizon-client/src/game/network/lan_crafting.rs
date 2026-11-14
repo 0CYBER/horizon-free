@@ -222,6 +222,13 @@ impl Game<'_> {
             .map(|opened| opened.slots.stack_limits(&self.world, opened.size))
             .unwrap_or_default();
         menu.set_container_limits(limits);
+        menu.set_block_pos(
+            host.hub.guests[gi]
+                .menu
+                .as_ref()
+                .and_then(|opened| opened.pos)
+                .map(|(x, y, z)| [x, y, z]),
+        );
         load_player(menu, &host.hub.guests[gi]);
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
         menu.item_smelted_hook = menu.brewed_potion_hook;
@@ -242,6 +249,7 @@ impl Game<'_> {
         let brewed_potion_takes = std::mem::take(&mut menu.brewed_potion_takes);
         let crafted = std::mem::take(&mut menu.crafted);
         let item_crafted = std::mem::take(&mut menu.item_crafted);
+        let crafted_counts = std::mem::take(&mut menu.crafted_counts);
         menu.drops.clear();
         let host = self.lan.as_mut()?;
         host.hub
@@ -249,6 +257,15 @@ impl Game<'_> {
             .update(gi, |guest| store_player(menu, guest));
         let guest = &host.hub.guests[gi];
         let (conn, uuid, entity_id) = (guest.conn, guest.uuid, guest.entity_id);
+        // `ItemStack.onCraftedBy`'s `Stats.ITEM_CRAFTED` count, before the
+        // recipe the take used.
+        if !crafted_counts.is_empty() {
+            self.as_guest(conn, |g| {
+                for (item, count) in crafted_counts {
+                    g.award_stat("crafted", &item, count);
+                }
+            });
+        }
         if !brewed.is_empty() || !brewed_potion_takes.is_empty() {
             self.as_guest(conn, |g| {
                 for stack in &brewed_potion_takes {
@@ -2087,7 +2104,23 @@ mod recipe_check_tests {
 mod lending_tests;
 
 #[cfg(test)]
+#[path = "lan_crafting/stonecutter_stat_tests.rs"]
+mod stonecutter_stat_tests;
+
+#[cfg(test)]
 mod empty_ingredient_placement_tests {
+    struct Predicate;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Predicate {
+        fn ingredient(
+            &self,
+            _: &dyn mod_api::DataLoadContext,
+            event: &mut mod_api::IngredientEvent<'_>,
+        ) {
+            assert_eq!(event.kind, "empty_fixture:predicate");
+        }
+    }
+
     use super::*;
     use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
     use horizon_protocol::packets::{configuration::ClientInformation, recipes::PlaceRecipe};
@@ -2096,241 +2129,249 @@ mod empty_ingredient_placement_tests {
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn server_packet_refuses_retained_empty_ingredient_recipes() {
-        crate::game::native_entity_refs::tests::with_game(|game| {
-            let dir = std::env::temp_dir()
-                .join(format!("horizon-empty-ingredients-{}", std::process::id()));
-            let pack = dir.join("datapacks/empty");
-            std::fs::create_dir_all(pack.join("data/empty_fixture/recipe")).unwrap();
-            std::fs::create_dir_all(pack.join("data/empty_fixture/tags/item")).unwrap();
-            std::fs::write(
-                pack.join("pack.mcmeta"),
-                r#"{"pack":{"description":"fixture"}}"#,
-            )
-            .unwrap();
-            std::fs::write(
-                pack.join("data/empty_fixture/tags/item/empty.json"),
-                r#"{"values":[]}"#,
-            )
-            .unwrap();
-            std::fs::write(
-                dir.join("datapacks.json"),
-                r#"{"enabled":["file/empty"],"disabled":[]}"#,
-            )
-            .unwrap();
-            for (id, ingredient) in [
-                ("direct", serde_json::json!([])),
-                ("missing", serde_json::json!("#empty_fixture:missing")),
-                ("tag", serde_json::json!("#empty_fixture:empty")),
-                (
-                    "custom",
-                    serde_json::json!({"type":"empty_fixture:predicate"}),
-                ),
-            ] {
-                std::fs::write(
-                    pack.join(format!("data/empty_fixture/recipe/{id}.json")),
-                    serde_json::json!({"type":"minecraft:crafting_shaped","pattern":["A"],
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new("empty_fixture", Box::new(Predicate))].into(),
+            || {
+                crate::game::native_entity_refs::tests::with_game(|game| {
+                    let dir = std::env::temp_dir()
+                        .join(format!("horizon-empty-ingredients-{}", std::process::id()));
+                    let pack = dir.join("datapacks/empty");
+                    std::fs::create_dir_all(pack.join("data/empty_fixture/recipe")).unwrap();
+                    std::fs::create_dir_all(pack.join("data/empty_fixture/tags/item")).unwrap();
+                    std::fs::write(
+                        pack.join("pack.mcmeta"),
+                        r#"{"pack":{"description":"fixture"}}"#,
+                    )
+                    .unwrap();
+                    std::fs::write(
+                        pack.join("data/empty_fixture/tags/item/empty.json"),
+                        r#"{"values":[]}"#,
+                    )
+                    .unwrap();
+                    std::fs::write(
+                        dir.join("datapacks.json"),
+                        r#"{"enabled":["file/empty"],"disabled":[]}"#,
+                    )
+                    .unwrap();
+                    for (id, ingredient) in [
+                        ("direct", serde_json::json!([])),
+                        ("missing", serde_json::json!("#empty_fixture:missing")),
+                        ("tag", serde_json::json!("#empty_fixture:empty")),
+                        (
+                            "custom",
+                            serde_json::json!({"type":"empty_fixture:predicate"}),
+                        ),
+                    ] {
+                        std::fs::write(
+                            pack.join(format!("data/empty_fixture/recipe/{id}.json")),
+                            serde_json::json!({"type":"minecraft:crafting_shaped","pattern":["A"],
                         "key":{"A":ingredient},"result":{"id":"minecraft:stick"}})
-                    .to_string(),
-                )
-                .unwrap();
-            }
-            std::fs::write(
-                pack.join("data/empty_fixture/recipe/a_invalid.json"),
-                serde_json::json!({"type":"minecraft:crafting_transmute",
+                            .to_string(),
+                        )
+                        .unwrap();
+                    }
+                    std::fs::write(
+                        pack.join("data/empty_fixture/recipe/a_invalid.json"),
+                        serde_json::json!({"type":"minecraft:crafting_transmute",
                     "input":"minecraft:stone","material":"#empty_fixture:missing",
                     "result":{"id":"minecraft:stick"}})
-                .to_string(),
-            )
-            .unwrap();
-            std::fs::write(
-                pack.join("data/empty_fixture/recipe/b_neighbor.json"),
-                serde_json::json!({"type":"minecraft:crafting_shaped","pattern":["A"],
-                    "key":{"A":"minecraft:stone"},"result":{"id":"minecraft:stick"}})
-                .to_string(),
-            )
-            .unwrap();
-            game.world_root = dir.clone();
-            let resources = game.options.resources.clone();
-            let stack = crate::game::functions::pack_stack(
-                &dir,
-                &resources,
-                &horizon_assets::resource_source::ResourceSource::directory(resources.clone()),
-                &Default::default(),
-                false,
-                &[],
-                &[],
-            );
-            game.world_tables = game
-                .stage_world_tables(&stack, false, &resources)
-                .unwrap()
-                .0;
-            game.build_registries();
-            {
-                // The generated Host entrypoint serves native and wasm callers;
-                // roundtrip its real answer, not a hand-constructed ingredient.
-                use mod_api::wire::{Reader, Wire, Writer};
-                let host: &dyn mod_api::Host = game;
-                let empty = host
-                    .recipe_ingredient(r##""#empty_fixture:empty""##)
-                    .unwrap()
+                        .to_string(),
+                    )
                     .unwrap();
-                assert!(empty.items.is_empty());
-                assert!(empty.order.is_empty());
-                assert!(
-                    host.recipe_ingredient(r##""#empty_fixture:missing""##)
+                    std::fs::write(
+                        pack.join("data/empty_fixture/recipe/b_neighbor.json"),
+                        serde_json::json!({"type":"minecraft:crafting_shaped","pattern":["A"],
+                    "key":{"A":"minecraft:stone"},"result":{"id":"minecraft:stick"}})
+                        .to_string(),
+                    )
+                    .unwrap();
+                    game.world_root = dir.clone();
+                    let resources = game.options.resources.clone();
+                    let stack = crate::game::functions::pack_stack(
+                        &dir,
+                        &resources,
+                        &horizon_assets::resource_source::ResourceSource::directory(
+                            resources.clone(),
+                        ),
+                        &Default::default(),
+                        false,
+                        &[],
+                        &[],
+                    );
+                    game.world_tables = game
+                        .stage_world_tables(&stack, false, &resources)
                         .unwrap()
-                        .is_none()
-                );
-                assert!(host.recipe_ingredient("[]").unwrap().is_none());
-                let mut writer = Writer::default();
-                empty.put(&mut writer);
-                let decoded: mod_api::Ingredient = Reader::decode(&writer.into_bytes()).unwrap();
-                assert_eq!(decoded, empty);
-                let stone = mod_api::ItemStack::of(
-                    mod_api::__private::item_key("minecraft:stone").unwrap(),
-                );
-                assert!(!decoded.test(host, &stone));
-            }
-            game.lan_host(
-                crate::game::lan::LanSettings {
-                    port: 0,
-                    guest_commands: true,
-                    force_game_mode: false,
-                },
-                NetConfig {
-                    announce: false,
-                    ..NetConfig::loopback(0, "empty-ingredient-test".into(), 2)
-                },
-                HubConfig {
-                    default_game_mode: 0,
-                    guest_commands: true,
-                    force_game_mode: false,
-                    hardcore: false,
-                    view_distance: 2,
-                    simulation_distance: 2,
-                    dimension: "minecraft:overworld".into(),
-                    allow_flight: false,
-                    seed: 0,
-                    max_players: 2,
-                    integrated: false,
-                    levels: Default::default(),
-                },
-            )
-            .unwrap();
-            let (tx, _rx) = mpsc::channel();
-            let mut guest = Guest::new(
-                Joined {
-                    conn: 2,
-                    uuid: 3739,
-                    name: "EmptyIngredientGuest".into(),
-                    properties: vec![],
-                    info: ClientInformation::new(2),
-                    brand: "test".into(),
-                    sender: PlayerSender::new(tx, Arc::default()),
-                    latency: Arc::new(AtomicI32::new(0)),
-                    address: "127.0.0.1:25565".parse().unwrap(),
-                    expected: false,
-                },
-                2,
-                [8.5, 200.0, 8.5],
-                2,
-            );
-            guest.dimension = "minecraft:overworld".into();
-            guest.placed = true;
-            guest.loaded = true;
-            guest.inventory[0] = Some(ItemStack::new("minecraft:stone", 16));
-            guest.craft_grid[0] = Some(ItemStack::new("minecraft:dirt", 3));
-            let ids = ["empty_fixture:tag", "empty_fixture:custom"].map(str::to_owned);
-            let index = &world_stations!(game).recipe_index;
-            for id in [
-                "empty_fixture:direct",
-                "empty_fixture:missing",
-                "empty_fixture:a_invalid",
-                "empty_fixture:tag",
-                "empty_fixture:custom",
-            ] {
-                assert!(index.first_display(id).is_none(), "{id}");
-            }
-            assert_eq!(guest.recipe_book.add_recipes(index, &ids), (0, vec![]));
-            guest
-                .recipe_book
-                .add_recipes(index, &["empty_fixture:b_neighbor".to_owned()]);
-            let sync = game.lan.as_ref().unwrap().hub.sync_data();
-            assert!(sync.advancements.recipes_added(&ids, sync).is_none());
-            let display = index.first_display("empty_fixture:b_neighbor").unwrap();
-            assert_eq!(
-                sync.advancements.recipe_of_display(display),
-                Some("empty_fixture:b_neighbor")
-            );
-            {
-                use horizon_protocol::{
-                    buf::{Codec, Reader},
-                    packets::recipes::RecipeBookAdd,
-                };
-                let requested = [
-                    ids[0].clone(),
-                    ids[1].clone(),
-                    "empty_fixture:b_neighbor".to_owned(),
-                ];
-                let bytes = sync.advancements.recipes_added(&requested, sync).unwrap();
-                let packet = RecipeBookAdd::read(&mut Reader::new(&bytes)).unwrap();
-                assert_eq!(packet.entries.len(), 1);
-                assert_eq!(packet.entries[0].id, display);
-            }
-            for id in &ids {
-                assert!(!guest.recipe_book.knows(id), "{id}");
-                assert!(world_recipes!(game).placement(id).unwrap().impossible());
-                assert!(
-                    world_recipes!(game).by_type["minecraft:crafting_shaped"]
-                        .iter()
-                        .any(|recipe| &recipe.id == id)
-                );
-            }
-            game.lan.as_mut().unwrap().hub.guests.push(guest);
-            for display in [-1, i32::MAX] {
-                game.lan_guest_packet(
-                    2,
-                    play::Serverbound::PlaceRecipe(PlaceRecipe {
-                        container: 0,
-                        recipe: display,
-                        use_max: true,
-                    }),
-                );
-                let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
-                assert_eq!(
-                    guest.inventory[0],
-                    Some(ItemStack::new("minecraft:stone", 16))
-                );
-                assert_eq!(
-                    guest.craft_grid[0],
-                    Some(ItemStack::new("minecraft:dirt", 3))
-                );
-                assert!(guest.craft_grid[1..].iter().all(Option::is_none));
-                assert!(guest.craft_result.is_none());
-            }
-            let display = world_stations!(game)
-                .recipe_index
-                .first_display("empty_fixture:b_neighbor")
-                .unwrap();
-            game.lan_guest_packet(
-                2,
-                play::Serverbound::PlaceRecipe(PlaceRecipe {
-                    container: 0,
-                    recipe: display,
-                    use_max: false,
-                }),
-            );
-            let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
-            assert_eq!(guest.inventory[0].as_ref().unwrap().count, 15);
-            assert_eq!(
-                guest.craft_grid[0],
-                Some(ItemStack::new("minecraft:stone", 1))
-            );
-            assert_eq!(
-                guest.craft_result,
-                Some(ItemStack::new("minecraft:stick", 1))
-            );
-            std::fs::remove_dir_all(dir).unwrap();
-        });
+                        .0;
+                    game.build_registries();
+                    {
+                        // The generated Host entrypoint serves native and wasm callers;
+                        // roundtrip its real answer, not a hand-constructed ingredient.
+                        use mod_api::wire::{Reader, Wire, Writer};
+                        let host: &dyn mod_api::Host = game;
+                        let empty = host
+                            .recipe_ingredient(r##""#empty_fixture:empty""##)
+                            .unwrap()
+                            .unwrap();
+                        assert!(empty.items.is_empty());
+                        assert!(empty.order.is_empty());
+                        assert!(
+                            host.recipe_ingredient(r##""#empty_fixture:missing""##)
+                                .unwrap()
+                                .is_none()
+                        );
+                        assert!(host.recipe_ingredient("[]").unwrap().is_none());
+                        let mut writer = Writer::default();
+                        empty.put(&mut writer);
+                        let decoded: mod_api::Ingredient =
+                            Reader::decode(&writer.into_bytes()).unwrap();
+                        assert_eq!(decoded, empty);
+                        let stone = mod_api::ItemStack::of(
+                            mod_api::__private::item_key("minecraft:stone").unwrap(),
+                        );
+                        assert!(!decoded.test(host, &stone));
+                    }
+                    game.lan_host(
+                        crate::game::lan::LanSettings {
+                            port: 0,
+                            guest_commands: true,
+                            force_game_mode: false,
+                        },
+                        NetConfig {
+                            announce: false,
+                            ..NetConfig::loopback(0, "empty-ingredient-test".into(), 2)
+                        },
+                        HubConfig {
+                            default_game_mode: 0,
+                            guest_commands: true,
+                            force_game_mode: false,
+                            hardcore: false,
+                            view_distance: 2,
+                            simulation_distance: 2,
+                            dimension: "minecraft:overworld".into(),
+                            allow_flight: false,
+                            seed: 0,
+                            max_players: 2,
+                            integrated: false,
+                            levels: Default::default(),
+                        },
+                    )
+                    .unwrap();
+                    let (tx, _rx) = mpsc::channel();
+                    let mut guest = Guest::new(
+                        Joined {
+                            conn: 2,
+                            uuid: 3739,
+                            name: "EmptyIngredientGuest".into(),
+                            properties: vec![],
+                            info: ClientInformation::new(2),
+                            brand: "test".into(),
+                            sender: PlayerSender::new(tx, Arc::default()),
+                            latency: Arc::new(AtomicI32::new(0)),
+                            address: "127.0.0.1:25565".parse().unwrap(),
+                            expected: false,
+                        },
+                        2,
+                        [8.5, 200.0, 8.5],
+                        2,
+                    );
+                    guest.dimension = "minecraft:overworld".into();
+                    guest.placed = true;
+                    guest.loaded = true;
+                    guest.inventory[0] = Some(ItemStack::new("minecraft:stone", 16));
+                    guest.craft_grid[0] = Some(ItemStack::new("minecraft:dirt", 3));
+                    let ids = ["empty_fixture:tag", "empty_fixture:custom"].map(str::to_owned);
+                    let index = &world_stations!(game).recipe_index;
+                    for id in [
+                        "empty_fixture:direct",
+                        "empty_fixture:missing",
+                        "empty_fixture:a_invalid",
+                        "empty_fixture:tag",
+                        "empty_fixture:custom",
+                    ] {
+                        assert!(index.first_display(id).is_none(), "{id}");
+                    }
+                    assert_eq!(guest.recipe_book.add_recipes(index, &ids), (0, vec![]));
+                    guest
+                        .recipe_book
+                        .add_recipes(index, &["empty_fixture:b_neighbor".to_owned()]);
+                    let sync = game.lan.as_ref().unwrap().hub.sync_data();
+                    assert!(sync.advancements.recipes_added(&ids, sync).is_none());
+                    let display = index.first_display("empty_fixture:b_neighbor").unwrap();
+                    assert_eq!(
+                        sync.advancements.recipe_of_display(display),
+                        Some("empty_fixture:b_neighbor")
+                    );
+                    {
+                        use horizon_protocol::{
+                            buf::{Codec, Reader},
+                            packets::recipes::RecipeBookAdd,
+                        };
+                        let requested = [
+                            ids[0].clone(),
+                            ids[1].clone(),
+                            "empty_fixture:b_neighbor".to_owned(),
+                        ];
+                        let bytes = sync.advancements.recipes_added(&requested, sync).unwrap();
+                        let packet = RecipeBookAdd::read(&mut Reader::new(&bytes)).unwrap();
+                        assert_eq!(packet.entries.len(), 1);
+                        assert_eq!(packet.entries[0].id, display);
+                    }
+                    for id in &ids {
+                        assert!(!guest.recipe_book.knows(id), "{id}");
+                        assert!(world_recipes!(game).placement(id).unwrap().impossible());
+                        assert!(
+                            world_recipes!(game).by_type["minecraft:crafting"]
+                                .iter()
+                                .any(|recipe| &recipe.id == id)
+                        );
+                    }
+                    game.lan.as_mut().unwrap().hub.guests.push(guest);
+                    for display in [-1, i32::MAX] {
+                        game.lan_guest_packet(
+                            2,
+                            play::Serverbound::PlaceRecipe(PlaceRecipe {
+                                container: 0,
+                                recipe: display,
+                                use_max: true,
+                            }),
+                        );
+                        let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
+                        assert_eq!(
+                            guest.inventory[0],
+                            Some(ItemStack::new("minecraft:stone", 16))
+                        );
+                        assert_eq!(
+                            guest.craft_grid[0],
+                            Some(ItemStack::new("minecraft:dirt", 3))
+                        );
+                        assert!(guest.craft_grid[1..].iter().all(Option::is_none));
+                        assert!(guest.craft_result.is_none());
+                    }
+                    let display = world_stations!(game)
+                        .recipe_index
+                        .first_display("empty_fixture:b_neighbor")
+                        .unwrap();
+                    game.lan_guest_packet(
+                        2,
+                        play::Serverbound::PlaceRecipe(PlaceRecipe {
+                            container: 0,
+                            recipe: display,
+                            use_max: false,
+                        }),
+                    );
+                    let guest = game.lan.as_ref().unwrap().hub.guest(2).unwrap();
+                    assert_eq!(guest.inventory[0].as_ref().unwrap().count, 15);
+                    assert_eq!(
+                        guest.craft_grid[0],
+                        Some(ItemStack::new("minecraft:stone", 1))
+                    );
+                    assert_eq!(
+                        guest.craft_result,
+                        Some(ItemStack::new("minecraft:stick", 1))
+                    );
+                    std::fs::remove_dir_all(dir).unwrap();
+                });
+            },
+        );
     }
 }

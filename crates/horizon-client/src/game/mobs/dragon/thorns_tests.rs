@@ -290,3 +290,40 @@ fn dragon_takes_player_thorns_through_its_body() {
         );
     });
 }
+
+/// `Guardian.hurtServer`: a still guardian's spikes are 2 of
+/// `minecraft:thorns` on the player whose blow it was, dealt inside that hurt
+/// (before any tick runs) — not at the end of the tick, where the outbox
+/// sweep has no player in place: a serving thread's players are all guests.
+#[test]
+#[ignore = "daily"]
+fn a_still_guardian_spikes_the_player_who_hit_it() {
+    with_game(|g| {
+        g.mobs.clear();
+        let kind = g.res.mob_types().get("minecraft:guardian").unwrap().clone();
+        let mut guardian = Mob::new(41, kind, Vec3::new(10.5, 64.0, 0.5), 0.0);
+        guardian.health = 30.0;
+        g.mobs.push(guardian);
+        g.player.as_mut().unwrap().health.advance_clock();
+        let before = g.player.as_ref().unwrap().health.health();
+        assert!(
+            g.hurt_by_player(0, 2.0, Damage::player([10.5, 64.0, 0.5])),
+            "the blow lands on the guardian"
+        );
+        g.player.as_mut().unwrap().health.advance_clock();
+        assert_eq!(
+            g.player.as_ref().unwrap().health.health(),
+            before - 2.0,
+            "the spikes hurt the player who hit it, in the hurt itself"
+        );
+        // Dealt once: the sweep at the end of the tick finds nothing left.
+        assert!(
+            !g.mobs[0]
+                .outbox
+                .iter()
+                .any(|e| matches!(e, MobEvent::DamagePlayer { .. })),
+            "{:?}",
+            g.mobs[0].outbox
+        );
+    });
+}

@@ -366,7 +366,13 @@ fn chest_minecart_break_unpacks_before_drop() {
         let id = cart(g);
         for _ in 0..2 {
             if let Some(i) = g.carts.iter().position(|c| c.id == id) {
-                g.hurt_cart(i, 100.0, false, false);
+                g.hurt_cart(
+                    i,
+                    100.0,
+                    false,
+                    false,
+                    crate::game::minecarts::CartHit::default(),
+                );
             }
         }
         assert!(!g.carts.iter().any(|c| c.id == id));

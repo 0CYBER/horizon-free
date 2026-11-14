@@ -43,6 +43,27 @@ emit a second notice.
 See the [generated API reference](../../reference/api.md) and the hook's
 [caller notes](../../reference/hook-notes.md#player-bed-leave-callers).
 
+## Physical movement decisions
+
+`entity_move` runs on the server before one physical `Entity.move` invocation,
+including its no-physics and stuck-multiplier handling. This hook receives the
+loop context, not a `Host`: it decides only the movement delta. `MoveCause`
+distinguishes self movement, player packets, pistons, shulker boxes and shulkers;
+boats and minecarts use self movement.
+
+A replacement must have finite components, each within ±64 blocks. Invalid
+output is refused whole, retaining the requested delta rather than clamping it.
+Cancellation skips the invocation: no position, velocity, collision-flag or fall
+change, and no displacement notice. An overridden player or vehicle packet move
+sends a correction even below the normal distance threshold, for creative players
+and from obstructed starts too. A replacement equal to the request retains the
+normal vanilla distance rules.
+
+A native panic or trapped/refused wasm listener restores the originally requested
+delta, not an earlier listener's replacement. Later listeners do not run on that
+invocation, and the failed listener is disabled for this hook for the session;
+its other hooks remain enabled. Native and wasm listeners share this contract.
+
 ## Teleport hooks
 
 `ender_pearl_teleport` covers player-owned and mob-owned pearls. Its `owner` is an

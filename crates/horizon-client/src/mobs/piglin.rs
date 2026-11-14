@@ -25,6 +25,17 @@ const CONVERSION: i32 = 300;
 /// `DANCING` memories last.
 const CELEBRATION: i32 = 300;
 
+/// `ZombifiedPiglin.populateDefaultEquipmentSlots`: a golden sword, or one
+/// time in 20 a golden spear, off `random` (`Pig.thunderHit` passes the pig's
+/// own, `this.getRandom()`).
+pub fn default_equipment(random: &mut LegacyRandom) -> &'static str {
+    if random.next_int_bound(20).unwrap_or(1) == 0 {
+        "minecraft:golden_spear"
+    } else {
+        "minecraft:golden_sword"
+    }
+}
+
 /// `PiglinAi.BARTERING_ITEM`: vanilla's barter currency, compared by item.
 pub const BARTERING_ITEM: &str = "minecraft:gold_ingot";
 
@@ -2014,11 +2025,12 @@ pub fn ai_step(
             }
             // `Hoglin.finishConversion` is `ConversionParams.single(this, true,
             // false)`, `AbstractPiglin.finishConversion` `(this, true, true)`;
-            // both leave the new mob nauseous (the game adds it).
+            // both leave the new mob nauseous.
             events.push(MobEvent::Convert {
                 from: Box::new(m.clone()),
                 kind,
                 params,
+                after: super::conversion::After::Nausea,
             });
             m.removed = true;
         }
@@ -2744,6 +2756,16 @@ mod conversion_tests {
             assert!(
                 matches!(relevant.as_slice(), [MobEvent::DropItem { .. }, MobEvent::DropStack { stack: a, at: p, .. }, MobEvent::DropStack { stack: b, .. }, MobEvent::Convert { from, .. }] if *a == stacks[0] && *b == stacks[1] && *p == at && from.extra.inventory.is_empty())
             );
+            // `AbstractPiglin.finishConversion` leaves the new mob nauseous:
+            // the step rides on the event, not on the new mob's type.
+            let after = relevant
+                .iter()
+                .find_map(|e| match e {
+                    MobEvent::Convert { after, .. } => Some(*after),
+                    _ => None,
+                })
+                .expect("the piglin converts");
+            assert_eq!(after, super::super::conversion::After::Nausea);
             assert!(m.extra.inventory.is_empty());
         });
         // Without the vanilla data there is nothing to check.

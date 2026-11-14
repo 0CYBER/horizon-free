@@ -222,11 +222,15 @@ fn server_mark_of(padding: usize) -> Vec<u8> {
 #[ignore = "daily"]
 fn a_part_that_inflates_past_the_cap_is_refused() {
     let field = server_mark_of(1 << 20);
-    let mut inflated = vec![0x08, 0x01];
-    while (inflated.len() as u64) <= MAX_PART_INFLATED {
-        inflated.extend_from_slice(&field);
+    // The same bytes as one big buffer, written in 1 MiB fields so the input is never held whole.
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(&[0x08, 0x01]).unwrap();
+    let mut written = 2u64;
+    while written <= MAX_PART_INFLATED {
+        encoder.write_all(&field).unwrap();
+        written += field.len() as u64;
     }
-    let gz = gzip(&inflated);
+    let gz = encoder.finish().unwrap();
     assert!(
         (gz.len() as u64) < MAX_PART_BYTES,
         "a bomb the announced cap lets through: {} bytes",

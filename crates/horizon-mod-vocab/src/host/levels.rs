@@ -227,9 +227,9 @@ pub trait LevelsBackend {
     /// Match and assemble through the engine's recipe matcher, without consuming inputs.
     /// Covers minecraft:crafting, smelting, blasting, smoking, campfire_cooking,
     /// stonecutting and smithing, including data-pack recipes of those types.
-    /// Mod-owned types return RecipeLookupError::NotMatchable: cache recipes_of_type once
+    /// Registered crafting serializers match through minecraft:crafting. Read-only and unregistered
+    /// mod-owned types return RecipeLookupError::NotMatchable; cache recipes_of_type once
     /// per load/reload and match those in mod memory (no per-tick host crossing).
-    /// Dynamic custom outputs and contextual predicates remain mod-owned.
     /// A valid input without a match returns Ok(None); invalid shapes/items and unavailable
     /// levels are typed refusals. Crafting dimensions are 1 through 3, with row-major slots.
 
@@ -799,6 +799,8 @@ pub trait LevelsBackendMut {
     /// spawnable bounds (`Level.isInSpawnableBounds`), an unloaded chunk, a
     /// stale handle, a level not in place, a client, a `finalize_spawn` that
     /// cancelled the spawn or a mob a mod kept out.
+    /// Inside a transaction its join waits for the root commit, so a mod keeping the mob out is not
+    /// known at the call: the handle is returned and reads stale from the commit on.
     #[access(WorldOnly)]
     fn level_spawn_mob(
         &mut self,
@@ -1401,8 +1403,10 @@ pub trait LevelsBackendMut {
     /// with `block_drops` off too), with its own random motion and the
     /// default pickup delay of 10 ticks. None, with nothing spawned, for an
     /// empty stack or an unknown item, with the `block_drops` rule off, on a
-    /// client, for a stale handle, a level not in place, or an item a mod
-    /// kept out (`entity_join_level`).
+    /// client, for a stale handle, a level not in place, once the entity ids run out, or an
+    /// item a mod kept out (`entity_join_level`).
+    /// Inside a transaction its join waits for the root commit, so a mod keeping the item out is not
+    /// known at the call: the handle is returned and reads stale from the commit on.
     #[access(WorldOnly)]
     fn level_pop_resource(
         &mut self,
@@ -1420,6 +1424,8 @@ pub trait LevelsBackendMut {
     /// spawned, for an empty stack or an unknown item, a value that isn't
     /// finite, on a client, for a stale handle, a level not in place, or an
     /// item a mod kept out (`entity_join_level`).
+    /// Inside a transaction its join waits for the root commit, so a mod keeping the item out is not
+    /// known at the call: the handle is returned and reads stale from the commit on.
     #[access(WorldOnly)]
     fn level_spawn_item(
         &mut self,

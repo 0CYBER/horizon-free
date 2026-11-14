@@ -230,6 +230,11 @@ impl Game<'_> {
         if !m.extra.saddled() || food || self.keys.held(Action::Sneak) {
             return false;
         }
+        // `Strider.canAddPassenger`: a strider whose eyes are in lava has no
+        // seat, though the click still counts as used.
+        if m.species() == Species::Strider && m.fluids.eye_in_lava {
+            return true;
+        }
         let id = m.id;
         if !self.native_may_board(id) {
             return true;
@@ -1630,7 +1635,7 @@ mod tests {
 
     /// A server-side game with nothing in it but an empty chunk, or None when
     /// the prepared resources are missing (CI has no vanilla data).
-    fn server_game(
+    pub(super) fn server_game(
         resources: &mut Option<std::sync::Arc<crate::game::Resources>>,
     ) -> Option<Box<Game<'_>>> {
         use crate::game::{Audio, Options, Progress, Settings, load_resources};
@@ -1876,3 +1881,6 @@ mod camel_jump_tests;
 #[cfg(test)]
 #[path = "mounts/sneak_dismount_tests.rs"]
 pub(in crate::game) mod sneak_dismount_tests;
+#[cfg(test)]
+#[path = "tests/strider_lava_boarding_tests.rs"]
+mod strider_lava_boarding_tests;

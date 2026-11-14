@@ -206,13 +206,20 @@ impl Game<'_> {
             return true;
         }
         self.assign_pending_join_ids();
+        // Read before this call's own announcement is held: it reaches the entities to construct.
+        let held_before = self.held_joins_through();
         if through.is_none()
             && self.hold_announcement(super::transactions::Announcement::Joins {
                 loaded_from_disk,
                 through: horizon_client::join_seq::JoinSeq::latest(),
             })
         {
+            // What an earlier held flush of this level told is constructed already; with a toss
+            // still asked it may have stopped short, so then everything since the mark is looked at.
             let mut mark = self.persist.joined_seq;
+            if self.native_lifecycle.held_joins.is_empty() {
+                mark = mark.max(held_before);
+            }
             while let Some((slot, id, seq)) = self.next_unannounced(mark, &[], None) {
                 mark = seq;
                 let kind = self.slot_kind_and_position(slot).0;

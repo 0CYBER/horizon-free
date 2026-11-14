@@ -2412,17 +2412,15 @@ impl Game<'_> {
             return Ok(());
         };
         let was_idle = b.brew_time <= 0;
-        let was_unfueled = b.fuel <= 0;
-        let fuel_item = was_unfueled
-            .then(|| b.items[4].as_ref().map(|s| s.item.clone()))
-            .flatten();
+        // `serverTick` takes the fuel item only while the stand has no fuel
+        // uses left, which `out.fuel_taken` reports.
+        let fuel_item = b.items[4].as_ref().map(|s| s.item.clone());
         let (mut out, due) = b.tick_to_brew(
             &world_stations!(self).brewing,
             world_items!(self),
             self.res.providers(),
             &|s| fuel.resolve(world_items!(self), s),
         );
-        let consumed_fuel = was_unfueled && b.fuel > 0;
         let started = was_idle && b.brew_time > 0;
         let ingredient = started.then(|| b.ingredient.clone()).flatten();
         let hooked = !mod_api::__private::mods().is_empty();
@@ -2447,22 +2445,27 @@ impl Game<'_> {
             self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
             post = hooked && (out.brewed || cancelled);
         }
-        if consumed_fuel && let Some(item) = fuel_item {
+        if out.fuel_taken
+            && let Some(item) = fuel_item
+        {
             self.native_brewing_fuel(at, &item);
         }
         if let Some(ingredient) = ingredient {
             self.native_brewing_start(at, &ingredient);
         }
-        if !was_idle || consumed_fuel || started || out != brewing::BrewTick::default() {
+        if !was_idle || started || out != brewing::BrewTick::default() {
             self.container_changed(pos);
         }
         let (x, y, z) = pos;
+        // `doBrew` drops the ingredient's remainder through
+        // `Containers.dropItemStack`, before the brew's level event: no
+        // `block_drops` test and no pickup delay.
+        for d in std::mem::take(&mut out.drops) {
+            self.drop_item_stack_containers(at, d);
+        }
         if out.brewed {
             self.native_brewing_complete(at);
             self.play_at("minecraft:block.brewing_stand.brew", at, 1.0, 1.0);
-        }
-        for d in std::mem::take(&mut out.drops) {
-            self.pop_resource(at, d);
         }
         // PotionBrewEvent.Post ends `doBrew`, after its sound and the
         // ingredient's remainder; the bottles' block state follows it.
@@ -3120,6 +3123,10 @@ mod cycling_tests {
 #[cfg(test)]
 #[path = "tests/brewing_changed_tests.rs"]
 mod brewing_changed_tests;
+
+#[cfg(test)]
+#[path = "stations/brewing_tick_tests.rs"]
+mod brewing_tick_tests;
 
 #[cfg(test)]
 #[path = "stations/stonecutter_scroll_tests.rs"]

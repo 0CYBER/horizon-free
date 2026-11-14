@@ -689,7 +689,6 @@ impl Game<'_> {
         origin: [f64; 3],
     ) -> Vec<(Target, f64)> {
         let level = self.experience.level;
-        let creative = self.creative;
         // EntitySelector tests the type before any predicate. With no scores=
         // or team= (whose holders may be made as they are read), the rest of
         // the extra filter is a pure test of each candidate, so the ones of
@@ -721,7 +720,7 @@ impl Game<'_> {
                     return None;
                 }
                 for (name, neg) in &s.names {
-                    let n = self.target_name(t).plain();
+                    let n = self.target_plain_name(t);
                     if (n == *name) == *neg {
                         return None;
                     }
@@ -730,7 +729,8 @@ impl Game<'_> {
                     return None;
                 }
                 let player = match t {
-                    Target::Player => Some((level, if creative { "creative" } else { "survival" })),
+                    // ServerPlayer.gameMode: the real mode, not `creative`.
+                    Target::Player => Some((level, self.mode.name())),
                     Target::Guest(conn) => self.guest_level_and_mode(conn),
                     _ => None,
                 };
@@ -5394,7 +5394,7 @@ mod forced_respawn_tests {
                     .expect("Overworld commands must retain a forced configuration");
                 assert!(config.forced);
                 assert_eq!(config.pos, [5, 64, 5]);
-                let actual = game.resolve_server_respawn(config);
+                let actual = game.resolve_server_respawn(config, true);
                 assert_eq!(actual.is_some(), allowed, "{block} at height {height}");
                 assert_eq!(game.respawn_config.is_some(), allowed);
                 assert_eq!(game.level.world_spawn, Some([0, 80, 0]));

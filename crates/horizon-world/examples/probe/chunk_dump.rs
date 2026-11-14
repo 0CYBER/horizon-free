@@ -18,6 +18,8 @@
 //! NAME X Y Z PRIORITY` line per scheduled tick.
 use crate::support::common::tag;
 use horizon_core::position::ChunkPos;
+#[path = "../datapacks/reader.rs"]
+mod pack_reader;
 use serde_json::Value;
 use std::{collections::HashMap, fmt::Write as _, fs, io::Write as _, path::Path, sync::Arc};
 use {
@@ -29,7 +31,7 @@ use {
             biome::BiomeId,
             blending::{BlendingData, Direction8, OldChunk, OldWorld, Sides},
             generator::{FlatSettings, GeneratorData, OverworldGenerator, ProtoChunk},
-            overrides::{PackFile, WorldgenOverrides},
+            overrides::WorldgenOverrides,
         },
     },
 };
@@ -147,45 +149,13 @@ fn canonical(tag: &Tag, out: &mut String) {
 /// HORIZON_DATAPACKS: a world's datapacks folder of folder packs, each enabled
 /// after vanilla in name order, as the oracle selects them.
 fn datapacks(dir: &Path) -> Result<WorldgenOverrides, Error> {
-    fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
-        let Ok(entries) = fs::read_dir(dir) else {
-            return;
-        };
-        let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-        entries.sort();
-        for path in entries {
-            if path.is_dir() {
-                walk(root, &path, out);
-            } else if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().replace('\\', "/"));
-            }
-        }
-    }
     let mut packs: Vec<_> = fs::read_dir(dir)?
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.join("pack.mcmeta").exists())
         .collect();
     packs.sort();
-    let mut overrides = WorldgenOverrides::default();
-    for pack in packs {
-        let id = format!(
-            "file/{}",
-            pack.file_name().unwrap_or_default().to_string_lossy()
-        );
-        let mut files = Vec::new();
-        walk(&pack, &pack.join("data"), &mut files);
-        for file in files {
-            let read = || fs::read_to_string(pack.join(&file)).ok();
-            if let PackFile::Unreadable = overrides.add_file(&id, &file, read) {
-                return Err(format!("{id}: {file}: unreadable").into());
-            }
-        }
-    }
-    for warning in overrides.finish(|_| true) {
-        eprintln!("data pack worldgen: {warning}");
-    }
-    Ok(overrides)
+    pack_reader::overrides(&packs.iter().map(|p| p.as_path()).collect::<Vec<_>>())
 }
 
 /// HORIZON_OLD_CHUNKS=SEED:x0,z0,x1,z1: chunks another seed generated that

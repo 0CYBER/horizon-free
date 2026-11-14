@@ -295,6 +295,13 @@ pub(super) enum DeferredEffect {
         key: &'static str,
         amount: i32,
     },
+    /// `Player.awardStat` of an item statistic (`used`, `crafted`...) for `item`.
+    ItemStat {
+        player: u128,
+        stat: &'static str,
+        item: std::sync::Arc<str>,
+        amount: i32,
+    },
     Sound {
         sound: &'static str,
         at: [f64; 3],
@@ -510,12 +517,13 @@ impl Game<'_> {
                     .and_then(|dim| entities::open_in(&mut self.transactions, dim))
                 {
                     Some(enclosing) => enclosing.lifetimes.merge(lifetimes),
-                    None => self.commit_entity_journal(lifetimes),
+                    None => self.commit_entity_journal(lifetimes, |_| {}),
                 }
             }
             (true, None) => {
-                self.root_commit(level);
-                self.commit_entity_journal(lifetimes);
+                // The commit is in place before the effects run: a join one causes (a placed
+                // item's leftover spawning) never announces what the transaction added and removed.
+                self.commit_entity_journal(lifetimes, |game| game.root_commit(level));
             }
             (false, _) => {
                 // The entities it added go first, so nothing is put back into one.
@@ -919,6 +927,14 @@ impl Game<'_> {
                     amount,
                 } => {
                     self.native_as_player(player, |g| g.award_custom_stat(key, amount));
+                }
+                DeferredEffect::ItemStat {
+                    player,
+                    stat,
+                    item,
+                    amount,
+                } => {
+                    self.native_as_player(player, |g| g.award_stat(stat, &item, amount));
                 }
                 DeferredEffect::Sound {
                     sound,

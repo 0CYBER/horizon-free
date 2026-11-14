@@ -955,7 +955,13 @@ mod off_level_tests {
                     child.age = 19;
                     game.mobs.push(child);
                     if cart {
-                        game.hurt_cart(0, 5.0, true, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            true,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, true));
                     }
@@ -1335,7 +1341,13 @@ mod nested_vehicle_discard_tests {
                     assert!(game.entity_ticking_area()(2, 3));
                     assert!(!game.entity_ticking_area()(136, 3));
                     if cart {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, false));
                     }
@@ -1423,7 +1435,13 @@ mod nested_vehicle_discard_tests {
                     game.riding = Some(71);
                     let vehicle = game.entity(71).unwrap();
                     if cart {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, false));
                     }
@@ -1471,7 +1489,13 @@ mod nested_vehicle_discard_tests {
                         .guests
                         .update(0, |guest| guest.vehicle = Some(71));
                     if cart {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, false));
                     }
@@ -1530,7 +1554,13 @@ mod nested_vehicle_discard_tests {
                     game.set_allow_commands(true);
                     game.persist.uuids.insert(72, [160, 0, 0, 72]);
                     if cart {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, false));
                     }
@@ -1717,9 +1747,15 @@ mod nested_vehicle_discard_tests {
                         0 => {
                             assert!(game.hurt_boat(0, 5.0, false));
                         }
-                        1 => game.hurt_cart(0, 5.0, false, false),
+                        1 => game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        ),
                         2 => {
-                            game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false);
+                            game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false, None, None);
                         }
                         3 | 4 => {
                             assert!(game.run_command(&format!("kill @e[type=minecraft:{kind}]")));
@@ -1864,7 +1900,13 @@ mod nested_vehicle_discard_tests {
                             });
                         }
                         match mode {
-                            0 if cart => game.hurt_cart(0, 5.0, false, false),
+                            0 if cart => game.hurt_cart(
+                                0,
+                                5.0,
+                                false,
+                                false,
+                                crate::game::minecarts::CartHit::default(),
+                            ),
                             0 => {
                                 assert!(game.hurt_boat(0, 5.0, false));
                             }
@@ -1962,7 +2004,13 @@ mod nested_vehicle_discard_tests {
                         1
                     );
                     if cart {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, false));
                     }
@@ -2001,7 +2049,13 @@ mod nested_vehicle_discard_tests {
                     assert_eq!(batch.query(&VEHICLE_VALUE).unwrap().iter().count(), 1);
                     let vehicle = game.entity(71).unwrap();
                     if cart {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, false));
                     }
@@ -2040,11 +2094,17 @@ mod nested_vehicle_discard_tests {
                     if mode == 0 {
                         assert!(game.hurt_boat(0, 5.0, false));
                     } else if mode == 1 {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         game.carts
                             .update(0, |cart| cart.kind = super::super::minecarts::CartKind::Tnt);
-                        game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false);
+                        game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false, None, None);
                     }
                     assert_eq!(calls.load(Ordering::Relaxed), 1);
                     assert!(game.entity(71).is_none());
@@ -2118,7 +2178,13 @@ mod nested_vehicle_discard_tests {
                     grandchild.extra.mount = Some(73);
                     game.mobs.push(grandchild);
                     if cart {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, false));
                     }
@@ -2158,7 +2224,13 @@ mod nested_vehicle_discard_tests {
                     let vehicle = game.entity(71).unwrap();
                     let rider = game.entity(72).unwrap();
                     if cart {
-                        game.hurt_cart(0, 5.0, false, false);
+                        game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        );
                     } else {
                         assert!(game.hurt_boat(0, 5.0, false));
                     }
@@ -2298,12 +2370,18 @@ mod nested_vehicle_discard_tests {
                             assert!(game.hurt_boat(0, 5.0, false));
                         }
                         2 => game.kill_target_in_level(super::super::commands::Target::Cart(71)),
-                        3 => game.hurt_cart(0, 5.0, false, false),
+                        3 => game.hurt_cart(
+                            0,
+                            5.0,
+                            false,
+                            false,
+                            crate::game::minecarts::CartHit::default(),
+                        ),
                         _ => {
                             game.carts.update(0, |cart| {
                                 cart.kind = super::super::minecarts::CartKind::Tnt
                             });
-                            game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false);
+                            game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false, None, None);
                         }
                     }
                     assert_eq!(game.mob_object(72).unwrap().extra.mount, Some(71));

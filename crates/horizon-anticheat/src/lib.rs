@@ -90,7 +90,8 @@ macro_rules! checks {
             pub enabled: bool,
             /// Tell online operators of an alert in their chat (the console and the log always are).
             pub alerts: bool,
-            /// The permission level a player needs to see alerts.
+            /// The permission level a player needs to see alerts, 0 to 4 (an operator's level is at
+            /// most 4).
             pub alert_level: u8,
             /// Every flag, one line each, relative to the server's folder; empty: no file.
             pub log: String,
@@ -206,8 +207,14 @@ impl Config {
         Ok(file.anticheat)
     }
 
-    /// Thresholds can't be negative, and neither can the timer's milliseconds.
+    /// Thresholds can't be negative, and neither can the timer's milliseconds. `alert_level` is a
+    /// permission level, 0 to 4.
     pub fn check(&self) -> Result<(), String> {
+        // No player's level is above 4 (`ops.json` and `op-permission-level` are read as 0 to 4),
+        // so a higher one would tell no operator, without a word.
+        if self.alert_level > 4 {
+            return Err("anticheat: alert_level is a permission level from 0 to 4".into());
+        }
         for &c in Check::ALL {
             let a = self.actions(c);
             if [a.setback, a.alert, a.kick, a.decay]
@@ -371,6 +378,20 @@ mod tests {
     fn refuses_unknown_keys_and_negative_levels() {
         assert!(Config::from_server_toml("[anticheat]\nenable = true\n").is_err());
         assert!(Config::from_server_toml("[anticheat.timer]\nkick = -1\n").is_err());
+    }
+
+    /// `alert_level` 5 or more would tell no operator: a player's permission level is at most 4.
+    #[test]
+    fn refuses_an_alert_level_above_4() {
+        for bad in [5, 255] {
+            let text = format!("[anticheat]\nalert_level = {bad}\n");
+            let e = Config::from_server_toml(&text).expect_err(&text);
+            assert!(e.starts_with("anticheat: alert_level"), "{bad}: {e}");
+        }
+        for good in [0, 4] {
+            let text = format!("[anticheat]\nalert_level = {good}\n");
+            assert_eq!(Config::from_server_toml(&text).unwrap().alert_level, good);
+        }
     }
 
     /// A negative `tolerance_ms` flags a client on time every tick, and so does a `max_lag_ms` below

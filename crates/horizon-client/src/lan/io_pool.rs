@@ -7,6 +7,7 @@
 //! connection stays on one thread, so its bytes keep their order. The
 //! integrated server's own player, over an in-memory pipe, is served the same
 //! way: the pipe tells the thread when bytes arrive.
+use super::Body;
 use horizon_protocol::connection::{ConnReader, ConnWriter, Pipe, Socket};
 use mio::{Events, Interest, Poll, Registry, Token, Waker};
 use std::{
@@ -82,13 +83,12 @@ struct Queue {
 }
 
 // Include allocation capacity and geometric queue growth, even for empty bodies.
-pub(super) fn charge(body: &Vec<u8>) -> usize {
-    body.capacity()
-        .saturating_add(std::mem::size_of::<Queued>() * 2)
+pub(super) fn charge(retained: usize) -> usize {
+    retained.saturating_add(std::mem::size_of::<Queued>() * 2)
 }
 
 pub(super) struct Queued {
-    body: Vec<u8>,
+    body: Body,
     prepared: bool,
     pending: Arc<AtomicUsize>,
     cost: usize,
@@ -166,11 +166,11 @@ impl Outbox {
     /// follows an end, but a close overrides a disconnect still writing.
     /// Past [`MAX_PENDING`] a capped connection closes. The thread to wake, if
     /// this is the first news it has since it last looked.
-    pub(super) fn push(&self, bodies: Vec<Vec<u8>>, end: Option<End>) -> Option<&Arc<Worker>> {
+    pub(super) fn push(&self, bodies: Vec<Body>, end: Option<End>) -> Option<&Arc<Worker>> {
         let bodies = bodies
             .into_iter()
             .map(|body| Queued {
-                cost: charge(&body),
+                cost: charge(body.retained()),
                 body,
                 prepared: false,
                 pending: self.pending.clone(),
@@ -209,14 +209,18 @@ impl Outbox {
             .then_some(&self.worker)
     }
     /// [`Self::push`], waking the thread at once.
-    pub(super) fn send(&self, bodies: Vec<Vec<u8>>, end: Option<End>) {
+    pub(super) fn send(&self, bodies: Vec<Body>, end: Option<End>) {
         if let Some(worker) = self.push(bodies, end) {
             worker.wake();
         }
     }
     #[cfg(test)]
     pub(super) fn queued_contents(&self) -> Vec<Vec<u8>> {
-        self.queue().bodies.iter().map(|b| b.body.clone()).collect()
+        self.queue()
+            .bodies
+            .iter()
+            .map(|b| b.body.to_vec())
+            .collect()
     }
     pub(super) fn alive(&self) -> bool {
         let q = self.queue();
@@ -224,7 +228,7 @@ impl Outbox {
     }
     pub(super) fn publish(&self, body: Vec<u8>, cost: usize) -> bool {
         let packet = Queued {
-            body,
+            body: body.into(),
             cost,
             prepared: true,
             pending: self.pending.clone(),
@@ -638,7 +642,7 @@ impl Conn {
                 return self.end(now, "Disconnected");
             }
             // The hub's own disconnect, if it was the last queued, does for this one.
-            let ours = (end.is_none()).then(|| disconnect.to_vec());
+            let ours = (end.is_none()).then(|| Body::from(disconnect.to_vec()));
             if !self.frame(now, bodies, true)
                 || !self.frame(
                     now,
@@ -762,7 +766,7 @@ impl Conn {
             && self.frame(
                 now,
                 vec![Queued {
-                    body,
+                    body: body.into(),
                     prepared: false,
                     pending: self.outbox.pending.clone(),
                     cost: 0,
@@ -848,7 +852,8 @@ mod tests {
     }
     impl Served {
         fn send(&self, bodies: Vec<Vec<u8>>, end: Option<End>) {
-            let len: usize = bodies.iter().map(charge).sum();
+            let bodies: Vec<Body> = bodies.into_iter().map(Body::from).collect();
+            let len: usize = bodies.iter().map(|b| charge(b.retained())).sum();
             self.pending.fetch_add(len, Ordering::Relaxed);
             self.outbox.send(bodies, end);
         }
@@ -967,7 +972,7 @@ mod tests {
         assert_eq!(served.next(), Seen::Closed);
         // Nothing after the kick, and nothing queued once closed.
         assert!(served.seen.try_recv().is_err());
-        assert!(served.outbox.push(vec![body(4, 1)], None).is_none());
+        assert!(served.outbox.push(vec![body(4, 1).into()], None).is_none());
     }
 
     #[test]

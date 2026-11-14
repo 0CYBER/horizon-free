@@ -16,6 +16,7 @@ impl Game<'_> {
         causing: i32,
         creative_source: bool,
         attack: &horizon_client::health::Attack,
+        armor_weapon: Option<horizon_client::health::ArmorWeapon>,
     ) -> horizon_client::Result<horizon_client::health::BlockOutcome> {
         let rules = self.world.health_rules;
         let helmet = self.armor[0]
@@ -37,6 +38,7 @@ impl Game<'_> {
                 creative_source,
                 helmet,
                 !self.combat.refuse_player_hit,
+                armor_weapon,
             )?;
         if let Some(damage) = hit.helmet_damage() {
             let hit_source = hit.source(attack);

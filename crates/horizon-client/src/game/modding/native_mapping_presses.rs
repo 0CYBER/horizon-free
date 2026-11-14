@@ -72,16 +72,16 @@ impl Game<'_> {
             remote.input.press(input);
             return;
         }
-        // Mod callbacks may enqueue repeatedly before a local tick: never wrap the counters.
+        // Mod callbacks may enqueue repeatedly before a local tick: the queues are bounded.
         match button {
             // KeyMapping.click: Minecraft.tick starts the attack.
-            MouseButton::Left => self.attack_clicks = self.attack_clicks.saturating_add(1),
+            MouseButton::Left => self.attack_clicks.press(),
             // handleKeybinds consumes use clicks without acting while an
             // item is in use. Minecraft.tick runs them after the attack
             // clicks, so a place and a break in one tick replace the block.
             MouseButton::Right => {
                 if self.using.is_none() {
-                    self.use_clicks = self.use_clicks.saturating_add(1);
+                    self.use_clicks.press();
                 }
             }
             MouseButton::Middle => {

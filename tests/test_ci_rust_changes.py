@@ -15,9 +15,15 @@ class RustChangesTests(unittest.TestCase):
         self.assertFalse(needs_rust([
             "docs/setup.md", "docs/media/banner.webp", "README.md",
         ]))
+        # The Python tools: verify's Python steps run their tests, and no Rust build or test reads them.
+        self.assertFalse(needs_rust([
+            "tools/parity.py", "tools/test_tick_parity.py", "tests/test_ci_runners.py", "docs/setup.md",
+        ]))
         for path in [
             "crates/horizon-client/src/game.rs", "xtask/src/main.rs", "Cargo.lock",
             ".cargo/config.toml", ".github/workflows/ci.yml", "tools/ci/rust_changes.py",
+            "tools/release_train.py", "tools/ci/sign_release.sh", "tools/native-hook-fragments/a.json",
+            "tools/parity_hosts.json", "mods/horizon/src/x.py",
             "research-lock.json", "crates/horizon-theme/tokens.css", "unknown-file",
         ]:
             with self.subTest(path=path):

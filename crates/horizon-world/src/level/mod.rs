@@ -211,7 +211,7 @@ pub use place::{
 };
 pub use portal::PortalShape;
 pub use states::{BlockId, PropKey, StateTable};
-pub use tick::{Precipitation, PrecipitationKind, RandomTickMask};
+pub use tick::{Precipitation, PrecipitationKind, RandomTickMask, RandomTickMaskUpdate};
 pub use ticks::Ticks;
 
 /// `Block.UPDATE_*` flags accepted by [`Behaviours::set_block`].

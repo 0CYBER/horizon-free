@@ -66,7 +66,7 @@ fn custom_sets_survive_dispatch_and_sync_but_new_foreign_keys_do_not() {
         ]
         .into(),
         || {
-            let resolved = ResolvedSources::resolve(vec![], &context);
+            let resolved = ResolvedSources::resolve(vec![], &context).unwrap();
             assert!(resolved.property_additions.get("foreign:input").is_none());
             assert!(resolved.property_additions.get("pot:foreign_new").is_none());
             assert!(

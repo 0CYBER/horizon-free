@@ -50,6 +50,13 @@ pub(crate) struct Installed {
     pub(crate) mods: Mods,
     pub(crate) subscribers: horizon_mod_runtime::subscribers::Subscribers,
     pub(crate) disabled: Box<[std::sync::atomic::AtomicBool]>,
+    /// The poison sets of the hooks whose dispatch isolates every listener
+    /// (#2414 ruling): a listener that unwound is skipped by that one hook
+    /// for the rest of the session. One set per hook, filled only on a panic;
+    /// `poison_free` answers through one atomic load, so a dispatch with no
+    /// poison pays nothing.
+    poisons: std::sync::Mutex<Option<Box<[Option<std::collections::HashSet<&'static str>>]>>>,
+    poison_free: std::sync::atomic::AtomicBool,
 }
 
 impl Installed {
@@ -85,6 +92,8 @@ impl Installed {
             mods,
             subscribers,
             disabled,
+            poisons: std::sync::Mutex::new(None),
+            poison_free: std::sync::atomic::AtomicBool::new(true),
         }
     }
 }
@@ -119,6 +128,40 @@ pub(crate) fn install(mods: Mods) -> &'static Installed {
         assert!(MODS.set(installed).is_ok(), "trait mods are installed once");
         MODS.get().unwrap()
     }
+}
+
+/// Mark `id`'s listener of `hook` poisoned for the session (#2414 ruling):
+/// it is skipped by that one hook alone — its other hooks and Parts are
+/// untouched, unlike a whole-mod disable. Called only from a listener's
+/// `catch_unwind` handler, so an installation is always in place.
+pub(crate) fn poison(hook: generated::HookId, id: &'static str) {
+    let installed = installed().expect("a poison lands inside a dispatch");
+    let mut poisons = installed.poisons.lock().unwrap();
+    let sets =
+        poisons.get_or_insert_with(|| std::vec![None; generated::HOOK_COUNT].into_boxed_slice());
+    sets[hook as usize]
+        .get_or_insert_with(std::collections::HashSet::new)
+        .insert(id);
+    installed
+        .poison_free
+        .store(false, std::sync::atomic::Ordering::Release);
+}
+
+/// Whether `id`'s listener of `hook` is poisoned for the session.
+pub(crate) fn poisoned(hook: generated::HookId, id: &str) -> bool {
+    // One atomic load on the usual path: the sets only fill on a panic.
+    installed().is_some_and(|installed| {
+        !installed
+            .poison_free
+            .load(std::sync::atomic::Ordering::Acquire)
+            && installed
+                .poisons
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|poisons| poisons[hook as usize].as_ref())
+                .is_some_and(|poisoned| poisoned.contains(id))
+    })
 }
 
 /// The process-wide list in dispatch order, or an empty list before installation.

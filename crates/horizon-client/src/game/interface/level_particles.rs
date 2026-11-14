@@ -462,3 +462,7 @@ impl Game<'_> {
         let _ = self.process_level_events();
     }
 }
+
+#[cfg(test)]
+#[path = "tests/phantom_bite_tests.rs"]
+mod phantom_bite_tests;

@@ -26,6 +26,10 @@ pub struct BiomeFacts {
     pub full_moon: bool,
     /// `spawns_coral_variant_zombie_nautilus` (the warm ocean).
     pub coral_nautilus: bool,
+    /// `#minecraft:spawns_white_rabbits` (`Rabbit.getRandomRabbitVariant`).
+    pub white_rabbit: bool,
+    /// `#minecraft:spawns_gold_rabbits` (`Rabbit.getRandomRabbitVariant`).
+    pub gold_rabbit: bool,
 }
 /// `SpawnPlacements.isSpawnPositionOk` for the entity type `entity`, of species `species`.
 pub fn placement_ok(entity: &str, species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> bool {
@@ -139,7 +143,7 @@ pub fn villager_type(b: &BiomeFacts) -> u8 {
     }
 }
 #[cfg(test)]
-mod tests {
+pub(in crate::mobs) mod tests {
     use super::*;
     use crate::mobs::finalize::{Attr, has_modifier, value};
 
@@ -199,7 +203,7 @@ mod tests {
             }
         }
     }
-    fn run_finalize(m: &mut Mob, difficulty: LocalDifficulty) {
+    pub(in crate::mobs) fn run_finalize(m: &mut Mob, difficulty: LocalDifficulty) {
         static LEVEL: std::sync::OnceLock<std::sync::Mutex<Level>> = std::sync::OnceLock::new();
         let mut level = LEVEL
             .get_or_init(|| {

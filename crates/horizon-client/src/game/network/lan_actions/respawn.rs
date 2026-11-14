@@ -248,7 +248,7 @@ impl Game<'_> {
             && self.world.loaded(c.pos[0], c.pos[2])
         {
             let found = self
-                .as_guest(conn, |g| g.resolve_server_respawn(c))
+                .as_guest(conn, |g| g.resolve_server_respawn(c, true))
                 .flatten();
             let world = self
                 .level
@@ -462,8 +462,9 @@ impl Game<'_> {
             if consumed && catalyst_xp > 0 {
                 self.guest_catalyst_trigger(gi, conn, at);
             }
-            // ServerPlayer.die: the drops, then the deathCount objectives, then
-            // the `deaths` statistic and the two timers it resets.
+            // ServerPlayer.die: the drops, the deathCount objectives, the
+            // experience (`dropAllDeathLoot`), then a kill credit's `killed_by`,
+            // awardKillScore and wither rose, then `deaths` and the two timers.
             self.as_guest(conn, |game| {
                 if let Some(eyes) = drops {
                     game.drop_inventory(eyes, &dropping);
@@ -473,12 +474,9 @@ impl Game<'_> {
                     game.award_stat("killed_by", kind, 1);
                 }
             });
-            self.guest_killed_player_trigger(conn, at, killing);
-            self.as_guest(conn, |game| {
-                game.award_custom_stat("deaths", 1);
-                game.stats.reset_death_timers();
-            });
-            // ServerPlayer.die: a spectator never reaches dropAllDeathLoot.
+            // ServerPlayer.die: a spectator never reaches dropAllDeathLoot. The
+            // experience the catalyst took does not drop (`Player.skipDropExperience`),
+            // and `dropAllDeathLoot` drops it before the rose.
             if drops.is_some() {
                 // LivingEntity.dropExperience: Player.isAlwaysExperienceDropper.
                 let now = self.world.game_time;
@@ -500,6 +498,12 @@ impl Game<'_> {
                     self.spawn_orbs(at, reward as u32);
                 }
             }
+            self.guest_killed_player_trigger(conn, at, killing);
+            self.guest_award_kill_score(conn, at);
+            self.as_guest(conn, |game| {
+                game.award_custom_stat("deaths", 1);
+                game.stats.reset_death_timers();
+            });
             // `ServerPlayer.die`'s `broadcastEntityEvent`, after the message,
             // the loot and the experience: Fabric's AFTER_DEATH. The blow is
             // the one `living_death` heard, so a death it cancelled returns

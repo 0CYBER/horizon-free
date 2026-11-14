@@ -11,6 +11,7 @@ pub mod desktop_seams;
 pub mod developer_install;
 pub mod developer_offline;
 pub(crate) mod download_retry;
+pub mod downloads;
 pub mod export;
 #[cfg(unix)]
 pub mod game_app;

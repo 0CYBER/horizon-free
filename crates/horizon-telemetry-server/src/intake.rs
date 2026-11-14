@@ -3,6 +3,8 @@
 //!
 //! - `POST /hub/report`: a bug report, opened at once as a GitHub issue (labels `bug`, `from-website`) in
 //!   the template Kira's `/report` uses (`github`). Kept and tried again by the upkeep if GitHub fails.
+//! - `POST /v1/report`: a bug or performance report from the game, opened the same way in its own template
+//!   (`game_report`), with its own daily cap.
 //!
 //! Roadmap suggestions come only from #horizon-ideas posts on Discord (Kira), not from here.
 //!
@@ -17,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::hub::{answer, json_body, refuse};
 use crate::store::Store;
-use crate::{App, github, take, utc_now};
+use crate::{App, game_report, github, take, utc_now};
 
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS hub_queue (
@@ -47,7 +49,7 @@ const REPORT: &[Field] = &[
 ];
 
 /// Text as stored: no control characters but line breaks (where allowed), trimmed.
-fn clean(text: &str, lines: bool) -> String {
+pub(crate) fn clean(text: &str, lines: bool) -> String {
     let text = text.replace("\r\n", "\n");
     let kept: String = text
         .chars()
@@ -122,15 +124,16 @@ impl Store {
         Ok((self.db.last_insert_rowid(), None))
     }
 
-    /// Reports whose issue isn't open yet, from `since` on: id and fields.
-    pub fn unfiled(&self, since: u32) -> rusqlite::Result<Vec<(i64, Map<String, Value>)>> {
+    /// Reports (the website's and the game's) whose issue isn't open yet, from `since` on: id, kind and fields.
+    pub fn unfiled(&self, since: u32) -> rusqlite::Result<Vec<(i64, String, Map<String, Value>)>> {
         let mut statement = self.db.prepare(
-            "SELECT id, body FROM hub_queue WHERE kind = 'report' AND state = 'new' AND day >= ?1 ORDER BY id",
+            "SELECT id, kind, body FROM hub_queue WHERE kind IN ('report', 'game') AND state = 'new' AND day >= ?1 ORDER BY id",
         )?;
         let rows = statement.query_map([since], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
-                serde_json::from_str(&r.get::<_, String>(1)?).unwrap_or_default(),
+                r.get::<_, String>(1)?,
+                serde_json::from_str(&r.get::<_, String>(2)?).unwrap_or_default(),
             ))
         })?;
         rows.collect()
@@ -168,7 +171,7 @@ impl Store {
     /// go.
     pub fn expire_queue(&mut self, oldest_day: u32, retry_from: u32) -> rusqlite::Result<usize> {
         self.db.execute(
-            "UPDATE hub_queue SET state = 'failed' WHERE kind = 'report' AND state = 'new' AND day < ?1",
+            "UPDATE hub_queue SET state = 'failed' WHERE kind IN ('report', 'game') AND state = 'new' AND day < ?1",
             [retry_from],
         )?;
         self.db
@@ -192,12 +195,12 @@ impl App {
         let Some(filer) = &self.filer else { return };
         let since = (self.today)().saturating_sub(RETRY_DAYS);
         let pending = self.store().unfiled(since).unwrap_or_default();
-        for (id, fields) in pending {
+        for (id, kind, fields) in pending {
             // A report a request is filing right now is its own.
             if !self.store().claim(id).unwrap_or(false) {
                 continue;
             }
-            match filer(&github::issue(&fields)) {
+            match filer(&issue_for(&kind, &fields)) {
                 Ok(url) => self.mark_filed(id, &url),
                 Err(e) => {
                     eprintln!("horizon-telemetry-server: report {id} still not opened: {e}");
@@ -226,22 +229,44 @@ impl App {
     }
 }
 
+/// The issue for a queued report of `kind`: the game's template or the website's.
+fn issue_for(kind: &str, fields: &Map<String, Value>) -> github::Issue {
+    if kind == game_report::KIND {
+        game_report::issue(fields)
+    } else {
+        github::issue(fields)
+    }
+}
+
 /// What `receive` keeps: the entry's id, its issue if already opened, its fields.
 type Received = (i64, Option<String>, Map<String, Value>);
 
-/// Checks a report and queues it.
-async fn receive(
-    app: &Arc<App>,
-    req: Request,
-    kind: &str,
-    rules: &[Field],
+/// How a kind of report is taken: its queue kind, its fields' check, its daily cap and largest body.
+struct Intake {
+    kind: &'static str,
+    check: fn(&Value) -> Result<Map<String, Value>, String>,
     per_day: u32,
-) -> Result<Received, Box<Response>> {
+    max_body: usize,
+}
+
+/// The website's form: the `#horizon-bugs` template's fields.
+fn website_fields(body: &Value) -> Result<Map<String, Value>, String> {
+    fields(body, REPORT)
+}
+
+/// Checks a report and queues it.
+async fn receive(app: &Arc<App>, req: Request, intake: &Intake) -> Result<Received, Box<Response>> {
+    let Intake {
+        kind,
+        check,
+        per_day,
+        max_body,
+    } = *intake;
     let no = |code: StatusCode, message: &str| Box::new(refuse(app, code, message));
     if !app.allow_post(&req) {
         return Err(no(StatusCode::TOO_MANY_REQUESTS, "too many requests"));
     }
-    let body = json_body(req)
+    let body = json_body(req, max_body)
         .await
         .map_err(|e| no(StatusCode::BAD_REQUEST, e))?;
     // The form's hidden field, which people leave empty and form-filling bots don't: thanked, dropped.
@@ -249,7 +274,7 @@ async fn receive(
         let thanks = answer(app, StatusCode::ACCEPTED, json!({ "id": 0 }));
         return Err(Box::new(thanks));
     }
-    let entry = fields(&body, rules).map_err(|e| no(StatusCode::BAD_REQUEST, &e))?;
+    let entry = check(&body).map_err(|e| no(StatusCode::BAD_REQUEST, &e))?;
     let today = (app.today)();
     // The day's count and the queueing, on the blocking pool (crate::blocking), under one lock.
     let (kind_owned, queued) = (kind.to_owned(), entry.clone());
@@ -279,6 +304,29 @@ async fn receive(
 /// `{"id", "issue"}` once the issue is open, 202 `{"id", "issue": null}` when GitHub failed and the upkeep
 /// will try again; 503 when reports are off (no GitHub token).
 pub async fn report(State(app): State<Arc<App>>, req: Request) -> Response {
+    let intake = Intake {
+        kind: "report",
+        check: website_fields,
+        per_day: app.config.hub_reports_per_day,
+        max_body: crate::hub::MAX_BODY,
+    };
+    open(app, req, intake).await
+}
+
+/// `POST /v1/report`: a report from the game, its fields as `game_report::check` reads them
+/// (docs/telemetry.md "Bug reports from the game"). Answers as `POST /hub/report` does.
+pub async fn game(State(app): State<Arc<App>>, req: Request) -> Response {
+    let intake = Intake {
+        kind: game_report::KIND,
+        check: game_report::check,
+        per_day: app.config.game_reports_per_day,
+        max_body: game_report::MAX_BODY,
+    };
+    open(app, req, intake).await
+}
+
+/// Takes a report and opens its issue (both routes).
+async fn open(app: Arc<App>, req: Request, intake: Intake) -> Response {
     let Some(filer) = app.filer.clone() else {
         return refuse(
             &app,
@@ -286,8 +334,7 @@ pub async fn report(State(app): State<Arc<App>>, req: Request) -> Response {
             "reports are closed here: use GitHub or Discord",
         );
     };
-    let per_day = app.config.hub_reports_per_day;
-    let (id, issue, fields) = match receive(&app, req, "report", REPORT, per_day).await {
+    let (id, issue, fields) = match receive(&app, req, &intake).await {
         Ok(received) => received,
         Err(response) => return *response,
     };
@@ -310,7 +357,8 @@ pub async fn report(State(app): State<Arc<App>>, req: Request) -> Response {
             json!({ "id": id, "issue": null }),
         );
     }
-    let opened = tokio::task::spawn_blocking(move || filer(&github::issue(&fields)))
+    let kind = intake.kind;
+    let opened = tokio::task::spawn_blocking(move || filer(&issue_for(kind, &fields)))
         .await
         .map_err(|e| e.to_string())
         .and_then(|opened| opened);

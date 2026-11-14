@@ -165,6 +165,8 @@ fn install(mods: Arc<[ModEntry]>) {
     });
     let subscribers =
         horizon_mod_runtime::subscribers::Subscribers::new(HOOK_COUNT, mods.len(), subscriptions);
+    // A fresh installation starts poison-free, as the real runtime's does per session.
+    runtime::POISONED.with(|poisoned| poisoned.borrow_mut().clear());
     // Test dispatch needs the same static lifetime as the real installation.
     MODS.set(Some(Box::leak(Box::new(Installed { mods, subscribers }))));
 }
@@ -200,21 +202,6 @@ fn listening(hook_id: HookId) -> impl Iterator<Item = (bool, &'static ModEntry)>
                 )
             })
     })
-}
-mod runtime {
-    pub(super) struct ListenerScope;
-    impl ListenerScope {
-        pub(super) fn new() -> Self {
-            Self
-        }
-        pub(super) fn enter(
-            &mut self,
-            entry: &'static super::ModEntry,
-            hook: &'static str,
-        ) -> &'static dyn super::Hooks {
-            super::enter_listener(entry, hook).1
-        }
-    }
 }
 fn enter_listener(entry: &'static ModEntry, hook: &'static str) -> ((), &'static dyn Hooks) {
     let index = MODS
@@ -403,6 +390,12 @@ impl MenuPart for Mod {
         &[]
     }
     fn menu_slot_rules(&self, _: &dyn Host, event: &mut MenuSlotRulesEvent<'_>) {
+        // The context arrives as the game passed it: who, where and the other slots.
+        let context = event.context;
+        assert_eq!((context.player, context.pos), (Some(7), Some([1, 2, 3])));
+        assert_eq!(event.container, MenuContainer::Grid);
+        assert_eq!(context.slots.len(), 2);
+        assert!(context.slots[1][0].is_none() && context.slots[1][1].is_some());
         event.may_place = false;
         event.max_stack = self.id;
     }
