@@ -37,14 +37,20 @@ pub struct StackedOnOther<'a> {
     pub cancellation_result: bool,
 }
 /// Who and where a `menu_slot_rules` ask is about: the player whose menu it is, the menu's
-/// block, and the menu's own container slots as they stand when the click plans (read only;
-/// the player's inventory slots are not in it). None where the menu has no such thing: a
-/// client's prediction knows no other player, and a menu opened with no block has no `pos`.
+/// block, the container the asked slot indexes, and the menu's own containers' slots as they
+/// stand when the click plans (read only, borrowed; the player's inventory slots are not in
+/// it). None where the menu has no such thing: a client's prediction knows no other player,
+/// and a menu opened with no block has no `pos`. `snapshot` is the click plan's one copy for
+/// the parts (see [`super::SlotSnapshot`]); a context without one copies per ask.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SlotContext<'a> {
     pub player: Option<u128>,
     pub pos: Option<[i32; 3]>,
+    pub container: mod_api::MenuContainer,
     pub slots: &'a [Option<ItemStack>],
+    pub grid: &'a [Option<ItemStack>],
+    pub result: &'a [Option<ItemStack>],
+    pub snapshot: Option<&'a super::SlotSnapshot>,
 }
 
 /// `menu_slot_rules` inside a menu click, which cannot reach the game: the game lends the menu

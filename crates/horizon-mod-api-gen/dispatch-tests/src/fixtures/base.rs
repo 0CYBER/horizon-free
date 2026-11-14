@@ -263,11 +263,12 @@ fn slot_rules_mutate_and_item_tick_can_cancel() {
         calls::MenuSlotRulesCall {
             menu: "test:menu",
             slot: 0,
+            container: MenuContainer::Grid,
             stack: &ItemStack::default(),
             context: &MenuSlotContext {
                 player: Some(7),
                 pos: Some([1, 2, 3]),
-                slots: vec![None, Some(ItemStack::default())],
+                slots: vec![vec![None], vec![None, Some(ItemStack::default())]],
             },
             may_place: &mut may_place,
             max_stack: &mut max_stack,

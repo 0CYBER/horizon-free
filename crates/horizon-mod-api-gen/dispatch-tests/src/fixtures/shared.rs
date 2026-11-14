@@ -406,8 +406,9 @@ impl MenuPart for Mod {
         // The context arrives as the game passed it: who, where and the other slots.
         let context = event.context;
         assert_eq!((context.player, context.pos), (Some(7), Some([1, 2, 3])));
+        assert_eq!(event.container, MenuContainer::Grid);
         assert_eq!(context.slots.len(), 2);
-        assert!(context.slots[0].is_none() && context.slots[1].is_some());
+        assert!(context.slots[1][0].is_none() && context.slots[1][1].is_some());
         event.may_place = false;
         event.max_stack = self.id;
     }

@@ -48,21 +48,31 @@ Named injections for `menu_slot_rules` request `hook_version = 4`.
 A rule that depends on more than the stack reads `event.context`, a `MenuSlotContext` the game
 fills the same way on the server and on the client's prediction. `context.player` is the UUID of
 the player whose menu it is, `context.pos` the block entity the menu belongs to
-(`ContainerLevelAccess`), and `context.slots` a read-only copy of the menu's own container slots
-as they stand while the click plans, indexed as `event.slot` is, without the player's inventory.
-A machine whose upgrade slot takes one card per kind, a cable bus that asks its block entity what
-a part slot holds, or a slot only the block's owner fills answers from these:
+(`ContainerLevelAccess`), and `context.slots` a read-only copy of the menu's own containers'
+slots as they stand while the click plans, without the player's inventory. The containers are
+keyed by `MenuContainer`: `Main` for the menu's own slots, and for a mod menu type with a crafting
+grid `Grid` (the grid's slots, row by row) and `Result` (its crafted result, slot 0).
+`event.container` names the container the asked slot is in, and `event.slot` indexes inside it;
+`context.slot(container, index)` reads any of them. A machine whose upgrade slot takes one card
+per kind, a cable bus that asks its block entity what a part slot holds, a grid slot that looks at
+the result, or a slot only the block's owner fills answers from these:
 
 ```rust,ignore
+use mod_api::MenuContainer;
+
 fn menu_slot_rules(&self, host: &dyn mod_api::Host, event: &mut mod_api::MenuSlotRulesEvent<'_>) {
     let context = event.context;
-    // Upgrade slots 4..8 take one card of each kind.
-    if (4..8).contains(&event.slot) {
+    // Upgrade slots 4..8 of the main container take one card of each kind.
+    if event.container == MenuContainer::Main && (4..8).contains(&event.slot) {
         let item = event.stack.item();
-        event.may_place &= !context.slots[4..8]
-            .iter()
-            .enumerate()
-            .any(|(i, s)| i + 4 != event.slot && s.as_ref().is_some_and(|s| s.item() == item));
+        event.may_place &= !(4..8).any(|i| {
+            i != event.slot
+                && context.slot(MenuContainer::Main, i).is_some_and(|s| s.item() == item)
+        });
+    }
+    // A crafting grid takes no more while a result waits to be taken.
+    if event.container == MenuContainer::Grid {
+        event.may_place &= context.slot(MenuContainer::Result, 0).is_none();
     }
     // `context.pos` names the block entity to read through `host`.
     let _ = (host, context.pos, context.player);
@@ -71,8 +81,9 @@ fn menu_slot_rules(&self, host: &dyn mod_api::Host, event: &mut mod_api::MenuSlo
 
 `player` is None where no player is known and `pos` None for a menu that is not a block's (one
 opened with no block by `player_open_mod_menu`, a vehicle's); a slot that cannot cross to the API
-shows empty in `slots`. The context is only built for a menu type a part answers: vanilla menus and
-types with no listening part never pay for it.
+shows empty, and `slot` reads nothing for `MenuContainer::Player` or past a container's end. The
+context is built once per click plan, and only for a menu type a part answers: vanilla menus and
+types with no listening part never pay for it, and the asks of one click share one copy.
 
 ## Keeping a block menu open
 

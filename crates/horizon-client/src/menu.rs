@@ -23,6 +23,8 @@ pub use models::{
     AnvilCraft, AnvilUpdate, AnvilVanilla, CarriedAccess, GrindstonePlace, GrindstoneTake,
     SlotContext, SlotRules, SlotView, StackedOnOther,
 };
+mod slot_context;
+pub use slot_context::{SlotSnapshot, lan_container};
 use std::sync::Arc;
 
 mod bundle;
@@ -864,6 +866,7 @@ impl Menu {
                     _ => None,
                 },
                 block_pos: None,
+                slot_snapshot: SlotSnapshot::default(),
                 slots,
                 containers,
                 grid_size,
@@ -1812,21 +1815,11 @@ impl Menu {
             id,
             self.state.slots[s].index,
             stack,
-            self.slot_context(env),
+            self.slot_context(env, s),
             own,
             max,
             Self::max_stack(env, stack),
         )
-    }
-
-    /// Who and where this menu's `menu_slot_rules` asks are about: the env's player, the
-    /// menu's block (`set_block_pos`) and its own container slots.
-    fn slot_context<'s>(&'s self, env: &Env) -> SlotContext<'s> {
-        SlotContext {
-            player: env.player,
-            pos: self.state.block_pos,
-            slots: &self.state.containers[MAIN],
-        }
     }
 
     /// Capacity overrides for the backing container slots, refreshed before each server edit.
@@ -2565,7 +2558,7 @@ impl Menu {
                         id,
                         self.state.slots[dest].index,
                         stack,
-                        self.slot_context(env),
+                        self.slot_context(env, dest),
                         self.state.slots[dest].role != Role::ModResult,
                         CONTAINER_MAX,
                         Self::max_stack(env, stack),

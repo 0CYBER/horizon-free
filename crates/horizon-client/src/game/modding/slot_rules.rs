@@ -26,12 +26,29 @@ impl SlotRules for Game<'_> {
         let Ok(stack) = stack.try_into_api() else {
             return;
         };
-        // The menu's other slots, read only; one that cannot cross shows empty.
-        let slots: Vec<Option<mod_api::ItemStack>> = context
-            .slots
-            .iter()
-            .map(|slot| slot.as_ref().and_then(|stack| stack.try_into_api().ok()))
-            .collect();
+        // The menu's own containers, read only, keyed by `MenuContainer`; a stack that cannot
+        // cross shows empty. Built once per click plan (the context's snapshot), and only here,
+        // where a part listens.
+        let build = || {
+            let copy = |slots: &[Option<ItemStack>]| -> Vec<Option<mod_api::ItemStack>> {
+                slots
+                    .iter()
+                    .map(|slot| slot.as_ref().and_then(|stack| stack.try_into_api().ok()))
+                    .collect()
+            };
+            let slots = vec![copy(context.slots), copy(context.grid), copy(context.result)];
+            mod_api::MenuSlotContext::new(context.player, context.pos, slots)
+        };
+        // A plan's copy made for another player or block (an env changed without a mutation)
+        // is not theirs: that ask copies its own.
+        let owned;
+        let snapshot = match context.snapshot.map(|cell| cell.get_or_init(&build)) {
+            Some(shared) if (shared.player, shared.pos) == (context.player, context.pos) => shared,
+            _ => {
+                owned = build();
+                &owned
+            }
+        };
         // A listener that panics is a failed ask, not a failed click: the slot's own answers
         // stand (the dispatch writes nothing back from a failed pass), the failure is logged by
         // name, and the click goes on. The next ask, and the next click, are asked as ever.
@@ -40,8 +57,9 @@ impl SlotRules for Game<'_> {
             self.native_menu_slot_rules(mod_api::__private::MenuSlotRulesCall {
                 menu,
                 slot,
+                container: context.container,
                 stack: &stack,
-                context: &mod_api::MenuSlotContext::new(context.player, context.pos, slots),
+                context: snapshot,
                 may_place: &mut place,
                 max_stack: &mut maximum,
             });

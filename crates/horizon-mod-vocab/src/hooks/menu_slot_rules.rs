@@ -13,10 +13,13 @@ pub trait Hooks {
     /// when it validates or applies. Answer from the stack and the host alone,
     /// and fast. On a LAN host's own click the LAN host is not reachable
     /// through the `Host` (it answers as if no LAN were open).
+    /// `container` is the container `slot` indexes ([`MenuContainer`]): a mod
+    /// crafting grid's slots are `Grid`'s and its result `Result`'s slot 0.
     /// `context` says who and where the ask is about ([`MenuSlotContext`]):
     /// the player whose menu it is, the menu's block entity and a read-only
-    /// copy of the menu's own container slots, filled the same on the server
-    /// and on the client's prediction. Parts that read `context.setting(..)` or `side()` have no
+    /// copy of the menu's own containers' slots, keyed by the same container
+    /// (`context.slot(container, index)`), built once per click plan and
+    /// filled the same on the server and on the client's prediction. Parts that read `context.setting(..)` or `side()` have no
     /// counterpart on the Host. Named injections request `hook_version = 4`.
     #[hook(
         side = "both",
@@ -31,6 +34,7 @@ pub trait Hooks {
     fn menu_slot_rules(
         menu: &str,
         slot: usize,
+        container: MenuContainer,
         stack: &ItemStack,
         context: &MenuSlotContext,
         may_place: &mut bool,

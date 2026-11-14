@@ -78,6 +78,7 @@ impl Menu {
 
     pub(super) fn touch(&mut self) {
         self.stamp.advance();
+        self.state.slot_snapshot.clear();
     }
 
     /// Commit a staged edit into this same menu; do not install the private
@@ -99,6 +100,8 @@ pub struct State {
     pub(super) registry_id: Option<Box<str>>,
     /// The block whose menu this is, for `menu_slot_rules`; None with no block.
     pub(super) block_pos: Option<[i32; 3]>,
+    /// The parts' copy of the slots for this click plan; emptied by every mutation.
+    pub(super) slot_snapshot: super::SlotSnapshot,
     pub(super) slots: Vec<Slot>,
     pub(super) containers: [Vec<Option<ItemStack>>; 4],
     pub(super) grid_size: usize,
