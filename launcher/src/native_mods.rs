@@ -961,6 +961,12 @@ pub enum Step {
     BackedUp(String),
     /// The mods compile against the prebuilt game.
     PrebuiltMods,
+    /// One mod's own library starts compiling: which, and how far through the mods.
+    Mod {
+        id: String,
+        done: usize,
+        total: usize,
+    },
     Install,
     /// This mod was left out of the build.
     LeftOut(LeftOut),
@@ -1025,6 +1031,10 @@ impl Step {
                 total.filter(|t| *t > 0).map(|t| *done as f32 / t as f32),
             ),
             Self::PrebuiltMods => (Stage::Compile, None),
+            Self::Mod { done, total, .. } => (
+                Stage::Compile,
+                (*total > 0).then(|| done.saturating_sub(1) as f32 / *total as f32),
+            ),
             Self::Install => (Stage::Install, None),
             Self::Done { .. } => (Stage::Install, Some(1.)),
         };
@@ -1062,6 +1072,14 @@ impl Step {
                 count => trf("Checking {count} mods", &[("count", &count.to_string())]),
             },
             Self::PrebuiltMods => tr("Compiling the mods against the prebuilt game").into(),
+            Self::Mod { id, done, total } => trf(
+                "Compiling {mod} ({done} of {total})",
+                &[
+                    ("mod", id),
+                    ("done", &done.to_string()),
+                    ("total", &total.to_string()),
+                ],
+            ),
             Self::Plan(plan, profile) => format!("{} ({})", plan.label(), profile.name()),
             Self::Compile {
                 done,
@@ -2162,6 +2180,13 @@ fn pipeline(
             &declared,
             &resolution,
             options.registry_consent,
+            &|id, done, total| {
+                progress(Step::Mod {
+                    id: id.to_owned(),
+                    done,
+                    total,
+                })
+            },
         )
         .map_err(blame)?;
         // The whole step; the tool's own build and the function replacement have their lines.

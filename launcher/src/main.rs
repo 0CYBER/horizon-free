@@ -304,9 +304,19 @@ struct Launcher {
     native_step: Option<String>,
     /// Where the build under way is, for the card's stages and bar.
     native_progress: Option<native_mods::Progress>,
+    /// The mod the build compiles now and how far through the mods ("fast-ore · 2 of 3").
+    native_mod_step: Option<String>,
+    /// The first build's one-time download (the compiler), in bytes; `None` once it is there.
+    first_build: Option<u64>,
+    /// Play was pressed while the instance's native mods needed a build (Build and play): the
+    /// game starts once the build worked.
+    play_after_build: bool,
     /// How the last native build ended ("Built (balanced, incremental)", or "Up to date").
     native_done: Option<String>,
     native_error: Option<String>,
+    /// The mods that stopped the last build (`native_mods::Failed::Mods`): their rows say Failed,
+    /// the others keep their own state.
+    native_failed_mods: Vec<String>,
     /// Mods the last build would have switched off that worlds were saved with: the choice
     /// between staying and backing those worlds up first, shown with `native_error`.
     native_worlds: Option<native_mods::AtStake>,

@@ -629,6 +629,8 @@ pub(super) fn compile(
     declared: &[Vec<dependencies::Dependency>],
     resolution: &dependencies::Resolution,
     consent: Option<&dyn Fn(&super::RegistryInventory) -> bool>,
+    // Each mod is its own library: told which one starts, and how far through them.
+    on_mod: &dyn Fn(&str, usize, usize),
 ) -> Result<(PathBuf, Vec<PathBuf>), String> {
     let mut names = std::collections::HashSet::new();
     names.insert(dylib_name("horizon_patch").to_ascii_lowercase());
@@ -660,6 +662,7 @@ pub(super) fn compile(
             projects,
             declared,
             resolution,
+            on_mod,
         );
         // Stamped after the route has made its folder again, failed or not.
         if out.exists() {
@@ -714,9 +717,10 @@ pub(super) fn compile(
     libraries.insert("mod_vocab", library(&deps, "mod_vocab")?);
     let mut rlibs: std::collections::HashMap<&str, PathBuf> = std::collections::HashMap::new();
     let mut crate_names: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
-    for &index in &resolution.order {
+    for (n, &index) in resolution.order.iter().enumerate() {
         let project = &projects[index];
         let id = project.bundle.manifest.id.as_str();
+        on_mod(id, n + 1, resolution.order.len());
         let api_dependencies = project.api_dependencies();
         if internals::needed(&project.bundle.manifest)
             || api_dependencies

@@ -283,6 +283,7 @@ impl Launcher {
 
     /// Cancel and Escape share the transition; neither can execute a pending action.
     pub(crate) fn cancel_native_consent(&mut self) {
+        self.play_after_build = false;
         if let Err(error) = native_consent::resolve(
             &mut self.pending_consent,
             false,

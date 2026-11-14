@@ -111,9 +111,11 @@ pub(super) struct Mods {
     /// The project the glass detail card showed last.
     pub(super) shown: Option<Project>,
     /// An install awaiting explicit native-code consent, before any download.
-    /// The selected instance's native build state, and the `native_status::fingerprint` it was
-    /// read for: read again only when that changes.
-    pub(super) native_state: std::cell::RefCell<Option<(String, native_status::State)>>,
+    /// The selected instance's native build state, the mods it would build again
+    /// (`native_status::unbuilt`), and the `native_status::fingerprint` they were read for: read
+    /// again only when that changes.
+    pub(super) native_state:
+        std::cell::RefCell<Option<(String, native_status::State, Vec<String>)>>,
     /// Native routes read by a worker for this instance's files, consent and game version.
     pub(super) native_routes: std::cell::RefCell<Option<crate::build_mode::RouteMemo>>,
     /// What updating the native mods to a newer installed game would do, read in the background.

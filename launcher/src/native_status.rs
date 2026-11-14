@@ -58,6 +58,20 @@ pub fn state(enabled: &[Mod], built: Option<&[Mod]>) -> State {
     }
 }
 
+/// The mods turned on that the played build doesn't have as they are now: each one's own "Needs
+/// build" on the Mods tab, so changing one mod never marks the others. Every one when the
+/// version played is no native build.
+pub fn unbuilt(enabled: &[Mod], built: Option<&[Mod]>) -> Vec<String> {
+    let same = |a: &Mod, b: &Mod| {
+        a.0 == b.0 && a.1 == b.1 && (a.2.is_none() || b.2.is_none() || a.2 == b.2)
+    };
+    enabled
+        .iter()
+        .filter(|m| !built.is_some_and(|built| built.iter().any(|b| same(m, b))))
+        .map(|m| m.0.clone())
+        .collect()
+}
+
 /// What a native build was made from, as the Mods page and the instance list show it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Build {
@@ -349,6 +363,31 @@ fn stem(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_changed_mod_needs_a_build() {
+        let m = |id: &str, v: &str, d: Option<&str>| (id.into(), v.into(), d.map(Into::into));
+        let built = [m("ores", "1.0", Some("a")), m("maps", "2.0", Some("b"))];
+        // `maps` updated, `ores` untouched, `tools` new: only the changed and new ones build.
+        let enabled = [
+            m("ores", "1.0", Some("a")),
+            m("maps", "2.1", Some("c")),
+            m("tools", "1.0", None),
+        ];
+        assert_eq!(unbuilt(&enabled, Some(&built)), ["maps", "tools"]);
+        // Same version, other files (a reinstalled local `.hmod`): that one builds again.
+        assert_eq!(
+            unbuilt(&[m("ores", "1.0", Some("z"))], Some(&built)),
+            ["ores"]
+        );
+        // An old record without digests still counts as built.
+        assert!(unbuilt(
+            &[m("ores", "1.0", Some("a"))],
+            Some(&[m("ores", "1.0", None)])
+        )
+        .is_empty());
+        assert_eq!(unbuilt(&enabled[..1], None), ["ores"]);
+    }
+
     use super::*;
 
     fn m(id: &str, version: &str) -> Mod {

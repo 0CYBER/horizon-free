@@ -228,14 +228,21 @@ impl Launcher {
                 Msg::NativeRegistryConsent(inventory, reply) => {
                     native_registry_consent::show(window, inventory, reply, cx)
                 }
-                Msg::NativeProgress(step, progress) => {
+                Msg::NativeProgress(step, progress, module) => {
                     self.native_step = Some(step);
+                    if module.is_some() {
+                        self.native_mod_step = module;
+                    }
                     self.native_progress = Some(progress);
                 }
                 Msg::Native(result) => {
                     // The last step of a build that worked says how it went.
                     let last = self.native_step.take();
                     self.native_progress = None;
+                    self.native_mod_step = None;
+                    self.first_build = None;
+                    // Build and play: the game starts once the build worked.
+                    let play_now = std::mem::take(&mut self.play_after_build) && result.is_ok();
                     let cancelled = matches!(&result, Err(native_mods::Failed::Other(error)) if error == native_mods::CANCELLED);
                     self.native_done = match (&result, cancelled) {
                         (Ok(_), _) => last,
@@ -253,7 +260,13 @@ impl Launcher {
                         if let native_mods::Failed::Worlds(stake) = &e {
                             self.keep_stop(stake);
                         }
+                        if let native_mods::Failed::Mods { left, .. } = &e {
+                            self.native_failed_mods = left.iter().map(|l| l.id.clone()).collect();
+                        }
                         self.native_error = Some(String::from(e));
+                    }
+                    if play_now {
+                        self.play();
                     }
                 }
                 Msg::LauncherProgress(p) => {

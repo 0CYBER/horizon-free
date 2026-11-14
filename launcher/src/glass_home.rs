@@ -378,16 +378,56 @@ impl Launcher {
                 let running = self.installing.as_ref().filter(|(t, _)| t == v);
                 running.map(|(_, p)| Some(*p)).or(queued.then_some(None))
             });
-        let busy = match (installing, self.preparing, &self.starting_client) {
-            (Some(p), _, _) => Some((tr("Updating"), Some(p))),
-            (_, _, _) if own.is_some() => Some((tr("Installing"), own.flatten())),
-            (_, true, _) => Some((
-                tr("Preparing"),
-                horizon_launcher::mojang::progress().map(|(d, n)| d as f32 / n.max(1) as f32),
-            )),
-            (_, _, Some(_)) => Some((tr("Starting"), None)),
-            _ => None,
-        };
+        let mine = self
+            .selected_instance()
+            .is_some_and(|i| self.native_for.as_deref() == Some(i.id.as_str()));
+        let building = mine && self.native_step.is_some();
+        // Native mods that changed since the last build: Play builds them first, one button.
+        let needs_build = !building
+            && self
+                .selected_instance()
+                .filter(|i| i.java.is_none())
+                .is_some_and(|i| {
+                    matches!(
+                        self.native_state_of(i),
+                        native_status::State::NotBuilt | native_status::State::Outdated
+                    )
+                });
+        let busy: Option<(SharedString, Option<f32>)> =
+            match (installing, self.preparing, &self.starting_client) {
+                (Some(p), _, _) => Some((tr("Updating").into(), Some(p))),
+                (_, _, _) if own.is_some() => Some((tr("Installing").into(), own.flatten())),
+                (_, true, _) => Some((
+                    tr("Preparing").into(),
+                    horizon_launcher::mojang::progress().map(|(d, n)| d as f32 / n.max(1) as f32),
+                )),
+                (_, _, Some(_)) => Some((tr("Starting").into(), None)),
+                // This instance's mods building (Build and play): the mod it compiles, and the
+                // build's own progress.
+                _ if building => Some((
+                    self.native_mod_step
+                        .clone()
+                        .unwrap_or_else(|| tr("Building mods").into())
+                        .into(),
+                    self.native_progress.as_ref().and_then(|p| p.fraction),
+                )),
+                // One build at a time: another instance's build first, and this one says whose.
+                _ if needs_build && self.native_step.is_some() => Some((
+                    trf(
+                        "Waiting for {instance}",
+                        &[(
+                            "instance",
+                            self.native_for
+                                .as_deref()
+                                .and_then(|id| self.instances.list.iter().find(|i| i.id == id))
+                                .map_or("", |i| i.name.as_str()),
+                        )],
+                    )
+                    .into(),
+                    None,
+                )),
+                _ => None,
+            };
         let open = self.home_menu == HomeMenu::Play;
         // What is drawn on the accent takes its own ink (white on the default violet), in the
         // light look too, where `white` is the page's dark ink; Stop sits on a quiet fill.
@@ -423,6 +463,31 @@ impl Launcher {
                 }
                 cx.notify();
             }));
+        // A build under way is cancelled from the button it was started from.
+        let more = if building {
+            div()
+                .id("play-cancel")
+                .occlude()
+                .absolute()
+                .right(px(8.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(40.))
+                .rounded(px(radius::CONTROL))
+                .cursor_pointer()
+                .hover(|s| s.bg(gpui::black().opacity(0.2)))
+                .child(ui::icon("stop", 18., glyph))
+                .tooltip(ui::tip(tr("Cancel the build")))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.play_after_build = false;
+                    native_mods::cancel();
+                    cx.notify();
+                }))
+        } else {
+            more
+        };
         let base = div()
             .relative()
             .flex()
@@ -511,8 +576,11 @@ impl Launcher {
                     self.owner
                 };
                 let press = play_press(ready, owner, false);
+                let build_first =
+                    needs_build && update.is_none() && matches!(press, PlayPress::Play);
                 let (label, icon) = match &update {
                     Some(_) => (tr("Update"), "download-04"),
+                    None if build_first => (tr("Build and play"), "hammer"),
                     None => (tr(play_label(press, owner)), "play"),
                 };
                 let main = crate::track_hover(
@@ -520,6 +588,17 @@ impl Launcher {
                     SharedString::from("play"),
                 );
                 let main = match (&update, press) {
+                    (None, PlayPress::Play) if build_first => {
+                        main.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.play_after_build = true;
+                            if this.settings.native_mods_allowed_at.is_some() {
+                                this.build_native();
+                            } else {
+                                this.request_native_build_consent();
+                            }
+                            cx.notify();
+                        }))
+                    }
                     (Some(next), _) if stable => {
                         let next = next.clone();
                         main.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -614,7 +693,7 @@ impl Launcher {
             });
         let mut wrap = div().relative().child(keyboard(group, &t).child(more));
         if open {
-            let locked = running || busy.is_some();
+            let locked = running || !busy_none;
             let mut items: Vec<(&'static str, SharedString, String, bool, PlayItem)> = Vec::new();
             if !tag.is_empty() {
                 let version = backend::game_version(tag);

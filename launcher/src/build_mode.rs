@@ -283,18 +283,36 @@ impl Launcher {
         );
         let mut memo = self.mods.native_state.borrow_mut();
         match memo.as_ref() {
-            Some((k, state)) if *k == key => *state,
+            Some((k, state, _)) if *k == key => *state,
             _ => {
                 let built = version.as_deref().and_then(native_status::built);
+                let enabled = native_status::enabled(&home);
                 let state = native_status::in_mode(
-                    native_status::state(&native_status::enabled(&home), built.as_deref()),
+                    native_status::state(&enabled, built.as_deref()),
                     version.as_deref().and_then(native_status::built_profile),
                     profile,
                 );
-                *memo = Some((key, state));
+                // A build in another mode rebuilds every mod; otherwise only the changed ones.
+                let unbuilt = match state {
+                    native_status::State::NotBuilt => enabled.into_iter().map(|m| m.0).collect(),
+                    _ => native_status::unbuilt(&enabled, built.as_deref()),
+                };
+                *memo = Some((key, state, unbuilt));
                 state
             }
         }
+    }
+
+    /// Whether native mod `id` of the selected instance waits for a build ([`Self::native_state_of`]).
+    pub(super) fn native_mod_unbuilt(&self, id: &str) -> bool {
+        if let Some(instance) = self.selected_instance() {
+            self.native_state_of(instance);
+        }
+        self.mods
+            .native_state
+            .borrow()
+            .as_ref()
+            .is_some_and(|(_, _, unbuilt)| unbuilt.iter().any(|u| u == id))
     }
 
     /// A bordered panel, as the build card and its warning sit on the page.
@@ -562,7 +580,18 @@ impl Launcher {
                     .child(icons),
             )
             .child(bar)
+            .children(self.native_mod_step.clone().map(|module| {
+                text_in(14., pal.ink)
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(module)
+            }))
             .child(text_in(13., pal.muted).truncate().child(step.to_owned()))
+            .children(self.first_build.map(|bytes| {
+                text_in(13., pal.muted).child(trf(
+                    "First time only: Horizon downloads its mod tools and a compiler ({size}). Later builds take seconds.",
+                    &[("size", &storage::format_bytes(bytes))],
+                ))
+            }))
     }
 
     /// Each turned-on native mod's route; filesystem and release reads never run while drawing.
