@@ -662,10 +662,18 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
         let sample = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return pipeline_texture(input.uv) * input.color; }";
         let shader = compose_with(sample, true).unwrap();
         assert!(shader.contains("@group(1) @binding(0) var horizon_pipeline_texture"));
-        assert!(compose(sample).unwrap_err().contains("RenderPipeline::textured"));
+        assert!(
+            compose(sample)
+                .unwrap_err()
+                .contains("RenderPipeline::textured")
+        );
         let own = "@group(1) @binding(3) var<uniform> mine: f32;
 fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return pipeline_texture(input.uv) * mine; }";
-        assert!(compose_with(own, true).unwrap_err().contains("declares a binding"));
+        assert!(
+            compose_with(own, true)
+                .unwrap_err()
+                .contains("declares a binding")
+        );
         // Untextured pipelines compose as before: no group 1.
         assert!(!compose(GLOW).unwrap().contains("@group(1)"));
     }
@@ -677,20 +685,33 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return pipeline_textur
         use mod_api::PipelineTexture;
         let pipeline = |id: &str| {
             let name = Identifier::parse("test:glow").unwrap();
-            RenderPipeline::new(name.clone(), name, PipelineBlend::Additive, WorldDepth::Tested)
-                .textured(PipelineTexture::Sprite(Identifier::parse(id).unwrap()))
+            RenderPipeline::new(
+                name.clone(),
+                name,
+                PipelineBlend::Additive,
+                WorldDepth::Tested,
+            )
+            .textured(PipelineTexture::Sprite(Identifier::parse(id).unwrap()))
         };
         let shader = |_: &str| Ok(GLOW.to_owned());
         let built = |id| {
             Pipelines::build(&[pipeline(id)], 1, shader)
                 .map(|set| set.built()[0].as_ref().unwrap().texture.clone().unwrap())
         };
-        assert_eq!(built("minecraft:block/stone"), Ok(BuiltTexture::Sprite("block/stone".into())));
+        assert_eq!(
+            built("minecraft:block/stone"),
+            Ok(BuiltTexture::Sprite("block/stone".into()))
+        );
         assert_eq!(
             built("powah:block/energy_charge"),
             Ok(BuiltTexture::Sprite("powah:block/energy_charge".into()))
         );
-        assert_eq!(load_texture(&PipelineTexture::Sprite(Identifier::parse("test:textures/glow").unwrap())), Err(PipelineTextureError::NotASpriteKey));
+        assert_eq!(
+            load_texture(&PipelineTexture::Sprite(
+                Identifier::parse("test:textures/glow").unwrap()
+            )),
+            Err(PipelineTextureError::NotASpriteKey)
+        );
         assert_eq!(
             built("test:effect/glow.png"),
             Err("required render pipeline test:glow from mod  refused: its texture: NotASpriteKey: the id names a file, not a sprite key".into())
@@ -706,21 +727,37 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return pipeline_textur
         let at = |u: f32, v: f32| repeat_texel([u, v], rect, [64, 64]);
         assert_eq!(at(0.0, 0.0), [32, 16], "the near corner");
         assert_eq!(at(0.5, 0.5), [40, 24]);
-        assert_eq!(at(0.999_999, 0.999_999), [47, 31], "just inside the far edge");
+        assert_eq!(
+            at(0.999_999, 0.999_999),
+            [47, 31],
+            "just inside the far edge"
+        );
         assert_eq!(at(1.0, 1.0), [32, 16], "the far edge repeats to the start");
         assert_eq!(at(2.5, 3.0625), [40, 17], "repeated");
-        assert_eq!(at(-0.0625, -0.25), [47, 28], "negative wraps from the far side");
+        assert_eq!(
+            at(-0.0625, -0.25),
+            [47, 28],
+            "negative wraps from the far side"
+        );
         assert_eq!(at(-1.0, -2.0), [32, 16]);
         // So small a negative that its fraction rounds to 1.0 still stays inside.
         assert_eq!(at(-1.0e-9, -1.0e-9), [47, 31]);
         assert_eq!(at(-1000.5, 1000.75), [40, 28]);
         // The 2x1 atlas's right half: always its one texel.
         for u in [0.0, 0.25, 0.999, 1.0, -0.5, 7.75] {
-            assert_eq!(repeat_texel([u, u], [0.5, 0.0, 1.0, 1.0], [2, 1]), [1, 0], "{u}");
+            assert_eq!(
+                repeat_texel([u, u], [0.5, 0.0, 1.0, 1.0], [2, 1]),
+                [1, 0],
+                "{u}"
+            );
         }
         // The left half: never the right's.
         for u in [0.0, 0.999, -0.001, 3.5] {
-            assert_eq!(repeat_texel([u, 0.0], [0.0, 0.0, 0.5, 1.0], [2, 1]), [0, 0], "{u}");
+            assert_eq!(
+                repeat_texel([u, 0.0], [0.0, 0.0, 0.5, 1.0], [2, 1]),
+                [0, 0],
+                "{u}"
+            );
         }
     }
 }

@@ -1011,12 +1011,19 @@ mod tests {
             pipeline(0).textured(PipelineTexture::Sprite(id(0))),
             // The atlas's right half, green.
             pipeline(1).textured(PipelineTexture::Sprite(id(1))),
-            pipeline(2).textured(PipelineTexture::Sprite(Identifier::parse("test:none").unwrap())),
+            pipeline(2).textured(PipelineTexture::Sprite(
+                Identifier::parse("test:none").unwrap(),
+            )),
             pipeline(3),
         ];
         let red_green = vec![255, 0, 0, 255, 0, 255, 0, 255];
         let set = Pipelines::build(&registered, 7, |file| {
-            Ok(if file.ends_with("p3.wgsl") { PASS } else { sample }.to_owned())
+            Ok(if file.ends_with("p3.wgsl") {
+                PASS
+            } else {
+                sample
+            }
+            .to_owned())
         })
         .unwrap();
         let atlas = device.create_texture_with_data(
@@ -1050,14 +1057,29 @@ mod tests {
             atlas: &atlas,
             sprite: &sprite,
         };
-        primitives.pipelines.build(device, &set, Some(sources)).unwrap();
+        primitives
+            .pipelines
+            .build(device, &set, Some(sources))
+            .unwrap();
         assert_eq!(
             set.resolve(&id(2)),
             Err(mod_api::RenderPipelineError::Invalid),
             "a sprite the atlas lacks"
         );
-        assert!(primitives.pipelines.pipelines[0].as_ref().unwrap().1.is_some());
-        assert!(primitives.pipelines.pipelines[3].as_ref().unwrap().1.is_none());
+        assert!(
+            primitives.pipelines.pipelines[0]
+                .as_ref()
+                .unwrap()
+                .1
+                .is_some()
+        );
+        assert!(
+            primitives.pipelines.pipelines[3]
+                .as_ref()
+                .unwrap()
+                .1
+                .is_none()
+        );
         let mut vertices = Vec::new();
         for (row, slot) in [(0.0, 0), (16.0, 1), (32.0, 3)] {
             let mut quad = quad([0.0, row, 64.0, row + 16.0], 2.0, [255, 255, 255, 255]);
