@@ -1,7 +1,7 @@
 //! Hardware ray queries, only on request (#13780, after the #1180 spike): `HORIZON_RAY_TRACING=1`
 //! at startup asks the device for wgpu's `EXPERIMENTAL_RAY_QUERY` when the GPU has it. Nothing
-//! draws with it yet. Without the variable, and in a build without `horizon-extras` (a Horizon
-//! extra, docs/layers.md), the device is opened exactly as before.
+//! draws with it yet. Without the variable the device is opened exactly as before. Every build
+//! has it: it is a render capability for shader packs (spec #15624), not a Horizon extra.
 
 /// The terrain's acceleration structures (step 2).
 #[path = "ray_scene.rs"]
@@ -15,11 +15,22 @@ pub(in crate::gfx) fn on(device: &wgpu::Device) -> bool {
     device.features().contains(RAY_QUERY)
 }
 
-/// What buffers that BLAS builds read need on top of their own usage: nothing without ray
-/// queries, so the off path's buffers are main's.
+/// What buffers that BLAS builds read (the quad indices) need on top of their own usage:
+/// nothing without ray queries, so the off path's buffers are main's.
 pub(in crate::gfx) fn blas_input(device: &wgpu::Device) -> wgpu::BufferUsages {
     if on(device) {
         wgpu::BufferUsages::BLAS_INPUT
+    } else {
+        wgpu::BufferUsages::empty()
+    }
+}
+
+/// What the arena's vertex pages need on top of their own usage: the unpack pass reads every
+/// section with a BLAS from them (`ray_scene`). Nothing without ray queries, so the off path's
+/// pages are main's.
+pub(in crate::gfx) fn arena_input(device: &wgpu::Device) -> wgpu::BufferUsages {
+    if on(device) {
+        wgpu::BufferUsages::STORAGE
     } else {
         wgpu::BufferUsages::empty()
     }
@@ -47,10 +58,9 @@ fn requested() -> bool {
     asked(std::env::var("HORIZON_RAY_TRACING").ok().as_deref())
 }
 
-/// Whether `HORIZON_RAY_TRACING` set to `var` asks for ray tracing: only in a `horizon-extras`
-/// build.
+/// Whether `HORIZON_RAY_TRACING` set to `var` asks for ray tracing: only `1` does.
 fn asked(var: Option<&str>) -> bool {
-    cfg!(feature = "horizon-extras") && var == Some("1")
+    var == Some("1")
 }
 
 /// The features to request on `adapter`: ray queries, when asked for and offered.
@@ -98,8 +108,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_an_extras_build_asks_for_ray_tracing() {
-        assert_eq!(asked(Some("1")), cfg!(feature = "horizon-extras"));
+    fn only_one_asks_for_ray_tracing() {
+        assert!(asked(Some("1")));
         assert!(!asked(None));
         assert!(!asked(Some("0")));
     }

@@ -136,8 +136,8 @@ impl Arena {
         } else {
             wgpu::BufferUsages::VERTEX
         };
-        // BLAS builds read sections' vertices here (`ray_scene`).
-        let usage = usage | super::surface_setup::ray_query::blas_input(device);
+        // Ray tracing's unpack pass reads sections here (`ray_scene`).
+        let usage = usage | super::surface_setup::ray_query::arena_input(device);
         Self::with_usage(device, stride, capacity, usage, PAGE_BYTES)
     }
     /// Sorted translucent indices; `storage` when compute passes read them.

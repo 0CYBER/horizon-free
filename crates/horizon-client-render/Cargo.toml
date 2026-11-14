@@ -78,11 +78,6 @@ test-support = []
 # The `scene_replay` example's allocator counts allocations (horizon-threads' `alloc-count`).
 alloc-count = ["horizon-threads/alloc-count"]
 
-# horizon-client's `horizon-extras`: asking the device for hardware ray tracing on request
-# (`gfx/ray_query.rs`, `HORIZON_RAY_TRACING=1`). Without it the device is requested as without
-# the variable.
-horizon-extras = []
-
 [lints]
 workspace = true
 
