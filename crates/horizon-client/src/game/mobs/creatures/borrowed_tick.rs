@@ -214,6 +214,9 @@ impl Game<'_> {
                             let Some(&i) = positions.get(&snapshot[slot].id) else {
                                 keep[slot] = false;
                                 snapshot[slot].alive = false;
+                                // The row's mob left the list at a boundary: the
+                                // tick view must answer a removed handle with nothing.
+                                snapshot[slot].removed = true;
                                 resuming = false;
                                 resume_sampled = None;
                                 cursor += 1;
@@ -232,6 +235,9 @@ impl Game<'_> {
                     if m.removed && !resuming {
                         keep[slot] = false;
                         snapshot[slot].alive = false;
+                        // `removed` is the view's authoritative gone: a dead body
+                        // that is still in the level keeps resolving (#795).
+                        snapshot[slot].removed = true;
                         cursor += 1;
                         continue;
                     }
@@ -339,6 +345,7 @@ impl Game<'_> {
                         if !kept {
                             died.remove(&m.id);
                             snapshot[slot].alive = false;
+                            snapshot[slot].removed = true;
                         }
                         keep[slot] = kept;
                         cursor += 1;
@@ -662,6 +669,7 @@ impl Game<'_> {
                     // after this mob see it as it is now.
                     snapshot[slot] = seen(m, uuid, world_items!(self));
                     snapshot[slot].alive &= kept;
+                    snapshot[slot].removed |= !kept;
                     grid.update(slot, snapshot[slot].bounds);
                     horizon_client::mobs::apply_brain_events(
                         &mut mobs,
@@ -753,8 +761,10 @@ impl Game<'_> {
                 if let Some(&i) = current.get(&s.id) {
                     *s = seen(&mobs[i], uuid, world_items!(self));
                     s.alive &= keep.get(slot).copied().unwrap_or(true);
+                    s.removed |= !keep.get(slot).copied().unwrap_or(true);
                 } else {
                     s.alive = false;
+                    s.removed = true;
                 }
             }
             for m in &mobs {

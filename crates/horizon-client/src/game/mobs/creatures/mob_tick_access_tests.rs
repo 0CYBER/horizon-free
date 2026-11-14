@@ -101,6 +101,73 @@ fn with_two_pigs(test: impl FnOnce(&mut Game<'_>)) {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Removes the mob it names, and records what every despawn callback reads of
+/// that mob's handle: the victim's own callback runs before the removal, a
+/// later callback after it.
+struct RemovedPeerProbe {
+    victim: u32,
+    records: Arc<Mutex<Vec<(u32, Option<[f64; 3]>)>>>,
+}
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for RemovedPeerProbe {
+    fn mob_despawn(&self, host: &dyn mod_api::Host, event: &mut mod_api::MobDespawnEvent<'_>) {
+        let id = event.mob.entity().id();
+        let victim = host
+            .entity(self.victim)
+            .and_then(|entity| entity.position(host));
+        self.records.lock().unwrap().push((id, victim));
+        if id == self.victim {
+            *event.result = Despawn::Allow;
+        }
+    }
+}
+
+/// The view's removed state is authoritative: once the first mob is removed by
+/// its own callback, a later callback asking for its handle gets nothing, even
+/// though the removed row stays indexed with its old position.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+fn a_removed_mob_handle_resolves_nothing_in_a_later_callback() {
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "mob-tick-removed-peer",
+        Box::new(RemovedPeerProbe {
+            victim: 71,
+            records: records.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            game.tick_creature_entities().unwrap();
+            let records = records.lock().unwrap();
+            assert_eq!(records.len(), 2, "both mobs heard their despawn check");
+            // 71 runs first and is removed only after its own answer.
+            assert_eq!(records[0].0, 71);
+            assert_eq!(
+                records[0].1,
+                Some([1.0, 80.0, 0.5]),
+                "the victim still resolves inside its own callback"
+            );
+            // 72 runs after 71's removal: its row is indexed but marked removed.
+            assert_eq!(records[1].0, 72);
+            assert_eq!(
+                records[1].1, None,
+                "a removed mob's handle resolves nothing"
+            );
+            assert!(
+                !game.mobs.iter().any(|mob| mob.id == 71),
+                "the allowed mob was removed"
+            );
+            assert!(
+                game.mobs.iter().any(|mob| mob.id == 72),
+                "the denied mob stayed"
+            );
+        });
+    });
+}
+
 /// The mob the pass holds out of the game answers its own handle, and the
 /// handle of the other mob (the tick snapshot) too; `Allow` removes the
 /// mob and its handle then resolves nothing.

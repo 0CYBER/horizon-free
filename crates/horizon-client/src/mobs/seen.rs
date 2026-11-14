@@ -13,6 +13,10 @@ pub struct Seen {
     pub bounds: Aabb,
     pub eye_y: f64,
     pub alive: bool,
+    /// `Mob.removed`: the mob has left the level. A removed row is the tick
+    /// view's authoritative "gone", unlike `alive` — a dead body still in the
+    /// level (`alive` false, `removed` false) has to keep resolving.
+    pub removed: bool,
     /// `Entity.isInvulnerable` (the ability flag or the temporary window,
     /// #916), which `asValidTarget` refuses a target by (#1175): a
     /// valid-target rule the tick's view asks.

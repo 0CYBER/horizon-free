@@ -7,7 +7,7 @@ impl GoalCx<'_, '_> {
     pub(super) fn is_game_entity(&self, entity: EntityRef) -> bool {
         if matches!(
             self.resolve(entity),
-            Some(Resolved::Own | Resolved::Live(_) | Resolved::Seen(_))
+            Some(Resolved::Own | Resolved::Live(_) | Resolved::Seen(_) | Resolved::Removed)
         ) {
             return false;
         }

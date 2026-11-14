@@ -2713,8 +2713,7 @@ impl Mob {
     /// of every mob writes each one in its slot, not through a copy.
     #[inline]
     pub fn seen(&self, _player: Option<[i32; 4]>, items: &crate::items::Items) -> Seen {
-        let m = self;
-        let villager = m.species() == Species::Villager;
+        let (m, villager) = (self, self.species() == Species::Villager);
         Seen {
             kind: Arc::clone(&m.kind),
             in_water: self.fluids.in_water,
@@ -2727,6 +2726,7 @@ impl Mob {
             hitbox: m.hitbox(),
             eye_y: m.eye_y(),
             alive: m.alive(),
+            removed: m.removed,
             invulnerable: m.is_invulnerable(),
             baby: m.is_baby(),
             // A villager is "in love" when it is willing to breed (`canBreed`).

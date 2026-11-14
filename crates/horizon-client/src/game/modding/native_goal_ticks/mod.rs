@@ -54,6 +54,10 @@ enum Resolved<'a> {
     Live(&'a Mob),
     Seen(&'a Seen),
     Dragon(TargetInfo),
+    /// The view carries this entity as removed. Authoritative over the indexed
+    /// snapshot row and over the game host behind the tick: a removed handle
+    /// resolves nothing, while a dead body still in the level keeps resolving.
+    Removed,
 }
 
 impl GoalCx<'_, '_> {
@@ -87,13 +91,20 @@ impl GoalCx<'_, '_> {
         if let Some(mobs) = self.w.live_mobs {
             // When the tick has a live view, it is authoritative. Falling
             // back to an older snapshot here would resurrect a stale handle.
-            return mobs.find(id).filter(|mob| !mob.removed).map(Resolved::Live);
+            return match mobs.find(id) {
+                Some(mob) if mob.removed => Some(Resolved::Removed),
+                Some(mob) => Some(Resolved::Live(mob)),
+                None => None,
+            };
         }
         let others = self.w.others;
         let seen = match self.w.others_index {
             Some(index) => index.get(&id).map(|&slot| &others[slot as usize]),
             None => others.iter().find(|s| s.id == id),
         }?;
+        if seen.removed {
+            return Some(Resolved::Removed);
+        }
         Some(Resolved::Seen(seen))
     }
 
@@ -124,15 +135,19 @@ impl GoalCx<'_, '_> {
                 | Resolved::Seen(_)
                 | Resolved::Dragon(_),
             ) => Some(entity),
+            // A removed row is the view's own answer: never ask the host.
+            Some(Resolved::Removed) => None,
             None => self.host.entity(id),
         }
     }
 
     /// `Host::living`: the handle resolves in the tick's view.
     pub(crate) fn lookup_living(&self, entity: EntityRef) -> Option<LivingRef> {
-        self.resolve(entity)
-            .map(|_| LivingRef::new(entity))
-            .or_else(|| self.host.living(entity))
+        match self.resolve(entity) {
+            Some(Resolved::Removed) => None,
+            Some(_) => Some(LivingRef::new(entity)),
+            None => self.host.living(entity),
+        }
     }
 
     /// `Host::mob`: the handle resolves in the tick's view as a mob — the
@@ -140,7 +155,7 @@ impl GoalCx<'_, '_> {
     /// is no `MobRef`, as the write handle's own narrowing refuses it.
     pub(crate) fn lookup_mob(&self, entity: EntityRef) -> Option<MobRef> {
         match self.resolve(entity) {
-            Some(Resolved::Player) => None,
+            Some(Resolved::Player | Resolved::Removed) => None,
             Some(_) => Some(MobRef::new(entity)),
             None => self.host.mob(entity),
         }
@@ -181,6 +196,7 @@ impl GoalCx<'_, '_> {
             Resolved::Player => self.w.selected_player().map(|p| p.position),
             Resolved::Seen(seen) => Some(seen.position),
             Resolved::Dragon(info) => Some(info.position),
+            Resolved::Removed => None,
         }
     }
 
@@ -202,6 +218,7 @@ impl GoalCx<'_, '_> {
             Resolved::Player => self.w.selected_player().map(|p| p.velocity),
             Resolved::Seen(seen) => Some(seen.velocity),
             Resolved::Dragon(_) => None,
+            Resolved::Removed => None,
         }
         .map(|v| [v.x, v.y, v.z])
     }
@@ -222,7 +239,7 @@ impl GoalCx<'_, '_> {
             Resolved::Live(mob) => Some(mob.head_yaw),
             Resolved::Player => self.w.selected_player().map(|p| p.yaw),
             // `Seen::yaw` is the body's, not the head's.
-            Resolved::Seen(_) | Resolved::Dragon(_) => None,
+            Resolved::Seen(_) | Resolved::Dragon(_) | Resolved::Removed => None,
         }
     }
 
@@ -233,6 +250,7 @@ impl GoalCx<'_, '_> {
             Resolved::Player => self.w.selected_player().map(|p| p.bounds)?,
             Resolved::Seen(seen) => seen.bounds,
             Resolved::Dragon(info) => info.bounds,
+            Resolved::Removed => return None,
         };
         let axes = [Axis::X, Axis::Y, Axis::Z];
         Some([axes.map(|a| bounds.min(a)), axes.map(|a| bounds.max(a))])
@@ -245,6 +263,7 @@ impl GoalCx<'_, '_> {
             Resolved::Player => self.w.selected_player().map(|p| p.eye[1] - p.position.y),
             Resolved::Seen(seen) => Some(seen.eye_y - seen.position.y),
             Resolved::Dragon(info) => Some(info.eye_y - info.position.y),
+            Resolved::Removed => None,
         }
     }
 
@@ -258,6 +277,7 @@ impl GoalCx<'_, '_> {
             Resolved::Live(mob) => Some([mob.position.x, mob.eye_y(), mob.position.z]),
             Resolved::Seen(seen) => Some([seen.position.x, seen.eye_y, seen.position.z]),
             Resolved::Dragon(info) => Some([info.position.x, info.eye_y, info.position.z]),
+            Resolved::Removed => None,
         }
     }
 
@@ -313,6 +333,7 @@ impl GoalCx<'_, '_> {
             Resolved::Player => self.w.selected_player().map(|p| p.alive),
             Resolved::Seen(seen) => Some(seen.alive),
             Resolved::Dragon(info) => Some(info.alive),
+            Resolved::Removed => None,
         }
     }
 }
@@ -430,7 +451,7 @@ impl GoalCxBackend for GoalCx<'_, '_> {
                     }
                     Some(Who::Mob(mob.id))
                 }
-                Some(Resolved::Dragon(_)) | None => return false,
+                Some(Resolved::Dragon(_) | Resolved::Removed) | None => return false,
             },
         };
         matches!(
@@ -475,8 +496,14 @@ impl BehaviorCxBackend for GoalCx<'_, '_> {
             Who::Player => self.w.player_identity?.1,
         };
         let entity = EntityRef::new(epoch, id);
-        self.resolve(entity)?;
-        Some(LivingRef::new(entity))
+        match self.resolve(entity)? {
+            Resolved::Removed => None,
+            Resolved::Own
+            | Resolved::Player
+            | Resolved::Live(_)
+            | Resolved::Seen(_)
+            | Resolved::Dragon(_) => Some(LivingRef::new(entity)),
+        }
     }
 
     fn set_brain_target(&mut self, target: Option<LivingRef>) -> bool {
@@ -489,7 +516,7 @@ impl BehaviorCxBackend for GoalCx<'_, '_> {
                 Some(Resolved::Player) => Some(Who::Player),
                 Some(Resolved::Seen(seen)) => Some(Who::Mob(seen.id)),
                 Some(Resolved::Live(mob)) => Some(Who::Mob(mob.id)),
-                Some(Resolved::Dragon(_)) | None => return false,
+                Some(Resolved::Dragon(_) | Resolved::Removed) | None => return false,
             },
         };
         mobs::ai::set_brain_target(self.m, who)
@@ -885,7 +912,7 @@ impl Game<'_> {
             Some(Resolved::Own) => mobs::TargetChange::Set(Some(Who::Mob(context.m.id))),
             Some(Resolved::Live(mob)) => mobs::TargetChange::Set(Some(Who::Mob(mob.id))),
             Some(Resolved::Seen(seen)) => mobs::TargetChange::Set(Some(Who::Mob(seen.id))),
-            Some(Resolved::Dragon(_)) | None => mobs::TargetChange::Keep,
+            Some(Resolved::Dragon(_) | Resolved::Removed) | None => mobs::TargetChange::Keep,
         }
     }
 }
