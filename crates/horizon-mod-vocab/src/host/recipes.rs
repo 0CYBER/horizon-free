@@ -6,15 +6,17 @@ use crate::*;
 pub trait RecipesHost {
     /// Side: both.
     /// Published asset/data read: available in Setup, Reloading and World.
-    /// The recipes of type `kind` (`minecraft:smelting`, `mymod:crusher`), vanilla's
+    /// The recipes of registered recipe type `kind` (`minecraft:crafting`, `mymod:crusher`), vanilla's
     /// types and mods' own alike, from `data/<namespace>/recipe/*.json` of vanilla,
     /// the content mods (`.hmod`) and the world's data packs, in file order: each
     /// one typed (`Recipe`: its ingredients, results, group, cooking time and
     /// experience, or its stonecutting, smithing or special crafting rule),
-    /// with its file as JSON for a mod's own type. Dynamic rules are not fixed
+    /// with its file as JSON for a mod's own type. The file's type field names its
+    /// serializer; this can differ from the reported recipe kind. Dynamic rules are not fixed
     /// outputs; use `LevelRef::recipe_for` for engine-matchable recipe types.
-    /// Cache mod-owned types once per load/reload and match those in mod memory;
-    /// the host returns RecipeLookupError::NotMatchable for such types. These are the
+    /// Registered crafting kinds match through LevelRef::recipe_for. Cache other mod-owned
+    /// types once per load/reload and match those in mod memory; those return
+    /// RecipeLookupError::NotMatchable. These are the
     /// recipes in force (`RecipeManager.getAllRecipesFor`): data packs merged and
     /// load conditions held, so a pack's override or removal shows. A data pack
     /// changes them on `/reload`, so look them up again when you need them. Empty

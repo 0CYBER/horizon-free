@@ -618,7 +618,7 @@ mod tests {
     fn content_brewing_recipe_condition_is_applied() {
         let root = content_brewing_root(
             "condition",
-            r#", "neoforge:conditions":[{"type":"neoforge:false"}]"#,
+            r#", "neoforge:conditions":[{"type":"neoforge:not","value":{"type":"neoforge:true"}}]"#,
         );
         let items = Items::for_tests(Default::default());
         let recipes = Brewing::load(&root, &items, &PackOverlay::NONE);

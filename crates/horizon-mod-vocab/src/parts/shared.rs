@@ -102,6 +102,11 @@ pub struct Parts {
     pub(crate) crash_sections: Vec<CrashSectionPart>,
     /// Command argument types the mods registered, by namespaced id, in registration order.
     pub(crate) command_arguments: Vec<CommandArgumentInfo>,
+    /// Separately declared mod recipe types.
+    pub(crate) recipe_types: HashMap<Box<str>, usize>,
+    /// Serializer IDs, their produced recipe types and retained owners.
+    pub(crate) recipe_serializers:
+        HashMap<Box<str>, (usize, String, Arc<dyn crate::CraftingRecipeHandler>)>,
     /// Entity selector tokens the mods registered, by name, in registration order.
     pub(crate) entity_selectors: Vec<EntitySelectorInfo>,
     /// Frozen raw payload declarations and their sole receiving owners.

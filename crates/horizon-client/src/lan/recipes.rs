@@ -368,7 +368,7 @@ pub fn encode_content(types: &[String], sources: &[(String, Value)], reset: bool
     let mut part: Vec<(String, Value)> = Vec::new();
     let mut size = 0;
     for (name, v) in sources {
-        if !types.iter().any(|t| v["type"].as_str() == Some(t)) {
+        if !crate::crafting::mod_kinds::file_has_type(v, types) {
             continue;
         }
         let id = if name.contains(':') {
@@ -644,7 +644,8 @@ mod content_tests {
         mod_platform::testing::with_mods(mods.into(), || {
             let server_origin = DataLoadOrigin::ServerDataLoad;
             let resolved =
-                ResolvedSources::resolve(sources(), &load(EngineDataLoadOrigin::ServerDataLoad));
+                ResolvedSources::resolve(sources(), &load(EngineDataLoadOrigin::ServerDataLoad))
+                    .unwrap();
             let once = heard.lock().unwrap().clone();
             assert_eq!(
                 once,
@@ -674,7 +675,8 @@ mod content_tests {
 
             heard.lock().unwrap().clear();
             let client =
-                ResolvedSources::resolve(sources(), &load(EngineDataLoadOrigin::ClientPreload));
+                ResolvedSources::resolve(sources(), &load(EngineDataLoadOrigin::ClientPreload))
+                    .unwrap();
             assert!(
                 heard
                     .lock()
@@ -728,7 +730,8 @@ mod content_tests {
         )];
         mod_platform::testing::with_mods(mods.into(), || {
             let resolved =
-                ResolvedSources::resolve(Vec::new(), &load(EngineDataLoadOrigin::ServerDataLoad));
+                ResolvedSources::resolve(Vec::new(), &load(EngineDataLoadOrigin::ServerDataLoad))
+                    .unwrap();
             assert_eq!(*heard.lock().unwrap(), [DataLoadOrigin::ServerDataLoad]);
             let added = &resolved.property_additions;
             assert!(added.adds("furnace_input", "minecraft:emerald"));
@@ -786,7 +789,8 @@ mod content_tests {
             let resolved = ResolvedSources::resolve(
                 vec![("slots".to_owned(), recipe.clone())],
                 &load(EngineDataLoadOrigin::ServerDataLoad),
-            );
+            )
+            .unwrap();
             assert_eq!(heard.lock().unwrap().len(), slots.len() + 2);
             let file = &resolved.recipes[0].resolved;
             let parse = |ingredient: &Value| {
@@ -812,68 +816,74 @@ mod content_tests {
 
     #[test]
     fn content_keeps_the_asked_types_and_ends_with_them() {
-        let sources = vec![
-            ("furnace".to_owned(), json!({"type": "minecraft:smelting"})),
-            (
-                "stick".to_owned(),
-                json!({"type": "minecraft:crafting_shaped"}),
-            ),
-            ("mymod:crush".to_owned(), json!({"type": "mymod:crusher"})),
-        ];
-        assert!(encode_content(&[], &sources, false).is_empty());
-        // After a sync that sent recipes, asking for none sends an empty last part.
-        let reset = encode_content(&[], &sources, true);
-        assert_eq!(reset.len(), 1);
-        let part: ContentPart = serde_json::from_slice(&reset[0]).unwrap();
-        assert!(part.recipes.is_empty());
-        assert_eq!(part.last.as_deref(), Some(&[][..]));
-        let types = vec![
-            "minecraft:smelting".to_owned(),
-            "mymod:crusher".to_owned(),
-            "x:none".to_owned(),
-        ];
-        let parts = encode_content(&types, &sources, false);
-        assert_eq!(parts.len(), 1);
-        let part: ContentPart = serde_json::from_slice(&parts[0]).unwrap();
-        let ids: Vec<&str> = part.recipes.iter().map(|(id, _)| id.as_str()).collect();
-        assert_eq!(ids, ["minecraft:furnace", "mymod:crush"]);
-        assert_eq!(part.last.as_deref(), Some(types.as_slice()));
+        mod_platform::testing::with_recipe_types(&["mymod:crusher"], || {
+            let sources = vec![
+                ("furnace".to_owned(), json!({"type": "minecraft:smelting"})),
+                (
+                    "stick".to_owned(),
+                    json!({"type": "minecraft:crafting_shaped"}),
+                ),
+                ("mymod:crush".to_owned(), json!({"type": "mymod:crusher"})),
+            ];
+            assert!(encode_content(&[], &sources, false).is_empty());
+            // After a sync that sent recipes, asking for none sends an empty last part.
+            let reset = encode_content(&[], &sources, true);
+            assert_eq!(reset.len(), 1);
+            let part: ContentPart = serde_json::from_slice(&reset[0]).unwrap();
+            assert!(part.recipes.is_empty());
+            assert_eq!(part.last.as_deref(), Some(&[][..]));
+            let types = vec![
+                "minecraft:smelting".to_owned(),
+                "mymod:crusher".to_owned(),
+                "x:none".to_owned(),
+            ];
+            let parts = encode_content(&types, &sources, false);
+            assert_eq!(parts.len(), 1);
+            let part: ContentPart = serde_json::from_slice(&parts[0]).unwrap();
+            let ids: Vec<&str> = part.recipes.iter().map(|(id, _)| id.as_str()).collect();
+            assert_eq!(ids, ["minecraft:furnace", "mymod:crush"]);
+            assert_eq!(part.last.as_deref(), Some(types.as_slice()));
+        });
     }
 
     #[test]
     fn content_splits_under_the_payload_cap() {
-        let big = "x".repeat(300_000);
-        let sources: Vec<_> = (0..10)
-            .map(|i| (format!("m:r{i}"), json!({"type": "m:t", "pad": big})))
-            .collect();
-        let parts = encode_content(&["m:t".to_owned()], &sources, false);
-        assert!(parts.len() >= 3);
-        let mut n = 0;
-        for (i, p) in parts.iter().enumerate() {
-            assert!(p.len() <= 1_048_576);
-            let part: ContentPart = serde_json::from_slice(p).unwrap();
-            assert_eq!(part.last.is_some(), i + 1 == parts.len());
-            n += part.recipes.len();
-        }
-        assert_eq!(n, 10);
+        mod_platform::testing::with_recipe_types(&["m:t"], || {
+            let big = "x".repeat(300_000);
+            let sources: Vec<_> = (0..10)
+                .map(|i| (format!("m:r{i}"), json!({"type": "m:t", "pad": big})))
+                .collect();
+            let parts = encode_content(&["m:t".to_owned()], &sources, false);
+            assert!(parts.len() >= 3);
+            let mut n = 0;
+            for (i, p) in parts.iter().enumerate() {
+                assert!(p.len() <= 1_048_576);
+                let part: ContentPart = serde_json::from_slice(p).unwrap();
+                assert_eq!(part.last.is_some(), i + 1 == parts.len());
+                n += part.recipes.len();
+            }
+            assert_eq!(n, 10);
+        });
     }
 
     #[test]
     fn a_long_type_list_keeps_the_last_part_under_the_cap() {
-        let types: Vec<String> = (0..5000)
-            .map(|i| format!("mod{i}:type_with_a_long_name"))
-            .collect();
-        let big = "x".repeat(1_000_000);
-        let sources = vec![(
-            "m:r".to_owned(),
-            json!({"type": "mod0:type_with_a_long_name", "pad": big}),
-        )];
-        let parts = encode_content(&types, &sources, false);
-        assert_eq!(parts.len(), 2);
-        assert!(parts.iter().all(|p| p.len() <= 1_048_576));
-        let last: ContentPart = serde_json::from_slice(&parts[1]).unwrap();
-        assert!(last.recipes.is_empty());
-        assert_eq!(last.last.map(|t| t.len()), Some(5000));
+        mod_platform::testing::with_recipe_types(&["mod0:type_with_a_long_name"], || {
+            let types: Vec<String> = (0..5000)
+                .map(|i| format!("mod{i}:type_with_a_long_name"))
+                .collect();
+            let big = "x".repeat(1_000_000);
+            let sources = vec![(
+                "m:r".to_owned(),
+                json!({"type": "mod0:type_with_a_long_name", "pad": big}),
+            )];
+            let parts = encode_content(&types, &sources, false);
+            assert_eq!(parts.len(), 2);
+            assert!(parts.iter().all(|p| p.len() <= 1_048_576));
+            let last: ContentPart = serde_json::from_slice(&parts[1]).unwrap();
+            assert!(last.recipes.is_empty());
+            assert_eq!(last.last.map(|t| t.len()), Some(5000));
+        });
     }
 }
 
@@ -883,33 +893,35 @@ mod per_player_tests {
 
     #[test]
     fn per_player_content_keeps_grinding_private_and_resets_only_its_owner() {
-        let sources = vec![(
-            "testmod:ore".into(),
-            serde_json::json!({"type":"testmod:grinding", "result":"minecraft:iron_ingot"}),
-        )];
-        let mut a = PlayerRecipeSync::default();
-        let mut b = PlayerRecipeSync::default();
-        let mut vanilla = PlayerRecipeSync::default();
-        a.replace(true, vec!["testmod:grinding".into()], &sources);
-        b.replace(true, vec![], &sources);
-        vanilla.replace(false, vec!["testmod:grinding".into()], &sources);
-        let part = ContentPart::decode(&a.payloads[0]).unwrap();
-        assert_eq!(part.recipes, sources);
-        assert_eq!(part.last, Some(vec!["testmod:grinding".into()]));
-        assert!(b.payloads.is_empty());
-        assert!(vanilla.payloads.is_empty());
-        a.replace(true, vec![], &sources);
-        b.replace(true, vec!["testmod:grinding".into()], &sources);
-        vanilla.replace(false, vec!["testmod:grinding".into()], &sources);
-        assert_eq!(
-            ContentPart::decode(&a.payloads[0]).unwrap().last,
-            Some(vec![])
-        );
-        assert_eq!(
-            ContentPart::decode(&b.payloads[0]).unwrap().recipes,
-            sources
-        );
-        assert!(vanilla.payloads.is_empty());
+        mod_platform::testing::with_recipe_types(&["testmod:grinding"], || {
+            let sources = vec![(
+                "testmod:ore".into(),
+                serde_json::json!({"type":"testmod:grinding", "result":"minecraft:iron_ingot"}),
+            )];
+            let mut a = PlayerRecipeSync::default();
+            let mut b = PlayerRecipeSync::default();
+            let mut vanilla = PlayerRecipeSync::default();
+            a.replace(true, vec!["testmod:grinding".into()], &sources);
+            b.replace(true, vec![], &sources);
+            vanilla.replace(false, vec!["testmod:grinding".into()], &sources);
+            let part = ContentPart::decode(&a.payloads[0]).unwrap();
+            assert_eq!(part.recipes, sources);
+            assert_eq!(part.last, Some(vec!["testmod:grinding".into()]));
+            assert!(b.payloads.is_empty());
+            assert!(vanilla.payloads.is_empty());
+            a.replace(true, vec![], &sources);
+            b.replace(true, vec!["testmod:grinding".into()], &sources);
+            vanilla.replace(false, vec!["testmod:grinding".into()], &sources);
+            assert_eq!(
+                ContentPart::decode(&a.payloads[0]).unwrap().last,
+                Some(vec![])
+            );
+            assert_eq!(
+                ContentPart::decode(&b.payloads[0]).unwrap().recipes,
+                sources
+            );
+            assert!(vanilla.payloads.is_empty());
+        });
     }
 }
 

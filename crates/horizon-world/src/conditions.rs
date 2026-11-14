@@ -67,6 +67,33 @@ impl LoadConditions {
         view
     }
 
+    /// Retain unknown-condition diagnostics for a load that must refuse them.
+    pub fn with_diagnostics(mut self) -> Self {
+        if self.diagnostics.0.is_none() {
+            self.diagnostics = Diagnostics::default();
+        }
+        self
+    }
+
+    /// Refuse ordinary errors and unknown conditions belonging to this resource folder.
+    /// Other resource folders retain their existing diagnostic policy.
+    pub fn check_resource_errors(&self, folder: &str) -> Result<(), String> {
+        self.check_errors()?;
+        if let Some(state) = &self.diagnostics.0 {
+            let state = state.lock().unwrap();
+            let errors: Vec<_> = state
+                .foreign_errors
+                .iter()
+                .filter(|(path, _)| path.split('/').nth(2) == Some(folder))
+                .map(|(_, message)| message.as_str())
+                .collect();
+            if !errors.is_empty() {
+                return Err(errors.join("; "));
+            }
+        }
+        Ok(())
+    }
+
     pub fn mod_loaded(&self, id: &str) -> bool {
         id == "minecraft"
             || self
@@ -154,9 +181,12 @@ impl LoadConditions {
             return answer;
         };
         let path = context();
-        let path = path
-            .rfind("/data/")
-            .map_or(path.as_str(), |index| &path[index + 1..]);
+        let path = if path.starts_with("data/") {
+            path.as_str()
+        } else {
+            path.rfind("/data/")
+                .map_or(path.as_str(), |index| &path[index + 1..])
+        };
         let state = self
             .diagnostics
             .0
@@ -525,3 +555,25 @@ mod registry_tests;
 #[cfg(test)]
 #[path = "condition_log_tests.rs"]
 mod log_tests;
+
+#[cfg(test)]
+mod recipe_error_tests {
+    use super::*;
+    #[test]
+    fn recipe_load_escalates_unknown_conditions_only_for_its_resource_folder() {
+        let conditions = LoadConditions::new([])
+            .with_diagnostics()
+            .with_lookup(BTreeMap::new(), |_, _| None);
+        let file = serde_json::json!({"neoforge:conditions":[{"type":"absent:condition"}]});
+        assert!(!conditions.allows_file(&file, "data/example/tags/item/flag.json"));
+        assert_eq!(conditions.check_errors(), Ok(()));
+        assert_eq!(conditions.check_resource_errors("recipe"), Ok(()));
+        assert!(!conditions.allows_file(&file, "data/example/recipe/deep/data/entry.json"));
+        let error = conditions.check_resource_errors("recipe").unwrap_err();
+        assert!(
+            error.contains("data/example/recipe/deep/data/entry.json")
+                && error.contains("absent:condition")
+        );
+        assert!(!error.contains("tags/item/flag.json"));
+    }
+}

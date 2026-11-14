@@ -271,7 +271,7 @@ impl RecipeSnapshot {
     pub(crate) fn has_placement_candidates(&self) -> bool {
         let nonempty = |ingredient: &Ingredient| !ingredient.items.is_empty();
         if matches!(
-            self.kind.as_str(),
+            self.json["type"].as_str().unwrap_or_default(),
             "minecraft:crafting_shaped" | "minecraft:crafting_shapeless"
         ) && self.ingredients.is_empty()
         {

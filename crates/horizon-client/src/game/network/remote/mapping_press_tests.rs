@@ -6,6 +6,9 @@ use super::*;
 use mod_api::prelude::ClientInputClientHost;
 use mod_api::{ClientHost, InteractionKeyMappingTriggeredEvent, MappingError};
 
+#[path = "input_burst_tests.rs"]
+mod input_burst_tests;
+
 /// The packets the client sends, and the hands the interaction hook hears.
 struct Heard {
     packets: Arc<Mutex<Vec<String>>>,

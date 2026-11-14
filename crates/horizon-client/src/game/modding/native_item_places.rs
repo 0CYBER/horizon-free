@@ -190,6 +190,8 @@ impl Game<'_> {
         if !self.places_simulated() || stack.count == 0 {
             return 0;
         }
+        // A write to a backed mod menu's storage (#3385) is noticed; none is backed in vanilla.
+        self.notice_menu_place_write(place);
         if let ItemPlace::Scratch(id) = place {
             return self.scratch_insert(*id, &stack);
         }
@@ -325,6 +327,7 @@ impl Game<'_> {
         if !self.places_simulated() {
             return 0;
         }
+        self.notice_menu_place_write(place);
         if let ItemPlace::Scratch(id) = place {
             return self.scratch_extract(*id, &stack);
         }

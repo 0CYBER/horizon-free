@@ -771,6 +771,7 @@ impl Hub {
                 container_limits: std::mem::take(&mut prepared.container_limits),
                 hidden: &prepared.hidden,
                 loop_context,
+                slot_snapshot: Default::default(),
             };
             menu::click(
                 &mut view,

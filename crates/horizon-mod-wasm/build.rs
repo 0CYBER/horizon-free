@@ -1,5 +1,9 @@
 #[path = "../../packaging/executable_link.rs"]
 mod executable_link;
+// The benchmark includes the same fixture root natively, so it needs the identical module list.
+#[allow(dead_code)]
+#[path = "tests/fixture/build.rs"]
+mod fixture_build;
 
 fn main() {
     println!("cargo:rerun-if-changed=../../packaging/executable_link.rs");
@@ -12,6 +16,9 @@ fn main() {
     let root =
         std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    if std::env::var_os("CARGO_FEATURE_LISTENER_FIXTURE").is_some() {
+        fixture_build::generate(&root.join("crates/horizon-mod-wasm/tests/fixture"), &out);
+    }
     println!("cargo:rerun-if-changed=../horizon-mod-api/src");
     println!("cargo:rerun-if-changed=../horizon-mod-vocab/src");
     println!("cargo:rerun-if-changed=../horizon-mod-api-gen/src");

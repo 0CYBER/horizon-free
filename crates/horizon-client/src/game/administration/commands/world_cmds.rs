@@ -51,12 +51,18 @@ fn java_double_text(v: f64) -> Text {
 impl Game<'_> {
     // ---- /recipe -----------------------------------------------------------
 
-    /// Non-special recipes, as resolved by `ResourceKeyArgument.getRecipe` and `/recipe *`.
+    /// Learnable recipes and registered hidden crafting kinds for `/recipe` resolution.
     pub(super) fn learnable_recipes(&self) -> Vec<String> {
         let index = &self.stations().recipe_index;
         index
             .ids()
-            .filter(|id| !index.special(id))
+            .filter(|id| {
+                !index.special(id)
+                    || matches!(
+                        self.recipes().recipe(id),
+                        Some(horizon_client::crafting::Recipe::Mod(_))
+                    )
+            })
             .cloned()
             .collect()
     }
@@ -108,12 +114,13 @@ impl Game<'_> {
     /// many recipe book displays changed (a transmute recipe has one per
     /// material count).
     pub(in crate::game) fn change_recipes(&mut self, give: bool, recipes: &[String]) -> i32 {
+        let (recipes, custom_count) = self.change_mod_crafting_recipes(give, recipes);
         if give {
-            return self.award_recipes(recipes) as i32;
+            return custom_count + self.award_recipes(&recipes) as i32;
         }
         let index = &world_stations!(self).recipe_index;
-        let removed = self.level.recipe_book.remove_recipes(index, recipes);
-        let count = removed.len() as i32;
+        let removed = self.level.recipe_book.remove_recipes(index, &recipes);
+        let count = custom_count + removed.len() as i32;
         if count != 0 {
             self.invalidate_mod_book_placement_knowledge();
         }

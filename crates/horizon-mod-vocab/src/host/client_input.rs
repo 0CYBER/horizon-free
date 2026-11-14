@@ -59,12 +59,17 @@ pub trait ClientInputClientHost {
     fn set_mapping_down(&mut self, key: &str, down: bool) -> Result<(), MappingError>;
     /// Side: client.
     /// Adds one click to the vanilla gameplay mapping `key` (`KeyMapping.click`), as a press of
-    /// its key does: the attack, use or pick a click starts on the next client tick, through the
+    /// its key does: the attack, use or pick a click starts on a subsequent client tick, through the
     /// checks of `startAttack` and `startUseItem` (the miss cooldown, busy hands, the item, the
     /// target under the crosshair) and the packets the player's own click sends; the hotbar slot,
     /// drop, inventory or hand swap of the inventory keys. With a screen or overlay open the click
     /// is dropped, as `KeyMapping.releaseAll` drops it. `interaction_key_mapping_triggered` fires
     /// at the action as for the player's click; `key_mapping_pre` is not asked.
+    /// Queued actions drain oldest first, at most 64 entries per queue per drain, with at most
+    /// 1024 pending. Excess entries wait for later drains (normally later client ticks); hotbar
+    /// selection can drain more than once per tick. A full queue refuses the new entry and returns
+    /// normally, logging only its first refusal for that queue's lifetime. These bounds also apply
+    /// to physical input queued through the same routes.
     #[access(WorldOnly)]
     fn click_mapping(&mut self, key: &str) -> Result<(), MappingError>;
     /// Side: client.

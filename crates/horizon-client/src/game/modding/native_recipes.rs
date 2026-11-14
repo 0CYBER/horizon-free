@@ -171,14 +171,20 @@ impl Game<'_> {
                 let grid = &grid[..size * size];
                 let scale = |id: i32| self.maps.data.get(&id).map(|m| m.scale);
                 let recipes = self.recipes();
-                let Some((id, output)) = recipes
-                    .find_with(&self.loop_context, grid, size, &scale)
-                    .filter(|(_, output)| output.count > 0)
-                else {
+                let matched =
+                    recipes.find_with_dimensions(&self.loop_context, grid, size, w, h, &scale);
+                let Some((id, output)) = matched.filter(|(_, output)| output.count > 0) else {
                     return Ok(None);
                 };
-                let mut placed =
-                    recipes.remainders(id, grid, size, &|s| self.crafting_remainder(s));
+                let mut placed = if matches!(
+                    recipes.recipe(id),
+                    Some(horizon_client::crafting::Recipe::Mod(_))
+                ) {
+                    recipes
+                        .mod_remainders_rect(id, grid, size, w, h, &|s| self.crafting_remainder(s))
+                } else {
+                    recipes.remainders(id, grid, size, &|s| self.crafting_remainder(s))
+                };
                 let remainders = (0..w * h)
                     .map(|i| placed[at(i)].take().try_into_api().map_err(|_| InvalidItem))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -519,7 +525,7 @@ fn synced_sources(
     received: Vec<(String, serde_json::Value)>,
     types: &[String],
 ) -> Vec<(String, serde_json::Value)> {
-    let of = |v: &serde_json::Value| types.iter().any(|t| v["type"].as_str() == Some(t));
+    let of = |v: &serde_json::Value| horizon_client::crafting::mod_kinds::file_has_type(v, types);
     let mut all: Vec<_> = own.into_iter().filter(|(_, v)| !of(v)).collect();
     all.extend(
         received
@@ -660,7 +666,7 @@ mod tests {
             ("minecraft:stick".to_owned(), shaped.clone()),
             ("braid:sticks_from_logs".to_owned(), shaped.clone()),
         ];
-        let types = ["minecraft:crafting_shaped".to_owned()];
+        let types = ["minecraft:crafting".to_owned()];
         let names: Vec<_> = super::synced_sources(own, received, &types)
             .into_iter()
             .map(|(name, _)| name)
@@ -688,12 +694,7 @@ mod tests {
             ];
             let own = ids.map(|id| book_ids(game, id));
             assert!(own.iter().all(|ids| !ids.is_empty()), "{own:?}");
-            let types = [
-                "minecraft:crafting_shaped",
-                "minecraft:crafting_shapeless",
-                "minecraft:smelting",
-            ]
-            .map(str::to_owned);
+            let types = ["minecraft:crafting", "minecraft:smelting"].map(str::to_owned);
             let mut sources = horizon_items::recipe_sources::sources(
                 &game.options.resources,
                 &horizon_world::loot::PackOverlay::NONE,
@@ -777,12 +778,7 @@ mod tests {
                 vec![index.first_display(id).unwrap()]
             });
             assert_eq!(ids.map(|id| book_ids(game, id)), server);
-            let types = [
-                "minecraft:crafting_shaped",
-                "minecraft:crafting_shapeless",
-                "minecraft:smelting",
-            ]
-            .map(str::to_owned);
+            let types = ["minecraft:crafting", "minecraft:smelting"].map(str::to_owned);
             let sources = horizon_items::recipe_sources::sources(
                 &game.options.resources,
                 &horizon_world::loot::PackOverlay::NONE,

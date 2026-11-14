@@ -295,7 +295,7 @@ fn main() -> Result<()> {
             } => json!({
                 "result": result.item.as_deref(), "count": result.count,
                 "ingredients": ingredients.iter().map(|i| sorted(&i.order)).collect::<Vec<_>>()}),
-            Recipe::Special(_) => json!({"special": true}),
+            Recipe::Special(_) | Recipe::Mod(_) => json!({"special": true}),
         };
         recipe_rows.insert(name.clone(), row);
     }

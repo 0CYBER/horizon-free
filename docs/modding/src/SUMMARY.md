@@ -57,3 +57,5 @@
 - [Saved-world mod mismatches](reference/saved-world-mod-mismatch.md)
 
 - [Container loot](reference/container-loot.md)
+
+- [Crafting recipe kinds](crafting-recipe-kinds.md)

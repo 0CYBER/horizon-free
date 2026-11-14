@@ -19,6 +19,9 @@ pub(in crate::game) struct GuestMenus {
     pub(in crate::game) station: MenuOwner<Option<GuestStation>>,
     /// The successful open already announced to mods, retained through a loan of `GuestPlay`.
     pub(in crate::game) menu_heard: Option<super::native_menus::HeardMenu>,
+    /// The storage a mod backed its open menu's slots with (`player_back_mod_menu_slots`);
+    /// None for every menu no mod backed.
+    pub(in crate::game) slot_places: Option<super::native_menu_places::MenuSlotPlaces>,
 }
 
 impl LanHost {

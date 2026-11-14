@@ -144,7 +144,7 @@ fn empty_ingredient_recipes_retain_predicates_but_not_placement() {
             "key":{"A":"minecraft:stone"},"result":{"id":"minecraft:stick"}
         }),
     ));
-    let resolved = ResolvedSources::resolve(sources, &load);
+    let resolved = ResolvedSources::resolve(sources, &load).unwrap();
     let root = std::env::temp_dir();
     let recipes = Recipes::from_resolved(&root, &items, &PackOverlay::NONE, &resolved).unwrap();
     let stations = crate::stations::StationRecipes::from_sources(&root, &items, &resolved);
@@ -161,7 +161,7 @@ fn empty_ingredient_recipes_retain_predicates_but_not_placement() {
     );
     for (id, _, retained, matches) in inputs {
         let id = format!("empty_fixture:{id}");
-        let entry = recipes.by_type["minecraft:crafting_shaped"]
+        let entry = recipes.by_type["minecraft:crafting"]
             .iter()
             .find(|r| r.id == id);
         assert_eq!(entry.is_some(), retained, "{id}");
@@ -191,7 +191,7 @@ fn empty_ingredient_recipes_retain_predicates_but_not_placement() {
         for (kind, suffix) in [
             ("minecraft:smelting", "_cook"),
             ("minecraft:stonecutting", "_cut"),
-            ("minecraft:smithing_transform", "_smith"),
+            ("minecraft:smithing", "_smith"),
         ] {
             assert_eq!(
                 recipes.by_type[kind]
