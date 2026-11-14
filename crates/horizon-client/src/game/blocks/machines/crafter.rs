@@ -161,6 +161,20 @@ impl Game<'_> {
         let target = offset(pos, facing);
         let mut rest = stack;
         let side = facing.opposite();
+        // `HopperBlockEntity.getBlockContainer`: a decorated pot keeps its slot in
+        // the chunk's saved tag, which `view` does not read.
+        if self.item_part_at(target, side).is_none()
+            && self.containers().view(target, false).is_none()
+            && let Some(pot) = self.containers().hopper_insertion_view(target)
+        {
+            self.crafter_insert(&pot, &mut rest, side, false);
+            if rest.count == 0 {
+                return;
+            }
+            self.spawn_dispensed(pos, facing, rest, 6);
+            self.crafter_crafted_notice(pos, facing, recipe);
+            return;
+        }
         self.with_container_at(target, side, |game, into| match into {
             ContainerTarget::Part(part) => {
                 // `insertCrafterOutput`: the handler takes what it will; the rest is dispensed.
@@ -176,6 +190,10 @@ impl Game<'_> {
             return;
         }
         self.spawn_dispensed(pos, facing, rest, 6);
+        self.crafter_crafted_notice(pos, facing, recipe);
+    }
+    /// The trigger and the sound and particle events after an ejected result.
+    fn crafter_crafted_notice(&mut self, pos: Pos, facing: Direction, recipe: &str) {
         // CrafterRecipeCraftedTrigger: every player whose box meets the 17-block
         // box around the crafter's centre (8.5 from the centre to a face: the
         // player's own width and height reach into it, not its eye point).
@@ -242,7 +260,6 @@ impl Game<'_> {
                 break;
             }
         }
-        rest
     }
 
     // ---- the menu ----
