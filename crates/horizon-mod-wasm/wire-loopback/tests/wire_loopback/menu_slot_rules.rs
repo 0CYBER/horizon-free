@@ -1,7 +1,7 @@
 //! `menu_slot_rules` through the generated host/guest dispatch against the same part called
 //! natively: the answers, and how often the part is asked, are the same.
 use super::*;
-use mod_api::{ItemStack, MenuPart, MenuSlotRulesEvent};
+use mod_api::{ItemStack, MenuContainer, MenuPart, MenuSlotContext, MenuSlotRulesEvent};
 use std::sync::atomic::{AtomicUsize, Ordering};
 struct World;
 impl mod_api::Host for World {}
@@ -44,7 +44,9 @@ fn menu_slot_rules_answers_and_asks_match_native_through_the_wire() {
                     let mut event = MenuSlotRulesEvent {
                         menu,
                         slot,
+                        container: MenuContainer::Main,
                         stack: &stack,
+                        context: &MenuSlotContext::default(),
                         may_place,
                         max_stack,
                     };

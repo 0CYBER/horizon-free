@@ -908,7 +908,7 @@ pub struct Viewer<'a> {
     pub sources: Option<&'a [((i32, i32), i32)]>,
     pub tracker: &'a mut Tracker,
     /// What the tick sends it, in order.
-    pub out: &'a mut Vec<Vec<u8>>,
+    pub out: &'a mut Vec<super::Body>,
     /// Where the entities it stops tracking were last sent, when asked (the prediction's replay).
     pub gone: Option<&'a mut Vec<[f64; 3]>>,
 }
@@ -1059,18 +1059,22 @@ fn vanilla_body(packet: &play::Clientbound) -> Vec<u8> {
 /// One entity's packets, encoded once for all the clients they go to.
 #[derive(Default)]
 struct Bodies {
-    all: Vec<Vec<u8>>,
+    all: Vec<super::Body>,
     /// What other clients get instead, when a native mod's particle is among them.
-    vanilla: Option<Vec<Vec<u8>>>,
+    vanilla: Option<Vec<super::Body>>,
 }
 
 impl Bodies {
     fn encode(&mut self, packets: &[play::Clientbound]) {
         self.all.clear();
         self.all
-            .extend(packets.iter().map(play::Clientbound::encode));
-        self.vanilla = (packets.iter().any(names_mod_particle))
-            .then(|| packets.iter().map(vanilla_body).collect());
+            .extend(packets.iter().map(|p| super::Body::shared(p.encode())));
+        self.vanilla = (packets.iter().any(names_mod_particle)).then(|| {
+            packets
+                .iter()
+                .map(|p| super::Body::shared(vanilla_body(p)))
+                .collect()
+        });
     }
 
     fn of(packets: &[play::Clientbound]) -> Self {
@@ -1079,7 +1083,7 @@ impl Bodies {
         bodies
     }
 
-    fn to(&self, viewer: &Viewer) -> &[Vec<u8>] {
+    fn to(&self, viewer: &Viewer) -> &[super::Body] {
         match &self.vanilla {
             Some(vanilla) if !viewer.horizon => vanilla,
             _ => &self.all,
@@ -1487,7 +1491,8 @@ impl Entities {
                             play::Clientbound::RemoveEntities(play::RemoveEntities {
                                 ids: removed,
                             })
-                            .encode(),
+                            .encode()
+                            .into(),
                         );
                     }
                     // A viewing client starts tracking no more than its viewed world holds.
@@ -1806,7 +1811,7 @@ mod tests {
             let players = 2 + next(40) as i32;
             let mut trackers: [Vec<Tracker>; 2] =
                 std::array::from_fn(|_| (0..players).map(|_| Tracker::default()).collect());
-            let mut outs: [Vec<Vec<Vec<u8>>>; 2] =
+            let mut outs: [Vec<Vec<crate::lan::Body>>; 2] =
                 std::array::from_fn(|_| vec![Vec::new(); players as usize]);
             let mut all: Vec<EntityState> = (0..players + 30 + next(200) as i32)
                 .map(|i| {
@@ -2430,6 +2435,9 @@ mod tests {
     struct Clients {
         chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
         trackers: [Tracker; 2],
+        /// What the last tick sent each client, as it was sent.
+        sent: [Vec<super::super::Body>; 2],
+        /// Its bytes.
         out: [Vec<Vec<u8>>; 2],
         positions: [[f64; 3]; 2],
         moved: [bool; 2],
@@ -2444,6 +2452,7 @@ mod tests {
             Self {
                 chunks: (-4..4).flat_map(|x| (-4..4).map(move |z| (x, z))).collect(),
                 trackers: Default::default(),
+                sent: Default::default(),
                 out: Default::default(),
                 positions: [[0.0, 64.0, 0.0]; 2],
                 moved: [false; 2],
@@ -2453,11 +2462,11 @@ mod tests {
             }
         }
         fn tick(&mut self, level: &mut Entities, entities: &[&EntityState]) {
-            for out in &mut self.out {
-                out.clear();
+            for sent in &mut self.sent {
+                sent.clear();
             }
             let [t0, t1] = &mut self.trackers;
-            let [o0, o1] = &mut self.out;
+            let [o0, o1] = &mut self.sent;
             let mut viewers = [
                 Viewer {
                     entity_id: 1,
@@ -2489,6 +2498,9 @@ mod tests {
                 },
             ];
             level.tick(entities, &Riding::default(), &mut viewers, |_| Some(100));
+            for (out, sent) in self.out.iter_mut().zip(&self.sent) {
+                *out = sent.iter().map(|b| b.to_vec()).collect();
+            }
         }
     }
 
@@ -2616,6 +2628,42 @@ mod tests {
         assert_eq!(c.out[0], [body(play::Clientbound::MoveEntityPos(moved))]);
         c.tick(&mut level, &[&e]);
         assert!(c.out.iter().all(Vec::is_empty));
+    }
+
+    /// The clients pairing with an entity in the same pass, then tracking its changes, are
+    /// each sent the bodies vanilla encodes for them, in order, and share one copy of each.
+    #[test]
+    fn clients_share_the_bytes_of_what_they_are_both_sent() {
+        let shared = |c: &Clients| {
+            assert_eq!(c.sent[0].len(), c.sent[1].len());
+            c.sent[0].iter().zip(&c.sent[1]).all(|pair| {
+                matches!(pair, (super::super::Body::Shared(a), super::super::Body::Shared(b))
+                    if Arc::ptr_eq(a, b))
+            })
+        };
+        let mut level = Entities::default();
+        let mut c = Clients::new();
+        let mut e = state(15.5);
+        // Paired in the same pass: the bodies of ServerEntity.sendPairingData.
+        c.tick(&mut level, &[&e]);
+        let mut pairing = Vec::new();
+        added(&e).pairing(&e, 100, &Riding::default(), &mut pairing);
+        let pairing: Vec<_> = pairing.into_iter().map(body).collect();
+        assert!(!pairing.is_empty());
+        assert_eq!(c.out, [pairing.clone(), pairing]);
+        assert!(shared(&c));
+        // Its first update (tick 0's position), then a data change, to both.
+        c.tick(&mut level, &[&e]);
+        assert_eq!(c.out[0].len(), 1);
+        assert!(shared(&c));
+        e.meta.push((9, serializer::FLOAT, Value::Float(5.0)));
+        c.tick(&mut level, &[&e]);
+        let health = body(play::Clientbound::SetEntityData(SetEntityData {
+            id: 7,
+            values: vec![(9, serializer::FLOAT, Value::Float(5.0))],
+        }));
+        assert_eq!(c.out, [vec![health.clone()], vec![health]]);
+        assert!(shared(&c));
     }
 
     /// A bare state carries none of the entity's data, so it is never paired:

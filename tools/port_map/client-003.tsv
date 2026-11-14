@@ -20,9 +20,10 @@ SessionSearchTrees.updateCreativeTags	inline	crates/horizon-client/src/creative.
 SessionSearchTrees.updateCreativeTooltips	inline	crates/horizon-client/src/creative.rs::Creative::search_results	name search uses exported English lines or lazily rebuilt translated tooltip lines
 ChatAbilities.selectVisibleMessages	port	crates/horizon-client-render/src/chat.rs::ChatAbilities::shows	source filter: client lines always, player and server lines per the abilities
 ChatAbilities.Builder.build	inline	crates/horizon-client-render/src/chat.rs::ChatAbilities::new	restrictions come from the Chat option alone; new() maps the visibility to them
-ChatListener.tick	port	crates/horizon-client/src/game/network/remote/mod.rs::tick_chat_queue	the queue runs down with the ticks and pauses with the game
-ChatListener.setMessageDelay	port	crates/horizon-client/src/game/network/remote/mod.rs::chat_delay_ms	Chat Delay in milliseconds, as Java truncates it, read when a chat line arrives
-ChatListener.flushQueue	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::flush_chat_queue	each message through accept_chat, so it counts as processed
+ChatListener.tick	port	crates/horizon-client/src/game/network/remote/chat_queue.rs::Game::tick_chat_queue	the queue runs down with the ticks and pauses with the game
+ChatListener.setMessageDelay	port	crates/horizon-client/src/game/network/remote/chat_queue.rs::Game::chat_delay_ms	Chat Delay in milliseconds, as Java truncates it, read when a chat line arrives
+ChatListener.flushQueue	port	crates/horizon-client/src/game/network/remote/chat_queue.rs::Game::flush_chat_queue	each message through accept_chat, so it counts as processed
+ChatListener.acceptNextDelayedMessage	port	crates/horizon-client/src/game/network/remote/chat_queue.rs::Game::accept_next_delayed_message	the chat.queue row's click shows one held message, without moving the delay timer
 ChatListener.removeFromDelayedMessageQueue	inline	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_delete_chat
 ChatListener.handleMessage	port	crates/horizon-client/src/game/network/remote/mod.rs::handle_player_chat	a line with a delay goes into remote.chat_queue instead of the chat
 ChatListener.handlePlayerChatMessage	port	crates/horizon-client/src/game/network/remote/mod.rs::Game::handle_packet	gap: player: no Only Show Secure Chat filter, no server filter-mask text, no block or friend-only hiding of chat lines

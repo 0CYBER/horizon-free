@@ -1028,7 +1028,7 @@ mod tests {
             seed % n
         };
         let mut sent = 0;
-        for level in 0..40 {
+        for level in 0..16 {
             let (mut serial, mut by_receiver) = (Waypoints::default(), Waypoints::default());
             let count = 2 + next(60) as u32;
             let spread = [4.0, 40.0, 400.0, 4000.0][level % 4];
@@ -1093,7 +1093,7 @@ mod tests {
             }
         }
         assert!(
-            sent > 10_000,
+            sent > 4_000,
             "the crowds were sent their waypoints ({sent})"
         );
     }

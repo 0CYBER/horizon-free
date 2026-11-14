@@ -1047,5 +1047,7 @@
   "horizon.tempban.success": "%1$s na %2$s, do %3$s",
   "horizon.tempban.usage": "/tempban <gracz> <czas> [powód]",
   "horizon.title.not_affiliated": "Niepowiązane z Mojang ani Microsoft",
-  "key.emote": "Koło emotek"
+  "key.emote": "Koło emotek",
+  "Parallel Tick": "Równoległy tick",
+  "Shares your world's tick among threads. Auto: only while that is faster.": "Dzieli tick Twojego świata między wątki. Auto: tylko gdy tak jest szybciej."
 }

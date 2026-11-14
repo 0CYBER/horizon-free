@@ -364,6 +364,7 @@ impl Book {
         for (name, recipe) in &recipes.crafting {
             let (category, grp) = recipes.meta.get(name).cloned().unwrap_or_default();
             let (display, result) = match recipe {
+                Recipe::Mod(_) => continue,
                 Recipe::Shaped {
                     width,
                     height,
@@ -1047,7 +1048,8 @@ impl RecipeIndex {
         let mut recipes = std::collections::BTreeMap::new();
         let mut insert = |id: String, v: &serde_json::Value| {
             let kind = v["type"].as_str().unwrap_or_default();
-            let special = kind.starts_with("minecraft:crafting_special_")
+            let special = mod_api::__private::parts_installation::crafting_recipe(kind).is_some()
+                || kind.starts_with("minecraft:crafting_special_")
                 || kind == "minecraft:crafting_decorated_pot"
                 // A brewing recipe has no recipe book display of its own
                 // (`BrewingRecipe`), so it never takes display numbers.
@@ -1399,7 +1401,7 @@ mod tests {
 
     #[test]
     fn content_recipe_condition_gates_crafting_and_index() {
-        let recipe = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:flint"],"result":{"id":"minecraft:stick"},"neoforge:conditions":[{"type":"neoforge:false"}]}"#;
+        let recipe = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:flint"],"result":{"id":"minecraft:stick"},"neoforge:conditions":[{"type":"neoforge:not","value":{"type":"neoforge:true"}}]}"#;
         let root = content_recipe_root("condition", recipe);
         let items = crate::items::Items::for_tests(HashMap::new());
         let recipes = Recipes::load(

@@ -263,12 +263,17 @@ impl RaidLevel for World<'_> {
             || self.s.facts.get(self.state(x, y - 1, z)).name.as_ref() == "minecraft:snow"
                 && self.s.facts.is_air(self.state(x, y, z))
     }
-    fn player(&self) -> Option<RaidPlayer> {
-        self.player.as_ref().map(|p| RaidPlayer {
-            position: p.position,
-            block: p.block(),
-            alive: p.alive,
-        })
+    fn players(&self) -> Vec<RaidPlayer> {
+        self.player
+            .as_ref()
+            .map(|p| RaidPlayer {
+                uuid: horizon_client::lan::playerdata::ints_uuid(PLAYER_UUID),
+                position: p.position,
+                block: p.block(),
+                alive: p.alive,
+            })
+            .into_iter()
+            .collect()
     }
 }
 

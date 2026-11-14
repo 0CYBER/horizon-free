@@ -724,6 +724,17 @@ pub struct ScreenId {
     pub id: String,
 }
 
+/// The sign the sign editor is on (`ScreensClientHost::sign_editor`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+// exhaustive: the game builds it with a literal; mods only read it
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct SignEditView {
+    /// The block position of the sign being edited.
+    pub pos: BlockPos,
+    /// Whether the side being edited is the sign's front (`true`) or back (`false`).
+    pub front: bool,
+}
+
 // no wire: borrowed call-scoped view; transport uses owned snapshots rather than serializing references.
 /// The open screen, for the screen hooks (`screen_render_post`, the
 /// mouse ones `screen_mouse_button_pressed_pre`, `..._released_pre` and

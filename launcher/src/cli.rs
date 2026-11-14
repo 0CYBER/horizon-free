@@ -1,5 +1,8 @@
 //! `horizon-launcher <subcommand>`: the same steps as the window, from a terminal. Every
 //! command goes through `backend`; this file only parses arguments and prints.
+mod progress;
+use progress::{native_progress, progress};
+
 use clap::{Parser, Subcommand};
 use horizon_launcher::account::{self, Accounts};
 use horizon_launcher::backend::{self, Release};
@@ -28,7 +31,7 @@ fn parse_storage_row(value: &str) -> Result<ClearStorage, String> {
             .ok_or_else(|| tr("Unknown").into())
     }
 }
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[derive(Parser)]
@@ -1192,23 +1195,6 @@ pub fn run() -> Option<i32> {
     })
 }
 
-/// Download progress on one terminal line, only when stderr is a terminal and the percentage moves.
-fn progress(label: String) -> impl Fn(f32) {
-    let last = std::cell::Cell::new(-1);
-    let tty = std::io::stderr().is_terminal();
-    move |p| {
-        let pct = (p * 100.) as i32;
-        if !tty || pct == last.replace(pct) {
-            return;
-        }
-        eprint!("\r{label} {pct:>3}%");
-        let _ = std::io::stderr().flush();
-        if p >= 1.0 {
-            eprintln!();
-        }
-    }
-}
-
 fn json(value: serde_json::Value) {
     println!("{}", serde_json::to_string_pretty(&value).unwrap());
 }
@@ -1364,7 +1350,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
                 );
                 return Ok(0);
             }
-            let steps = |step: native_mods::Step| eprintln!("{}", step.label());
+            let progress = native_progress(std::io::stderr().is_terminal());
+            let steps = |step| {
+                if let Some(label) = progress(step) {
+                    eprintln!("{label}");
+                }
+            };
             if let Some(output) = server_output {
                 // Export mode: a standalone server engine in `output`. No instance is read
                 // or changed, and no launcher config is written; `folder` is required (clap).

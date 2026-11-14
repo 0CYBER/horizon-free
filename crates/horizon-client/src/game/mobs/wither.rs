@@ -20,19 +20,35 @@ impl Game<'_> {
             Some(Who::Mob(id))
                 if m.ai.last_hurt_by_player <= 0
                     && m.age as i32 - m.ai.last_hurt_by_time <= 100
-                    && self
-                        .mobs
-                        .iter()
-                        .any(|o| o.id == id && o.alive() && o.species() == Species::Wither) =>
+                    && self.is_wither(id) =>
             {
-                id
+                Some(id)
             }
-            _ => return,
+            _ => None,
+        };
+        let position = [m.position.x, m.position.y, m.position.z];
+        self.create_wither_rose_at(position, wither);
+    }
+    /// `LivingEntity.createWitherRose` for a dying player (`ServerPlayer.die`),
+    /// whose kill credit is `killer`.
+    pub(super) fn create_wither_rose_by(&mut self, position: [f64; 3], killer: Option<u32>) {
+        let wither = killer.filter(|&id| self.is_wither(id));
+        self.create_wither_rose_at(position, wither);
+    }
+    /// `getKillCredit` naming a wither that is still in the level.
+    fn is_wither(&self, id: u32) -> bool {
+        self.mobs
+            .iter()
+            .any(|o| o.id == id && o.alive() && o.species() == Species::Wither)
+    }
+    fn create_wither_rose_at(&mut self, position: [f64; 3], wither: Option<u32>) {
+        let Some(wither) = wither else {
+            return;
         };
         let pos = [
-            m.position.x.floor() as i32,
-            m.position.y.floor() as i32,
-            m.position.z.floor() as i32,
+            position[0].floor() as i32,
+            position[1].floor() as i32,
+            position[2].floor() as i32,
         ];
         let registry = self.pack.assets.registry;
         let rose = registry.default_state("minecraft:wither_rose");
@@ -50,11 +66,7 @@ impl Game<'_> {
             let _ = self.level_set(pos, rose);
             return;
         }
-        self.spawn_item_own(
-            ItemStack::new("minecraft:wither_rose", 1),
-            [m.position.x, m.position.y, m.position.z],
-            0,
-        );
+        self.spawn_item_own(ItemStack::new("minecraft:wither_rose", 1), position, 0);
     }
     fn is_wither_skull(&self, p: [i32; 3]) -> bool {
         let name = &*self

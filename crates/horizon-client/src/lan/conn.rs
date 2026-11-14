@@ -8,7 +8,7 @@
 //! keep-alive schedule on their own so a long tick never times a client out.
 use super::config_payloads::ConfigIo;
 use super::{
-    Joined, NetEvent, Out, Shared,
+    Body, Joined, NetEvent, Out, Shared,
     data::{CORE_PACK, SyncData},
     forwarding,
     io_pool::{self, Session as _},
@@ -279,7 +279,7 @@ pub struct PlayerSender {
     pub undrained: Arc<Undrained>,
     /// The bytes of the bodies sent and not framed yet.
     pub pending: Arc<AtomicUsize>,
-    held: Arc<Mutex<Vec<Vec<u8>>>>,
+    held: Arc<Mutex<Vec<Body>>>,
     framing: horizon_protocol::connection::Framing,
     to: To,
     /// The connection's bytes on the wire (after compression and encryption), counted by its
@@ -322,7 +322,7 @@ impl PlayerSender {
                     Ok(h) => format!(
                         "items={} bytes={}",
                         h.len(),
-                        h.iter().map(Vec::len).sum::<usize>()
+                        h.iter().map(|body| body.len()).sum::<usize>()
                     ),
                     Err(_) => "busy/poisoned".into(),
                 },
@@ -443,7 +443,7 @@ impl PlayerSender {
             outbox.send(Vec::new(), Some(io_pool::End::Close));
         }
     }
-    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Body>> {
         self.held.lock().unwrap_or_else(PoisonError::into_inner)
     }
     fn reserve(&self, cost: usize) -> bool {
@@ -486,7 +486,7 @@ impl PlayerSender {
         // Bookkeeping for PreparedPayload and the transaction's deferred journal record,
         // including geometric journal growth (records are at most 256 bytes). This is
         // retained-memory accounting, not a packet count or application-body cap.
-        let cost = io_pool::charge(&bytes).saturating_add(512);
+        let cost = io_pool::charge(bytes.capacity()).saturating_add(512);
         if !self.reserve(cost) {
             return Err(PayloadSendError::Backpressure);
         }
@@ -497,10 +497,13 @@ impl PlayerSender {
         })
     }
     pub fn send(&self, body: Vec<u8>) {
+        self.send_body(body.into());
+    }
+    fn send_body(&self, body: Body) {
         if matches!(self.to, To::Disabled) {
             return;
         }
-        if !self.reserve(io_pool::charge(&body)) {
+        if !self.reserve(io_pool::charge(body.retained())) {
             self.close();
             return;
         }
@@ -510,7 +513,7 @@ impl PlayerSender {
             self.flush();
             match &self.to {
                 To::Disabled => {}
-                To::Channel(tx) => drop(tx.send(Out::Packet(body))),
+                To::Channel(tx) => drop(tx.send(Out::Packet(body.into_vec()))),
                 To::Pool(outbox, _) => outbox.send(vec![body], None),
             }
         }
@@ -530,18 +533,21 @@ impl PlayerSender {
         )
     }
     /// Several packets in order, as [`Self::send`] each: under one lock
-    /// while the tick holds them.
-    pub fn send_many(&self, bodies: impl IntoIterator<Item = Vec<u8>>) {
+    /// while the tick holds them. Shared bodies stay shared up to the wire.
+    pub fn send_many<B: Into<Body>>(&self, bodies: impl IntoIterator<Item = B>) {
         if matches!(self.to, To::Disabled) {
             return;
         }
         if !HOLDING.get() {
-            bodies.into_iter().for_each(|body| self.send(body));
+            bodies
+                .into_iter()
+                .for_each(|body| self.send_body(body.into()));
             return;
         }
         let mut held = self.held();
         for body in bodies {
-            if !self.reserve(io_pool::charge(&body)) {
+            let body = body.into();
+            if !self.reserve(io_pool::charge(body.retained())) {
                 self.close();
                 return;
             }
@@ -554,7 +560,7 @@ impl PlayerSender {
         if !held.is_empty() {
             match &self.to {
                 To::Disabled => {}
-                To::Channel(tx) => drop(tx.send(Out::Packets(held))),
+                To::Channel(tx) => drop(tx.send(unshared(held))),
                 To::Pool(outbox, _) => outbox.send(held, None),
             }
         }
@@ -569,7 +575,8 @@ impl PlayerSender {
             To::Channel(tx) => drop(tx.send(Out::Disconnect(reason))),
             To::Pool(outbox, _) => {
                 let body = play::Clientbound::Disconnect(cfg::Disconnect { reason }).encode();
-                if !self.reserve(io_pool::charge(&body)) {
+                let body = Body::from(body);
+                if !self.reserve(io_pool::charge(body.retained())) {
                     self.close();
                     return;
                 }
@@ -577,6 +584,11 @@ impl PlayerSender {
             }
         }
     }
+}
+
+/// Held bodies as a test's channel gives them: each its own bytes.
+fn unshared(held: Vec<Body>) -> Out {
+    Out::Packets(held.into_iter().map(Body::into_vec).collect())
 }
 
 /// A transaction-owned packet. Dropping it cancels its retained-byte reservation.
@@ -621,7 +633,7 @@ pub fn flush_all<'a>(senders: impl IntoIterator<Item = &'a PlayerSender>) {
         }
         match &s.to {
             To::Disabled => {}
-            To::Channel(tx) => drop(tx.send(Out::Packets(held))),
+            To::Channel(tx) => drop(tx.send(unshared(held))),
             To::Pool(outbox, _) => {
                 if let Some(worker) = outbox.push(held, None)
                     && !wake.iter().any(|w| Arc::ptr_eq(w, worker))
@@ -2428,6 +2440,38 @@ impl KeepAliveWatch {
 mod tests {
     include!("profession_join_tests.rs");
 
+    /// Bodies shared between players reach each of them as the same bytes, in the order
+    /// they were sent among the player's own.
+    #[test]
+    fn shared_bodies_reach_every_player_in_order() {
+        let shared: Vec<Body> = [vec![1, 2, 3], vec![4]]
+            .into_iter()
+            .map(Body::shared)
+            .collect();
+        let players: Vec<_> = (0..2)
+            .map(|_| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                (PlayerSender::new(tx, Arc::default()), rx)
+            })
+            .collect();
+        {
+            let _holding = Holding::start();
+            for (i, (sender, _)) in players.iter().enumerate() {
+                sender.send(vec![9, i as u8]);
+                sender.send_many(shared.iter().cloned());
+                sender.send_many([vec![8]]);
+            }
+            flush_all(players.iter().map(|(sender, _)| sender));
+        }
+        for (i, (_, rx)) in players.iter().enumerate() {
+            let Ok(Out::Packets(bodies)) = rx.try_recv() else {
+                panic!("expected the held packets");
+            };
+            assert_eq!(bodies, [vec![9, i as u8], vec![1, 2, 3], vec![4], vec![8]]);
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
     #[test]
     fn undrained_packets_stop_at_twice_the_inbox() {
         let u = Undrained::default();
@@ -3669,7 +3713,7 @@ mod outgoing_budget_tests {
     fn empty_prepared_journal_records_are_bounded_and_fully_refunded() {
         let s = sender(Framing::Memory);
         let id = PayloadId("test:raw".into());
-        let cost = io_pool::charge(&Vec::new()) + 512;
+        let cost = io_pool::charge(0) + 512;
         let mut permits = Vec::new();
         for _ in 0..io_pool::MAX_PENDING / cost {
             permits.push(s.prepare_payload(Vec::new(), &id).unwrap());
@@ -3724,7 +3768,7 @@ mod outgoing_budget_tests {
         s.send(Vec::with_capacity(20000));
         assert_eq!(
             s.pending.load(Ordering::Relaxed),
-            before + io_pool::charge(&Vec::with_capacity(20000))
+            before + io_pool::charge(20000)
         );
         drop(hold);
         s.flush();
@@ -3741,7 +3785,7 @@ mod outgoing_budget_tests {
         ));
         assert_eq!(s.pending.load(Ordering::Relaxed), 0);
         let _hold = Holding::start();
-        for _ in 0..(io_pool::MAX_PENDING / io_pool::charge(&Vec::new()) + 10) {
+        for _ in 0..(io_pool::MAX_PENDING / io_pool::charge(0) + 10) {
             s.send(Vec::new());
         }
         assert!(s.pending.load(Ordering::Relaxed) <= io_pool::MAX_PENDING);

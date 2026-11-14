@@ -7,6 +7,8 @@ struct BookMod;
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for BookMod {
     fn register(&self, registrar: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        registrar.register_recipe_type("geometry:crafting");
+        registrar.register_raw_recipe_serializer("geometry:crafting", "geometry:crafting");
         let key = registrar.recipe_book_type("geometry:book").unwrap();
         assert_eq!(KEY.get_or_init(|| key.clone()), &key);
     }

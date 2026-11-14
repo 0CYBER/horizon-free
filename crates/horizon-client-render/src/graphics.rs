@@ -591,6 +591,45 @@ pub fn translucent_batching_offered() -> bool {
     TRANSLUCENT_BATCHING_OFFERED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Parallel Tick's setting, for the worlds this game runs itself (single player, open to LAN):
+/// whether the server tick's phases that give the same result in any order share their work
+/// among helper threads (`parallel`). Auto shares it only while the tick is heavy and sharing
+/// makes it faster; a quiet world stays on one thread and starts no helper.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ParallelTickMode {
+    #[default]
+    Off = 0,
+    Auto = 1,
+    On = 2,
+}
+impl ParallelTickMode {
+    pub const ALL: [ParallelTickMode; 3] = [
+        ParallelTickMode::Off,
+        ParallelTickMode::Auto,
+        ParallelTickMode::On,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Auto => "auto",
+            Self::On => "on",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Auto => "Auto",
+            Self::On => "On",
+        }
+    }
+    fn parse(s: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.name() == s)
+            .unwrap_or_default()
+    }
+}
+
 /// GPU Culling's setting: off, on where it is offered, or Auto, which has it on only where the
 /// CPU limits the frame and it makes the frame faster (`autotune::GpuCullingAuto`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -826,6 +865,9 @@ pub struct Graphics {
     pub pacing: Pacing,
     /// Chunk worker threads; 0 uses every core but one. Applies at the next start.
     pub workers: u32,
+    /// Parallel Tick (Performance graphics, beside Worker Threads): applies from the next tick,
+    /// and no preset sets it.
+    pub parallel_tick: ParallelTickMode,
     pub overlay: Overlay,
     /// World resolution as a percentage of the window's (50..=200).
     pub resolution_scale: u32,
@@ -928,6 +970,7 @@ impl Default for Graphics {
             present_mode: PresentMode::Auto,
             pacing: Pacing::Efficient,
             workers: 0,
+            parallel_tick: ParallelTickMode::Off,
             overlay: Overlay::Off,
             resolution_scale: 100,
             dynamic_resolution: false,
@@ -1050,6 +1093,7 @@ impl Graphics {
                 "particleCulling" => g.particle_culling = ParticleCullingMode::parse(value),
                 "leafCulling" => g.leaf_culling = LeafCullingMode::parse(value),
                 "opaqueIce" => g.opaque_ice = flag(g.opaque_ice),
+                "parallelTick" => g.parallel_tick = ParallelTickMode::parse(value),
                 "blockEntityCache" => {
                     let enabled = flag(false);
                     g.cache_shulker_boxes = enabled;
@@ -1149,7 +1193,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nentityCullingPrecheck:{}\nparticleCulling:{}\nleafCulling:{}\nopaqueIce:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\ndynamicResolution:{}\ntargetFps:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nupscalingSharpness:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiNits:{}\nhdrLighting:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\nhdrSmoothGradients:{}\ngpuCulling:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nentityCullingPrecheck:{}\nparticleCulling:{}\nleafCulling:{}\nopaqueIce:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\ndynamicResolution:{}\ntargetFps:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nupscalingSharpness:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiNits:{}\nhdrLighting:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\nhdrSmoothGradients:{}\ngpuCulling:{}\nparallelTick:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -1207,6 +1251,7 @@ impl Graphics {
             bool_text(self.translucent_batching),
             bool_text(self.hdr_smooth_gradients),
             self.gpu_culling.key(),
+            self.parallel_tick.name(),
         );
         if let Some(driver) = &self.hdr_failed_start {
             text += &format!("hdrFailedStart:{driver}\n");
@@ -1523,6 +1568,7 @@ mod tests {
             present_mode: PresentMode::Mailbox,
             pacing: Pacing::Precise,
             workers: 6,
+            parallel_tick: ParallelTickMode::Auto,
             overlay: Overlay::Graph,
             resolution_scale: 75,
             dynamic_resolution: false,

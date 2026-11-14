@@ -27,6 +27,7 @@ pub mod item_tooltip;
 #[doc(hidden)]
 pub mod menu;
 pub(crate) mod menu_slot;
+pub(crate) mod menu_slot_place;
 // hidden: owned trading values are re-exported at the API root
 #[doc(hidden)]
 pub mod merchant;

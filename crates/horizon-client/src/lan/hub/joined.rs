@@ -28,7 +28,7 @@ impl Hub {
             return;
         }
         let dimension = &self.config.dimension;
-        let mut outs: Vec<Vec<Vec<u8>>> = self
+        let mut outs: Vec<Vec<crate::lan::Body>> = self
             .guests
             .iter()
             .filter(|g| self.here(g))

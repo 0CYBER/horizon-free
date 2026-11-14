@@ -1,0 +1,17 @@
+# Incoming download engine tests use loopback networking.
+horizon-launcher downloads::tests::thousands_of_assets_are_bounded_and_connections_reused lib daily network
+horizon-launcher downloads::tests::segmented_transfers_validate_and_fallback_without_corrupt_output lib daily network
+horizon-launcher downloads::tests::transient_disconnect_resumes_only_validated_ranges lib daily network
+horizon-launcher downloads::tests::corrupt_cache_is_repaired_duplicates_coalesce_and_bad_hashes_never_publish lib daily network
+horizon-launcher downloads::tests::cancellation_and_inactivity_release_resources_and_cleanup lib daily network
+horizon-launcher downloads::tests::rate_limits_wait_and_permanent_failures_do_not_retry lib daily network
+horizon-launcher downloads::tests::metadata_never_follows_an_insecure_redirect lib daily network
+horizon-launcher downloads::tests::missing_or_malformed_hashes_never_reuse_cache_or_start_a_request lib daily network
+horizon-launcher downloads::tests::startup_sweep_only_removes_generated_files_from_exited_processes lib daily network
+horizon-launcher downloads::tests::global_budget_covers_two_hosts_metadata_and_segment_streams lib daily network
+horizon-launcher downloads::tests::range_probes_honor_retry_after_before_any_followup_request lib daily network
+horizon-launcher downloads::tests::unknown_size_disconnect_restarts_without_appending_the_whole_response lib daily network
+horizon-launcher downloads::tests::socks_proxy_resolves_hostnames_remotely_like_the_previous_transport lib daily network
+horizon-launcher downloads::tests::successive_jobs_reset_progress_and_share_budgets lib daily network
+horizon-launcher downloads::tests::required_failures_abort_queued_and_active_siblings lib daily network
+horizon-launcher downloads::tests::changing_proxy_routes_never_reuses_a_previous_hosts_keepalive_pool lib daily network

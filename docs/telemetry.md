@@ -107,6 +107,43 @@ The server also asks the official server (`horizon_telemetry::server_status::OFF
 
 The launcher reads the count when it opens and every minute after, and shows "N playing now" on the Play page, exact, with thousands separators; clicking it opens playhorizon.dev/stats. Beside it, "M on the official SMP" is the official server's own count, from the same status ping the launcher sends once a minute (3-second timeout, nothing shown when it doesn't answer); clicking it opens the Servers page. It shows nothing when the server can't be reached. `HORIZON_TELEMETRY_URL=off` turns both off; `HORIZON_NO_HEARTBEAT=1` keeps a single automated run out of the count.
 
+## Bug reports from the game
+
+The pause menu's Report Bugs opens Horizon's report screen instead of Mojang's bug tracker (the screen comes in a
+later pull request; this is the server's side). It is not data collection: nothing is kept on the machine or sent
+in the background, and no switch above covers it. The player picks "Something works wrong" or "Performance",
+writes a sentence, sees the whole issue as it will be posted, and clicking Send is the consent for that one report.
+
+The game fills in the technical part itself, scrubbed as the rest of this page says (`scrub::Scrubber`): no
+account, UUID, install ID, server address, world name or coordinates. `POST /v1/report` on the telemetry server
+takes it and opens a public issue in horizon-rust/horizon:
+
+| Field | Needed | What |
+|---|---|---|
+| `category` | yes | `bug` or `performance` |
+| `title` | yes | 5 to 120 characters; the game writes it, the player may change it |
+| `happened` | for a bug (10 to 500) | the player's sentence; optional for performance |
+| `expected` | no | up to 500 |
+| `area` | no | a bug's area label: `blocks`, `mobs`, `rendering`, `audio`, `ui`, `multiplayer`, `saves`, `worldgen`, `chunks`, `commands` |
+| `version` | yes | the build, as the log's first line names it |
+| `outdated` | no | the newer build the game knew of: the report is still taken and says so |
+| `name` | no | a Discord name to ask, up to 64 |
+| `system` | yes | 1 to 60 `[label, value]` rows: the machine, its GPUs and driver, the screen, power |
+| `settings` | no | up to 40 `[label, value]` rows |
+| `context` | no | up to 30 lines: what happened in the last seconds |
+| `measurement` | for performance (10 to 6000) | the measurement's summary, as text |
+| `likely` | no | up to 10 lines: what most likely explains it |
+| `capture` | no | the measurement's link on `playhorizon.dev/perf/c/` |
+| `log` | no | the end of the log, up to 40,000 characters, without chat |
+
+The issue gets `from-game`, plus `bug` and the area, or `perf`. Each piece of the player's text is made inert as
+the website's reports are (no mentions, cross-references or HTML); the log and the measurement sit in code
+blocks, and the log's start goes when the issue would pass GitHub's size limit. The server takes 20 a day from
+everyone (`HORIZON_TELEMETRY_GAME_REPORTS_PER_DAY`), apart from the website's 30, at most 20 an hour from one
+address, and the same report twice in a day gets the first one's issue. It keeps the report's text for 90 days and
+never the sender's address. The answer is the issue's link, which the game shows; the player gets no GitHub
+notifications.
+
 ## Server
 
 - `POST /v1/batch`
@@ -116,6 +153,7 @@ The launcher reads the count when it opens and every minute after, and shows "N 
 - `GET /v1/export/benchmarks` and `GET /v1/export/hardware`: for the maintainers' performance work only, behind a bearer token the public cannot use (404 while the server has none). The raw benchmark reports and the play sessions per machine description, including CPU threads and physical cores, with no minimum group size. Nothing identifying: no install ID, and only what a player already agreed to send (this page's lists).
 - `POST /v1/live` and `GET /v1/live`: the "I'm playing" ping and the live count.
 - `GET /v1/live/history?range=24h|7d|30d|all&series=players|official`: the live count, or the official server's, over time (above).
+- `POST /v1/report`: a bug report from the game, opened as a GitHub issue ([above](#bug-reports-from-the-game)).
 
 Public output never holds a raw hardware value, only these classes (`src/classes.rs`, the same in the website's `scripts/benchmarks.mjs`, horizon-rust/horizon-site), and a class is published only with at least 3 different installs:
 

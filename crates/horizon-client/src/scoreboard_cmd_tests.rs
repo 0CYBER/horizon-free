@@ -356,3 +356,27 @@ fn selector_options_parse() {
     let parse = vanilla::dispatcher().parse("scoreboard players get @e kills", &reg);
     assert!(parse.executable().is_err());
 }
+
+#[test]
+fn swapping_with_a_read_only_source_writes_the_target_then_fails() {
+    let mut m = mock();
+    run(&mut m, "scoreboard objectives add hp health").unwrap();
+    run(&mut m, "scoreboard objectives add d dummy").unwrap();
+    run(&mut m, "scoreboard players set Steve d 5").unwrap();
+    // The game keeps the health objective's scores; a command cannot.
+    m.sb.set("Alex", "hp", 9);
+    // `OperationArgument.Operation.SWAP`: the target's write comes first.
+    assert_eq!(
+        fail(&mut m, "scoreboard players operation Steve d >< Alex hp"),
+        "command.failed"
+    );
+    // The target keeps the value it wrote before the source refused the swap.
+    assert_eq!(m.sb.score("Steve", "d").unwrap().value, 9);
+    assert_eq!(m.sb.score("Alex", "hp").unwrap().value, 9);
+    // Only the source's `set` throws: an operation that just reads it works.
+    assert_eq!(
+        run(&mut m, "scoreboard players operation Steve d += Alex hp").unwrap(),
+        18
+    );
+    assert_eq!(m.sb.score("Alex", "hp").unwrap().value, 9);
+}

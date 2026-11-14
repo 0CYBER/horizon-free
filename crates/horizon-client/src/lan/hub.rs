@@ -458,7 +458,7 @@ pub struct Hub {
     /// before the level's ChunkMap.tick (`Entities::synced`).
     pub synced: Vec<(i32, i32)>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
-    entity_out: Vec<Vec<Vec<u8>>>,
+    entity_out: Vec<Vec<super::Body>>,
     /// Each placed guest's entities gone this tick, where they were last sent (only while the
     /// prediction records).
     entity_gone: Vec<Vec<[f64; 3]>>,
@@ -1494,7 +1494,7 @@ impl Hub {
             player_id: entity_id,
             hardcore: self.config.hardcore,
             levels,
-            max_players: self.config.max_players as i32,
+            max_players: i32::try_from(self.lan.shared.max_players()).unwrap_or(i32::MAX),
             chunk_radius: self.chunk_radius(),
             simulation_distance: self.config.simulation_distance,
             reduced_debug_info: self.reduced_debug_info,
@@ -5180,6 +5180,7 @@ mod tests {
     mod effect_meta_tests;
     #[path = "../far_tests.rs"]
     mod far_tests;
+    mod live_player_limit_tests;
     mod ordered_inbox_tests;
     mod pending_move_bound_tests;
     mod pending_move_scope_tests;

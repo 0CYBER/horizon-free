@@ -31,7 +31,8 @@ pub fn sources(root: &Path, overlay: &PackOverlay) -> Result<Vec<(String, Value)
     let inventory = horizon_mod_package::enabled::EnabledMods::read(root)?;
     let conditions = overlay
         .conditions
-        .with_mod_inventory(inventory.server_ids());
+        .with_mod_inventory(inventory.server_ids())
+        .with_diagnostics();
     for file in &horizon_world::json_folder::read(&root.join("data/minecraft/recipe"))?.files {
         sources.push((file.name.clone(), file.bytes()?.to_vec()));
     }
@@ -83,5 +84,6 @@ pub fn sources(root: &Path, overlay: &PackOverlay) -> Result<Vec<(String, Value)
         }
         parsed.push((name, v));
     }
+    conditions.check_resource_errors("recipe")?;
     Ok(parsed)
 }

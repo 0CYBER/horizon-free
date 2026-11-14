@@ -120,6 +120,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage) -> bool {
             | DamageKind::MaceSmash
             | DamageKind::Spear
             | DamageKind::MobAttack
+            | DamageKind::MobAttackNoAggro
             | DamageKind::Arrow
             | DamageKind::Thrown
             | DamageKind::Fireball

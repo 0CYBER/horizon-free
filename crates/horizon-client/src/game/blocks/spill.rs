@@ -549,6 +549,9 @@ impl GameLevel<'_> {
     fn pop_resource(&mut self, pos: [i32; 3], mut stack: ItemStack) {
         self.pending.attach(pos, &mut stack);
         let at = pop_position(&mut self.world.random, pos);
+        // `Block.popResource` draws its three offsets, then its private
+        // overload reads `GameRules.BLOCK_DROPS` and pops nothing while it is
+        // off: the level random advances either way.
         if self.rules.block_drops {
             self.spill.spawns.push(Spawn {
                 random: None,

@@ -142,5 +142,6 @@ OceanMonumentPieces.OceanMonumentPiece.generateBoxOnFillOnly	port	crates/horizon
 OceanMonumentPieces.OceanMonumentPiece.chunkIntersects	port	crates/horizon-world/src/worldgen/structure/monument.rs::W::hits
 OceanMonumentStructure.findGenerationPoint	inline	crates/horizon-world/src/worldgen/structure/start.rs::try_generate	surrounding biome check around the chunk centre, then the top-of-chunk stub
 OceanMonumentStructure.createTopPiece	inline	crates/horizon-world/src/worldgen/structure/start.rs::try_generate	MonumentBuilding::new at the chunk corner minus 29 with a random direction
+OceanMonumentStructure.regeneratePiecesAfterLoad	port	crates/horizon-world/src/worldgen/structure/monument.rs::MonumentBuilding::regenerate_after_load	the first saved piece's box and orientation are read and its rooms are built again from the seed; the other saved pieces are thrown away
 OceanRuinPieces.archyRuleProcessor	inline	crates/horizon-world/src/worldgen/structure/ocean_ruin.rs::processors	sand to suspicious sand with loot and a cap of 5 in the warm branch, cold bricks in the other
 OceanRuinPieces.allPositions	inline	crates/horizon-world/src/worldgen/structure/ocean_ruin.rs::pieces	eight cluster offsets drawn inline before the ruins count

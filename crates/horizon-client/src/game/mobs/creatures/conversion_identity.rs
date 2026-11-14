@@ -100,7 +100,7 @@ mod tests {
                 preserve_can_pick_up_loot: false,
             };
             let witch = game
-                .convert_to(&villager, "minecraft:witch", params, |_, _| {})
+                .convert_to(&villager, "minecraft:witch", params, false, |_, _| {})
                 .unwrap();
             assert_eq!(MARK.get_existing(game, Holder::Entity(witch)), Ok(Some(7)));
             assert_eq!(LOOSE.get_existing(game, Holder::Entity(witch)), Ok(None));

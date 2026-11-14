@@ -11,6 +11,25 @@ pub const ELASTIC: f64 = 6.0;
 /// `Leashable.LEASH_TOO_FAR_DIST`.
 pub const SNAP: f64 = 12.0;
 
+/// `Leashable.leashSnapDistance`: the `Ghast` family snaps its lead further
+/// out than the default.
+pub fn snap_distance(species: Species) -> f64 {
+    if matches!(species, Species::Ghast | Species::HappyGhast) {
+        16.0
+    } else {
+        SNAP
+    }
+}
+
+/// `Leashable.leashElasticDistance`.
+pub fn elastic_distance(species: Species) -> f64 {
+    if matches!(species, Species::Ghast | Species::HappyGhast) {
+        10.0
+    } else {
+        ELASTIC
+    }
+}
+
 /// What holds the other end of a lead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Holder {
@@ -323,6 +342,22 @@ pub fn can_be_leashed(m: &Mob) -> bool {
         _ => !m.hostile() && !m.removed,
     }
 }
+
+/// `Leashable.canHaveALeashAttachedTo`: the holder's box centre is within
+/// the mob's own snap distance of its box centre, and the mob is leashable.
+pub fn can_have_a_leash_attached(m: &Mob, center: Vec3) -> bool {
+    if !can_be_leashed(m) || !m.alive() {
+        return false;
+    }
+    let b = m.bounds();
+    let (lo, hi) = (b.min_position(), b.max_position());
+    let mine = Vec3::new(
+        (lo.x + hi.x) / 2.0,
+        (lo.y + hi.y) / 2.0,
+        (lo.z + hi.z) / 2.0,
+    );
+    mine.distance(center) <= snap_distance(m.species())
+}
 /// `Leashable.tickLeash` at the end of `Entity.baseTick`.
 pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let Some(holder) = m.extra.leash else {
@@ -371,11 +406,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     };
     // PathfinderMob.whenLeashedTo: home is the holder's block, within the
     // elastic distance less one.
-    let (elastic, snap) = if m.species() == Species::HappyGhast {
-        (10.0, 16.0)
-    } else {
-        (ELASTIC, SNAP)
-    };
+    let (elastic, snap) = (elastic_distance(m.species()), snap_distance(m.species()));
     m.ai.home = Some((
         [
             state.position.x.floor() as i32,
@@ -452,32 +483,19 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if !pulled {
         close_range(m, w, &state);
     }
-    // tickLeash widens the float yaw before subtracting double momentum.
-    if quad {
-        m.yaw = (f64::from(m.yaw) - m.extra.leash_spin) as f32;
-    } else {
-        m.yaw -= m.extra.leash_spin as f32;
-    }
+    // tickLeash: `setYRot((float)(getYRot() - angularMomentum))` widens the
+    // float yaw, subtracts the double momentum, then narrows once.
+    m.yaw = (f64::from(m.yaw) - m.extra.leash_spin) as f32;
+    // Leashable.angularFriction: the block under the mob's movement decides
+    // the ground friction, whatever the lead's shape; the product is a float.
     let friction = if m.on_ground {
-        0.6 * 0.91
+        m.friction_at(w, m.on_pos(0.500_001)) * 0.91_f32
     } else if m.is_in_liquid() {
-        0.8
+        0.8_f32
     } else {
-        0.91
+        0.91_f32
     };
-    if quad {
-        // angularFriction returns a float, including the ground product.
-        let friction = if m.on_ground {
-            m.friction_at(w, m.on_pos(0.500_001)) * 0.91_f32
-        } else if m.is_in_liquid() {
-            0.8_f32
-        } else {
-            0.91_f32
-        };
-        m.extra.leash_spin *= f64::from(friction);
-    } else {
-        m.extra.leash_spin *= friction;
-    }
+    m.extra.leash_spin *= f64::from(friction);
 }
 /// The lead comes off (`Mob.onLeashRemoved`): no more home.
 pub fn remove(m: &mut Mob) -> Option<Holder> {
@@ -831,11 +849,7 @@ mod tests {
                     Vec3::new(force[0] * 0.8, force[1] * 0.2, force[2] * 0.8),
                     "{kind} held by {holder_kind}"
                 );
-                let yaw = if quad {
-                    (90.0 - 10.0 * torque) as f32
-                } else {
-                    90.0 - (10.0 * torque) as f32
-                };
+                let yaw = (90.0 - 10.0 * torque) as f32;
                 assert_eq!(mob.yaw, yaw);
                 assert!(
                     !events
@@ -1093,6 +1107,53 @@ mod tests {
         .expect("pull")
         .0;
         assert!((following[0] - still[0] * 0.3_f32 as f64).abs() < 1e-9);
+    }
+    #[test]
+    fn a_leads_spin_uses_the_friction_of_the_block_under_the_mob() {
+        // Leashable.angularFriction on the ground is
+        // `getBlockState(getBlockPosBelowThatAffectsMyMovement()).getBlock()
+        // .getFriction() * 0.91F`; Blocks.BLUE_ICE friction is 0.989F.
+        let expected = f64::from(0.989_f32 * 0.91_f32);
+        // `with_test_world` answers false when the prepared data is absent, and
+        // the edits are inside the closure, so a skip needs no early return.
+        let _ = crate::mobs::world::with_built_test_world(
+            &[],
+            |world, registry| {
+                world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
+                );
+                let ice = registry.default_state("minecraft:blue_ice").unwrap();
+                world.set(0, 63, 0, ice).unwrap();
+            },
+            |world, types| {
+                let mut cow = Mob::new(
+                    1,
+                    std::sync::Arc::new(types.types["minecraft:cow"].clone()),
+                    Vec3::new(0.5, 64.0, 0.5),
+                    0.0,
+                );
+                cow.on_ground = true;
+                cow.extra.leash = Some(Holder::Player);
+                cow.extra.leash_spin = 1.0;
+                let mut w = world.clone();
+                w.player = Some(crate::mobs::world::test_player(Vec3::new(0.5, 64.0, 2.5)));
+                let mut events = Vec::new();
+                tick(&mut cow, &w, &mut events);
+                assert!(
+                    !events
+                        .iter()
+                        .any(|e| matches!(e, MobEvent::LeashBreak { .. })),
+                    "the lead is slack: {events:?}"
+                );
+                assert_eq!(cow.extra.leash_spin, expected, "blue ice, not 0.6");
+                // Off the ground the same lead keeps vanilla's plain drag.
+                cow.on_ground = false;
+                cow.extra.leash_spin = 1.0;
+                tick(&mut cow, &w, &mut events);
+                assert_eq!(cow.extra.leash_spin, f64::from(0.91_f32));
+            },
+        );
     }
     #[test]
     fn leash_tags_round_trip() {

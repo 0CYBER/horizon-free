@@ -22,8 +22,17 @@ LAUNCHER_CHECK = {".github/workflows/ci.yml", ".github/workflows/dyna-ci.yml",
                   "tools/ci/rust_changes.py", "tools/release_train.py"}
 
 
+# The Python under tools/ and tests/: verify's Python steps and the parity jobs run it, and no Rust build or test reads
+# it (Rust does read tools/native-hook-fragments/*.json and tools/ci/*.sh, so those still count). This script and the
+# module it imports decide whether Rust runs at all, so a change to them runs it.
+RUST_DECIDES = {"tools/ci/rust_changes.py", "tools/release_train.py"}
+
+
 def needs_rust(paths):
-    return any(not (path.startswith("docs/") or path.endswith(".md")) for path in paths)
+    return any(not (
+        path.startswith("docs/") or path.endswith(".md")
+        or path.startswith(("tools/", "tests/")) and path.endswith(".py") and path not in RUST_DECIDES
+    ) for path in paths)
 
 
 def needs_launcher(paths):

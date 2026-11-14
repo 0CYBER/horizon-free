@@ -282,21 +282,13 @@ impl Game<'_> {
             .play(&format!("minecraft:item.lead.{sound}"), Some(at), 1.0, 1.0);
     }
     /// `Leashable.canHaveALeashAttachedTo` for the mob at `index` and a
-    /// holder whose box centre is `center`: within snapping range and
-    /// leashable.
+    /// holder whose box centre is `center`: within the species' snapping
+    /// range and leashable.
     pub(super) fn can_attach_lead(&self, index: usize, center: glam::DVec3) -> bool {
-        let m = &self.mobs[index];
-        if !leash::can_be_leashed(m) || !m.alive() {
-            return false;
-        }
-        let b = m.bounds();
-        let (lo, hi) = (b.min_position(), b.max_position());
-        let mine = glam::DVec3::new(
-            (lo.x + hi.x) / 2.0,
-            (lo.y + hi.y) / 2.0,
-            (lo.z + hi.z) / 2.0,
-        );
-        mine.distance(center) <= leash::SNAP
+        leash::can_have_a_leash_attached(
+            &self.mobs[index],
+            horizon_core::geometry::Vec3::new(center.x, center.y, center.z),
+        )
     }
     /// `Entity.gameEvent(event, player)` for a lead: the acting player is the source.
     pub(super) fn lead_game_event(&mut self, event: &'static str, at: [f64; 3]) {
@@ -1293,20 +1285,12 @@ mod rope_hold_tests {
 
 #[cfg(test)]
 mod attach_tests {
-    /// `Entity.interact` with a lead: `setLeashedTo` → `LeashData.setLeashHolder`
-    /// forgets the holder a save named. A mob whose saved holder never loaded
-    /// keeps the player's lead past the 100-tick deadline, and no second lead
-    /// falls from the forgotten one.
-    #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn a_player_lead_replaces_a_saved_holder_that_never_loaded() {
-        use crate::game::{Audio, Options, Progress, Settings, load_resources};
-        use horizon_client::mobs::{
-            Mob,
-            leash::{Holder, Pending},
-        };
-        use horizon_core::geometry::Vec3;
+    use crate::game::{Audio, Options, Progress, Settings, load_resources};
+    use horizon_core::geometry::Vec3;
 
+    /// A game with resources but no level: a test pushes the mobs it needs
+    /// and drives the lead code alone.
+    fn game(resources: &mut Option<std::sync::Arc<crate::game::Resources>>) -> super::Game<'_> {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
         let loaded = load_resources(
@@ -1325,9 +1309,9 @@ mod attach_tests {
         let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
         options.resources = root.clone();
         options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
-        let res = loaded.resources;
+        let res = resources.insert(loaded.resources);
         let mut game = super::Game::new(
-            &res,
+            res,
             loaded.pack,
             loaded.gui.unwrap(),
             options,
@@ -1343,6 +1327,74 @@ mod attach_tests {
             horizon_client::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5))
                 .unwrap(),
         );
+        game
+    }
+
+    /// The centre of a mob's box: `Leashable.leashDistanceTo`'s own end.
+    fn centre(m: &horizon_client::mobs::Mob) -> glam::DVec3 {
+        let b = m.bounds();
+        let (lo, hi) = (b.min_position(), b.max_position());
+        glam::DVec3::new(
+            (lo.x + hi.x) / 2.0,
+            (lo.y + hi.y) / 2.0,
+            (lo.z + hi.z) / 2.0,
+        )
+    }
+
+    /// `Leashable.canHaveALeashAttachedTo` measures with the leashee's own
+    /// `leashSnapDistance`: a happy ghast's 16, a cow's default 12.
+    #[test]
+    #[ignore = "daily"]
+    fn a_lead_attaches_within_the_species_own_snap_distance() {
+        use horizon_client::mobs::{Mob, Species};
+
+        let mut resources = None;
+        let mut game = game(&mut resources);
+        for (id, kind, species) in [
+            (1, "minecraft:happy_ghast", Species::HappyGhast),
+            (2, "minecraft:cow", Species::Cow),
+        ] {
+            let kind = game.res.mob_types().get(kind).expect(kind).clone();
+            game.mobs
+                .push(Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0));
+            assert_eq!(game.mobs.last().unwrap().species(), species);
+        }
+        let at = |index: usize, blocks: f64| {
+            let c = centre(&game.mobs[index]);
+            glam::DVec3::new(c.x + blocks, c.y, c.z)
+        };
+        assert!(
+            game.can_attach_lead(0, at(0, 15.0)),
+            "a happy ghast takes a lead 15 blocks out, as vanilla ties it"
+        );
+        assert!(
+            !game.can_attach_lead(0, at(0, 17.0)),
+            "past its 16-block snap distance it cannot be tied"
+        );
+        assert!(
+            game.can_attach_lead(1, at(1, 11.0)),
+            "a cow takes a lead inside the default distance"
+        );
+        assert!(
+            !game.can_attach_lead(1, at(1, 13.0)),
+            "a cow still snaps its lead past 12 blocks"
+        );
+    }
+
+    /// `Entity.interact` with a lead: `setLeashedTo` → `LeashData.setLeashHolder`
+    /// forgets the holder a save named. A mob whose saved holder never loaded
+    /// keeps the player's lead past the 100-tick deadline, and no second lead
+    /// falls from the forgotten one.
+    #[test]
+    #[ignore = "daily"]
+    fn a_player_lead_replaces_a_saved_holder_that_never_loaded() {
+        use horizon_client::mobs::{
+            Mob,
+            leash::{Holder, Pending},
+        };
+
+        let mut resources = None;
+        let mut game = game(&mut resources);
         let kind = game
             .res
             .mob_types()

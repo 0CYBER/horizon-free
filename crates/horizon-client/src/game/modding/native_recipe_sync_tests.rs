@@ -2,6 +2,15 @@ use crate::game::native_guest_turn_tests::with_guests;
 use horizon_client::lan::recipes::ContentPart;
 use std::sync::{Arc, Mutex};
 
+struct MachineTypes;
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for MachineTypes {
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        r.register_recipe_type("recipe_sync_data:grinding");
+        r.register_raw_recipe_serializer("recipe_sync_data:grinding", "recipe_sync_data:grinding");
+    }
+}
+
 struct Selection(Arc<Mutex<Vec<u128>>>);
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Selection {
@@ -13,7 +22,7 @@ impl mod_api::Hooks for Selection {
         let uuid = event.player.uuid();
         self.0.lock().unwrap().push(uuid);
         if uuid == 12 {
-            event.recipe_types.push("testmod:grinding".into());
+            event.recipe_types.push("recipe_sync_data:grinding".into());
         }
     }
 }
@@ -23,10 +32,10 @@ impl mod_api::Hooks for Selection {
 fn datapack_sync_selects_once_per_join_and_reload_for_each_recipient() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
-        vec![mod_api::ModEntry::new(
-            "selection",
-            Box::new(Selection(calls.clone())),
-        )]
+        vec![
+            mod_api::ModEntry::new("selection", Box::new(Selection(calls.clone()))),
+            mod_api::ModEntry::new("recipe_sync_data", Box::new(MachineTypes)),
+        ]
         .into(),
         || {
             with_guests(|game| {
@@ -46,9 +55,9 @@ fn datapack_sync_selects_once_per_join_and_reload_for_each_recipient() {
                 assert_eq!(*calls.lock().unwrap(), [12, 13]);
                 let host = game.lan.as_ref().unwrap();
                 let a = &host.hub.guest(12).unwrap().recipe_sync;
-                assert_eq!(a.types, ["testmod:grinding"]);
+                assert_eq!(a.types, ["recipe_sync_data:grinding"]);
                 let last = ContentPart::decode(a.payloads.last().unwrap()).unwrap();
-                assert_eq!(last.last, Some(vec!["testmod:grinding".into()]));
+                assert_eq!(last.last, Some(vec!["recipe_sync_data:grinding".into()]));
                 assert!(host.hub.guest(13).unwrap().recipe_sync.payloads.is_empty());
                 for conn in [12, 13] {
                     horizon_client::lan::recipes::send_content(
@@ -57,7 +66,7 @@ fn datapack_sync_selects_once_per_join_and_reload_for_each_recipient() {
                 }
                 assert_eq!(
                     received(&receivers[0]),
-                    [vec!["testmod:grinding".to_owned()]]
+                    [vec!["recipe_sync_data:grinding".to_owned()]]
                 );
                 assert!(received(&receivers[1]).is_empty());
                 game.sync_recipe_content();
@@ -69,13 +78,13 @@ fn datapack_sync_selects_once_per_join_and_reload_for_each_recipient() {
                 }
                 assert_eq!(
                     received(&receivers[0]),
-                    [vec!["testmod:grinding".to_owned()]]
+                    [vec!["recipe_sync_data:grinding".to_owned()]]
                 );
                 assert!(received(&receivers[1]).is_empty());
                 let host = game.lan.as_ref().unwrap();
                 assert_eq!(
                     host.hub.guest(12).unwrap().recipe_sync.types,
-                    ["testmod:grinding"]
+                    ["recipe_sync_data:grinding"]
                 );
                 assert!(host.hub.guest(13).unwrap().recipe_sync.payloads.is_empty());
                 game.lan
@@ -141,7 +150,7 @@ impl mod_api::Hooks for MarkedSelection {
         let uuid = event.player.uuid();
         self.decided.lock().unwrap().push(uuid);
         if uuid == 12 {
-            event.recipe_types.push("testmod:grinding".into());
+            event.recipe_types.push("recipe_sync_data:grinding".into());
         }
         // A marker in the recipient's actual packet stream records the decision.
         let marker = horizon_protocol::packets::play::Clientbound::CustomPayload(
@@ -160,13 +169,16 @@ fn datapack_sync_decision_precedes_join_recipe_packets() {
     let senders = Arc::new(Mutex::new(std::collections::HashMap::new()));
     let decided = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
-        vec![mod_api::ModEntry::new(
-            "order",
-            Box::new(MarkedSelection {
-                senders: senders.clone(),
-                decided: decided.clone(),
-            }),
-        )]
+        vec![
+            mod_api::ModEntry::new(
+                "order",
+                Box::new(MarkedSelection {
+                    senders: senders.clone(),
+                    decided: decided.clone(),
+                }),
+            ),
+            mod_api::ModEntry::new("recipe_sync_data", Box::new(MachineTypes)),
+        ]
         .into(),
         || {
             with_guests(|game| {
@@ -205,7 +217,10 @@ fn datapack_sync_decision_precedes_join_recipe_packets() {
                             C::UpdateRecipes(_) => order.push("recipes"),
                             C::CustomPayload(p) if p.channel == "horizon:recipe_content" => {
                                 let content = ContentPart::decode(&p.data).unwrap();
-                                assert_eq!(content.last, Some(vec!["testmod:grinding".into()]));
+                                assert_eq!(
+                                    content.last,
+                                    Some(vec!["recipe_sync_data:grinding".into()])
+                                );
                                 order.push("selected recipes");
                             }
                             _ => {}
@@ -227,10 +242,10 @@ fn datapack_sync_decision_precedes_join_recipe_packets() {
 fn datapack_sync_disconnect_before_ask_sends_nothing_and_empty_reload_asks_nobody() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
-        vec![mod_api::ModEntry::new(
-            "disconnect",
-            Box::new(Selection(calls.clone())),
-        )]
+        vec![
+            mod_api::ModEntry::new("disconnect", Box::new(Selection(calls.clone()))),
+            mod_api::ModEntry::new("recipe_sync_data", Box::new(MachineTypes)),
+        ]
         .into(),
         || {
             with_guests(|game| {

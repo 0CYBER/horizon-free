@@ -480,7 +480,16 @@ impl ItemPlace {
                 let (provider, _) = host.capability_providers().place_provider(provider)?;
                 provider.stack(host, *key)
             }
-            ItemPlace::MenuSlot { menu, slot } => menu.slot(host, *slot)?,
+            // A slot backed by a mod's storage reads it through its handler; every other slot
+            // reads as before.
+            ItemPlace::MenuSlot { menu, slot } => match menu.slot_backing(host, *slot) {
+                Some(MenuSlotBacking::Place(place)) => {
+                    let (handler, index) = place.handler(host, menu.player)?;
+                    let resource = handler.resource(host, index)?;
+                    resource.to_stack(handler.amount(host, index))
+                }
+                _ => menu.slot(host, *slot)?,
+            },
             _ => backend_mut_of(host).and_then(|backend| backend.game_stack(self)),
         }
     }
@@ -705,6 +714,10 @@ impl ItemPlace {
                     }
                     MenuSlotBacking::Entity { entity, slot } => {
                         (entity.capability(host, &ENTITY_ITEMS, ()), slot)
+                    }
+                    MenuSlotBacking::Place(place) => {
+                        let (handler, index) = place.handler(host, menu.player).ok_or(())?;
+                        (Some(handler), index)
                     }
                     MenuSlotBacking::CraftResult => return Ok(0),
                     _ => {

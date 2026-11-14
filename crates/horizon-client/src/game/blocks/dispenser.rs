@@ -2027,6 +2027,7 @@ impl Game<'_> {
                 keep_equipment: false,
                 preserve_can_pick_up_loot: false,
             },
+            false,
             |game, _| {
                 game.mooshroom_shear_puff([at.x, at.y, at.z], height);
                 let mut drops =

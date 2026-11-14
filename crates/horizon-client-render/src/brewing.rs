@@ -337,6 +337,9 @@ pub struct BrewTick {
     pub bottles: Option<[bool; 3]>,
     /// Level event 1035 (brew sound).
     pub brewed: bool,
+    /// A fuel item was taken: `serverTick` marks the stand changed for it even
+    /// when its `brewing_fuel` gave no uses.
+    pub fuel_taken: bool,
     /// Remainders dropped at the stand.
     pub drops: Vec<ItemStack>,
 }
@@ -401,6 +404,7 @@ impl BrewingStand {
             } else if let Some(r) = remainder {
                 out.drops.push(r);
             }
+            out.fuel_taken = true;
         }
         let brewable = self.brewable(brewing);
         let mut due = false;
@@ -614,7 +618,7 @@ mod tests {
     fn content_brewing_recipe_condition_is_applied() {
         let root = content_brewing_root(
             "condition",
-            r#", "neoforge:conditions":[{"type":"neoforge:false"}]"#,
+            r#", "neoforge:conditions":[{"type":"neoforge:not","value":{"type":"neoforge:true"}}]"#,
         );
         let items = Items::for_tests(Default::default());
         let recipes = Brewing::load(&root, &items, &PackOverlay::NONE);

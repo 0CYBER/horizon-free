@@ -1963,18 +1963,11 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             }
             S::Rabbit => {
                 let at = block(m);
-                let roll = self.int(100);
-                let mut variant = if self.level.biome_tag("minecraft:spawns_white_rabbits", at) {
-                    if roll < 80 { 1 } else { 3 }
-                } else if self.level.biome_tag("minecraft:spawns_gold_rabbits", at) {
-                    4
-                } else if roll < 50 {
-                    0
-                } else if roll < 90 {
-                    5
-                } else {
-                    2
-                };
+                let mut variant = super::rabbit::random_variant(
+                    self.level.biome_tag("minecraft:spawns_white_rabbits", at),
+                    self.level.biome_tag("minecraft:spawns_gold_rabbits", at),
+                    self.random,
+                );
                 let g = match g {
                     Some(Group::Rabbit(a, v)) => {
                         variant = v;

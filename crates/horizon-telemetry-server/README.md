@@ -23,6 +23,7 @@ It runs at **https://telemetry.playhorizon.dev** (`DEFAULT_ENDPOINT` in `crates/
 | `POST /hub/vote` | `{"item": "<roadmap id>", "voter": "<the browser's random id>", "up": true}`: a 👍 on a roadmap item, one per voter; `"up": false` takes it back. Returns `{"item", "votes"}`. 400 for a bad id, 429 over the address's limit. |
 | `GET /hub/votes` | `{"votes": {"<item>": n}}`. Made again at most every minute. |
 | `POST /hub/report` | A bug report from the hub's form: `{"title", "did", "happened", "expected", "version"?, "system", "name"?}`. Opens a GitHub issue at once (labels `bug` and `from-website`, the `#horizon-bugs` template, "Reported on playhorizon.dev") and returns 201 `{"id", "issue": "<url>"}`. If GitHub fails: 202 `{"id", "issue": null}`, and the upkeep tries again for a week. The same report twice in a day returns the first one's issue. 400 for an empty or too long field, 429 over the address's limit, 503 past the day's cap or without `GITHUB_TOKEN`. |
+| `POST /v1/report` | A bug or performance report from the game: the fields in docs/telemetry.md "Bug reports from the game". Opens a GitHub issue in the game's template (labels `from-game`, and `bug` with the player's area or `perf`) and answers as `POST /hub/report` does. Its own daily cap; the same per-address limit as the hub's form. |
 | `GET /healthz` | `ok` |
 
 The hub's posts take JSON from the website (`OPTIONS` preflights answer with its origin). A form's hidden `website` field filled in (a bot) gets 202 and is dropped.
@@ -90,6 +91,7 @@ All are environment variables:
 - `HORIZON_TELEMETRY_HUB_PER_HOUR` votes and vote reads per address (600, bursts of 60: a page load is one read, and several players can share an address)
 - `HORIZON_TELEMETRY_HUB_POSTS_PER_HOUR` bug reports per address (20, bursts of 2)
 - `HORIZON_TELEMETRY_HUB_REPORTS_PER_DAY` from everyone (30): each opens an issue
+- `HORIZON_TELEMETRY_GAME_REPORTS_PER_DAY` reports from the game, from everyone (20): each opens an issue
 - `HORIZON_TELEMETRY_HUB_KEEP_DAYS` (90)
 - `HORIZON_TELEMETRY_GITHUB_TOKEN`: a fine-grained token with Issues read and write on the repository only (unset: `POST /hub/report` answers 503 and the form points to GitHub and Discord)
 - `HORIZON_TELEMETRY_GITHUB_REPO` (`horizon-rust/horizon`)

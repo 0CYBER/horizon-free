@@ -76,6 +76,31 @@ pub trait ScreensClientHost {
     #[access(WorldOnly)]
     fn mod_screen_close(&mut self, mod_id: &str);
     /// Side: client.
+    /// Closes the open screen as its Escape key does: a container screen
+    /// closes as the player's container close (`ServerboundContainerClosePacket`
+    /// with the menu's id, then the client menu closed), a pause menu closes
+    /// to the game, and another screen runs its own close. The sign editor
+    /// sends its sign update (`ServerboundSignUpdatePacket`), as Escape does.
+    /// The screen hooks fire as for Escape. The death screen does not close
+    /// this way. False when no screen is open (or, outside a world, when it
+    /// cannot act).
+    #[access(WorldOnly)]
+    fn close_screen(&mut self) -> bool;
+    /// Side: client.
+    /// Opens the player's inventory as the inventory key does: locally, with
+    /// no packet (the player menu is always open on the server). Riding a
+    /// vehicle with its own inventory sends the open-inventory player command
+    /// (`ServerboundPlayerCommandPacket`), as the key does. False with a
+    /// screen already open, for a spectator, in a portal transition, or with
+    /// no world.
+    #[access(WorldOnly)]
+    fn open_inventory(&mut self) -> bool;
+    /// Side: client.
+    /// The sign the sign editor is on, its block position and side; None when
+    /// no sign editor is open or outside a world.
+    #[access(ClientSetup)]
+    fn sign_editor(&self) -> Option<SignEditView>;
+    /// Side: client.
     /// The mod whose own screen is open, if one is (Escape, or another screen
     /// replacing it, closes it).
     #[access(ClientSetup)]

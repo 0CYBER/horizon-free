@@ -274,6 +274,9 @@ impl Game<'_> {
         let outcome = match (&result, custom) {
             (_, Some(c)) => c,
             (Ok(v), None) => Some((true, *v)),
+            // `ContextChain.runExecutable` reports a `CommandSyntaxException`
+            // to the result consumer; any other exception skips it.
+            (Err(e), None) if e.unexpected => None,
             (Err(_), None) => Some((false, 0)),
         };
         if let Some((success, value)) = outcome {
@@ -388,7 +391,16 @@ impl Game<'_> {
                         };
                         match result {
                             Ok(n) => total += n,
-                            Err(_) if forked => {}
+                            // `handleError` with `forked` silences a command
+                            // syntax error.
+                            Err(e) if forked && !e.unexpected => {}
+                            // Not a `CommandSyntaxException`: it escapes to
+                            // `Commands.performCommand`'s catch, once, and the
+                            // chain stops there.
+                            Err(e) if e.unexpected => {
+                                failure = Some(e);
+                                break;
+                            }
                             // Several sources: report each failure and carry on.
                             Err(e) if many => self.command_failure(e.message),
                             Err(e) => failure = Some(e),
@@ -411,7 +423,15 @@ impl Game<'_> {
                     forked = true;
                     let mut kept = Vec::new();
                     for s in sources {
-                        let (keep, _) = self.with_source(s, |g| g.condition(c, want))?;
+                        // `BuildContexts`: an error in a fork modifier is
+                        // silent and drops its source (`handleError` with
+                        // `forked`); one that is not a `CommandSyntaxException`
+                        // still reaches `Commands.performCommand`.
+                        let (keep, _) = match self.with_source(s, |g| g.condition(c, want)) {
+                            Ok(v) => v,
+                            Err(e) if !e.unexpected => continue,
+                            Err(e) => return Err(e),
+                        };
                         if kept.len() + usize::from(keep) >= fork_limit {
                             return fork_limit_reached(forked, fork_limit);
                         }
@@ -1158,15 +1178,15 @@ impl Game<'_> {
         if self.score.board.objective(&to).is_none() {
             return Err(err("arguments.objective.notFound", &[&to]));
         }
-        let Some(a) = target
-            .first()
-            .and_then(|t| self.score.board.score(t, &to))
-            .map(|s| s.value)
-        else {
-            return Ok(false);
-        };
         if c.has("matches") {
             let Some(Arg::IntRange((lo, hi))) = c.get("range") else {
+                return Ok(false);
+            };
+            let Some(a) = target
+                .first()
+                .and_then(|t| self.score.board.score(t, &to))
+                .map(|s| s.value)
+            else {
                 return Ok(false);
             };
             return Ok(lo.is_none_or(|l| a >= l) && hi.is_none_or(|h| a <= h));
@@ -1178,6 +1198,13 @@ impl Game<'_> {
         if self.score.board.objective(&so).is_none() {
             return Err(err("arguments.objective.notFound", &[&so]));
         }
+        let Some(a) = target
+            .first()
+            .and_then(|t| self.score.board.score(t, &to))
+            .map(|s| s.value)
+        else {
+            return Ok(false);
+        };
         let Some(b) = source
             .first()
             .and_then(|t| self.score.board.score(t, &so))
@@ -1674,5 +1701,69 @@ mod terminal_fork_tests {
         );
         assert!(empty.0.is_empty() && empty.1.is_empty());
         assert_eq!(game.world.game_time, time);
+    }
+}
+
+#[cfg(test)]
+mod score_condition_tests {
+    use super::*;
+    use crate::game::game_tests::tests::server_game;
+
+    fn game(resources: &mut Option<std::sync::Arc<crate::game::Resources>>) -> Game<'_> {
+        let mut game = server_game(resources);
+        game.build_registries();
+        game.set_allow_commands(true);
+        game
+    }
+
+    fn say(game: &mut Game<'_>, command: &str) -> (bool, Vec<String>) {
+        game.chat_capture = Some(Vec::new());
+        let ok = game.run_command(command);
+        let said = game.chat_capture.take().unwrap_or_default();
+        (
+            ok,
+            said.iter().map(horizon_client::text::Text::plain).collect(),
+        )
+    }
+
+    /// `checkScore` resolves the source holder and objective before it reads
+    /// the target's score, so a terminal condition names the bad objective
+    /// even when the target has no score at all.
+    #[test]
+    #[ignore = "daily"]
+    fn an_unknown_source_objective_fails_a_terminal_condition() {
+        let mut resources = None;
+        let mut game = game(&mut resources);
+        assert!(game.run_command("scoreboard objectives add a dummy"));
+        for sign in ["if", "unless"] {
+            let (ok, said) = say(
+                &mut game,
+                &format!("execute {sign} score zero a = zero nope"),
+            );
+            assert!(!ok, "{sign}: {said:?}");
+            assert!(
+                said.iter().any(|m| m.contains("nope")),
+                "{sign}: the source objective is named: {said:?}"
+            );
+        }
+    }
+
+    /// A non-terminal `if`/`unless` is a fork: its error is silent and its
+    /// source is dropped (`CommandSourceStack.handleError` with `forked`), so
+    /// `unless` does not run the branch either.
+    #[test]
+    #[ignore = "daily"]
+    fn an_unknown_source_objective_drops_a_forked_condition_silently() {
+        let mut resources = None;
+        let mut game = game(&mut resources);
+        assert!(game.run_command("scoreboard objectives add a dummy"));
+        for sign in ["if", "unless"] {
+            let (ok, said) = say(
+                &mut game,
+                &format!("execute {sign} score zero a = zero nope run say hi"),
+            );
+            assert!(ok, "{sign}: {said:?}");
+            assert!(said.is_empty(), "{sign}: {said:?}");
+        }
     }
 }

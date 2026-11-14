@@ -902,9 +902,11 @@ impl Projectile {
             self.kind.id()
         }
     }
-    /// `Arrow.ID_EFFECT_COLOR` (`updateColor`): the opaque colour of the
-    /// potion the arrow carries, from its tipped pickup item or the effect a
-    /// stray, bogged or parched adds; -1 for none.
+    /// `Arrow.ID_EFFECT_COLOR` (`updateColor`): `PotionContents.getColor` of
+    /// the contents the arrow carries, from its pickup item, or the effect a
+    /// stray, bogged or parched adds; -1 while they are
+    /// `PotionContents.EMPTY` (a colour and a custom effect alone make them
+    /// nonempty, with no potion id at all).
     pub fn arrow_effect_color(&self) -> i32 {
         let ProjectileKind::Arrow { effect, .. } = &self.kind else {
             return -1;
@@ -912,15 +914,17 @@ impl Projectile {
         if self.is_spectral_arrow() {
             return -1;
         }
-        let rgb = match (effect, &self.arrow) {
-            (Some((id, _)), _) => crate::brewing::effect(id).map(|e| e.shown_color()),
-            (None, Some(a)) if &*a.pickup_item.item == "minecraft:tipped_arrow" => a
-                .pickup_item
-                .potion()
-                .map(|p| crate::brewing::potion_color(Some(p))),
+        let color = match (effect, &self.arrow) {
+            // One added effect is one custom effect: its own colour, opaque.
+            (Some((id, _)), _) => crate::brewing::effect(id).map(|e| e.shown_color() | 0xFF00_0000),
+            // `PotionContents.getColor` already carries the alpha a
+            // `custom_color` was given, as vanilla syncs it. Any arrow item's
+            // contents count, as `updateColor` reads the pickup stack.
+            (None, Some(a)) => (!crate::brewing::contents_empty(&a.pickup_item))
+                .then(|| crate::brewing::contents_color(&a.pickup_item)),
             _ => None,
         };
-        rgb.map_or(-1, |rgb| (rgb | 0xFF00_0000) as i32)
+        color.map_or(-1, |color| color as i32)
     }
     pub fn is_fireball(&self) -> bool {
         matches!(
@@ -3260,6 +3264,60 @@ mod render_light_tests {
         let mut snowball = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None);
         snowball.set_egg_item(&ItemStack::new("minecraft:blue_egg", 1));
         assert_eq!(snowball.egg_variant, None);
+    }
+}
+
+#[cfg(test)]
+mod arrow_color_tests {
+    use super::*;
+    use crate::items::ItemStack;
+    use horizon_core::nbt::Tag;
+
+    /// `Arrow.updateColor`: `ID_EFFECT_COLOR` is -1 only while the pickup
+    /// item's contents are `PotionContents.EMPTY`, and otherwise
+    /// `PotionContents.getColor` — so a tipped arrow whose contents have a
+    /// `custom_color` or only custom effects, with no potion id at all, still
+    /// syncs a colour.
+    #[test]
+    fn a_tipped_arrows_synced_colour_is_its_whole_contents() {
+        let color = |stack: &ItemStack| {
+            let kind = ProjectileKind::Arrow {
+                base_damage: 2.0,
+                critical: false,
+                effect: None,
+            };
+            let mut p = Projectile::new(kind, Vec3::new(0.5, 64.0, 0.5), None);
+            let mut arrow = crate::arrows::ArrowState::new();
+            arrow.set_item(stack);
+            p.arrow = Some(Box::new(arrow));
+            p.arrow_effect_color()
+        };
+        let tipped = || ItemStack::new("minecraft:tipped_arrow", 1);
+        assert_eq!(color(&tipped()), -1, "PotionContents.EMPTY has no colour");
+        // `PotionContents.getColor`: an explicit `custom_color` wins, as given.
+        let mut custom_color = tipped();
+        custom_color
+            .data_mut()
+            .potion_extra
+            .push(("custom_color".into(), Tag::Int(0x8012_3456u32 as i32)));
+        assert_eq!(color(&custom_color), 0x8012_3456u32 as i32);
+        // Else the mix of the visible effects: poison's own colour (0x87A363).
+        let mut custom_effect = tipped();
+        custom_effect.data_mut().potion_extra.push((
+            "custom_effects".into(),
+            Tag::List(vec![Tag::compound([
+                ("id", Tag::String("minecraft:poison".into())),
+                ("duration", Tag::Int(900)),
+            ])]),
+        ));
+        assert_eq!(color(&custom_effect), 0xFF87_A363u32 as i32);
+        // `updateColor` reads the pickup stack, whatever arrow item it is.
+        let mut plain = ItemStack::new("minecraft:arrow", 1);
+        plain
+            .data_mut()
+            .potion_extra
+            .push(("custom_color".into(), Tag::Int(0x8012_3456u32 as i32)));
+        assert_eq!(color(&plain), 0x8012_3456u32 as i32);
     }
 }
 crate::impl_joined!(Projectile);

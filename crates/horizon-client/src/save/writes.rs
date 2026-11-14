@@ -103,7 +103,24 @@ impl SaveDir {
         let thread = std::thread::Builder::new()
             .name("horizon-region-writer".into())
             .spawn(move || {
-                for (kind, batch) in receive {
+                let mut buffer: std::collections::VecDeque<WriteBatch> =
+                    std::collections::VecDeque::new();
+                const MAX_BATCH_CHUNKS: usize = 64;
+                while let Some((kind, mut batch)) =
+                    buffer.pop_front().or_else(|| receive.recv().ok())
+                {
+                    let mut batch_count = 1;
+                    while batch.len() < MAX_BATCH_CHUNKS
+                        && let Ok(next) = receive.try_recv()
+                    {
+                        if next.0 == kind {
+                            batch.extend(next.1);
+                            batch_count += 1;
+                        } else {
+                            buffer.push_back(next);
+                            break;
+                        }
+                    }
                     let cache = match kind {
                         Folder::Region => &regions,
                         Folder::Entities => &entity_regions,
@@ -147,7 +164,7 @@ impl SaveDir {
                         outstanding.chunks.fetch_sub(batch.len(), Ordering::Relaxed);
                     }
                     if let Ok(mut count) = outstanding.count.lock() {
-                        *count -= 1;
+                        *count -= batch_count;
                         outstanding.done.notify_all();
                     }
                 }

@@ -3371,7 +3371,7 @@ impl Game<'_> {
                 && !dead
                 && let Some((source, _)) = m.last_damage
             {
-                use horizon_client::mobs::{DamageKind as K, Who};
+                use horizon_client::mobs::Who;
                 let kind = super::creatures::source_damage_type(source);
                 // The player a mob sees is the guest acting.
                 let cause = source.attacker.and_then(|who| match who {
@@ -3383,16 +3383,7 @@ impl Game<'_> {
                     Who::Mob(id) => Some(id as i32),
                 });
                 // A projectile is the direct entity of its hit: not tracked here.
-                let melee = matches!(
-                    source.kind,
-                    K::PlayerAttack
-                        | K::MaceSmash
-                        | K::Spear
-                        | K::MobAttack
-                        | K::Sting
-                        | K::SonicBoom
-                );
-                let direct = cause.filter(|_| melee);
+                let direct = cause.filter(|_| super::combat::melee(source.kind));
                 host.hub.damage_event(m.id as i32, kind, cause, direct, at);
             }
             if dead && !old.is_some_and(|o| o.1) {

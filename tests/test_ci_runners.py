@@ -170,15 +170,20 @@ class OwnRunnerTests(unittest.TestCase):
                         self.test_no_deployment_environment_on_our_runners()
 
     def test_checks_split_between_both_pools(self):
-        ci = (WORKFLOWS / "ci.yml").read_text()
-        verify = dict(jobs(ci))["verify"]
-        value = runs_on(verify)
+        ci = dict(jobs((WORKFLOWS / "ci.yml").read_text()))
+        value = runs_on(ci["launcher"])
         # A pull request by the last digit of its number unless SELF_HOSTED_CI=all; main's pushes keep GitHub's cache.
         self.assertIn("github.event_name == 'pull_request' && (", value)
         self.assertIn("vars.SELF_HOSTED_CI == 'all'", value)
         self.assertIn("endsWith(format('{0}', github.event.pull_request.number), '0')", value)
         self.assertNotIn(FORK_GUARD, value)
-        self.assertEqual(value, runs_on(dict(jobs(ci))["launcher"]))
+        # verify's parts go where the launcher goes; verify itself only waits for them.
+        for part in ("verify-tree", "verify-lint", "verify-test"):
+            with self.subTest(part=part):
+                self.assertEqual(runs_on(ci[part]), value)
+        self.assertIn("needs: [verify-tree, verify-lint, verify-test]", ci["verify"])
+        # Never skipped: GitHub counts a skipped required check as passed.
+        self.assertIn("if: always()", ci["verify"])
 
     def test_the_light_runners_refuse_forks_themselves(self):
         script = (ROOT / "tools/ci/checks-runners.sh").read_text()

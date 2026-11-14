@@ -1,0 +1,3 @@
+ids = ["method:prelude::ScreensClientHost::close_screen", "method:prelude::ScreensClientHost::open_inventory", "method:prelude::ScreensClientHost::sign_editor", "type:SignEditView"]
+why = "Client mods can close a screen through its ordinary Escape path, request the inventory through its ordinary key path, and inspect the position and side of the sign editor. An open sign editor counts as an open screen and refuses an inventory request."
+migrate = "Use these client-host methods instead of simulating keys. close_screen and open_inventory return false when they cannot act; sign_editor returns None outside a sign editor."

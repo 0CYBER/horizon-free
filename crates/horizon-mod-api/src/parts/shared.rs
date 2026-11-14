@@ -264,6 +264,7 @@ pub(crate) fn install_registrar(
             warning.args()
         );
     }
+    registrar.validate_recipe_types();
     if !registrar.refused.is_empty() {
         return Err(registrar.refused);
     }
