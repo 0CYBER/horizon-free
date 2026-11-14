@@ -339,6 +339,15 @@ impl GoalCxBackend for GoalCx<'_, '_> {
         self.m.nav_move_to(self.w, at, speed)
     }
 
+    fn move_to_path(&mut self, path: Vec<mod_api::PathNode>, speed: f64) -> bool {
+        // The handle's own boundary, the same one `MobRef::move_to_path` takes.
+        if !super::native_mob_navigation::supplied_path_accepts(&path, speed) {
+            return false;
+        }
+        let nodes: Vec<[f64; 3]> = path.iter().map(|n| [n.x, n.y, n.z]).collect();
+        self.m.nav_move_to_supplied(self.w, &nodes, speed)
+    }
+
     fn stop_navigation(&mut self) {
         self.m.nav_stop();
     }

@@ -20,6 +20,19 @@ pub(super) fn navigation_look_accepts(at: [f64; 3]) -> bool {
     at.iter().all(|v| v.is_finite())
 }
 
+/// The nodes a mod hands `PathNavigation.moveTo(Path, speed)`: finite
+/// coordinates and a finite speed. Nothing is refused for being unloaded or
+/// outside the world, and the node count is unbounded (vanilla's `moveTo`
+/// carries no cap); a node outside the block-coordinate range is floored to
+/// the saturating integer and reads as void air, as vanilla's `BlockPos` cast
+/// does.
+pub(super) fn supplied_path_accepts(nodes: &[mod_api::PathNode], speed: f64) -> bool {
+    speed.is_finite()
+        && nodes
+            .iter()
+            .all(|node| node.x.is_finite() && node.y.is_finite() && node.z.is_finite())
+}
+
 impl Game<'_> {
     /// `PathNavigation.moveTo(x, y, z, speed)`: true if a path was started.
     /// Refuses a stale or unavailable mob, a client, non-finite arguments,
@@ -43,6 +56,43 @@ impl Game<'_> {
         #[cfg(test)]
         super::entity::taken_pass_tests::after_take(self);
         let moved = mobs[index].nav_move_to(&self.mob_world_base(&[]), at, speed);
+        self.mobs
+            .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
+        moved
+    }
+
+    /// `PathNavigation.moveTo(Path, speed)`: follow a path the mod computed.
+    /// Each node is floored to its block, classified by the engine on submit
+    /// (the classification never filters the path), trimmed as every `moveTo`
+    /// trims, and followed as given. A supplied path keeps no recompute
+    /// target, so a block change on it or the stuck check drops it without a
+    /// search. Only non-finite coordinates and speeds are refused; the node
+    /// count is unbounded, and unloaded or out-of-world nodes are neither
+    /// refused nor clamped. False for a stale or unavailable mob, a client,
+    /// and the dragon.
+    pub(super) fn mob_move_to_path(
+        &mut self,
+        mob: MobRef,
+        nodes: Vec<mod_api::PathNode>,
+        speed: f64,
+    ) -> bool {
+        if !supplied_path_accepts(&nodes, speed) {
+            return false;
+        }
+        let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
+            return false;
+        };
+        let Some(index) = self.mobs.iter().position(|m| m.id == id) else {
+            return false;
+        };
+        let nodes: Vec<[f64; 3]> = nodes.iter().map(|n| [n.x, n.y, n.z]).collect();
+        // The pathfinder reads terrain only. Take the mob list so its selected
+        // mob can be mutably borrowed alongside the shared MobWorld, as the
+        // mob tick does. No mod hook fires during classification.
+        let mut mobs = self.mobs.lift();
+        #[cfg(test)]
+        super::entity::taken_pass_tests::after_take(self);
+        let moved = mobs[index].nav_move_to_supplied(&self.mob_world_base(&[]), &nodes, speed);
         self.mobs
             .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
         moved
@@ -144,10 +194,47 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::super::native_entity_refs::tests::with_game;
+    use super::supplied_path_accepts;
     use horizon_client::{chunk::Chunk, mobs::Mob};
     use horizon_core::geometry::Vec3;
-    use mod_api::{EntityRef, MobRef, WorldEpoch};
+    use mod_api::{EntityRef, MobRef, PathNode, WorldEpoch};
     use std::sync::Arc;
+
+    /// `moveTo(Path, speed)`'s boundary never gets stricter than vanilla's:
+    /// finite coordinates and speed pass, a node count far above any vanilla
+    /// search passes, and coordinates outside the block range are not refused
+    /// (they are floored with the saturating cast and read as void air).
+    #[test]
+    fn a_supplied_path_only_refuses_non_finite_numbers() {
+        let node = |x: f64, y: f64, z: f64| PathNode { x, y, z };
+        assert!(supplied_path_accepts(&[], 1.0), "an empty path is taken");
+        assert!(supplied_path_accepts(
+            &[node(1.5, 64.0, -2.5), node(2.0, 64.0, -2.0)],
+            0.3
+        ));
+        assert!(
+            supplied_path_accepts(&[node(3.0e7, -3.0e7, 30_000_000.5)], 1.0),
+            "past 30,000,000 is not refused"
+        );
+        assert!(
+            supplied_path_accepts(&[node(1.0e300, -1.0e300, 0.0)], 1.0),
+            "any finite coordinate is taken, floored by the saturating cast"
+        );
+        assert!(!supplied_path_accepts(&[node(f64::NAN, 64.0, 0.0)], 1.0));
+        assert!(!supplied_path_accepts(
+            &[node(0.0, f64::INFINITY, 0.0)],
+            1.0
+        ));
+        assert!(!supplied_path_accepts(
+            &[node(0.0, 64.0, f64::NEG_INFINITY)],
+            1.0
+        ));
+        assert!(!supplied_path_accepts(&[node(0.0, 64.0, 0.0)], f64::NAN));
+        assert!(
+            !supplied_path_accepts(&[node(0.0, 64.0, 0.0)], f64::INFINITY),
+            "a non-finite speed is refused as `move_to` refuses it"
+        );
+    }
 
     #[test]
     #[ignore = "needs prepared resources"]

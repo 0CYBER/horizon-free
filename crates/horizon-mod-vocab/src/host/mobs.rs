@@ -259,6 +259,26 @@ pub trait MobsBackendMut {
     /// dragon, which flies by its phase and keeps no navigation.
     #[access(WorldOnly)]
     fn mob_move_to(&mut self, mob: MobRef, at: [f64; 3], speed: f64) -> bool;
+    /// `PathNavigation.moveTo(Path, speed)`: follow a path the mod computed.
+    /// Each [`PathNode`] is floored to its block, and the engine classifies
+    /// the node's [`PathType`] on submit (the mod gives no types); the
+    /// classification is information for the follower, never a filter: a node
+    /// it calls blocked is not refused, moved or dropped, so the path is
+    /// followed as given. As every `moveTo`, this trims the path: a node in a
+    /// cauldron is raised onto its rim, and with avoid-sun a ground navigation
+    /// cuts at the first node that can see the sky. The path is finished once
+    /// its next-node index reaches the node count; [`mob_is_done`](MobsBackend::mob_is_done)
+    /// is true when there is no path or it is finished. A supplied path keeps
+    /// no recompute target, so a block change on it or the stuck check drops
+    /// it and no search is ever run in its place (stricter than vanilla, which
+    /// re-searches to the previous target); the per-node timeout drops it as
+    /// well. Only non-finite coordinates and speeds are refused; there is no
+    /// cap on the node count, and unloaded or out-of-world nodes are neither
+    /// refused nor clamped. As in vanilla, the mob's own goals may replace
+    /// the path next tick. False for a stale or unavailable mob, a client,
+    /// and the dragon, which flies by its phase and keeps no navigation.
+    #[access(WorldOnly)]
+    fn mob_move_to_path(&mut self, mob: MobRef, nodes: Vec<PathNode>, speed: f64) -> bool;
     /// Side: server.
     /// `PathNavigation.stop`. False for a stale or unavailable mob, or on a
     /// client, and for the dragon (no navigation).

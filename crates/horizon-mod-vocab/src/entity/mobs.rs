@@ -132,6 +132,34 @@ impl PathType {
         }
     }
 }
+/// One node of a path a mod computed, as [`crate::MobRef::move_to_path`] and
+/// [`crate::GoalContext::move_to_path`] take it: the block position the mob
+/// should walk to. Each coordinate is floored to its block, as vanilla's
+/// `BlockPos.containing` does. The mod does not give the node's
+/// [`PathType`]: the engine classifies it on submit. Coordinates only have to
+/// be finite; an unloaded position or one outside the world is not refused or
+/// clamped.
+#[derive(Clone, Copy, Debug, Default, PartialEq, horizon_mod_api_macros::Wire)]
+pub struct PathNode {
+    /// The node's X, in blocks.
+    pub x: f64,
+    /// The node's Y, in blocks.
+    pub y: f64,
+    /// The node's Z, in blocks.
+    pub z: f64,
+}
+
+impl PathNode {
+    /// A node at `at`.
+    pub fn new(at: [f64; 3]) -> Self {
+        Self {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+        }
+    }
+}
+
 /// `Pose`: the stance a living entity's box follows (`Entity.setPose`),
 /// vanilla 26.3's set. A species' own box reads its state where its
 /// `getDefaultDimensions` does; a stance a species never takes answers its

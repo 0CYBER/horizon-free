@@ -3,7 +3,7 @@
 //! stuck detection and path timeouts.
 use super::{
     Mob, MobWorld,
-    path::{Evaluator, Finder, Path, PathMob, PathType},
+    path::{Evaluator, Finder, Path, PathMob, PathNode, PathType},
 };
 use horizon_core::geometry::Vec3;
 
@@ -404,6 +404,60 @@ impl Mob {
         self.ai.nav.last_stuck_pos = self.navigation_position();
         true
     }
+    /// `PathNavigation.moveTo(Path, speed)` for a path a mod computed
+    /// (`MobRef::move_to_path`): each position is floored to its block and
+    /// classified here, one cached static lookup per node, then the path is
+    /// trimmed and followed exactly as `moveTo(Path)` follows an engine path.
+    ///
+    /// A supplied path keeps no recompute target, so a block change on it or
+    /// the stuck check drops it and no search is run in its place (vanilla
+    /// would re-search to the previous target; this is the stricter rule the
+    /// issue asks for). The per-node timeout drops it as it drops any path.
+    pub fn nav_move_to_supplied(&mut self, w: &MobWorld, nodes: &[[f64; 3]], speed: f64) -> bool {
+        let nodes: Vec<PathNode> = nodes
+            .iter()
+            .map(|at| PathNode {
+                x: at[0].floor() as i32,
+                y: at[1].floor() as i32,
+                z: at[2].floor() as i32,
+                // Replaced by the engine's classification below.
+                kind: PathType::Blocked,
+            })
+            .collect();
+        let target = nodes.last().map_or([0; 3], |n| [n.x, n.y, n.z]);
+        let mut path = Path {
+            nodes,
+            next: 0,
+            target,
+            dist_to_target: 0.0,
+            reached: true,
+        };
+        self.classify_path_nodes(w, &mut path);
+        // Our rule, not vanilla's: a supplied path stores no recompute target,
+        // so a block change on it drops it instead of re-searching.
+        self.ai.nav.target_pos = None;
+        self.ai.nav.reach_range = 0;
+        self.ai.nav.pending_recompute = false;
+        self.ai.nav.delayed_recompute = false;
+        // A supplied path supersedes any half-finished wall climb to an old
+        // entity target.
+        self.ai.nav.climb_to = None;
+        self.ai.nav.reset_stuck_timeout();
+        self.nav_move_to_path(w, Some(path), speed)
+    }
+    /// Classify every node of a supplied path, through this mob's navigation
+    /// evaluator and the world's cached classification. The result is
+    /// information for the follower (the corner-cut rule), never a filter.
+    fn classify_path_nodes(&self, w: &MobWorld, path: &mut Path) {
+        if path.nodes.is_empty() {
+            return;
+        }
+        let body = self.path_mob();
+        let finder = Finder::new(w, &body, self.ai.nav.evaluator());
+        for node in &mut path.nodes {
+            node.kind = finder.path_type_at(node.x, node.y, node.z);
+        }
+    }
     /// PathNavigation.moveTo(x, y, z, speed): a path to the containing block.
     pub fn nav_move_to(&mut self, w: &MobWorld, at: [f64; 3], speed: f64) -> bool {
         let p = [
@@ -438,6 +492,16 @@ impl Mob {
         self.ai.nav.path = None;
     }
     fn recompute_path(&mut self, w: &MobWorld) {
+        // Our rule for a path a mod supplied (it keeps no recompute target):
+        // a block change on it, or anything else that asks for a recompute,
+        // drops it. No search is ever run in its place, so a stale target is
+        // never revived.
+        if self.ai.nav.target_pos.is_none() {
+            self.ai.nav.path = None;
+            self.ai.nav.delayed_recompute = false;
+            self.ai.nav.time_last_recompute = w.game_time;
+            return;
+        }
         if w.game_time - self.ai.nav.time_last_recompute <= 20 || !self.can_update_path() {
             self.ai.nav.delayed_recompute = true;
         } else if let Some(t) = self.ai.nav.target_pos {
@@ -586,7 +650,7 @@ impl Mob {
                         target.y.floor() as i32,
                         target.z.floor() as i32,
                     );
-                    if w.facts.is_air(w.world.block(bx, by - 1, bz)) {
+                    if w.facts.is_air(w.world.block(bx, by.saturating_sub(1), bz)) {
                         target.y
                     } else {
                         w.floor_level(bx, by, bz)
@@ -933,5 +997,204 @@ mod tests {
         m.extra.mount = None;
         m.fluids.in_water = true;
         assert!(m.can_update_path(), "in a liquid");
+    }
+}
+
+#[cfg(test)]
+mod supplied_path_tests {
+    use super::*;
+    use crate::mobs::world::{with_built_test_world, with_test_world};
+    use horizon_core::geometry::Vec3;
+
+    fn cow(types: &crate::mobs::MobTypes) -> std::sync::Arc<crate::mobs::MobType> {
+        std::sync::Arc::new(types.types["minecraft:cow"].clone())
+    }
+
+    /// A supplied path is followed to its last node: positions are floored to
+    /// their block, the speed becomes the path's modifier, and the path is in
+    /// progress until its next-node index reaches the node count.
+    #[test]
+    fn a_supplied_path_is_followed_and_finishes_at_its_node_count() {
+        with_test_world(&[], |w, types| {
+            let mut m = Mob::new(1, cow(types), Vec3::new(0.5, 64.0, 0.5), 0.0);
+            m.on_ground = true;
+            assert!(m.ai.nav.is_done(), "no path");
+            assert!(m.nav_move_to_supplied(
+                w,
+                &[[0.5, 64.0, 0.5], [1.9, 64.0, 0.5], [2.9, 64.0, 0.5]],
+                0.75
+            ));
+            let path = m.ai.nav.path.as_ref().expect("a path was taken");
+            assert_eq!(
+                path.nodes
+                    .iter()
+                    .map(|n| (n.x, n.y, n.z))
+                    .collect::<Vec<_>>(),
+                vec![(0, 64, 0), (1, 64, 0), (2, 64, 0)],
+                "each coordinate is floored to its block"
+            );
+            assert_eq!(path.target, [2, 64, 0]);
+            assert_eq!(m.ai.nav.speed_modifier, 0.75);
+            assert!(m.ai.nav.is_in_progress());
+            assert!(!m.ai.nav.is_done());
+            assert!(
+                w.world.chunks.is_empty(),
+                "classifying an unloaded node loads no chunk"
+            );
+            // An unloaded node and one far outside the world are accepted: no
+            // refusal, no clamp, and nothing loaded.
+            assert!(m.nav_move_to_supplied(w, &[[1.0e9, 1.0e9, 1.0e9]], 0.5));
+            assert!(
+                m.ai.nav.path.as_ref().is_some_and(|p| p.nodes[0]
+                    == PathNode {
+                        x: 1_000_000_000,
+                        y: 1_000_000_000,
+                        z: 1_000_000_000,
+                        kind: p.nodes[0].kind,
+                    }),
+                "the out-of-world node is neither moved nor clamped"
+            );
+            assert!(w.world.chunks.is_empty(), "still no chunk was loaded");
+            m.ai.nav.path.as_mut().unwrap().next = 3;
+            assert!(m.ai.nav.is_done(), "the next index reached the count");
+            assert!(!m.ai.nav.is_in_progress());
+        });
+    }
+
+    /// Classification is information, never a filter: a node the engine calls
+    /// blocked is recorded as such and the path is taken whole.
+    #[test]
+    fn a_node_the_engine_calls_blocked_is_recorded_not_refused() {
+        with_built_test_world(
+            &[],
+            |world, registry| {
+                world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
+                );
+                let stone = registry.default_state("minecraft:stone").unwrap();
+                world.set(1, 64, 0, stone).unwrap();
+            },
+            |w, types| {
+                let mut m = Mob::new(1, cow(types), Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.on_ground = true;
+                assert!(m.nav_move_to_supplied(
+                    w,
+                    &[[0.5, 64.0, 0.5], [1.5, 64.0, 0.5], [2.5, 64.0, 0.5]],
+                    0.5
+                ));
+                let path = m.ai.nav.path.as_ref().expect("the path is taken whole");
+                assert_eq!(path.nodes.len(), 3);
+                assert_eq!(
+                    path.nodes[1].kind,
+                    PathType::Blocked,
+                    "the engine's classification is recorded"
+                );
+            },
+        );
+    }
+
+    /// Every `moveTo` trims: a node standing in a cauldron is raised onto its
+    /// rim at acceptance.
+    #[test]
+    fn a_supplied_path_is_trimmed_like_any_move_to() {
+        with_built_test_world(
+            &[],
+            |world, registry| {
+                world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
+                );
+                let cauldron = registry.default_state("minecraft:cauldron").unwrap();
+                world.set(1, 63, 0, cauldron).unwrap();
+            },
+            |w, types| {
+                let mut m = Mob::new(1, cow(types), Vec3::new(0.5, 63.0, 0.5), 0.0);
+                m.on_ground = true;
+                assert!(m.nav_move_to_supplied(w, &[[0.5, 63.0, 0.5], [1.5, 63.0, 0.5]], 0.5));
+                let path = m.ai.nav.path.as_ref().expect("a path was taken");
+                assert_eq!(
+                    path.nodes[0],
+                    PathNode {
+                        x: 0,
+                        y: 63,
+                        z: 0,
+                        kind: path.nodes[0].kind
+                    }
+                );
+                assert_eq!(
+                    path.nodes[1].y, 64,
+                    "the cauldron node is raised onto its rim"
+                );
+            },
+        );
+    }
+
+    /// The stricter rule: a block change on a supplied path drops it and no
+    /// search runs in its place, leaving `done` true and in progress false.
+    #[test]
+    fn a_block_change_drops_a_supplied_path_without_re_searching() {
+        with_test_world(&[], |w, types| {
+            let mut m = Mob::new(1, cow(types), Vec3::new(0.5, 64.0, 0.5), 0.0);
+            m.on_ground = true;
+            let nodes: Vec<[f64; 3]> = (0..20).map(|x| [f64::from(x) + 0.5, 64.0, 0.5]).collect();
+            assert!(m.nav_move_to_supplied(w, &nodes, 0.5));
+            assert!(
+                m.ai.nav.target_pos.is_none(),
+                "a supplied path stores no recompute target"
+            );
+            // A block on the path changed: the tick asks for a recompute.
+            m.queue_path_recompute();
+            m.nav_tick(w);
+            assert!(m.ai.nav.path.is_none(), "the path was dropped");
+            assert!(m.ai.nav.is_done());
+            assert!(!m.ai.nav.is_in_progress());
+            assert!(!m.ai.nav.delayed_recompute);
+            m.nav_tick(w);
+            assert!(m.ai.nav.path.is_none(), "and nothing searched in its place");
+        });
+    }
+
+    /// The stuck check stops a supplied path: afterwards `done` is true and
+    /// `stuck` is true.
+    #[test]
+    fn the_stuck_check_stops_a_supplied_path() {
+        with_test_world(&[], |w, types| {
+            let mut m = Mob::new(1, cow(types), Vec3::new(0.5, 64.0, 0.5), 0.0);
+            m.on_ground = true;
+            m.ai.speed = 0.3;
+            let nodes: Vec<[f64; 3]> = (0..200).map(|x| [f64::from(x) + 0.5, 64.0, 0.5]).collect();
+            assert!(m.nav_move_to_supplied(w, &nodes, 0.5));
+            for _ in 0..=100 {
+                m.nav_tick(w);
+            }
+            assert!(m.ai.nav.stuck, "the 100-tick check found no progress");
+            assert!(m.ai.nav.path.is_none(), "the stuck check dropped the path");
+            assert!(m.ai.nav.is_done());
+            assert!(!m.ai.nav.is_in_progress());
+        });
+    }
+
+    /// The per-node timeout stops a supplied path too: afterwards `done` is
+    /// true, in progress false, and `stuck` is false (the timeout resets it).
+    #[test]
+    fn the_per_node_timeout_stops_a_supplied_path() {
+        with_test_world(&[], |w, types| {
+            let mut m = Mob::new(1, cow(types), Vec3::new(0.5, 64.0, 0.5), 0.0);
+            m.on_ground = true;
+            m.ai.speed = 0.5;
+            assert!(m.nav_move_to_supplied(w, &[[50.5, 64.0, 0.5], [51.5, 64.0, 0.5]], 0.5));
+            let mob = Vec3::new(0.5, 64.0, 0.5);
+            // The first sample sets the node's expected travel time.
+            m.do_stuck_detection(w, mob);
+            assert!(m.ai.nav.timeout_limit > 0.0);
+            // Three times the expected travel time passes on the same node.
+            m.ai.nav.last_timeout_check = w.game_time - (m.ai.nav.timeout_limit as i64 * 3 + 1);
+            m.do_stuck_detection(w, mob);
+            assert!(m.ai.nav.path.is_none(), "the timeout dropped the path");
+            assert!(m.ai.nav.is_done());
+            assert!(!m.ai.nav.is_in_progress());
+            assert!(!m.ai.nav.stuck, "a timeout is not a stuck check");
+        });
     }
 }

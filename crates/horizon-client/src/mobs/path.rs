@@ -249,12 +249,12 @@ impl Path {
             if !is_cauldron(node.x, node.y, node.z) {
                 continue;
             }
-            self.nodes[i].y = node.y + 1;
+            self.nodes[i].y = node.y.saturating_add(1);
             if let Some(&next) = self.nodes.get(i + 1)
                 && node.y >= next.y
             {
                 self.nodes[i + 1] = PathNode {
-                    y: node.y + 1,
+                    y: node.y.saturating_add(1),
                     ..next
                 };
             }
@@ -417,6 +417,12 @@ impl<'a, 'w> Finder<'a, 'w> {
             }
         }
         self.mob.malus(t)
+    }
+    /// The static `PathType` of a position under this finder's evaluator,
+    /// through the world's cached classification. One classification per
+    /// position: a mod's supplied path is classified here on submit.
+    pub fn path_type_at(&self, x: i32, y: i32, z: i32) -> PathType {
+        self.path_type(x, y, z)
     }
     // --- world access -------------------------------------------------
     fn state(&self, x: i32, y: i32, z: i32) -> data::StateData {
