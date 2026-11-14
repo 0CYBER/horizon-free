@@ -18,6 +18,7 @@ pub(crate) mod dimension;
 pub(crate) mod dimension_transition;
 pub(crate) mod game_rule_value;
 // hidden: a module of game-side types; mods use their re-exports
+pub(crate) mod chunk_refusal;
 #[doc(hidden)]
 pub mod ground;
 pub(crate) mod inside_write;

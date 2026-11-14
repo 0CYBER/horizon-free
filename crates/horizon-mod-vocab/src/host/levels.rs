@@ -1145,6 +1145,31 @@ pub trait LevelsBackendMut {
     #[access(WorldOnly)]
     fn level_send_block_updated(&mut self, level: LevelRef, pos: [i32; 3]) -> bool;
     /// Side: server.
+    /// Lights the loaded chunks `chunks` (chunk coordinates) of the level in place again, whole,
+    /// from their blocks, and the loaded chunks around them, at once on the calling thread, as
+    /// the light jobs of `edit_blocks` do later on the workers: for a mod that wrote blocks by
+    /// other means and needs the light before the chunks go out (`chunk_resend`). A chunk that
+    /// is not loaded, or lacks one of its eight neighbours, is left out and not counted. The
+    /// light that changed goes to the players who see that chunk's border, as any relight's
+    /// does. It lights every chunk it is given, so call it for the chunks an edit changed, not
+    /// every tick. Returns how many chunks were lit, the ring included. Each refusal lights
+    /// nothing and is named by `ChunkRefusal`: `Stale`, `Client`, `NotInPlace` (a level that
+    /// is not the one being ticked) and `TooManyChunks` (more than 256 given).
+    #[access(WorldOnly)]
+    fn level_relight_chunks(
+        &mut self,
+        level: LevelRef,
+        chunks: &[[i32; 2]],
+    ) -> Result<u32, ChunkRefusal>;
+    /// Side: server.
+    /// Sends the loaded chunk whole again, with its light, block entities and biomes as they are
+    /// at the end of the tick, to every player watching it (`chunk_watchers`), as a chunk
+    /// `edit_blocks` changed is sent: one packet instead of a block update per changed block.
+    /// Ok with nothing sent when no player is in the level. Each refusal queues nothing and is
+    /// named by `ChunkRefusal`: `Stale`, `Client`, `NotInPlace` and `NotLoaded`.
+    #[access(WorldOnly)]
+    fn chunk_resend(&mut self, chunk: ChunkRef) -> Result<(), ChunkRefusal>;
+    /// Side: server.
     /// Plays sound event `sound` at `at` for the players in this level
     /// within range (16 blocks, times the volume above 1), as
     /// `ServerLevel.playSound(null, ...)` does, under `source`'s volume
