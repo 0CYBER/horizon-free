@@ -4,32 +4,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 static ENTITY_PRE_CALLS: AtomicU32 = AtomicU32::new(0);
 static ENTITY_POST_CALLS: AtomicU32 = AtomicU32::new(0);
 
-pub mod area_macros;
-pub mod block_state_notice;
-pub mod bulk_files;
-pub mod capability_registration;
-pub mod cauldron;
-pub mod datapack;
-pub mod game_payload;
-pub mod interaction;
-pub mod lending;
-pub mod matrix;
-pub mod movement;
-pub mod part_state;
-pub mod predicted_use;
-pub mod projectile_owner;
-pub mod replace;
-pub mod runtime_environment;
-pub mod selector_command;
-pub mod tick_reply;
-pub mod turn;
+// Generated in filename order by build.rs; a new guest registration needs only its own file.
+include!(concat!(env!("OUT_DIR"), "/wasm_fixture_modules.rs"));
 pub use matrix::{mirrors, sum_return};
-pub mod shutdown;
 pub use replace::own_average;
 pub use shutdown::on_shutdown;
 pub use turn::turn_angle;
-
-mod strict_math_checks;
 
 #[derive(Default)]
 pub struct Mod;
