@@ -77,7 +77,13 @@ horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::act
 horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::bed_leave_carries_the_wake_flags_before_the_sleep_clears lib daily game-boot
 horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::guest_missing_bed_death_and_bed_rule_keep_their_distinct_literal_pairs lib daily game-boot
 horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::guest_wake_counters_match_the_same_reasons_without_listeners lib daily game-boot
+horizon-client game::native_menu_places::tests::a_backing_names_why_it_refuses lib daily resources
 horizon-client game::native_menu_places::tests::a_shift_click_into_a_held_backpack_writes_through_its_handler lib daily resources
+horizon-client game::native_menu_places::tests::a_write_into_the_box_is_mirrored_at_its_notice lib daily resources
+horizon-client game::native_menu_places::tests::another_hotbar_slot_selected_closes_the_menu lib daily resources
+horizon-client game::native_menu_places::tests::another_stack_in_the_hand_closes_the_menu lib daily resources
+horizon-client game::native_menu_places::tests::another_stack_in_the_offhand_closes_the_menu lib daily resources
+horizon-client game::native_menu_places::tests::un_backing_or_shortening_empties_the_mirrored_slots_and_keeps_the_items_once lib daily resources
 horizon-client game::native_menus::tests::container_hooks_follow_actual_open_boundaries_without_a_tick lib daily game-boot
 horizon-client game::native_passage_cross::tests::a_crossing_into_another_level_is_refused_far_level lib daily resources
 horizon-client game::native_passages::tests::a_destination_level_must_be_open_and_another_level lib daily resources

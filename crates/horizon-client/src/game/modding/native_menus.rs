@@ -355,7 +355,14 @@ impl Game<'_> {
                         self.native_menu_clicked(uuid, window, slot, button, mode);
                     }
                 }
-                NativeMenuEvent::Closed { uuid, window } => self.native_menu_closed(uuid, window),
+                NativeMenuEvent::Closed { uuid, window } => {
+                    self.menu_places_closed(uuid, window);
+                    self.native_menu_closed(uuid, window);
+                }
+                // A write to a backed menu's storage (#3385): its slots looked at again.
+                NativeMenuEvent::PlacesChanged { uuid, window } => {
+                    self.menu_places_changed(uuid, window)
+                }
             }
         }
     }

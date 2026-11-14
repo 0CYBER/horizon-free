@@ -1,1 +1,1 @@
-pub use item::menu_slot_place::MenuSlotPlace;
+pub use item::menu_slot_place::{MenuSlotBackRefusal, MenuSlotPlace};

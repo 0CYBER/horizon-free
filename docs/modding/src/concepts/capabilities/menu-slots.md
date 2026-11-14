@@ -184,16 +184,32 @@ slots with `player.back_mod_menu_slots(host, window, places)`, one `MenuSlotPlac
 
 From then on `MenuRef::slot_backing` names the slot `MenuSlotBacking::Place(place)`. A pickup or shift-click on the
 menu, and an `ItemPlace::MenuSlot` write, go through that storage's own handler in one transaction, so an aborted
-transaction leaves it as it was. The client sees ordinary synced slots; there is no new packet. The menu closes at the
-next tick once a place stops resolving (the backpack left the hand, the entity is gone). Slots past `places` stay the
-mod's own (`menu_clicked`). A drag, a number-key swap, a double-click collect or a throw on a backed menu is still the
-mod's to answer.
+transaction leaves it as it was. The client sees ordinary synced slots; there is no new packet. Nothing runs per tick:
+the slots are mirrored after each click on the menu and after each `ItemPlace` write to the player's places (their hand,
+a container held there, the menu's slots), and only the slots that changed are written. Before each click and at each
+such change the menu checks its places: it closes once one stops resolving (the backpack left the hand, the entity is
+gone), or once a `HeldItem` hand no longer holds the stack bound when the slots were backed (another stack put in its
+place, another hotbar slot selected). Stacks are values, so the bound stack is told apart by its item and components
+other than its contents. Slots past `places` stay the mod's own (`menu_clicked`). A drag, a number-key swap, a
+double-click collect or a throw on a backed menu is still the mod's to answer.
+
+Backing the same window again replaces its places. A slot no longer backed (an empty list, or a shorter one) is
+emptied: it never keeps the copy it showed, which stays in the storage it came from. A backing that cannot be made
+changes nothing and says why with a `MenuSlotBackRefusal`:
+
+- `NoPlayerOrWindow`: the player is not online here, or `window` is not the menu they have open.
+- `UnsupportedMenu`: the open menu is not a mod menu opened with no block (a block's or an entity's menu shows its own
+  storage).
+- `TooManyPlaces`: more places than the menu's container slots.
+- `PlaceUnresolved { index }`: `places[index]` names no storage now.
 
 ```rust,ignore
 let window = player.open_mod_menu(host, backpack_menu, title, Vec::new(), None, MenuReplace::CloseFirst)?;
 if let Some(window) = window {
     let places = (0..27).map(|slot| MenuSlotPlace::HeldItem { hand: Hand::Main, slot }).collect();
-    player.back_mod_menu_slots(host, window, places);
+    if let Err(refusal) = player.back_mod_menu_slots(host, window, places) {
+        log::warn!("backpack menu not backed: {refusal:?}");
+    }
 }
 ```
 

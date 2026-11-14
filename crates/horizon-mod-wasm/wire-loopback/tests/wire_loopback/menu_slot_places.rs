@@ -50,9 +50,13 @@ impl mod_api::prelude::PlayersBackendMut for Server {
         _: mod_api::PlayerRef,
         window: i32,
         places: Vec<mod_api::MenuSlotPlace>,
-    ) -> bool {
+    ) -> Result<(), mod_api::MenuSlotBackRefusal> {
+        // Window 2 is backed; window 3 names its refusal, which crosses back as sent.
         self.backed.push((window, places));
-        window == 2
+        match window {
+            2 => Ok(()),
+            _ => Err(mod_api::MenuSlotBackRefusal::PlaceUnresolved { index: 4 }),
+        }
     }
 }
 
@@ -80,8 +84,14 @@ fn a_wasm_mod_backs_its_menu_slots_with_places() {
             slot,
         })
         .collect();
-    assert!(player.back_mod_menu_slots(&mut guest::Guest, 2, places.clone()));
-    assert!(!player.back_mod_menu_slots(&mut guest::Guest, 3, Vec::new()));
+    assert_eq!(
+        player.back_mod_menu_slots(&mut guest::Guest, 2, places.clone()),
+        Ok(())
+    );
+    assert_eq!(
+        player.back_mod_menu_slots(&mut guest::Guest, 3, Vec::new()),
+        Err(mod_api::MenuSlotBackRefusal::PlaceUnresolved { index: 4 })
+    );
     guest::set_transport(None);
     assert_eq!(server.backed, [(2, places), (3, Vec::new())]);
 }
