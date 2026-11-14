@@ -705,7 +705,8 @@ mod tests {
         let saved = rules.to_nbt().tag;
         let loaded = GameRules::from_nbt_with_registry(&saved, &[], registry.clone());
         assert_eq!(loaded.int_slot(slot), Some(12));
-        let out_of_range = Tag::compound([("data", Tag::compound([("example:cap", Tag::Int(70))]))]);
+        let out_of_range =
+            Tag::compound([("data", Tag::compound([("example:cap", Tag::Int(70))]))]);
         let loaded = GameRules::from_nbt_with_registry(&out_of_range, &[], registry);
         assert_eq!(loaded.int_slot(slot), Some(8));
     }

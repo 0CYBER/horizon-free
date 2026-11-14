@@ -2889,8 +2889,7 @@ fn recreate_rules_load_saved_values_and_default_new_rules() {
             .collect::<Vec<_>>()
     };
     let old = Arc::new(
-        RuleRegistry::with_mod_rules(&["example:machines".into()], &definitions(&["old"]))
-            .unwrap(),
+        RuleRegistry::with_mod_rules(&["example:machines".into()], &definitions(&["old"])).unwrap(),
     );
     let mut rules = GameRules::with_registry(old, &[]);
     rules.set("example:old", Value::Bool(false));

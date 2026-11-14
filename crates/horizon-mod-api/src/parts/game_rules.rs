@@ -164,13 +164,17 @@ pub mod tests {
         let slot = mod_vocab::__private::parts_installation::int_game_rule_key_slot(key);
         assert!(mod_vocab::__private::parts_installation::validate_int_game_rule_key(slot).is_ok());
         assert!(super::game_rule_int_slot(key).is_some());
-        assert!(super::game_rules().iter().any(|rule| rule.name == "example:cap"
-            && rule.default
-                == crate::GameRuleDefault::Int {
-                    default: 8,
-                    min: 0,
-                    max: 64
-                }));
+        assert!(
+            super::game_rules()
+                .iter()
+                .any(|rule| rule.name == "example:cap"
+                    && rule.default
+                        == crate::GameRuleDefault::Int {
+                            default: 8,
+                            min: 0,
+                            max: 64
+                        })
+        );
     }
 
     #[test]
@@ -280,7 +284,9 @@ impl GameRulesRegistrar for PartRegistrar {
                     crate::GameRuleDefault::Int { default, min, max },
                 ),
             );
-            Ok(mod_vocab::__private::parts_installation::int_game_rule_key(slot))
+            Ok(mod_vocab::__private::parts_installation::int_game_rule_key(
+                slot,
+            ))
         })();
         if let Err(error) = &result {
             self.refused

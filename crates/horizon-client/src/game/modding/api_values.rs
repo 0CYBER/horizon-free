@@ -2584,7 +2584,6 @@ pub(in crate::game) fn block_entity_declarations()
         .collect()
 }
 
-
 #[cfg(test)]
 mod declaration_snapshot_tests {
     use super::*;
