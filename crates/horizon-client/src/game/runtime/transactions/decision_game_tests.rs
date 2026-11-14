@@ -199,6 +199,71 @@ fn real_save_gate_and_save_all_refuse_action_savepoint() {
     });
 }
 
+/// Row 7 of the special item renderer matrix (`docs/design/mod-api/resource-renderers.md`):
+/// saves are refused during an open action savepoint, even though rendering adds no persistent
+/// state, so a special item a mod's renderer draws inside one changes nothing: `save-all` is
+/// refused and nothing partial is persisted after the rollback.
+#[test]
+#[ignore = "daily"]
+fn a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in() {
+    crate::game::in_own_process(
+        "game::transactions::decision::game_tests::a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in",
+        a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in_isolated,
+    );
+}
+
+fn a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in_isolated() {
+    use crate::game::native_special_renderers::frame_tests::{
+        asked, drawn_by_the_renderer, special_stick_layers,
+    };
+    /// Every file under `root` with its length and modification time.
+    fn persisted(root: &std::path::Path) -> Vec<(std::path::PathBuf, u64, std::time::SystemTime)> {
+        let mut files = Vec::new();
+        let mut dirs = vec![root.to_path_buf()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let meta = entry.metadata().unwrap();
+                if meta.is_dir() {
+                    dirs.push(entry.path());
+                } else {
+                    files.push((entry.path(), meta.len(), meta.modified().unwrap()));
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+    with_game(|game| {
+        let identity = identity(game);
+        let saved = persisted(&game.world_root);
+        let menu = Menu::new(tests::state());
+        let root = game.transaction_open();
+        let mut host = GameHost { game, identity };
+        assert_eq!(
+            run(
+                &mut host,
+                &menu,
+                |_, s| tests::placement(s),
+                |host| {
+                    let layers = special_stick_layers(host.game, 7);
+                    assert!(drawn_by_the_renderer(&layers), "{layers:?}");
+                    assert_eq!(asked(7), 1);
+                    assert!(Game::admit_entity_save().is_err());
+                    assert_eq!(
+                        host.game.save_all_reply().translation_key(),
+                        Some("commands.save.failed")
+                    );
+                    Reply::Cancel
+                }
+            ),
+            Ok(Outcome::Canceled)
+        );
+        host.game.transaction_close(&root, false);
+        assert!(host.game.transactions.is_empty());
+        assert_eq!(persisted(&host.game.world_root), saved);
+    });
+}
+
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn only_root_commit_publishes_real_listener_and_plan_drops_in_order() {
