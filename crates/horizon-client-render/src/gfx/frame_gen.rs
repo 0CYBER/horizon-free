@@ -423,6 +423,17 @@ struct Pair {
     interval: Duration,
 }
 
+/// Whether the present thread may call `Window::pre_present_notify`.
+///
+/// On macOS winit implements that call as `dispatch_sync` onto the main queue,
+/// and the callback it runs there is empty. This thread is not the main thread.
+/// The main thread is blocked in the pair channel until `show` returns, so the
+/// sync never runs and the window stops (spinning cursor). Wayland is the
+/// platform that uses the notify.
+fn notify_before_present(vsync: bool) -> bool {
+    vsync && cfg!(not(target_os = "macos"))
+}
+
 /// The thread that copies frames to the swapchain and presents them on time.
 struct Presenter {
     config: wgpu::SurfaceConfiguration,
@@ -461,6 +472,9 @@ impl Presenter {
                     // Anything but a frame (outdated, lost, occluded...): the renderer
                     // stops this thread and acquires itself, handling it as it does
                     // without frame generation. A suboptimal frame still shows.
+                    // This runs off the main thread. On macOS the Metal acquire must
+                    // not call into AppKit here, and `nextDrawable` must be able to
+                    // time out: the main thread waits on this thread for targets.
                     let target = match surface.get_current_texture() {
                         wgpu::CurrentSurfaceTexture::Success(t) => t,
                         wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
@@ -479,7 +493,7 @@ impl Presenter {
                         target.texture.size(),
                     );
                     queue.submit([encoder.finish()]);
-                    if vsync {
+                    if notify_before_present(vsync) {
                         window.pre_present_notify();
                     }
                     queue.present(target);
@@ -539,6 +553,14 @@ mod tests {
             pos: pos.into(),
             ..bytemuck::Zeroable::zeroed()
         }
+    }
+
+    /// macOS must not hop to the main queue from the present thread. That hop is
+    /// what froze the window with upscaling and frame generation on.
+    #[test]
+    fn the_present_thread_does_not_wait_on_the_main_queue() {
+        assert!(!notify_before_present(false));
+        assert_eq!(notify_before_present(true), cfg!(not(target_os = "macos")));
     }
 
     /// A swing lands halfway; a hand still on screen while the camera turns stays still;
