@@ -179,6 +179,8 @@ pub enum RuleRegistryError {
     Duplicate(String),
     /// A referenced category does not exist.
     UnknownCategory { rule: String, category: String },
+    /// An integer rule's default is outside its `min..=max`.
+    InvalidRange(String),
 }
 impl Default for RuleRegistry {
     fn default() -> Self {
@@ -212,8 +214,8 @@ impl RuleRegistry {
     pub fn categories(&self) -> &[String] {
         &self.categories
     }
-    /// Add validated bool declarations before the registry is shared.
-    pub fn with_bool_rules(
+    /// Add validated mod declarations (bool or int) before the registry is shared.
+    pub fn with_mod_rules(
         categories: &[String],
         rules: &[Rule],
     ) -> Result<Self, Vec<RuleRegistryError>> {
@@ -222,6 +224,12 @@ impl RuleRegistry {
         for rule in rules {
             if registry.rule(&rule.name).is_some() {
                 errors.push(RuleRegistryError::Duplicate(rule.name.clone()));
+                continue;
+            }
+            if let Value::Int(default) = rule.default
+                && !(rule.min..=rule.max).contains(&default)
+            {
+                errors.push(RuleRegistryError::InvalidRange(rule.name.clone()));
                 continue;
             }
             if !registry.categories.contains(&rule.category) {
@@ -501,6 +509,13 @@ impl GameRules {
             _ => None,
         }
     }
+    /// Read a prevalidated integer slot.
+    pub fn int_slot(&self, slot: u32) -> Option<i32> {
+        match self.values.get(slot as usize)? {
+            Value::Int(value) => Some(*value),
+            _ => None,
+        }
+    }
     /// Read a resolved vanilla boolean rule without a name lookup.
     pub fn bool_at(&self, index: RuleIndex) -> bool {
         matches!(self.values[index.0], Value::Bool(true))
@@ -661,6 +676,39 @@ impl GameRules {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn int_rule(default: i32) -> Rule {
+        Rule {
+            name: "example:cap".into(),
+            category: "example:machines".into(),
+            default: Value::Int(default),
+            min: 0,
+            max: 64,
+        }
+    }
+
+    #[test]
+    fn mod_int_rules_keep_their_range_through_set_and_save() {
+        let categories = ["example:machines".to_owned()];
+        assert_eq!(
+            RuleRegistry::with_mod_rules(&categories, &[int_rule(70)]).err(),
+            Some(vec![RuleRegistryError::InvalidRange("example:cap".into())])
+        );
+        let registry = Arc::new(RuleRegistry::with_mod_rules(&categories, &[int_rule(8)]).unwrap());
+        let slot = registry.position("example:cap").unwrap();
+        let mut rules = GameRules::with_registry(registry.clone(), &[]);
+        assert_eq!(rules.int_slot(slot), Some(8));
+        assert_eq!(rules.bool_slot(slot), None);
+        assert!(!rules.set_string("example:cap", "70"));
+        assert!(!rules.set_string("example:cap", "true"));
+        assert!(rules.set_string("example:cap", "12"));
+        let saved = rules.to_nbt().tag;
+        let loaded = GameRules::from_nbt_with_registry(&saved, &[], registry.clone());
+        assert_eq!(loaded.int_slot(slot), Some(12));
+        let out_of_range = Tag::compound([("data", Tag::compound([("example:cap", Tag::Int(70))]))]);
+        let loaded = GameRules::from_nbt_with_registry(&out_of_range, &[], registry);
+        assert_eq!(loaded.int_slot(slot), Some(8));
+    }
 
     #[test]
     fn unknown_rules_survive_save_and_feature_copy() {

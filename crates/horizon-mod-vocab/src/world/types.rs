@@ -25,6 +25,8 @@ pub enum GameRuleError {
     ForeignNamespace,
     /// The category is already declared.
     Duplicate,
+    /// An integer rule's `min` is above its `max`, or its default is outside `min..=max`.
+    InvalidRange,
 }
 
 /// A boolean game rule declared by a mod.
@@ -32,6 +34,13 @@ pub enum GameRuleError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 // exhaustive: only the registration table creates keys
 pub struct BoolGameRuleKey(pub(crate) u32);
+
+/// An integer game rule declared by a mod with
+/// [`Registrar::game_rule_int`](GameRulesRegistrar::game_rule_int).
+// no wire: decoding validates the u32 slot with IntGameRuleKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+// exhaustive: only the registration table creates keys
+pub struct IntGameRuleKey(pub(crate) u32);
 
 /// A load-owned fluid identity requested through [`Registrar::fluid_key`](FluidsRegistrar::fluid_key) or resolved through
 /// [`DataLoadContext::fluid_key`].

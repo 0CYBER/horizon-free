@@ -541,6 +541,11 @@ pub trait LevelsBackend {
     #[access(WorldOnly)]
     fn level_game_rule_bool(&self, level: LevelRef, key: BoolGameRuleKey) -> Option<bool>;
     /// Side: server.
+    /// Read a registered integer game rule (`GameRules.getInt`), always within the range it was
+    /// declared with. None for a stale handle, a level the server has not opened, or a client.
+    #[access(WorldOnly)]
+    fn level_game_rule_int(&self, level: LevelRef, key: IntGameRuleKey) -> Option<i32>;
+    /// Side: server.
     /// Game rule `rule` (`minecraft:keep_inventory` or `keep_inventory`), as
     /// `/gamerule` queries it: `Ok(None)` for an unknown rule. A gone/reopened level
     /// returns `Stale`; an unreadable side or phase returns `Unavailable`.

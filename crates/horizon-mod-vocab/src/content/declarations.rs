@@ -1,6 +1,6 @@
 //! Owned registration data, independent of package parsing and engine storage.
 
-/// A boolean rule declared by a mod during registration.
+/// A game rule declared by a mod during registration.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -9,8 +9,27 @@ pub struct GameRuleDecl {
     pub name: String,
     /// Category identifier, resolved after every mod registers.
     pub category: String,
-    /// Initial value in a new world.
-    pub default: bool,
+    /// The rule's type and its initial value in a new world.
+    pub default: GameRuleDefault,
+}
+
+/// A declared rule's type and initial value, as vanilla's `GameRuleType` (`BOOL` or `INT`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum GameRuleDefault {
+    /// An on/off rule ([`GameRulesRegistrar::game_rule_bool`](crate::GameRulesRegistrar::game_rule_bool)).
+    Bool(bool),
+    /// An integer rule ([`GameRulesRegistrar::game_rule_int`](crate::GameRulesRegistrar::game_rule_int)):
+    /// `/gamerule` and the game rules screen refuse values outside `min..=max`.
+    Int {
+        /// Initial value, within `min..=max`.
+        default: i32,
+        /// Smallest accepted value.
+        min: i32,
+        /// Largest accepted value.
+        max: i32,
+    },
 }
 
 // no wire: borrowed parser or registration callbacks execute only in their owning process.
@@ -45,6 +64,10 @@ impl RuleSchema<'_> {
                 .map_or("unknown", |(owner, _)| owner);
             if (self.position)(&rule.name).is_some() || !names.insert(&rule.name) {
                 errors.push(format!("mod {owner}: Duplicate({:?})", rule.name));
+            } else if let GameRuleDefault::Int { default, min, max } = rule.default
+                && !(min..=max).contains(&default)
+            {
+                errors.push(format!("mod {owner}: InvalidRange({:?})", rule.name));
             } else if !(self.category)(&rule.category) && !categories.contains(&rule.category) {
                 errors.push(format!(
                     "mod {owner}: UnknownCategory {{ rule: {:?}, category: {:?} }}",
@@ -77,7 +100,7 @@ mod tests {
         GameRuleDecl {
             name: name.into(),
             category: category.into(),
-            default: true,
+            default: GameRuleDefault::Bool(true),
         }
     }
     #[test]

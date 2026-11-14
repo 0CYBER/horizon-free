@@ -1456,7 +1456,7 @@ mod tests {
             max: 0,
         };
         let registry =
-            Arc::new(RuleRegistry::with_bool_rules(&["example:machines".into()], &[rule]).unwrap());
+            Arc::new(RuleRegistry::with_mod_rules(&["example:machines".into()], &[rule]).unwrap());
         let mut create = horizon_client::title::WorldOptions {
             rules: GameRules::with_registry(registry.clone(), &[]),
             ..Default::default()
