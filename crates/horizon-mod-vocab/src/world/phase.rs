@@ -449,6 +449,12 @@ impl RegistrationData {
                 .collect(),
         }
     }
+    /// The engine's initial load shares the published registration settings
+    /// rather than capturing the same startup files again on its workers.
+    /// Without a registration publication, the load owns a fresh capture.
+    pub fn initial_settings_snapshot() -> Option<Arc<[(String, Arc<[(String, String)]>)]>> {
+        registration_data().map(|data| data.settings)
+    }
     /// Bind the game's pure type-coverage projection. It reads no world or runtime position.
     pub fn with_capability_coverage(
         mut self,
