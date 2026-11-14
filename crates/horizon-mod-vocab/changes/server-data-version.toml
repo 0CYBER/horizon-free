@@ -1,0 +1,2 @@
+ids = ["method:host::config::ConfigHost::server_data_version"]
+why = "Additive host method server_data_version() -> i32 exposes the engine's saved-data version on both sides, without an open world. Available to native and WebAssembly mods."
