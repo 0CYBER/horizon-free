@@ -3,6 +3,7 @@
 pub(crate) mod attachment_holder;
 pub(crate) mod attachment_query;
 pub(crate) mod chunk_areas;
+pub(crate) mod player_world;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod behaviors;

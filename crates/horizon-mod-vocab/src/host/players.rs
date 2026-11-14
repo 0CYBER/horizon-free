@@ -378,6 +378,18 @@ pub trait PlayersBackend {
     /// unavailable player.
     #[access(WorldOnly)]
     fn player_announced_channels(&self, player: PlayerRef) -> Option<Vec<String>>;
+    /// Side: server.
+    /// Whether `viewer`'s client is shown the player `target` by the rules players are tracked
+    /// with (`ServerPlayer.broadcastToPlayer`; Paper's `Player.canSee`): a spectator is seen
+    /// only by spectators, and by them only while it watches through its own camera, and a
+    /// player hidden with `player_hide` is seen only by players of at least that level.
+    /// Distance and chunks are not part of it, so a player out of range is still seen. A player
+    /// sees themselves. Refuses with `PlayerWorldRefusal`: `Client`, `Stale` (a handle of the
+    /// two no longer identifies a player in the server's list) and `NoConnection` (a fake
+    /// player is no one's viewer or target).
+    #[access(WorldOnly)]
+    fn player_sees(&self, viewer: PlayerRef, target: PlayerRef)
+    -> Result<bool, PlayerWorldRefusal>;
 }
 /// The handles' client reads of the `players` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -858,4 +870,52 @@ pub trait PlayersBackendMut {
         player: PlayerRef,
         input: PlayerInput,
     ) -> Option<SimulatedMove>;
+    /// Side: server.
+    /// Acknowledges the player's block actions up to `sequence`
+    /// (`ServerGamePacketListenerImpl.ackBlockChangesUpTo`), for a mod that handled one itself,
+    /// such as an editor's own message: the client's predicted blocks settle on the server's
+    /// states once it gets `ClientboundBlockChangedAckPacket`, which goes after the next tick's
+    /// block changes, the highest sequence of the tick only. Refuses, queueing nothing, with
+    /// `PlayerWorldRefusal`: `Client`, `Stale`, `NoConnection` and `NegativeSequence`.
+    #[access(WorldOnly)]
+    fn player_ack_block_changes(
+        &mut self,
+        player: PlayerRef,
+        sequence: i32,
+    ) -> Result<(), PlayerWorldRefusal>;
+    /// Side: server.
+    /// Shows that player alone `state` at `pos` in their level (`ClientboundBlockUpdatePacket`
+    /// to their client; Paper's `Player.sendBlockChange`), at once. The world is not changed:
+    /// the real block comes back when it or its chunk is next sent, as in vanilla, so a mod
+    /// sends it again while it still wants it shown. Refuses, sending nothing, with
+    /// `PlayerWorldRefusal`: `Client`, `Stale`, `NoConnection`, `UnknownState` and
+    /// `PositionNotSendable` (y outside -2048..=2047, x or z outside -33554432..33554432).
+    #[access(WorldOnly)]
+    fn player_show_block(
+        &mut self,
+        player: PlayerRef,
+        pos: [i32; 3],
+        state: BlockState,
+    ) -> Result<(), PlayerWorldRefusal>;
+    /// Side: server.
+    /// Writes `state` at `pos` in `level` as the player placed it, the write of vanilla's
+    /// `BlockItem.place` for a state the mod already chose (an editor's or a schematic's):
+    /// `setBlock` with the placement's flags, so the neighbours hear of it and, unless
+    /// `update_neighbour_shapes` is false, their shapes update (fences, walls and stairs
+    /// connect), then `Block.setPlacedBy` with the player as placer (a bed places its head, a
+    /// door its upper half). A new block gets its block entity; the same block in another state
+    /// keeps its own and what is in it. No sound, game event or item use. The state is written
+    /// as given. Refuses, writing nothing, with `PlayerWorldRefusal`: `Client`, `Stale`,
+    /// `Dead`, `StaleLevel`, `OtherLevel` (not the level in place, where the player is),
+    /// `UnknownState`, `OutOfWorld`, `NotLoaded` and `Unchanged` (that state already stands
+    /// there).
+    #[access(WorldOnly)]
+    fn player_place_block(
+        &mut self,
+        player: PlayerRef,
+        level: LevelRef,
+        pos: [i32; 3],
+        state: BlockState,
+        update_neighbour_shapes: bool,
+    ) -> Result<(), PlayerWorldRefusal>;
 }

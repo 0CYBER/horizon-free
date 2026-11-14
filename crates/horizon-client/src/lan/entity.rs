@@ -934,12 +934,7 @@ struct Probe {
 /// spectator is hidden. A player a native mod hid is shown only to players
 /// of at least its level.
 fn broadcast_to_player(v: &Viewer, p: &Probe) -> bool {
-    let shown = if v.spectator {
-        !p.watching
-    } else {
-        !p.spectator
-    };
-    shown && p.hidden.is_none_or(|level| v.permission >= level)
+    super::player_shown::player_shown(v.spectator, v.permission, p.spectator, p.watching, p.hidden)
 }
 
 /// TrackedEntity.updatePlayer: within the type's range (capped by the view
