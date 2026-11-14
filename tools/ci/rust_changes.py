@@ -110,7 +110,7 @@ if __name__ == "__main__":
     parser.add_argument("head")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--launcher", action="store_true", help="answer for the launcher instead")
-    mode.add_argument("--all", action="store_true", help="emit every selection in one answer")
+    mode.add_argument("--all", action="store_true", help="emit the Rust, launcher and tooling selections at once")
     args = parser.parse_args()
     changes = changed_entries(args.base, args.head)
     paths = [path for _, path in changes]

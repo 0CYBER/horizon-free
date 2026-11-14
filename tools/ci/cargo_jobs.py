@@ -1,4 +1,4 @@
-"""Print how many crates a Dyna runner builds at once: its CPU quota, bounded by its memory.
+"""Print how many crates a self-hosted runner builds at once: its CPU quota, bounded by its memory.
 
 The runner's cgroup (v2, or v1) holds its CPU quota and memory limit. Each concurrent rustc may need
 `--job-mib` of memory. Four stays the floor: the fixed cap these runners used before.

@@ -139,8 +139,7 @@ request doesn't wait for them.
    "don't merge" from anyone holds it).
 
 Never merge your own pull request: another Team member reviews and merges it. Never push to, force-push or rebase a
-contributor's branch. On this fork small fixes go in our own commits on top of theirs in a rollup, their commits stay
-intact, and their pull request shows as merged.
+contributor's branch.
 
 **A risky pull request gets the `needs-proof` label** and waits for an agent's local proof (both single-player
 paths, `lan_e2e`, a screenshot for anything visible) before it merges. Risky means any of:
@@ -207,18 +206,18 @@ Three kinds of game build (CI tiers, owner 2026-11-13):
 
 | Build | Who starts it | What it needs | Published as |
 |---|---|---|---|
-| [Snapshot](#snapshot) | root, by dispatching `release.yml -f kind=snapshot -f dry_run=false` on main | the gate (`lint`, `verify`, `verify-static`, `launcher`) green on that commit | pre-release `snapshot-<date>-<short>`; no launcher offers it |
+| [Snapshot](#snapshot) | a maintainer, by dispatching `release.yml -f kind=snapshot -f dry_run=false` on main | the gate (`checks`' `verify` and `launcher`) green on that commit | pre-release `snapshot-<date>-<short>`; no launcher offers it |
 | Nightly | the [daily run](#daily-run), when every leg is green | `daily-green` on that commit, with its SDK | pre-release `nightly`, every launcher's update |
 | Release (`v*`) | by hand, from a Nightly | | the release |
 
 ### Snapshot
 
 A snapshot is how a change to packages or platform legs is tested after it merges: none of those jobs runs on a pull
-request. Root dispatches `release.yml` with `kind=snapshot` on main, for main's head or `-f commit=<sha>` of a
+request. A maintainer dispatches `release.yml` with `kind=snapshot` on main, for main's head or `-f commit=<sha>` of a
 commit on main. In order:
 
 1. `decide` (`tools/release_train.py decide --channel snapshot`) refuses a commit that is not on main, or whose
-   newest dyna-checks main-push run did not pass every gate job (a pending job is not passed). Nothing else holds
+   newest `checks` main-push run did not pass every gate job (a pending job is not passed). Nothing else holds
    it: no daily tests, no `daily-green`, no batch rules, no daily cap, no pause, no release-blocker.
 2. `snapshot-sdk` builds the commit's prebuilt SDK on every OS (`prebuilt-game-build.yml`; skipped when
    `sdk-<sha>` already exists) and `snapshot-sdk-publish` signs and publishes it as `sdk-<sha>` from this run's
@@ -266,7 +265,7 @@ summary (`tools/ci/daily_summary.py`) reads each leg's result and its sanitised 
 
 Only a run on `main` with `dry_run` false moves the tag, files issues or publishes; any other run prints what it
 would do. A Nightly ships only the commit `daily-green` points to, with its SDK (`release.yml`, `nightly build`).
-A [snapshot](#snapshot) (`release.yml -f kind=snapshot`) needs only dyna-checks' gate on its commit of main.
+A [snapshot](#snapshot) (`release.yml -f kind=snapshot`) needs only the `checks` gate on its commit of main.
 
 ```mermaid
 flowchart LR

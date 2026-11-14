@@ -197,7 +197,7 @@ The trap gives no proof that it avoided all of these. So, after a fault:
 
 ## What to measure and test
 
-All measurements run on the same frozen main, with the same scene as #1780's runs: `tools/shm-scene`, 1,000
+All measurements run on the same frozen main, with the same scene as #1780's runs: a local bench scene, 1,000
 `machine_sample:machine`, a flat dedicated world, 15 s warmup and 20 s report, three repetitions, with the CPU named.
 
 | Measurement | Compared | Acceptance |

@@ -42,6 +42,3 @@ Tried in game: <what you did and saw, or "no: <why>", or "n/a">
 ## Screenshots
 
 <!-- For anything players see: before and after. Delete this section otherwise. -->
-
-<!-- On this fork we never push to your branch: small fixes are carried in our own commits on top of yours in a
-     rollup, and your pull request shows as merged. See CONTRIBUTING.md. -->

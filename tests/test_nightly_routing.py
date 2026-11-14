@@ -115,12 +115,12 @@ console.log(JSON.stringify(eval(expression)));
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             python = root / "python3"
-            python.write_text("#!/bin/sh\necho 'no green dyna-checks main base'\nexit 23\n")
+            python.write_text("#!/bin/sh\necho 'no green checks main base'\nexit 23\n")
             python.chmod(0o755)
             summary = root / "summary"
             result = subprocess.run(["bash", "-c", shell], cwd=root, env={**os.environ, "FORCE": "", "KIND": "nightly", "GITHUB_STEP_SUMMARY": str(summary), "PATH": str(root) + os.pathsep + os.environ["PATH"]}, text=True, capture_output=True)
             self.assertEqual(result.returncode, 23)
-            self.assertIn("no green dyna-checks main base", summary.read_text())
+            self.assertIn("no green checks main base", summary.read_text())
             self.assertNotIn("nightly-notes.md", result.stderr)
 
     @unittest.skipUnless(shutil.which("bash"), "The runner guard executes in Bash")

@@ -52,9 +52,9 @@ handle count and the total; no build required):
 python3 -c 'exec("import subprocess,re,collections\nc=collections.Counter()\nfor p in subprocess.check_output(['"'"'git'"'"','"'"'ls-tree'"'"','"'"'-r'"'"','"'"'--name-only'"'"','"'"'arismoko/main'"'"','"'"'--'"'"','"'"'crates/horizon-mod-vocab/src/host'"'"'],text=True).splitlines():\n s=subprocess.check_output(['"'"'git'"'"','"'"'show'"'"','"'"'arismoko/main:'"'"'+p],text=True)\n for t in re.finditer(r'"'"'pub trait \\w*Backend\\s*\\{(.*?)\\n\\}'"'"',s,re.S):\n  for m in re.finditer(r'"'"'/// Side: (server|both|client)\\.(.*?)(?=/// Side:|\\Z)'"'"',t[1],re.S):\n   f=re.search(r'"'"'fn\\s+(\\w+)\\s*\\(\\s*&self\\s*,\\s*\\w+\\s*:\\s*(\\w+)'"'"',m[2])\n   if f and m[1]=='"'"'server'"'"' and f[2].endswith(('"'"'Ref'"'"','"'"'Key'"'"')) and f[1].startswith(re.sub(r'"'"'(?<!^)(?=[A-Z])'"'"','"'"'_'"'"',re.sub(r'"'"'(Ref|Key)$'"'"','"'"''"'"',f[2])).lower()+'"'"'_'"'"'): c[f[2]]+=1\nprint(dict(sorted(c.items())));print(sum(c.values()))\n")'
 ```
 
-This gives 255, versus Dyna's reported 252 across the same 18 handles.
-LevelRef 48 and EntityRef 53 agree; DisplayRef is 24 here versus Dyna's 23.
-The other two differences cannot be attributed without Dyna's full inventory
+This gives 255, versus the earlier inventory's 252 across the same 18 handles.
+LevelRef 48 and EntityRef 53 agree; DisplayRef is 24 here versus the earlier inventory's 23.
+The other two differences cannot be attributed without that inventory in full
 and revision. The command pins the counting rule to the fetched ref rather than
 assuming those totals agree. The earlier 204 undercount used semicolons as
 method boundaries; semicolons inside documentation truncated the side label.

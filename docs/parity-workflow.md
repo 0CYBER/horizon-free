@@ -25,8 +25,7 @@ runtimes, launch servers and generate worlds. Metadata for cold Linux 1.8.9 alon
 8,320,755 bytes for the server jar plus 235,129,362 bytes for the pinned legacy runtime:
 243,450,117 bytes before JSON metadata and generated worlds. Other versions/runtimes add
 more; cached payload can be zero. No runtime measurement is available for this repair.
-The fork's active Dyna gate does not currently run datafix; upstream-style source selection
-is not proof of active fork CI coverage. Fork issue #3027 tracks the separate coverage decision.
+Fork issue #3027 tracks whether CI runs datafix.
 
 ## Running the vanilla harnesses
 

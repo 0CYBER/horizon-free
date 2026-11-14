@@ -121,20 +121,19 @@ It exits non-zero when something fails.
 
 ### CI tiers
 
-CI is split by how long a test takes and what it needs. Main and rollups run only quick checks and unit tests;
+CI is split by how long a test takes and what it needs. Pull requests and main run only quick checks and unit tests;
 every test that boots the game runs once a day. Existing tests that need prepared resources, a child process or the
 network and are still in `verify` are being moved by the next change of #4022.
 
 | Tier | Runs on | What |
 | --- | --- | --- |
-| Push | every pull request push | `format`, `verify-static` |
-| Gate | rollup and sync pull requests, pushes to main | `lint`, `verify` (unit tests only), `verify-static`, `launcher` |
+| Push | every pull request push, pushes to main | `checks`: `verify` (format, lint, unit tests only, the test-tier and mod API surface checks), `launcher` |
 | Daily | once a day on main's head | every test that boots the game or needs prepared resources, the wasm fixture, `fn-replace-check`, the SDK build and its linkage probe, the machine sample built against the mod API |
 
 **A unit test** uses no prepared resources, boots no game, starts no child process, uses no network and no compiled
 wasm fixture, and finishes in under 2 seconds. Any other test is a daily test: it carries `#[ignore]` and a row in
 `tools/ci/ignored-tests/` (the format is in that folder's README). `verify` fails a unit test that takes over 5
-seconds and `verify-static` one that boots the game; existing tests over 2 seconds and those that boot the game are
+seconds and one that boots the game; existing tests over 2 seconds and those that boot the game are
 already daily tests, and the existing ones that need resources or a child process are being moved over.
 In Linux `verify`, test binaries run normally under an inet guard: opening, binding or connecting an IPv4/IPv6
 socket or calling libc name-resolution APIs (`getaddrinfo`, `gethostbyname`/`gethostbyname2`/`gethostbyaddr`, their reentrant
@@ -196,9 +195,6 @@ it (edited on every push, never repeated): talk to its author in the thread befo
   needs. There's no line limit; split by concern, never by size, and don't bundle unrelated changes.
 - **Fill in the template**: what and why, the vanilla reference, the pr_ready block, screenshots for anything you
   can see.
-- **We never push to your branch on this fork.** When something small is left (a lint, a rebase, a nit) we carry
-  it in our own commits on top of yours in a rollup, and your pull request shows as merged with your commits
-  intact; only design questions come back to you. You don't need to tick "Allow edits by maintainers".
 - **Keep your branch yours.** You can push to it as you like. If you want to bring it up to date, `git merge
   origin/main` is the safe way; a rebase or force-push is fine too, since nothing of ours lives on your branch.
 - **Title: `kind(area): what changes`**, so the queue reads at a glance: `parity(mobs): a ghast's fireball uses its
@@ -236,7 +232,7 @@ A change too big to review as one concern starts from a spec:
 
 ## Parity checks on forks
 
-A pull request from a fork gets the push tier ([CI tiers](#ci-tiers)); the gate runs when a rollup carries it. The
+A pull request from a fork gets the push tier ([CI tiers](#ci-tiers)). The
 `parity` check runs the affected
 harnesses on a maintainer's machine, which holds the game files, so it never runs a fork's code on its own: a
 maintainer reads your change, then adds the `run-parity` label, which runs it once on your current commit. After

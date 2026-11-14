@@ -1,6 +1,6 @@
 # Farmer's Delight's calls against existing hooks
 
-The open rows of the Portizon map of Farmer's Delight's mixins (#1027; the full 34-point table is
+The open rows of the map of Farmer's Delight's mixins (#1027; the full 34-point table is
 reservedbytes' comment on that issue), each exercised against the hook Horizon already has. Each
 row names what Farmer's Delight's injection does at its vanilla method, the hook's contract and the
 test that runs it. No Farmer's Delight-specific hook is proposed. The three contract mismatches the

@@ -1,4 +1,4 @@
-"""The Dyna preparation cache reuses keys and recovers its lock after a killed job."""
+"""The slot preparation cache (HORIZON_DYNA_CACHE) reuses keys and recovers its lock after a killed job."""
 import os
 from pathlib import Path
 import signal

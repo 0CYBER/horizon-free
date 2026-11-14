@@ -19,7 +19,7 @@
 
 A nightly builds main plus the pull requests the trusted reviewers picked (the set: tools/ci/nightly_set.py), merged
 in their order and pushed as nightly/build-<date>-<n>; with no set, main alone. Main is its newest commit where
-this repository's checks passed (`dyna-checks` on the fork, `checks` and `parity-main` upstream), as for a release
+this repository's checks passed (`checks` and `parity-main`), as for a release
 (release_train.green_main_head), or NIGHTLY_BASE when the caller gives that commit. It is published as the
 `nightly` pre-release; the previous one stays a week as nightly-<date>.
 On arismoko/horizon only, the base is the commit `daily-green` points to (the newest daily run that passed every
@@ -349,7 +349,7 @@ def require_sdk(sha: str) -> None:
 
 def green_base(repo: str, issue: str) -> Ref:
     """NIGHTLY_BASE, else a green main commit from this repository's checks
-    (dyna-checks on the fork, checks plus parity-main upstream), never an untested fallback."""
+    (checks plus parity-main), never an untested fallback."""
     explicit = os.environ.get("NIGHTLY_BASE", "").strip()
     fork = repo == "arismoko/horizon"
     if explicit:

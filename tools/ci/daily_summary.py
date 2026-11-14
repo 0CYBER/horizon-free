@@ -46,7 +46,7 @@ TAG = "daily-green"
 LABEL = "bug"
 PREFIX = "Daily: "
 UNFINISHED = " did not complete"
-DISCLOSURE = "> 🤖 Filed by Aria's agent swarm, Dyna, not by Aria."
+DISCLOSURE = "> 🤖 Filed by the daily run."
 # daily.yml's leg jobs (each a called workflow), and the called workflows' own routing jobs, which test nothing.
 LEGS = ("shards", "wasm-mods", "fn-replace-check", "linkage", "windows-runtime-leases", "machine-sample", "sdk")
 # Legs whose red is an action for someone, not a break: their one issue is titled as the action, and says what to do.
