@@ -66,6 +66,13 @@ These correspond to NeoForge's other `ItemAccess` factories:
   transaction that made it drops it, and aborting a later one puts it back as it was. As in
   `StackItemAccess`, a write never changes its item, only its count and components: a bucket in
   one can't become a water bucket.
+- `host.scratch_slots(tx, stack)` holds a stack outside the world in a private two-slot copy
+  whose item may change, and returns its `ItemPlace::ScratchSlots`: what
+  `fluid_util::dispense_container` runs a dispensed container in, so a bucket can become a water
+  bucket. Reads and extracts are the first slot's. An insert fills the first slot where it is
+  empty or holds the same item and components, and the rest goes to the second, as a changed
+  item split off a stack does. `host.scratch_take_slots(tx, &place)` takes both slots back out.
+  It lives and aborts as a scratch stack does.
 - `ItemPlace::Strict(place)` (`forHandlerIndexStrict`) refuses what a block entity's, entity's
   or nested item's slot doesn't take, where the plain place would spread it to the other slots.
 - `ItemPlace::OneByOne(place)` (`oneByOne`) reads at most one item and extracts at most one, so a
