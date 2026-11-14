@@ -1793,9 +1793,13 @@ fn pipeline(
         .filter(|b| b.manifest.native.is_some())
         .cloned()
         .collect();
+    let side = match target {
+        Target::Client => horizon_mod_package::manifest::Side::Client,
+        Target::Server => horizon_mod_package::manifest::Side::Server,
+    };
     let declared: Vec<Vec<dependencies::Dependency>> = mods
         .iter()
-        .map(|bundle| dependencies::from_manifest(&bundle.manifest.dependencies))
+        .map(|bundle| dependencies::from_manifest(&bundle.manifest.dependencies, side))
         .collect();
     let pairs: Vec<(&Bundle, &[dependencies::Dependency])> = mods
         .iter()
@@ -1818,10 +1822,43 @@ fn pipeline(
             id: &bundle.manifest.id,
             version: &bundle.manifest.version,
             has_api: true,
+            code: true,
             dependencies: deps,
         })
         .collect();
-    let resolution = dependencies::resolve(&inputs).map_err(|e| e.to_string())?;
+    // Native sources live beside the instance's horizon-mods directory. Read
+    // its policy before compiling, but never use dispatch overrides to stage
+    // an incomplete or reversed Cargo library graph.
+    let instance = folder.parent().unwrap_or_else(|| Path::new("."));
+    let overrides =
+        dependencies::Overrides::read(&instance.join(horizon_mod_package::mod_list::DIR))?;
+    let settings = horizon_mod_package::mod_list::ModList::load(instance);
+    let content: Vec<_> =
+        horizon_mod_package::selection::content_packages(instance, &settings.enabled, &[])
+            .collect();
+    let requested_ids: std::collections::HashSet<_> = requested
+        .iter()
+        .map(|bundle| bundle.manifest.id.as_str())
+        .collect();
+    let applicable: Vec<_> = requested
+        .iter()
+        .filter(|bundle| !left_out.iter().any(|left| left.id == bundle.manifest.id))
+        .map(|bundle| &bundle.manifest)
+        .chain(
+            content
+                .iter()
+                .filter(|source| {
+                    let manifest = &source.package.manifest;
+                    let code = manifest.native.is_some() || manifest.wasm.is_some();
+                    !code || !requested_ids.contains(manifest.id.as_str())
+                })
+                .map(|source| &source.package.manifest),
+        )
+        .collect();
+    dependencies::resolve_manifests(&applicable, side, &overrides)
+        .map_err(|error| error.to_string())?;
+    let resolution = dependencies::resolve_links(&inputs)
+        .map_err(|error| format!("code link requirements refused: {error}"))?;
     let ordered: Vec<Bundle> = resolution.order.iter().map(|&i| mods[i].clone()).collect();
     let projects: Vec<_> = mods
         .iter()

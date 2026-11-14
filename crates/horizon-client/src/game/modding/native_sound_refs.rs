@@ -27,7 +27,7 @@ impl Game<'_> {
     }
     /// Whether the server's registry has `sound`, when it is a vanilla
     /// event; a mod's goes by name.
-    fn native_sound_known(&self, sound: &str) -> bool {
+    pub(super) fn native_sound_known(&self, sound: &str) -> bool {
         !sound.starts_with("minecraft:")
             || self.lan.as_ref().is_none_or(|host| {
                 host.hub

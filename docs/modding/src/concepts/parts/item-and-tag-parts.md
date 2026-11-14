@@ -77,6 +77,25 @@ Canceling `ItemBeforeBlock` skips the item's `on_item_use_first` Part. `Pass`
 continues to the block phase; any non-`Pass` result ends the block interaction. Cancellation alone does not suppress the later phases when its answer is `Pass`. A block-phase `TryWithEmptyHand`
 can run the block's empty-hand behaviour on the main hand.
 
+`ItemPart::use_on`, `Hooks::entity_interact` and `ItemPart::item_interact_mob`
+use version 2, run on both logical sides, and expose native `HostSide`.
+Their mutable `result` is `Option<InteractionResult>`: `None` defers to later
+listeners and the ordinary behaviour; `Some(result)` supplies the replacement
+answer. `item_interact_mob` also carries the interaction `hand`.
+`ItemPart::use_item` keeps its existing both-side, version-2 contract.
+
+Client execution predicts hands only. Client hosts allow reads and local effects,
+not authoritative world, inventory or entity writes; perform those on the server.
+Answer on the client as well when prediction must stop the hand loop: an answer
+made only on the server cannot suppress an offhand attempt already predicted by
+the client.
+
+`Success`, `SuccessServer` and `Consume` consume the interaction and end the
+client's hand loop. Only `Success` swings on the client; `SuccessServer` swings
+on the server and `Consume` never swings. `Fail` ends block interaction only,
+not an entity or air-use hand loop. `Pass` and `TryWithEmptyHand` fall through
+(the latter can select the block's empty-hand behaviour at the block phase).
+
 ## Item wear
 
 `ItemPart::damage_item` is `IItemExtension.damageItem`: the wear a stack of the part's item is about to take

@@ -1,7 +1,7 @@
 use super::*;
 
 fn refuses_artifact(cache: ModuleCache) {
-    let engine = Engine::default();
+    let engine = crate::runtime::test_engine();
     let bytes =
         wat::parse_str("(module (func (export \"answer\") (result i32) i32.const 42))").unwrap();
     let other =

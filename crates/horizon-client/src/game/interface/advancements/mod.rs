@@ -2,6 +2,7 @@
 //! events (`CriteriaTriggers`), awarding with rewards, the toast and the
 //! chat announcement, and `players/advancements/<uuid>.json`.
 use super::{Dim, Game};
+mod icons;
 
 #[cfg(test)]
 #[path = "inventory_changed_tests.rs"]
@@ -50,7 +51,7 @@ fn progress_snapshot(a: &adv::Advancement, progress: &Progress) -> mod_api::Adva
 }
 
 pub(super) struct Toast {
-    icon: String,
+    icon: ItemStack,
     frame: Frame,
     title: Text,
     description: Option<Text>,
@@ -69,7 +70,7 @@ impl Toast {
     /// `RecipeToast.addOrUpdate` on a new toast.
     pub(super) fn recipe(items: Vec<(String, ItemStack)>) -> Self {
         Self {
-            icon: String::new(),
+            icon: ItemStack::new("minecraft:air", 0),
             frame: Frame::Task,
             title: Text::translate("recipe.toast.title", &[]),
             description: Some(Text::translate("recipe.toast.description", &[])),
@@ -1172,7 +1173,7 @@ impl Game<'_> {
             // A network player's client shows its own toast.
             if d.show_toast && !self.adv.quiet && self.lan_acting.is_none() {
                 self.add_advancement_toast(Toast {
-                    icon: d.icon.item.to_string(),
+                    icon: d.icon.clone(),
                     frame: d.frame,
                     title: Text::translate(toast_label(d.frame).0, &[]),
                     description: Some(text_of(&d.title)),
@@ -2403,26 +2404,27 @@ impl Game<'_> {
     }
 
     /// The `AdvancementToast` or `RecipeToast` at `index` in its slot at `y`.
-    fn draw_toast(&mut self, batch: &mut HudBatch, index: usize, y: f32, multiplier: f64) {
+    fn draw_toast(&self, batch: &mut HudBatch, index: usize, y: f32, multiplier: f64) {
         let t = &self.adv.toasts[index];
         let x = batch.width - 160.0 * t.slide.portion;
         let fully_for = t.slide.fully_for;
-        let (title, frame, icon) = (t.title.clone(), t.frame, t.icon.clone());
-        let description = t.description.clone().unwrap_or_else(|| Text::literal(""));
+        let (title, frame, icon) = (&t.title, t.frame, &t.icon);
+        let empty = Text::literal("");
+        let description = t.description.as_ref().unwrap_or(&empty);
         let recipe = t
             .is_recipe()
-            .then(|| t.recipes[t.displayed_recipe(fully_for, multiplier)].clone());
+            .then(|| &t.recipes[t.displayed_recipe(fully_for, multiplier)]);
         if let Some((station, item)) = recipe {
             // RecipeToast: black description under a purple title, the
             // station at 0.6 scale in the corner over the cycling result.
             let atlas = &self.gui.atlas;
             batch.sprite(atlas, "gui/sprites/toast/recipe", x, y);
-            batch.text_styled(atlas, &title, x + 30.0, y + 7.0, 0xFF50_0050, false);
-            batch.text_styled(atlas, &description, x + 30.0, y + 18.0, 0xFF00_0000, false);
+            batch.text_styled(atlas, title, x + 30.0, y + 7.0, 0xFF50_0050, false);
+            batch.text_styled(atlas, description, x + 30.0, y + 18.0, 0xFF00_0000, false);
             let start = batch.vertices.len();
-            self.draw_item_model(batch, &ItemStack::new(&station, 1), x + 3.0, y + 3.0);
+            self.draw_item_model(batch, &ItemStack::new(station, 1), x + 3.0, y + 3.0);
             batch.scale_since(start, x, y, 0.6, 0.6);
-            self.draw_item_model(batch, &item, x + 8.0, y + 8.0);
+            self.draw_item_model(batch, item, x + 8.0, y + 8.0);
             return;
         }
         let atlas = &self.gui.atlas;
@@ -2435,13 +2437,13 @@ impl Game<'_> {
         let label = title;
         let rgb = color & 0x00FF_FFFF;
         if let [line] = lines.as_slice() {
-            batch.text_styled(atlas, &label, x + 30.0, y + 7.0, color, false);
+            batch.text_styled(atlas, label, x + 30.0, y + 7.0, color, false);
             batch.text_styled(atlas, line, x + 30.0, y + 18.0, u32::MAX, false);
         } else if fully_for < 1500 {
             let fade = ((1500 - fully_for) as f32 / 300.0).clamp(0.0, 1.0);
             let alpha = (fade * 255.0).floor() as u32;
             if alpha != 0 {
-                batch.text_styled(atlas, &label, x + 30.0, y + 11.0, alpha << 24 | rgb, false);
+                batch.text_styled(atlas, label, x + 30.0, y + 11.0, alpha << 24 | rgb, false);
             }
         } else {
             let fade = ((fully_for - 1500) as f32 / 300.0).clamp(0.0, 1.0);
@@ -2461,7 +2463,7 @@ impl Game<'_> {
                 }
             }
         }
-        self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, y + 8.0);
+        self.draw_item(batch, icon, x + 8.0, y + 8.0);
     }
 }
 /// The toast's frame label and its colour (`AdvancementToast`: -30465, pink,
@@ -2576,12 +2578,10 @@ impl Game<'_> {
 impl Game<'_> {
     /// `ClientAdvancements.update` (ClientboundUpdateAdvancementsPacket):
     /// the server's advancements replace or join the tree, each changed one
-    /// takes the progress sent, and one just done shows its toast. `icons`
-    /// are the added advancements' icon items by name.
+    /// takes the progress sent, and one just done shows its toast.
     pub(super) fn remote_advancements(
         &mut self,
         p: horizon_protocol::packets::play::UpdateAdvancements,
-        icons: Vec<String>,
     ) {
         use horizon_client::scoreboard::tag_to_json;
         let mut list: Vec<adv::Advancement> = Vec::new();
@@ -2600,10 +2600,10 @@ impl Game<'_> {
         for id in &p.removed {
             self.adv.progress.criteria.remove(id);
         }
-        for (a, icon) in p.added.into_iter().zip(icons) {
+        for a in p.added {
             list.retain(|o| o.id != a.id);
             let display = a.display.map(|d| adv::Display {
-                icon: horizon_client::items::ItemStack::new(&icon, 1),
+                icon: self.remote_advancement_icon(d.icon),
                 title: tag_to_json(&d.title),
                 description: tag_to_json(&d.description),
                 frame: match d.frame {
@@ -2663,7 +2663,7 @@ impl Game<'_> {
                 && let Some(d) = a.display.as_ref().filter(|d| d.show_toast)
             {
                 self.add_advancement_toast(Toast {
-                    icon: d.icon.item.to_string(),
+                    icon: d.icon.clone(),
                     frame: d.frame,
                     title: Text::translate(toast_label(d.frame).0, &[]),
                     description: Some(text_of(&d.title)),
@@ -2757,7 +2757,7 @@ mod tests {
                 game.options.execution_role = super::super::execution_role::ExecutionRole::Client;
                 game.adv.toasts.clear();
                 let advancement = |name: &str| Toast {
-                    icon: "minecraft:stone".into(),
+                    icon: ItemStack::new("minecraft:stone", 1),
                     frame: Frame::Challenge,
                     title: Text::translate("advancements.toast.challenge", &[]),
                     description: Some(Text::literal(name)),
@@ -2776,7 +2776,7 @@ mod tests {
                     serde_json::json!({"translate": "advancements.toast.challenge"})
                 );
                 assert_eq!(original.description.as_ref().unwrap().plain(), "untouched");
-                assert_eq!(original.icon, "minecraft:stone");
+                assert_eq!(original.icon, ItemStack::new("minecraft:stone", 1));
                 assert!(original.slot.is_none());
                 assert!(
                     original.slide.origin.is_none(),

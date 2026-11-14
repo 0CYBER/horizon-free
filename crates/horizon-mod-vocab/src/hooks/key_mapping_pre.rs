@@ -8,7 +8,8 @@ pub trait Hooks {
     /// acts on nothing. A release cannot be canceled, so what the game holds is always let go.
     /// Told for the keys and mouse buttons the window takes (agent control's included), after the
     /// window's own shortcuts (fullscreen, screenshot, debug keys), and only with no screen open;
-    /// not for a controller, whose presses go straight to the mappings. No NeoForge counterpart.
+    /// not for a controller, whose presses go straight to the mappings, nor for a mod's
+    /// `set_mapping_down` and `click_mapping`, which are no physical input. No NeoForge counterpart.
     /// Client-side.
     #[hook(
         side = "client",

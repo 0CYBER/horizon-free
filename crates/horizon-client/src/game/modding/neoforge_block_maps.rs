@@ -26,7 +26,7 @@ fn load(
         registry: "minecraft:block".to_owned(),
     });
     let maps = DataMaps::load(&types, overlay, registries);
-    let values = |id| maps.values("minecraft:block", id);
+    let values = |id| maps.json_values("minecraft:block", id);
     let block_maps =
         BlockMaps::from_values(values(MAPS[0]), values(MAPS[1]), values(MAPS[2]), rank);
     (!block_maps.is_empty()).then(|| Arc::new(block_maps))

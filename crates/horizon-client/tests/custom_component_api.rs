@@ -4,7 +4,7 @@ use horizon_client::{
     content_identity,
     mod_content::{ContentMod, accept_mod, build, known_components},
 };
-use horizon_core::nbt::Tag;
+use horizon_core::nbt::{Tag, validate_component_value};
 use horizon_protocol::{
     buf::NBT_QUOTA,
     item::custom::{self, InstallError},
@@ -30,18 +30,20 @@ fn registration_limits_and_defaults_are_bound_to_the_connection() {
         Err(InstallError::AlreadyInstalled)
     );
 
-    assert!(custom::validate(&Tag::Int(42)).is_ok());
-    assert!(custom::validate(&Tag::End).is_err());
-    assert!(custom::validate(&Tag::Double((-0.0_f64).to_bits())).is_err());
-    assert!(custom::validate(&Tag::Float(0x7fc0_0001)).is_err());
-    assert!(custom::validate(&Tag::Float(0x7fc0_0000)).is_ok());
-    assert!(custom::validate(&Tag::ByteArray(vec![0; NBT_QUOTA])).is_err());
+    assert!(validate_component_value(&Tag::Int(42)).is_ok());
+    assert!(validate_component_value(&Tag::End).is_err());
+    assert!(validate_component_value(&Tag::Double((-0.0_f64).to_bits())).is_err());
+    assert!(validate_component_value(&Tag::Float(0x7fc0_0001)).is_err());
+    assert!(validate_component_value(&Tag::Float(0x7fc0_0000)).is_ok());
+    assert!(validate_component_value(&Tag::ByteArray(vec![0; NBT_QUOTA])).is_err());
     let mut deep = Tag::Int(1);
     for _ in 0..600 {
         deep = Tag::List(vec![deep]);
     }
-    assert!(custom::validate(&deep).is_err());
-    assert!(custom::validate(&Tag::List(vec![Tag::Int(1), Tag::String("x".into())])).is_ok());
+    assert!(validate_component_value(&deep).is_err());
+    assert!(
+        validate_component_value(&Tag::List(vec![Tag::Int(1), Tag::String("x".into())])).is_ok()
+    );
 
     let dir =
         std::env::temp_dir().join(format!("horizon-component-identity-{}", std::process::id()));

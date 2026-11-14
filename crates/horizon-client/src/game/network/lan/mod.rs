@@ -2231,9 +2231,9 @@ impl Game<'_> {
                                 g.name,
                                 g.address,
                                 g.entity_id,
-                                super::dedicated::java_double(x),
-                                super::dedicated::java_double(y),
-                                super::dedicated::java_double(z)
+                                horizon_core::java_number::double_to_string(x),
+                                horizon_core::java_number::double_to_string(y),
+                                horizon_core::java_number::double_to_string(z)
                             ),
                         );
                         // A held player is not announced: it is not in the world yet.

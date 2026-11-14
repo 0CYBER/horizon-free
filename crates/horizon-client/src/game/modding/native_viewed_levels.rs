@@ -38,6 +38,30 @@ impl Game<'_> {
         }
         remote.viewed.world_of(level.dimension())
     }
+    /// On a client, the handle the player's own level answers to now (its key and the client
+    /// level's epoch): what a world view naming a level is compared with, resolved with the
+    /// same rules as `client_view_world`. None before login.
+    fn client_own_level(&self) -> Option<LevelRef> {
+        let remote = self.remote.as_ref().filter(|r| r.logged_in)?;
+        Some(LevelRef::new(
+            self.native_lifecycle.epoch()?,
+            remote.level_key,
+        ))
+    }
+    /// The frusta of the frame's camera `[fov_degrees, yaw, pitch]` and its world views, which are
+    /// asked for here: each view's level handle is resolved once, first, against the player's own.
+    pub(in crate::game) fn world_view_frustum(
+        &mut self,
+        camera: glam::DVec3,
+        [fov_degrees, yaw, pitch]: [f32; 3],
+        bob: glam::Mat4,
+        depth_far: f32,
+    ) -> Option<horizon_client::gfx::JoinedFrusta> {
+        let own_level = self.client_own_level();
+        let renderer = self.renderer.as_mut()?;
+        renderer.set_world_view_own_level(own_level);
+        Some(renderer.camera_frustum(camera, fov_degrees, yaw, pitch, bob, depth_far))
+    }
     /// The world `block_state` and `clip` read: on a server an open level, in place or parked
     /// (`native_level_world`), on a client `client_view_world`.
     pub(super) fn native_level_view_world(&self, level: LevelRef) -> Option<&World> {

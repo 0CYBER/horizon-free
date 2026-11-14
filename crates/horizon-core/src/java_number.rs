@@ -1,53 +1,82 @@
 //! Java's floating-point spelling, shared by SNBT and JSON numeric conversions.
+//!
+//! Decimal selection follows the public Java 25 `Double.toString` and
+//! `Float.toString` contracts: choose the closest shortest round-trip decimal
+//! (considering both one and two digits when one suffices), breaking ties with
+//! an even significand. No Java runtime implementation source is used.
 
-/// Java `Double.toString`.
-pub fn java_double(d: f64) -> String {
-    java_fp_string(d, format!("{d:e}"))
+use std::fmt::{self, Write};
+
+// Scientific f64 text needs at most 24 ASCII bytes, including a sign.
+struct NumberBuffer {
+    bytes: [u8; 32],
+    len: usize,
 }
-/// Java `Float.toString`.
-pub fn java_float(f: f32) -> String {
-    java_fp_string(f64::from(f), format!("{f:e}"))
-}
-fn java_fp_string(d: f64, sci: String) -> String {
-    if d.is_nan() {
-        return "NaN".into();
-    }
-    if d.is_infinite() {
-        return if d > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    if d == 0.0 {
-        return if d.is_sign_negative() { "-0.0" } else { "0.0" }.into();
-    }
-    // `sci` is Rust's shortest round-trip form: d.ddde<exp>.
-    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
-    let exp: i32 = exp.parse().unwrap_or(0);
-    let negative = mantissa.starts_with('-');
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let sign = if negative { "-" } else { "" };
-    let a = d.abs();
-    if (1e-3..1e7).contains(&a) {
-        if exp >= 0 {
-            let e = exp as usize;
-            let (int, frac) = if digits.len() > e + 1 {
-                (digits[..=e].to_string(), digits[e + 1..].to_string())
-            } else {
-                (format!("{digits:0<width$}", width = e + 1), String::new())
-            };
-            let frac = if frac.is_empty() { "0".into() } else { frac };
-            format!("{sign}{int}.{frac}")
-        } else {
-            let zeros = "0".repeat((-exp - 1) as usize);
-            format!("{sign}0.{zeros}{digits}")
+
+impl NumberBuffer {
+    fn new() -> Self {
+        Self {
+            bytes: [0; 32],
+            len: 0,
         }
+    }
+
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len]).expect("numeric formatting is ASCII")
+    }
+}
+
+impl Write for NumberBuffer {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        let end = self.len + text.len();
+        let destination = self.bytes.get_mut(self.len..end).ok_or(fmt::Error)?;
+        destination.copy_from_slice(text.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+fn render_nearest(
+    negative: bool,
+    value: f64,
+    shortest: &str,
+    round_trips: impl FnOnce(&str) -> bool,
+) -> String {
+    let mantissa = shortest.split_once('e').expect("scientific notation").0;
+    let length = mantissa.bytes().filter(u8::is_ascii_digit).count();
+    let precision = length.max(2) - 1;
+    let mut nearest = NumberBuffer::new();
+    // Explicit precision rounds the exact binary value, with ties to even;
+    // Rust's shortest formatting can instead choose the odd upper candidate.
+    write!(&mut nearest, "{value:.precision$e}").expect("scientific text fits");
+    let candidate = nearest.as_str();
+    // At normal powers of two the round-trip interval can be asymmetric.
+    // Elsewhere it is symmetric, so the closest decimal must round back if
+    // any decimal on this grid does; no parse is needed for those values.
+    // A float widened to f64 retains whether it is a power of two.
+    let power_of_two = value.to_bits() & 0x000f_ffff_ffff_ffff == 0;
+    let selected = if !power_of_two || round_trips(candidate) {
+        candidate
     } else {
-        if digits.len() == 1 {
-            // Select the nearest two-digit decimal, rather than padding the
-            // one-digit round-trip form; Java can choose a different exponent.
-            return format!("{d:.1e}").replace('e', "E");
-        }
-        let (first, rest) = digits.split_at(1);
-        format!("{sign}{first}.{rest}E{exp}")
+        // The nearest grid point is outside the asymmetric interval; the
+        // original shortest decimal is the only grid point inside it.
+        shortest
+    };
+    let (mantissa, exponent) = selected.split_once('e').expect("scientific notation");
+    let mut digits = [0; 17];
+    let mut len = 0;
+    for digit in mantissa.bytes().filter(u8::is_ascii_digit) {
+        digits[len] = digit;
+        len += 1;
     }
+    while len > 1 && digits[len - 1] == b'0' {
+        len -= 1;
+    }
+    render(
+        negative,
+        std::str::from_utf8(&digits[..len]).expect("decimal digits are ASCII"),
+        exponent.parse().expect("scientific exponent"),
+    )
 }
 /// Digits and decimal exponent of the shortest round-trip form.
 fn shortest(text: &str) -> (String, i32) {
@@ -58,7 +87,7 @@ fn shortest(text: &str) -> (String, i32) {
 }
 
 fn render(negative: bool, digits: &str, exponent: i32) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(24);
     if negative {
         out.push('-');
     }
@@ -89,7 +118,7 @@ fn render(negative: bool, digits: &str, exponent: i32) -> String {
             out.push('0');
         }
         out.push('E');
-        out.push_str(&exponent.to_string());
+        write!(&mut out, "{exponent}").expect("writing to a string");
     }
     out
 }
@@ -110,8 +139,15 @@ pub fn double_to_string(value: f64) -> String {
         }
         .into();
     }
-    let (digits, exponent) = shortest(&format!("{:e}", value.abs()));
-    render(value < 0.0, &digits, exponent)
+    let magnitude = value.abs();
+    let mut shortest = NumberBuffer::new();
+    write!(&mut shortest, "{magnitude:e}").expect("scientific text fits");
+    render_nearest(
+        value.is_sign_negative(),
+        magnitude,
+        shortest.as_str(),
+        |text| text.parse::<f64>().is_ok_and(|parsed| parsed == magnitude),
+    )
 }
 
 /// `Float.toString`.
@@ -130,8 +166,15 @@ pub fn float_to_string(value: f32) -> String {
         }
         .into();
     }
-    let (digits, exponent) = shortest(&format!("{:e}", value.abs()));
-    render(value < 0.0, &digits, exponent)
+    let magnitude = value.abs();
+    let mut shortest = NumberBuffer::new();
+    write!(&mut shortest, "{magnitude:e}").expect("scientific text fits");
+    render_nearest(
+        value.is_sign_negative(),
+        f64::from(magnitude),
+        shortest.as_str(),
+        |text| text.parse::<f32>().is_ok_and(|parsed| parsed == magnitude),
+    )
 }
 /// `String.format(Locale.ROOT, "%.<n>f", value)`: Java rounds the shortest
 /// round-trip decimal expansion half-up (so 1.005 gives 1.01).
@@ -217,5 +260,50 @@ mod moved_tests {
         assert_eq!(float_to_string(0.15), "0.15");
         assert_eq!(float_to_string(1.0e10), "1.0E10");
         assert_eq!(double_to_string(-2.5), "-2.5");
+        for (bits, expected) in [
+            (0x0000_0001, "1.4E-45"),
+            (0x0000_0002, "2.8E-45"),
+            (0x0000_0007, "9.8E-45"),
+            (0x007f_ffff, "1.1754942E-38"),
+            (0x0080_0000, "1.1754944E-38"),
+            (0x0080_0001, "1.1754945E-38"),
+            (0x3980_0000, "2.4414062E-4"),
+            (0x44a4_5900, "1314.7812"),
+            (0x4811_6728, "148892.62"),
+            (0x4a00_0001, "2097152.2"),
+            (0x7f7f_ffff, "3.4028235E38"),
+        ] {
+            assert_eq!(float_to_string(f32::from_bits(bits)), expected);
+            assert_eq!(
+                float_to_string(f32::from_bits(bits | 0x8000_0000)),
+                format!("-{expected}")
+            );
+        }
+        for (bits, expected) in [
+            (0x0000_0000_0000_0001, "4.9E-324"),
+            (0x0000_0000_0000_0002, "9.9E-324"),
+            (0x0000_0000_0000_0014, "9.9E-323"),
+            (0x000f_ffff_ffff_ffff, "2.225073858507201E-308"),
+            (0x0010_0000_0000_0000, "2.2250738585072014E-308"),
+            (0x0010_0000_0000_0001, "2.225073858507202E-308"),
+            (0x3fef_ffff_ffff_ffff, "0.9999999999999999"),
+            (0x3ff0_0000_0000_0001, "1.0000000000000002"),
+            (0x3e60_0000_0000_0000, "2.9802322387695312E-8"),
+            (0x4300_0ef8_712f_e8d2, "5.650074801267462E14"),
+            (0x4310_0000_0000_0001, "1.1258999068426242E15"),
+            (0x7fef_ffff_ffff_ffff, "1.7976931348623157E308"),
+        ] {
+            assert_eq!(double_to_string(f64::from_bits(bits)), expected);
+            assert_eq!(
+                double_to_string(f64::from_bits(bits | 0x8000_0000_0000_0000)),
+                format!("-{expected}")
+            );
+        }
+        assert_eq!(float_to_string(-0.0), "-0.0");
+        assert_eq!(double_to_string(-0.0), "-0.0");
+        assert_eq!(float_to_string(f32::INFINITY), "Infinity");
+        assert_eq!(double_to_string(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(float_to_string(f32::NAN), "NaN");
+        assert_eq!(double_to_string(f64::NAN), "NaN");
     }
 }

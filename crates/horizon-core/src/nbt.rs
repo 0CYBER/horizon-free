@@ -206,6 +206,15 @@ impl Default for Limits {
     }
 }
 impl Limits {
+    /// Vanilla's bounded network NBT policy, including the minimum per-tag heap charge.
+    pub const fn network() -> Self {
+        Self {
+            max_bytes: 2_097_152,
+            max_nodes: 2_097_152 / 8,
+            max_depth: 512,
+        }
+    }
+
     /// The prepared per-state block tables (`cached-collision.nbt`,
     /// `block-properties.nbt`, ...): trusted files with a row per block
     /// state, which content mods' states grow past the default caps
@@ -1015,6 +1024,10 @@ impl Writer {
 /// `NbtIo.write`: a file root. A string too long for modified UTF-8 is
 /// written empty, as vanilla's disk writer does; [`write_network`] refuses it.
 pub fn write_named(root: &NamedTag, limits: Limits) -> Result<Vec<u8>, Error> {
+    write_named_parts(&root.name, &root.tag, limits)
+}
+
+fn write_named_parts(name: &JavaString, tag: &Tag, limits: Limits) -> Result<Vec<u8>, Error> {
     let mut writer = Writer {
         bytes: Vec::new(),
         limits,
@@ -1022,11 +1035,11 @@ pub fn write_named(root: &NamedTag, limits: Limits) -> Result<Vec<u8>, Error> {
         empty_long_strings: true,
         canonical_nan: true,
     };
-    writer.put(&[root.tag.id()])?;
-    if root.tag.id() != 0 {
-        writer.string(&root.name)?;
+    writer.put(&[tag.id()])?;
+    if tag.id() != 0 {
+        writer.string(name)?;
     }
-    writer.payload(&root.tag, 0)?;
+    writer.payload(tag, 0)?;
     Ok(writer.bytes)
 }
 
@@ -1041,6 +1054,35 @@ pub fn write_network(tag: &Tag, limits: Limits) -> Result<Vec<u8>, Error> {
     writer.put(&[tag.id()])?;
     writer.payload(tag, 0)?;
     Ok(writer.bytes)
+}
+
+/// Validate an opaque native component against network limits and a stable disk round trip.
+pub fn validate_component_value(value: &Tag) -> Result<(), String> {
+    if matches!(value, Tag::End) {
+        return Err("a component value cannot be NBT End".into());
+    }
+    let network = Limits::network();
+    let bytes = write_network(
+        value,
+        Limits {
+            max_bytes: network.max_bytes,
+            ..Limits::default()
+        },
+    )
+    .map_err(|error| format!("NBT: {error}"))?;
+    read_network(&bytes, network).map_err(|error| format!("NBT: {error}"))?;
+    let limits = Limits {
+        max_bytes: network.max_bytes + 2,
+        ..Limits::default()
+    };
+    // Disk NBT canonicalizes NaNs and normalizes negative zero when read.
+    let saved = write_named_parts(&JavaString::default(), value, limits)
+        .map_err(|error| error.to_string())?;
+    let (loaded, _) = read_named(&saved, limits).map_err(|error| error.to_string())?;
+    if loaded.tag != *value {
+        return Err("component value changes on save and reload".into());
+    }
+    Ok(())
 }
 
 /// `NbtUtils.compareNbt(expected, actual, true)`.

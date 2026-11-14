@@ -42,6 +42,13 @@ const MOD: &str = r#"(module
     (i32.add (call $add (i32.const 2) (i32.const 3)) (i32.load (global.get $counter))))
   (func (export "bumps") (result i32) (call $bump)))"#;
 
+/// Wasmtime's defaults with wasm threads off, as every Horizon engine has them.
+fn engine() -> Engine {
+    let mut config = wasmtime::Config::new();
+    config.wasm_threads(false).shared_memory(false);
+    Engine::new(&config).unwrap()
+}
+
 fn bytes(text: &str) -> Vec<u8> {
     wat::parse_str(text).unwrap()
 }
@@ -57,7 +64,7 @@ fn a_mod_calls_its_library_and_reads_its_static_over_one_shared_std() {
     crate::test_stack::on_guest_stack(|| {
         let (std, lib, user) = (bytes(STD), bytes(LIB), bytes(MOD));
         let mut group = Group::link(
-            &Engine::default(),
+            &engine(),
             &[
                 Member {
                     name: "std",
@@ -87,7 +94,7 @@ fn an_import_no_earlier_member_has_is_refused_naming_the_member() {
     crate::test_stack::on_guest_stack(|| {
         let (std, user) = (bytes(STD), bytes(MOD));
         let err = Group::link(
-            &Engine::default(),
+            &engine(),
             &[
                 Member {
                     name: "std",
@@ -116,7 +123,7 @@ fn two_members_exporting_one_name_are_refused() {
     crate::test_stack::on_guest_stack(|| {
         let std = bytes(STD);
         let err = Group::link(
-            &Engine::default(),
+            &engine(),
             &[
                 Member {
                     name: "std",
@@ -138,7 +145,7 @@ fn two_members_exporting_one_name_are_refused() {
 fn bytes_that_are_not_a_shared_module_are_refused_without_a_panic() {
     crate::test_stack::on_guest_stack(|| {
         let plain = bytes("(module)");
-        let engine = Engine::default();
+        let engine = engine();
         let err = Group::link(
             &engine,
             &[Member {
@@ -213,7 +220,7 @@ fn self_got_function_and_data_relocations_are_ready_before_constructors() {
     crate::test_stack::on_guest_stack(|| {
         let module = bytes(SELF_GOT);
         let mut group = Group::link(
-            &Engine::default(),
+            &engine(),
             &[Member {
                 name: "self",
                 module: &module,
@@ -236,7 +243,7 @@ fn self_got_requires_an_actual_export_of_the_right_kind() {
         ] {
             let module = bytes(&source);
             let error = Group::link(
-                &Engine::default(),
+                &engine(),
                 &[Member {
                     name: "self",
                     module: &module,
@@ -254,7 +261,7 @@ fn self_got_requires_an_actual_export_of_the_right_kind() {
         }
         let module = bytes(&SELF_GOT.replace("(global (export \"SELF_DATA\")", "(global"));
         let error = Group::link(
-            &Engine::default(),
+            &engine(),
             &[Member {
                 name: "self",
                 module: &module,
@@ -277,7 +284,7 @@ fn self_got_does_not_allow_a_start_function_to_observe_unrelocated_state() {
     crate::test_stack::on_guest_stack(|| {
         let module = bytes(&SELF_GOT.replace("(func $ctor", "(start $ctor) (func $ctor"));
         let error = Group::link(
-            &Engine::default(),
+            &engine(),
             &[Member {
                 name: "self",
                 module: &module,
@@ -296,7 +303,7 @@ fn self_got_delayed_start_runs_after_relocation_and_before_constructors() {
         "(func (export \"__wasm_start\") (i32.store (global.get $data) (i32.const 50))) (func $ctor");
         let module = bytes(&source);
         let mut group = Group::link(
-            &Engine::default(),
+            &engine(),
             &[Member {
                 name: "self",
                 module: &module,
@@ -314,7 +321,7 @@ fn self_got_private_helpers_and_data_belong_to_each_member() {
         let first = bytes(&source);
         let second = bytes(&source.replace("(i32.const 2))", "(i32.const 3))"));
         let mut group = Group::link(
-            &Engine::default(),
+            &engine(),
             &[
                 Member {
                     name: "first",
@@ -344,7 +351,7 @@ fn self_got_private_function_does_not_bind_an_earlier_public_function() {
         r#"(@custom "horizon.private" "[\22answer\22,\22SELF_DATA\22,\22run\22]") (type $get"#, 1)
         .replace("(i32.const 2))", "(i32.const 3))"));
         let mut group = Group::link(
-            &Engine::default(),
+            &engine(),
             &[
                 Member {
                     name: "first",

@@ -1655,6 +1655,37 @@ mod tests {
         );
     }
 
+    /// `ItemStack.getHoverName`: a custom name, else a written book's non-blank title, else the
+    /// item's name in the client's language.
+    #[test]
+    fn hover_name_prefers_custom_name_then_book_title_then_item_name() {
+        let names = crate::creative::Names::default();
+        let stack = |snbt: &str| item_data::parse_stack(snbt).unwrap().unwrap();
+        let lang = crate::lang::Language::of(
+            "en_us",
+            [
+                ("item.minecraft.diamond", "Diamond"),
+                ("item.minecraft.written_book", "Written Book"),
+            ]
+            .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        );
+        crate::lang::scoped(lang, || {
+            let renamed = stack(
+                r#"{id:"minecraft:diamond_pickaxe",count:1,components:{"minecraft:custom_name":"Hammer"}}"#,
+            );
+            assert_eq!(hover_name(&names, &renamed), "Hammer");
+            let book = |title: &str| {
+                stack(&format!(
+                    r#"{{id:"minecraft:written_book",count:1,components:{{"minecraft:written_book_content":{{title:"{title}",author:"A"}}}}}}"#
+                ))
+            };
+            assert_eq!(hover_name(&names, &book("Log")), "Log");
+            assert_eq!(hover_name(&names, &book(" ")), "Written Book");
+            let diamond = stack(r#"{id:"minecraft:diamond",count:1}"#);
+            assert_eq!(hover_name(&names, &diamond), "Diamond");
+        });
+    }
+
     /// `ItemStack.getHoverName` falls back to `getOrDefault(ITEM_NAME, EMPTY)`,
     /// so a removed item name is the empty string, not the localized item.
     #[test]

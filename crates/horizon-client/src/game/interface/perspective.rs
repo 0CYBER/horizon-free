@@ -2007,7 +2007,7 @@ mod preview_tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
-            pathfindable_overrides: Default::default(),
+            resolved: Default::default(),
         };
         let draw = |body: bool| {
             let mut out = Vec::new();

@@ -211,6 +211,10 @@ Each instance caps every group with `wasm.memory_cap_mib:<MiB>` in `horizon-mods
 4096 unless the player lowers it. A group whose members declare more than the cap is refused at load, and
 the Mods page names the group, what it declares and the cap.
 
+### Threads
+
+Wasm threads and shared memory are off for wasm mods. A module that declares or imports a shared memory, or uses an atomic instruction, is refused when the group links, and the refusal names the member and quotes the reason. Wasmtime's `threads` feature is compiled in only for native hosts that embed their own engine; the engine that runs mods keeps both settings off.
+
 ## Compiled module cache
 
 The game caches compiled wasm modules in `<game_dir>/.horizon-cache/wasm/`, keyed by the

@@ -592,7 +592,7 @@ fn existing_fieldless_enum_layouts_match_baseline() {
     );
     assert_eq!(
         <crate::content::package_side::Side as Wire>::layout(&mut vec![]),
-        0xdd28eeec22f3e455,
+        0xa58ce85f7e9e9c30,
         "Side"
     );
     assert_eq!(

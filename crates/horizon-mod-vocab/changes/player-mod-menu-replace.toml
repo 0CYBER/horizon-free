@@ -1,0 +1,3 @@
+ids = ["handle:PlayerRef::open_mod_menu"]
+why = "Opening a mod menu now takes MenuReplace to choose close-first or in-place replacement of the current menu."
+migrate = "Pass `MenuReplace::CloseFirst` for the old behaviour."

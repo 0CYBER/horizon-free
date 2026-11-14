@@ -159,6 +159,7 @@ fn a_mob_bounces_off_a_bouncy_block_and_not_off_stone() {
             }
         }
         let w = MobWorld {
+            mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
             professions: crate::mobs::villager::profession_table(),
             teams: Default::default(),
             world: &world,
@@ -278,6 +279,7 @@ fn a_ridden_horse_floats_in_deep_water() {
         }
     }
     let w = MobWorld {
+        mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
         professions: crate::mobs::villager::profession_table(),
         teams: Default::default(),
         world: &world,
@@ -425,6 +427,7 @@ fn a_falling_mob_lands_on_a_shulker_or_a_held_happy_ghast() {
     let landing = |below: &Mob| -> f64 {
         let others = [below.seen(None, &crate::items::Items::empty())];
         let w = MobWorld {
+            mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
             professions: crate::mobs::villager::profession_table(),
             teams: Default::default(),
             world: &world,

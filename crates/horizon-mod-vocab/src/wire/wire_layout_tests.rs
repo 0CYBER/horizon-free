@@ -3,7 +3,7 @@ use super::*;
 use crate::*;
 use horizon_core::nbt::{Compound, JavaString};
 
-fn install_layout_resources() {
+pub(super) fn install_layout_resources() {
     let _ = crate::wire::install_resource_access(crate::wire::ResourceAccess {
         intern: |value| {
             if value.len() > crate::wire::MAX_STATIC_STRING_BYTES {
@@ -465,7 +465,15 @@ fn registration_and_attribute_records_have_declared_field_bytes() {
             PackageKind::Code,
             Side::Both,
             vec!["example".into()],
-            vec![PackageDependency::new("library".into(), "^1".into(), true)],
+            vec![PackageDependency::new(
+                "library".into(),
+                "^1".into(),
+                crate::DependencyKind::Optional,
+                crate::DependencyOrder::After,
+                crate::Side::Both,
+                None,
+                None,
+            )],
         ),
         (
             "example".to_owned(),
@@ -475,15 +483,63 @@ fn registration_and_attribute_records_have_declared_field_bytes() {
             vec!["example".to_owned()],
             // Nested tuples flatten into one field list.
             (
-                vec![PackageDependency::new("library".into(), "^1".into(), true)],
+                vec![PackageDependency::new(
+                    "library".into(),
+                    "^1".into(),
+                    crate::DependencyKind::Optional,
+                    crate::DependencyOrder::After,
+                    crate::Side::Both,
+                    None,
+                    None,
+                )],
                 PackageDetails::default(),
             ),
         ),
     );
     fields(PropertyValue::Integer(3), (1u32, 3i64));
+    let dependency = PackageDependency::new(
+        "library".into(),
+        "^1".into(),
+        crate::DependencyKind::Optional,
+        crate::DependencyOrder::After,
+        crate::Side::Both,
+        None,
+        None,
+    );
     fields(
-        PackageDependency::new("library".into(), "^1".into(), true),
-        ("library".to_owned(), "^1".to_owned(), true),
+        dependency.clone(),
+        (
+            "library".to_owned(),
+            "^1".to_owned(),
+            crate::DependencyKind::Optional,
+            crate::DependencyOrder::After,
+            crate::Side::Both,
+            (None::<String>, None::<String>),
+        ),
+    );
+    // Independently check actual enum discriminants, not just a round trip
+    // through the same enum codec: Optional = 1, After = 0, Both = 1.
+    let mut bytes = Writer::new();
+    bytes.put(&dependency);
+    let raw = Reader::decode::<(
+        String,
+        String,
+        u32,
+        u32,
+        u32,
+        (Option<String>, Option<String>),
+    )>(bytes.bytes())
+    .unwrap();
+    assert_eq!(
+        raw,
+        (
+            "library".to_owned(),
+            "^1".to_owned(),
+            1u32,
+            0u32,
+            1u32,
+            (None::<String>, None::<String>)
+        )
     );
     let details = PackageDetails {
         name: "Example".into(),

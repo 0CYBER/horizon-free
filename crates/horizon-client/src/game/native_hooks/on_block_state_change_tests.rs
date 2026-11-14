@@ -27,6 +27,10 @@ struct Listener(Arc<Mutex<Vec<Heard>>>);
 #[mod_api::horizon_part]
 impl BlockPart for Listener {
     fn on_block_state_change(&self, level: LevelSide<'_>, event: &mut OnBlockStateChangeEvent) {
+        assert!(
+            !event.predicted,
+            "server writes and piston replays are not predictions"
+        );
         let (client, level) = match level {
             LevelSide::Server(level) => (false, level),
             LevelSide::Client(level) => (true, level),

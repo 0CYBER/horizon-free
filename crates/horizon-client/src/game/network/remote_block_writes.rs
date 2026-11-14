@@ -12,6 +12,7 @@ impl Game<'_> {
         pos: [i32; 3],
         previous: BlockStateId,
         state: BlockStateId,
+        predicted: bool,
     ) {
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
         // LevelChunk.setBlockState removes the block entity of a block
@@ -23,8 +24,10 @@ impl Game<'_> {
             self.forget_moving_piston(at);
             self.moving_pistons_stale = true;
         }
-        // Level.setBlock ends with updatePOIOnBlockStateChange when the state changed
-        // (NeoForge's onBlockStateChange). Nothing is built while no part listens.
+        // No event values or level adapter while no part listens: one flag check.
+        if !mod_api::__private::has_scoped_hook(mod_api::HookId::OnBlockStateChange) {
+            return;
+        }
         let listens = |s| {
             crate::game::api_values::block_state::block_listens(
                 mod_api::HookId::OnBlockStateChange,
@@ -32,7 +35,7 @@ impl Game<'_> {
             )
         };
         if previous != state && (listens(previous) || listens(state)) {
-            self.with_level(|_, level, _| level.block_state_change(at, previous, state));
+            self.with_level(|_, level, _| level.block_state_change(at, previous, state, predicted));
         }
     }
 }

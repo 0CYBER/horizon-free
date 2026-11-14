@@ -99,7 +99,7 @@ impl Game<'_> {
             .facts()
             .get(self.world.block(key.0, key.1, key.2))
             .name;
-        let mut tag = save::encode_block_entity(key, entity, block);
+        let mut tag = save::block_entity_encode::encode(key, entity, block);
         if let (Some(name), Tag::Compound(map)) = (self.world.block_names.get(&key), &mut tag) {
             map.insert("CustomName".into(), name.clone());
         }

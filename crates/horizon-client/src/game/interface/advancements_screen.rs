@@ -6,7 +6,6 @@ use super::{Game, Screen, advancements::text_of};
 use horizon_client::{
     advancements::{Frame, Tree},
     hud::HudBatch,
-    items::ItemStack,
     text::{Style, Text},
     ui,
 };
@@ -496,8 +495,7 @@ impl Game<'_> {
                         26.0,
                         u32::MAX,
                     );
-                    let icon = ItemStack::new(&d.icon.item, 1);
-                    self.draw_item(batch, &icon, x + 8.0, y + 5.0);
+                    self.draw_item(batch, &d.icon, x + 8.0, y + 5.0);
                 }
                 batch.clip_since(start, ix, iy, ix + 234.0, iy + 113.0);
             }
@@ -527,8 +525,7 @@ impl Game<'_> {
                 let (x, y) = tab_pos(ty, i);
                 let (dx, dy) = icon_offset(ty.0);
                 if let Some(d) = &tree.list[t].display {
-                    let icon = ItemStack::new(&d.icon.item, 1);
-                    self.draw_item(batch, &icon, left + x + dx, top + y + dy);
+                    self.draw_item(batch, &d.icon, left + x + dx, top + y + dy);
                 }
             }
         }
@@ -776,8 +773,7 @@ impl Game<'_> {
             title_bottom
         };
         lines(batch, &desc, desc_left, desc_y, 0xFF00_FF00);
-        let icon = ItemStack::new(&d.icon.item, 1);
-        self.draw_item(batch, &icon, ix + f(x + 8), iy + f(y + 5));
+        self.draw_item(batch, &d.icon, ix + f(x + 8), iy + f(y + 5));
     }
     /// A left button press or release.
     pub(super) fn advancements_mouse(&mut self, pressed: bool, size: [u32; 2]) {

@@ -328,8 +328,6 @@ impl Game<'_> {
             root,
             &overlay,
         );
-        let data_maps = native_data_maps::DataMaps::load(&data_map_types, &overlay, &registries);
-        drop(registries);
         let causes_suffocation = items
             .block_tags
             .get("minecraft:causes_suffocation")
@@ -343,7 +341,11 @@ impl Game<'_> {
         )?;
         // A registry whose pack tags don't load keeps the game's own tags
         // (`in_tag` falls back to them), rather than matching no tag at all.
-        let pack_tags = WorldTables::PACK_TAG_REGISTRIES
+        let pack_tags: HashMap<_, _> = WorldTables::PACK_TAG_REGISTRIES
+            .into_iter()
+            .chain(horizon_client::neoforge_mob_maps::MAPS.map(|definition| definition.directory))
+            .filter(|directory| *directory != "item")
+            .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .filter_map(|registry| {
                 match horizon_client::items::load_tags(root, registry, &overlay) {
@@ -355,6 +357,52 @@ impl Game<'_> {
                 }
             })
             .collect();
+        // Items already decoded the root's command export. Block-state-only
+        // command metadata is not the registry universe, and professions and
+        // biomes belong to the live world candidate rather than that export.
+        for registry in ["minecraft:sound_event", "minecraft:game_event"] {
+            if items.component_registry.ids(registry).is_empty() {
+                return Err(format!(
+                    "builtin data maps require {registry} in command-registries.json"
+                )
+                .into());
+            }
+        }
+        let builtin = neoforge_mob_maps::load(
+            &overlay,
+            |directory| {
+                if directory == "item" {
+                    Some(&items.item_tags)
+                } else {
+                    pack_tags.get(directory)
+                }
+            },
+            |registry, id| match registry {
+                "minecraft:item" => items.items.contains_key(id),
+                "minecraft:villager_profession" => stations.professions.resolve(id).is_some(),
+                "minecraft:worldgen/biome" => self
+                    .world_biomes
+                    .as_ref()
+                    .unwrap_or_else(|| self.res.biomes())
+                    .contains(id),
+                "minecraft:entity_type" => {
+                    self.res.mob_types().contains_key(id)
+                        || items
+                            .component_registry
+                            .ids(registry)
+                            .binary_search_by(|known| known.as_str().cmp(id))
+                            .is_ok()
+                }
+                _ => items
+                    .component_registry
+                    .ids(registry)
+                    .binary_search_by(|known| known.as_str().cmp(id))
+                    .is_ok(),
+            },
+        )?;
+        let data_maps = native_data_maps::DataMaps::load(&data_map_types, &overlay, &registries)
+            .with_builtins(builtin);
+        drop(registries);
         conditions.check_errors()?;
         Ok((
             Some(WorldTables {
@@ -443,6 +491,7 @@ impl Game<'_> {
             .map_or_else(Vec::new, |t| t.data_maps.registries());
         self.install_block_maps();
         self.install_profession_save_snapshots();
+        self.share_mob_maps();
         horizon_client::datapack_net::serve(self.mods.datapack_registries.clone());
         Ok(())
     }
@@ -499,6 +548,7 @@ impl Game<'_> {
             .map_or_else(Vec::new, |t| t.data_maps.registries());
         self.install_block_maps();
         self.install_profession_save_snapshots();
+        self.share_mob_maps();
         self.world.pois.clear();
         for world in self.levels.parked_worlds() {
             world.pois.clear();
@@ -733,15 +783,22 @@ impl Game<'_> {
         api_values::install_block_states(prepared.block_states);
         native_world_read::install_block_tags(prepared.tags);
         mod_api::__private::install_resolved_parts(prepared.parts);
-        self.resolve_pathfindable();
+        self.resolve_block_paths();
         self.resolve_piston_reactions();
     }
-    pub(super) fn resolve_pathfindable(&self) {
-        let asked = mod_api::__private::has_scoped_hook(mod_api::HookId::IsPathfindable);
-        let data = &self.res.rest().mob_data;
-        data.set_pathfindable(asked, |state, kind, mut pathfindable| {
-            self.native_is_pathfindable(state, kind, &mut pathfindable);
-            pathfindable
-        });
+    pub(super) fn resolve_block_paths(&self) {
+        use horizon_client::mobs::data::PartAnswers;
+        use mod_api::{__private::has_scoped_hook, HookId, PathComputationType};
+        let pathfindable: &dyn Fn(BlockStateId, PathComputationType, bool) -> bool =
+            &|state, kind, mut pathfindable| {
+                self.native_is_pathfindable(state, kind, &mut pathfindable);
+                pathfindable
+            };
+        self.res.mob_data().resolve_parts(
+            self.res.facts(),
+            &PartAnswers {
+                pathfindable: has_scoped_hook(HookId::IsPathfindable).then_some(pathfindable),
+            },
+        );
     }
 }

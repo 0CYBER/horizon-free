@@ -200,11 +200,8 @@ pub fn is_valid_empty_spawn<L: SpawnLevel>(s: Species, l: &L, x: i32, y: i32, z:
     }
     let f = l.facts().get(l.state(x, y, z));
     let block = &*f.name;
-    let burning = l.block_tag("minecraft:fire", block)
-        || block == "minecraft:lava"
-        || block == "minecraft:magma_block"
-        || (block == "minecraft:campfire" || block == "minecraft:soul_campfire") && f.emission > 0
-        || block == "minecraft:lava_cauldron";
+    let burning =
+        data::vanilla_burning_block(block, f.emission > 0, l.block_tag("minecraft:fire", block));
     let other = matches!(
         block,
         "minecraft:wither_rose"

@@ -264,17 +264,20 @@ impl Wire for crate::LoadedMods {
     }
 }
 impl Wire for crate::RegistrationContext {
-    const LAYOUT_SEED: u64 = crate::wire::layout_seed("RegistrationContext.runtime.v2");
+    const LAYOUT_SEED: u64 = crate::wire::layout_seed("RegistrationContext.runtime.startup.v3");
     const MIN: usize = <Option<crate::InstanceDirectory> as Wire>::MIN
-        + <Option<crate::RuntimeEnvironment> as Wire>::MIN;
+        + <Option<crate::RuntimeEnvironment> as Wire>::MIN
+        + <Option<std::sync::Arc<dyn crate::StartupScreen>> as Wire>::MIN;
     fn put(&self, out: &mut Writer) {
         out.put(&self.instance_dir);
         out.put(&self.runtime);
+        out.put(&self.startup);
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
         let mut context = Self::new();
         context.instance_dir = input.take()?;
         context.runtime = input.take()?;
+        context.startup = input.take()?;
         Ok(context)
     }
 }
@@ -338,7 +341,11 @@ mod resource_wire_tests {
             vec![crate::PackageDependency::new(
                 "other".into(),
                 "^1".into(),
-                true,
+                crate::DependencyKind::Optional,
+                crate::DependencyOrder::Before,
+                crate::Side::Server,
+                Some("Shared library".into()),
+                Some("https://example.org/library".into()),
             )],
         )
         .with_details(crate::PackageDetails {
@@ -357,7 +364,20 @@ mod resource_wire_tests {
         assert_eq!(decoded.side(), crate::Side::Both);
         assert!(decoded.depends_on("other"));
         assert_eq!(decoded.dependencies()[0].version(), "^1");
-        assert!(decoded.dependencies()[0].optional());
+        assert_eq!(
+            decoded.dependencies()[0].kind(),
+            crate::DependencyKind::Optional
+        );
+        assert_eq!(
+            decoded.dependencies()[0].order(),
+            crate::DependencyOrder::Before
+        );
+        assert_eq!(decoded.dependencies()[0].side(), crate::Side::Server);
+        assert_eq!(decoded.dependencies()[0].reason(), Some("Shared library"));
+        assert_eq!(
+            decoded.dependencies()[0].url(),
+            Some("https://example.org/library")
+        );
         assert_eq!(decoded.name(), "Test");
         assert_eq!(decoded.homepage(), Some("https://example.org"));
         assert_eq!(decoded.runtime(), Some(crate::PackageRuntime::Wasm));
@@ -373,7 +393,7 @@ mod resource_wire_tests {
                     .is_err()
             );
         }
-        assert!(Reader::new(&[2, 0, 0, 0]).take::<crate::Side>().is_err());
+        assert!(Reader::new(&[3, 0, 0, 0]).take::<crate::Side>().is_err());
         assert!(
             Reader::new(&[2, 0, 0, 0])
                 .take::<crate::PackageKind>()
@@ -437,7 +457,12 @@ impl Wire for crate::ConfigPath {
         out.put_str(self.as_str());
     }
     fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
-        Self::new(&input.take::<String>()?).map_err(|_| WireError::Invalid("invalid config path"))
+        let text = input.take::<String>()?;
+        if text.is_empty() {
+            Ok(Self::root())
+        } else {
+            Self::try_from(text).map_err(|_| WireError::Invalid("invalid config path"))
+        }
     }
 }
 impl Wire for crate::SpawnerKey {
@@ -836,7 +861,9 @@ mod tests {
 
     #[test]
     fn wire_checked_values_and_garbage() {
+        super::layout_tests::install_layout_resources();
         round(crate::ConfigPath::new("example/options.toml").unwrap());
+        round(crate::ConfigPath::root());
         round(crate::SpawnerKey::new("example:spawner").unwrap());
         round(crate::CustomSpawners::vanilla());
         round(crate::Identifier::parse("example:thing").unwrap());

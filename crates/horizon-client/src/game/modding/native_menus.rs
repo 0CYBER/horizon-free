@@ -91,12 +91,7 @@ impl Game<'_> {
         replace: MenuReplace,
     ) -> Option<i32> {
         let conn = self.native_conn(uuid)?;
-        // ServerPlayer.openMenu closes the menu that was open: `closeContainer`, or
-        // `doCloseContainer` for a provider that skips the client's close.
-        match replace {
-            MenuReplace::CloseFirst => self.guest_close_menus_and_tell(conn),
-            MenuReplace::InPlace => self.guest_close_all(conn),
-        }
+        self.close_for_open(conn, replace);
         let window = self.lan.as_mut()?.hub.open_native_menu(
             conn,
             rows,
@@ -106,9 +101,19 @@ impl Game<'_> {
         self.player_menu_opening(conn);
         Some(window)
     }
+    /// `ServerPlayer.openMenu`'s close of the menu that was open: `closeContainer`, which then
+    /// tells the client, or `doCloseContainer` for a provider that skips the client's close.
+    /// Either way the old menu's `removed` runs and the mods hear it close.
+    fn close_for_open(&mut self, conn: u32, replace: MenuReplace) {
+        match replace {
+            MenuReplace::CloseFirst => self.guest_close_menus_and_tell(conn),
+            MenuReplace::InPlace => self.guest_close_all(conn),
+        }
+    }
     /// `ServerPlayer.openMenu(provider, extraDataWriter)` for a content mod menu type and no
     /// block: the type's container slots show empty and their clicks reach the mods, as
-    /// `open_menu`'s do; `extra` and `pos` go first in its `horizon:menu_extra` payload.
+    /// `open_menu`'s do; `extra` and `pos` go first in its `horizon:menu_extra` payload, and
+    /// `replace` is the provider's choice of the client's close, as for `open_menu`.
     pub(super) fn player_open_mod_menu(
         &mut self,
         player: mod_api::PlayerRef,
@@ -116,6 +121,7 @@ impl Game<'_> {
         title: Text,
         extra: Vec<u8>,
         pos: Option<[i32; 3]>,
+        replace: MenuReplace,
     ) -> Result<Option<i32>, mod_api::OpenMenuError> {
         use mod_api::OpenMenuError;
         let id = self.menu_key_id(menu);
@@ -143,8 +149,7 @@ impl Game<'_> {
         if !self.guest_may_open(conn, &id, pos) {
             return Ok(None);
         }
-        // ServerPlayer.openMenu closes the menu that was open.
-        self.guest_close_all(conn);
+        self.close_for_open(conn, replace);
         let host = self.lan.as_mut().ok_or(OpenMenuError::PlayerUnavailable)?;
         let window = host.hub.open_menu_window(
             conn,
@@ -703,6 +708,157 @@ mod tests {
         });
     }
 
+    /// The content mod menu type the mod-menu tests open: a prepared registry slot
+    /// (`minecraft:generic_9x1`) for a synthetic definition, in the fresh process each case
+    /// runs in, which keeps the one-shot menu table out of other fixtures.
+    const MOD_MENU: &str = "minecraft:generic_9x1";
+
+    fn register_mod_menu() {
+        assert!(horizon_client::containers::register_mod_menu_types([(
+            MOD_MENU.into(),
+            9,
+            0,
+            Vec::new(),
+            None,
+            None,
+        )]));
+    }
+
+    /// [`watched_guest`] on a Horizon client that reads a menu opened with no block, and the
+    /// key of [`MOD_MENU`].
+    fn mod_menu_guest(game: &mut Game<'_>) -> (mpsc::Receiver<Out>, mod_api::MenuKey) {
+        let rx = watched_guest(game);
+        game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+            g.brand = "horizon".into();
+            g.sender.menu_extra_rev = 1;
+        });
+        let key = mod_api::__private::menu_keys()
+            .into_iter()
+            .find(|key| mod_api::__private::menu_key_id(*key).as_deref() == Some(MOD_MENU))
+            .unwrap();
+        (rx, key)
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_mod_menu_opened_in_place_sends_no_close_and_still_closes_the_old_menu() {
+        use mod_api::{PlayerContainerCloseEvent, PlayerContainerOpenEvent};
+        use std::sync::Mutex;
+        const CASE: &str = "HORIZON_MOD_MENU_REPLACE_CHILD";
+        if super::super::native_entity_refs::tests::run_fresh_cases(
+            "game::native_menus::tests::a_mod_menu_opened_in_place_sends_no_close_and_still_closes_the_old_menu",
+            CASE,
+            &["close_first", "in_place"],
+        ) {
+            return;
+        }
+        // What the mods heard, in order.
+        static HEARD: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        struct Listen;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Listen {
+            fn player_container_open(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut PlayerContainerOpenEvent<'_>,
+            ) {
+                HEARD.lock().unwrap().push(format!("open {}", event.menu));
+            }
+            fn player_container_close(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut PlayerContainerCloseEvent<'_>,
+            ) {
+                HEARD.lock().unwrap().push(format!("close {}", event.menu));
+            }
+        }
+        let heard = || std::mem::take(&mut *HEARD.lock().unwrap());
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new("listen", Box::new(Listen))].into();
+        mod_platform::__private::install(mods.clone());
+        crate::game::api_values::install_parts(&mods).unwrap();
+        let replace = match std::env::var(CASE).unwrap().as_str() {
+            "close_first" => MenuReplace::CloseFirst,
+            _ => MenuReplace::InPlace,
+        };
+        register_mod_menu();
+        with_game(|game| {
+            let (rx, key) = mod_menu_guest(game);
+            // Where the game keeps what the mods last heard the player open.
+            game.lan.as_mut().unwrap().play.entry(1).or_default();
+            let player = game.player(123).unwrap();
+            assert_eq!(open(game, 3, "old", MenuReplace::CloseFirst), 1);
+            assert_eq!(heard(), ["open minecraft:generic_9x3"]);
+            sent(&rx);
+            let stone = ItemStack::new("minecraft:stone", 4);
+            game.lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .guests
+                .update(0, |g| g.carried = Some(stone.clone()));
+
+            let window = game
+                .player_open_mod_menu(player, key, Text::literal("new"), vec![7], None, replace)
+                .unwrap()
+                .unwrap();
+            assert_eq!(window, 2);
+            // The old menu's close, heard once, before anything of the new one.
+            assert_eq!(
+                heard(),
+                [
+                    "close minecraft:generic_9x3".to_owned(),
+                    format!("open {MOD_MENU}")
+                ]
+            );
+            let packets: Vec<String> = sent(&rx)
+                .iter()
+                .map(|p| match p {
+                    C::ContainerClose(close) => format!("close {}", close.container),
+                    C::CustomPayload(payload) => format!("payload {}", payload.channel),
+                    C::OpenScreen(open) => format!("open {}", open.container),
+                    C::ContainerSetContent(content) => format!(
+                        "content {} state {} slots {}",
+                        content.container,
+                        content.state,
+                        content.items.len()
+                    ),
+                    other => format!("{other:?}"),
+                })
+                .collect();
+            // The client's close of the old window for `CloseFirst` only (queued before the
+            // removal, as `closeContainer` does), the inventory with the cursor stack back in
+            // it, then the new menu's extra data, screen and contents.
+            let mut expected = vec![
+                "content 0 state 1 slots 46",
+                "payload horizon:menu_extra",
+                "open 2",
+                "content 2 state 1 slots 45",
+            ];
+            if replace == MenuReplace::CloseFirst {
+                expected.insert(0, "close 1");
+            }
+            assert_eq!(packets, expected);
+            let g = &game.lan.as_ref().unwrap().hub.guests[0];
+            assert_eq!(g.carried, None, "the cursor stack went back");
+            assert_eq!(
+                g.inventory.iter().flatten().cloned().collect::<Vec<_>>(),
+                vec![stone]
+            );
+            assert_eq!(g.menu.as_ref().map(|m| (m.window, m.size)), Some((2, 9)));
+            assert_eq!(
+                game.lan.as_ref().unwrap().hub.native_menu_events,
+                vec![NativeMenuEvent::Closed {
+                    uuid: 123,
+                    window: 1
+                }],
+                "the old menu closed on the server"
+            );
+
+            // Both notifications were delivered inline, without a second close.
+            assert!(heard().is_empty());
+        });
+    }
+
     #[test]
     #[ignore = "needs prepared resources; isolated menu registration"]
     fn mod_menu_backend_payload_and_refusals() {
@@ -713,33 +869,22 @@ mod tests {
         ) {
             return;
         }
-        // Reuse a prepared registry slot for this synthetic content-menu definition.
-        // The isolated process keeps the one-shot menu table out of other fixtures.
-        let id = "minecraft:generic_9x1";
-        assert!(horizon_client::containers::register_mod_menu_types([(
-            id.into(),
-            9,
-            0,
-            Vec::new(),
-            None,
-            None,
-        )]));
+        register_mod_menu();
         with_game(|game| {
-            let rx = watched_guest(game);
-            game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
-                g.brand = "horizon".into();
-                g.sender.menu_extra_rev = 1;
-            });
-            let key = mod_api::__private::menu_keys()
-                .into_iter()
-                .find(|key| mod_api::__private::menu_key_id(*key).as_deref() == Some(id))
-                .unwrap();
+            let (rx, key) = mod_menu_guest(game);
             let player = game.player(123).unwrap();
             let old = open(game, 1, "old", MenuReplace::CloseFirst);
             sent(&rx);
             let bytes = vec![0, 255, 17];
             let window = game
-                .player_open_mod_menu(player, key, Text::literal("new"), bytes.clone(), None)
+                .player_open_mod_menu(
+                    player,
+                    key,
+                    Text::literal("new"),
+                    bytes.clone(),
+                    None,
+                    MenuReplace::CloseFirst,
+                )
                 .unwrap()
                 .unwrap();
             assert_eq!(window, old + 1);
@@ -789,7 +934,14 @@ mod tests {
                 });
                 game.lan.as_mut().unwrap().hub.native_menu_events.clear();
                 assert_eq!(
-                    game.player_open_mod_menu(player, key, Text::literal("refused"), extra, None,),
+                    game.player_open_mod_menu(
+                        player,
+                        key,
+                        Text::literal("refused"),
+                        extra,
+                        None,
+                        MenuReplace::InPlace,
+                    ),
                     Err(expected)
                 );
                 assert_eq!(

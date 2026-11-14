@@ -30,6 +30,24 @@ constructing a native filesystem path. Wasm receives the identical host-encoded
 value through Wire as data only; this does not grant filesystem access. A context
 with no engine snapshot returns `RegistrationReadError::Unavailable`.
 
+A mod that does slow work while the game starts shows it on the startup loading screen
+(NeoForge's `StartupNotificationManager` and `ProgressMeter`). `RegistrationContext::progress(label,
+steps)` opens a bar under the game's stage bar and returns `Result<StartupProgress, StartupProgressError>` (handle `TooManyBars` when 64 bars are already open): `step()`, `set(n)` and
+`label(text)` move it, and dropping it removes the bar. The mod may keep the handle past
+`register` and step it or call `bar.message(text)` from a worker thread or from `client_setup`.
+`RegistrationContext::message(text)` shows a line for a few seconds. The newest four bars and the
+last three lines are drawn, each cut to one line. A dedicated server logs each label, line and
+tenth of a bar's steps instead. A wasm mod holds the game's screen by id, and each call crosses to
+the game. A custom loading window is not part of this.
+
+This is part of the startup progress feature, not live rendering of synchronous setup work.
+Bars can be opened through `RegistrationContext`; `client_setup` has no creation context and
+must retain a handle from registration. Updates become visible only while the loading screen
+is actually drawing. A synchronous `client_setup` listener runs on the render thread, so its
+updates cannot draw live and may appear only after it returns, if another loading frame is drawn.
+Slow work can run in a mod-owned worker and step a retained bar, but neither that worker nor
+the bar keeps the loading screen open. Live display of synchronous setup work and a creation
+route from `client_setup` remain outside this change.
 ## Registration and setup
 
 Registration runs once: `register`, `component_types`, `blocks`, `items` and `standalone_models`

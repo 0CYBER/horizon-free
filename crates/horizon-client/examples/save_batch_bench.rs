@@ -107,7 +107,7 @@ fn fixture(per_chunk: usize) -> (Vec<Arc<Chunk>>, Entities, Names) {
             }
             // Exercise the existing NBT overlay and saved list order as well.
             if j % 8 == 2 {
-                let mut raw = save::encode_block_entity(p, &e, BLOCKS[block as usize]);
+                let mut raw = save::block_entity_encode::encode(p, &e, BLOCKS[block as usize]);
                 if let Tag::Compound(map) = &mut raw {
                     map.insert(
                         "LootTable".into(),

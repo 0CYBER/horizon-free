@@ -681,9 +681,9 @@ fn dispatch_contracts() {
     assert!(!canceled);
     install(mods.clone());
     calls.lock().unwrap().clear();
-    let mut claimed = false;
+    let mut result = None;
     dispatch_use_on(
-        &mut host,
+        HostSide::Server(&mut host),
         calls::UseOnCall {
             stack: &ItemStack::default(),
             pos: [0; 3],
@@ -692,14 +692,14 @@ fn dispatch_contracts() {
             hit: BlockHit,
             player: 0,
             player_entity_id: 0,
-            claimed: &mut claimed,
+            result: &mut result,
         },
     );
-    assert!(claimed);
+    assert_eq!(result, Some(InteractionResult::SuccessServer));
     assert_eq!(*calls.lock().unwrap(), [1]);
     calls.lock().unwrap().clear();
     dispatch_use_on(
-        &mut host,
+        HostSide::Server(&mut host),
         calls::UseOnCall {
             stack: &ItemStack::default(),
             pos: [0; 3],
@@ -708,7 +708,7 @@ fn dispatch_contracts() {
             hit: BlockHit,
             player: 0,
             player_entity_id: 0,
-            claimed: &mut claimed,
+            result: &mut result,
         },
     );
     assert!(calls.lock().unwrap().is_empty());
@@ -721,6 +721,7 @@ mod stubs {
     #[derive(Clone, Copy)]
     pub(super) struct BlockId;
     pub(super) struct Ticks;
+    pub(super) struct ClockAdjustment;
     pub(super) struct Compound;
     pub(super) type Dispensed = (Option<super::ItemStack>, i32);
     pub(super) struct LootDrops<'a>(pub &'a ());

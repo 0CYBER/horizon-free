@@ -39,7 +39,9 @@ range (`ClipPlane`: a normal `[x, y, z]` of zero, a value or its scaled or camer
 too, or the camera not behind it), an `id` already pushed this frame (`DuplicateId`), a parent not pushed before
 it, refused, or the view itself (`MissingParent`, so a refused view's children are refused too), depth 6
 (`TooDeep`; never clamped), a ninth view (`TooMany`) and a view past the pixel budget (`PixelBudget`, with its
-pixels and those left). Views taken for a frame that turns out to be a title or loading screen's are refused
+pixels and those left) and a view of a level other than the player's own (`Level`: `with_level` names a level
+by a handle; `None` and the player's own level draw, an open viewed level, a stale handle, a closed or never open
+level are refused, as viewed levels are not drawn yet). Views taken for a frame that turns out to be a title or loading screen's are refused
 afterwards (`TitleScreen`). Each refusal is logged once: the first time a view of that `id` is refused for that
 reason.
 

@@ -6,14 +6,7 @@
 use super::{Game, stats::Stats};
 use mod_api::{PlayerRef, StatType};
 
-/// An id with its namespace: `stone` is `minecraft:stone`.
-fn qualified(id: &str) -> String {
-    if id.contains(':') {
-        id.to_owned()
-    } else {
-        format!("minecraft:{id}")
-    }
-}
+use super::native_namespaced_id::namespaced;
 
 impl Game<'_> {
     /// Whether `player` still names the same player on this server.
@@ -53,7 +46,7 @@ impl Game<'_> {
     ) -> Option<i32> {
         let ty = stat_type.path();
         let stats = self.native_player_stats(player)?;
-        Some(stats.map_or(0, |s| s.get(ty, &qualified(key))))
+        Some(stats.map_or(0, |s| s.get(ty, &namespaced(key))))
     }
     /// `Player.awardStat(stat, amount)`: adds `amount`, as the game does
     /// for its own counts, so `player_stat_award` hears it and may rewrite or cancel
@@ -67,7 +60,7 @@ impl Game<'_> {
         amount: i32,
     ) -> bool {
         let ty = stat_type.path();
-        let key = qualified(key);
+        let key = namespaced(key);
         self.native_player_current(player)
             && self.native_as_player_handle(player, |game| game.award_stat(ty, &key, amount))
     }
@@ -80,7 +73,7 @@ impl Game<'_> {
         key: &str,
     ) -> bool {
         let ty = stat_type.path();
-        let key = qualified(key);
+        let key = namespaced(key);
         self.native_player_current(player)
             && self.native_as_player_handle(player, |game| game.stats.reset(ty, &key))
     }
@@ -95,7 +88,7 @@ impl Game<'_> {
         if !self.native_player_current(player) {
             return None;
         }
-        let id = qualified(recipe);
+        let id = namespaced(recipe);
         Some(match self.native_player_resting(player) {
             Some(g) => g.recipe_book.recipes.contains(&id),
             None => self.level.recipe_book.recipes.contains(&id),
@@ -148,7 +141,7 @@ impl Game<'_> {
         let index = &self.stations().recipe_index;
         let ids: Vec<String> = recipes
             .iter()
-            .map(|r| qualified(r))
+            .map(|r| namespaced(r))
             .filter(|id| index.contains(id))
             .collect();
         let mut count = 0;

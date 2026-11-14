@@ -4,7 +4,7 @@ A mod keeps its options in one of two ways:
 
 | | Config files | Settings |
 | --- | --- | --- |
-| Lives in | The game's `config/` folder (on a server, `serverconfig/` per world) | The mod's data folder, one file per key |
+| Lives in | The game's `config/` folder (on a server, `serverconfig/` per world) | `horizon-mods/.horizon-mod-data/<mod id>/`, one file per key |
 | Edited by | The player, in a text editor | The player, on the mod's page in **Options > Mods** |
 | You declare it with | `Hooks::register_configs` | `Registrar::register_setting` |
 | You read it in | `config_loading` and `config_reloading` | `Host::setting` and the typed `setting_*` reads |
@@ -30,8 +30,33 @@ These hooks run in the Config [load phase](../concepts/load-phases.md): settings
 available, world handles and transactions are not. A file outside `config/`, or one already registered, is
 skipped.
 
-For files the hooks don't manage, `Host::config_files()` gives your mod its own files in `config/`. The service is
-bound to the mod whose hook or Part is running: you never pass your id, and you cannot reach another mod's files.
+For files the hooks don't manage, `Host::config_files()` gives your mod its own files in `config/`. Paths retain
+the ownership spelling above, such as `<mod id>/extra.toml`. The service is bound to the mod whose hook or Part
+is running; you cannot reach another mod's files.
+
+## Bulk data
+
+Keep map tiles, waypoints, seeds and exports out of settings and config files:
+
+- `Host::data_files()` is available on both sides, rooted at `<game directory>/horizon-mod-data/<mod id>/`.
+  A client-only mod can key its own subfolders by server or save and dimension.
+- `ServerHost::world_data_files()` is server-only, rooted at `<world>/horizon-mod-data/<mod id>/`.
+  Its contents are copied, deleted and backed up with the save. Without a current world it refuses calls with
+  `ConfigFileError::NoWorld`; a client has no world-folder service.
+
+Both use the same `ConfigFiles`, `ConfigPath`, `ConfigEntry` and `ConfigFileError` types as config files, on native
+and wasm. Bulk paths are relative to your implicit mod root: `tiles/overworld/0.bin`, not
+`<mod id>/tiles/overworld/0.bin`. The game never scans bulk data as settings or config.
+
+`read`, `write` and `stat` operate on checked `/`-separated paths; traversal (`..`), backslashes and symbolic links
+are refused. Writes replace the whole file atomically, never exposing partial contents. Horizon's own per-file
+limits are `DATA_FILE_MAX` (64 MiB) for both bulk areas and `CONFIG_FILE_MAX` (4 MiB) for config files.
+Oversized files and unavailable operations return typed errors, rather than partially writing.
+
+Walk a folder with `list(&folder, after, limit)`: start with `after = None`, then pass the last returned entry's
+name as the exclusive cursor. Names are lexicographically ordered; each page has at most `limit` entries.
+`limit` must be between 1 and `CONFIG_LIST_MAX` (1024), or the call returns `ConfigFileError::InvalidPage`.
+Use `ConfigPath::root()` to list your own root, and stop when a page is empty.
 
 ## Settings
 
@@ -48,3 +73,7 @@ button.
 
 A mod reads and writes only its own settings: another mod's id, or a key its owner never registered, reads
 `None` and writes nothing.
+
+The settings folder is settings only, not bulk storage: ordinary files there are read as setting keys and
+subfolders or unsafe entries still warn during snapshots. Use the bulk services above instead; their files are
+not included in settings snapshots.

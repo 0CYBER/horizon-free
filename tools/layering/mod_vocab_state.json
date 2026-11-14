@@ -193,5 +193,10 @@
     "type": "::std::sync::LazyLock<u64>",
     "category": "immutable ABI layout fingerprint",
     "reason": "Hash of the build-fixed Wire layouts; the generator validates its sole declaration and type before writing output."
+  },
+  "world/startup_progress.rs::SCREEN": {
+    "type": "OnceLock<Arc<dynStartupScreen>>",
+    "category": "dispatch table",
+    "reason": "One engine-installed startup-screen service; registration contexts carry this same resource to native and wasm mods, and retained progress handles use it after registration."
   }
 }

@@ -167,3 +167,5 @@ player's inventory, and packets for its window are ignored. `replace` is the cho
 (`shouldTriggerClientSideContainerClosingOnOpen`): `MenuReplace::CloseFirst`, vanilla's default, first sends the
 client a close, which centres the mouse again; `MenuReplace::InPlace` sends none, so the new screen takes the old
 one's place and the mouse stays where it is. Opening from the player's inventory sends no close either way.
+`player.open_mod_menu` takes the same `replace` for a content mod's menu type
+([machine menu data](../../how-to/world/machine-menu-data.md)).

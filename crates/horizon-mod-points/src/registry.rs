@@ -7,13 +7,13 @@ use mod_api::__private::points::{Place, Table};
 pub use mod_api::__private::points::register;
 pub use mod_api::__private::points::{RegisterError, stop};
 
-/// Seal listener registration after installing the engine's dispatch provider.
+/// Seal listener registration after installing the engine's point table.
 pub fn seal() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
         // SAFETY: the table accepts typed listeners only through registrations whose
         // contract checks the catalog index, host, and canonical record signature.
-        unsafe { horizon_engine_slots::install_points(|place, call| TABLE.fire_api(place, call)) }
+        unsafe { horizon_engine_slots::install_points(&TABLE) }
             .expect("installing the game's point provider");
     });
     mod_api::__private::points::seal();

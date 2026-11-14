@@ -544,6 +544,17 @@ impl Levels {
         }
     }
 
+    pub(super) fn install_mob_map_snapshots(
+        &self,
+        snapshot: &Arc<horizon_client::neoforge_mob_maps::NeoForgeMobMaps>,
+    ) {
+        for level in self.parked.values() {
+            if let Some(terrain) = &level.locator {
+                terrain.set_mob_maps(snapshot);
+            }
+        }
+    }
+
     pub(super) fn parked_worlds(&self) -> impl Iterator<Item = &World> {
         self.parked.values().map(|level| &level.world)
     }
@@ -681,6 +692,9 @@ impl Game<'_> {
             generate.as_ref(),
         )?;
         save.install_profession_snapshot(self.stations().professions.clone());
+        if let Some(terrain) = &locator {
+            terrain.set_mob_maps(self.mob_map_snapshot());
+        }
         let mut world = Game::world_for_mods(self.res.facts().air, seed);
         world.attachments = save.load_attachments();
         world.shape = self.level_shapes.get(dim.id());

@@ -838,6 +838,7 @@ mod tests {
             version: &bundle.manifest.version,
             dependencies: &declared[0],
             has_api: true,
+            code: true,
         }];
         let resolution = dependencies::resolve(&inputs).unwrap();
         let rust = crate::rust_toolchain::install(|_| {}).unwrap();

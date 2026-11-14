@@ -1,8 +1,7 @@
 //! Tag text output: `StringTagVisitor` (compact SNBT) and
-//! `TextComponentTagVisitor` (the coloured form commands print), plus Java's
-//! number formatting.
+//! `TextComponentTagVisitor` (the coloured form commands print).
 use crate::text::{self, Style, Text};
-pub use horizon_core::java_number::{java_double, java_float};
+use horizon_core::java_number::{double_to_string, float_to_string};
 use horizon_core::nbt::Tag;
 use horizon_world::snbt_text::string_of;
 pub use horizon_world::snbt_text::{quote_and_escape, to_snbt};
@@ -92,8 +91,8 @@ impl Pretty {
             Tag::Short(v) => self.number(&v.to_string(), "s"),
             Tag::Int(v) => self.number(&v.to_string(), ""),
             Tag::Long(v) => self.number(&v.to_string(), "L"),
-            Tag::Float(v) => self.number(&java_float(f32::from_bits(*v)), "f"),
-            Tag::Double(v) => self.number(&java_double(f64::from_bits(*v)), "d"),
+            Tag::Float(v) => self.number(&float_to_string(f32::from_bits(*v)), "f"),
+            Tag::Double(v) => self.number(&double_to_string(f64::from_bits(*v)), "d"),
             Tag::String(s) => self.quoted(&string_of(s), text::GREEN),
             Tag::ByteArray(a) => {
                 let v: Vec<i8> = a.iter().map(|b| *b as i8).collect();
@@ -478,15 +477,15 @@ mod tests {
     }
     #[test]
     fn java_number_text() {
-        assert_eq!(java_double(1.0), "1.0");
-        assert_eq!(java_double(0.1), "0.1");
-        assert_eq!(java_double(1.0e7), "1.0E7");
-        assert_eq!(java_double(12345678.9), "1.23456789E7");
-        assert_eq!(java_double(0.0001), "1.0E-4");
-        assert_eq!(java_double(-3.5), "-3.5");
-        assert_eq!(java_float(0.3), "0.3");
-        assert_eq!(java_float(100.0), "100.0");
-        assert_eq!(java_double(f64::NAN), "NaN");
+        assert_eq!(double_to_string(1.0), "1.0");
+        assert_eq!(double_to_string(0.1), "0.1");
+        assert_eq!(double_to_string(1.0e7), "1.0E7");
+        assert_eq!(double_to_string(12345678.9), "1.23456789E7");
+        assert_eq!(double_to_string(0.0001), "1.0E-4");
+        assert_eq!(double_to_string(-3.5), "-3.5");
+        assert_eq!(float_to_string(0.3), "0.3");
+        assert_eq!(float_to_string(100.0), "100.0");
+        assert_eq!(double_to_string(f64::NAN), "NaN");
     }
     #[test]
     fn pretty_form_is_coloured_without_changing_text() {

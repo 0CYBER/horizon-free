@@ -1,4 +1,5 @@
 //! AI goals of native mod mob handles.
+use super::native_namespaced_id::namespaced;
 use super::{Game, commands::Target};
 use horizon_client::mobs::{
     self, Species,
@@ -372,10 +373,7 @@ impl Game<'_> {
                 if !speed.is_finite() || *speed < 0.0 || items.is_empty() {
                     return None;
                 }
-                let items: Vec<String> = items
-                    .iter()
-                    .map(|id| namespaced(id.to_owned()))
-                    .collect::<Vec<_>>();
+                let items: Vec<String> = items.iter().map(|id| namespaced(id)).collect::<Vec<_>>();
                 Some(Box::new(Tempt::new(*speed, items.into(), *can_scare)))
             }
             GoalSpec::Breed { speed } => {
@@ -451,19 +449,7 @@ impl Game<'_> {
 
     /// The species of the mob type `id` names (`minecraft:zombie`).
     fn species_of(&self, id: &str) -> Option<Species> {
-        self.res
-            .mob_types()
-            .get(&namespaced(id.to_owned()))
-            .map(|t| t.species)
-    }
-}
-
-/// `id` with a namespace: a bare id reads as `minecraft:`'s.
-fn namespaced(id: String) -> String {
-    if id.contains(':') {
-        id
-    } else {
-        format!("minecraft:{id}")
+        self.res.mob_types().get(&namespaced(id)).map(|t| t.species)
     }
 }
 

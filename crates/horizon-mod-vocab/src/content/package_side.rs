@@ -10,4 +10,6 @@ pub enum Side {
     Client,
     /// Both installations; the server tells clients which version it expects.
     Both,
+    /// The dedicated server installation, not an integrated server on a client.
+    Server,
 }

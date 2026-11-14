@@ -738,21 +738,17 @@ impl Game<'_> {
     pub(in crate::game) fn native_gui_layer_post(&self, layer: &str, draw: &mut HudBatch) {
         self.fire_gui_layer_post(layer, draw);
     }
-    /// A player right-clicks the entity `entity` (`Entity.getId`) of type
-    /// `kind` (`minecraft:cow`) with `hand`, holding `stack` (none in an
-    /// empty hand): where `Player.interactOn` starts, before the entity's own
-    /// `interact` and the item's `interactLivingEntity`. Set `claimed` to take
-    /// the click: the hand swings and neither runs. Asked once per hand, as
-    /// vanilla tries main then off hand. Server-side, for every acting player.
+    /// `Player.interactOn`: both logical sides answer before entity interaction.
+    /// Only the client's own consuming answer stops its hand loop.
     pub(in crate::game) fn native_entity_interact(
         &mut self,
         hand: Hand,
         entity: i32,
         kind: &str,
         stack: Option<&ItemStack>,
-        claimed: &mut bool,
+        result: &mut Option<mod_api::InteractionResult>,
     ) {
-        self.fire_entity_interact(hand, entity, kind, stack, claimed);
+        self.fire_entity_interact(hand, entity, kind, stack, result);
     }
     /// A player left-clicks the block `state` at `pos`, `face` the face hit
     /// (`[0, 1, 0]` is the top): where `ServerPlayerGameMode.handleBlockBreakAction`
@@ -1596,11 +1592,11 @@ impl Game<'_> {
     /// `native_tell`, the item helpers and the rest reach them. Heard for:
     /// Nether and End portals (also riding a vehicle, and leaving the End as
     /// its winner), `/execute in ... run tp` and any other command that
-    /// teleports a player into another level, and the death respawn. Not
-    /// heard: a move within a level (`/tp`, an End gateway), a player who
-    /// leaves before the move ends, a move that ends where it started (a
-    /// respawn in the dimension of the death), and anything outside a
-    /// dedicated server.
+    /// teleports a player into another level, and death respawns, on dedicated
+    /// and integrated servers (single player and LAN), where the world is simulated.
+    /// Not heard by a remote client window, for a move within a level (`/tp`,
+    /// an End gateway), for a player who leaves before the move ends, or for a
+    /// move ending where it started (a respawn in the dimension of the death).
     pub(in crate::game) fn native_player_changed_dimension(
         &mut self,
         player: u128,
@@ -2774,28 +2770,23 @@ impl Game<'_> {
         self.fire_lightning_strike(player, pos, cause, cancel);
     }
 
-    /// Enough players have slept through the night in level `dimension`
-    /// and the clock is about to move to the morning (NeoForge's
-    /// `SleepFinishedTimeEvent`, vanilla's `ServerLevel.tick` when it moves
-    /// the clock to `wake_up_from_sleep`): `new_time` comes in as the next
-    /// morning's day time and may be changed to wake everyone at another
-    /// time. A time before `current` (the day time now) is refused, as
-    /// `setTimeAddition` refuses one, and the morning stays. Unlike
-    /// NeoForge, which refuses a bad value as it is set, the check runs once
-    /// after every mod, so a later mod sees the value an earlier one left.
-    /// On the server, only when the `advance_time` rule is on;
-    /// `native_time_skip` then hears the jump to the time chosen here and
-    /// may still cancel it. The players wake and the weather resets as
-    /// usual either way. Set `canceled` and the clock is left where it is, as
-    /// NeoForge's cancel leaves it: `native_time_skip` is not asked either.
+    /// Enough players slept through the night in level `dimension` and the clock is about to
+    /// move to the morning (NeoForge's `SleepFinishedTimeEvent`). `adjustment` comes in as
+    /// `Marker(minecraft:wake_up_from_sleep)` and a mod may set `Absolute`, `Relative` (from
+    /// `current`) or another marker; `new_time` is the vanilla morning, read only (contract 2: in
+    /// version 1 a mod wrote it). Times are the level's own clock's; resolved once after every mod
+    /// (`game/world/wake_time.rs`): a time before `current` or past `i64::MAX`, or a marker the
+    /// clock lacks, moves to the morning. `native_time_skip` then hears the jump and may cancel
+    /// it. Set `canceled` and the clock stays, and `native_time_skip` is not asked.
     pub(in crate::game) fn native_sleep_finished_time(
         &mut self,
         dimension: &str,
         current: i64,
-        new_time: &mut i64,
+        new_time: i64,
+        adjustment: &mut ClockAdjustment,
         canceled: &mut bool,
     ) {
-        self.fire_sleep_finished_time(dimension, current, new_time, canceled);
+        self.fire_sleep_finished_time(dimension, current, new_time, adjustment, canceled);
     }
 
     /// The overworld clock is about to jump, from sleep or `/time`. Set
@@ -3251,16 +3242,8 @@ impl Game<'_> {
     ) {
         self.fire_item_decorations(stack, x, y, draw);
     }
-    /// A player uses `stack` (right click) with `self.hand` on the block at
-    /// `pos`, `face` the face clicked (`[0, 1, 0]` is the top), once the
-    /// block itself let the click through (a chest still opens): where
-    /// `ItemStack.useOn` starts. Set `claimed` to take the use: the hand
-    /// swings and neither the item's `useOn` nor its `use` runs.
-    /// Server-side, for every player of the world (the helpers read the
-    /// acting one); an item on cooldown is never used. `hand`, `hit`
-    /// (`UseOnContext.getClickLocation`, `getClickedFace`, `isInside`) and
-    /// `player` (the acting player's UUID) and `player_entity_id` (the server's
-    /// entity id),.
+    /// `ItemStack.useOn`: both logical sides answer after the block passed.
+    /// Client reads and local effects cannot perform authoritative writes.
     pub(in crate::game) fn native_use_on(&mut self, call: mod_api::__private::UseOnCall<'_>) {
         self.fire_use_on(call);
     }

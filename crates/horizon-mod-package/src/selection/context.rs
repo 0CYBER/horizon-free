@@ -57,6 +57,20 @@ impl fmt::Display for MissingValue {
 impl std::error::Error for MissingValue {}
 
 impl LaunchArguments {
+    /// The installation receiving dependency declarations: an integrated server
+    /// belongs to the client installation; `--dedicated` selects the server one.
+    pub fn installation_side(&self) -> crate::manifest::Side {
+        if self
+            .rest
+            .iter()
+            .any(|argument| matches!(argument, Argument::Dedicated(_)))
+        {
+            crate::manifest::Side::Server
+        } else {
+            crate::manifest::Side::Client
+        }
+    }
+
     /// Snapshot a managed game command before shell/overlay wrappers are applied.
     /// These commands inherit the parent environment, with explicit overrides and removals.
     pub fn for_command(command: &std::process::Command) -> std::io::Result<Self> {

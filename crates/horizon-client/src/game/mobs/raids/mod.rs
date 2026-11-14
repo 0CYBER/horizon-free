@@ -554,8 +554,8 @@ impl Game<'_> {
             r.groups_spawned,
             r.omen_level,
             members.len(),
-            horizon_client::snbt::java_float(health),
-            horizon_client::snbt::java_float(r.total_health)
+            horizon_core::java_number::float_to_string(health),
+            horizon_core::java_number::float_to_string(r.total_health)
         )
     }
     /// A raid's members (`groupRaiderMap`): the living raiders it counts.

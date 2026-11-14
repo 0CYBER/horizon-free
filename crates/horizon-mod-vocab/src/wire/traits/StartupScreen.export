@@ -1,0 +1,2 @@
+The game's startup loading screen, handed to the mod in its RegistrationContext and held by
+id: the mod calls it to open, step and close its bars and to show lines.

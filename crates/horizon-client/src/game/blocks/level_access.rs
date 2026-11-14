@@ -59,7 +59,7 @@ impl LevelAccess for GameLevel<'_> {
         self.block_state_change_heard(old, new)
     }
     fn observe_block_state_change(&self, pos: BlockPos, old: BlockStateId, new: BlockStateId) {
-        self.block_state_change(pos, old, new);
+        self.block_state_change(pos, old, new, false);
     }
     fn neighbor_notify(&self, pos: BlockPos, skipped: Option<Direction>) -> bool {
         if !self.native_authoritative
@@ -883,6 +883,11 @@ impl LevelAccess for GameLevel<'_> {
             && let Some(log) = &mut self.world.block_log
         {
             log.push((pos.x, pos.y, pos.z));
+        }
+        // Vanilla's full chunk status, not the stricter simulation-ticket gate
+        // used by the existing network log above. Independent of log presence.
+        if !self.client_side && self.tickets.loaded_ticking(pos.x >> 4, pos.z >> 4) {
+            self.world.path_type_block_updated(pos);
         }
     }
     fn is_loaded(&self, pos: BlockPos) -> bool {

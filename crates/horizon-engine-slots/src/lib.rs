@@ -131,22 +131,24 @@ pub use platform::{Platform, PlatformRefusal, install_platform, platform};
 
 include!(concat!(env!("OUT_DIR"), "/engine_points.rs"));
 
-/// Set-once provider for the engine's typed point dispatch.
-pub type PointDispatch = fn(usize, &mut dyn FnMut(mod_vocab::__private::points::ApiKind));
-static POINT_DISPATCH: std::sync::OnceLock<PointDispatch> = std::sync::OnceLock::new();
+/// The game's point table, set once by the game before any listened point is published.
+static POINT_TABLE: std::sync::OnceLock<&'static mod_vocab::__private::points::Table> =
+    std::sync::OnceLock::new();
 
-/// Install the platform provider before publishing any listened point.
+/// Install the game's point table before publishing any listened point.
 ///
 /// This is set-once: a second installation returns [`Refusal::AlreadyInstalled`].
 /// Direct typed dispatch before installation panics; quiet macro sites skip dispatch
 /// while their activity flag is unset.
 ///
 /// # Safety
-/// For each catalog index, every typed listener supplied to `call` must be a valid
+/// For each catalog index, every typed listener the table holds must be a valid
 /// function pointer with that point's generated host and record signature.
-pub unsafe fn install_points(provider: PointDispatch) -> Result<(), Refusal> {
-    POINT_DISPATCH
-        .set(provider)
+pub unsafe fn install_points(
+    table: &'static mod_vocab::__private::points::Table,
+) -> Result<(), Refusal> {
+    POINT_TABLE
+        .set(table)
         .map_err(|_| Refusal::AlreadyInstalled)
 }
 
@@ -158,15 +160,14 @@ pub mod __private {
     /// A quiet point costs one acquire load.
     pub static POINTS: [std::sync::atomic::AtomicBool; POINT_COUNT] =
         [const { std::sync::atomic::AtomicBool::new(false) }; POINT_COUNT];
-    /// Dispatch through the installed platform without owning listener policy.
+    /// Dispatch through the installed point table without owning listener policy.
     ///
-    /// Panics if [`install_points`] has not installed a provider. Quiet macro sites
+    /// Panics if [`install_points`] has not installed a table. Quiet macro sites
     /// check their activity flag and do not call this function before publication.
     pub fn fire_api(place: PointId, call: &mut dyn FnMut(ApiKind)) {
-        POINT_DISPATCH
+        POINT_TABLE
             .get()
-            .expect("point provider must be installed before publication")(
-            place as usize, call
-        );
+            .expect("point provider must be installed before publication")
+            .fire_api(place as usize, call);
     }
 }

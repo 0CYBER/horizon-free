@@ -1,10 +1,10 @@
 //! Particles a server sends its players and its clients draw:
 //! `ClientboundLevelParticlesPacket` (`ServerLevel.sendParticles`, which
 //! `/particle` uses) and `ClientboundExplodePacket` (`ServerLevel.explode`).
-use super::{Game, lan::LanHost, level_sounds::LevelSound};
+use super::{Game, explosion_settings::BlastEffects, lan::LanHost, level_sounds::LevelSound};
 use horizon_client::lan::containers::within_range;
 use horizon_client::lan::hub::Hub;
-use horizon_client::particles::{ParticleOptions, ParticleType};
+use horizon_client::particles::{ExplosionParticle, ParticleOptions, ParticleType};
 use horizon_core::{
     geometry::{Aabb, Vec3},
     position::BlockPos,
@@ -19,6 +19,16 @@ use horizon_protocol::{
 };
 use horizon_world::registry::BlockStateId;
 use mod_api::{SoundSource, client::particles::PositionSource};
+
+/// An explosion packet a guest's turn put off (`lan_explode`).
+pub(super) struct LanExplosion {
+    center: [f64; 3],
+    small: bool,
+    radius: f32,
+    block_count: usize,
+    pushed: Vec<(u32, [f64; 3])>,
+    effects: BlastEffects,
+}
 
 /// A particle request awaiting delivery to players in its level.
 pub(super) struct QueuedParticle {
@@ -539,8 +549,9 @@ impl Game<'_> {
         }
     }
 
-    /// `ClientPacketListener.handleExplosion`: the blast's particles (and its
-    /// sound, when the packet carries it), then the player's push.
+    /// `ClientPacketListener.handleExplosion`: the blast's particles (its
+    /// block particles as the packet lists them) and its sound, when the
+    /// packet carries it, then the player's push.
     pub(super) fn remote_explode(&mut self, p: &play::Explode) {
         if p.play_sound {
             let pitch = (1.0
@@ -557,11 +568,25 @@ impl Game<'_> {
         if let Some(options) = self.received_particle(&p.particle, p.center) {
             self.particles.add(&options, p.center, [1.0, 0.0, 0.0]);
         }
-        // A wind charge's burst throws none.
-        if !p.block_particles.is_empty() {
-            self.particles
-                .track_explosion(p.center, p.radius, p.block_count.max(0) as usize);
-        }
+        // A wind charge's burst lists none, and one this client can't draw is left out.
+        let block_particles: Vec<_> = p
+            .block_particles
+            .iter()
+            .filter_map(|b| {
+                Some(ExplosionParticle {
+                    options: self.received_particle(&b.particle, p.center)?,
+                    scaling: b.scaling,
+                    speed: b.speed,
+                    weight: u32::try_from(b.weight).ok()?,
+                })
+            })
+            .collect();
+        self.particles.track_explosion(
+            p.center,
+            p.radius,
+            p.block_count.max(0) as usize,
+            &block_particles,
+        );
         // Entity.pushFromExplosion.
         if let (Some(push), Some(player)) = (p.knockback, self.player.as_mut()) {
             player.velocity = Vec3::new(
@@ -729,9 +754,9 @@ impl Game<'_> {
 
     /// `ServerLevel.explode`'s packet to each player within 64 blocks, with
     /// the push `pushed` holds for them (`ServerExplosion.hitPlayers`: a
-    /// creative player, whom nothing hurt). The sound reaches them on its own
-    /// (the level's sounds), and so does a hurt player's push (the motion
-    /// they are sent).
+    /// creative player, whom nothing hurt), and the blast's `effects`. The
+    /// sound reaches them on its own (the level's sounds), and so does a hurt
+    /// player's push (the motion they are sent).
     pub(super) fn lan_explode(
         &mut self,
         center: [f64; 3],
@@ -739,35 +764,49 @@ impl Game<'_> {
         radius: f32,
         block_count: usize,
         pushed: Vec<(u32, [f64; 3])>,
+        effects: BlastEffects,
     ) {
         // In a guest's turn (their hit on an end crystal or a minecart) the
         // host holds the players (`as_guest`): the packet waits for the turn
         // to end so that it reaches every player, the guest too.
         if self.lan_acting.is_some() && self.lan.is_none() {
-            self.creatures
-                .lan_explosions
-                .push((center, small, radius, block_count, pushed));
+            self.creatures.lan_explosions.push(LanExplosion {
+                center,
+                small,
+                radius,
+                block_count,
+                pushed,
+                effects,
+            });
             return;
         }
-        let emitter = if small {
-            "minecraft:explosion"
-        } else {
-            "minecraft:explosion_emitter"
-        };
-        let sound = "minecraft:entity.generic.explode";
-        if let Some(packet) =
-            self.explosion_packet(center, radius, block_count, emitter, sound, true)
-        {
+        let packet = self.lan.as_ref().and_then(|lan| {
+            explosion_packet(
+                &lan.hub,
+                center,
+                radius,
+                block_count,
+                effects.emitter(small),
+                &effects.sound,
+                &effects.block_particles,
+            )
+        });
+        if let Some(packet) = packet {
             self.send_explosion(packet, &pushed);
         }
     }
 
     /// The explosions guests' turns put off.
     pub(super) fn flush_lan_explosions(&mut self) {
-        for (center, small, radius, block_count, pushed) in
-            std::mem::take(&mut self.creatures.lan_explosions)
-        {
-            self.lan_explode(center, small, radius, block_count, pushed);
+        for e in std::mem::take(&mut self.creatures.lan_explosions) {
+            self.lan_explode(
+                e.center,
+                e.small,
+                e.radius,
+                e.block_count,
+                e.pushed,
+                e.effects,
+            );
         }
     }
 
@@ -783,65 +822,17 @@ impl Game<'_> {
         block_count: usize,
         pushed: &[(u32, [f64; 3])],
     ) {
-        let emitter = if radius < 2.0 {
-            "minecraft:gust_emitter_small"
+        let emitter = ParticleOptions::simple(if radius < 2.0 {
+            ParticleType::GustEmitterSmall
         } else {
-            "minecraft:gust_emitter_large"
-        };
-        if let Some(packet) =
-            self.explosion_packet(center, radius, block_count, emitter, sound, false)
-        {
+            ParticleType::GustEmitterLarge
+        });
+        let packet = self.lan.as_ref().and_then(|lan| {
+            explosion_packet(&lan.hub, center, radius, block_count, &emitter, sound, &[])
+        });
+        if let Some(packet) = packet {
             self.send_explosion(packet, pushed);
         }
-    }
-
-    /// `ClientboundExplodePacket` without a push, or None while not serving.
-    /// The sound is the level's, which the players hear already, so it isn't
-    /// played from the packet.
-    fn explosion_packet(
-        &self,
-        center: [f64; 3],
-        radius: f32,
-        block_count: usize,
-        emitter: &str,
-        sound: &str,
-        block_particles: bool,
-    ) -> Option<play::Explode> {
-        let hub = &self.lan.as_ref()?.hub;
-        let particle = |name: &str| {
-            Some(Particle {
-                id: hub.registry_id("minecraft:particle_type", name)?,
-                data: None,
-            })
-        };
-        // Level.DEFAULT_EXPLOSION_BLOCK_PARTICLES.
-        let info = |particle, scaling| play::ExplosionParticle {
-            particle,
-            scaling,
-            speed: 1.0,
-            weight: 1,
-        };
-        let block_particles = if block_particles {
-            vec![
-                info(particle("minecraft:poof")?, 0.5),
-                info(particle("minecraft:smoke")?, 1.0),
-            ]
-        } else {
-            Vec::new()
-        };
-        Some(play::Explode {
-            center,
-            radius,
-            block_count: block_count as i32,
-            knockback: None,
-            particle: particle(emitter)?,
-            sound: match hub.registry_id("minecraft:sound_event", sound) {
-                Some(id) => (id, None),
-                None => (-1, Some((sound.into(), None))),
-            },
-            block_particles,
-            play_sound: false,
-        })
     }
 
     /// `packet` to each player within 64 blocks of its centre, with the push
@@ -868,6 +859,44 @@ impl Game<'_> {
     }
 }
 
+/// `ClientboundExplodePacket` without a push, or None while not serving.
+/// The sound is the level's, which the players hear already, so it isn't
+/// played from the packet.
+fn explosion_packet(
+    hub: &Hub,
+    center: [f64; 3],
+    radius: f32,
+    block_count: usize,
+    emitter: &ParticleOptions,
+    sound: &str,
+    block_particles: &[ExplosionParticle],
+) -> Option<play::Explode> {
+    let block_particles = block_particles
+        .iter()
+        .map(|p| {
+            Some(play::ExplosionParticle {
+                particle: hub.particle(&p.options, None)?,
+                scaling: p.scaling,
+                speed: p.speed,
+                weight: i32::try_from(p.weight).ok()?,
+            })
+        })
+        .collect::<Option<_>>()?;
+    Some(play::Explode {
+        center,
+        radius,
+        block_count: block_count as i32,
+        knockback: None,
+        particle: hub.particle(emitter, None)?,
+        sound: match hub.registry_id("minecraft:sound_event", sound) {
+            Some(id) => (id, None),
+            None => (-1, Some((sound.into(), None))),
+        },
+        block_particles,
+        play_sound: false,
+    })
+}
+
 #[cfg(test)]
 pub(in crate::game) mod tests {
     use super::*;
@@ -878,7 +907,7 @@ pub(in crate::game) mod tests {
         guest::Guest,
         hub::{Hub, HubConfig},
     };
-    use horizon_client::particles::{ParticleOptions, ParticleType};
+    use horizon_client::particles::{ExplosionParticle, ParticleOptions, ParticleType};
     use horizon_core::random::LegacyRandom;
     use horizon_protocol::packets::play;
 
@@ -1043,6 +1072,47 @@ pub(in crate::game) mod tests {
         hub.guests
             .push(guest(2, 2, "FarPlayer", [100.0, 64.0, 100.0], tx_far));
         (hub, rx_near, rx_far)
+    }
+
+    /// A blast's effects reach `ClientboundExplodePacket` as given: its centre
+    /// particle, its weighted block particles and its sound.
+    #[test]
+    fn an_explosion_packet_carries_the_blasts_particles_and_sound() {
+        let names = vec!["minecraft:flame".into(), "minecraft:end_rod".into()];
+        let (hub, _near, _far) = test_hub("ExplosionEffectsTest", names, None);
+        let block_particles = [ExplosionParticle {
+            options: ParticleOptions::simple(ParticleType::EndRod),
+            scaling: 0.25,
+            speed: 2.0,
+            weight: 3,
+        }];
+        let flame = ParticleOptions::simple(ParticleType::Flame);
+        let packet = explosion_packet(
+            &hub,
+            [1.0, 64.0, 2.0],
+            5.0,
+            7,
+            &flame,
+            "test:fuel_tank_burst",
+            &block_particles,
+        )
+        .unwrap();
+        assert_eq!(
+            (packet.center, packet.radius, packet.block_count),
+            ([1.0, 64.0, 2.0], 5.0, 7)
+        );
+        assert_eq!((packet.particle.id, packet.particle.data), (0, None));
+        let [b] = packet.block_particles.as_slice() else {
+            panic!("one block particle: {:?}", packet.block_particles);
+        };
+        assert_eq!(
+            (b.particle.id, b.scaling, b.speed, b.weight),
+            (1, 0.25, 2.0, 3)
+        );
+        assert_eq!(
+            packet.sound,
+            (-1, Some(("test:fuel_tank_burst".to_owned(), None)))
+        );
     }
 
     /// The one `ClientboundLevelParticlesPacket` a guest receives.

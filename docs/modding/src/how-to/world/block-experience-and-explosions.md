@@ -56,9 +56,11 @@ way, and vanilla's answer is used.
 
 ## Setting off an explosion
 
-`level.explode(host, source, center, radius, fire, interaction)` is
-`Level.explode(source, x, y, z, radius, fire, interaction)`, on the server, in
-the level in place. `source` is the exploding entity (`Option<EntityRef>`). The
+`level.explode(host, source, center, radius, fire, interaction, settings)` is
+vanilla's full `Level.explode(source, damageSource, calculator, x, y, z, radius,
+fire, interaction, smallParticles, largeParticles, blockParticles, sound)`, on
+the server, in the level in place. `ExplosionSettings::default()` is the short
+form; its fields are under [Damage type, calculator and effects](#damage-type-calculator-and-effects). `source` is the exploding entity (`Option<EntityRef>`). The
 entity that caused the blast is never passed: it comes from the source, as
 vanilla's `Explosion.getIndirectSourceEntity` has it.
 
@@ -70,7 +72,8 @@ vanilla's `Explosion.getIndirectSourceEntity` has it.
 | Anything else, or `None` | None |
 
 With a source and a causing entity the damage is `minecraft:player_explosion`,
-otherwise `minecraft:explosion`, and the causing entity gets the kill: a mob
+otherwise `minecraft:explosion` (unless `settings` names its own), and the
+causing entity gets the kill: a mob
 killed by a blast whose source is player-lit TNT dies to that player, and one
 killed by unowned TNT to no one. The source itself is not hurt or pushed by its
 own blast, and the blocks it breaks roll their loot with it as "this entity". A
@@ -93,9 +96,70 @@ interaction, `None` included. The steps run in vanilla's order:
 what players hear and see. A blast set off inside another blast's hook keeps
 its own source and cause and leaves the other blast's as they were.
 
-`explode` answers `false` and explodes nothing for a parked level or a stale
-handle, a `source` that is stale, names no entity or is a player in another
-level, a chunk that isn't loaded, or a radius outside `0 < radius <= 32`.
+There is no radius limit, as in vanilla. A blast casts 1352 rays whatever its
+radius; their steps grow with the radius and the distinct positions they find
+roughly with its cube, so a big blast costs what it finds (a ray of a radius-48
+blast takes up to about 280 steps). A radius of 0 or below finds no blocks and
+hurts no one, but `explosion_start` still hears it and players still see it;
+`explosion_detonate` only runs from a radius of 0.00001.
+
+### Damage type, calculator and effects
+
+Every `ExplosionSettings` field left `None` is vanilla's own choice.
+
+| Field | What it does | `None` |
+| --- | --- | --- |
+| `damage_type` | A registered damage type (`mymod:fuel_tank`): its death message, its tags (`#is_explosion`, armour, immunity), and the type `living_damage` and `explosion_start` hear | The one derived above |
+| `calculator` | `ExplosionCalculator`, vanilla's `SimpleExplosionDamageCalculator` | The source's calculator (below) |
+| `small_particle` | The centre particle of a small blast (a radius under 2, or one that keeps its blocks) | `minecraft:explosion` |
+| `large_particle` | The centre particle of any other blast | `minecraft:explosion_emitter` |
+| `block_particles` | `ExplosionBlockParticle`s (particle, scaling, speed, weight), one picked by weight for each bit of debris; an empty list throws none | `minecraft:poof` (scaling 0.5) and `minecraft:smoke`, one each |
+| `sound` | The sound event | `minecraft:entity.generic.explode` |
+
+The calculator's fields:
+
+- `explodes_blocks`: false finds no blocks, so nothing breaks, burns or reaches
+  `explosion_detonate`'s block list.
+- `damages_entities`: false leaves every entity's health alone (decorations and
+  end crystals too); they are still pushed. The damage is the default formula.
+- `knockback_multiplier`: how hard entities are pushed, 1 when `None`. A flying
+  player (the ability, not creative mode) is pushed 0. An entity neither damaged
+  nor pushed (`damages_entities` false and a multiplier of exactly 0) is not
+  checked for exposure.
+- `immune_blocks`: a block tag whose blocks never break. **When given it
+  replaces the resistance rule entirely**: its blocks resist 3,600,000 and every
+  other cell resists nothing, obsidian and fluids included, and no part's
+  `explosion_resistance` is asked. Leave it `None` to keep the usual rule, with
+  your parts' answers.
+
+Without a calculator the source brings its own, as its own blast does in
+vanilla:
+
+| Source | Calculator |
+| --- | --- |
+| A primed TNT that went through a portal | Nether portal blocks resist nothing and never break; every other cell as usual |
+| A wind charge (a player's or a breeze's) | The blocks of `#blocks_wind_charge_explosions` (barrier, bedrock) resist 3,600,000; every other cell, fluids included, nothing |
+| Anything else, or `None` | The default calculator |
+
+With a calculator given, the source's is not used, as in vanilla.
+
+A particle is a vanilla particle type that takes no options (`minecraft:flame`,
+`minecraft:end_rod`; not `minecraft:block` or `minecraft:item`). The packet
+holds each block particle's weight as an `int`, so a weight, or the list's
+total, past 2,147,483,647 is refused.
+
+### Refusals
+
+`explode` returns an `ExplodeError`, explodes nothing and tells no hook:
+
+| `ExplodeError` | When |
+| --- | --- |
+| `Unavailable` | A client, a parked level or a stale handle, a `source` that is stale, names no entity or is a player in another level, a centre in a chunk that isn't loaded |
+| `InvalidBlast` | A centre outside the world or not finite, a radius or knockback multiplier that isn't finite |
+| `UnknownDamageType` | A damage type that isn't registered |
+| `UnknownBlockTag` | An `immune_blocks` that names no block tag |
+| `InvalidParticle` | A particle that isn't a particle type taking no options, a block particle with a weight of 0 or a scaling or speed that isn't finite, or a weight or total of weights past 2,147,483,647 |
+| `UnknownSound` | A sound that isn't a sound event id, or a `minecraft:` one the server doesn't have |
 
 ## Entities that destroy blocks
 

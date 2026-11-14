@@ -374,6 +374,8 @@ impl Game<'_> {
     /// `sendBlockUpdated`: the clients load the new update tag (the client
     /// copy's delay follows it, its display mob is made again).
     fn spawner_block_updated(&mut self, key: Pos) {
+        self.world
+            .path_type_block_updated(horizon_core::position::BlockPos::new(key.0, key.1, key.2));
         if let Some(BlockEntity::Spawner(s)) = self.world.block_entities.get_mut(&key) {
             s.client_loaded();
         }

@@ -148,6 +148,11 @@ impl Renderer {
             .map(|[solid, _, end]| (end - solid) as usize)
             .sum()
     }
+    /// The player's own level this frame, as the game resolved it (`Game::client_own_level`),
+    /// which a view naming a level is compared with: set before the views are asked for.
+    pub fn set_world_view_own_level(&mut self, own_level: Option<mod_api::LevelRef>) {
+        self.world_views.sections.views.set_own_level(own_level);
+    }
     /// The frusta `render` will cull with for `camera`: the camera's `frustum` and those of the
     /// world views, which it asks the mods for here, once a frame (`render` draws these).
     pub(super) fn ask_world_views(

@@ -17,6 +17,13 @@ impl ClientSession for Game<'_> {
         );
         self.native_client_language()
     }
+    fn client_latency(&self) -> Option<u32> {
+        mod_api::__private::check_access(
+            "client_latency",
+            mod_api::__private::LoadAccess::ClientSetup,
+        );
+        self.native_client_latency()
+    }
     fn client_frame_stats(&self) -> Option<ClientFrameStats> {
         mod_api::__private::check_access(
             "client_frame_stats",

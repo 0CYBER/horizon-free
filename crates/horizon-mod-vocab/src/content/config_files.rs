@@ -1,36 +1,45 @@
-//! A mod's own files in the game's `config/` folder (`Host::config_files`).
-//!
-//! The game binds the service to the mod whose hook or part it is inside
-//! (`crash::current_native_mod`), so a mod never names its own id and can't
-//! reach another mod's files.
+//! Checked, mod-bound files for config, game data and current-world data.
+//! All three roots use the same paths, errors and paged file operations.
 
 /// Bytes a config file may hold, read or written.
 pub const CONFIG_FILE_MAX: u64 = 4 << 20;
 
-/// Entries one `list` answers at most.
+/// Horizon's bulk-data bound: 64 MiB per file, for tiles and exports.
+/// Applies to both `Host::data_files` and `ServerHost::world_data_files`.
+pub const DATA_FILE_MAX: u64 = 64 << 20;
+
+/// Maximum entries in one page, for config and both bulk-data roots.
 pub const CONFIG_LIST_MAX: usize = 1024;
 
-/// The calling mod's files in `config/`: read, write, list and stat. Every
-/// call takes `&self`, so reads and writes work through `&dyn Host` on both
-/// sides; a write changes the file, not the host. The game's reload poll
-/// (`config_reloading`) sees a written registered config as any edit.
+/// The calling mod's checked file service on either side. The historical
+/// name also serves bulk data: its root chooses the per-file size cap.
+/// Config writes are observed by the registered config reload poll; bulk
+/// data is never scanned as config or settings.
 pub trait ConfigFiles {
-    /// The file's bytes, at most `CONFIG_FILE_MAX`.
+    /// The file's bytes, at most the root's file-size cap.
     fn read(&self, file: &ConfigPath) -> Result<Vec<u8>, ConfigFileError>;
-    /// Replaces the file's bytes, at most `CONFIG_FILE_MAX`, making its
+    /// Replaces the file's bytes, at most the root's file-size cap, making its
     /// folders when missing. The new bytes replace the old ones at once: a
     /// reader never sees half a write.
     fn write(&self, file: &ConfigPath, bytes: &[u8]) -> Result<(), ConfigFileError>;
-    /// The entries of a folder, by name, at most `CONFIG_LIST_MAX`.
-    fn list(&self, folder: &ConfigPath) -> Result<Vec<ConfigEntry>, ConfigFileError>;
+    /// An ordered page of entries strictly after `after` (a name, not a path).
+    /// Pass `None` for the first page, then the last returned name. An empty
+    /// page ends the walk. Concurrent folder edits are not a snapshot.
+    /// `limit` must be 1..=CONFIG_LIST_MAX; memory use is bounded by this page.
+    fn list(
+        &self,
+        folder: &ConfigPath,
+        after: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<ConfigEntry>, ConfigFileError>;
     /// What is at `path`; None where nothing is.
     fn stat(&self, path: &ConfigPath) -> Result<Option<ConfigStat>, ConfigFileError>;
 }
 
-/// A path inside `config/`: relative, `/`-separated, with no empty, `.` or
-/// `..` part, no `\`, `:` or NUL. Checked once here; the service checks only
-/// that it is the calling mod's.
-// no wire: decoding calls ConfigPath::new to reject unsafe relative paths, traversal and invalid components.
+/// A relative, `/`-separated path, checked once. Each component must satisfy
+/// [`ConfigPath::is_valid_name`], identically on every platform. Bulk paths
+/// omit the mod id; config paths name its owned config.
+// no wire: decoding validates the checked relative path or the explicit root.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 // exhaustive: its fields are private, so mods cannot build or destructure it
 pub struct ConfigPath(String);
@@ -45,19 +54,52 @@ impl From<&ConfigPath> for String {
 impl TryFrom<String> for ConfigPath {
     type Error = ConfigFileError;
     fn try_from(path: String) -> Result<Self, ConfigFileError> {
-        Self::new(&path)
+        if path.split('/').all(Self::is_valid_name) {
+            Ok(Self(path))
+        } else {
+            Err(ConfigFileError::InvalidPath)
+        }
     }
 }
 
 impl ConfigPath {
+    /// The calling mod's bulk-data root, for listing or stat. The shared
+    /// config folder itself is not owned and refuses this path.
+    pub fn root() -> Self {
+        Self(String::new())
+    }
+
     /// Checks `path` and makes a `ConfigPath` of it, or refuses with `ConfigFileError::InvalidPath`.
     pub fn new(path: &str) -> Result<Self, ConfigFileError> {
-        let valid = path
-            .split('/')
-            .all(|part| !matches!(part, "" | "." | "..") && !part.contains(['\\', ':', '\0']));
+        let valid = path.split('/').all(Self::is_valid_name);
         valid
             .then(|| Self(path.to_owned()))
             .ok_or(ConfigFileError::InvalidPath)
+    }
+
+    /// Whether a directory-entry name or listing cursor is portable and safe,
+    /// without allocating a path. Windows device names and normalized aliases
+    /// are refused on every platform, as are separators and control characters.
+    pub fn is_valid_name(name: &str) -> bool {
+        if name.is_empty()
+            || name.ends_with(['.', ' '])
+            || name.chars().any(|c| {
+                c.is_control() || matches!(c, '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*')
+            })
+        {
+            return false;
+        }
+        let base = name.split('.').next().unwrap_or(name);
+        if ["CON", "PRN", "AUX", "NUL"]
+            .iter()
+            .any(|reserved| base.eq_ignore_ascii_case(reserved))
+        {
+            return false;
+        }
+        let bytes = base.as_bytes();
+        !(bytes.len() == 4
+            && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
+            && matches!(bytes[3], b'1'..=b'9'))
     }
 
     /// The path as written, `/`-separated.
@@ -125,8 +167,11 @@ pub enum ConfigFileError {
     NotOwned,
     /// Not a path `ConfigPath::new` takes.
     InvalidPath,
-    /// More than `CONFIG_FILE_MAX` bytes, or a folder of more than
-    /// `CONFIG_LIST_MAX` entries.
+    /// No current world save folder is open.
+    NoWorld,
+    /// Page size is zero or exceeds `CONFIG_LIST_MAX`, or the cursor is not a name.
+    InvalidPage,
+    /// More bytes than the selected root's per-file size cap.
     TooLarge,
     /// Nothing is at that path.
     NotFound,
@@ -134,7 +179,7 @@ pub enum ConfigFileError {
     NotAFile,
     /// A file where a folder was asked for.
     NotAFolder,
-    /// A symbolic link on the path, which could lead outside `config/`.
+    /// A symbolic link on the path, which could lead outside the bound root.
     Symlink,
     /// Any other failure of the file system, as it describes itself.
     Io(String),
@@ -145,7 +190,9 @@ impl std::fmt::Display for ConfigFileError {
         match self {
             Self::NoCallingMod => f.write_str("no mod is calling"),
             Self::NotOwned => f.write_str("the path is not the calling mod's"),
-            Self::InvalidPath => f.write_str("not a path inside config/"),
+            Self::InvalidPath => f.write_str("not a checked relative file path"),
+            Self::NoWorld => f.write_str("no current world save is open"),
+            Self::InvalidPage => f.write_str("invalid file-list page size or cursor"),
             Self::TooLarge => f.write_str("too large"),
             Self::NotFound => f.write_str("not found"),
             Self::NotAFile => f.write_str("not a file"),
@@ -164,11 +211,33 @@ mod tests {
 
     #[test]
     fn a_path_stays_inside_config() {
-        for good in ["fd.json", "fd/a/b.toml", "fd-common.toml"] {
+        for good in ["fd.json", "fd/a/b.toml", "fd-common.toml", "fd/éá"] {
             assert!(ConfigPath::new(good).is_ok(), "{good}");
         }
         for bad in [
-            "", "/fd.json", "fd/", "fd//a", "./fd", "fd/../x", "..", "fd\\a", "C:fd", "fd\0",
+            "",
+            "/fd.json",
+            "fd/",
+            "fd//a",
+            "./fd",
+            "fd/../x",
+            "..",
+            "fd\\a",
+            "C:fd",
+            "fd\0",
+            "fd/.. ",
+            "fd/a.",
+            "fd/a ",
+            "fd/NUL",
+            "fd/con.txt",
+            "fd/COM1.bin",
+            "fd/a\nb",
+            "fd/a?b",
+            "fd/a*b",
+            "fd/a|b",
+            "fd/a<b",
+            "fd/a>b",
+            "fd/a\"b",
         ] {
             assert_eq!(
                 ConfigPath::new(bad),

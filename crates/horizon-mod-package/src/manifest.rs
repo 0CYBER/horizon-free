@@ -82,6 +82,17 @@ pub struct Manifest {
     /// Other native mods whose hooks must be available before this one.
     #[serde(default)]
     pub dependencies: std::collections::BTreeMap<String, Dependency>,
+    /// Mods this one breaks with: the game refuses to start while one of them is loaded at a
+    /// version the rule matches (NeoForge's `DependencyType.INCOMPATIBLE`).
+    #[serde(default)]
+    pub incompatible: std::collections::BTreeMap<String, Rule>,
+    /// Mods this one works badly with: they load, with a warning (`DependencyType.DISCOURAGED`).
+    #[serde(default)]
+    pub discouraged: std::collections::BTreeMap<String, Rule>,
+    /// Mods whose hooks run after this one's when they are loaded, without depending on them
+    /// (`Ordering.BEFORE`).
+    #[serde(default)]
+    pub load_before: Vec<String>,
     /// Original Java jars, layered in list order below this mod's own files.
     #[serde(default)]
     pub jar: Vec<JarRef>,
@@ -133,6 +144,84 @@ pub struct DependencyDetails {
     pub version: semver::VersionReq,
     #[serde(default)]
     pub optional: bool,
+    /// The installation on which this dependency declaration applies.
+    #[serde(default = "both_sides")]
+    pub side: Side,
+    /// A mod-provided explanation, at most 512 bytes.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// An HTTPS link with more information.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Dispatch ordering only; `none` does not remove a code link requirement.
+    #[serde(default)]
+    pub order: mod_vocab::DependencyOrder,
+}
+
+impl Dependency {
+    /// The dependency's typed declaration, with bare-version defaults filled in.
+    pub fn details(&self) -> DependencyDetails {
+        match self {
+            Self::Version(version) => DependencyDetails {
+                version: version.clone(),
+                optional: false,
+                side: Side::Both,
+                reason: None,
+                url: None,
+                order: mod_vocab::DependencyOrder::After,
+            },
+            Self::Detailed(details) => details.clone(),
+        }
+    }
+}
+
+/// An `[incompatible]` or `[discouraged]` entry: the versions of the other mod it matches
+/// (`"<2"`), or a table that also gives the player a reason and a link.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum Rule {
+    Version(semver::VersionReq),
+    Detailed(RuleDetails),
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RuleDetails {
+    /// Every version when left out.
+    #[serde(default = "any_version")]
+    pub version: semver::VersionReq,
+    /// Why, shown when the rule fails: at most 512 bytes.
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Where to read more, shown with the reason: an `https://` link.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Where the rule holds: both sides, or only the client or the dedicated server.
+    #[serde(default = "both_sides")]
+    pub side: Side,
+}
+
+fn both_sides() -> Side {
+    Side::Both
+}
+
+fn any_version() -> semver::VersionReq {
+    semver::VersionReq::STAR
+}
+
+impl Rule {
+    /// The versions, reason, link and side, the bare form's as defaults.
+    pub fn details(&self) -> RuleDetails {
+        match self {
+            Self::Version(version) => RuleDetails {
+                version: version.clone(),
+                reason: None,
+                url: None,
+                side: Side::Both,
+            },
+            Self::Detailed(details) => details.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -188,7 +277,7 @@ pub struct Module {
     pub visibility: Option<String>,
 }
 
-use mod_vocab::Side;
+pub use mod_vocab::Side;
 
 /// What a content mod adds; the player sees it before turning the mod on.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -321,6 +410,11 @@ impl Manifest {
                 format!("{MANIFEST}: {e}")
             }
         })?;
+        if m.side == Side::Server {
+            return Err(format!(
+                "{MANIFEST}: top-level side = \"server\" is not a supported package side"
+            ));
+        }
         inject::Inject::check_all(&m.inject, &m.id, m.native.is_some() || m.wasm.is_some())
             .map_err(|e| e.to_string())?;
         for entry in &m.inject {
@@ -352,9 +446,31 @@ impl Manifest {
                 m.id
             ));
         }
-        for id in m.dependencies.keys() {
+        let rules = m.incompatible.iter().chain(&m.discouraged);
+        for id in m
+            .dependencies
+            .keys()
+            .chain(rules.clone().map(|(id, _)| id))
+            .chain(&m.load_before)
+        {
             if !valid_mod_id(id) {
                 return Err(format!("{MANIFEST}: invalid dependency id {id:?}"));
+            }
+        }
+        let rule_notes = rules.map(|(id, rule)| {
+            let details = rule.details();
+            (id, details.reason, details.url)
+        });
+        let dependency_notes = m.dependencies.iter().map(|(id, dependency)| {
+            let details = dependency.details();
+            (id, details.reason, details.url)
+        });
+        for (id, reason, url) in rule_notes.chain(dependency_notes) {
+            if reason.as_ref().is_some_and(|reason| reason.len() > 512) {
+                return Err(format!("{MANIFEST}: rule for {id}: reason over 512 bytes"));
+            }
+            if url.as_ref().is_some_and(|url| !url.starts_with("https://")) {
+                return Err(format!("{MANIFEST}: rule for {id}: url is not https://"));
             }
         }
         if let Some(mib) = m.wasm_memory_mib

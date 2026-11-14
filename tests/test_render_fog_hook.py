@@ -5,16 +5,13 @@ import subprocess
 import tempfile
 import unittest
 
-from test_world_input_capture import method
-
-ROOT = Path(__file__).resolve().parents[1]
+from rust_items import rust_fn
 
 
 class RenderFogHookTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_valid_parameters_and_atomic_invalid_fallback(self):
-        source = (next(ROOT.glob('crates/horizon-client/src/game/*/render_tick.rs'))).read_text(encoding="utf-8")
-        actual = method(source, "native_fog_now")
+        actual = rust_fn("native_fog_now")
         fixture = r"""
 #[derive(Clone, Copy)]
 enum FogType { Water }

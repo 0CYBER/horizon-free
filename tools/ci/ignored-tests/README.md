@@ -51,7 +51,15 @@ verify-static fails an un-ignored test that starts a child process (`check_proce
 `Command`, directly or through a helper of its file or one listed in `tools/ci/process-spawns.txt`. Such a test is a
 `daily` row with reason `child-process`.
 
-`verify` times its test binaries (`tools/ci/run_test_binaries.py --time-limits 2,5`): a test over 5 s fails by name,
-one over 2 s only warns, so it stays until someone moves it. The times are wall time with three binaries and their
-test threads running at once, not isolated measurements. Documentation examples and `verify`'s Python steps are not
-timed.
+`verify` times its test binaries (`tools/ci/run_test_binaries.py --time-limits 2,5`): a test over 5 s is rerun once,
+alone after all binary workers finish, with the same binary and environment. It fails by name if that isolated
+rerun also exceeds 5 s, fails, or has no passing timed record; both times are printed. The 2 s warnings stay as they
+are, so a warned test stays until someone moves it. Initial times are wall time with three binaries and their test
+threads running at once, not isolated measurements. Documentation examples and `verify`'s Python steps are not timed.
+
+Tests that assert process-wide save admission isolate themselves, not the whole shard. For example,
+`game::visibility_unwind_tests::visibility_listener_unwind_does_not_block_an_outside_save` uses Game's
+`in_own_process` helper to run its callback, unwind and disk-save assertions in an exact-selected child
+process. It still runs through the normal parallel shard selection, without a failure-policy row or
+special runner selector. Other fixtures' outstanding leases must not be worked around by weakening
+the process-wide `passes_settled` save gate.

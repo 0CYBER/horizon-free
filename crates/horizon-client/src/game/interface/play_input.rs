@@ -130,7 +130,12 @@ impl Game<'_> {
             };
             // A controller's stick click acts as the key without setting the modifier: it is held
             // while the pad holds it (or its release waits for a tick), not when the keyboard says.
-            let pad = self.input_holds(mapping);
+            // Nor does the modifier say anything of a mod's hold (`set_mapping_down`).
+            let pad = self.input_holds(mapping)
+                || self.keys.held_by(
+                    &[KeyCode::ShiftLeft, KeyCode::ControlLeft][slot],
+                    Source::Mod,
+                );
             if !held && !pad {
                 self.toggles.0[slot].set_down(false, needs_toggle);
                 self.sync_toggle(slot);
@@ -151,7 +156,7 @@ impl Game<'_> {
                     .translate_all(*physical)
                     .contains(&Ok(key))
             }),
-            Source::Agent => false,
+            Source::Agent | Source::Mod => false,
         }
     }
     /// Apply a physical key to every mapping bound to it.
@@ -377,7 +382,7 @@ impl Game<'_> {
             _ => return false,
         };
         match source {
-            Source::Keyboard | Source::Agent => self.input_holds(mapping),
+            Source::Keyboard | Source::Agent | Source::Mod => self.input_holds(mapping),
             Source::Pad => {
                 let keys = &self.settings.keys;
                 self.physical_buttons
@@ -413,61 +418,10 @@ impl Game<'_> {
             }
             return Ok(());
         }
-        if self.remote.is_some() {
-            return self.remote_mouse(button, pressed);
-        }
-        match button {
-            MouseButton::Left => {
-                // KeyMapping.click: Minecraft.tick starts the attack.
-                if pressed {
-                    self.attack_clicks += 1;
-                }
-                self.toggles
-                    .button(2, pressed, false, self.settings.toggle_attack);
-                self.left = self.toggles.is_down(2);
-            }
-            MouseButton::Right => {
-                self.toggles
-                    .button(3, pressed, false, self.settings.toggle_use);
-                self.right = self.toggles.is_down(3);
-                // handleKeybinds consumes use clicks without acting while an
-                // item is in use. Minecraft.tick runs them after the attack
-                // clicks, so a place and a break in one tick replace the block.
-                if pressed && self.using.is_none() {
-                    self.use_clicks += 1;
-                }
-            }
-            MouseButton::Middle if pressed => {
-                // handleKeybinds: the number keys select before key.pickItem.
-                self.select_queued_hotbar();
-                // Minecraft.pickBlockOrEntity -> the server's handlePickItemFromBlock:
-                // the block's clone item, with its block entity's data on Ctrl in
-                // creative, picked from the inventory (`pick_item`).
-                if let Some(entity) = self.pick_entity_hit() {
-                    // handlePickItemFromEntity: the entity's pick result.
-                    if let Some(stack) = entity.and_then(|id| self.entity_pick_result(id)) {
-                        let infinite = self.creative;
-                        horizon_client::pick_item::pick(
-                            &mut self.inventory[..36],
-                            &mut self.selected,
-                            &stack,
-                            infinite,
-                        );
-                    }
-                } else if let Some(hit) = self.pick() {
-                    let include_data = self.creative && self.has_control_down();
-                    if let Some(stack) = self.picked_stack(hit.pos, include_data) {
-                        let infinite = self.creative;
-                        horizon_client::pick_item::pick(
-                            &mut self.inventory[..36],
-                            &mut self.selected,
-                            &stack,
-                            infinite,
-                        );
-                    }
-                }
-            }
-            _ => {}
+        // MouseHandler.onButton: `KeyMapping.set`, then `KeyMapping.click` for a press.
+        self.mouse_mapping_set_down(button, pressed);
+        if pressed {
+            self.mouse_mapping_click(button);
         }
         Ok(())
     }

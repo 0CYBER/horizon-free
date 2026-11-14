@@ -982,7 +982,7 @@ fn component_patch(
         .map(|(key, value)| {
             if !key.starts_with('!') && horizon_protocol::item::custom::id(key).is_some() {
                 let tag = horizon_client_core::scoreboard::json_to_tag(value);
-                horizon_protocol::item::custom::validate(&tag)
+                horizon_core::nbt::validate_component_value(&tag)
                     .map_err(|error| format!("{id}: component {key}: {error}"))?;
             }
             Ok((

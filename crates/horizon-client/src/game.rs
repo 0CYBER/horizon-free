@@ -2614,7 +2614,7 @@ impl Game<'_> {
     fn loot_block_entity(&self, pos: [i32; 3], block: &str) -> Option<horizon_core::nbt::Tag> {
         let key = (pos[0], pos[1], pos[2]);
         match self.world.block_entities.get(&key) {
-            Some(entity) => Some(horizon_client::save::encode_block_entity(
+            Some(entity) => Some(horizon_client::save::block_entity_encode::encode(
                 key, entity, block,
             )),
             None => spill::saved_entity(&self.world, pos),
@@ -4200,7 +4200,8 @@ impl Game<'_> {
     /// The `ItemStack.interactLivingEntity` fallback in `Player.interactOn`,
     /// currently for native Mob entries after the entity's own action passed.
     fn item_interact_mob(&mut self, target: Option<InteractTarget>) -> bool {
-        if self.spectator() {
+        if self.spectator() || !mod_api::__private::has_part_hook(mod_api::HookId::ItemInteractMob)
+        {
             return false;
         }
         let Some(index) = self.mob_interaction_target(target) else {
@@ -4217,12 +4218,9 @@ impl Game<'_> {
         let Some(stack) = self.held().filter(|stack| stack.count > 0).cloned() else {
             return false;
         };
-        let mut swing = None;
-        self.native_item_interact_mob(entity, &kind, &stack, &mut swing);
-        if swing == Some(true) {
-            self.swing_arm();
-        }
-        swing.is_some()
+        let mut result = None;
+        self.native_item_interact_mob(self.hand, entity, &kind, &stack, &mut result);
+        result.is_some_and(|answer| self.interaction_consumed(answer))
     }
     /// `ItemStack.applyAfterUseComponentSideEffects`: a used stack with a
     /// `use_cooldown` component starts its entry (`UseCooldown.apply`). A
@@ -7787,22 +7785,14 @@ impl Game<'_> {
                 .rules
                 .bool_at(horizon_client::gamerules::vanilla::ADVANCE_TIME)
             {
-                let t = self.world.day_time;
-                let mut target = t + 24000 - t.rem_euclid(24000);
-                // SleepFinishedTimeEvent: the mods may move the wake-up time,
-                // never before now (`setTimeAddition` refuses a lower one).
-                let mut asked = target;
-                let mut cancel = false;
-                self.native_sleep_finished_time(self.dim.id(), t, &mut asked, &mut cancel);
-                if asked >= t {
-                    target = asked;
-                }
-                // A canceled event leaves the clock alone, so `native_time_skip` is not asked.
-                if !cancel {
+                // SleepFinishedTimeEvent on the level's own clock (game/world/wake_time.rs): None
+                // when a mod canceled, so `native_time_skip` is not asked, or no time fits.
+                if let Some((clock, t, target)) = self.sleep_finished_move() {
+                    let mut cancel = false;
                     self.native_time_skip(self.dim.id(), t, target, "sleep", &mut cancel);
-                }
-                if !cancel {
-                    self.world.day_time = target;
+                    if !cancel {
+                        self.set_command_clock_time(&clock, target);
+                    }
                 }
             }
             // Level.isRaining: the rain level is above 0.2.
@@ -8648,10 +8638,8 @@ impl Game<'_> {
             }
             _ => None,
         };
-        self.view_frustum = self
-            .renderer
-            .as_mut()
-            .map(|r| r.camera_frustum(camera, fov_degrees, yaw, pitch, bob * spin, depth_far));
+        self.view_frustum =
+            self.world_view_frustum(camera, [fov_degrees, yaw, pitch], bob * spin, depth_far);
         let billboard_frustum = if self.settings.horizon.taa {
             self.renderer.as_ref().map(|r| {
                 r.camera_frustum_with_jitter(fov_degrees, yaw, pitch, bob * spin, depth_far)
@@ -10353,7 +10341,7 @@ impl Game<'_> {
                     self.tick_world_icon();
                     let ticked = Instant::now();
                     let rendered = self.render_and_flip(elapsed)?;
-                    horizon_client::spans::time("pr_cursor", || self.apply_cursor_icon());
+                    self.native_frame_end()?;
                     // The frame's spans, taken every frame they are recorded so they never
                     // pile up: the slow-frame line's.
                     let frame_spans = if horizon_client::spans::recording_here() {

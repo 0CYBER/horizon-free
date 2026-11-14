@@ -14,7 +14,7 @@ fn vanilla_models_and_animations_stay_inside_the_precheck_envelope() {
     }
     let types = MobTypes::load(&root).unwrap();
     let data = MobData {
-        pathfindable_overrides: Default::default(),
+        resolved: Default::default(),
         states: Vec::new(),
         placements: Default::default(),
         heightmaps: Default::default(),

@@ -435,8 +435,9 @@ impl Game<'_> {
         if horizon_protocol::item::custom::id(id).is_none() {
             return Err(NativeComponentError::UnknownType);
         }
-        horizon_protocol::item::custom::validate(&value)
-            .map_err(NativeComponentError::InvalidValue)?;
+        horizon_core::nbt::validate_component_value(&value).map_err(|error| {
+            NativeComponentError::InvalidValue(horizon_protocol::Error::new(error))
+        })?;
         let default = self
             .items()
             .get(&stack.item)

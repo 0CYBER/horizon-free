@@ -5,28 +5,31 @@ fn entity_interact_reports_each_typed_hand() {
     impl Hooks for Listener {
         fn entity_interact(
             &self,
-            _: &mut dyn ServerHost,
+            _: HostSide<'_>,
             event: &mut EntityInteractEvent<'_>,
-        ) -> Flow {
+        ) -> Option<InteractionResult> {
             assert!(matches!(event.hand, Hand::Main | Hand::Off));
             if event.hand == Hand::Off {
-                Flow::Cancel
+                Some(InteractionResult::SuccessServer)
             } else {
-                Flow::Continue
+                None
             }
         }
     }
     install(vec![ModEntry::new("hands", Box::new(Listener))].into());
     for hand in [Hand::Main, Hand::Off] {
-        let mut claimed = false;
+        let mut result = None;
         dispatch_entity_interact(
-            &mut TestHost,
+            HostSide::Server(&mut TestHost),
             hand,
             42,
             "minecraft:zombie",
             None,
-            &mut claimed,
+            &mut result,
         );
-        assert_eq!(claimed, hand == Hand::Off);
+        assert_eq!(
+            result,
+            (hand == Hand::Off).then_some(InteractionResult::SuccessServer)
+        );
     }
 }

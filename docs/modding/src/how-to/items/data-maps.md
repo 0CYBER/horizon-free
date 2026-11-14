@@ -69,7 +69,7 @@ id order (`IRegistryExtension.getDataMap`). The answers are:
 - `Ok(Some(value))`: the merged value. The newest file wins, a `#tag` gives every entry in it the
   value, `replace` drops what earlier files set and `remove` takes entries away.
 - `Ok(None)`: the map gives this entry no value.
-- `Err(DataMapError::UnknownType)`: no mod registered the map for that registry in this load.
+- `Err(DataMapError::UnknownType)`: neither the engine nor a mod registered the map for that registry in this load.
 - `Err(DataMapError::Undecodable)`: the value is not one `decode` takes.
 - `Err(DataMapError::Unavailable)`: no maps are loaded here. Data maps live on the server (the
   single player server thread included) and are not synced to clients, so a client returns
@@ -82,6 +82,46 @@ values. Reads also work in world hooks. A lookup reads the loaded map: it parses
 touches no file.
 
 Wasm mods read data maps the same way, with the same answers.
+
+## NeoForge's built-in mob and item maps
+
+These maps are already registered in the server's common store. Do not register them again.
+Their files are `data/neoforge/data_maps/<registry path>/<name>.json`:
+
+| Name | Registry path | Codec field |
+| --- | --- | --- |
+| `acceptable_villager_distances` | `entity_type` | `acceptable_villager_distance` |
+| `parrot_imitations` | `entity_type` | `sound` |
+| `villager_types` | `worldgen/biome` | `villager_type` |
+| `raid_hero_gifts` | `villager_profession` | `loot_table` |
+| `vibration_frequencies` | `game_event` | `frequency` |
+| `villager_compostables` | `item` | `can_villager_compost` |
+
+Every name has the `neoforge:` namespace. Values may be a scalar, a record with the codec
+field above, or the usual conditional `{"value": ..., "replace": false}` wrapper.
+File and entry conditions run before merging. Every value is decoded before applying the
+file's replacement, values or removals: one invalid value refuses that whole file, even
+when its target is unknown. Valid unknown targets and unknown removals are skipped. Tags
+use the target registry, including profession and game-event tags.
+
+Distances parse the original decimal directly to `f32`, including negative values,
+signed zero and overflow to infinity (`1e500`). Frequencies truncate the exact decimal,
+retain the low 32 bits as a signed integer, then require 1 through 15: `4294967297`
+becomes 1, `4294967311` becomes 15, and `15.999999999999999999999` becomes 15.
+Sound and villager-type values must name registered sounds and supported villager types;
+loot tables are resource identifiers. Compostability is boolean.
+
+Builtin reads return canonical NBT compounds with the field above, rather than the
+input's shorthand: distances are `Float`, frequencies `Int`, compostability `Byte`, and
+identifiers `String`. Infinity remains an NBT Float, never JSON null. The existing query surface from main is unchanged; this carry adds no key families.
+Remaining query coverage is deferred to #4199. Registering these stores
+and firing `data_maps_updated` does not sync them to clients.
+
+The gameplay readers and structure generation use immutable world-owned snapshots.
+Villager types apply to finalizeSpawn only; bred villagers retain the existing biome-facts
+rule rather than reading this map. Reload replaces the whole generation; a structure finalization already in progress may
+finish with its old snapshot. Custom entity types are matched by their exact registered
+ID, not by the vanilla species used as their behaviour template.
 
 ## NeoForge's built-in block maps
 

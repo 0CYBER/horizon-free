@@ -51,6 +51,36 @@ pub enum PathType {
 impl PathType {
     /// How many kinds there are: the length of a per-kind table.
     pub const COUNT: usize = 27;
+    /// Every kind, in declaration order: `ALL[kind as usize] == kind`.
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Blocked,
+        Self::Open,
+        Self::Walkable,
+        Self::WalkableDoor,
+        Self::Trapdoor,
+        Self::PowderSnow,
+        Self::OnTopOfPowderSnow,
+        Self::Fence,
+        Self::Lava,
+        Self::Water,
+        Self::WaterBorder,
+        Self::Rail,
+        Self::UnpassableRail,
+        Self::FireInNeighbor,
+        Self::Fire,
+        Self::DamagingInNeighbor,
+        Self::Damaging,
+        Self::DoorOpen,
+        Self::DoorWoodClosed,
+        Self::DoorIronClosed,
+        Self::Breach,
+        Self::Leaves,
+        Self::StickyHoney,
+        Self::Cocoa,
+        Self::DamageCautious,
+        Self::OnTopOfTrapdoor,
+        Self::BigMobsCloseToDanger,
+    ];
     /// The vanilla `PathType` constant `name` names, as the block data writes
     /// it (`"WATER"`); an unknown name is `Blocked`.
     pub fn from_name(name: &str) -> Self {

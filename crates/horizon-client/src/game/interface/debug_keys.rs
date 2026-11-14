@@ -944,7 +944,8 @@ impl Game<'_> {
     pub(super) fn block_entity_tag(&self, pos: [i32; 3]) -> Option<Tag> {
         let e = self.world.block_entities.get(&(pos[0], pos[1], pos[2]))?;
         let name = self.data_block_name(pos);
-        let mut tag = horizon_client::save::encode_block_entity((pos[0], pos[1], pos[2]), e, &name);
+        let mut tag =
+            horizon_client::save::block_entity_encode::encode((pos[0], pos[1], pos[2]), e, &name);
         if let Tag::Compound(c) = &mut tag {
             for key in ["id", "x", "y", "z", "keepPacked"] {
                 c.remove(&key.into());

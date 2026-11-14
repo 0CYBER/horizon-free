@@ -51,6 +51,12 @@ impl InteractionInput {
     pub fn press(&mut self, button: Button) {
         self.clicks[button as usize] += 1;
     }
+    /// Preserve clicks queued by callbacks while the owner temporarily takes this input.
+    pub fn merge_queued(&mut self, queued: Self) {
+        for (clicks, added) in self.clicks.iter_mut().zip(queued.clicks) {
+            *clicks = clicks.saturating_add(added);
+        }
+    }
     pub fn tick(&mut self, world: &mut impl InteractionWorld, attack_down: bool, use_down: bool) {
         let [attack, use_item, pick] = std::mem::take(&mut self.clicks);
         world.pick_hit_result();

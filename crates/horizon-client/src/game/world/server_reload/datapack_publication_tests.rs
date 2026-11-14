@@ -320,7 +320,7 @@ fn weights(game: &crate::game::Game<'_>) -> Vec<(String, serde_json::Value)> {
         .as_ref()
         .unwrap()
         .data_maps
-        .values("registry_test:spell", "registry_test:weights")
+        .json_values("registry_test:spell", "registry_test:weights")
         .map(|(id, value)| (id.to_owned(), value.clone()))
         .collect()
 }

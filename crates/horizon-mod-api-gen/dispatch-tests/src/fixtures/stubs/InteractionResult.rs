@@ -1,1 +1,4 @@
-pub(super) struct InteractionResult;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InteractionResult {
+    SuccessServer,
+}

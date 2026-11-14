@@ -943,6 +943,7 @@ mod tests {
 
     #[test]
     fn an_unresolved_fluid_uses_the_unknown_label() {
+        mod_platform::__private::initialize().unwrap();
         let handle = mod_api::__private::intern_unresolved_fluid("missing:panel_fluid").unwrap();
         let well = Well::new(&mod_api::FluidStack {
             fluid: mod_api::FluidIdentity::Unresolved(handle),

@@ -415,15 +415,37 @@ impl ClimbingWorld for FlagClimbing<'_> {
         );
         ladder
     }
+    fn adjust_trapdoor_ladder(
+        &mut self,
+        position: BlockPos,
+        state: BlockStateId,
+        trapdoor: BlockStateId,
+        ladder: bool,
+    ) -> bool {
+        let mut climbable = ladder;
+        horizon_client::motion::ladder::native_makes_open_trapdoor_above_climbable(
+            self.context,
+            state,
+            position,
+            trapdoor,
+            &mut climbable,
+        );
+        climbable
+    }
 }
 
 #[cfg(test)]
 pub(in crate::game) mod tests {
     use super::super::Game;
-    use super::super::native_entity_refs::tests::with_game;
+    use super::super::native_entity_refs::tests::{record_key, with_game};
     use horizon_client::mobs::{Mob, villager};
+    use horizon_client::motion::{MotionWorld, PlayerMotion};
     use horizon_core::geometry::Vec3;
-    use mod_api::{EntityRef, LivingRef, WorldEpoch};
+    use horizon_core::position::BlockPos;
+    use mod_api::{
+        BlockPart, EntityRef, Hooks, LivingRef, LoopContext, MakesOpenTrapdoorAboveClimbableEvent,
+        Registrar, WorldEpoch,
+    };
 
     /// A live cow `id` at `(5.5, 64, 5.5)`, with its handle.
     fn cow(game: &mut Game<'_>, id: u32) -> LivingRef {
@@ -1273,9 +1295,6 @@ pub(in crate::game) mod tests {
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn a_block_part_decides_what_a_living_entity_climbs() {
-        use horizon_client::motion::{MotionWorld, PlayerMotion};
-        use horizon_core::position::BlockPos;
-
         // The fixture's parts: glass is a ladder to even entity ids, a vine to none.
         mod_platform::__private::part_tests::ladder_game_thread();
         // The client library asks the mods through the executable's callbacks.
@@ -1331,32 +1350,142 @@ pub(in crate::game) mod tests {
             }
 
             // The player's own motion asks the same parts, with the player's entity id.
-            let climbs = |game: &mut Game<'_>, id: i32| {
-                let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5)).unwrap();
-                player.entity_id = id;
-                let mut world = MotionWorld {
-                    entities: &[],
-                    player: &mut player,
-                    scene: &mut game.world,
-                    assets: &game.pack.assets,
-                    collision_binding: game.collision,
-                    resources: game.motion,
-                    health: &game.health_resources,
-                    tag_items: Some(game.res.items()),
-                    loop_context: &game.loop_context,
-                    damage_hooks: &game.damage_hooks,
-                    block_registries: Some(&game.ui.registries),
-                };
-                let climbing = world.climbable().unwrap();
-                (climbing, player.last_climbable)
-            };
             game.world.set(5, 64, 5, glass).unwrap();
-            assert_eq!(climbs(game, 30), (true, Some(BlockPos::new(5, 64, 5))));
-            assert_eq!(climbs(game, 31), (false, None));
+            assert_eq!(
+                player_climbs(game, 30),
+                (true, Some(BlockPos::new(5, 64, 5)))
+            );
+            assert_eq!(player_climbs(game, 31), (false, None));
             game.world.set(5, 64, 5, vine).unwrap();
-            assert_eq!(climbs(game, 30), (false, None));
+            assert_eq!(player_climbs(game, 30), (false, None));
             game.world.set(5, 64, 5, ladder).unwrap();
-            assert_eq!(climbs(game, 31), (true, Some(BlockPos::new(5, 64, 5))));
+            assert_eq!(
+                player_climbs(game, 31),
+                (true, Some(BlockPos::new(5, 64, 5)))
+            );
+        });
+    }
+
+    /// Whether the player, as entity `id` at `(5.5, 64, 5.5)`, climbs by its own motion, and the
+    /// block it then remembers climbing.
+    fn player_climbs(game: &mut Game<'_>, id: i32) -> (bool, Option<BlockPos>) {
+        let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5)).unwrap();
+        player.entity_id = id;
+        let mut world = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut game.world,
+            assets: &game.pack.assets,
+            collision_binding: game.collision,
+            resources: game.motion,
+            health: &game.health_resources,
+            tag_items: Some(game.res.items()),
+            loop_context: &game.loop_context,
+            damage_hooks: &game.damage_hooks,
+            block_registries: Some(&game.ui.registries),
+        };
+        let climbing = world.climbable().unwrap();
+        (climbing, player.last_climbable)
+    }
+
+    /// The spruce trapdoor's key, kept across the fixture's repeat registration.
+    static SPRUCE_TRAPDOOR: std::sync::OnceLock<mod_api::BlockKey> = std::sync::OnceLock::new();
+
+    /// Makes an open trapdoor above oak planks climb.
+    struct Planks;
+    #[mod_api::horizon_part]
+    impl BlockPart for Planks {
+        fn makes_open_trapdoor_above_climbable(
+            &self,
+            _: &dyn LoopContext,
+            event: &mut MakesOpenTrapdoorAboveClimbableEvent,
+        ) {
+            event.climbable = true;
+        }
+    }
+
+    /// Refuses a spruce trapdoor above a ladder, and leaves the others to vanilla.
+    struct Ladder;
+    #[mod_api::horizon_part]
+    impl BlockPart for Ladder {
+        fn makes_open_trapdoor_above_climbable(
+            &self,
+            _: &dyn LoopContext,
+            event: &mut MakesOpenTrapdoorAboveClimbableEvent,
+        ) {
+            if SPRUCE_TRAPDOOR.get() == Some(&event.trapdoor.block()) {
+                event.climbable = false;
+            }
+        }
+    }
+
+    struct TrapdoorLadderMod;
+    #[mod_api::__subscriptions]
+    impl Hooks for TrapdoorLadderMod {
+        fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+            record_key(&SPRUCE_TRAPDOOR, r.block_key("minecraft:spruce_trapdoor"));
+            let planks = r.block_key("minecraft:oak_planks");
+            r.block_part(planks, Planks);
+            let ladder = r.block_key("minecraft:ladder");
+            r.block_part(ladder, Ladder);
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_block_part_decides_whether_an_open_trapdoor_above_it_climbs() {
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "trapdoor_ladder",
+            Box::new(TrapdoorLadderMod),
+        )]
+        .into();
+        crate::game::api_values::install_parts(&mods).unwrap();
+        // The client library asks the mods through the executable's callbacks.
+        crate::entry::install_client_hooks();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+                );
+                let registry = game.pack.assets.registry;
+                let state = |name: &str, properties: &[(&str, &str)]| {
+                    registry
+                        .resolve(&horizon_world::chunk::BlockState {
+                            name: name.into(),
+                            properties: properties
+                                .iter()
+                                .map(|(key, value)| ((*key).into(), (*value).into()))
+                                .collect(),
+                        })
+                        .unwrap()
+                };
+                let open = |name: &str| state(name, &[("facing", "north"), ("open", "true")]);
+                let ladder = |facing: &str| state("minecraft:ladder", &[("facing", facing)]);
+                let living = cow(game, 40);
+                for (trapdoor, below, climbs) in [
+                    // Vanilla: a ladder facing the trapdoor's way, and the part leaves it.
+                    (open("minecraft:oak_trapdoor"), ladder("north"), true),
+                    (open("minecraft:oak_trapdoor"), ladder("south"), false),
+                    // Allow: planks are no ladder, and their part says yes.
+                    (
+                        open("minecraft:oak_trapdoor"),
+                        state("minecraft:oak_planks", &[]),
+                        true,
+                    ),
+                    // Deny: the ladder's part refuses the spruce trapdoor.
+                    (open("minecraft:spruce_trapdoor"), ladder("north"), false),
+                ] {
+                    game.world.set(5, 63, 5, below).unwrap();
+                    game.world.set(5, 64, 5, trapdoor).unwrap();
+                    // The flag a mod reads, the cow's own climbing and the player's motion agree.
+                    assert_eq!(game.living_is_climbing(living), Some(climbs));
+                    let mob = game.mobs.iter().find(|m| m.id == 40).unwrap();
+                    assert_eq!(mob.on_climbable(&game.mob_world_base(&[])), climbs);
+                    let remembered = climbs.then_some(BlockPos::new(5, 64, 5));
+                    assert_eq!(player_climbs(game, 41), (climbs, remembered));
+                }
+            })
         });
     }
 }

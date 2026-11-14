@@ -20,7 +20,7 @@
 
 use crate::carrier_store::{MAX_CARRIERS, Store};
 use crate::game::Game;
-use crate::save::encode_block_entity;
+use crate::save::block_entity_encode;
 use horizon_core::position::BlockPos;
 use horizon_world::carrier::codec;
 use horizon_world::carrier::contact::RigidTransform;
@@ -277,7 +277,7 @@ impl Game<'_> {
                 .block_entities
                 .get(&(key[0], key[1], key[2]))
                 .map(|entity| {
-                    encode_block_entity((key[0], key[1], key[2]), entity, &descriptor.name)
+                    block_entity_encode::encode((key[0], key[1], key[2]), entity, &descriptor.name)
                 });
             operation_cells.push(OperationCell {
                 world: key,
@@ -850,7 +850,7 @@ impl Game<'_> {
                         .state(state)
                         .map(|descriptor| descriptor.name.as_str())
                         .unwrap_or("");
-                    let encoded = encode_block_entity((pos[0], pos[1], pos[2]), live, name);
+                    let encoded = block_entity_encode::encode((pos[0], pos[1], pos[2]), live, name);
                     if !entities_content_equal(&encoded, image) {
                         return Err(TransferError::Revalidation(pos));
                     }
@@ -1368,8 +1368,11 @@ mod tests {
                     extra: None,
                 }),
             ]);
-            let tag =
-                horizon_client::save::encode_block_entity((4, 64, 4), &entity, "minecraft:chest");
+            let tag = horizon_client::save::block_entity_encode::encode(
+                (4, 64, 4),
+                &entity,
+                "minecraft:chest",
+            );
             spill::put_saved_entity(&mut game.world, [4, 64, 4], tag.clone());
             assert!(matches!(
                 game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)]),
@@ -1440,8 +1443,11 @@ mod tests {
                     extra: None,
                 }),
             ]);
-            let tag =
-                horizon_client::save::encode_block_entity((4, 64, 4), &entity, "minecraft:chest");
+            let tag = horizon_client::save::block_entity_encode::encode(
+                (4, 64, 4),
+                &entity,
+                "minecraft:chest",
+            );
             spill::put_saved_entity(&mut game.world, [4, 64, 4], tag.clone());
             let images = [crate::carrier_store::OperationCell {
                 world: [4, 64, 4],

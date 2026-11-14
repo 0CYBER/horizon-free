@@ -320,7 +320,8 @@ impl Game<'_> {
         });
         let held = if hud.held { self.held_count() } else { None };
         let multiplayer = self.remote.is_some() && !self.has_singleplayer_server();
-        let ping = self.own_latency().filter(|_| multiplayer);
+        // 0 shows nothing rather than `0 ms`: no measurement yet.
+        let ping = self.own_latency().filter(|&ms| ms > 0 && multiplayer);
         let coords = self.player.as_ref().filter(|_| !self.reduced_debug_info());
         let coords = coords.map(|p| {
             let at = [p.position.x, p.position.y, p.position.z].map(|v| v.floor() as i32);

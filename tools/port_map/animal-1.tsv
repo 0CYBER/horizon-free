@@ -61,6 +61,7 @@ Axolotl.createAttributes	skip:data		attributes come from entity-types.json
 Axolotl.mobInteract	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_mob	a water bucket scoops it up (bucketable)
 Axolotl.playAttackSound	port	crates/horizon-client/src/mobs/ai.rs::do_hurt_target	AXOLOTL_ATTACK at 1.0/1.0 after the blow lands, skipped for a silent mob
 Axolotl.loadFromBucketTag	port	crates/horizon-client/src/entity_nbt.rs::apply_item_components	age, age lock and hunting cooldown from the bucket_entity_data component
+Axolotl.saveToBucketTag	port	crates/horizon-client/src/entity_nbt.rs::bucket_components	the axolotl variant component plus default bucket NBT, Age, AgeLocked and HuntingCooldown
 Axolotl.applySupportingEffects	inline	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::handle_mob_events	the AxolotlSupportPlayer event: regeneration and no mining fatigue, host player only
 Axolotl.usePlayerItem	port	crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::interact_mob	a fed tropical fish bucket leaves a water bucket in its place (creative keeps the fish bucket and adds the bucket)
 Axolotl.Variant.getSpawnVariant	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	the common pick for a spawn group; the 1-in-1200 blue draw is the breeding path's (crates/horizon-client/src/game/mobs/creatures/mod.rs::Game::breed)

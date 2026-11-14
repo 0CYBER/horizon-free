@@ -217,7 +217,7 @@ fn data_slot_sizing_after_creation_and_load_joins_the_existing_journal() {
                 game.world.modified.is_empty(),
                 "refusal sends no Changed notice"
             );
-            let saved = horizon_client::save::encode_block_entity(
+            let saved = horizon_client::save::block_entity_encode::encode(
                 pos,
                 game.world.block_entities.get(&pos).unwrap(),
                 "minecraft:stone",

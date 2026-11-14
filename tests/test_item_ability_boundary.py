@@ -5,17 +5,14 @@ import subprocess
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+from rust_items import rust_fn
 
 class AbilityBoundary(unittest.TestCase):
     def test_unrelated_item_skips_conversion(self):
         compiler = shutil.which("rustc")
         if compiler is None:
             self.skipTest("requires Rust to execute the production boundary fixture")
-        source = (ROOT / 'crates/horizon-client/src/game/items/item_abilities.rs').read_text()
-        start = source.index('    pub(in crate::game) fn stack_can_perform(')
-        end = source.index('\n    ///', start)
-        method = source[start:end].replace('pub(in crate::game)', 'pub')
+        method = rust_fn('stack_can_perform')
         fixture = r'''
 use std::cell::Cell;
 struct ItemStack { item: String }

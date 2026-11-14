@@ -7,8 +7,9 @@ use crate::{
 };
 use horizon_core::random::{LegacyRandom, LevelRandom};
 use horizon_world::registry::BlockStateId;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+mod path_type_cache;
 mod pending_entity;
 pub use pending_entity::{EntityLoadReason, PendingEntity};
 
@@ -62,6 +63,8 @@ impl DirtySections {
     }
 }
 pub struct World {
+    // Initialized only for a logical server level, then borrowed by every AI worker.
+    path_type_cache: OnceLock<path_type_cache::PathTypeCache>,
     /// The dimension type's fire-source tag, resolved at entry and data reload.
     pub infiniburn: Option<Arc<horizon_world::level::data::BlockSet>>,
     /// Server-owned mod data attached to this dimension.
@@ -303,6 +306,7 @@ impl World {
 
     pub fn new(air: BlockStateId, seed: i64) -> Self {
         Self {
+            path_type_cache: OnceLock::new(),
             infiniburn: None,
             shape: LevelShape::OVERWORLD,
             chunks: Default::default(),

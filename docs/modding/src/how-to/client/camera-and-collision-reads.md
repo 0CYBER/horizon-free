@@ -31,6 +31,16 @@ reversed depth z. A HUD or screen hook turns it into GUI pixels with the `DrawCo
 non-finite one (vanilla returns a mirrored point there), outside a world, before extraction and between render frames. It is supported in GUI, screen
 and world drawing callbacks after camera extraction, not setup or tick callbacks.
 
+`ClientHost::set_local_rotation(yaw, pitch)` turns the local player's view, as vanilla's `setYRot`
+and `setXRot` store it: yaw as given (not wrapped; the server wraps it), pitch `% 360` then clamped to
+-90..90. The previous-frame angles move by the same amount, so the view doesn't jump. The call sends no
+packet. The game's own player sync at the end of the client tick sends the look in its one move packet,
+of the kind vanilla picks, and only while the camera is the player (a rider sends the rotation-only
+packet). Several calls in one tick send the last values once, and a call after the sync goes out the
+next tick. NaN or infinity returns `NotFinite` and changes nothing; outside a world the call returns
+`NoWorld`. The server sees an ordinary client look, at tick granularity, as from a mouse.
+`calculate_player_turn` changes how far the mouse turns the view; `set_local_rotation` sets it directly.
+
 `ClientHost::set_camera_type(type)` is a queued client-only effect and takes `&self`, so
 shared callbacks such as `camera_pose` can request a perspective. `camera_type()` reports
 the latest request immediately; several requests coalesce to the last one. Requests before
@@ -74,6 +84,25 @@ when the client level is replaced or the client disconnects; a same-level respaw
 keeps its epoch. This supplies identity, not client entity reads: the server-only
 entity data methods reject client handles. Unlike `view_hit` and `raycast`, this does not find blocks
 in distant terrain or return a block behind a targeted entity.
+
+## Local player reads
+
+These read the local player as the client sees it. They take no mod-controlled numbers and send nothing.
+
+- `ClientHost::client_session().client_latency()` is the player's latency in milliseconds as the
+  tab list draws it (`PlayerInfo.getLatency`): the server's smoothed keep-alive average, refreshed by
+  the server's own broadcast. It reads 0 before the server's first measurement, as vanilla does, and
+  `None` outside a world.
+- `ClientHost::local_item_use()` is the item in use: `ItemUse { hand, ticks_used, ticks_remaining }`
+  (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
+  `ticks_used + ticks_remaining` is the use duration. It is `None` when no item is in use or no world
+  is open.
+- `ClientHost::hover_name(&stack)` is `ItemStack.getHoverName()` as plain text: the custom name, else
+  a written book's non-blank title, else the item's name in the client's language, without rarity
+  colour or italics. An invalid stack reads an empty string.
+- Reach is `targeting()` (below), which comes from the interaction-range attributes with the server's
+  and equipment's modifiers. Menu slot numbers are `Slot.index`, the position in the menu's slot list
+  that `menu_slot` and `menu_slot_count` take; `menu_slot_backing` gives the index in the backing container.
 
 ## Combat targeting
 

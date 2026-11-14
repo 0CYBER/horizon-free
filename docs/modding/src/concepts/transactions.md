@@ -37,7 +37,7 @@ The journal covers writes through capability handlers to these storages:
 | Cauldron | Block state |
 | Composter | Block state and composter-local random stream; fill feedback, game events and maturation scheduling wait for outer commit |
 | World fluid pickup and placement | Block state, and a block entity the new block removes |
-| Player | Inventory slots, armour, offhand and cursor, for host and guest players |
+| Player | Inventory slots, armour, offhand, body, saddle, cursor, ender chest and persistent data, for host and guest players |
 | Entity inventory | Chest or hopper minecart, chest boat, chested donkey, mule or llama inventory |
 | Item entity | Stack; an emptied entity remains until the outermost commit removes it |
 
@@ -54,7 +54,7 @@ unlike `trigger_sound_and_game_event`, which acts at once. The `block_drops` lis
 replaced block see it as it was, and a cancelled drop keeps the replacement.
 
 Direct writes are not journaled: direct item-entity stack writes,
-`LivingRef::set_equipment`, and the player and armor-stand `slot_set` paths take
+`LivingRef::set_equipment`, and the armor-stand `slot_set` paths take
 effect immediately, even inside a transaction. Equipment sounds and equip/unequip
 events from `LivingRef::set_equipment` also happen immediately. An abort does not
 undo these writes or effects. Use journaled capability handlers when you need rollback.
@@ -97,3 +97,7 @@ writes are outside the transaction whose commit triggered them.
 NeoForge's `Capabilities.Item.ENTITY`. Read and write it like any other item place.
 Reading or writing a minecart's slots unpacks its loot table without a player,
 as vanilla's `getChestVehicleItem` does.
+
+The player `set_inventory_slot`, `set_ender_chest_slot`, `give_stack` and
+`set_persistent_data` writes use the open transaction journal. Aborting restores
+the old values; equipment effects and given-stack overflow wait for root commit.

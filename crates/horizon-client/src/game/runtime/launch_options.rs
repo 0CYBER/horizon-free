@@ -177,9 +177,9 @@ impl Options {
             std::env::var_os("HORIZON_HOME").as_deref(),
         )?)
     }
-    pub(super) fn from_launch(
-        LaunchArguments { context, rest }: LaunchArguments,
-    ) -> Result<Option<Self>> {
+    pub(super) fn from_launch(launch: LaunchArguments) -> Result<Option<Self>> {
+        let installation_side = launch.installation_side();
+        let LaunchArguments { context, rest } = launch;
         let sibling = std::env::current_exe()?
             .parent()
             .ok_or("missing executable directory")?
@@ -228,6 +228,8 @@ impl Options {
             benchmark_set: None,
             benchmark_profile: false,
             mods: mods::ModsState {
+                installation_side,
+                overrides_dir: context.game_dir.join(horizon_mod_package::mod_list::DIR),
                 dev: context.dev_mods,
                 ..Default::default()
             },

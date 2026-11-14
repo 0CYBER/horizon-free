@@ -90,18 +90,86 @@ member declares; with none declared it gets 1024 (1 GiB). The instance's cap (`w
 group at load, naming the group and both numbers. Native mods are not wasm groups: they share the game's memory,
 and the key means nothing to them. See [Memory](../how-to/wasm-mods.md#memory).
 
-Top-level `[dependencies]` declares other mods by id: a semver requirement string, or
-`{ version = "^1", optional = true }`. These versions refer to `horizon-mod.toml`, not Cargo metadata.
-Content layers load in dependency order. A missing required dependency, incompatible installed version or dependency cycle refuses startup; an absent optional dependency is ignored. Native code dependencies additionally require API packages
-([Dependencies between mods](../concepts/dependencies.md)).
+Top-level `[dependencies]` declares other mods by ID: a semver requirement string, or a table:
+
+```toml
+[dependencies]
+base = { version = "^1", optional = false, side = "both", order = "after", reason = "Provides the shared API", url = "https://example.org/base" }
+```
+
+Versions refer to `horizon-mod.toml`, not Cargo metadata. `optional` defaults to false;
+`side` defaults to `"both"`; `order` is `"after"` (default), `"before"` or `"none"`.
+After means the dependency's listeners/content precede the owner's; before reverses that
+**dispatch** edge; none removes it. Reason is at most 512 bytes and URL must start with
+`https://`. Unknown fields and malformed values refuse the manifest; there is no `kind`
+key or alternate optional spelling.
+
+Side is the **installation**, not the logical side executing a hook: an integrated server
+belongs to the client installation, a dedicated server to the server installation.
+Inactive declarations are excluded before missing/version/order checks and code dependency
+selection. A missing required dependency, incompatible installed version or dispatch cycle
+refuses loading; an absent optional dependency is ignored. Content, native and wasm manifests
+share the installed-set rule resolver, including mixed content/code relationships.
+
+**Horizon addition: physical linking is separate from dispatch policy.** A code package's
+`[dependencies]` also declares real API library requirements. `before`, `none`, and instance
+overrides do not remove Cargo/wasm imports, reverse compiler staging, bypass ABI/hash/toolchain
+checks, or manufacture a missing library. Physical libraries still resolve dependency-first
+or refuse by name. Content constraints do not require an API package.
+See [Dependencies between mods](../concepts/dependencies.md).
 
 Top-level `[properties]` holds free-form values other mods read: strings, integers, floats and booleans only,
 at most 64 keys and 8 KiB (keys and strings by length, 8 bytes per number, 1 per boolean); a table, an array
 or a larger table refuses the package. A mod reads any loaded package's manifest through
 `context.mods().get(id)`: `PackageInfo` gives `name`, `description`, `authors`, `license`, `homepage`,
-`issues`, `icon_path`, `runtime` (`Native`, `Wasm`, or `None` for content), `dependencies` (id, version
-requirement, optional) and `property(key)`, the same on client and server (NeoForge's
+`issues`, `icon_path`, `runtime` (`Native`, `Wasm`, or `None` for content), `dependencies` and
+`property(key)`. Each readonly `PackageDependency` exposes `id()`, `version()`, `kind()`,
+`order()`, `side()`, `reason()` and `url()`. `DependencyKind` is `Required`, `Optional`,
+`Incompatible`, `Discouraged` or `LoadBefore`; `DependencyOrder` is `After`, `Before` or `None`.
+These are all original declarations, including inactive sides, not the effective override-rewritten
+graph. `LoadBefore` is ordering-only: its version `*` is a marker, order is `Before` and side
+is `Both`, not an API library declaration. The metadata is the same on client and server (NeoForge's
 `ModContainer.getModInfo`, `IModInfo` and `getModProperties`).
+
+Load rules name other mods without linking against them (NeoForge's `INCOMPATIBLE`, `DISCOURAGED` and
+`ordering = "BEFORE"`). The game checks them alongside ordinary dependencies for the selected content and loaded code:
+
+```toml
+load_before = ["minimap"]            # their hooks run after ours when they are loaded
+
+[incompatible]
+old_lib = "<2"                       # refuse to start beside old_lib below 2.0
+
+[discouraged]
+shaders = { version = "*", reason = "Flickers with the water shader", url = "https://example.org/w", side = "client" }
+```
+
+An `[incompatible]` or `[discouraged]` entry is a semver requirement on the other mod's version, or a
+table with `version` (every version when left out), `reason` (at most 512 bytes), `url` (`https://`
+only) and `side` (`"both"`, the default, `"client"` or `"server"`, the dedicated server). A rule
+about a mod that isn't loaded holds nothing. A matching incompatible mod refuses startup with the
+owner's reason and link; a matching discouraged mod loads with a warning in the log and on
+both affected installed rows in the Mods page. Every notice remains visible in the scrollable
+panel, even when a row is off or failed; registration notices are retained too.
+
+A player can override a rule in `horizon-mods/dependency-overrides.toml`: a table per mod that owns
+the rule, mapping the other mod's ID to `"drop"` (remove its logical validation/dispatch edge)
+or `"discourage"` (warn instead of refusing). This also applies to ordinary required/optional
+manifest dependencies; the physical code-library requirements above remain enforced. Every
+applied override is logged and shown on both affected installed Mods rows. Missing files mean
+no overrides; malformed files refuse loading with their path in the diagnostic. Owner and target
+IDs use the same validated ID syntax as manifests.
+
+The game reads this file from its game directory. Native builds read the policy and selected
+content from `horizon-mods` beside the source folder (the normal source folder is
+`horizon-native-mods`), and apply the target installation side. A standalone server export
+has a separate runtime instance: its operator supplies that instance's policy if overrides
+are needed at runtime; source-instance policy is not an implicit global setting.
+
+```toml
+[my_mod]
+old_lib = "discourage"
+```
 
 ## Original Java jar layers
 

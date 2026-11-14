@@ -68,7 +68,9 @@ pub trait MenusBackend {
     fn menu_slot_count(&self, menu: MenuRef) -> Option<usize>;
     /// Side: both.
     /// Full stack at a menu index. Outer None means unavailable or out of
-    /// range; Some(None) means an empty slot.
+    /// range; Some(None) means an empty slot. `slot` is the slot's position in the menu's slot
+    /// list, vanilla's `Slot.index`, the number container click packets carry; vanilla has no other
+    /// player-visible slot number. `menu_slot_backing` gives the index inside the backing container.
     #[access(WorldOnly)]
     fn menu_slot(&self, menu: MenuRef, slot: usize) -> Option<Option<ItemStack>>;
     /// Side: both.

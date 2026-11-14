@@ -985,7 +985,7 @@ impl Game<'_> {
                 // The sensor does not hear its own placement or removal.
                 let own = source_block == [key.0, key.1, key.2]
                     && matches!(event, "minecraft:block_destroy" | "minecraft:block_place");
-                let frequency = sculk::frequency(event);
+                let frequency = self.mob_maps().vibration_frequency(event);
                 let calibrated_out = kind == SculkKind::Calibrated && {
                     let back = self.calibrated_signal(key);
                     back != 0 && frequency != back
@@ -1237,7 +1237,7 @@ impl Game<'_> {
             SculkKind::Sensor | SculkKind::Calibrated => {
                 let state = self.world.block(key.0, key.1, key.2);
                 if self.res.behaviours().sculk_sensor_can_activate(state) {
-                    let frequency = sculk::frequency(info.event);
+                    let frequency = self.mob_maps().vibration_frequency(info.event);
                     if let Some(e) = self.sculk_entity(key) {
                         e.last_frequency = frequency;
                     }

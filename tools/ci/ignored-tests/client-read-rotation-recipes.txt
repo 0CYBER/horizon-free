@@ -1,0 +1,3 @@
+horizon-client game::remote::native_entity_tests::a_client_reads_the_entities_and_menu_the_server_shows_it lib daily resources
+horizon-client game::remote::movement_input_tests::local_rotation_tests::a_mod_set_look_is_clamped_and_sent_once_by_the_tick lib daily resources
+horizon-client game::native_client_session::tests::latency_and_item_use_read_the_local_player_as_the_client_sees_it lib daily resources

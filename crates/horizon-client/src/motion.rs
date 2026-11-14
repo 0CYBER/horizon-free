@@ -118,7 +118,7 @@ mod auto_jump;
 pub(crate) mod environment;
 use environment::fly_into_wall_damage;
 mod fluids;
-mod ladder;
+pub mod ladder;
 pub mod surface;
 pub use fluids::{
     BubbleColumn, FluidResources, FluidTags, LAVA, PlayerFluids, RiddenBoat, WATER,
@@ -6129,7 +6129,8 @@ mod tests {
                 scene.set(x, y, 20, source).unwrap();
             }
         }
-        let depth = 5.0 + 8.0 / 9.0 - 4.0;
+        // A source's height is the `f32` 8/9 (`8 / 9F`), so the depth is 1 + that, in `f64`.
+        let depth = 1.0 + f64::from(8.0_f32 / 9.0);
         // (x, water height, lava height)
         for (x, water, lava) in [
             (20.5, 0.0, depth),
@@ -6154,8 +6155,10 @@ mod tests {
             };
             w.fluid_base_tick().unwrap();
             let near = |a: f64, b: f64| (a - b).abs() < 1e-9;
-            assert!(near(w.player.fluid_height(WATER), water), "water at x {x}");
-            assert!(near(w.player.fluid_height(LAVA), lava), "lava at x {x}");
+            let got_water = w.player.fluid_height(WATER);
+            let got_lava = w.player.fluid_height(LAVA);
+            assert!(near(got_water, water), "water at x {x}: {got_water}");
+            assert!(near(got_lava, lava), "lava at x {x}: {got_lava}");
             assert_eq!(w.player.fluids.was_touching_water, water > 0.0, "x {x}");
             assert_eq!(w.player.is_in_lava(), lava > 0.0, "x {x}");
         }

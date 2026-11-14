@@ -96,9 +96,8 @@ jobs:
       # self-update switch and development overrides, which no test reaches), and debug adds overflow checks.
       - run: "cargo test --no-fail-fast --locked -p horizon-mod-package --features runtime-process --lib output::"
         working-directory: .
-      # The library, the binary's own tests, the docs, and the tests/ targets that start no process. The tests/
-      # targets that start the launcher binary run in the daily run's launcher-processes job, built for release:
-      # a debug launcher overflows the Windows main thread's 1 MiB stack.
+      # The library, the binary's own tests, the docs, and the tests/ targets that start no process.
+      # Targets that start the debug launcher binary run in the daily launcher-processes job.
       - run: >-
           cargo test --no-fail-fast --locked --lib --bins --test developer_install --test durable_publication
           --test modpack_headline --test storage_consent
@@ -150,8 +149,8 @@ jobs:
             -- --ignored --exact "${tests[@]}"
 
   launcher-processes:
-    # The tests/ targets that start the launcher binary (the test job runs every other target). Release, as players
-    # run it: a debug launcher overflows the Windows main thread's 1 MiB stack. Daily run and hand dispatch only.
+    # The tests/ targets that start the debug launcher binary (the test job runs every other target).
+    # Daily run and hand dispatch only: no test-runner stack override or release-only workaround.
     if: inputs.commit != '' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 40
@@ -173,8 +172,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: launcher
-          shared-key: launcher-windows-release
+          shared-key: launcher-windows-debug
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: >-
-          cargo test --no-fail-fast --release --locked --test desktop --test hidden_processes --test logs
+          cargo test --no-fail-fast --locked --test desktop --test hidden_processes --test logs
           --test owner_gate --test startup --test storage
+      - run: >-
+          cargo test --locked --test startup cli_settings_work_with_one_mib_process_stack
+          -- --ignored --exact

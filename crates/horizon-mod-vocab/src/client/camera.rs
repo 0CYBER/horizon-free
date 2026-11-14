@@ -38,6 +38,16 @@ pub enum UseItem {
     Spyglass,
     Other,
 }
+/// Why `ClientHost::set_local_rotation` changed nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// exhaustive: a closed set the game matches without a wildcard
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum LocalRotationError {
+    /// No client world is open.
+    NoWorld,
+    /// The yaw or the pitch is NaN or infinite.
+    NotFinite,
+}
 /// `CameraType`: where the camera sits for the local player. `key.togglePerspective` (F5) cycles
 /// it first person, third person behind, third person in front.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
