@@ -120,7 +120,8 @@ run there (parity has none). It is also a parity host (`playhorizon` in `tools/p
 
 ## Merging
 
-Pull requests merge with a merge commit, by hand: never `gh pr merge --auto`. Branch protection on main
+Pull requests go through the merge queue, which squashes each one into a single commit titled with the pull
+request's title and number (`kind(area): what changes (#123)`); never `gh pr merge --auto`. Branch protection on main
 requires `verify` for everyone, and Ludovic's review for the files `.github/CODEOWNERS` lists (what builds, signs
 and ships releases). Branches don't have to be up to date with main: main's own `checks` run catches the rare
 semantic conflict.
@@ -203,7 +204,7 @@ main, every 10 minutes (so a batch waiting for merges to settle goes out without
 ```mermaid
 flowchart LR
     pr(["pull request"]) --> checks{"verify<br/>parity"}
-    checks -- green --> merge["merge<br/>(merge commit)"]
+    checks -- green --> merge["merge queue<br/>(squash)"]
     merge --> main(["main"])
     main --> mainchecks{"checks and<br/>parity-main"}
     mainchecks -- green --> decide{"decide<br/>tools/release_train.py"}
