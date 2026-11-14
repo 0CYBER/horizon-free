@@ -214,19 +214,26 @@ fn a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in() {
 
 fn a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in_isolated() {
     use crate::game::native_special_renderers::frame_tests::{
-        asked, drawn_by_the_renderer, special_stick_layers,
+        asked, draw_stick, install_special_stick,
     };
-    /// Every file under `root` with its length and modification time.
-    fn persisted(root: &std::path::Path) -> Vec<(std::path::PathBuf, u64, std::time::SystemTime)> {
+    /// Every file under `root`, by its path relative to `root`, with a hash of its contents;
+    /// a folder or file that can't be read fails the test.
+    fn persisted(root: &std::path::Path) -> Vec<(std::path::PathBuf, u64)> {
+        use std::hash::{Hash, Hasher};
         let mut files = Vec::new();
         let mut dirs = vec![root.to_path_buf()];
         while let Some(dir) = dirs.pop() {
-            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                let meta = entry.metadata().unwrap();
-                if meta.is_dir() {
-                    dirs.push(entry.path());
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
                 } else {
-                    files.push((entry.path(), meta.len(), meta.modified().unwrap()));
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    std::fs::read(&path).unwrap().hash(&mut hash);
+                    files.push((
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        hash.finish(),
+                    ));
                 }
             }
         }
@@ -234,8 +241,12 @@ fn a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in_isolated(
         files
     }
     with_game(|game| {
+        install_special_stick(game);
         let identity = identity(game);
-        let saved = persisted(&game.world_root);
+        // The world's folder, where a save would land: the fixture's world has none.
+        let folder = tempfile::tempdir().unwrap();
+        game.world_root = folder.path().to_path_buf();
+        let saved = persisted(folder.path());
         let menu = Menu::new(tests::state());
         let root = game.transaction_open();
         let mut host = GameHost { game, identity };
@@ -245,9 +256,8 @@ fn a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in_isolated(
                 &menu,
                 |_, s| tests::placement(s),
                 |host| {
-                    let layers = special_stick_layers(host.game, 7);
-                    assert!(drawn_by_the_renderer(&layers), "{layers:?}");
-                    assert_eq!(asked(7), 1);
+                    draw_stick(host.game, 7);
+                    assert_eq!(asked(7), 1, "the stick wasn't drawn by its renderer");
                     assert!(Game::admit_entity_save().is_err());
                     assert_eq!(
                         host.game.save_all_reply().translation_key(),
@@ -260,7 +270,7 @@ fn a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in_isolated(
         );
         host.game.transaction_close(&root, false);
         assert!(host.game.transactions.is_empty());
-        assert_eq!(persisted(&host.game.world_root), saved);
+        assert_eq!(persisted(folder.path()), saved);
     });
 }
 
