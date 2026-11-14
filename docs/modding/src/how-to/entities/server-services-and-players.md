@@ -123,3 +123,20 @@ read the distances in chunks; `host.server_set_view_distance(d)` and
 `host.server_set_simulation_distance(d)` change them live for 2 to 32 on a
 dedicated server and return `false` otherwise. `server.properties` is not
 written.
+
+## World mutation: chunks, blocks shown and placed as a player
+
+For mods that write blocks by other means (an editor's own section writes, a schematic) and then have to make the game and the client agree. Server only. Each method returns `Result` and names every refusal; a refusal changes nothing.
+
+| Method | Behavior |
+|---|---|
+| `level.relight_chunks(host, &[[cx, cz]])` | Lights the given loaded chunks of the level in place again, whole, now, on the calling thread, together with the loaded chunks around them; the light that changed goes to the players who see it. A chunk that is not loaded, or lacks one of its eight neighbours, is skipped and not counted. Returns how many were lit. Refuses with `ChunkRefusal::{Stale, Client, NotInPlace, TooManyChunks { asked, max: 256 }}`. Call it for the chunks an edit changed, not every tick. |
+| `chunk.resend(host)` | Queues the loaded chunk to go whole (light, block entities, biomes) to its watchers at the end of the tick, as an `edit_blocks` chunk does. `Ok` with nothing sent when nobody watches. Refuses with `ChunkRefusal::{Stale, Client, NotInPlace, NotLoaded}`. |
+| `player.sees(host, target)` | Whether the player's client is shown `target` by the tracker's rule (`ServerPlayer.broadcastToPlayer`): a spectator only to spectators watching through their own camera, a player hidden with `hide` only to players of at least that level. Distance is not part of it. Refuses with `PlayerWorldRefusal::{Client, Stale, NoConnection}` (a fake player is no viewer or target). |
+| `player.ack_block_changes(host, sequence)` | Acknowledges the player's block actions up to `sequence` for an action a mod handled on its own channel; the ack goes after the next tick's block changes, the highest sequence of the tick only. Refuses with `Client`, `Stale`, `NoConnection` and `NegativeSequence { sequence }`. |
+| `player.show_block(host, pos, state)` | One block update to that player alone; the world is unchanged and the real block returns when it or its chunk is next sent, so a mod sends it again while it wants it shown. Refuses with `Client`, `Stale`, `NoConnection`, `UnknownState` and `PositionNotSendable { pos }` (y outside -2048..=2047, x or z outside -33554432..33554432: the packet's position wraps there). |
+| `player.place_block(host, level, pos, state, update_neighbour_shapes)` | Writes `state` as the player placed it (`BlockItem.place`'s write): neighbours are told and, unless `update_neighbour_shapes` is false, their shapes update; then `Block.setPlacedBy` with the player as placer (a bed gets its head, a door its upper half). A new block gets its block entity, the same block in another state keeps its own. No sound, game event or item use. Refuses with `Client`, `Stale`, `Dead`, `StaleLevel`, `OtherLevel` (not the level in place, where the player is), `UnknownState`, `OutOfWorld { pos }`, `NotLoaded { pos }` and `Unchanged` (that state already stands there). |
+
+Where Horizon differs from vanilla: vanilla sends and relights per edit and has no call that lights a set of chunks at once, so `relight_chunks` is bounded (256 chunks a call) to keep the server thread's stall bounded; `show_block` and `place_block` check the position and the state before anything runs, where vanilla's packet and `setBlock` would wrap or ignore them.
+
+A command usage may also name `<pos:vec3>` (`Vec3Argument.vec3()`): the point typed, delivered as `CommandArgumentValue::Vec3([f64; 3])`. A whole x or z is the block's centre (`1` is `1.5`) and y is as typed; relative and local coordinates resolve against the command's source. Fewer than three numbers, or text, is a parse error and the command does not run.
