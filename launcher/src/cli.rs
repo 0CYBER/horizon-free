@@ -1209,6 +1209,32 @@ fn progress(label: String) -> impl Fn(f32) {
     }
 }
 
+/// Keep detailed terminal updates, but only the first and completed download updates in logs.
+fn native_progress(tty: bool) -> impl Fn(native_mods::Step) -> Option<String> {
+    use native_mods::Step;
+    let previous = std::cell::RefCell::new(None);
+    move |step| {
+        let show = tty
+            || match (&step, previous.borrow().as_ref()) {
+                (Step::Rust(done), Some(Step::Rust(last))) => *done >= 1.0 && *last < 1.0,
+                (
+                    Step::Tools { build, done, total },
+                    Some(Step::Tools {
+                        build: last_build,
+                        done: last_done,
+                        total: last_total,
+                    }),
+                ) if build == last_build => {
+                    *total > 0 && done >= total && (*last_total == 0 || last_done < last_total)
+                }
+                _ => true,
+            };
+        let label = show.then(|| step.label());
+        *previous.borrow_mut() = Some(step);
+        label
+    }
+}
+
 fn json(value: serde_json::Value) {
     println!("{}", serde_json::to_string_pretty(&value).unwrap());
 }
@@ -1364,7 +1390,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<i32, String> {
                 );
                 return Ok(0);
             }
-            let steps = |step: native_mods::Step| eprintln!("{}", step.label());
+            let progress = native_progress(std::io::stderr().is_terminal());
+            let steps = |step| {
+                if let Some(label) = progress(step) {
+                    eprintln!("{label}");
+                }
+            };
             if let Some(output) = server_output {
                 // Export mode: a standalone server engine in `output`. No instance is read
                 // or changed, and no launcher config is written; `folder` is required (clap).
@@ -2264,7 +2295,7 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
 /// Installs the native mods of `found` (a GitHub link, resolved) into the game folder `home`: the
 /// warning and the exact source link first, and nothing downloaded without `trust`.
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
-    use horizon_launcher::browser::{horizon, installed, java_instance, Kind, Query, SourceId};
+    use horizon_launcher::browser::{Kind, Query, SourceId, horizon, installed, java_instance};
     use horizon_launcher::modpacks;
     // What the browser installs goes into an instance's game folder; Java mods' checks are kept
     // in the default one, shared by all.
@@ -3659,6 +3690,99 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    fn native_progress_limits_redirected_rust_downloads_to_start_and_end() {
+        let progress = native_progress(false);
+        let fractions = [0.0, 0.01, 0.97, 0.971, 0.974, 0.98, 1.0, 1.0];
+        let labels: Vec<_> = fractions
+            .into_iter()
+            .filter_map(|done| progress(native_mods::Step::Rust(done)))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                native_mods::Step::Rust(0.0).label(),
+                native_mods::Step::Rust(1.0).label(),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_progress_keeps_detailed_terminal_downloads() {
+        let progress = native_progress(true);
+        for done in [0.0, 0.97, 0.971, 0.974, 0.98, 1.0] {
+            let step = native_mods::Step::Rust(done);
+            assert_eq!(progress(step.clone()), Some(step.label()));
+        }
+        for done in [0, 1, 97, 100] {
+            let step = native_mods::Step::Tools {
+                build: "sdk".into(),
+                done,
+                total: 100,
+            };
+            assert_eq!(progress(step.clone()), Some(step.label()));
+        }
+    }
+
+    #[test]
+    fn native_progress_limits_each_redirected_sdk_download() {
+        let progress = native_progress(false);
+        let tools = |build: &str, done, total| native_mods::Step::Tools {
+            build: build.into(),
+            done,
+            total,
+        };
+        for (done, shown) in [
+            (0, true),
+            (1, false),
+            (97, false),
+            (100, true),
+            (100, false),
+        ] {
+            let step = tools("first", done, 100);
+            assert_eq!(progress(step.clone()), shown.then(|| step.label()));
+        }
+        let next = tools("second", 20, 100);
+        assert_eq!(progress(next.clone()), Some(next.label()));
+        assert_eq!(progress(tools("second", 50, 100)), None);
+        let complete = tools("second", 100, 100);
+        assert_eq!(progress(complete.clone()), Some(complete.label()));
+        let unknown = tools("third", 0, 0);
+        assert_eq!(progress(unknown.clone()), Some(unknown.label()));
+        assert_eq!(progress(tools("third", 0, 0)), None);
+        let complete = tools("third", 100, 100);
+        assert_eq!(progress(complete.clone()), Some(complete.label()));
+    }
+
+    #[test]
+    fn native_progress_keeps_phase_order_and_restarts_download_reporting() {
+        use native_mods::Step;
+        let progress = native_progress(false);
+        let first = Step::Rust(0.97);
+        assert_eq!(progress(first.clone()), Some(first.label()));
+        assert_eq!(progress(Step::Rust(0.98)), None);
+        for step in [
+            Step::PrebuiltMods,
+            Step::Compile {
+                done: 1,
+                total: Some(2),
+                name: "first".into(),
+                profile: Default::default(),
+            },
+            Step::Compile {
+                done: 2,
+                total: Some(2),
+                name: "second".into(),
+                profile: Default::default(),
+            },
+            Step::Install,
+            Step::Rust(0.0),
+            Step::Rust(1.0),
+        ] {
+            assert_eq!(progress(step.clone()), Some(step.label()));
+        }
+    }
+
+    #[test]
     fn attached_preserves_real_process_codes_and_unix_signals() {
         let mut codes = vec![0, 37];
         #[cfg(unix)]
@@ -4031,15 +4155,17 @@ mod tests {
             _ => panic!("expected native-build"),
         }
         // A version refuses --update, as in the game mode.
-        assert!(parse(&[
-            "mods",
-            "--server-output",
-            "engine-out",
-            "--version",
-            "v2026.10.13",
-            "--update"
-        ])
-        .is_err());
+        assert!(
+            parse(&[
+                "mods",
+                "--server-output",
+                "engine-out",
+                "--version",
+                "v2026.10.13",
+                "--update"
+            ])
+            .is_err()
+        );
         assert!(parse(&["mods", "--allow-version-mismatch"]).is_err());
         // The game mode is unchanged: an instance build without --server-output.
         assert!(matches!(
