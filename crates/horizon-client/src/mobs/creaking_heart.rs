@@ -46,6 +46,9 @@ pub enum HeartEvent {
     },
     /// `updateNeighbourForOutputSignal`: comparators read the new signal.
     OutputChanged([i32; 3]),
+    /// `Level.gameEvent(event, pos, Context.of(state))` from the heart's own
+    /// block state (a resin clump's `BLOCK_PLACE`).
+    BlockGameEvent(&'static str, [i32; 3], BlockStateId),
     /// A mob's own sounds and effects (the spawned creaking's voice, a
     /// creaking falling apart).
     Mob(MobEvent),
@@ -338,6 +341,11 @@ pub fn creaking_hurt(
         for _ in 0..clumps {
             if let Some(at) = spread_resin(&mut b, pos, lr, out) {
                 out.push(HeartEvent::Sound("block.resin.place", centre(at), 1.0, 1.0));
+                out.push(HeartEvent::BlockGameEvent(
+                    "minecraft:block_place",
+                    at,
+                    state,
+                ));
             }
         }
     }
@@ -444,6 +452,20 @@ fn spawn_protector(
         if !creaking::is_active(&m) {
             m.voice("entity.creaking.ambient", &mut events);
         }
+        // spawnProtector: ENTITY_PLACE at the creaking and entity event 60
+        // (the poof cloud), then setTransient.
+        let spawned_at = [m.position.x, m.position.y, m.position.z];
+        events.push(MobEvent::GameEvent {
+            event: "minecraft:entity_place",
+            at: spawned_at,
+            source: id,
+            state: BlockStateId(0),
+        });
+        events.push(MobEvent::EntityEvent {
+            mob: id,
+            event: 60,
+            at: spawned_at,
+        });
         creaking::set_transient(&mut m, pos);
         // spawnProtector's caller: the creaking's spawn sound.
         m.voice("entity.creaking.spawn", &mut events);

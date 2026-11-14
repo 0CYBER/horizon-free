@@ -177,6 +177,9 @@ impl Game<'_> {
                     [0.0; 3],
                 ),
                 HeartEvent::OutputChanged(at) => self.container_changed((at[0], at[1], at[2])),
+                HeartEvent::BlockGameEvent(event, at, state) => {
+                    self.post_block_game_event(event, at, None, Some(state))
+                }
                 HeartEvent::Mob(event) => mob_events.push(event),
             }
         }
@@ -467,6 +470,10 @@ impl CreakingState {
         self.revision = Some(revision);
     }
 }
+
+#[cfg(test)]
+#[path = "creaking_heart_events_tests.rs"]
+mod creaking_heart_events_tests;
 
 #[cfg(test)]
 mod tests {
