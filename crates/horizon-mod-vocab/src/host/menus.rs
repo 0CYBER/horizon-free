@@ -39,6 +39,24 @@ pub trait MenusServerHost {
     /// Closes the player's native menu (a `menu_closed` follows).
     #[access(WorldOnly)]
     fn close_menu(&mut self, uuid: u128);
+    /// Side: server.
+    /// Replaces everything the player's open `open_menu` menu `window` shows with `items` (by
+    /// slot, padded with empty ones, extra ones dropped, as `open_menu` takes them) and sends
+    /// it at once as one `ClientboundContainerSetContentPacket`
+    /// (`AbstractContainerMenu.sendAllDataToRemote`), without reopening the menu: the title,
+    /// the cursor and the screen stay. Writing slots through `menu` sends each changed slot with
+    /// the next tick's sync instead; this is the whole-contents form, for a page turned or a
+    /// list rebuilt. Each refusal sends nothing and changes nothing, and is named by
+    /// `MenuItemsRefusal`: `Client`, `NoPlayer` (no placed player of that UUID), `NotOpen`
+    /// (`window` is not their open `open_menu` menu) and `Stack` (a stack the game's item
+    /// conversion refuses).
+    #[access(WorldOnly)]
+    fn menu_set_items(
+        &mut self,
+        uuid: u128,
+        window: i32,
+        items: Vec<Option<ItemStack>>,
+    ) -> Result<(), MenuItemsRefusal>;
 }
 /// The client host's methods of the `menus` area, implemented by the game and reached through [`crate::ClientHost`].
 #[horizon_mod_api_macros::host_area]

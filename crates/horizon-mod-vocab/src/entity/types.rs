@@ -1212,6 +1212,63 @@ impl NoBackend for OpenMenuError {
     }
 }
 
+/// Why [`PlayerRef::respawn`] respawned nobody. Nothing changed when one comes back; the checks
+/// run in the order the variants are listed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum RespawnRefusal {
+    /// The call was made on a client; the respawn is the server's.
+    Client,
+    /// A player's state is swapped in (the call came from inside a player's hook, such as a
+    /// command or a packet handler); call it from `server_tick`.
+    InPlayerHook,
+    /// The handle no longer identifies a player on this server: it is stale, or they left.
+    Stale,
+    /// The player has no connection of their own to press Respawn on: a fake player, or the
+    /// world's own player in a single-player world.
+    NoConnection,
+    /// The player has health above 0 and has not won the game: the case the Respawn button
+    /// ignores. A player who has won the game (the End poem is showing) is respawned even
+    /// alive, as the button does.
+    Alive,
+}
+
+impl NoBackend for RespawnRefusal {
+    fn no_backend() -> Self {
+        Self::Stale
+    }
+}
+
+/// Why `menu_set_items` replaced nothing. Nothing is sent when one comes back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum MenuItemsRefusal {
+    /// The call was made on a client; menus are the server's.
+    Client,
+    /// No player of that UUID is online and placed.
+    NoPlayer,
+    /// The window is not the player's open `open_menu` menu: another window, a menu the game
+    /// opened (a chest, a trade), or none open.
+    NotOpen,
+    /// One of the stacks was refused at the game's item conversion boundary: an item the world
+    /// lacks, a count or damage the item does not allow.
+    Stack(StackWriteError),
+}
+
+impl From<StackWriteError> for MenuItemsRefusal {
+    fn from(error: StackWriteError) -> Self {
+        Self::Stack(error)
+    }
+}
+
+impl NoBackend for MenuItemsRefusal {
+    fn no_backend() -> Self {
+        Self::NoPlayer
+    }
+}
+
 /// A player's experience (`Player.experienceLevel`, `experienceProgress`,
 /// `totalExperience`).
 #[derive(Clone, Copy, Debug, PartialEq)]

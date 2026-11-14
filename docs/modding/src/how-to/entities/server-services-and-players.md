@@ -69,6 +69,25 @@ UUID: you can use a retained handle after disconnection until its world epoch
 closes. You cannot target arbitrary offline UUIDs. Retain the handle value, not a
 borrowed service.
 
+## Chat lines and respawn
+
+Keeping a public chat line from some players (an ignore list, a chat channel, a party chat): the `chat_recipient`
+hook is asked once for each placed receiver, the sender included, before any of them is sent the line, with the
+`sender`, `sender_name`, the `message` players see and the `recipient`. Set `hidden` and that one receiver is sent
+nothing, no chat index and no pending acknowledgement; the others still get the line signed as it was sent, so its
+signature verifies for them. It covers a player's chat after `server_chat` let it through and `/say` and `/me`, signed
+or not; whispers (`/msg`) are not public and are not asked. It is not a second `server_chat`: that hook is heard once
+for a typed line and cancels it for everyone, while this one is per receiver and also covers `/say` and `/me`. With no
+listener nothing is asked or allocated. A wasm listener's fault or timeout answers nothing, so the line is sent. The
+server's log keeps every line, hidden or not.
+
+`player.respawn(host)` presses the Respawn button for a dead player, as their client's does (`PERFORM_RESPAWN`): they
+are placed at their respawn point or the world spawn and `player_respawned` is heard. Call it outside every player's
+hook (from `server_tick`, say). It returns `Result<(), RespawnRefusal>`, and each refusal changes nothing, checked in
+this order: `Client`, `InPlayerHook` (a player's state is swapped in), `Stale` (no player on this server behind the
+handle), `NoConnection` (a fake player, or the world's own player in a single-player world, which respawns through its
+own screen) and `Alive` (health above 0 and the game not won: the case the button ignores; a player who has won the game and is watching the End poem is respawned even alive, on the next server tick, as the button does).
+
 ## Player rules and sleep
 
 Reads accept `Host`; writes accept `ServerHost`.
