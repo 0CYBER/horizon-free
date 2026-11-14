@@ -280,7 +280,7 @@ pub(in crate::game) mod tests {
     /// fallback), a level viewed already in another slot, the player's own level, a cap past the
     /// client's ceiling, an epoch not newer than the last and a negative slot (the codec's).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn each_open_refusal_has_a_fixed_reason() {
         use viewed_levels::Level;
         let mut resources = None;
@@ -344,7 +344,7 @@ pub(in crate::game) mod tests {
     /// A level the Login did not name (a runtime level opened since) is viewed in the slot its
     /// `open` binds: its `run`s fill it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_not_named_at_login_is_viewed_in_its_slot() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -359,7 +359,7 @@ pub(in crate::game) mod tests {
     /// is dropped by its epoch, never reaching the new world, and the new binding's packets go to
     /// it. A `run` at an epoch no `open` gave closes the connection.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_late_packet_of_a_slot_bound_again_is_dropped() {
         let mut resources = None;
         let mut game = client(&mut resources);
@@ -398,7 +398,7 @@ pub(in crate::game) mod tests {
 
     /// An `open`'s column cap is the world's: a new column past it closes the connection.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_opens_column_cap_bounds_its_world() {
         let mut resources = None;
         let mut game = client(&mut resources);

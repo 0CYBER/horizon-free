@@ -177,7 +177,7 @@ mod tests {
     /// both worlds keep their columns, the next `run` of the slot reaches the level left, and a
     /// late `run` of the level entered, at its old epoch, is dropped.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn travels_between_two_runtime_levels_of_one_type_keep_both_worlds() {
         const A: &str = "test:instance/a";
         const B: &str = "test:instance/b";
@@ -218,7 +218,7 @@ mod tests {
     /// changed since its `open`: it enters afresh, and the server's `swap` is refused with a fixed
     /// reason, so the two sides never disagree in silence.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_swap_the_client_did_not_make_is_refused() {
         let mut resources = None;
         let mut game = client(&mut resources);
