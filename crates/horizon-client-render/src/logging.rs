@@ -379,6 +379,11 @@ static LOGGER: std::sync::OnceLock<Logger> = std::sync::OnceLock::new();
 /// The most lines the tap keeps between two drains (`take_tapped`); older ones are dropped.
 pub const TAP_LINES: usize = 4096;
 
+/// The most bytes of a line's message the tap keeps; the rest is cut off at a character boundary.
+pub const TAP_MESSAGE_BYTES: usize = 8192;
+/// The most bytes of a thread name the tap keeps; the rest is cut off at a character boundary.
+pub const TAP_THREAD_BYTES: usize = 128;
+
 /// A line the log tap kept: its level, the thread it names and the message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TappedLine {
@@ -426,6 +431,15 @@ pub fn untapped<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
+/// `text` cut to at most `max` bytes, at a character boundary.
+fn capped(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
 fn tap(thread: &str, level: log::Level, message: &str) {
     if !TAPPING.load(std::sync::atomic::Ordering::Relaxed) || UNTAPPED.get() {
         return;
@@ -436,8 +450,8 @@ fn tap(thread: &str, level: log::Level, message: &str) {
     }
     lines.push_back(TappedLine {
         level,
-        thread: thread.to_owned(),
-        message: message.to_owned(),
+        thread: capped(thread, TAP_THREAD_BYTES),
+        message: capped(message, TAP_MESSAGE_BYTES),
     });
 }
 
@@ -702,6 +716,19 @@ mod tests {
         assert_eq!(
             kept.last().unwrap().message,
             format!("tap probe {}", TAP_LINES + 4)
+        );
+        // An oversized line is cut to the stated caps, at a character boundary: the message
+        // ends in a three-byte character that straddles the cap, the thread name is long.
+        let long = format!("tap probe long {}", "\u{20ac}".repeat(TAP_MESSAGE_BYTES));
+        write_as(&"t".repeat(TAP_THREAD_BYTES + 50), log::Level::Info, &long);
+        let kept = take_tapped();
+        let line = kept.last().unwrap();
+        assert_eq!(line.thread, "t".repeat(TAP_THREAD_BYTES));
+        assert!(line.message.starts_with("tap probe long \u{20ac}"));
+        assert!(line.message.len() <= TAP_MESSAGE_BYTES);
+        assert!(
+            TAP_MESSAGE_BYTES - line.message.len() < 3,
+            "cut at the last whole character"
         );
         set_tap(false);
         write_as("Server thread", log::Level::Info, "tap probe after");

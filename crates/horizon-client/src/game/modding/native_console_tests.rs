@@ -1,8 +1,8 @@
 //! The console for native mods: logged lines reach `console_line`, and a command's feedback
-//! comes back from `server_run_command_captured`.
+//! comes back from `run_command_with_output`.
 use super::native_guest_turn_tests::with_guests;
 use horizon_client::logging;
-use mod_api::{ConsoleLineEvent, ConsoleRefusal, Hooks, ServerHost};
+use mod_api::{CommandResult, ConsoleLineEvent, Hooks, ServerHost};
 use std::sync::{Arc, Mutex};
 
 /// Records the probe lines it hears and logs a line of its own for each.
@@ -58,28 +58,28 @@ fn logged_lines_reach_a_listener_but_not_its_own() {
     });
 }
 
-/// The console's feedback comes back as plain text. A command that ran and failed is `Ok` with
-/// `ran` false and its message, not a refusal, and one leading slash is dropped.
+/// The console's feedback comes back as plain text with the result of `run_command`. A command
+/// that ran and failed is `ran: false` with its message, and one leading slash is dropped.
 #[test]
 #[ignore = "daily"]
 fn a_captured_command_returns_its_feedback() {
     with_guests(|game| {
-        let (ran, lines) = game
-            .server_run_command_captured("/time query gametime")
-            .unwrap();
-        assert!(ran);
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines[0].starts_with("The game time is"), "{lines:?}");
-        let (ran, lines) = game
-            .server_run_command_captured(" time query gametime ")
-            .unwrap();
-        assert!(ran && lines.len() == 1, "{lines:?}");
-        let (ran, lines) = game
-            .server_run_command_captured("gamerule nosuchrule")
-            .unwrap();
-        assert!(!ran);
-        assert!(!lines.is_empty());
+        let result = game.native_run_command_with_output("/time query gametime");
+        assert!(result.ran);
+        assert_eq!(result.lines.len(), 1, "{result:?}");
+        assert!(
+            result.lines[0].starts_with("The game time is"),
+            "{result:?}"
+        );
+        let result = game.native_run_command_with_output(" time query gametime ");
+        assert!(result.ran && result.lines.len() == 1, "{result:?}");
+        let result = game.native_run_command_with_output("gamerule nosuchrule");
+        assert!(!result.ran);
+        assert!(!result.lines.is_empty());
         assert!(game.chat_capture.is_none(), "the outer capture is put back");
+        // The same line through `run_command`'s path answers as the captured one does.
+        assert!(game.native_run_command("time query gametime"));
+        assert!(!game.native_run_command("gamerule nosuchrule"));
     });
 }
 
@@ -89,43 +89,61 @@ fn a_captured_command_returns_its_feedback() {
 fn the_dedicated_consoles_own_commands_are_not_reached() {
     with_guests(|game| {
         for line in ["stop", "op nobody", "whitelist list", "ban nobody"] {
-            let (ran, lines) = game.server_run_command_captured(line).unwrap();
-            assert!(!ran, "{line}: {lines:?}");
-            assert!(!lines.is_empty(), "{line}");
+            let result = game.native_run_command_with_output(line);
+            assert!(!result.ran, "{line}: {result:?}");
+            assert!(!result.lines.is_empty(), "{line}");
         }
     });
 }
 
-/// Each refusal is its own result and runs nothing: a blank line (empty, spaces, a lone slash,
-/// a slash and spaces) and no server open to players.
+/// A blank line (empty, spaces, a lone slash, a slash and spaces) and no server open to players
+/// run nothing and answer as `run_command` does: `ran` false and no lines.
 #[test]
 #[ignore = "daily"]
-fn each_console_refusal_has_its_own_name_and_runs_nothing() {
+fn a_blank_line_or_no_server_runs_nothing() {
     with_guests(|game| {
         for blank in ["", "   ", "/", " / ", "/   "] {
             assert_eq!(
-                game.server_run_command_captured(blank),
-                Err(ConsoleRefusal::Blank),
+                game.native_run_command_with_output(blank),
+                CommandResult::default(),
                 "{blank:?}"
             );
         }
         assert!(game.chat_capture.is_none(), "nothing was captured");
         let host = game.lan.take();
         assert_eq!(
-            game.server_run_command_captured("time query gametime"),
-            Err(ConsoleRefusal::NotOpen)
+            game.native_run_command_with_output("time query gametime"),
+            CommandResult::default()
         );
-        assert_eq!(
-            game.server_run_command_captured(""),
-            Err(ConsoleRefusal::NotOpen),
-            "no server is the first reason"
-        );
+        assert!(!game.native_run_command("time query gametime"));
         game.lan = host;
         assert!(
-            game.server_run_command_captured("time query gametime")
-                .is_ok()
+            game.native_run_command_with_output("time query gametime")
+                .ran
         );
     });
+}
+
+/// The lines kept are capped: at most `MAX_LINES` lines, none above `MAX_LINE_BYTES` bytes, cut
+/// at a character boundary (the line below ends in a three-byte character on the cap).
+#[test]
+fn the_feedback_kept_is_capped() {
+    use horizon_client::text::Text;
+    let long = Text::literal(&format!(
+        "ab{}",
+        "\u{20ac}".repeat(CommandResult::MAX_LINE_BYTES)
+    ));
+    let many: Vec<Text> = std::iter::once(long)
+        .chain((1..CommandResult::MAX_LINES + 40).map(|n| Text::literal(&format!("line {n}"))))
+        .collect();
+    let kept = super::native_console::capped_lines(&many);
+    assert_eq!(kept.len(), 256);
+    assert_eq!(CommandResult::MAX_LINE_BYTES, 4096);
+    // "ab" and 1364 whole euro signs (4094 bytes) fit; a 1365th would pass 4096.
+    assert_eq!(kept[0].len(), 2 + 1364 * 3);
+    assert!(kept[0].starts_with("ab\u{20ac}"));
+    assert_eq!(kept[1], "line 1");
+    assert_eq!(kept[255], "line 255");
 }
 
 /// A call made while another capture is open captures its own lines, and the outer capture
@@ -137,10 +155,8 @@ fn a_nested_capture_leaves_the_outer_one_as_it_was() {
         let outer = game
             .chat_capture
             .replace(vec![horizon_client::text::Text::literal("outer line")]);
-        let (ran, lines) = game
-            .server_run_command_captured("time query gametime")
-            .unwrap();
-        assert!(ran && lines.len() == 1, "{lines:?}");
+        let result = game.native_run_command_with_output("time query gametime");
+        assert!(result.ran && result.lines.len() == 1, "{result:?}");
         let kept: Vec<String> = game
             .chat_capture
             .take()

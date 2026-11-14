@@ -1,8 +1,8 @@
 //! The server's console for native mods: every logged line (`console_line`)
-//! and a console command whose feedback comes back (`server_run_command_captured`).
-use super::{Dim, Game, commands::execute};
+//! and a console command whose feedback comes back (`run_command_with_output`).
+use super::Game;
 use horizon_client::logging;
-use mod_api::ConsoleRefusal;
+use mod_api::CommandResult;
 
 impl Game<'_> {
     /// `console_line` for each line logged since the last server tick, while
@@ -23,34 +23,34 @@ impl Game<'_> {
         }
     }
 
-    /// `Commands::run_command` with its feedback kept: whether it ran without
-    /// failing, and the console's lines for it as plain text.
-    pub(super) fn server_run_command_captured(
-        &mut self,
-        line: &str,
-    ) -> Result<(bool, Vec<String>), ConsoleRefusal> {
-        if self.lan.is_none() {
-            return Err(ConsoleRefusal::NotOpen);
-        }
+    /// `Commands::run_command_with_output`: `native_run_command` with its feedback kept as
+    /// plain text, at most `CommandResult::MAX_LINES` lines of `MAX_LINE_BYTES` bytes each.
+    pub(super) fn native_run_command_with_output(&mut self, line: &str) -> CommandResult {
         let line = line.trim();
         let line = line.strip_prefix('/').unwrap_or(line);
         if line.trim().is_empty() {
-            return Err(ConsoleRefusal::Blank);
+            return CommandResult::default();
         }
-        let console = execute::Source {
-            dimension: Dim::Overworld,
-            silent: false,
-            ..self.server_source()
-        };
-        let outer = self.command_source.replace(console);
-        let filter = std::mem::replace(&mut self.native_command_filter, true);
-        let outer_exec = std::mem::take(&mut self.exec);
-        let outer_capture = self.chat_capture.replace(Vec::new());
-        let ok = self.as_console(|game| game.run_command(line));
-        let lines = std::mem::replace(&mut self.chat_capture, outer_capture).unwrap_or_default();
-        self.exec = outer_exec;
-        self.native_command_filter = filter;
-        self.command_source = outer;
-        Ok((ok, lines.iter().map(|text| text.plain()).collect()))
+        let (ran, lines) = self.run_console_command(line, true);
+        let lines = capped_lines(&lines);
+        CommandResult::new(ran, lines)
     }
+}
+
+/// `lines` as plain text, at most `CommandResult::MAX_LINES` of them, each cut to at most
+/// `CommandResult::MAX_LINE_BYTES` bytes at a character boundary.
+pub(super) fn capped_lines(lines: &[horizon_client::text::Text]) -> Vec<String> {
+    lines
+        .iter()
+        .take(CommandResult::MAX_LINES)
+        .map(|text| {
+            let mut plain = text.plain();
+            let mut end = plain.len().min(CommandResult::MAX_LINE_BYTES);
+            while !plain.is_char_boundary(end) {
+                end -= 1;
+            }
+            plain.truncate(end);
+            plain
+        })
+        .collect()
 }

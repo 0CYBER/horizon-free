@@ -1506,7 +1506,8 @@ impl Hub {
             player_id: entity_id,
             hardcore: self.config.hardcore,
             levels: self.level_keys(),
-            max_players: self.config.max_players as i32,
+            // The live limit (`server_set_max_players`), as the status answer shows it.
+            max_players: i32::try_from(self.lan.shared.max_players()).unwrap_or(i32::MAX),
             chunk_radius: self.chunk_radius(),
             simulation_distance: self.config.simulation_distance,
             reduced_debug_info: self.reduced_debug_info,
@@ -5192,6 +5193,7 @@ mod tests {
     mod effect_meta_tests;
     #[path = "../far_tests.rs"]
     mod far_tests;
+    mod live_player_limit_tests;
     mod ordered_inbox_tests;
     mod pending_move_bound_tests;
     mod pending_move_scope_tests;

@@ -1644,21 +1644,42 @@ impl Game<'_> {
     /// acting player) are reachable; displaced outer players are excluded
     /// from name, UUID and selector resolution on this path only.
     pub(super) fn native_run_command(&mut self, line: &str) -> bool {
+        self.run_console_command(line, false).0
+    }
+    /// The one path `native_run_command` and `native_run_command_with_output` run a line
+    /// by: the console's source from the overworld's spawn, the native command filter on,
+    /// and the running command's own chat capture, so a call inside another capture leaves
+    /// the outer one as it was. With `capture`, the source is not silent and the feedback
+    /// comes back as the second value.
+    pub(super) fn run_console_command(
+        &mut self,
+        line: &str,
+        capture: bool,
+    ) -> (bool, Vec<horizon_client::text::Text>) {
         if self.lan.is_none() {
-            return false;
+            return (false, Vec::new());
         }
+        let base = self.server_source();
         let server = execute::Source {
             dimension: Dim::Overworld,
-            ..self.server_source()
+            silent: base.silent && !capture,
+            ..base
         };
         let outer = self.command_source.replace(server);
         let filter = std::mem::replace(&mut self.native_command_filter, true);
         let outer_exec = std::mem::take(&mut self.exec);
+        let outer_capture = capture.then(|| self.chat_capture.replace(Vec::new()));
         let ok = self.as_console(|g| g.run_command(line));
+        let lines = match outer_capture {
+            Some(outer_capture) => {
+                std::mem::replace(&mut self.chat_capture, outer_capture).unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
         self.exec = outer_exec;
         self.native_command_filter = filter;
         self.command_source = outer;
-        ok
+        (ok, lines)
     }
     /// Runs the command `line` (a leading slash allowed) with the entity as
     /// its source, as vanilla runs a portal's or a sign's command:

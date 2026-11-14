@@ -1,1 +1,1 @@
-pub use world::server_console::{ConsoleRefusal, PlayerLimitRefusal};
+pub use world::server_console::{CommandResult, PlayerLimitRefusal};
