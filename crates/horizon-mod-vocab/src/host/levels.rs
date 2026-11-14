@@ -227,9 +227,9 @@ pub trait LevelsBackend {
     /// Match and assemble through the engine's recipe matcher, without consuming inputs.
     /// Covers minecraft:crafting, smelting, blasting, smoking, campfire_cooking,
     /// stonecutting and smithing, including data-pack recipes of those types.
-    /// Mod-owned types return RecipeLookupError::NotMatchable: cache recipes_of_type once
+    /// Registered crafting serializers match through minecraft:crafting. Read-only and unregistered
+    /// mod-owned types return RecipeLookupError::NotMatchable; cache recipes_of_type once
     /// per load/reload and match those in mod memory (no per-tick host crossing).
-    /// Dynamic custom outputs and contextual predicates remain mod-owned.
     /// A valid input without a match returns Ok(None); invalid shapes/items and unavailable
     /// levels are typed refusals. Crafting dimensions are 1 through 3, with row-major slots.
 

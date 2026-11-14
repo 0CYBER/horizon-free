@@ -41,7 +41,7 @@ fn native_host_returns_typed_recipe_rules() {
     struct Recipes(Arc<[Recipe]>);
     impl mod_api::prelude::RecipesHost for Recipes {
         fn recipes_of_type(&self, kind: &str) -> Arc<[Recipe]> {
-            if kind == "minecraft:crafting_transmute" {
+            if kind == "minecraft:crafting" {
                 self.0.clone()
             } else {
                 Arc::from([])
@@ -52,7 +52,7 @@ fn native_host_returns_typed_recipe_rules() {
     mod_api::impl_host_areas!(Recipes, except(recipes));
     let mut recipe = Recipe::new(
         "test:recipe",
-        "minecraft:crafting_transmute",
+        "minecraft:crafting",
         Arc::new(serde_json::json!({"source": "test"})),
     );
     recipe.rule = Some(RecipeRule::Transmute {
@@ -64,7 +64,7 @@ fn native_host_returns_typed_recipe_rules() {
         result: RecipeTemplate::new(None, 3, None),
     });
     let host = Recipes(Arc::from([recipe]));
-    let view = (&host as &dyn Host).recipes_of_type("minecraft:crafting_transmute");
+    let view = (&host as &dyn Host).recipes_of_type("minecraft:crafting");
     let Some(RecipeRule::Transmute {
         input,
         material,

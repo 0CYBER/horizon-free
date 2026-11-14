@@ -46,11 +46,10 @@ pub(in crate::game) fn server_sources(
     {
         return Ok(held.sources.clone());
     }
-    let sources = Arc::new(ResolvedSources::load_or_empty(
-        root,
-        overlay,
-        &server_data_load(root, item_data)?,
-    ));
+    let sources = Arc::new(
+        ResolvedSources::load(root, overlay, &server_data_load(root, item_data)?)
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+    );
     *slot = Some(ServerSources {
         root: root.to_owned(),
         generation,
@@ -66,11 +65,10 @@ pub(in crate::game) fn prepare_server_sources(
     item_data: &ItemData,
     overlay: &horizon_world::loot::PackOverlay,
 ) -> std::io::Result<Arc<ResolvedSources>> {
-    Ok(Arc::new(ResolvedSources::load_or_empty(
-        root,
-        overlay,
-        &server_data_load(root, item_data)?,
-    )))
+    Ok(Arc::new(
+        ResolvedSources::load(root, overlay, &server_data_load(root, item_data)?)
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+    ))
 }
 
 pub(in crate::game) fn install_server_sources(
@@ -97,11 +95,10 @@ pub(in crate::game) fn load_sources(
     use horizon_world::native_load_context::DataLoadOrigin;
     match origin {
         DataLoadOrigin::ServerDataLoad => server_sources(root, item_data, overlay),
-        DataLoadOrigin::ClientPreload | _ => Ok(Arc::new(ResolvedSources::load_or_empty(
-            root,
-            overlay,
-            &data_load_context(root, item_data, origin)?,
-        ))),
+        DataLoadOrigin::ClientPreload | _ => Ok(Arc::new(
+            ResolvedSources::load(root, overlay, &data_load_context(root, item_data, origin)?)
+                .map_err(|error| std::io::Error::other(error.to_string()))?,
+        )),
     }
 }
 

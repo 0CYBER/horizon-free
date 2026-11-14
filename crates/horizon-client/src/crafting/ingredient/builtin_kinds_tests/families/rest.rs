@@ -1402,10 +1402,7 @@ fn custom_model_data_recipe_decodes_ordered_lists_and_matches_without_allocating
         .data_mut()
         .set_other("minecraft:custom_model_data", Some(expected.clone()));
     assert!(recipes.recipe_matches(&context, "fixture:model", &[Some(stack.clone())], 1));
-    assert_eq!(
-        recipes.by_type["minecraft:crafting_shaped"][0].results[0].count,
-        2
-    );
+    assert_eq!(recipes.by_type["minecraft:crafting"][0].results[0].count, 2);
     // Raw live numeric widths and RGB vectors compare to the canonical recipe value.
     let mut raw = expected.clone();
     if let Tag::Compound(fields) = &mut raw {
