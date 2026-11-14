@@ -443,7 +443,8 @@ impl<H: LevelHost> Level<'_, H> {
         let (bx, by, bz) = (x.floor() as i32, y.floor() as i32, z.floor() as i32);
         let facts = biome_facts_in(self.w.world, self.w.biomes, self.w.data, bx, by, bz);
         let difficulty = difficulty_reader(self.w.world)(r.position);
-        horizon_client::mobs::spawning::finalize(&mut mob, &facts, &difficulty);
+        // Natural packs still finalize on the mob's own random until #11574 ports them.
+        horizon_client::mobs::spawning::finalize_on_own_random(&mut mob, &facts, &difficulty);
         horizon_client::mobs::raider::finalize(
             &mut mob,
             horizon_client::mobs::raider::Reason::Natural,
@@ -793,7 +794,7 @@ impl<'a> Game<'a> {
             self.enchant_spawn_equipment(id);
             self.halloween_spawn_head(id);
             if !persistent {
-                self.spawn_jockeys(id, true);
+                self.spawn_jockeys_on(id, true, true);
             }
         }
     }

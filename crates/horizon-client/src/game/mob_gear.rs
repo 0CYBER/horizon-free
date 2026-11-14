@@ -138,9 +138,8 @@ impl Game<'_> {
         let Some(i) = self.mobs.iter().position(|m| m.id == id) else {
             return;
         };
-        let mut random = self.mobs[i].random.clone();
-        horizon_client::mobs::finalize::halloween_head(&mut self.mobs[i], &mut random, halloween);
-        self.mobs[i].random = random;
+        let random = &mut self.world.random;
+        horizon_client::mobs::finalize::halloween_head(&mut self.mobs[i], random, halloween);
     }
     fn enchant_slot(&mut self, id: u32, slot: usize, chance: f32, special: f32) {
         let Some(item) = self

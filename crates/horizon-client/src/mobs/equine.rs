@@ -238,9 +238,14 @@ pub fn register(m: &mut Mob) {
 /// the jump, zombie horses a smaller jump and their own speed. The health and
 /// speed are attribute bases (`setBaseValue`), so the server syncs them to
 /// the clients that draw the mount's hearts.
-pub fn finalize(m: &mut Mob) {
+pub fn finalize(m: &mut Mob, r: &mut impl RandomSource) {
     let species = m.species();
-    let r = &mut m.random;
+    // Horse.finalizeSpawn picks the coat and markings before it calls
+    // AbstractHorse.finalizeSpawn, which randomizes the attributes.
+    if species == Species::Horse {
+        m.extra.variant = r.next_int_bound(7).unwrap_or(0) as u8;
+        m.extra.variant2 = r.next_int_bound(5).unwrap_or(0) as u8;
+    }
     let health = matches!(species, Species::Horse | Species::Donkey | Species::Mule).then(|| {
         15.0 + r.next_int_bound(8).unwrap_or(0) as f32 + r.next_int_bound(9).unwrap_or(0) as f32
     });
@@ -253,8 +258,6 @@ pub fn finalize(m: &mut Mob) {
             );
             m.extra.vector[0] =
                 0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
-            m.extra.variant = r.next_int_bound(7).unwrap_or(0) as u8;
-            m.extra.variant2 = r.next_int_bound(5).unwrap_or(0) as u8;
         }
         Species::Donkey | Species::Mule => m.extra.vector[0] = 0.5,
         Species::ZombieHorse => {
@@ -1322,7 +1325,7 @@ mod tests {
     fn rolled_health_and_speed_are_attribute_bases() {
         for species in [Species::Horse, Species::Donkey, Species::Mule] {
             let mut m = horse(species);
-            finalize(&mut m);
+            finalize(&mut m, &mut horizon_core::random::LegacyRandom::new(0));
             assert!((15.0..=30.0).contains(&m.attrs.max_health));
             assert_eq!(
                 base_value(&m, Attr::MaxHealth),
@@ -1331,7 +1334,7 @@ mod tests {
             assert_eq!(m.health, m.attrs.max_health);
         }
         let mut m = horse(Species::Horse);
-        finalize(&mut m);
+        finalize(&mut m, &mut horizon_core::random::LegacyRandom::new(0));
         assert_eq!(base_value(&m, Attr::MovementSpeed), m.attrs.speed);
     }
 

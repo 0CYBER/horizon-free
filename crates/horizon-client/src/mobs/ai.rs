@@ -4764,7 +4764,7 @@ mod age_up_tests {
             let kind = Arc::new(types.types["minecraft:goat"].clone());
             let mut m = Mob::new(1, kind, Vec3::ZERO, 0.0);
             // As a natural spawn leaves it, then on its last baby tick.
-            super::super::finalize::goat_spawn(&mut m);
+            super::super::finalize::goat_spawn(&mut m, &mut LegacyRandom::new(0));
             super::super::finalize::set_age(&mut m, -1);
             let (mut lr, mut events) = (LegacyRandom::new(0), Vec::new());
             tick(&mut m, w, &mut lr, &mut events);

@@ -292,7 +292,7 @@ pub trait SpawnerExt: Sized {
         l: &L,
         random: &mut R,
         pos: [i32; 3],
-        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<SpawnerAdded>,
+        spawn: &mut dyn FnMut(&L, &mut R, &SpawnerSpawn) -> Option<SpawnerAdded>,
         events: &mut Vec<SpawnerEvent>,
     );
     /// `clientTick`: with a player near and a mob to show, a smoke and flame
@@ -464,7 +464,7 @@ impl SpawnerExt for Spawner {
         l: &L,
         random: &mut R,
         pos: [i32; 3],
-        spawn: &mut dyn FnMut(&L, &SpawnerSpawn) -> Option<SpawnerAdded>,
+        spawn: &mut dyn FnMut(&L, &mut R, &SpawnerSpawn) -> Option<SpawnerAdded>,
         events: &mut Vec<SpawnerEvent>,
     ) {
         if !self.near_player(l, pos) || !l.spawner_blocks_work() {
@@ -605,7 +605,7 @@ impl SpawnerExt for Spawner {
                 equipment: data.equipment.as_ref(),
                 trial: false,
             };
-            let Some(result) = spawn(l, &request) else {
+            let Some(result) = spawn(l, random, &request) else {
                 self.delay(random, events);
                 return;
             };

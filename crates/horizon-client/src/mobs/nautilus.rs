@@ -69,8 +69,8 @@ pub fn register(m: &mut Mob) {
 }
 /// `finalizeSpawn`: `NautilusAi.initMemories` (2400 to 3600 ticks before it
 /// first looks for prey) and the zombie's variant by biome.
-pub fn finalize(m: &mut Mob, warm_ocean: bool) {
-    m.extra.counter = 2400 + m.random.next_int_bound(1201).unwrap_or(0);
+pub fn finalize(m: &mut Mob, warm_ocean: bool, r: &mut impl RandomSource) {
+    m.extra.counter = 2400 + r.next_int_bound(1201).unwrap_or(0);
     m.extra.nautilus_attack_cooldown_ttl = Some(i64::MAX);
     if zombie(m) {
         m.extra.variant = u8::from(warm_ocean);

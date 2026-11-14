@@ -1635,9 +1635,9 @@ pub fn cat_amounts(m: &mut Mob) {
     };
 }
 /// `Cat.finalizeSpawn` variant: any but all-black, which a full moon allows.
-pub fn cat_variant(m: &mut Mob, w_moon_full: bool) -> u8 {
+pub fn cat_variant(w_moon_full: bool, r: &mut impl RandomSource) -> u8 {
     let n = if w_moon_full { 11 } else { 10 };
-    m.random.next_int_bound(n).unwrap_or(0) as u8
+    r.next_int_bound(n).unwrap_or(0) as u8
 }
 pub fn cat_texture(m: &Mob) -> String {
     let v = CAT_VARIANTS[(m.extra.variant as usize).min(10)];

@@ -73,9 +73,9 @@ pub fn set_size(m: &mut Mob, size: i32) {
 /// AbstractCubeMob.setSpawnSize: a scale of 0 to 2, and below 2 one more when
 /// `nextFloat() < 0.5 * getSpecialMultiplier()` (the float is drawn for every
 /// scale below 2, whatever the multiplier), so sizes 1, 2 or 4.
-pub fn finalize(m: &mut Mob, special: f32) {
-    let mut scale = m.random.next_int_bound(3).unwrap_or(0);
-    if scale < 2 && m.random.next_float() < 0.5 * special {
+pub fn finalize(m: &mut Mob, special: f32, r: &mut impl RandomSource) {
+    let mut scale = r.next_int_bound(3).unwrap_or(0);
+    if scale < 2 && r.next_float() < 0.5 * special {
         scale += 1;
     }
     set_size(m, 1 << scale);

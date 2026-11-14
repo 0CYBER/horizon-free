@@ -107,13 +107,13 @@ fn summoned_drowned_hold_shells_as_guaranteed_drops() {
 
 /// The other side of the shell opportunity, through the same
 /// `spawning::finalize` route on mobs that `summon` with NBT left
-/// unfinalized, from fixed seeds. The expected values were read from this
-/// route before the shell branch existed (`.local/drowned/pristine-oracle.log`).
+/// unfinalized, from fixed seeds of the level's random it draws from. The
+/// expected values were read from this route without the shell branch.
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
 fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     use horizon_client::mobs::drops::{DEFAULT_DROP_CHANCE, SLOTS, drop_chance};
-    use horizon_core::random::RandomSource;
+    use horizon_core::random::{LegacyRandom, RandomSource};
     let mut game = game();
     for command in [
         "summon drowned 0.5 100 0.5 {NoAI:1b}",
@@ -134,34 +134,35 @@ fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     };
     let finalize = |mut m: horizon_client::mobs::Mob, seed: i64| {
         m.random.set_seed(seed);
-        horizon_client::mobs::spawning::finalize(&mut m, &facts, &difficulty);
-        m
+        let mut level = LegacyRandom::new(seed);
+        horizon_client::mobs::spawning::finalize(&mut m, &facts, &difficulty, &mut level);
+        (m, level)
     };
     // Other species draw nothing more: the end state of their random is the
     // one the route had before.
     let before = [
-        (1, 266611666813271u64),
-        (2, 209180304053342),
-        (3, 228324091639985),
+        (1, 200055422738958u64),
+        (2, 259836486421929),
+        (3, 239909465194272),
     ];
     for kind in ["minecraft:zombie", "minecraft:husk"] {
         for (seed, state) in before {
-            let m = finalize(base(kind), seed);
-            assert_eq!(m.random.state(), state, "{kind} seed {seed}");
+            let (m, level) = finalize(base(kind), seed);
+            assert_eq!(level.state(), state, "{kind} seed {seed}");
             assert_eq!(m.extra.off_hand, None);
         }
     }
     // An occupied offhand: no shell draw, the item and the chances stay.
     let occupied = [
-        (1, 266611666813271u64),
-        (2, 236527342890431),
-        (3, 115845733591934),
+        (1, 200055422738958u64),
+        (2, 241258967538006),
+        (3, 63989017391689),
     ];
     for (seed, state) in occupied {
         let mut m = base("minecraft:drowned");
         m.extra.off_hand = Some("minecraft:dandelion".into());
-        let m = finalize(m, seed);
-        assert_eq!(m.random.state(), state, "occupied seed {seed}");
+        let (m, level) = finalize(m, seed);
+        assert_eq!(level.state(), state, "occupied seed {seed}");
         assert_eq!(m.extra.off_hand.as_deref(), Some("minecraft:dandelion"));
         assert_eq!(m.extra.drop_chances, None);
     }
@@ -171,11 +172,10 @@ fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     for seed in 0..400 {
         let mut occupied = base("minecraft:drowned");
         occupied.extra.off_hand = Some("minecraft:dandelion".into());
-        let occupied = finalize(occupied, seed);
-        let empty = finalize(base("minecraft:drowned"), seed);
-        let mut after = occupied.random.clone();
+        let (occupied, mut after) = finalize(occupied, seed);
+        let (empty, level) = finalize(base("minecraft:drowned"), seed);
         let draw = after.next_float();
-        assert_eq!(empty.random.state(), after.state(), "seed {seed}: one draw");
+        assert_eq!(level.state(), after.state(), "seed {seed}: one draw");
         let shell = empty.extra.off_hand.as_deref() == Some("minecraft:nautilus_shell");
         assert_eq!(shell, draw < 0.03, "seed {seed}: draw {draw}");
         assert_eq!(

@@ -931,33 +931,34 @@ fn spawner_case(
     for tick in 0..ticks {
         let mut events = Vec::new();
         let mut spawned = std::collections::VecDeque::new();
-        let mut spawn = |l: &World, r: &SpawnerSpawn| -> Option<SpawnerAdded> {
-            let t = l.s.types.types.get(r.id)?;
-            let [x, y, z] = r.position;
-            let bounds = spawn_box(x, y, z, t.width as f32, t.height as f32);
-            l.entities.borrow_mut().push((r.id.to_owned(), bounds));
-            spawned.push_back(format!(
-                "{tick} spawn {} {} {} {} {}",
-                r.id,
-                bits(x),
-                bits(y),
-                bits(z),
-                // Shulker.finalizeSpawn faces it south.
-                yaw_text(
+        let mut spawn =
+            |l: &World, _: &mut LegacyRandom, r: &SpawnerSpawn| -> Option<SpawnerAdded> {
+                let t = l.s.types.types.get(r.id)?;
+                let [x, y, z] = r.position;
+                let bounds = spawn_box(x, y, z, t.width as f32, t.height as f32);
+                l.entities.borrow_mut().push((r.id.to_owned(), bounds));
+                spawned.push_back(format!(
+                    "{tick} spawn {} {} {} {} {}",
                     r.id,
-                    if r.finalize && r.id == "minecraft:shulker" {
-                        0.0
-                    } else {
-                        r.yaw
-                    }
-                )
-            ));
-            Some(SpawnerAdded {
-                id: spawned.len() as u32,
-                bounds,
-                mob: true,
-            })
-        };
+                    bits(x),
+                    bits(y),
+                    bits(z),
+                    // Shulker.finalizeSpawn faces it south.
+                    yaw_text(
+                        r.id,
+                        if r.finalize && r.id == "minecraft:shulker" {
+                            0.0
+                        } else {
+                            r.yaw
+                        }
+                    )
+                ));
+                Some(SpawnerAdded {
+                    id: spawned.len() as u32,
+                    bounds,
+                    mob: true,
+                })
+            };
         spawner.server_tick(world, random, pos, &mut spawn, &mut events);
         for e in events {
             match e {
@@ -1038,7 +1039,7 @@ fn trial_case(
         let mut events = Vec::new();
         let mut spawned = std::collections::VecDeque::new();
         let mut items = Vec::new();
-        let mut spawn = |l: &World, r: &SpawnerSpawn| {
+        let mut spawn = |l: &World, _: &mut LegacyRandom, r: &SpawnerSpawn| {
             let t = l.s.types.types.get(r.id)?;
             // Slime.readAdditionalSaveData: size Size + 1, clamped to 1..=127.
             let size = match r.entity.get(&horizon_world::nbt::JavaString::from("Size")) {
