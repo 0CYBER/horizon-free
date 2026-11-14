@@ -120,7 +120,7 @@ Player.debugInfo	skip:debug
 Player.printPlayerPermissions	skip:debug		
 PlayerEquipment.set	port	crates/horizon-world/src/player_equipment.rs::set	main hand goes to the selected slot
 PlayerEquipment.get	port	crates/horizon-world/src/player_equipment.rs::get	main hand reads the selected slot
-ProfilePublicKey.Data.hasExpired	port	crates/horizon-protocol/src/secure_chat.rs::ProfileKey::has_expired	gap: minor: the grace-period overload is not separate
+ProfilePublicKey.Data.hasExpired	port	crates/horizon-protocol/src/secure_chat.rs::ProfileKey::has_expired	hasExpired() is has_expired; the Duration overload is ProfileKey::has_expired_with, which the chat validator calls with EXPIRY_GRACE_PERIOD (8 hours, ProfilePublicKey.EXPIRY_GRACE_PERIOD)
 ProfilePublicKey.Data.equals	skip:java		value equality of the key record
 StackedContents.take	inline	crates/horizon-client/src/menu/place.rs::Picker::try_pick	the count subtraction when a pick succeeds
 StackedContents.getUniqueAvailableIngredientItems	inline	crates/horizon-client/src/menu/place.rs::Picker::new	the stocked items that some ingredient accepts
