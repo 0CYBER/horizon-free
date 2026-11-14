@@ -341,15 +341,17 @@ impl OpticalFlow {
     }
 
     /// The flow from the previous call's `color` to this one's. `color`: `display` size,
-    /// a float texture holding Horizon's frame (gamma-encoded RGB, the swapchain's
-    /// values: AMD's SDR back buffer). `reset`: the previous frame is unrelated (first
-    /// frame, resize, teleport).
+    /// a float texture holding Horizon's frame (gamma-encoded RGB: the swapchain's values,
+    /// AMD's SDR back buffer, or the float frame's light, 1 at paper white). `peak`: on the
+    /// float frame, the display's peak in paper whites. `reset`: the previous frame is
+    /// unrelated (first frame, resize, teleport).
     pub fn dispatch(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         color: &wgpu::TextureView,
+        peak: Option<f32>,
         reset: bool,
     ) {
         let reset = reset || self.first;
@@ -371,8 +373,8 @@ impl OpticalFlow {
                 level: level as u32,
                 level_count: LEVELS as u32,
                 frame_index: self.frame_index,
-                transfer_function: 0,
-                min_max_luminance: [0.0, 1.0],
+                transfer_function: if peak.is_some() { 3 } else { 0 },
+                min_max_luminance: [0.0, peak.unwrap_or(1.0)],
             };
             queue.write_buffer(buffer, 0, bytemuck::bytes_of(&params));
         }
@@ -598,7 +600,7 @@ pub(super) mod tests {
         reset: bool,
     ) {
         let mut encoder = device.create_command_encoder(&Default::default());
-        flow.dispatch(device, queue, &mut encoder, color, reset);
+        flow.dispatch(device, queue, &mut encoder, color, None, reset);
         queue.submit([encoder.finish()]);
     }
 

@@ -42,7 +42,8 @@ use glam::Mat4;
 /// One real frame's inputs.
 pub struct Inputs<'a> {
     /// This frame's colour without the hand and HUD: `display` size, a filterable
-    /// float texture (gamma-encoded RGB, the swapchain's values) that can be copied from.
+    /// float texture (gamma-encoded RGB: the swapchain's values, or the float frame's light
+    /// past 1, which the blend keeps) that can be copied from.
     pub color: &'a wgpu::TextureView,
     /// This frame's depth: `Depth32Float` at `render_size`, reversed (1 at the near
     /// plane, 0 at the far one), finite, jittered by `jitter`.
@@ -777,7 +778,7 @@ mod tests {
             .collect();
         for (i, (color, _)) in frames.iter().enumerate() {
             let mut encoder = device.create_command_encoder(&Default::default());
-            flow.dispatch(&device, &queue, &mut encoder, color, i == 0);
+            flow.dispatch(&device, &queue, &mut encoder, color, None, i == 0);
             interpolation.dispatch(
                 &device,
                 &queue,

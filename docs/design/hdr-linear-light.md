@@ -252,7 +252,9 @@ They read the frame as it is stored and, outside the 0.1 path, have no marks to 
 above. Native upscaling
 ([#1403](https://github.com/horizon-rust/horizon/issues/1403)) should take the float frame. Horizon's TAA
 blends the gamma-stored frame as it is; a tone-weighted resolve is for passes that accumulate linear light (a 0.2
-pack's post chain, or the frame under linear storage), where bright pixels would otherwise sparkle. Frame generation stays off with HDR output, as today.
+pack's post chain, or the frame under linear storage), where bright pixels would otherwise sparkle. Frame generation
+interpolates the float frame's light before the tone curve, and the made frame goes through the tone curve, the HUD's
+layer and HDR output's last pass as the real one does; the compatibility frame keeps it off with HDR output.
 The rules such a pass keeps now are in [hdr-passes.md](../hdr-passes.md).
 Where a 0.2 pack's stages, post chain and `[tonemap]` sit around them is in [shader-api-frame.md](shader-api-frame.md) (proposed).
 

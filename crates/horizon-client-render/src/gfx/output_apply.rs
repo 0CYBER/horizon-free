@@ -89,7 +89,8 @@ fn name(encoding: Option<hdr::Output>) -> &'static str {
 }
 
 /// The swapchain's configuration for `encoding`: `config` (what every pipeline draws in), or
-/// HDR10 or scRGB.
+/// HDR10 or scRGB, which HDR output's last pass draws, or frame generation's present thread
+/// copies to where the surface takes copies.
 pub(super) fn surface_config(
     config: &wgpu::SurfaceConfiguration,
     encoding: Option<hdr::Output>,
@@ -99,7 +100,8 @@ pub(super) fn surface_config(
         config.format = output.format();
         config.view_formats = vec![output.format()];
         config.color_space = output.color_space();
-        config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        config.usage =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | config.usage & wgpu::TextureUsages::COPY_DST;
     }
     config
 }
@@ -235,17 +237,19 @@ impl Present for Applying<'_> {
             _ => None,
         };
         if let Some(surface) = &r.surface {
-            r.frame_gen.stop();
+            r.frame_gen.stop_to_configure();
             // The submit thread may still present to the old swapchain.
             r.queue.wait();
             let hdr = built.as_ref().or(r.hdr.as_ref());
-            Renderer::configure(
+            let configured = Renderer::configure(
                 &r.device,
                 surface,
                 &surface_config(&r.config, output.encoding),
                 hdr.filter(|_| output.encoding.is_some()),
                 &r.device_lost,
-            )?;
+            );
+            r.frame_gen.refused = configured.is_err();
+            configured?;
             r.surface_unconfigured = false;
         }
         if output.encoding.is_none() {
@@ -261,7 +265,7 @@ impl Present for Applying<'_> {
         r.hdr = None;
         r.mark_hdr_start(false, self.marker);
         if let Some(surface) = &r.surface {
-            r.frame_gen.stop();
+            r.frame_gen.stop_to_configure();
             r.queue.wait();
             r.surface_unconfigured =
                 Renderer::configure(&r.device, surface, &r.config, None, &r.device_lost).is_err();
