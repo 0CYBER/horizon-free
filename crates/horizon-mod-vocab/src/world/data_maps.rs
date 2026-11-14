@@ -169,7 +169,7 @@ pub enum DataMapError {
     UnknownType,
     /// The entry's value is not one the map's [`DataMap::decode`] takes.
     Undecodable,
-    /// The installed registry does not own the supplied key.
+    /// The key is expired, belongs to another world, or was never issued by this generation.
     InvalidKey,
 }
 impl NoBackend for DataMapError {
