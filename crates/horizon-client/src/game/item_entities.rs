@@ -4,6 +4,19 @@ use super::*;
 
 mod ahead;
 
+/// A dropped item's `bobOffs` (its bob and spin phase) from its random's draw `drawn`, or under
+/// `HORIZON_STILL` from a random seeded by its position alone: a client seeds an item's random
+/// with the server's entity id, which follows the order chunks load in and differs between
+/// launches. The draw is made either way, so the item's random stays where vanilla's would be.
+pub(super) fn bob_offset(position: Vec3, drawn: f32, still: bool) -> f32 {
+    let drawn = if still {
+        horizon_client::mobs::entity_random(0, position).next_float()
+    } else {
+        drawn
+    };
+    drawn * std::f32::consts::PI * 2.0
+}
+
 impl Game<'_> {
     pub(super) fn tick_items(&mut self) {
         // EntityTickEvent.Pre for the items about to tick, and the Post after them.
@@ -1096,3 +1109,28 @@ mod thrown_items_tests;
 #[cfg(test)]
 #[path = "wither_star_tests.rs"]
 mod wither_star_tests;
+#[cfg(test)]
+mod bob_tests {
+    use horizon_core::geometry::Vec3;
+    use horizon_core::random::RandomSource;
+
+    /// The bob a client gives the item with entity id `id` at `at`.
+    fn bob(id: u32, at: Vec3, still: bool) -> f32 {
+        let mut random = (*horizon_client::mobs::entity_random(id, at)).clone();
+        super::bob_offset(at, random.next_float(), still)
+    }
+
+    /// Under `HORIZON_STILL` the item's position decides its bob, not the id the server gave
+    /// it; without it the bob is the id-seeded random's own draw.
+    #[test]
+    fn a_still_items_bob_comes_from_its_position() {
+        let at = Vec3::new(0.5, 64.0, 2.5);
+        assert_eq!(bob(17, at, true), bob(22, at, true));
+        for id in [17, 22] {
+            let mut random = (*horizon_client::mobs::entity_random(id, at)).clone();
+            let vanilla = random.next_float() * std::f32::consts::PI * 2.0;
+            assert_eq!(bob(id, at, false), vanilla);
+        }
+        assert_ne!(bob(17, at, false), bob(22, at, false));
+    }
+}

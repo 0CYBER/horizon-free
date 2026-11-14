@@ -5806,10 +5806,10 @@ impl Game<'_> {
         let at = Vec3::new(p[0], p[1], p[2]);
         // ItemEntity's constructor draws bobOffs from the item's own random.
         let mut random = (*horizon_client::mobs::entity_random(id as u32, at)).clone();
-        let bob_offset = random.next_float() * std::f32::consts::PI * 2.0;
+        let bob = super::item_entities::bob_offset(at, random.next_float(), self.clock.still());
         self.dropped.push(ItemEntity {
             random,
-            ..ItemEntity::new(id as u32, stack, at, velocity, bob_offset)
+            ..ItemEntity::new(id as u32, stack, at, velocity, bob)
         });
     }
     /// `Entity.lerpMotion` (and `recreateFromPacket`'s motion) for the
