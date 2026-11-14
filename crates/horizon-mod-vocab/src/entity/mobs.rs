@@ -132,13 +132,43 @@ impl PathType {
         }
     }
 }
+/// Why a path a mod computed was not taken ([`crate::MobRef::move_to_path`] and
+/// [`crate::GoalContext::move_to_path`]). A refused path leaves the navigation
+/// as it was. [`PathNode`] coordinates are never refused for being large:
+/// extreme finite ones are classified and followed with saturating block
+/// arithmetic, so only the reasons below refuse a path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum MoveToPathError {
+    /// A node coordinate or the speed is NaN or infinite.
+    NotFinite,
+    /// No mob stands behind the handle: a stale handle, one of another world
+    /// or dimension, a player, the dragon (which flies by its phase and keeps
+    /// no navigation), a mob taken out for ticking, or a client that does not
+    /// know the entity. A goal tick's own mob is always there.
+    Unavailable,
+    /// The path had no node left to follow: an empty node list, or a path the
+    /// trim cut at its first node.
+    Empty,
+}
+
+impl crate::NoBackend for MoveToPathError {
+    /// No game: no mob stands behind the handle.
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}
+
 /// One node of a path a mod computed, as [`crate::MobRef::move_to_path`] and
 /// [`crate::GoalContext::move_to_path`] take it: the block position the mob
 /// should walk to. Each coordinate is floored to its block, as vanilla's
-/// `BlockPos.containing` does. The mod does not give the node's
-/// [`PathType`]: the engine classifies it on submit. Coordinates only have to
-/// be finite; an unloaded position or one outside the world is not refused or
-/// clamped.
+/// `BlockPos.containing` does, and a coordinate outside the `i32` range
+/// saturates there. The mod does not give the node's [`PathType`]: the engine
+/// classifies it on submit. Coordinates only have to be finite; an unloaded
+/// position or one outside the world is not refused or clamped, and an extreme
+/// finite one is followed with saturating block arithmetic rather than
+/// refused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, horizon_mod_api_macros::Wire)]
 pub struct PathNode {
     /// The node's X, in blocks.

@@ -1197,4 +1197,80 @@ mod supplied_path_tests {
             assert!(!m.ai.nav.stuck, "a timeout is not a stuck check");
         });
     }
+
+    /// A walking node at the top of the `i32` range is classified and followed
+    /// without overflowing: the floor under it takes the walk classifier
+    /// through its neighbour scan, whose `x + 1` saturated badly in a checked
+    /// build (#4443). A finite coordinate is never refused, and the node is
+    /// neither moved nor clamped.
+    #[test]
+    fn an_extreme_walking_node_is_classified_and_followed() {
+        with_built_test_world(
+            &[],
+            |world, registry| {
+                // `World::set` marks the sections around a write, which steps
+                // past the `i32` range at the world's edge: the fence goes into
+                // its chunk directly, the block the classifier reads.
+                let (cx, cz) = (i32::MAX >> 4, i32::MAX >> 4);
+                let fence = registry.default_state("minecraft:oak_fence").unwrap();
+                let mut chunk = crate::chunk::Chunk::empty(cx, cz);
+                chunk.set(i32::MAX & 15, 63, i32::MAX & 15, fence.0);
+                world.chunks.insert((cx, cz), std::sync::Arc::new(chunk));
+            },
+            |w, types| {
+                let mut m = Mob::new(1, cow(types), Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.on_ground = true;
+                assert!(
+                    m.nav_move_to_supplied(w, &[[i32::MAX as f64, 64.0, i32::MAX as f64]], 0.5),
+                    "the extreme node is taken"
+                );
+                let path = m.ai.nav.path.as_ref().expect("a path was taken");
+                assert_eq!(
+                    (path.nodes[0].x, path.nodes[0].y, path.nodes[0].z),
+                    (i32::MAX, 64, i32::MAX),
+                    "the node stays where the mod put it"
+                );
+                assert_eq!(
+                    path.nodes[0].kind,
+                    PathType::Walkable,
+                    "the fence below sent the classifier through the neighbour scan"
+                );
+                // The follow arithmetic reads the same extreme block: one tick
+                // classifies nothing new and must not overflow either.
+                m.nav_tick(w);
+                assert!(m.ai.nav.path.is_some(), "the path survives its follow tick");
+                assert!(!m.ai.nav.is_done(), "the node is still to reach");
+            },
+        );
+    }
+
+    /// A flying node in void air at the top of the `i32` range is classified
+    /// and followed without overflowing: the fly classifier adds a neighbour
+    /// (`x + 1`) to the node itself, the exact addition of #4443.
+    #[test]
+    fn an_extreme_flying_node_is_classified_and_followed() {
+        with_test_world(&[], |w, types| {
+            let mut m = Mob::new(1, cow(types), Vec3::new(0.5, 64.0, 0.5), 0.0);
+            m.ai.nav.kind = NavKind::Flying;
+            m.on_ground = true;
+            assert!(
+                m.nav_move_to_supplied(w, &[[i32::MAX as f64, 64.0, i32::MAX as f64]], 0.5),
+                "void air at the saturation point is taken, not refused"
+            );
+            let path = m.ai.nav.path.as_ref().expect("a path was taken");
+            assert_eq!(
+                (path.nodes[0].x, path.nodes[0].y, path.nodes[0].z),
+                (i32::MAX, 64, i32::MAX),
+                "the node is neither moved nor clamped"
+            );
+            assert_eq!(
+                path.nodes[0].kind,
+                PathType::Open,
+                "a fly classifier classified the extreme node itself"
+            );
+            m.nav_tick(w);
+            assert!(m.ai.nav.path.is_some(), "the path survives its follow tick");
+            assert!(!m.ai.nav.is_done(), "the node is still to reach");
+        });
+    }
 }

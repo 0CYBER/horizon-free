@@ -25,10 +25,13 @@ impl MobWorld<'_> {
         })
     }
     /// WalkNodeEvaluator.getPathTypeStatic.
+    /// A mod's supplied path is classified through here, so every block step
+    /// saturates: a finite coordinate at `i32::MIN` or `i32::MAX` is never
+    /// refused, and never overflows a checked build either (#4443).
     pub fn path_type_static(&self, x: i32, y: i32, z: i32) -> PathType {
         let t = self.path_type_from_state(x, y, z);
         if t == PathType::Open && y > self.world.bottom_y() {
-            match self.path_type_from_state(x, y - 1, z) {
+            match self.path_type_from_state(x, y.saturating_sub(1), z) {
                 PathType::Open | PathType::Water | PathType::Lava | PathType::Walkable => {
                     PathType::Open
                 }
@@ -45,7 +48,8 @@ impl MobWorld<'_> {
         }
     }
     /// WalkNodeEvaluator.checkNeighbourBlocks: the first neighbour that gives a node a type
-    /// (`getAdjacentBlockPathType`) decides it.
+    /// (`getAdjacentBlockPathType`) decides it. The neighbour step saturates, so a
+    /// node at the edge of the `i32` range still reads its eight neighbours (#4443).
     pub fn check_neighbours(&self, x: i32, y: i32, z: i32, t: PathType) -> PathType {
         for dx in -1..=1 {
             for dy in -1..=1 {
@@ -53,7 +57,11 @@ impl MobWorld<'_> {
                     if dx == 0 && dz == 0 {
                         continue;
                     }
-                    let pos = [x + dx, y + dy, z + dz];
+                    let pos = [
+                        x.saturating_add(dx),
+                        y.saturating_add(dy),
+                        z.saturating_add(dz),
+                    ];
                     let state = self.world.block(pos[0], pos[1], pos[2]);
                     let own = self.path_type_from_state(pos[0], pos[1], pos[2]);
                     let facts = self.facts.get(state);
@@ -87,9 +95,12 @@ impl MobWorld<'_> {
         }
         t
     }
-    /// WalkNodeEvaluator.getFloorLevel(level, pos).
+    /// WalkNodeEvaluator.getFloorLevel(level, pos). Saturating, as the
+    /// neighbour step is: a follower asking under a node at `i32::MIN` lands on
+    /// the same block instead of overflowing (#4443).
     pub fn floor_level(&self, x: i32, y: i32, z: i32) -> f64 {
-        f64::from(y - 1) + f64::from(self.data.state(self.world.block(x, y - 1, z)).top)
+        let below = y.saturating_sub(1);
+        f64::from(below) + f64::from(self.data.state(self.world.block(x, below, z)).top)
     }
 }
 
@@ -442,7 +453,8 @@ impl<'a, 'w> Finder<'a, 'w> {
     }
     /// WalkNodeEvaluator.getFloorLevel(level, pos).
     pub fn static_floor(&self, x: i32, y: i32, z: i32) -> f64 {
-        f64::from(y - 1) + f64::from(self.state(x, y - 1, z).top)
+        let below = y.saturating_sub(1);
+        f64::from(below) + f64::from(self.state(x, below, z).top)
     }
     fn floor_level(&self, x: i32, y: i32, z: i32) -> f64 {
         let amphibious = matches!(self.eval, Evaluator::Amphibious { .. });
@@ -495,7 +507,12 @@ impl<'a, 'w> Finder<'a, 'w> {
                         (-1, 0, 0),
                         (1, 0, 0),
                     ] {
-                        if self.type_from_state(x + dx, y + dy, z + dz) == PathType::Blocked {
+                        if self.type_from_state(
+                            x.saturating_add(dx),
+                            y.saturating_add(dy),
+                            z.saturating_add(dz),
+                        ) == PathType::Blocked
+                        {
                             return PathType::WaterBorder;
                         }
                     }
@@ -516,13 +533,14 @@ impl<'a, 'w> Finder<'a, 'w> {
     fn fly_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         let mut t = self.type_from_state(x, y, z);
         if t == PathType::Open && y > self.w.world.bottom_y() {
-            let below = self.type_from_state(x, y - 1, z);
+            let below_y = y.saturating_sub(1);
+            let below = self.type_from_state(x, below_y, z);
             t = match below {
                 PathType::Fire | PathType::Lava => PathType::Fire,
                 PathType::Damaging => PathType::Damaging,
                 PathType::Cocoa => PathType::Cocoa,
                 PathType::Fence => {
-                    if [x, y - 1, z] != self.mob.block_position() {
+                    if [x, below_y, z] != self.mob.block_position() {
                         PathType::Fence
                     } else {
                         t
@@ -543,7 +561,11 @@ impl<'a, 'w> Finder<'a, 'w> {
         for dx in 0..self.entity_width {
             for dy in 0..self.entity_height {
                 for dz in 0..self.entity_depth {
-                    let mut t = self.path_type(x + dx, y + dy, z + dz);
+                    let mut t = self.path_type(
+                        x.saturating_add(dx),
+                        y.saturating_add(dy),
+                        z.saturating_add(dz),
+                    );
                     if t == PathType::DoorWoodClosed
                         && self.mob.can_open_doors
                         && self.mob.can_pass_doors
@@ -555,7 +577,7 @@ impl<'a, 'w> Finder<'a, 'w> {
                     }
                     if t == PathType::Rail
                         && self.path_type(mp[0], mp[1], mp[2]) != PathType::Rail
-                        && self.path_type(mp[0], mp[1] - 1, mp[2]) != PathType::Rail
+                        && self.path_type(mp[0], mp[1].saturating_sub(1), mp[2]) != PathType::Rail
                     {
                         t = PathType::UnpassableRail;
                     }
@@ -612,13 +634,20 @@ impl<'a, 'w> Finder<'a, 'w> {
     }
     fn swim_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         let mut last = (x, y, z);
-        for xx in x..x + self.entity_width {
-            for yy in y..y + self.entity_height {
-                for zz in z..z + self.entity_depth {
+        for xx in x..x.saturating_add(self.entity_width) {
+            for yy in y..y.saturating_add(self.entity_height) {
+                for zz in z..z.saturating_add(self.entity_depth) {
                     let fluid = self.fluid(xx, yy, zz);
                     if let Some(t) = swim_cell_type(
                         fluid,
-                        || self.pathfindable(xx, yy - 1, zz, PathComputationType::Water),
+                        || {
+                            self.pathfindable(
+                                xx,
+                                yy.saturating_sub(1),
+                                zz,
+                                PathComputationType::Water,
+                            )
+                        },
                         || self.is_air(xx, yy, zz),
                     ) {
                         return t;

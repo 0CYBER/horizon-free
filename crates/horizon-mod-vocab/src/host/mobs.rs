@@ -274,11 +274,22 @@ pub trait MobsBackendMut {
     /// re-searches to the previous target); the per-node timeout drops it as
     /// well. Only non-finite coordinates and speeds are refused; there is no
     /// cap on the node count, and unloaded or out-of-world nodes are neither
-    /// refused nor clamped. As in vanilla, the mob's own goals may replace
-    /// the path next tick. False for a stale or unavailable mob, a client,
-    /// and the dragon, which flies by its phase and keeps no navigation.
+    /// refused nor clamped: a finite coordinate at the edge of the `i32` range
+    /// saturates when it is floored to its block, and every block step after
+    /// it (the classifier's neighbours, the floor under a node, the follower's
+    /// waypoint) saturates too, so no mod input panics the engine. As in
+    /// vanilla, the mob's own goals may replace the path next tick. Refuses
+    /// with a [`MoveToPathError`]: `NotFinite` for such a coordinate or speed,
+    /// `Unavailable` for a stale or unavailable mob, a client, and the dragon
+    /// (which flies by its phase and keeps no navigation), and `Empty` when
+    /// the path has no node left to follow after the trim.
     #[access(WorldOnly)]
-    fn mob_move_to_path(&mut self, mob: MobRef, nodes: Vec<PathNode>, speed: f64) -> bool;
+    fn mob_move_to_path(
+        &mut self,
+        mob: MobRef,
+        nodes: Vec<PathNode>,
+        speed: f64,
+    ) -> Result<(), MoveToPathError>;
     /// Side: server.
     /// `PathNavigation.stop`. False for a stale or unavailable mob, or on a
     /// client, and for the dragon (no navigation).

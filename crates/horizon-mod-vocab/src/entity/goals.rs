@@ -60,7 +60,7 @@
 //!     }
 //! }
 //! ```
-use crate::{Host, LegacyRandom, LivingRef, MobRef, PathNode};
+use crate::{Host, LegacyRandom, LivingRef, MobRef, MoveToPathError, PathNode};
 
 /// The MOVE, LOOK, JUMP and TARGET bits a [`Goal`] claims, as vanilla's
 /// `Goal.Flag` set does: at most one goal holding each flag runs at a time, and
@@ -248,8 +248,10 @@ impl<'a> GoalContext<'a> {
     /// path; the path is followed as given rather than judged by that type.
     /// A supplied path keeps no recompute target, so a block change on it or
     /// the stuck check drops it without a search. As in vanilla, a goal of the
-    /// mob's own that creates a path replaces this one next tick.
-    pub fn move_to_path(&mut self, path: Vec<PathNode>, speed: f64) -> bool {
+    /// mob's own that creates a path replaces this one next tick. The mob this
+    /// goal runs on is always there, so the refusals are `NotFinite` and
+    /// `Empty`, the same [`MoveToPathError`] the handle answers.
+    pub fn move_to_path(&mut self, path: Vec<PathNode>, speed: f64) -> Result<(), MoveToPathError> {
         self.inner.move_to_path(path, speed)
     }
     /// `getNavigation().stop()`.
@@ -285,7 +287,7 @@ pub trait GoalCxBackend {
     /// `GoalContext::move_to`.
     fn move_to(&mut self, at: [f64; 3], speed: f64) -> bool;
     /// `GoalContext::move_to_path`.
-    fn move_to_path(&mut self, path: Vec<PathNode>, speed: f64) -> bool;
+    fn move_to_path(&mut self, path: Vec<PathNode>, speed: f64) -> Result<(), MoveToPathError>;
     /// `GoalContext::stop_navigation`.
     fn stop_navigation(&mut self);
     /// `GoalContext::look_at`.

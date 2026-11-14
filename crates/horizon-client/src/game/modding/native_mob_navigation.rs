@@ -1,6 +1,6 @@
 //! Navigation helpers for native mod mob handles.
 use super::{Game, commands::Target};
-use mod_api::{MobRef, PathType};
+use mod_api::{MobRef, MoveToPathError, PathType};
 
 /// The numbers a mod hands a mob's navigation (`moveTo(x, y, z, speed)`): a
 /// finite speed, and finite coordinates small enough for the pathfinder's
@@ -31,6 +31,18 @@ pub(super) fn supplied_path_accepts(nodes: &[mod_api::PathNode], speed: f64) -> 
         && nodes
             .iter()
             .all(|node| node.x.is_finite() && node.y.is_finite() && node.z.is_finite())
+}
+
+/// The refusal a `false` from `nav_move_to_supplied` stands for once the
+/// numbers and the mob are known to be fine: `PathNavigation.moveTo(Path)`
+/// refuses a path with no node left, an empty one or one the trim emptied.
+/// One conversion, shared by the handle and by a goal tick's view (#4410).
+pub(super) fn supplied_path_refusal(followed: bool) -> Result<(), MoveToPathError> {
+    if followed {
+        Ok(())
+    } else {
+        Err(MoveToPathError::Empty)
+    }
 }
 
 impl Game<'_> {
@@ -67,23 +79,24 @@ impl Game<'_> {
     /// trims, and followed as given. A supplied path keeps no recompute
     /// target, so a block change on it or the stuck check drops it without a
     /// search. Only non-finite coordinates and speeds are refused; the node
-    /// count is unbounded, and unloaded or out-of-world nodes are neither
-    /// refused nor clamped. False for a stale or unavailable mob, a client,
-    /// and the dragon.
+    /// count is unbounded, unloaded or out-of-world nodes are neither refused
+    /// nor clamped, and an extreme finite node is classified and followed with
+    /// saturating block arithmetic. `Unavailable` for a stale or unavailable
+    /// mob, a client, and the dragon; `Empty` when no node is left to follow.
     pub(super) fn mob_move_to_path(
         &mut self,
         mob: MobRef,
         nodes: Vec<mod_api::PathNode>,
         speed: f64,
-    ) -> bool {
+    ) -> Result<(), MoveToPathError> {
         if !supplied_path_accepts(&nodes, speed) {
-            return false;
+            return Err(MoveToPathError::NotFinite);
         }
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
-            return false;
+            return Err(MoveToPathError::Unavailable);
         };
         let Some(index) = self.mobs.iter().position(|m| m.id == id) else {
-            return false;
+            return Err(MoveToPathError::Unavailable);
         };
         let nodes: Vec<[f64; 3]> = nodes.iter().map(|n| [n.x, n.y, n.z]).collect();
         // The pathfinder reads terrain only. Take the mob list so its selected
@@ -92,10 +105,10 @@ impl Game<'_> {
         let mut mobs = self.mobs.lift();
         #[cfg(test)]
         super::entity::taken_pass_tests::after_take(self);
-        let moved = mobs[index].nav_move_to_supplied(&self.mob_world_base(&[]), &nodes, speed);
+        let followed = mobs[index].nav_move_to_supplied(&self.mob_world_base(&[]), &nodes, speed);
         self.mobs
             .restore(mobs, horizon_client::join_seq::RestoreOrder::SurvivorsFirst);
-        moved
+        supplied_path_refusal(followed)
     }
 
     /// `PathNavigation.stop`. False for a stale or unavailable mob, or on a
@@ -197,7 +210,7 @@ mod tests {
     use super::supplied_path_accepts;
     use horizon_client::{chunk::Chunk, mobs::Mob};
     use horizon_core::geometry::Vec3;
-    use mod_api::{EntityRef, MobRef, PathNode, WorldEpoch};
+    use mod_api::{EntityRef, MobRef, MoveToPathError, PathNode, WorldEpoch};
     use std::sync::Arc;
 
     /// `moveTo(Path, speed)`'s boundary never gets stricter than vanilla's:
@@ -340,6 +353,49 @@ mod tests {
             let fish = game.mob(game.entity(101).unwrap()).unwrap();
             assert!(!fish.move_to(game, [9.5, 65.0, 7.5], 1.0));
             assert_eq!(fish.is_done(game), Some(true));
+        });
+    }
+
+    /// A refusal names its cause, so a mod tells an invalid number from a mob
+    /// that is not there and from a path with nothing left to follow (#4443).
+    #[test]
+    #[ignore = "needs prepared resources"]
+    fn a_supplied_path_refusal_names_its_cause() {
+        with_game(|game| {
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:zombie")
+                .unwrap()
+                .clone();
+            game.mobs
+                .push(Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0));
+            let entity = game.entity(99).unwrap();
+            let mob = game.mob(entity).unwrap();
+            let node = |x: f64, y: f64, z: f64| PathNode { x, y, z };
+            assert_eq!(
+                mob.move_to_path(game, vec![node(f64::NAN, 65.0, 3.5)], 1.0),
+                Err(MoveToPathError::NotFinite)
+            );
+            assert_eq!(
+                mob.move_to_path(game, Vec::new(), 1.0),
+                Err(MoveToPathError::Empty),
+                "an empty path has no node left to follow"
+            );
+            assert_eq!(
+                mob.move_to_path(game, vec![node(3.5, 65.0, 3.5), node(4.5, 65.0, 3.5)], 1.0),
+                Ok(()),
+                "a path the navigation took answers Ok"
+            );
+            assert_eq!(mob.is_done(game), Some(false));
+            let stale = MobRef::new(EntityRef::new(
+                WorldEpoch::new(entity.epoch().get() + 1),
+                99,
+            ));
+            assert_eq!(
+                stale.move_to_path(game, vec![node(3.5, 65.0, 3.5)], 1.0),
+                Err(MoveToPathError::Unavailable)
+            );
         });
     }
 
