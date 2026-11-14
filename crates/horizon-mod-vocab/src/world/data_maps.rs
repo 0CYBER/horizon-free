@@ -168,10 +168,10 @@ pub enum DataMapError {
     /// No mod registered the map for the entry's registry in the current data load
     /// (`data_map_types`).
     UnknownType,
-    /// The key is expired, belongs to another world, or was never issued by this generation.
-    InvalidKey,
     /// The entry's value is not one the map's [`DataMap::decode`] takes.
     Undecodable,
+    /// The key is expired, belongs to another world, or was never issued by this generation.
+    InvalidKey,
 }
 impl NoBackend for DataMapError {
     fn no_backend() -> Self {
