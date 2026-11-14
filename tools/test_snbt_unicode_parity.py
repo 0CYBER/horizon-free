@@ -75,7 +75,7 @@ def main():
     report = build / 'report.json'
     report.unlink(missing_ok=True)
     paths = ['crates/horizon-world/src/snbt_text.rs', 'crates/horizon-world/src/nbt.rs',
-             'crates/horizon-world/tests/snbt_unicode_order.rs',
+             'crates/horizon-world/tests/it/snbt_unicode_order.rs',
              'crates/horizon-world/examples/probe/main.rs',
              'crates/horizon-world/examples/probe/snbt_unicode_fixture.rs',
              'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSnbtUnicodeOracle.java',
