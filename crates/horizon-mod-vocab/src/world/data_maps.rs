@@ -1,8 +1,8 @@
 //! Typed reads of data maps (NeoForge's `DataMapType` and `IWithData.getData`): the value the
 //! server's data packs and mods' files gave a registry entry, after every pack was applied.
 use crate::{
-    Backend, BlockEntityTypeKey, BlockKey, DataMapType, EffectKey, EnchantmentKey, EntityTypeKey,
-    FluidKey, Host, ItemKey, NoBackend, ProfessionKey,
+    Backend, BiomeKey, BlockEntityTypeKey, BlockKey, DataMapType, EffectKey, EnchantmentKey,
+    EntityTypeKey, FluidKey, Host, ItemKey, NoBackend, ProfessionKey,
 };
 use horizon_core::nbt::Tag;
 
@@ -109,6 +109,7 @@ macro_rules! typed_entries {
     )+};
 }
 typed_entries! {
+    BiomeKey => "minecraft:worldgen/biome", biome_key_id;
     ItemKey => "minecraft:item", item_key_id;
     BlockKey => "minecraft:block", block_key_id;
     FluidKey => "minecraft:fluid", fluid_key_id;

@@ -401,7 +401,13 @@ impl Game<'_> {
             },
         )?;
         let data_maps = native_data_maps::DataMaps::load(&data_map_types, &overlay, &registries)
-            .with_builtins(builtin);
+            .with_builtins(builtin)
+            .with_biome_keys(mod_api::__private::BiomeKeys::new(
+                self.world_biomes
+                    .as_ref()
+                    .unwrap_or_else(|| self.res.biomes())
+                    .registry_order(),
+            ));
         drop(registries);
         conditions.check_errors()?;
         Ok((

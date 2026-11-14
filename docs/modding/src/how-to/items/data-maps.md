@@ -113,9 +113,9 @@ loot tables are resource identifiers. Compostability is boolean.
 
 Builtin reads return canonical NBT compounds with the field above, rather than the
 input's shorthand: distances are `Float`, frequencies `Int`, compostability `Byte`, and
-identifiers `String`. Infinity remains an NBT Float, never JSON null. The existing query surface from main is unchanged; this carry adds no key families.
-Remaining query coverage is deferred to #4199. Registering these stores
-and firing `data_maps_updated` does not sync them to clients.
+identifiers `String`. Infinity remains an NBT Float, never JSON null. Biome values
+are queryable through `BiomeKey`; typed game-event coverage remains in #4199.
+Registering these stores and firing `data_maps_updated` does not sync them to clients.
 
 The gameplay readers and structure generation use immutable world-owned snapshots.
 Villager types apply to finalizeSpawn only; bred villagers retain the existing biome-facts
@@ -158,3 +158,12 @@ keep vanilla's own lists. A block the maps don't name keeps vanilla's behaviour.
 
 `generate_block_transform`, `neoforge:transformables` and `block_transform_appenders` are not read
 yet ([#3359](https://github.com/arismoko/horizon/issues/3359)).
+
+`host.biome_key("minecraft:plains")` resolves a `BiomeKey` in the installed
+server world registry. Its `id(host)` returns the canonical biome id, and
+`data(host, &map)` reads maps whose `DataMap::Entry` is `BiomeKey`, including
+`neoforge:villager_types` in `minecraft:worldgen/biome`. Missing entries return
+`Ok(None)`. Lookup returns `None` on clients and before world data is installed;
+data maps there return `DataMapError::Unavailable`. Reacquire biome keys after
+reload: tokens from earlier generations are refused at the host boundary.
+Native and wasm use the same generated route and installed snapshot.
