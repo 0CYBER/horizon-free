@@ -322,9 +322,9 @@ fn horizon_entity_normal(position: vec3<f32>) -> vec3<f32> {
 /// What the material entries (the checker's below and the renderer's) share: the
 /// surface's normal and tangent from the derivatives of its position and uv. The arguments are
 /// the line's return statements of `block_light_color`, `block_texture` and
-/// `block_texture_level`, the helpers that read colour.
+/// `block_texture_level`, the helpers that read colour, and the two sums of the tangent.
 macro_rules! material_helpers {
-    ($light:literal, $texture:literal, $texture_level:literal) => {
+    ($light:literal, $texture:literal, $texture_level:literal, $tangent:literal) => {
         concat!(
             block_light_color!("reflection_sampler", $light),
             "\
@@ -419,9 +419,9 @@ fn horizon_material_tangent(position: vec3<f32>, uv: vec2<f32>, normal: vec3<f32
     let duv2 = dpdy(uv);
     let dp2perp = cross(dp2, normal);
     let dp1perp = cross(normal, dp1);
-    let t = dp2perp * duv1.x + dp1perp * duv2.x;
-    let b = dp2perp * duv1.y + dp1perp * duv2.y;
-    if length(t) < 1e-12 {
+",
+            $tangent,
+            "    if length(t) < 1e-12 {
         return vec4<f32>(1.0, 0.0, 0.0, 1.0);
     }
     let tangent = normalize(t - normal * dot(normal, t));
@@ -435,14 +435,22 @@ fn horizon_material_tangent(position: vec3<f32>, uv: vec2<f32>, normal: vec3<f32
 const MATERIAL_HELPERS: &str = material_helpers!(
     "    return vec4<f32>(c.rgb * 4.0, c.a);\n",
     "    return horizon_block_sample(uv, horizon_block_layer, horizon_block_lod);\n",
-    "    return horizon_block_sample(uv, horizon_block_layer, lod);\n"
+    "    return horizon_block_sample(uv, horizon_block_layer, lod);\n",
+    // 0.1's WGSL is frozen: its tangent points where `uv.x` shrinks (#16082).
+    "    let t = dp2perp * duv1.x + dp1perp * duv2.x;\n    \
+     let b = dp2perp * duv1.y + dp1perp * duv2.y;\n"
 );
 
 /// 0.2's: the `[[lights]]` colours and the block texture decoded (the LabPBR maps are data).
 const MATERIAL_HELPERS_0_2: &str = material_helpers!(
     "    return vec4<f32>(horizon_decode(c.rgb * 4.0), c.a);\n",
     "    return horizon_decode_rgba(horizon_block_sample(uv, horizon_block_layer, horizon_block_lod));\n",
-    "    return horizon_decode_rgba(horizon_block_sample(uv, horizon_block_layer, lod));\n"
+    "    return horizon_decode_rgba(horizon_block_sample(uv, horizon_block_layer, lod));\n",
+    // Both sums carry the sign of the screen's handedness against `normal`, negative for a
+    // normal that faces the camera (the framebuffer's y points down).
+    "    let side = select(-1.0, 1.0, dot(dp1, dp2perp) >= 0.0);\n    \
+     let t = (dp2perp * duv1.x + dp1perp * duv2.x) * side;\n    \
+     let b = (dp2perp * duv1.y + dp1perp * duv2.y) * side;\n"
 );
 
 /// The post prelude's `surface_at`, for the post helpers' end.

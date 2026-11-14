@@ -246,6 +246,10 @@ draws them itself (the material stage covers terrain only). The first-person han
 
 ## Changelog
 
+- 2026-11-13: API 0.2 (fix, experimental): `MaterialInput.tangent.xyz` now points where `uv.x` grows, as the
+  reference says; it pointed the other way, so a normal map turned into world axes by the reference's rule had both
+  in-plane components negated. `w` is unchanged. A 0.2 pack that negated the tangent to make up for it must stop.
+  API 0.1 keeps the old direction: its WGSL is frozen.
 - 2026-11-10: API 0.2 (additions, experimental): the `[entity]` stage, `fn entity(input: EntityInput) -> Surface`,
   for entities, block entities, items and particles, with the material stage's shadow maps and coloured lights. The
   reference gives vanilla's own as the stage's function. `horizon-shader check` takes it; the game refuses a pack
