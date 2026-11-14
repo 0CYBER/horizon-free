@@ -308,7 +308,10 @@ fn outside(lo: vec3<f32>, hi: vec3<f32>) -> bool {
     for (var i = 0u; i < 8u; i++) {
         let p = select(lo, hi, vec3((i & 1u) != 0u, (i & 2u) != 0u, (i & 4u) != 0u));
         let c = params.view_proj * vec4(p, 1.0);
-        out = out & vec4((c.x < -c.w), (c.x > c.w), (c.y < -c.w), (c.y > c.w));
+        // Per component: FXC (DirectX 12) drops the whole test for the same `out & vec4(...)`
+        // and rejects every quad (#16168).
+        out = vec4(out.x && c.x < -c.w, out.y && c.x > c.w,
+            out.z && c.y < -c.w, out.w && c.y > c.w);
         behind = behind && c.w <= 0.0;
     }
     return any(out) || behind;
@@ -529,10 +532,11 @@ impl Displacement {
                 U::UNIFORM | U::COPY_DST,
             );
             let picked = buffer("Displacement picks", MAX_QUADS * 8, U::STORAGE);
+            // `COPY_SRC` for the tests, which read the draw back.
             let draw = buffer(
                 "Displacement draw",
                 16,
-                U::STORAGE | U::INDIRECT | U::COPY_DST,
+                U::STORAGE | U::INDIRECT | U::COPY_DST | U::COPY_SRC,
             );
             let pick_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Displacement pick"),
@@ -707,5 +711,127 @@ mod tests {
         )
         .validate(&module)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(super::PICK)));
+    }
+
+    /// The production pick, on each device here (`test_gpu::each_adapter`), of
+    /// one opaque quad with relief, facing the eye one block away with the clip
+    /// space the view: drawn by the view and the shadow map; and moved along x
+    /// and y, still drawn where it reaches into the view (with the relief's
+    /// margin), and by the view not at all wholly past one side. FXC dropped
+    /// the view's side test and drew nothing (#16168).
+    #[test]
+    fn the_pick_takes_the_quads_in_view_on_every_backend() {
+        let mut tested = false;
+        for (adapter, name) in crate::gfx::test_gpu::each_adapter() {
+            let (device, queue) =
+                match pollster::block_on(adapter.request_device(&Default::default())) {
+                    Ok(device) => device,
+                    Err(e) => {
+                        eprintln!("no device on {name}: {e}");
+                        continue;
+                    }
+                };
+            eprintln!("displacement pick on {} ({name})", adapter.get_info().name);
+            let normals = normals(&device, &queue);
+            let mut displacement =
+                super::Displacement::new(&device, 12.0, 16, false, &normals, true);
+            for (at, view) in [
+                ([0.0, 0.0], 1),
+                ([1.25, 0.0], 1),
+                ([0.0, -1.25], 1),
+                ([2.25, 0.0], 0),
+                ([-2.25, 0.0], 0),
+                ([0.0, 2.25], 0),
+                ([0.0, -2.25], 0),
+            ] {
+                let quad = quad(&device, at);
+                let near = [super::Near {
+                    buffer: &quad,
+                    start: 0,
+                    quads: 1,
+                    origin: [0.0; 3],
+                }];
+                let mut encoder = device.create_command_encoder(&Default::default());
+                displacement.prepare(&queue, &mut encoder, &near, glam::Mat4::IDENTITY);
+                queue.submit([encoder.finish()]);
+                let shadow = &displacement.shadow.as_ref().unwrap().draw;
+                assert_eq!(
+                    read(&device, &queue, &displacement.view.draw),
+                    [16 * 16 * 6, view, 0, 0],
+                    "view at {at:?} on {name}"
+                );
+                assert_eq!(
+                    read(&device, &queue, shadow),
+                    [16 * 16 * 6, 1, 0, 0],
+                    "shadow at {at:?} on {name}"
+                );
+            }
+            tested = true;
+        }
+        if !tested {
+            eprintln!("no GPU: skipped");
+        }
+    }
+
+    /// One 2x2 layer of LabPBR normals, every height 128/255.
+    fn normals(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+        use wgpu::util::DeviceExt;
+        let texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 2,
+                    height: 2,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            Default::default(),
+            &[128, 128, 255, 128].repeat(4),
+        );
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        })
+    }
+
+    /// An opaque quad on layer 0 a block wide at z = -1 around `at`, wound
+    /// to face the origin.
+    fn quad(device: &wgpu::Device, at: [f32; 2]) -> wgpu::Buffer {
+        use wgpu::util::DeviceExt;
+        let corner = |x: f32, y: f32| crate::mesher::TerrainVertex {
+            pos: [at[0] + x, at[1] + y, -1.0],
+            uv: [0; 2],
+            layer: crate::mesher::OPAQUE_LAYER,
+            light: 0,
+            color: u32::MAX,
+        };
+        let corners = [
+            corner(-0.5, -0.5),
+            corner(0.5, -0.5),
+            corner(0.5, 0.5),
+            corner(-0.5, 0.5),
+        ];
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&corners),
+            usage: wgpu::BufferUsages::COPY_SRC,
+        })
+    }
+
+    /// An indirect draw's arguments.
+    fn read(device: &wgpu::Device, queue: &wgpu::Queue, draw: &wgpu::Buffer) -> [u32; 4] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        wgpu::util::DownloadBuffer::read_buffer(device, queue, &draw.slice(..), move |result| {
+            tx.send(result.unwrap().to_vec()).unwrap()
+        });
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        bytemuck::pod_read_unaligned(&rx.recv().unwrap())
     }
 }
