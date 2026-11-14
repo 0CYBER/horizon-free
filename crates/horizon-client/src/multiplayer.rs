@@ -142,7 +142,8 @@ pub enum Screen {
     /// A page a crate registered at the title screen's Friends icon, as a form.
     Page(Form),
     Disconnected {
-        reason: String,
+        /// The server's or a mod's reason, rendered in the player's language when drawn.
+        reason: Text,
         /// Auto-reconnect's next attempt, until it is cancelled.
         retry: Option<crate::reconnect::Retry>,
         /// Wrapped reason lines, set by the last draw; the buttons sit below them.
@@ -908,7 +909,7 @@ impl Screen {
             // DisconnectedScreen: its title and the reason.
             Self::Disconnected { reason, .. } => ScreenInfo::new(
                 "multiplayer/disconnected",
-                join(&[&get("disconnect.lost", "Connection Lost"), reason]),
+                join(&[&get("disconnect.lost", "Connection Lost"), &reason.plain()]),
             ),
         }
     }
@@ -1400,7 +1401,8 @@ impl Screen {
                 lines,
             } => {
                 // DisconnectedScreen: the reason wraps to width - 50.
-                let wrapped = wrap(reason, (w.ceil() - 50.0).max(1.0), atlas);
+                let reason = reason.plain();
+                let wrapped = wrap(&reason, (w.ceil() - 50.0).max(1.0), atlas);
                 lines.set(wrapped.len());
                 let l = disconnected_layout(h, wrapped.len(), retry.is_some());
                 centered(
@@ -2339,7 +2341,7 @@ mod tests {
         };
         assert_eq!(at(&friend, 427.0, 253.0), [(113.0, 177.0), (113.0, 201.0)]);
         let lost = Screen::Disconnected {
-            reason: String::new(),
+            reason: Text::empty(),
             retry: None,
             lines: std::cell::Cell::new(1),
         };
@@ -2850,5 +2852,35 @@ mod tests {
         click(&mut screen, Some(42), 0.0, 0.0, size, &saves);
         assert_eq!(cycle(&screen).unwrap().3, "Server Resource Packs: Prompt");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DisconnectedScreen.getNarrationMessage: the reason reads as the player's language
+    /// renders it, and a plain-text reason is unchanged.
+    #[test]
+    fn disconnect_screen_narrates_a_translated_reason() {
+        let language = crate::lang::Language::of(
+            "fr_fr",
+            [
+                ("disconnect.lost".into(), "Connexion perdue".into()),
+                ("mymod.kicked".into(), "Expulsé par le mod".into()),
+            ],
+        );
+        let ((), _missed) = crate::lang::scoped(language, || {
+            let translated = Screen::Disconnected {
+                reason: Text::translate("mymod.kicked", &[]),
+                retry: None,
+                lines: std::cell::Cell::new(1),
+            };
+            assert_eq!(
+                translated.narration().title,
+                "Connexion perdue. Expulsé par le mod"
+            );
+            let plain = Screen::Disconnected {
+                reason: Text::literal("You were kicked"),
+                retry: None,
+                lines: std::cell::Cell::new(1),
+            };
+            assert_eq!(plain.narration().title, "Connexion perdue. You were kicked");
+        });
     }
 }

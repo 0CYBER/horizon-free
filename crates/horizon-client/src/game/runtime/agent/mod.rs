@@ -726,7 +726,7 @@ impl Game<'_> {
             Mode::Multiplayer(horizon_client::multiplayer::Screen::Disconnected {
                 reason, ..
             }) => {
-                json!({ "mode": "multiplayer", "disconnected": reason })
+                json!({ "mode": "multiplayer", "disconnected": reason.plain() })
             }
             Mode::Multiplayer(_) => json!({ "mode": "multiplayer" }),
             Mode::Realms(_) => json!({ "mode": "realms" }),

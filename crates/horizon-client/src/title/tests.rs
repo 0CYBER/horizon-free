@@ -2821,7 +2821,7 @@ fn the_multiplayer_screens_have_their_own_ids() {
     );
     assert_eq!(
         M::Disconnected {
-            reason: String::new(),
+            reason: Text::empty(),
             retry: None,
             lines: std::cell::Cell::new(1),
         }

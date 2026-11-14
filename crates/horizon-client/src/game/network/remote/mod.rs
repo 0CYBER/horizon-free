@@ -48,6 +48,7 @@ use horizon_client::{
     sprint::Keys,
     streaming::{ChunkGenerator, Proto, Streaming},
     tab_list::SPECTATOR,
+    text::Text,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_protocol::{
@@ -1508,7 +1509,7 @@ impl Game<'_> {
     }
 
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
-    pub(super) fn leave_server(&mut self, reason: Option<String>) -> Result<()> {
+    pub(super) fn leave_server(&mut self, reason: Option<Text>) -> Result<()> {
         if reason.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
             return self.begin_closing_save(false);
         }
@@ -1989,9 +1990,8 @@ impl Game<'_> {
             return Ok(());
         };
         let Some(signature) = r.signatures.unpack(packed) else {
-            let reason =
-                horizon_client::text::Text::translate("multiplayer.disconnect.invalid_packet", &[]);
-            return self.leave_server(Some(reason.plain()));
+            let reason = Text::translate("multiplayer.disconnect.invalid_packet", &[]);
+            return self.leave_server(Some(reason));
         };
         r.secure_chat.ignore_pending(&signature);
         let queued = r.chat_queue.len();
@@ -2439,7 +2439,7 @@ impl Game<'_> {
                         return Ok(());
                     }
                     let retry = self.reconnect_after(&reason, key.as_deref(), from_server);
-                    self.leave_server(Some(reason))?;
+                    self.leave_server(Some(Text::literal(reason)))?;
                     self.offer_reconnect(retry);
                     return Ok(());
                 }
@@ -5171,11 +5171,8 @@ impl Game<'_> {
                         "Missing or out-of-order chat message from server, expected index {expected} but got {}",
                         p.global_index
                     );
-                    let reason = horizon_client::text::Text::translate(
-                        "multiplayer.disconnect.bad_chat_index",
-                        &[],
-                    );
-                    return self.leave_server(Some(reason.plain()));
+                    let reason = Text::translate("multiplayer.disconnect.bad_chat_index", &[]);
+                    return self.leave_server(Some(reason));
                 }
                 let last_seen: Option<Vec<Signature>> =
                     p.last_seen.iter().map(|s| r.signatures.unpack(s)).collect();
@@ -5184,11 +5181,8 @@ impl Game<'_> {
                         "Message from player with ID {:032x} referenced unrecognized signature id",
                         p.sender
                     );
-                    let reason = horizon_client::text::Text::translate(
-                        "multiplayer.disconnect.invalid_packet",
-                        &[],
-                    );
-                    return self.leave_server(Some(reason.plain()));
+                    let reason = Text::translate("multiplayer.disconnect.invalid_packet", &[]);
+                    return self.leave_server(Some(reason));
                 };
                 let signature = p
                     .signature
