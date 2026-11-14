@@ -365,7 +365,10 @@ pub fn queue_line(queued: usize) -> Text {
             id: QUEUE_EXPAND_ID.into(),
             payload: None,
         }),
-        hover: Some(Box::new(Text::translate("chat.queue.tooltip", &[]))),
+        hover: Some(std::sync::Arc::new(Text::translate(
+            "chat.queue.tooltip",
+            &[],
+        ))),
         ..Style::default()
     })
 }
