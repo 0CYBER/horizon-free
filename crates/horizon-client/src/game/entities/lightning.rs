@@ -10,6 +10,7 @@ use super::{
     entity::{
         Entity as _, EntityHandle, ThunderHit, entity_lists_of, for_each_entity, with_entity,
     },
+    minecarts::CartHit,
 };
 use horizon_client::advancements::EntityView;
 use horizon_client::mobs::{Damage, DamageKind, Species};
@@ -626,7 +627,10 @@ impl Game<'_> {
                     keep_equipment: false,
                     preserve_can_pick_up_loot: old.species() == Species::Pig,
                 };
-                if self.convert_to(&old, outcome, params, |_, _| {}).is_some() {
+                if self
+                    .convert_to(&old, outcome, params, false, |_, _| {})
+                    .is_some()
+                {
                     continue;
                 }
             }
@@ -738,7 +742,7 @@ impl Game<'_> {
                     };
                     let vanilla = self.saved_refuses_damage(id, "minecraft:lightning_bolt", false);
                     if !self.native_nonliving_invulnerable(id, kind, source, vanilla) {
-                        self.hurt_cart(i, 5.0, false, false);
+                        self.hurt_cart(i, 5.0, false, false, CartHit::default());
                     }
                 }
                 EntityHandle::Orb(i) => {
@@ -1097,6 +1101,7 @@ mod tests {
                     &old,
                     "minecraft:zombified_piglin",
                     horizon_client::mobs::conversion::Params::KEEP_ALL,
+                    false,
                     |_, _| {},
                 )
                 .unwrap();
@@ -1187,6 +1192,7 @@ mod tests {
                     &old,
                     "minecraft:cow",
                     horizon_client::mobs::conversion::Params::KEEP_ALL,
+                    false,
                     |_, _| {}
                 )
                 .is_none()
@@ -1398,3 +1404,8 @@ mod tests {
         });
     }
 }
+
+// A conversion keeps the old mob's state; lives here for the lightning's.
+#[cfg(test)]
+#[path = "tests/mob_conversion_state_tests.rs"]
+mod mob_conversion_state_tests;

@@ -13,6 +13,7 @@
 //!   official server's (its status ping), over time, written down once a minute (`history`:
 //!   totals only), cached a minute.
 //! - `/hub/…`: the hub's votes (`hub`) and bug reports (`intake`).
+//! - `POST /v1/report`: a bug or performance report from the game, opened as an issue (`intake`, `game_report`).
 //! - `GET /healthz`.
 //!
 //! Abuse limits: a token bucket per IP address (kept in memory for an hour, never stored), a
@@ -35,6 +36,7 @@ use horizon_telemetry::batch;
 
 pub mod classes;
 pub mod export;
+pub mod game_report;
 pub mod github;
 pub mod history;
 pub mod hub;
@@ -87,6 +89,9 @@ pub struct Config {
     pub hub_posts_per_hour: f64,
     /// Bug reports taken a day, from everyone: each one opens a GitHub issue.
     pub hub_reports_per_day: u32,
+    /// Reports from the game taken a day, from everyone (`POST /v1/report`): each one opens a GitHub
+    /// issue. Apart from the website's, so neither uses up the other's.
+    pub game_reports_per_day: u32,
     /// Days reports are kept (opened as issues long before).
     pub hub_keep_days: u32,
     /// The bearer token the protected export (`export`) wants; unset, it answers 404.
@@ -106,6 +111,9 @@ pub struct Config {
     pub aggregate_days: Option<Vec<u32>>,
 }
 
+/// The website: the browser origin answered by default, and where a game report's capture link must point.
+pub(crate) const WEBSITE: &str = "https://playhorizon.dev";
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -115,7 +123,7 @@ impl Default for Config {
             items_per_day: 100,
             trust_proxy: false,
             client_ip_header: None,
-            allow_origin: "https://playhorizon.dev".into(),
+            allow_origin: WEBSITE.into(),
             live_per_hour: 600.0,
             live_window: horizon_telemetry::live::WINDOW,
             live_max_sessions: 200_000,
@@ -125,6 +133,7 @@ impl Default for Config {
             hub_per_hour: 600.0,
             hub_posts_per_hour: 20.0,
             hub_reports_per_day: 30,
+            game_reports_per_day: 20,
             hub_keep_days: 90,
             export_token: None,
             github_token: None,
@@ -141,7 +150,7 @@ impl Config {
     /// `…_REQUESTS_PER_HOUR`, `…_ITEMS_PER_DAY`, `…_TRUST_PROXY` (1), `…_ALLOW_ORIGIN`,
     /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS`, `…_LIVE_MAX_SESSIONS`, `…_LIVE_MINUTE_DAYS`,
     /// `…_LIVE_HOUR_DAYS`, `…_OFFICIAL_SERVER` (`off` for none), `…_HUB_PER_HOUR`,
-    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_HUB_KEEP_DAYS`, `…_GITHUB_TOKEN`,
+    /// `…_HUB_POSTS_PER_HOUR`, `…_HUB_REPORTS_PER_DAY`, `…_GAME_REPORTS_PER_DAY`, `…_HUB_KEEP_DAYS`, `…_GITHUB_TOKEN`,
     /// `…_GITHUB_REPO`, `…_READS_PER_HOUR`, `…_AGGREGATE_BUILDS_PER_HOUR` and `…_AGGREGATE_DAYS`, plus `TELEMETRY_EXPORT_TOKEN` (or `HORIZON_TELEMETRY_EXPORT_TOKEN`) for the
     /// protected export. An empty token counts as unset.
     pub fn from_env() -> Self {
@@ -197,6 +206,9 @@ impl Config {
             hub_reports_per_day: var("HUB_REPORTS_PER_DAY")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_reports_per_day),
+            game_reports_per_day: var("GAME_REPORTS_PER_DAY")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.game_reports_per_day),
             hub_keep_days: var("HUB_KEEP_DAYS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.hub_keep_days),
@@ -889,6 +901,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/hub/vote", post(hub::vote).options(hub::preflight))
         .route("/hub/votes", get(hub::votes))
         .route("/hub/report", post(intake::report).options(hub::preflight))
+        .route("/v1/report", post(intake::game))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }

@@ -139,6 +139,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.syn]
 opt-level = 3
+# The perf-format tests gzip over 512 MiB; unoptimized deflate took most of their time.
+[profile.dev.package.miniz_oxide]
+opt-level = 3
 [profile.dev.package.proc-macro2]
 opt-level = 3
 [profile.release.package.horizon-mod-api-gen]

@@ -26,6 +26,10 @@ pub struct BiomeFacts {
     pub full_moon: bool,
     /// `spawns_coral_variant_zombie_nautilus` (the warm ocean).
     pub coral_nautilus: bool,
+    /// `#minecraft:spawns_white_rabbits` (`Rabbit.getRandomRabbitVariant`).
+    pub white_rabbit: bool,
+    /// `#minecraft:spawns_gold_rabbits` (`Rabbit.getRandomRabbitVariant`).
+    pub gold_rabbit: bool,
 }
 /// `SpawnPlacements.isSpawnPositionOk` for the entity type `entity`, of species `species`.
 pub fn placement_ok(entity: &str, species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> bool {

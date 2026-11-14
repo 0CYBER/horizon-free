@@ -4,7 +4,7 @@
 //! return to the owner, pickup) with `ThrownTridentRenderer`, and Channeling's
 //! lightning on a hit (`channeling.json`).
 use super::level_sounds::LevelSound;
-use super::{Game, view_vector};
+use super::{Game, commands::Target, minecarts::CartHit, view_vector};
 use horizon_client::{
     arrows::{Pickup, back_off, clip_block_hit},
     collisions::SceneCollisions,
@@ -1180,7 +1180,11 @@ impl Game<'_> {
                                     vanilla,
                                 )
                             {
-                                self.hurt_cart(i, damage, creative, false);
+                                // `damageSources().trident(this, owner)`: the trident is the
+                                // direct entity, so no piglin anger.
+                                let by = t.guest.map_or(Target::Player, Target::Guest);
+                                let hit = CartHit::attributed(Some(by));
+                                self.hurt_cart(i, damage, creative, false, hit);
                             }
                         } else {
                             // ItemFrame.hurtServer: the item comes out, or the frame breaks.

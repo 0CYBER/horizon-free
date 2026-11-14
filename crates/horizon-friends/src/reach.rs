@@ -53,6 +53,17 @@ fn shared(ip: IpAddr) -> bool {
     }
 }
 
+/// Native global-unicast IPv6 (2000::/3), excluding special-use and documentation ranges.
+fn public_ipv6(ip: IpAddr) -> bool {
+    let IpAddr::V6(ip) = ip else {
+        return false;
+    };
+    let [first, second, ..] = ip.segments();
+    first & 0xe000 == 0x2000
+        && !(first == 0x2001 && (second < 0x0200 || second == 0x0db8))
+        && !(first == 0x3fff && second & 0xf000 == 0)
+}
+
 /// Interface names of containers and VMs, whose addresses nobody else reaches.
 fn virtual_interface(name: &str) -> bool {
     [
@@ -163,6 +174,7 @@ impl Reach {
     }
 
     pub fn verdict(&self) -> Verdict {
+        let direct_ipv6 = self.local.iter().copied().any(public_ipv6);
         if let Some(m) = &self.mapping {
             let wan = m.external.ip();
             // The router's own WAN side is shared or private, or STUN sees
@@ -174,11 +186,13 @@ impl Reach {
             if !behind {
                 return Verdict::Mapped(m.method.name());
             }
-            return Verdict::LocalOnly { cgnat: true };
+            return if direct_ipv6 {
+                Verdict::Public
+            } else {
+                Verdict::LocalOnly { cgnat: true }
+            };
         }
-        if let Some(p) = self.public_ip
-            && self.local.contains(&p)
-        {
+        if direct_ipv6 || self.public_ip.is_some_and(|p| self.local.contains(&p)) {
             return Verdict::Public;
         }
         Verdict::LocalOnly { cgnat: false }
@@ -299,6 +313,47 @@ mod tests {
             r.endpoints(),
             vec!["203.0.113.5:25580".parse::<SocketAddr>().unwrap()]
         );
+    }
+
+    #[test]
+    fn public_ipv6_does_not_need_an_ipv4_mapping_or_stun() {
+        use crate::portmap::{Mapping, Method};
+        for public in [None, Some("203.0.113.5")] {
+            let mut r = reach(public, &["192.168.1.20", "2001:4860:4860::8888"]);
+            assert_eq!(r.verdict(), Verdict::Public);
+            assert!(r.summary().contains("firewall"));
+            assert!(
+                r.endpoints()
+                    .contains(&"[2001:4860:4860::8888]:25580".parse().unwrap())
+            );
+
+            r.mapping = Some(Mapping::granted(
+                Method::Pcp,
+                "100.80.1.2:40123".parse().unwrap(),
+            ));
+            assert_eq!(
+                r.verdict(),
+                Verdict::Public,
+                "IPv4 CGNAT does not hide IPv6"
+            );
+        }
+        for address in [
+            "::",
+            "::1",
+            "::ffff:192.168.1.20",
+            "fe80::1",
+            "fd00::1",
+            "ff02::1",
+            "2001:2::1",
+            "2001:db8::1",
+            "3fff::1",
+        ] {
+            assert_eq!(
+                reach(None, &[address]).verdict(),
+                Verdict::LocalOnly { cgnat: false },
+                "{address}"
+            );
+        }
     }
 
     #[test]

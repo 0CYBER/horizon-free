@@ -15,8 +15,9 @@ pub struct Breath {
     /// `decreaseAirSupply`: 1, or 0 by the oxygen bonus's chance, for an
     /// entity that drowns; 1 for one that would not.
     pub consume: i32,
-    /// `increaseAirSupply`: 4 for one that can breathe, 0 for one that drowns
-    /// or is held under by the nautilus' breath.
+    /// `increaseAirSupply`: 4 for one that can breathe, the whole maximum for a
+    /// dolphin (whatever its air, hence less it), 0 for one that drowns or is
+    /// held under by the nautilus' breath.
     pub refill: i32,
 }
 
@@ -26,8 +27,9 @@ pub struct Breath {
 /// `minecraft:zombie`). `can_breathe`, `consume` and `refill` come in as
 /// Horizon does it today (a mod-free game changes nothing); set them to
 /// change this tick. With `can_breathe` the air rises by `refill`, up to its
-/// maximum (300); without, it falls by `consume`, and at -20 it is set to 0
-/// and the entity takes 2 drowning damage. Negative amounts count as 0.
+/// maximum (300; 4800 for a dolphin); without, it falls by `consume`, and at -20
+/// it is set to 0 and the entity takes 2 drowning damage. Negative amounts count
+/// as 0.
 /// Asked on servers for players and mobs. Water animals, axolotls and
 /// nautiluses come in with their own air logic's answer ([`own_air`]).
 #[inline(never)]
@@ -100,22 +102,11 @@ pub struct Drowning {
     pub bubbles: i32,
 }
 
-/// `breath` applied to `air` (`apply`), then `LivingEntity.baseTick`'s
-/// drowning, which the mods may change when `server` (`native_living_drown`).
-/// An entity that drowns is set to 0 air.
+/// `breath` applied to `air` up to `max` (`getMaxAirSupply`: 300, 4800 for a
+/// dolphin) (`apply`), then `LivingEntity.baseTick`'s drowning, which the mods
+/// may change when `server` (`native_living_drown`). An entity that drowns is set
+/// to 0 air.
 pub fn drown(
-    context: &LoopContext,
-    entity: u32,
-    kind: &str,
-    air: &mut i32,
-    breath: Breath,
-    server: bool,
-) -> Option<Drowning> {
-    drown_up_to(context, entity, kind, air, 300, breath, server)
-}
-
-/// [`drown`] for an entity whose full air is `max`.
-fn drown_up_to(
     context: &LoopContext,
     entity: u32,
     kind: &str,
@@ -159,10 +150,9 @@ fn drown_up_to(
 /// drying out). The mods are asked as for any entity (`native_living_breathe`
 /// with those answers, then `native_living_drown`); the damage they leave
 /// comes back. These entities show no drowning bubbles, so a `bubble_count`
-/// a mod sets for them is not used. `exact` is `WaterAnimal`'s test, which
-/// drowns only at exactly -20 air (`==`), where the others drown at -20 or
-/// less. Air out of range (below -20, or a refill from below 0) ends as
-/// vanilla leaves it while the mods keep vanilla's answer.
+/// a mod sets for them is not used. All of them drown at -20 air or less
+/// (`shouldTakeDrowningDamage`). Air out of range (a refill from below 0) ends
+/// as vanilla leaves it while the mods keep vanilla's answer.
 pub fn own_air(
     context: &LoopContext,
     entity: u32,
@@ -170,7 +160,6 @@ pub fn own_air(
     air: &mut i32,
     breathes: bool,
     max: i32,
-    exact: bool,
 ) -> Option<f32> {
     let vanilla = Breath {
         can_breathe: breathes,
@@ -183,12 +172,7 @@ pub fn own_air(
         *air = max;
         return None;
     }
-    if exact && !breath.can_breathe && air.saturating_sub(breath.consume) < -20 {
-        // Already past -20: `WaterAnimal`'s `== -20` never fires again.
-        *air = air.saturating_sub(breath.consume);
-        return None;
-    }
-    drown_up_to(context, entity, kind, air, max, breath, true)?.damage
+    drown(context, entity, kind, air, max, breath, true)?.damage
 }
 
 /// The air supply after `breath`: raised up to `max` when it can breathe,
@@ -269,24 +253,24 @@ mod tests {
         let context = crate::test_resources::server_loop_context();
         let mut air = 5;
         assert_eq!(
-            own_air(context, 1, "minecraft:cod", &mut air, true, 300, true),
+            own_air(context, 1, "minecraft:cod", &mut air, true, 300),
             None
         );
         assert_eq!(air, 300);
         assert_eq!(
-            own_air(context, 1, "minecraft:cod", &mut air, false, 300, true),
+            own_air(context, 1, "minecraft:cod", &mut air, false, 300),
             None
         );
         assert_eq!(air, 299);
         air = -18;
         assert_eq!(
-            own_air(context, 1, "minecraft:cod", &mut air, false, 300, true),
+            own_air(context, 1, "minecraft:cod", &mut air, false, 300),
             None
         );
         assert_eq!(air, -19);
         // At -20 it is set to 0 and takes 2 damage.
         assert_eq!(
-            own_air(context, 1, "minecraft:cod", &mut air, false, 300, true),
+            own_air(context, 1, "minecraft:cod", &mut air, false, 300),
             Some(2.0)
         );
         assert_eq!(air, 0);
@@ -302,6 +286,7 @@ mod tests {
             3,
             "minecraft:player",
             &mut player_air,
+            300,
             breath,
             true,
         )
@@ -309,36 +294,28 @@ mod tests {
         assert_eq!((d.damage, d.bubbles, player_air), (Some(2.0), 8, 0));
         // An axolotl's full air is its own.
         assert_eq!(
-            own_air(context, 2, "minecraft:axolotl", &mut air, true, 6000, false),
+            own_air(context, 2, "minecraft:axolotl", &mut air, true, 6000),
             None
         );
         assert_eq!(air, 6000);
         // Out of range, without a mod, as before: entering water from -19
-        // fills up, a water animal below -20 only loses air, and an axolotl
-        // there dries out.
+        // fills up, and a water animal or an axolotl below -20 still drowns or
+        // dries out (`getAirSupply() <= -20`).
         air = -19;
-        own_air(context, 1, "minecraft:cod", &mut air, true, 300, true);
+        own_air(context, 1, "minecraft:cod", &mut air, true, 300);
         assert_eq!(air, 300);
         air = -19;
-        own_air(context, 2, "minecraft:axolotl", &mut air, true, 6000, false);
+        own_air(context, 2, "minecraft:axolotl", &mut air, true, 6000);
         assert_eq!(air, 6000);
         air = -25;
         assert_eq!(
-            own_air(context, 1, "minecraft:cod", &mut air, false, 300, true),
-            None
+            own_air(context, 1, "minecraft:cod", &mut air, false, 300),
+            Some(2.0)
         );
-        assert_eq!(air, -26);
+        assert_eq!(air, 0);
         air = -25;
         assert_eq!(
-            own_air(
-                context,
-                2,
-                "minecraft:axolotl",
-                &mut air,
-                false,
-                6000,
-                false
-            ),
+            own_air(context, 2, "minecraft:axolotl", &mut air, false, 6000),
             Some(2.0)
         );
         assert_eq!(air, 0);

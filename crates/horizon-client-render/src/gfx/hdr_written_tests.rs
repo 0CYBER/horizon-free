@@ -704,11 +704,27 @@ fn float_plain_fragments_keep_rgb_and_write_only_coverage() {
                     ("fs_sky_celestial", coverage),
                 ]
             };
-            for plain in [false, true] {
+            // `HDR_LIGHTING` is only a pipeline constant for terrain, so entity
+            // pipelines are identical for both values and need one pass.
+            for plain in if terrain {
+                vec![false, true]
+            } else {
+                vec![false]
+            } {
                 draw.hdr_lighting = !plain;
                 for &(entry, alpha) in &entries {
-                    for tier in [0, 3, 4] {
-                        for overlay in if terrain { vec![0, 1] } else { vec![0, 6] } {
+                    // These vertex functions never read `TEST_TIER` or
+                    // `TEST_OVERLAY`, so one combination covers them.
+                    let fixed =
+                        matches!(entry, "fs_native_model" | "fs_native_fluid" | "fs_sunrise");
+                    for tier in if fixed { vec![0] } else { vec![0, 3, 4] } {
+                        for overlay in if fixed {
+                            vec![0]
+                        } else if terrain {
+                            vec![0, 1]
+                        } else {
+                            vec![0, 6]
+                        } {
                             let old = draw.render(&mut hdr, false, entry, tier, overlay, [0.0; 4]);
                             let float = draw.render(&mut hdr, true, entry, tier, overlay, [0.0; 4]);
                             assert_eq!(

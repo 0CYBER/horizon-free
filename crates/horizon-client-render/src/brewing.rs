@@ -337,6 +337,9 @@ pub struct BrewTick {
     pub bottles: Option<[bool; 3]>,
     /// Level event 1035 (brew sound).
     pub brewed: bool,
+    /// A fuel item was taken: `serverTick` marks the stand changed for it even
+    /// when its `brewing_fuel` gave no uses.
+    pub fuel_taken: bool,
     /// Remainders dropped at the stand.
     pub drops: Vec<ItemStack>,
 }
@@ -401,6 +404,7 @@ impl BrewingStand {
             } else if let Some(r) = remainder {
                 out.drops.push(r);
             }
+            out.fuel_taken = true;
         }
         let brewable = self.brewable(brewing);
         let mut due = false;

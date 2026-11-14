@@ -105,7 +105,7 @@ impl GuestList {
     pub(super) fn tracking_viewers<'a>(
         &'a mut self,
         visible: impl Fn(&Guest) -> bool,
-        outputs: impl IntoIterator<Item = (&'a mut Vec<Vec<u8>>, Option<&'a mut Vec<[f64; 3]>>)>,
+        outputs: impl IntoIterator<Item = (&'a mut Vec<super::Body>, Option<&'a mut Vec<[f64; 3]>>)>,
         take_moved: bool,
     ) -> Vec<super::entity::Viewer<'a>> {
         self.tracking_viewers_and_views(visible, outputs, take_moved, ("", &mut []))
@@ -117,9 +117,9 @@ impl GuestList {
     pub(super) fn tracking_viewers_and_views<'a>(
         &'a mut self,
         visible: impl Fn(&Guest) -> bool,
-        outputs: impl IntoIterator<Item = (&'a mut Vec<Vec<u8>>, Option<&'a mut Vec<[f64; 3]>>)>,
+        outputs: impl IntoIterator<Item = (&'a mut Vec<super::Body>, Option<&'a mut Vec<[f64; 3]>>)>,
         take_moved: bool,
-        (dimension, views): (&str, &'a mut [Vec<Vec<u8>>]),
+        (dimension, views): (&str, &'a mut [Vec<super::Body>]),
     ) -> Vec<super::entity::Viewer<'a>> {
         use super::viewed_levels::entities::tracks_view;
         let viewing = !views.is_empty();

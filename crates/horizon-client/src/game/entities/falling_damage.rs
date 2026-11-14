@@ -223,7 +223,7 @@ impl Game<'_> {
             ..Default::default()
         };
         let outcome = self
-            .hurt_player_equipment(id, amount, None, false, entity as i32, false, &attack)
+            .hurt_player_equipment(id, amount, None, false, entity as i32, false, &attack, None)
             .unwrap_or_default();
         if outcome.hurt {
             // LivingEntity.hurtServer: ENTITY_HURT_PLAYER, the falling block

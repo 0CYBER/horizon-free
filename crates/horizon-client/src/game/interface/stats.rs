@@ -15,6 +15,9 @@ use std::{
 #[path = "tests/phantom_spawn_tests.rs"]
 mod phantom_spawn_tests;
 #[cfg(test)]
+#[path = "tests/player_stat_award_tests.rs"]
+mod player_stat_award_tests;
+#[cfg(test)]
 #[path = "tests/stat_award_tests.rs"]
 mod stat_award_tests;
 

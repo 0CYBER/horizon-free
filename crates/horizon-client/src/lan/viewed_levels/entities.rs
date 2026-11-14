@@ -65,7 +65,7 @@ fn scoped(body: &[u8]) -> bool {
 impl Hub {
     /// An empty output for each client that views the level in place, in the guests' order, for
     /// the tracking pass; none, without looking at a player, while nobody views a level.
-    pub(in crate::lan) fn view_outs(&self) -> Vec<Vec<Vec<u8>>> {
+    pub(in crate::lan) fn view_outs(&self) -> Vec<Vec<crate::lan::Body>> {
         if !self.viewed.active() {
             return Vec::new();
         }
@@ -76,7 +76,7 @@ impl Hub {
 
     /// What the tracking pass gave each viewing client (`view_outs`), wrapped in runs of its
     /// view's level, and its tracker's events dropped.
-    pub(in crate::lan) fn send_view_entities(&mut self, outs: Vec<Vec<Vec<u8>>>) {
+    pub(in crate::lan) fn send_view_entities(&mut self, outs: Vec<Vec<crate::lan::Body>>) {
         if outs.is_empty() {
             return;
         }

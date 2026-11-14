@@ -12,7 +12,7 @@ struct Scene {
     level: Entities,
     entities: Vec<EntityState>,
     trackers: Vec<Tracker>,
-    out: Vec<Vec<Vec<u8>>>,
+    out: Vec<Vec<super::super::Body>>,
     chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     active: Vec<usize>,
 }

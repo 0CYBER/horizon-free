@@ -724,6 +724,26 @@ impl Game<'_> {
         self.spawn_item_own(stack, p, 10);
     }
 
+    /// `Containers.dropItemStack`: a crafting remainder leaves from inside the
+    /// block, split by the level random, and can be picked up at once. Unlike
+    /// `Block.popResource` it has no `block_drops` test.
+    pub(super) fn drop_item_stack_containers(&mut self, pos: [i32; 3], stack: ItemStack) {
+        let count = stack.count;
+        let at = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];
+        for piece in
+            horizon_world::level::removal::drop_item_stack_at(&mut self.world.random, at, count)
+        {
+            self.spawn_item_thrown(
+                ItemStack {
+                    count: piece.count,
+                    ..stack.clone()
+                },
+                piece.pos,
+                piece.motion,
+            );
+        }
+    }
+
     /// `Block.popResourceFromFace`: the loot leaves the clicked face with the
     /// face's own motion instead of the item's random one.
     pub(super) fn pop_resource_from_face(

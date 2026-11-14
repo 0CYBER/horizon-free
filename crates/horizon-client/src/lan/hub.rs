@@ -458,7 +458,7 @@ pub struct Hub {
     /// before the level's ChunkMap.tick (`Entities::synced`).
     pub synced: Vec<(i32, i32)>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
-    entity_out: Vec<Vec<Vec<u8>>>,
+    entity_out: Vec<Vec<super::Body>>,
     /// Each placed guest's entities gone this tick, where they were last sent (only while the
     /// prediction records).
     entity_gone: Vec<Vec<[f64; 3]>>,

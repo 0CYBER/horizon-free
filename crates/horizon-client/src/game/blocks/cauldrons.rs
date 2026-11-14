@@ -1,6 +1,13 @@
 //! Using an item on a cauldron (`CauldronInteraction`): what the click does, and doing it.
 use super::*;
 
+/// `CauldronInteractions.isUnderWater`: the *fluid* above the cauldron is in
+/// `FluidTags.WATER`. A waterlogged slab or stair, kelp, seagrass and a bubble
+/// column are water there even though the block is not named `water`.
+pub(super) fn is_under_water(facts: &BlockFacts, above: BlockStateId) -> bool {
+    facts.get(above).fluid == Fluid::Water
+}
+
 impl Game<'_> {
     /// What the cauldron at `pos` answers to `held` on a client, which only
     /// asks (`CauldronInteractions` acts `if (!level.isClientSide())`). A
@@ -24,6 +31,9 @@ impl Game<'_> {
             return Ok(false);
         };
         let removes_dye = cauldron::removes_dye(self.items(), &held.item);
+        // `Stats.ITEM_USED.get(itemInHand.getItem())`: the item the hand held
+        // before the interaction swaps it.
+        let used_item = held.item.clone();
         let table = cauldron_interactions::snapshot();
         let items = self.items();
         let entry = table.select(&state.name, &held.item, removes_dye, |tag| {
@@ -51,6 +61,16 @@ impl Game<'_> {
                 self.defer_effect(DeferredEffect::CustomStat {
                     player,
                     key: stat,
+                    amount: 1,
+                });
+            }
+            // The bottle and bucket interactions award `ITEM_USED` right after
+            // their cauldron statistic.
+            if result.item_used {
+                self.defer_effect(DeferredEffect::ItemStat {
+                    player,
+                    stat: "used",
+                    item: used_item,
                     amount: 1,
                 });
             }
@@ -92,6 +112,16 @@ impl Game<'_> {
                 game.defer_effect(DeferredEffect::CustomStat {
                     player,
                     key: stat,
+                    amount: 1,
+                });
+            }
+            // The bottle and bucket interactions award `ITEM_USED` right after
+            // their cauldron statistic.
+            if result.item_used {
+                game.defer_effect(DeferredEffect::ItemStat {
+                    player,
+                    stat: "used",
+                    item: used_item.clone(),
                     amount: 1,
                 });
             }

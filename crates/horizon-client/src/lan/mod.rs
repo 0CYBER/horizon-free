@@ -14,6 +14,7 @@ pub mod anticheat;
 pub mod arrivals;
 pub mod attributes;
 mod biome_resend;
+mod body;
 pub mod border;
 pub mod chunk_watch;
 pub mod chunks;
@@ -50,6 +51,7 @@ pub mod tracking;
 pub mod viewed_levels;
 pub mod waypoints;
 
+pub use body::Body;
 pub use conn::{Holding, PlayerSender, flush_all};
 use horizon_protocol::packets::play;
 use horizon_protocol::{

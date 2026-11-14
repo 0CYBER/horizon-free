@@ -658,13 +658,31 @@ pub fn discover(resources: &Path, packs_dir: &Path) -> Vec<Pack> {
 /// The packs (folders and zips) in `dir`, by name, as `FolderRepositorySource`
 /// finds them; their compatibility is against `format`.
 pub fn folder(dir: &Path, format: (i64, i64)) -> Vec<Pack> {
+    folder_with(dir, format, &DirectoryValidator::game())
+}
+/// [`folder`] under an explicit `allowed_symlinks.txt` validator.
+pub(crate) fn folder_with(
+    dir: &Path,
+    format: (i64, i64),
+    validator: &DirectoryValidator,
+) -> Vec<Pack> {
     let mut user: Vec<Pack> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
-            let path = e.path();
             let name = e.file_name().to_string_lossy().into_owned();
+            let path = match detected_pack_path(&e.path(), validator) {
+                Ok(Some(path)) => path,
+                Ok(None) => return None,
+                Err(err) => {
+                    log::warn!(
+                        "Failed to read properties of '{}', ignoring: {err}",
+                        e.path().display()
+                    );
+                    return None;
+                }
+            };
             let source = if path.is_dir() {
                 Source::Dir(path)
             } else if path
@@ -680,6 +698,158 @@ pub fn folder(dir: &Path, format: (i64, i64)) -> Vec<Pack> {
         .collect();
     user.sort_by(|a, b| a.id.cmp(&b.id));
     user
+}
+
+/// `LevelStorageSource.ALLOWED_SYMLINKS_CONFIG_NAME`: the game folder's list of
+/// symbolic link targets the game accepts.
+pub const ALLOWED_SYMLINKS_CONFIG_NAME: &str = "allowed_symlinks.txt";
+
+/// `DirectoryValidator` over vanilla's `PathAllowList`: which symbolic link
+/// targets the game accepts. With no entry, no link is, so a link planted in a
+/// pack folder cannot point the game at the rest of the disk.
+#[derive(Default)]
+pub struct DirectoryValidator {
+    /// `EntryType.PREFIX`: a target whose text starts with the entry matches.
+    prefixes: Vec<String>,
+}
+impl DirectoryValidator {
+    /// `LevelStorageSource.parseValidator`: the entries of `config`, none when
+    /// it is missing, unreadable or unparseable. `[glob]` and `[regex]` entries
+    /// are skipped with a warning: Horizon has no Java path matcher to compile
+    /// them with, so a skipped entry allows less than vanilla's, never more,
+    /// except that vanilla denies every link when an entry fails to compile.
+    pub fn parse(config: &Path) -> Self {
+        let Ok(text) = fs::read_to_string(config) else {
+            return Self::default();
+        };
+        let mut prefixes = Vec::new();
+        for line in text.lines() {
+            // `ConfigEntry.parse`: blank lines and comments, untrimmed otherwise.
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some(rest) = line.strip_prefix('[') else {
+                prefixes.push(line.to_owned());
+                continue;
+            };
+            let Some((kind, pattern)) = rest.split_once(']') else {
+                // `ConfigEntry.parse` throws on an unterminated type, and
+                // `parseValidator` then keeps no entry at all.
+                log::error!(
+                    "Horizon: {}: unterminated type in {line:?}",
+                    config.display()
+                );
+                return Self::default();
+            };
+            match kind {
+                "prefix" => prefixes.push(pattern.to_owned()),
+                "glob" | "regex" => log::warn!(
+                    "Horizon: {}: {kind} entry {pattern:?} is not supported and allows nothing",
+                    config.display()
+                ),
+                _ => {
+                    // An unsupported type throws in `parse`, as an unterminated
+                    // one does: the whole file then allows no link.
+                    log::error!(
+                        "Horizon: {}: unsupported type in {line:?}",
+                        config.display()
+                    );
+                    return Self::default();
+                }
+            }
+        }
+        Self { prefixes }
+    }
+    /// The game folder's list, as `Minecraft` reads it from
+    /// `gameDirPath.resolve("allowed_symlinks.txt")`; the game folder is the
+    /// working directory, as for `options.txt`.
+    pub fn game() -> Self {
+        Self::parse(
+            &std::env::current_dir()
+                .unwrap_or_default()
+                .join(ALLOWED_SYMLINKS_CONFIG_NAME),
+        )
+    }
+    /// `PathAllowList.matches`, on the target as written, not resolved.
+    fn allows(&self, target: &Path) -> bool {
+        target
+            .to_str()
+            .is_some_and(|t| self.prefixes.iter().any(|p| t.starts_with(p.as_str())))
+    }
+}
+/// `DirectoryValidator.validateKnownDirectory`: every link under `dir`, never
+/// following one, added to `issues` with its target unless the validator
+/// allows the target.
+fn forbidden_links(
+    dir: &Path,
+    validator: &DirectoryValidator,
+    issues: &mut Vec<(PathBuf, PathBuf)>,
+) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            let target = fs::read_link(&path)?;
+            if !validator.allows(&target) {
+                issues.push((path, target));
+            }
+        } else if kind.is_dir() {
+            forbidden_links(&path, validator, issues)?;
+        }
+    }
+    Ok(())
+}
+/// `FolderRepositorySource.discoverPacks`'s warning for a refused entry: the
+/// entry, as vanilla names it, and every forbidden link in it.
+fn refused(entry: &Path, issues: &[(PathBuf, PathBuf)]) {
+    let list: Vec<String> = issues
+        .iter()
+        .map(|(link, target)| format!("{}->{}", link.display(), target.display()))
+        .collect();
+    log::warn!(
+        "Ignoring potential pack entry: Failed to validate '{}'. Found forbidden symlinks: {}",
+        entry.display(),
+        list.join(", ")
+    );
+}
+/// `PackDetector.detectPackResources`: the path a pack entry names, once the
+/// validator accepts the entry and every link inside it; `None` when it is
+/// missing or not a pack, `Err` when it cannot be read. A link is followed one
+/// level, to its target as written rather than resolved, as vanilla does.
+pub(crate) fn detected_pack_path(
+    path: &Path,
+    validator: &DirectoryValidator,
+) -> io::Result<Option<PathBuf>> {
+    let mut kind = match fs::symlink_metadata(path) {
+        Ok(meta) => meta.file_type(),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None), // `NoSuchFileException`
+        Err(err) => return Err(err),
+    };
+    let mut target = path.to_path_buf();
+    if kind.is_symlink() {
+        let link = fs::read_link(path)?;
+        if !validator.allows(&link) {
+            refused(path, &[(path.to_path_buf(), link)]);
+            return Ok(None);
+        }
+        target = link;
+        // One level only: the attributes read on the target do not follow a
+        // second link, and such an entry is neither a directory nor a file.
+        kind = fs::symlink_metadata(&target)?.file_type();
+        if kind.is_symlink() {
+            return Ok(None);
+        }
+    }
+    if kind.is_dir() {
+        let mut issues = Vec::new();
+        forbidden_links(&target, validator, &mut issues)?;
+        if !issues.is_empty() {
+            refused(path, &issues);
+            return Ok(None);
+        }
+    }
+    Ok(Some(target))
 }
 /// A file a pack provides: its path (folder packs) and its name inside the pack.
 type Provided = (
@@ -1754,6 +1924,90 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    /// `FolderRepositorySource.discoverPacks` + `PackDetector.detectPackResources`:
+    /// an entry that is a link, or holds one, is not a pack the game lists.
+    #[cfg(unix)]
+    #[test]
+    fn pack_discovery_refuses_symlinks() {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir().join(format!("horizon-pack-links-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let meta = br#"{"pack":{"description":"d","pack_format":97}}"#;
+        let pack = |dir: &Path| {
+            fs::create_dir_all(dir.join("assets/deep")).unwrap();
+            fs::write(dir.join("pack.mcmeta"), meta).unwrap();
+        };
+        // A linked pack's target, a file a pack may hold a link to, and a link
+        // whose own target is a link.
+        pack(&base.join("outside/pack"));
+        fs::create_dir_all(base.join("outside")).unwrap();
+        fs::write(base.join("outside/file.txt"), "f").unwrap();
+        symlink(base.join("outside/pack"), base.join("outside/alias")).unwrap();
+        let packs = base.join("packs");
+        for name in ["clean", "nested", "broken"] {
+            pack(&packs.join(name));
+        }
+        symlink(
+            base.join("outside/file.txt"),
+            packs.join("nested/assets/deep/link"),
+        )
+        .unwrap();
+        symlink(base.join("missing"), packs.join("broken/link")).unwrap();
+        symlink(base.join("outside/pack"), packs.join("linked")).unwrap();
+        symlink(base.join("outside/alias"), packs.join("chained")).unwrap();
+        let ids = |validator: &DirectoryValidator| {
+            let mut ids: Vec<String> = folder_with(&packs, RESOURCE_FORMAT, validator)
+                .into_iter()
+                .map(|p| p.id)
+                .collect();
+            ids.extend(
+                crate::datapack::discover_folder_with(&packs, validator)
+                    .into_iter()
+                    .map(|p| p.id),
+            );
+            ids
+        };
+        // Vanilla's default validator, with no `allowed_symlinks.txt`: no link.
+        assert_eq!(
+            ids(&DirectoryValidator::default()),
+            ["file/clean", "file/clean"]
+        );
+        // An entry naming the linked pack's target lets that link, and only it,
+        // through: the pack holding a link to a file, the broken link and the
+        // link to a link stay out. A `[glob]` entry Horizon cannot compile
+        // allows nothing.
+        let allow = base.join(ALLOWED_SYMLINKS_CONFIG_NAME);
+        fs::write(
+            &allow,
+            format!(
+                "# packs shared between game folders\n[glob]**/outside/**\n[prefix]{}\n[prefix]{}\n",
+                base.join("outside/pack").display(),
+                base.join("outside/alias").display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            ids(&DirectoryValidator::parse(&allow)),
+            ["file/clean", "file/linked", "file/clean", "file/linked"]
+        );
+        // An unsupported entry type throws in `ConfigEntry.parse`, so the whole
+        // file allows no link.
+        fs::write(
+            &allow,
+            format!(
+                "[bogus]{}\n[prefix]{}\n",
+                base.join("outside/pack").display(),
+                base.join("outside/pack").display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            ids(&DirectoryValidator::parse(&allow)),
+            ["file/clean", "file/clean"]
+        );
+        let _ = fs::remove_dir_all(&base);
+    }
+
     /// `DownloadedPackSource.DOWNLOADED_PACK_SELECTION`: the pack is selected,
     /// fixed at the top, cannot be removed, and stays out of options.txt.
     #[test]
@@ -2497,15 +2751,14 @@ mod tests {
             zip.finish().unwrap();
             fs::metadata(&path).unwrap().len()
         };
-        // Four 24 MiB files of zeros: well under the per-file limit, 96 MiB in all from a zip of
+        // Three 22 MiB files of zeros: well under the per-file limit, 66 MiB in all from a zip of
         // a few hundred KiB, past the 64 MiB a small pack may unpack to.
         let size = pack(
             "bomb.zip",
             &[
-                ("assets/minecraft/textures/block/a.png", 24),
-                ("assets/minecraft/textures/block/b.png", 24),
-                ("assets/minecraft/textures/block/c.png", 24),
-                ("assets/minecraft/textures/block/d.png", 24),
+                ("assets/minecraft/textures/block/a.png", 22),
+                ("assets/minecraft/textures/block/b.png", 22),
+                ("assets/minecraft/textures/block/c.png", 22),
             ],
         );
         assert!(size < 1 << 20, "the bomb is small: {size} bytes");
@@ -2518,22 +2771,16 @@ mod tests {
             !out.exists(),
             "what was unpacked before the budget ran out stays"
         );
-        // The same files within the budget unpack whole.
+        // A file within the budget unpacks whole.
         fs::remove_file(base.join("packs/bomb.zip")).unwrap();
-        pack(
-            "fine.zip",
-            &[
-                ("assets/minecraft/textures/block/a.png", 24),
-                ("assets/minecraft/textures/block/b.png", 24),
-            ],
-        );
+        pack("fine.zip", &[("assets/minecraft/textures/block/a.png", 8)]);
         let packs = discover(&vanilla, &base.join("packs"));
         build_overlay(&vanilla, &packs, &out).unwrap();
         assert_eq!(
-            fs::metadata(out.join("assets/minecraft/textures/block/b.png"))
+            fs::metadata(out.join("assets/minecraft/textures/block/a.png"))
                 .unwrap()
                 .len(),
-            24 << 20
+            8 << 20
         );
         let _ = fs::remove_dir_all(&base);
     }

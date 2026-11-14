@@ -1665,10 +1665,9 @@ mod tests {
         assert!(levels.parked.is_empty());
     }
 
-    /// `ServerLevel.getWorldBorder`: `/worldborder` in one level leaves the others' alone.
-    #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn each_level_keeps_its_own_world_border() {
+    /// A game on the prepared resources in `HORIZON_TEST_RESOURCES`, with no
+    /// world opened and commands allowed.
+    fn prepared_game() -> Game<'static> {
         use crate::game::{Audio, Options, Progress, Settings, load_resources};
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -1688,8 +1687,10 @@ mod tests {
         let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
         options.resources = root.clone();
         options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        // The game keeps its resources for the whole test.
+        let resources: &'static _ = Box::leak(Box::new(loaded.resources));
         let mut game = Game::new(
-            &loaded.resources,
+            resources,
             loaded.pack,
             loaded.gui.unwrap(),
             options,
@@ -1702,6 +1703,41 @@ mod tests {
         .unwrap();
         game.build_registries();
         game.set_allow_commands(true);
+        game
+    }
+
+    /// `WorldBorderCommand.setSize` from `/worldborder add` with a time: the
+    /// new change lasts the ticks still running plus the argument
+    /// (`getLerpTime() + time`), where `/worldborder set` replaces it.
+    #[test]
+    #[ignore = "daily"]
+    fn worldborder_add_extends_a_change_in_flight() {
+        let mut game = prepared_game();
+        assert!(game.run_command("worldborder set 100 1000"));
+        assert_eq!(game.border.remaining_ticks(), 1000);
+        // Part way through the change, where the size is between its ends.
+        for _ in 0..100 {
+            game.border.tick();
+        }
+        assert_eq!(game.border.remaining_ticks(), 900);
+        let from = game.border.size();
+        assert!(from < 59_999_968.0 && from > 100.0);
+        // The new change starts from that size and lasts the ticks still
+        // running plus the argument, not just the argument.
+        assert!(game.run_command("worldborder add -50 5s"));
+        assert_eq!(game.border.target_size(), from - 50.0);
+        assert_eq!(game.border.remaining_ticks(), 1000);
+        // `set` starts over from the size the border has now.
+        assert!(game.run_command("worldborder set 200 40"));
+        assert_eq!(game.border.target_size(), 200.0);
+        assert_eq!(game.border.remaining_ticks(), 40);
+    }
+
+    /// `ServerLevel.getWorldBorder`: `/worldborder` in one level leaves the others' alone.
+    #[test]
+    #[ignore = "daily"]
+    fn each_level_keeps_its_own_world_border() {
+        let mut game = prepared_game();
         assert!(game.run_command("worldborder set 1000"));
         assert!(game.run_command("execute in minecraft:the_nether run worldborder set 100"));
         assert_eq!(game.dim, Dim::Overworld);

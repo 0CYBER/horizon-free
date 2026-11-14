@@ -646,6 +646,8 @@ pub enum DamageKind {
     /// `spear`: a stab of a spear (the player attack tags too).
     Spear,
     MobAttack,
+    /// `mob_attack_no_aggro`: a goat's ram, the one type in `#no_anger`.
+    MobAttackNoAggro,
     Arrow,
     Thrown,
     Fireball,
@@ -854,6 +856,8 @@ impl Damage {
                 | DamageKind::Stalagmite
                 | DamageKind::Starve
                 | DamageKind::Campfire
+                // `mob_attack` panics; its no-aggro twin is not in the tag.
+                | DamageKind::MobAttackNoAggro
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -1147,7 +1151,7 @@ pub struct Extra {
     /// horse still rearing then goes on with the rider's keys until the rear
     /// ends (`tick` clears it).
     pub stand_sliding: bool,
-    /// Species scratch values (the wither's head targets and clocks).
+    /// Species scratch values (the wither's head targets and clocks, a ghast's power).
     pub ints: [i32; 6],
     pub counter: i32,
     /// Nautilus ATTACK_TARGET_COOLDOWN saved slot: None is absent,
@@ -1888,16 +1892,16 @@ pub enum MobEvent {
         state: horizon_world::registry::BlockStateId,
     },
     AttackPlayer(f32, [f64; 3]),
-    /// `Bee.doHurtTarget` on a player: a sting that lands leaves its stinger
-    /// in them and poisons them for `poison_ticks` (none on easy).
-    StingPlayer {
+    /// `Bee.doHurtTarget`: a sting that lands leaves its stinger and poisons.
+    Sting {
+        target: Who,
         amount: f32,
-        from: [f64; 3],
         poison_ticks: i32,
+        source: Damage,
     },
     /// A melee hit whose effect comes only if the hit lands (husk hunger,
-    /// cave spider poison, wither skeleton wither, bee and pufferfish
-    /// poison): a shield-blocked hit gives nothing.
+    /// cave spider poison, wither skeleton wither): a shield-blocked hit gives
+    /// nothing.
     AttackPlayerWithEffect {
         amount: f32,
         from: [f64; 3],
@@ -2120,12 +2124,12 @@ pub enum MobEvent {
         setup: SpawnSetup,
     },
     /// `Mob.convertTo` with `ConversionType.SINGLE` ([`conversion::single`]):
-    /// a new mob of `kind` takes the place of `from` (already removed) and
-    /// keeps its gear, name and flags.
+    /// `from` (already removed) becomes `kind` with its gear, name and flags, then `after`.
     Convert {
         from: Box<Mob>,
         kind: &'static str,
         params: conversion::Params,
+        after: conversion::After,
     },
     DropItem {
         mob: u32,
@@ -2545,7 +2549,6 @@ impl MobEvent {
             Self::AttackPlayer(..)
             | Self::CubeHurtPlayer { .. }
             | Self::AttackPlayerWithEffect { .. }
-            | Self::StingPlayer { .. }
             | Self::DamagePlayer { .. }
             | Self::EffectPlayer { .. }
             | Self::AxolotlSupportPlayer { .. }
@@ -2553,6 +2556,7 @@ impl MobEvent {
             Self::SonicBoom { target, .. }
             | Self::Push { target, .. }
             | Self::Knockback { target, .. }
+            | Self::Sting { target, .. }
             | Self::StabDismount { target }
             | Self::Ignite(target, _)
             | Self::ZombieIgnite(target, _)
@@ -3125,8 +3129,7 @@ pub struct PlayerView {
     pub effects: Vec<&'static str>,
     /// The player's UUID (villagers' gossip is keyed by it).
     pub uuid: [i32; 4],
-    /// The mobs on the player's team (`isAlliedTo`): combat targeting
-    /// leaves the player alone.
+    /// The mobs on the player's team (`isAlliedTo`): combat targeting leaves the player alone.
     pub allies: std::sync::Arc<std::collections::HashSet<u32>>,
     /// A LAN guest: its own client moves it, and touching mobs push it there
     /// (`EntitySelector.pushableBy` on the client).
@@ -3860,6 +3863,9 @@ impl Mob {
         source: Damage,
         armor_effectiveness: Option<&mut dyn FnMut(f32, &mut LegacyRandom) -> f32>,
     ) -> bool {
+        // `Guardian.hurtServer`'s spikes answer its attacker before
+        // `super.hurtServer`'s guards.
+        hurt_by::before_hurt(self, &source);
         // Enderman.hurtServer: past `isInvulnerableTo`, the teleport draw
         // follows `super.hurtServer` whatever it answered (a hurt cooldown, a
         // dead enderman), its hurt sound's pitch included.
@@ -4153,12 +4159,7 @@ impl Mob {
             self.last_damage = Some((source, i64::from(self.age)));
         }
         self.last_direct = None;
-        if let Some(who) = source.attacker {
-            self.ai.hurt_by(who, self.age as i32);
-            if who == Who::Player {
-                self.ai.last_hurt_by_player = 100;
-            }
-        }
+        hurt_by::resolve(self, &source);
         // dealDefaultKnockback, unless the damage type is tagged no_knockback or
         // the hit was blocked whole; a source without a position knocks in a
         // random direction.
@@ -7449,3 +7450,5 @@ pub fn apply_mob_pushes(m: &mut Mob, pending: &mut PendingPushes) {
         pushes.into_iter().for_each(add);
     }
 }
+#[cfg(test)]
+mod guardian_tests;

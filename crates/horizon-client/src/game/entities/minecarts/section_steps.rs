@@ -11,9 +11,7 @@ pub(super) fn tick(
     let from = cart.position;
     cart.loot = loot;
     let alive = game.tick_cart(&mut cart, [0.0; 2], i, index);
-    if cart.kind == CartKind::Hopper && cart.enabled {
-        game.hopper_cart_suck(&mut cart);
-    }
+    game.hopper_cart_tick(&mut cart, alive);
     let Some(i) = cart_at(&game.carts, id, i) else {
         return (false, None);
     };
@@ -36,6 +34,8 @@ pub(super) fn tick_riding(
     let mut cart = game.carts[i].clone();
     let from = cart.position;
     let alive = game.tick_cart(&mut cart, intent, i, &mut CartIndex::default());
+    // `MinecartHopper.tick`'s `tryConsumeItems` runs in the rider's turn too.
+    game.hopper_cart_tick(&mut cart, alive);
     let mut player_step = None;
     if alive
         && game.riding == Some(cart.id)

@@ -38,16 +38,18 @@ pub(super) fn thrown_block_hit(start: Vec3, end: Vec3, velocity: Vec3) -> ([i32;
 impl Game<'_> {
     /// `PotionContents.is`: the potion of `stack` is in the potion tag `tag`
     /// (`minecraft:douses_fire` and the others, read from the data pack's
-    /// `tags/potion`). A stack with no potion is in no tag.
+    /// `tags/potion`) and the stack has no custom effects of its own
+    /// (`isPotionWithoutCustomEffects`). A stack with no potion is in no tag.
     pub(super) fn potion_in_tag(&self, stack: &ItemStack, tag: &str) -> bool {
-        stack.potion().is_some_and(|potion| {
-            self.res
-                .stations()
-                .trades
-                .potion_tags
-                .get(tag)
-                .is_some_and(|members| members.iter().any(|m| m.as_str() == potion))
-        })
+        stack.custom_potion_effects().is_empty()
+            && stack.potion().is_some_and(|potion| {
+                self.res
+                    .stations()
+                    .trades
+                    .potion_tags
+                    .get(tag)
+                    .is_some_and(|members| members.iter().any(|m| m.as_str() == potion))
+            })
     }
 
     /// `AbstractThrownPotion.onHitBlock` on the server: a potion (the stack's

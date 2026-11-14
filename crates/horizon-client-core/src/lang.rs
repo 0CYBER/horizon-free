@@ -1104,10 +1104,25 @@ mod tests {
             "found only {} sentence keys",
             sentences.len()
         );
+        // Every quote in the sources opens a candidate literal that runs to the next
+        // unescaped quote, quotes included. A needle is a quote, escaped text and a
+        // quote, so wherever it occurs it is exactly such a slice, and one pass
+        // over the sources replaces a `contains` scan per key.
+        let bytes = code.as_bytes();
+        let mut literals: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (start, _) in bytes.iter().enumerate().filter(|(_, b)| **b == b'"') {
+            let mut at = start + 1;
+            while at < bytes.len() && bytes[at] != b'"' {
+                at += if bytes[at] == b'\\' { 2 } else { 1 };
+            }
+            if at < bytes.len() {
+                literals.insert(&code[start..=at]);
+            }
+        }
         // A JSON string literal escapes `"` and `\` as Rust's does.
         let mut dead: Vec<&str> = sentences
             .into_iter()
-            .filter(|key| !code.contains(&serde_json::to_string(key).unwrap()))
+            .filter(|key| !literals.contains(serde_json::to_string(key).unwrap().as_str()))
             .map(String::as_str)
             .collect();
         dead.sort_unstable();

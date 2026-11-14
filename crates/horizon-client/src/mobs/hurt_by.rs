@@ -1,7 +1,7 @@
 //! The mob that last hurt a mob (`LivingEntity.lastHurtByMob`): its record in
 //! `Ai`, its end in `baseTick`, and what a hit or a stop being angry does to it.
 use super::ai::Ai;
-use super::{Mob, MobWorld, Who};
+use super::{Damage, DamageKind, Mob, MobWorld, Species, Who};
 
 // `LivingEntity.lastHurtByMob` is a lazy `EntityReference`: a record read back
 // from `last_hurt_by_mob` stays the bare UUID (`Ai::last_hurt_by_ref`) until the
@@ -20,6 +20,28 @@ impl Ai {
         self.last_hurt_by = None;
         self.last_hurt_by_ref = None;
         self.last_hurt_by_time = tick;
+    }
+}
+/// `LivingEntity.resolveMobResponsibleForDamage` and
+/// `resolvePlayerResponsibleForDamage` after a hit landed: a mob's hit names
+/// its attacker, unless the type is in `#no_anger` (`DamageTypeTagsProvider`
+/// holds `mob_attack_no_aggro` alone, a goat's ram), which skips only the mob
+/// record: a player's hit still counts for the kill credit.
+pub(super) fn resolve(m: &mut Mob, source: &Damage) {
+    let Some(who) = source.attacker else { return };
+    if !matches!(source.kind, DamageKind::MobAttackNoAggro) {
+        m.ai.hurt_by(who, m.age as i32);
+    }
+    if who == Who::Player {
+        m.ai.last_hurt_by_player = 100;
+    }
+}
+/// The species' hooks that run before `LivingEntity.hurtServer`'s guards:
+/// `Guardian.hurtServer`'s spikes answer its attacker even for a blow the
+/// guardian then refuses.
+pub(super) fn before_hurt(m: &mut Mob, source: &Damage) {
+    if matches!(m.species(), Species::Guardian | Species::ElderGuardian) {
+        super::guardian::hurt_server(m, source);
     }
 }
 /// `LivingEntity.baseTick`'s hurt timers: `hurtTime` and `invulnerableTime`

@@ -67,9 +67,11 @@ def paths_in_repository(history=False, revisions=None):
         return []
     roots = ["--all"] if revisions is None else revisions
     # Include diffs against merge parents so merge-resolution-only artifacts are caught.
+    # --no-renames: a rename is listed as a deletion and an addition, so both paths still show, and git skips its
+    # rename search on every large merge diff (53 s -> 8 s on main's whole history).
     # Git pushes the stored objects, not the history presented by local replace refs.
     result = subprocess.check_output(["git", "--no-replace-objects", "log", "--format=", "--name-only",
-                                      "-z", "-m", *roots, "--"])
+                                      "-z", "-m", "--no-renames", *roots, "--"])
     return [path.lstrip("\n") for path in result.decode("utf-8").split("\0")]
 
 
@@ -95,8 +97,8 @@ def main():
     revisions = (pushed_revisions(sys.stdin) if args.pre_push else [args.range] if args.range
                  else ["HEAD"] if args.history else None)
     history = args.history or args.pre_push or bool(args.range)
-    rejected = sorted({path for path in paths_in_repository(history, revisions)
-                       if path and prohibited(path)})
+    # Millions of entries in a long history repeat a few thousand paths: judge each path once.
+    rejected = sorted(path for path in set(paths_in_repository(history, revisions)) if path and prohibited(path))
     tables = [] if history else sorted(copied_tables())
     if tables:
         print("Vanilla's data fixer tables come from the player's jar (horizon-prepare), not from Git:",

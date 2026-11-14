@@ -2307,16 +2307,24 @@ impl Game<'_> {
     /// Overworld position the player went into the Nether from (`at`) is kept
     /// for the way back, and any other trip drops it.
     pub(super) fn trigger_dimension(&mut self, from: Dim, to: Dim, at: [f64; 3]) {
-        let (from_id, to_id) = (from.id().to_owned(), to.id().to_owned());
-        self.trigger("minecraft:changed_dimension", move |c, _| {
-            c["from"].as_str().is_none_or(|f| adv::full(f) == from_id)
-                && c["to"].as_str().is_none_or(|t| adv::full(t) == to_id)
-        });
+        self.trigger_changed_dimension(from, to);
         if from == Dim::Overworld && to == Dim::Nether {
             self.adv.marks.nether = Some(at);
         } else if !(from == Dim::Nether && to == Dim::Overworld) {
             self.adv.marks.nether = None;
         }
+    }
+    /// `CriteriaTriggers.CHANGED_DIMENSION` alone, without the
+    /// `enteredNetherPosition` bookkeeping of
+    /// `ServerPlayer.triggerDimensionChangeTriggers`: a respawn after the
+    /// credits triggers the criterion (`END` → `OVERWORLD`, whatever level
+    /// the point is in) and leaves that position as it is.
+    pub(super) fn trigger_changed_dimension(&mut self, from: Dim, to: Dim) {
+        let (from_id, to_id) = (from.id().to_owned(), to.id().to_owned());
+        self.trigger("minecraft:changed_dimension", move |c, _| {
+            c["from"].as_str().is_none_or(|f| adv::full(f) == from_id)
+                && c["to"].as_str().is_none_or(|t| adv::full(t) == to_id)
+        });
     }
     /// `ToastManager.SLOT_COUNT`.
     pub(super) const TOAST_SLOTS: usize = 5;
