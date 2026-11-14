@@ -230,6 +230,14 @@ pub mod game {
     pub fn player_ref(entity: EntityRef, uuid: u128) -> PlayerRef {
         PlayerRef { entity, uuid }
     }
+    /// The player a completion is for, as the game knows them.
+    pub fn command_sender(uuid: u128, name: String, permission: PermissionLevel) -> CommandSender {
+        CommandSender {
+            uuid,
+            name,
+            permission,
+        }
+    }
     /// A stack's modifiers for `item_attribute_modifier`, as its component
     /// gives them.
     pub fn item_attribute_modifiers(entries: Vec<ItemAttributeModifier>) -> ItemAttributeModifiers {

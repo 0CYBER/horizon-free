@@ -951,6 +951,17 @@ impl Game<'_> {
             self.ui.registries.dimensions = levels;
         }
         self.ui.registries.custom_completions = self.remote_custom_completions();
+        // The sender a mod's own argument completion answers for: this player, whose permission
+        // level is `registries.permission`. A server completion sets it from the guest asking
+        // (`guest_suggestions`); the console has none.
+        self.ui.registries.sender = self
+            .remote
+            .as_ref()
+            .filter(|remote| remote.logged_in && remote.profile != 0)
+            .map(|remote| horizon_client_core::registries::CommandSender {
+                uuid: remote.profile,
+                name: remote.profile_name.clone(),
+            });
     }
     /// `ChatComponent.createScreen`: T or / opens the chat with the draft kept
     /// last time, when this method can restore it (a command draft only for

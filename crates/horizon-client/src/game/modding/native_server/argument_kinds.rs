@@ -274,9 +274,18 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
                     .map_err(|_| Text::tr("commands.generic.failed", &[]))?
                     .map_err(refused_argument_text)
             },
-            move |prefix| {
+            move |reg: &horizon_client::command::Registries, prefix: &str| {
+                // The mod's provider decides what this sender may complete; the game keeps
+                // its answer as it comes (`CommandSender::suggest`).
+                let sender = reg.sender.as_ref().map(|sender| {
+                    mod_api::__private::game::command_sender(
+                        sender.uuid,
+                        sender.name.clone(),
+                        mod_api::PermissionLevel::from_level(i32::from(reg.permission)),
+                    )
+                });
                 let Ok(results) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    suggest.suggest(prefix)
+                    suggest.suggest(sender.as_ref(), prefix)
                 })) else {
                     eprintln!("mod command argument completer panicked");
                     return Vec::new();

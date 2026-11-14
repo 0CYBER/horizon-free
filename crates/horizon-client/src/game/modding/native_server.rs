@@ -2991,7 +2991,11 @@ mod tests {
             }
         }
 
-        fn suggest(&self, prefix: &str) -> Vec<mod_api::CommandSuggestion> {
+        fn suggest(
+            &self,
+            _: Option<&mod_api::CommandSender>,
+            prefix: &str,
+        ) -> Vec<mod_api::CommandSuggestion> {
             ["press", "furnace"]
                 .into_iter()
                 .filter(|machine| machine.starts_with(prefix))
@@ -3012,7 +3016,11 @@ mod tests {
             }
             Ok(input.into())
         }
-        fn suggest(&self, prefix: &str) -> Vec<mod_api::CommandSuggestion> {
+        fn suggest(
+            &self,
+            _: Option<&mod_api::CommandSender>,
+            prefix: &str,
+        ) -> Vec<mod_api::CommandSuggestion> {
             match prefix {
                 "panic" => panic!("completer"),
                 "text" => vec![mod_api::CommandSuggestion::new("a".repeat(32768))],
@@ -3071,7 +3079,11 @@ mod tests {
             fn parse(&self, _: &str) -> Result<String, mod_api::CommandArgumentError> {
                 unreachable!()
             }
-            fn suggest(&self, _: &str) -> Vec<mod_api::CommandSuggestion> {
+            fn suggest(
+                &self,
+                _: Option<&mod_api::CommandSender>,
+                _: &str,
+            ) -> Vec<mod_api::CommandSuggestion> {
                 unreachable!()
             }
         }

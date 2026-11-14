@@ -1,0 +1,3 @@
+ids = ["method:CommandArgumentType::suggest", "type:CommandSender"]
+why = "A suggestion provider now sees who is asking: `CommandArgumentType::suggest` takes `Option<&CommandSender>` (uuid, name, permission level) before the prefix, so a provider can leave out entries the sender may not run. The engine no longer filters a provider's answer."
+migrate = "Rebuild against this SDK. Implement `suggest(&self, sender: Option<&CommandSender>, prefix: &str) -> Vec<CommandSuggestion>` and read `sender`; `None` means no sender could be identified (a console or a headless caller). Returns the whole list unchanged for a provider that does not care, which is what the default implementation does."

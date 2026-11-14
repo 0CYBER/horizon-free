@@ -1488,7 +1488,7 @@ fn a_custom_argument_parses_completes_and_keeps_its_id() {
                 Err(Text::literal(format!("unknown machine `{input}`")))
             }
         },
-        |prefix| {
+        |_, prefix| {
             ["press", "furnace"]
                 .into_iter()
                 .filter(|machine| machine.starts_with(prefix))
@@ -1542,7 +1542,7 @@ fn a_greedy_custom_argument_takes_the_rest_of_the_line() {
         "example:note",
         CustomArgumentKind::Greedy,
         |input| Ok(input.trim().to_owned()),
-        |_| Vec::new(),
+        |_, _| Vec::new(),
     ));
     let mut dispatcher = Dispatcher::new();
     let note = dispatcher.literal(0, "note");
