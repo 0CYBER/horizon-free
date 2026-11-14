@@ -1412,15 +1412,11 @@ impl Launcher {
                 && entries
                     .iter()
                     .any(|e| native_status::is_native_file(&e.file));
-        let left_out = native
-            .then(|| {
-                self.selected_instance()
-                    .and_then(|instance| self.version_of(instance))
-                    .and_then(|version| self.native_build_of(version))
-            })
-            .flatten()
-            .map(|build| build.left_out)
-            .unwrap_or_default();
+        let left_out = if native {
+            self.native_left_out()
+        } else {
+            Vec::new()
+        };
         let instance = self.selected_instance().map(|i| i.name.clone());
         let row = |i: usize| {
             if i >= entries.len() {

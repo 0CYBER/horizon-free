@@ -242,6 +242,7 @@ impl Launcher {
             home_strip: Default::default(),
             client_since: None,
             instance_mods: Default::default(),
+            mod_preview: Default::default(),
             project_icons: Default::default(),
             play_pressed: None,
             bench: perf::Bench::from_env(),
@@ -338,6 +339,7 @@ impl Launcher {
             this.wardrobe_preview();
         }
         // What the game and the launcher kept, if the player allows it and there is a server.
+        this.mod_preview_from_env();
         telemetry::send_in_background();
         telemetry::watch_playing(this.tx.clone());
         telemetry::watch_official(this.tx.clone());

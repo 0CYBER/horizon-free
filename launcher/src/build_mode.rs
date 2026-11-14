@@ -88,6 +88,20 @@ impl Pal {
     }
 }
 
+/// What a native mod's chip and menu say about how it reaches the game.
+pub(super) struct RouteFacts {
+    glyph: &'static str,
+    color: Hsla,
+    headline: SharedString,
+    reason: String,
+}
+
+impl RouteFacts {
+    pub(super) fn color(&self) -> Hsla {
+        self.color
+    }
+}
+
 /// The share of a whole build each stage covers, for the one percentage.
 fn percent(progress: Option<native_mods::Progress>) -> u32 {
     let Some(p) = progress else { return 0 };
@@ -128,6 +142,18 @@ impl Launcher {
             .map(|instance| (instance, stake.unbuilt.clone()));
     }
 
+    /// The mods the selected instance's native build left out, as the build recorded them.
+    pub(super) fn native_left_out(&self) -> Vec<native_mods::LeftOut> {
+        if self.mod_preview.active {
+            return self.mod_preview.left_out.clone();
+        }
+        self.selected_instance()
+            .and_then(|instance| self.version_of(instance))
+            .and_then(|version| self.native_build_of(version))
+            .map(|build| build.left_out)
+            .unwrap_or_default()
+    }
+
     /// The selected instance's build card: the build mode, and the build under way or its end.
     pub(super) fn native_build(&self, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
@@ -165,6 +191,9 @@ impl Launcher {
         pal: Pal,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
+        if let Some(check) = self.mod_preview.update.clone() {
+            return Some(self.update_panel(check, "nightly-2026-11-10", String::new(), pal, cx));
+        }
         if self.native_step.is_some() || self.settings.native_mods_allowed_at.is_none() {
             return None;
         }
@@ -274,6 +303,9 @@ impl Launcher {
 
     /// Where the instance's native mods stand, read again only when what it depends on changes.
     pub(super) fn native_state_of(&self, instance: &instances::Instance) -> State {
+        if let Some(state) = self.mod_preview.state.filter(|_| self.mod_preview.active) {
+            return state;
+        }
         let version = self.version_of(instance).cloned();
         let home = self.mods.home();
         let profile = Profile::Optimized;
@@ -596,6 +628,9 @@ impl Launcher {
 
     /// Each turned-on native mod's route; filesystem and release reads never run while drawing.
     pub(super) fn native_routes(&self, cx: &mut Context<Self>) -> native_mods::Routes {
+        if self.mod_preview.active {
+            return self.mod_preview.routes.clone();
+        }
         let home = self.mods.home();
         let plays = self
             .selected_instance()
@@ -637,10 +672,9 @@ impl Launcher {
         native_mods::Routes::default()
     }
 
-    /// The chip that says how `mod_id` reaches the game, with its menu when open.
-    pub(super) fn route_chip(&self, mod_id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let t = self.theme;
-        let pal = Pal::of(&t);
+    /// What the chip and menu of native mod `mod_id` say: its glyph and colour, a headline and why.
+    pub(super) fn route_facts(&self, mod_id: &str, cx: &mut Context<Self>) -> Option<RouteFacts> {
+        let pal = Pal::of(&self.theme);
         let instance = self.selected_instance()?;
         let state = self.native_state_of(instance);
         let busy = self.native_step.is_some();
@@ -718,6 +752,19 @@ impl Launcher {
                 ),
             }
         };
+        Some(RouteFacts {
+            glyph,
+            color,
+            headline,
+            reason,
+        })
+    }
+
+    /// The chip that says how `mod_id` reaches the game, with its menu when open.
+    pub(super) fn route_chip(&self, mod_id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = self.theme;
+        let facts = self.route_facts(mod_id, cx)?;
+        let (glyph, color) = (facts.glyph, facts.color);
         let open = self.mods.route_open.as_deref() == Some(mod_id);
         let id = mod_id.to_owned();
         let chip = crate::keyboard(
@@ -746,118 +793,157 @@ impl Launcher {
         }));
         let mut wrap = div().relative().flex_none().child(chip);
         if open {
-            let home = self.mods.home();
-            // A mod the stop names is decided on the panel: turning it off here would skip the
-            // backup that keeps its worlds' content.
-            let named = self.stop_names(mod_id);
-            let off = {
-                let id = id.clone();
-                ui::menu_item(
-                    "route-off",
-                    trf("Turn off {mod}", &[("mod", mod_id)]).into(),
-                    if named {
-                        tr("Choose what to do about your worlds first").to_string()
-                    } else {
-                        tr("Keeps the file, leaves it out of the game").to_string()
-                    },
-                    busy || named,
-                    &t,
-                )
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    if this.native_step.is_some() || named {
-                        return;
-                    }
-                    this.mods.message =
-                        horizon_launcher::browser::java::set_enabled(&home, &id, false)
-                            .err()
-                            .map(Err);
-                    this.mods.route_open = None;
-                    this.instance_mods_changed();
-                    cx.notify();
-                }))
-            };
-            let worlds_pending = stop.is_some();
-            let build_now = ui::menu_item(
-                "route-build",
-                tr("Build now").into(),
-                if worlds_pending {
-                    tr("Choose what to do about your worlds first").to_string()
-                } else {
-                    tr("Builds the game with your mods").to_string()
-                },
-                busy || state == State::NoMods || worlds_pending,
-                &t,
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                if this.native_step.is_some() || worlds_pending {
-                    return;
-                }
-                this.mods.route_open = None;
-                if this.settings.native_mods_allowed_at.is_some() {
-                    this.build_native();
-                } else {
-                    this.request_native_build_consent();
-                }
-                cx.notify();
-            }));
-            let log = ui::menu_item(
-                "route-log",
-                tr("Show last log").into(),
-                tr("What the last build printed").to_string(),
-                false,
-                &t,
-            )
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.mods.route_open = None;
-                this.native_log_open();
-                cx.notify();
-            }));
-            let backing = if ui::light() {
-                gpui::white().opacity(0.94)
-            } else {
-                ui::color(0x16112b).opacity(0.94)
-            };
-            let menu = ui::popover(280.)
-                .bg(backing)
-                .id("route-menu")
-                .occlude()
-                .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                    this.mods.route_open = None;
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(2.))
-                        .px(px(12.))
-                        .py(px(8.))
-                        .child(
-                            text_in(14., pal.ink)
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(headline),
-                        )
-                        .children(reason.split('\n').map(|paragraph| {
-                            text_in(12., pal.muted)
-                                .pb(px(4.))
-                                .child(paragraph.to_owned())
-                        })),
-                )
-                .child(off)
-                .child(build_now)
-                .child(log);
             wrap = wrap.child(
                 gpui::deferred(
-                    div()
-                        .absolute()
-                        .top(px(34.))
-                        .right_0()
-                        .child(gpui::anchored().anchor(gpui::Anchor::TopRight).child(menu)),
+                    div().absolute().top(px(34.)).right_0().child(
+                        gpui::anchored()
+                            .anchor(gpui::Anchor::TopRight)
+                            .child(self.route_menu(mod_id, &facts, cx)),
+                    ),
                 )
                 .with_priority(1),
             );
         }
         Some(wrap.into_any_element())
+    }
+
+    /// The menu under a native mod's chip (or its status in the glass look): the headline and
+    /// why, then what can be done about it.
+    pub(super) fn route_menu(
+        &self,
+        mod_id: &str,
+        facts: &RouteFacts,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let t = self.theme;
+        let pal = Pal::of(&t);
+        let (headline, reason) = (facts.headline.clone(), facts.reason.clone());
+        let instance = self.selected_instance().map(|i| i.id.clone());
+        let state = self
+            .selected_instance()
+            .map_or(State::NoMods, |i| self.native_state_of(i));
+        let busy = self.native_step.is_some();
+        let mine = self.native_for.is_some() && self.native_for == instance;
+        let stop = self.worlds_stop(mine);
+        let id = mod_id.to_owned();
+        let home = self.mods.home();
+        // A mod the stop names is decided on the panel: turning it off here would skip the
+        // backup that keeps its worlds' content.
+        let named = self.stop_names(mod_id);
+        let off = {
+            let id = id.clone();
+            ui::menu_item(
+                "route-off",
+                trf("Turn off {mod}", &[("mod", mod_id)]).into(),
+                if named {
+                    tr("Choose what to do about your worlds first").to_string()
+                } else {
+                    tr("Keeps the file, leaves it out of the game").to_string()
+                },
+                busy || named,
+                &t,
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if this.native_step.is_some() || named {
+                    return;
+                }
+                this.mods.message = horizon_launcher::browser::java::set_enabled(&home, &id, false)
+                    .err()
+                    .map(Err);
+                this.mods.route_open = None;
+                this.instance_mods_changed();
+                cx.notify();
+            }))
+        };
+        let worlds_pending = stop.is_some();
+        let build_now = ui::menu_item(
+            "route-build",
+            tr("Build now").into(),
+            if worlds_pending {
+                tr("Choose what to do about your worlds first").to_string()
+            } else {
+                tr("Builds the game with your mods").to_string()
+            },
+            busy || state == State::NoMods || worlds_pending,
+            &t,
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            if this.native_step.is_some() || worlds_pending {
+                return;
+            }
+            this.mods.route_open = None;
+            if this.settings.native_mods_allowed_at.is_some() {
+                this.build_native();
+            } else {
+                this.request_native_build_consent();
+            }
+            cx.notify();
+        }));
+        let log = ui::menu_item(
+            "route-log",
+            tr("Show last log").into(),
+            tr("What the last build printed").to_string(),
+            false,
+            &t,
+        )
+        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            this.mods.route_open = None;
+            this.native_log_open();
+            cx.notify();
+        }));
+        let backing = if ui::light() {
+            gpui::white().opacity(0.94)
+        } else {
+            ui::color(0x16112b).opacity(0.94)
+        };
+        // Native mods run as real code: until the player allows them, the menu offers the
+        // trust notice (the glass rows have no button of their own for it).
+        let allow = (t.glass && self.settings.native_mods_allowed_at.is_none()).then(|| {
+            let id = id.clone();
+            ui::menu_item(
+                "route-allow",
+                tr("Allow native mods").into(),
+                tr("Native mods have access to your computer.").to_string(),
+                false,
+                &t,
+            )
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                this.mods.route_open = None;
+                this.pending_consent = Some(PendingConsent::Local(id.clone()));
+                cx.notify();
+            }))
+        });
+        let menu = ui::popover(280.)
+            .bg(backing)
+            .id("route-menu")
+            .occlude()
+            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                this.mods.route_open = None;
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .px(px(12.))
+                    .py(px(8.))
+                    .child(
+                        text_in(14., pal.ink)
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(headline),
+                    )
+                    .children(reason.split('\n').map(|paragraph| {
+                        text_in(12., pal.muted)
+                            .pb(px(4.))
+                            .child(paragraph.to_owned())
+                    })),
+            )
+            .child(off)
+            .child(build_now)
+            .child(log)
+            .children(allow);
+        menu
     }
 
     /// Declared game internals beside the mod's route.

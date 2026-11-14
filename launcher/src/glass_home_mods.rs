@@ -85,11 +85,23 @@ impl Launcher {
         let native = self.mods.java.is_none()
             && self.instance_mods.list.iter().any(|r| {
                 r.native.is_some()
+                    || matches!(r.kind, Some((ModKind::Native, _)))
                     || r.entry
                         .as_ref()
                         .is_some_and(|e| native_status::is_native_file(&e.file))
             });
         body = body.children(native.then(|| self.native_build(cx)).flatten());
+        // Mods the last build left out stay installed: the build says which, and why.
+        let left_out = if native {
+            self.native_left_out()
+        } else {
+            Vec::new()
+        };
+        body = body.children(left_out.iter().map(|left| {
+            ui::text(13., FontWeight::NORMAL, 1.)
+                .text_color(ui::warn())
+                .child(left.label())
+        }));
         let rows: Vec<ModRow> = self
             .instance_mods
             .list
@@ -210,6 +222,7 @@ impl Launcher {
         ui::list_row(key, hovered, hover, &t)
             .child(icon)
             .child(ui::list_text(row.name.clone(), note))
+            .children(row.kind.as_ref().map(|(kind, _)| kind_pill(*kind)))
             .child(status.relative())
             .children(update.map(|u| u.relative()))
             .children(github.map(|g| g.relative()))
@@ -262,7 +275,7 @@ impl Launcher {
             Some(_) if unbuilt => (tr("Needs build"), ui::warn()),
             Some(_) => (tr("Ready"), ui::live()),
         };
-        div()
+        let shown = div()
             .flex()
             .flex_none()
             .items_center()
@@ -272,7 +285,53 @@ impl Launcher {
                 ui::text(12., FontWeight::MEDIUM, 1.)
                     .text_color(color)
                     .child(word),
+            );
+        // A native mod's word opens what its chip says on the old look: how it reaches the game
+        // (fits, exact build only, does not fit, did not build) and what can be done.
+        let facts = id
+            .as_deref()
+            .filter(|_| row.on)
+            .and_then(|id| self.route_facts(id, cx).map(|facts| (id.to_owned(), facts)));
+        let Some((id, facts)) = facts else {
+            return div().child(shown);
+        };
+        let open = self.mods.route_open.as_deref() == Some(id.as_str());
+        let toggle = id.clone();
+        let button = crate::keyboard(
+            div()
+                .id(SharedString::from(format!("mod-route-{}", row.file)))
+                .flex()
+                .items_center()
+                .h(px(28.))
+                .px(px(8.))
+                .rounded(px(radius::SMALL))
+                .cursor_pointer()
+                .bg(facts.color().opacity(if open { 0.2 } else { 0. }))
+                .hover(|s| s.bg(white(0.07)))
+                .child(shown),
+            &self.theme,
+        )
+        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+            if this.closed_by_this_press(event) {
+                return;
+            }
+            this.mods.route_open = match this.mods.route_open.as_deref() {
+                Some(open) if open == toggle => None,
+                _ => Some(toggle.clone()),
+            };
+            cx.notify();
+        }));
+        let menu = open.then(|| {
+            gpui::deferred(
+                div().absolute().top(px(32.)).right_0().child(
+                    gpui::anchored()
+                        .anchor(gpui::Anchor::TopRight)
+                        .child(self.route_menu(&id, &facts, cx)),
+                ),
             )
+            .with_priority(1)
+        });
+        div().relative().child(button).children(menu)
     }
 
     /// A native mod's switch, with its consent step.
@@ -461,4 +520,36 @@ fn find_mods(cx: &mut Context<Launcher>) -> Listener<ClickEvent> {
         this.go(Page::Mods);
         cx.notify();
     }))
+}
+
+/// What a Horizon mod is (Native, WebAssembly, Content), as the old look's badge says it: a
+/// native one is real code, never hidden.
+fn kind_pill(kind: ModKind) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .h(px(20.))
+        .px(px(8.))
+        .rounded_full()
+        .bg(white(0.07))
+        .child(ui::text(11., FontWeight::MEDIUM, 0.6).child(kind.label()))
+}
+
+impl Launcher {
+    /// Under Home's head: a build that stopped or was refused, with its remedy, even when the
+    /// Mods tab is not the one open (Build and play starts from the Play button).
+    pub(super) fn glass_build_notice(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let mine = self
+            .selected_instance()
+            .is_some_and(|i| self.native_for.as_deref() == Some(i.id.as_str()));
+        if !mine
+            || self.home_tab == home_tabs::HomeTab::Mods
+            || (self.native_error.is_none() && self.native_worlds.is_none())
+        {
+            return None;
+        }
+        let card = self.native_build(cx)?;
+        Some(crate::glass::plate(radius::PANEL).p(px(20.)).child(card))
+    }
 }

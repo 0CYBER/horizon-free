@@ -43,7 +43,7 @@ mod picker;
 mod prebuilt;
 pub mod sdk_cache;
 
-pub use isolate::LeftOut;
+pub use isolate::{LeftOut, Why};
 pub use picker::{Route, Routes};
 pub use prebuilt::Refusal;
 pub use registry_inventory::Inventory as RegistryInventory;
@@ -1277,7 +1277,7 @@ fn with_app_control(error: String) -> String {
 }
 
 /// [`run`]'s error: the `errors` lines not already among the last ones (`tail`), then those.
-fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> String {
+pub fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> String {
     let end = diagnostic(&tail.join("\n")).unwrap_or_else(|| tail.join("\n"));
     let first: Vec<&str> = errors
         .iter()

@@ -213,6 +213,9 @@ impl Launcher {
 
     /// Reads the selected instance's mods off the UI thread, once until something changes them.
     fn load_instance_mods(&mut self, cx: &mut Context<Self>) {
+        if self.mod_preview.active {
+            return;
+        }
         let Some(i) = self.selected_instance() else {
             return;
         };
