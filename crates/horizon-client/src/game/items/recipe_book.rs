@@ -1558,8 +1558,9 @@ impl Game<'_> {
                 missing_cells: Vec::new(),
             });
         }
-        if !self.mod_recipe_screen() || !self.remote.as_ref().is_some_and(|r| r.recipe_viewer.check)
-        {
+        let eligible_menu = self.mod_recipe_screen()
+            || (self.screen == Screen::Inventory && !self.spectator() && self.mod_menu_open());
+        if !eligible_menu || !self.remote.as_ref().is_some_and(|r| r.recipe_viewer.check) {
             return None;
         }
         let now = Instant::now();
@@ -2328,3 +2329,7 @@ mod tests {
         assert!(!super::escape_closes_book(super::NARROW - 1.0, false));
     }
 }
+
+#[cfg(test)]
+#[path = "recipe_book/check_mod_menu_tests.rs"]
+mod check_mod_menu_tests;
