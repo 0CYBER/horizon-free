@@ -135,10 +135,17 @@ impl Game<'_> {
         line: &str,
         permission: u8,
     ) -> (bool, Vec<Text>) {
+        let silent = source.silent;
         let outer = self.command_source.replace(source);
         let filter = std::mem::replace(&mut self.native_command_filter, true);
         let console = self.console_broadcast.take();
-        let capture = self.chat_capture.replace(Vec::new());
+        // A silent nonplayer source has no recipient for captured output. In
+        // particular, say broadcasts independently of feedback: leaving capture
+        // enabled would exclude the acting guest without ever delivering its copy.
+        let capture = std::mem::replace(
+            &mut self.chat_capture,
+            if silent { None } else { Some(Vec::new()) },
+        );
         let outer_exec = std::mem::take(&mut self.exec);
         let level = std::mem::replace(&mut self.ui.registries.permission, permission);
         let ok = self.run_command(line);
@@ -158,6 +165,84 @@ mod tests {
     use crate::game::native_guest_turn_tests::with_guests;
     use horizon_protocol::packets::play::Clientbound as C;
     use mod_api::{GameMode, PermissionLevel};
+
+    #[test]
+    #[ignore = "daily"]
+    fn silent_entity_say_reaches_every_guest_without_feedback_or_outer_capture() {
+        with_guests(|game| {
+            game.build_registries();
+            game.options.dedicated = Some(Vec::new());
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+            );
+            let id = game
+                .summon(
+                    game.dim.id(),
+                    "minecraft:armor_stand",
+                    [1.5, 70.0, 1.5],
+                    Default::default(),
+                )
+                .unwrap();
+            let stand = game.entity(id).unwrap();
+            let receivers: Vec<_> = [12, 13]
+                .into_iter()
+                .map(|conn| {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    game.lan.as_mut().unwrap().hub.update_guest(conn, |guest| {
+                        guest.sender =
+                            horizon_client::lan::PlayerSender::new(tx, std::sync::Arc::default());
+                    });
+                    rx
+                })
+                .collect();
+            game.as_guest(12, |game| {
+                game.chat_capture = Some(vec![Text::literal("outer command")]);
+                let denied = stand.run_command_with_output(
+                    game,
+                    "/say forbidden",
+                    PermissionLevel::from_level(0),
+                );
+                assert!(!denied.success);
+                assert!(denied.feedback.is_empty());
+                for rx in &receivers {
+                    assert!(rx.try_recv().is_err(), "denied say must not broadcast");
+                }
+                let result = stand.run_command_with_output(
+                    game,
+                    "/say silent source announcement",
+                    PermissionLevel::from_level(2),
+                );
+                assert!(result.success);
+                assert!(result.feedback.is_empty());
+                assert_eq!(
+                    game.chat_capture
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .map(Text::plain)
+                        .collect::<Vec<_>>(),
+                    ["outer command"]
+                );
+                for rx in &receivers {
+                    let mut announcements = 0;
+                    while let Ok(horizon_client::lan::Out::Packet(body)) = rx.try_recv() {
+                        let mut reader = horizon_protocol::buf::Reader::new(&body);
+                        let id = reader.varint().unwrap();
+                        if let C::DisguisedChat(chat) = C::decode(id, reader.rest()).unwrap() {
+                            assert_eq!(
+                                horizon_client::component::name_text(&chat.message).plain(),
+                                "silent source announcement"
+                            );
+                            announcements += 1;
+                        }
+                    }
+                    assert_eq!(announcements, 1, "acting guest and peer each hear say once");
+                }
+            })
+            .unwrap();
+        });
+    }
 
     #[test]
     #[ignore = "daily"]

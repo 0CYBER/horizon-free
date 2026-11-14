@@ -74,14 +74,16 @@ Entities a transaction spawns or removes follow the same commit and rollback rul
   never reused, so the aborted entity's id stays burnt and a stale handle never names a later entity.
 - A removal (`EntityRef::discard`, a kill) marks the entity at the call: its handle and selectors
   stop finding it, and a mob reads as removed (it is flagged at the call; any other entity is
-  listed as removed until the commit has run its removal, joins told by then included). Passengers dismount, the leave
+  listed as removed until the commit has run its removal, joins told by then included).
+  Passengers dismount, the leave
   is told and the other effects of removal wait for the outermost commit; an abort puts the
   entity back as it was and tells no one. An entity spawned and removed in the same
   transaction is never announced, so it never leaves.
 - A spawn is refused, inside a transaction as outside one, once the entity ids run out.
 - A transaction covers the entities of the level it was opened in; with transactions of several levels open (a command run `in` another level can open one), an entity belongs to the innermost one of its own level. A command it runs in another
-  level (`execute in`) spawns or removes there as it would outside a transaction: the join and
-  the leave are told at once, and an abort does not take the entity back. A join listener that
+  level (`execute in`) spawns or removes there as it would outside a transaction when no
+  transaction is open in that level: the join and the leave are told at once, and an abort does
+  not take the entity back. With one open there, the innermost of that level journals it, as above. A join listener that
   spawns, removes or commits a transaction while a commit is telling its joins is told about its
   own entities after the commit's batch, in the order it asked.
 - Travel between levels is not journaled: an entity that arrives in another level during an aborted

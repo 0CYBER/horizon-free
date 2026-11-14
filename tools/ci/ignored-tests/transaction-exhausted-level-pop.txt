@@ -1,0 +1,2 @@
+# An exhausted id counter refuses a level pop before any random draw.
+horizon-client game::transaction_entities_tests::an_exhausted_level_pop_draws_nothing_from_the_level_random lib daily child-process

@@ -7,10 +7,14 @@ Code follows agreement on this note.
 
 ## Moments and typed contract
 
-Declare exactly two catalog moments: `living_travel` and `entity_move`. Both use
-`HostSide` with typed `ServerHost` or `ClientHost` access, never an unchecked side
-flag granting server writes. Entity reads and authoritative writes belong on typed
-entity/player handles; do not add entity-id movement methods to Host.
+Declare exactly two catalog moments: `living_travel` and `entity_move`. Travel
+uses `HostSide` with typed `ServerHost` or `ClientHost` access, never an
+unchecked side flag granting server writes. Entity reads and authoritative
+writes belong on typed entity/player handles; do not add entity-id movement
+methods to Host. `entity_move` is ruled otherwise (#2414 maintainer ruling): a
+loop-context hook **without a host**, like `ender_entity_teleport` — there is
+nothing at that point in the reference for the hook to mirror, so the listener
+only decides the delta: continue, cancel or replace.
 
 Travel fires once at the LivingEntity.travel boundary, after ordinary input and
 attribute resolution and player swimming preparation, before fluid/air/glide
@@ -26,9 +30,10 @@ hook adds multipliers or a parallel attribute system.
 
 Move fires once per physical Entity.move invocation, including external pushes,
 before no-physics handling, piston limiting, stuck multipliers, edge backoff and
-collision. Snapshot includes entity handle, starting position/AABB, requested delta,
-velocity, typed cause (Self, Piston, ShulkerBox, Shulker or Vehicle), epoch and
-identity `(connection epoch, tick, action sequence, invocation ordinal)`. Output is
+collision. The listener hears the entity, its kind, the requested delta and the
+typed cause (Self, Player, Piston, ShulkerBox or Shulker — vanilla's
+five `MoverType` names; boats and minecarts move as Self, `Player` is the
+server packet sites). Output is
 `Continue`, `Cancel`, or `ReplaceDelta(Vec3)`. Cancel skips that invocation without
 changing position, velocity, collision flags or fall state and emits no displacement
 notice. Replacement still passes through all ordinary restrictions. Collision,
@@ -44,9 +49,13 @@ Reject the entire malformed result (NaN, infinity, out-of-range, including negat
 magnitude budgets); signed negative vector components within range are valid.
 Reject rather than clamp, retain the preceding valid proposal, and diagnose once
 per listener/tick. Dependency-ordered listeners see the preceding valid proposal;
-Cancel is terminal. Panic or wasm trap rolls back that listener's writes, discards
-its result and disables it for the session; continue from the preceding proposal.
-Native abort cannot be recovered. Native and wasm otherwise share validation.
+Cancel is terminal. For `entity_move` — with no host writes there is nothing to
+go stale — a panic or wasm trap keeps the **requested** delta (not a replacement
+an earlier listener had proposed), and the panic poison disables that listener
+for the session; the move carries on. A rejected replacement is refused as the
+requested delta would be: result validation, not a stale-decision recheck.
+Native abort cannot be recovered. Native and wasm otherwise share validation
+and see the same hook through the generator.
 
 ## Ownership and route map
 
@@ -79,12 +88,18 @@ lands and route their actual Entity.move equivalents through this boundary.
 
 ## Transaction, prediction and replay
 
-Use decide/fire/apply: lower physics prepares a bounded immutable decision, the
-game dispatches with Host, and apply revalidates entity existence, level epoch,
-position, velocity, attributes and collision/environment revision in the same
-transaction as listener writes. A changed precondition refuses the decision and
-rolls back that transaction; never recompute against changed state mid-callback.
-No listeners takes the existing path without snapshots, allocations or mod scans.
+`living_travel` uses decide/fire/apply: lower physics prepares a bounded
+immutable decision, the game dispatches with Host, and apply revalidates entity
+existence, level epoch, position, velocity, attributes and collision/environment
+revision in the same transaction as listener writes. A changed precondition
+refuses the decision and rolls back that transaction; never recompute against
+changed state mid-callback. `entity_move`, ruled hostless (#2414), reduces to
+result validation: the armed gate holds the requested delta, a listener result
+that passes the budget replaces it, malformed output falls back to it, and
+cancellation skips the invocation. A panic keeps the requested delta while its
+poison disables that listener for this hook for the session. Both take
+the existing path without snapshots, allocations or mod scans when nobody
+subscribes — dispatch only to subscribed mods, resolved once.
 
 Integrate with the [client action pipeline](client-action-pipeline.md), preserving
 its input/action ordering and server validation. Negotiate movement-rule identity

@@ -165,6 +165,8 @@ fn install(mods: Arc<[ModEntry]>) {
     });
     let subscribers =
         horizon_mod_runtime::subscribers::Subscribers::new(HOOK_COUNT, mods.len(), subscriptions);
+    // A fresh installation starts poison-free, as the real runtime's does per session.
+    runtime::POISONED.with(|poisoned| poisoned.borrow_mut().clear());
     // Test dispatch needs the same static lifetime as the real installation.
     MODS.set(Some(Box::leak(Box::new(Installed { mods, subscribers }))));
 }
@@ -200,21 +202,6 @@ fn listening(hook_id: HookId) -> impl Iterator<Item = (bool, &'static ModEntry)>
                 )
             })
     })
-}
-mod runtime {
-    pub(super) struct ListenerScope;
-    impl ListenerScope {
-        pub(super) fn new() -> Self {
-            Self
-        }
-        pub(super) fn enter(
-            &mut self,
-            entry: &'static super::ModEntry,
-            hook: &'static str,
-        ) -> &'static dyn super::Hooks {
-            super::enter_listener(entry, hook).1
-        }
-    }
 }
 fn enter_listener(entry: &'static ModEntry, hook: &'static str) -> ((), &'static dyn Hooks) {
     let index = MODS

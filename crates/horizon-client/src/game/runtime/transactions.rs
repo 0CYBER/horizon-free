@@ -510,12 +510,13 @@ impl Game<'_> {
                     .and_then(|dim| entities::open_in(&mut self.transactions, dim))
                 {
                     Some(enclosing) => enclosing.lifetimes.merge(lifetimes),
-                    None => self.commit_entity_journal(lifetimes),
+                    None => self.commit_entity_journal(lifetimes, |_| {}),
                 }
             }
             (true, None) => {
-                self.root_commit(level);
-                self.commit_entity_journal(lifetimes);
+                // The commit is in place before the effects run: a join one causes (a placed
+                // item's leftover spawning) never announces what the transaction added and removed.
+                self.commit_entity_journal(lifetimes, |game| game.root_commit(level));
             }
             (false, _) => {
                 // The entities it added go first, so nothing is put back into one.

@@ -4,40 +4,108 @@
 //! here; `clippy.toml` bans calling the `resolve*` entries anywhere else, so a
 //! forgotten family cannot compile around the gate.
 //!
-//! PR 1a carries no hook: `arm` only records the cause and the movement, every
-//! decision is `Run`, and a move with no listener costs one branch. PR 1b adds
-//! the `entity_move` hook inside [`arm`] — decide, fire, apply with a revision
-//! recheck — leaving these signatures as they are.
+//! [`arm`] is also where the `entity_move` hook fires (#2414, design #2308):
+//! decide, fire, apply — in that one function, on the authoritative side, only
+//! when a listener subscribes (one branch otherwise: no snapshot, no
+//! allocation, no mod scan).
 use crate::collisions::{EntityCollisions, SceneCollisions};
 use horizon_core::geometry::{Aabb, Vec3, border::BorderGeometry};
 use horizon_world::block_collision_scan::BlockCollisionWorld;
 use horizon_world::collision_context::CollisionContext;
 use horizon_world::entity_move::MoverType;
 use horizon_world::move_gate::MoveGate;
-use horizon_world::native_load_context::LoopContext;
+use horizon_world::native_load_context::{LoopContext, LoopSide};
 use horizon_world::world_movement::EntityMovementWorld;
+use mod_api::MoveCause;
 use std::borrow::Cow;
 use std::io;
 
+/// The `entity_move` hook's target (#2414): the generated dispatch the
+/// catalog's generator requires of a target, with the loop's own reader as
+/// the context. Its declaration carries `isolate`, so the same generated
+/// walk is the one the move gate dispatches through — no alias, no second
+/// route.
+pub fn native_entity_move(
+    context: &LoopContext,
+    entity: u32,
+    kind: &str,
+    cause: MoveCause,
+    delta: &mut [f64; 3],
+    canceled: &mut bool,
+) {
+    let reader = horizon_client_render::api_context::LoopReader(context);
+    mod_api::dispatch_entity_move(&reader.context(), entity, kind, cause, delta, canceled);
+}
+
+/// The cause the mod API names for a `MoverType` (`entity_move` of #2414):
+/// vanilla's five mover names, one for one.
+fn cause_of(cause: MoverType) -> MoveCause {
+    match cause {
+        MoverType::SelfMovement => MoveCause::SelfMovement,
+        MoverType::Player => MoveCause::Player,
+        MoverType::Piston => MoveCause::Piston,
+        MoverType::ShulkerBox => MoveCause::ShulkerBox,
+        MoverType::Shulker => MoveCause::Shulker,
+    }
+}
+
 /// Arm one physical `Entity.move` invocation (#2414): the entity `entity` is
-/// about to move by `delta` for `cause`'s sake. PR 1b fires the `entity_move`
-/// hook here — in this one function — and writes what the listeners decided
-/// into `gate`; PR 1a records the movement unchanged.
+/// about to move by `delta` for `cause`'s sake. The `entity_move` hook fires
+/// here — in this one function — on the authoritative side, and only when a
+/// listener subscribes; with none, or on a client's own prediction, the
+/// movement is recorded unchanged and the tick cost is the subscriber branch.
+/// A listener that cancels skips the invocation; a replacement outside ±64
+/// blocks per axis, or not a finite number, is refused whole — the movement
+/// stands as the requested delta would. A listener that unwinds keeps the
+/// **requested** delta — the generated isolated dispatch rolls its writes
+/// back, skips it from this hook's next dispatch for the session and leaves
+/// its other hooks and Parts alone — and the move carries on.
 ///
 /// `kind` names the entity's type (`minecraft:zombie`) only when called: a
-/// listener needs it, a move nobody listens to must not pay for it. PR 1b
-/// calls it after the subscriber check, so with no listener a move costs one
-/// branch and builds no string.
+/// listener needs it, a move nobody listens to must not pay for it. It runs
+/// after the subscriber check, so with no listener a move costs one branch
+/// and builds no string.
 #[inline(never)]
 pub fn arm_with<'k>(
     gate: &mut MoveGate,
-    _context: &LoopContext,
-    _entity: u32,
-    _kind: impl FnOnce() -> Cow<'k, str>,
+    context: &LoopContext,
+    entity: u32,
+    kind: impl FnOnce() -> Cow<'k, str>,
     cause: MoverType,
     delta: Vec3,
 ) {
+    // The requested delta is the floor every listener result falls back to:
+    // armed first, the decision replaced only by a result that passes
+    // validation — the request stays what `overridden` measures against.
     gate.arm(cause, delta);
+    if context.side() != LoopSide::Server {
+        return;
+    }
+    if !mod_api::__private::listened(mod_api::HookId::EntityMove) {
+        return;
+    }
+    let kind = kind();
+    let mut replaced = [delta.x, delta.y, delta.z];
+    let mut canceled = false;
+    let reader = horizon_client_render::api_context::LoopReader(context);
+    mod_api::dispatch_entity_move(
+        &reader.context(),
+        entity,
+        &kind,
+        cause_of(cause),
+        &mut replaced,
+        &mut canceled,
+    );
+    if canceled {
+        gate.skip();
+        return;
+    }
+    // Design #2308: replacement components lie in ±64 blocks and are finite;
+    // a malformed result is rejected whole — like the requested delta would
+    // be — never clamped.
+    if replaced.iter().all(|v| v.is_finite() && v.abs() <= 64.0) {
+        gate.decide(Vec3::new(replaced[0], replaced[1], replaced[2]));
+    }
 }
 
 /// [`arm_with`] for a mover whose type name is already a borrowed `&str`.

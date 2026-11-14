@@ -564,7 +564,8 @@ pub trait LivingBackendMut {
     /// death's drops. `include_thrower_name` sets the thrower, and a player's
     /// throw along the view then counts in its stats and fires `item_toss`.
     /// None for an empty stack, a stand or the dragon, a stale handle, or an
-    /// item a mod kept out. API @API:living_refs@.
+    /// item a mod kept out. Inside a transaction its join waits for the root commit, so a mod
+    /// keeping the item out is not known at the call. API @API:living_refs@.
     #[access(WorldOnly)]
     fn living_drop(
         &mut self,

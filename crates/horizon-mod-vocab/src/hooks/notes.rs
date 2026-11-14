@@ -610,8 +610,8 @@ During a machine's own tick its block entity is out of the world, so it has no c
 names the level it means by its `dimension` (`minecraft:overworld`), as `native_set_block` does.
 
 - `native_summon(dimension, kind, pos, nbt)` spawns an entity of `kind` from its compound, as `/summon <kind> <pos> <nbt>`
-  does (passengers included), and returns its id. None on a client, for another dimension, a position outside `/summon`'s
-  bounds, a chunk that isn't loaded, a kind Horizon can't load, or one a mod kept out with `entity_join_level`.
+  does (passengers included), and returns its id. None on a client, for another dimension, outside `/summon`'s bounds, an
+  unloaded chunk, an unloadable kind, or a mod's `entity_join_level` veto (in a transaction its id goes stale).
 
 A model that moves (a turning gun barrel, a thrown projectile) is an `item_display` showing an item whose model comes from
 the mod's `.hmod` assets: summon it once, then move it and pose it with `DisplayRef` from a tick hook. Easing between ticks happens on each
