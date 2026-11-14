@@ -33,7 +33,7 @@ pub(super) fn tick_air(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     } else if m.kind.flags.needs_water {
         if !m.fluids.in_water {
             m.air -= 1;
-            if m.air == -20 {
+            if m.air <= -20 {
                 m.air = 0;
                 hurt(m, w, events, 2.0, Damage::of(DamageKind::Drown));
             }
@@ -55,13 +55,22 @@ pub(super) fn tick_air(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let nautilus = m.has_effect("minecraft:breath_of_the_nautilus");
         let drowns = submerged && !can_breathe_under_water(m) && !water_breathing && !nautilus;
         let held = submerged && nautilus && !water_breathing;
+        let max = m.max_air_supply();
         let vanilla = Breath {
             can_breathe: !drowns,
             consume: if keeps_its_air(m) { 0 } else { 1 },
-            refill: if drowns || held { 0 } else { 4 },
+            // `increaseAirSupply`: four a tick, except the dolphin's own, which
+            // hands back the whole 4800 maximum however little air it has.
+            refill: if drowns || held {
+                0
+            } else if m.species() == Species::Dolphin {
+                max.saturating_sub(m.air)
+            } else {
+                4
+            },
         };
         let breath = breathe(m.id, &m.kind.id, vanilla);
-        if let Some(drowning) = drown(m.id, &m.kind.id, &mut m.air, breath, true) {
+        if let Some(drowning) = drown(m.id, &m.kind.id, &mut m.air, max, breath, true) {
             events.push(MobEvent::Drown {
                 mob: m.id,
                 at: [m.position.x, m.position.y, m.position.z],
@@ -118,6 +127,70 @@ mod tests {
                 drowned("minecraft:sulfur_cube", false, Some("minecraft:stone")),
                 (0.0, 300)
             );
+        });
+        let _ = ran;
+    }
+
+    /// `WaterAnimal.handleAirSupply` asks `shouldTakeDrowningDamage`, which is
+    /// `getAirSupply() <= -20`: a cod summoned with `{Air:-25}` still drowns, is
+    /// reset to 0 and takes the 2, and the next hit is 20 ticks later.
+    #[test]
+    fn a_water_creature_below_minus_twenty_still_drowns() {
+        let ran = crate::mobs::world::with_test_world(&[], |w, types| {
+            let drowned = |start: i32, ticks: usize| {
+                let kind = Arc::new(types.types["minecraft:cod"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.air = start;
+                let health = m.health;
+                let mut events = Vec::new();
+                for _ in 0..ticks {
+                    tick_air(&mut m, w, &mut events);
+                }
+                (health - m.health, m.air)
+            };
+            // Out of water the handler takes one a tick, then hurts at -20 or below.
+            assert_eq!(drowned(-25, 1), (2.0, 0));
+            assert_eq!(drowned(-20, 1), (2.0, 0));
+            assert_eq!(drowned(0, 19), (0.0, -19));
+            assert_eq!(drowned(0, 20), (2.0, 0));
+        });
+        let _ = ran;
+    }
+
+    /// `Dolphin.getMaxAirSupply` is 4800 and `Dolphin.increaseAirSupply` hands
+    /// back the whole maximum, so under Water Breathing a submerged dolphin is
+    /// at 4800 on the next tick, and out of water it refills straight to it too.
+    /// An ordinary mob still climbs four at a time to 300, and a fish's own
+    /// handler still fills it to 300 in water.
+    #[test]
+    fn a_dolphin_refills_to_its_own_maximum() {
+        let ran = crate::mobs::world::with_test_world(&[], |w, types| {
+            let after = |id: &str, start: i32, submerged: bool, breathing: bool| {
+                let kind = Arc::new(types.types[id].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.fluids.in_water = submerged;
+                m.fluids.eye_in_water = submerged;
+                if breathing {
+                    m.add_effect("minecraft:water_breathing", 100, 0);
+                }
+                m.air = start;
+                let mut events = Vec::new();
+                tick_air(&mut m, w, &mut events);
+                (m.air, m.health)
+            };
+            assert_eq!(after("minecraft:dolphin", 100, true, true), (4800, 10.0));
+            assert_eq!(after("minecraft:dolphin", 100, false, false), (4800, 10.0));
+            // Without the effect it still holds its breath, a tick at a time.
+            assert_eq!(after("minecraft:dolphin", 4800, true, false).0, 4799);
+            // `getAirSupply() < getMaxAirSupply()`: air already above the
+            // maximum is left alone, in water or out.
+            assert_eq!(after("minecraft:dolphin", 5000, false, false).0, 5000);
+            assert_eq!(after("minecraft:dolphin", 5000, true, true).0, 5000);
+            // Another mob keeps Entity.getMaxAirSupply's 300.
+            assert_eq!(after("minecraft:zombie", 100, true, true).0, 104);
+            assert_eq!(after("minecraft:zombie", 299, true, true).0, 300);
+            // A fish's own handler fills it straight to 300 in water.
+            assert_eq!(after("minecraft:cod", 100, true, false).0, 300);
         });
         let _ = ran;
     }

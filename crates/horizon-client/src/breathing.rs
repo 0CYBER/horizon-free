@@ -13,8 +13,9 @@ pub struct Breath {
     /// `decreaseAirSupply`: 1, or 0 by the oxygen bonus's chance, for an
     /// entity that drowns; 1 for one that would not.
     pub consume: i32,
-    /// `increaseAirSupply`: 4 for one that can breathe, 0 for one that drowns
-    /// or is held under by the nautilus' breath.
+    /// `increaseAirSupply`: 4 for one that can breathe, the whole maximum for a
+    /// dolphin (whatever its air, hence less it), 0 for one that drowns or is
+    /// held under by the nautilus' breath.
     pub refill: i32,
 }
 
@@ -24,8 +25,9 @@ pub struct Breath {
 /// `minecraft:zombie`). `can_breathe`, `consume` and `refill` come in as
 /// Horizon does it today (a mod-free game changes nothing); set them to
 /// change this tick. With `can_breathe` the air rises by `refill`, up to its
-/// maximum (300); without, it falls by `consume`, and at -20 it is set to 0
-/// and the entity takes 2 drowning damage. Negative amounts count as 0.
+/// maximum (300; 4800 for a dolphin); without, it falls by `consume`, and at -20
+/// it is set to 0 and the entity takes 2 drowning damage. Negative amounts count
+/// as 0.
 /// Asked on servers for players and for mobs, except those with a
 /// `WaterAnimal`'s or an axolotl's own air logic. API 144.
 #[inline(never)]
@@ -85,17 +87,19 @@ pub struct Drowning {
     pub damage: Option<f32>,
 }
 
-/// `breath` applied to `air` (`apply`), then `LivingEntity.baseTick`'s
-/// drowning, which the mods may change when `server` (`native_living_drown`).
-/// An entity that drowns is set to 0 air.
+/// `breath` applied to `air` up to `max` (`getMaxAirSupply`: 300, 4800 for a
+/// dolphin) (`apply`), then `LivingEntity.baseTick`'s drowning, which the mods
+/// may change when `server` (`native_living_drown`). An entity that drowns is set
+/// to 0 air.
 pub fn drown(
     entity: u32,
     kind: &str,
     air: &mut i32,
+    max: i32,
     breath: Breath,
     server: bool,
 ) -> Option<Drowning> {
-    let (next, drowned) = apply(*air, 300, breath);
+    let (next, drowned) = apply(*air, max, breath);
     *air = if drowned { *air - breath.consume } else { next };
     let (mut drowning, mut damage, mut cancel) = (drowned, 2.0, false);
     if server && !breath.can_breathe && *air <= 0 {
