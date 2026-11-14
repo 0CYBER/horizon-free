@@ -129,12 +129,12 @@ fn a_blank_line_or_no_server_runs_nothing() {
 #[test]
 fn the_feedback_kept_is_capped() {
     use horizon_client::text::Text;
-    let long = Text::literal(&format!(
+    let long = Text::literal(format!(
         "ab{}",
         "\u{20ac}".repeat(CommandResult::MAX_LINE_BYTES)
     ));
     let many: Vec<Text> = std::iter::once(long)
-        .chain((1..CommandResult::MAX_LINES + 40).map(|n| Text::literal(&format!("line {n}"))))
+        .chain((1..CommandResult::MAX_LINES + 40).map(|n| Text::literal(format!("line {n}"))))
         .collect();
     let kept = super::native_console::capped_lines(&many);
     assert_eq!(kept.len(), 256);
