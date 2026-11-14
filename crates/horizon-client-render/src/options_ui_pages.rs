@@ -1,7 +1,6 @@
 //! The pages crates add to the options screens: a native mod's settings page (its keys and
 //! buttons), and the pages crates above the engine register (`horizon_hooks::pages`, docs/layers.md
-//! "Platform registries") with their entries on Horizon Settings. Kept out of options_ui.rs, which
-//! may not grow (tools/check_file_size.py).
+//! "Platform registries") with their entries on Horizon Settings. Kept out of options_ui.rs.
 use super::*;
 use horizon_hooks::pages as added;
 

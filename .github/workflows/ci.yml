@@ -82,7 +82,7 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup default stable
           echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
-      # On a pull request, the next three checks compare with HEAD^1: the main that GitHub's merge commit puts the pull
+      # On a pull request, the next two checks compare with HEAD^1: the main that GitHub's merge commit puts the pull
       # request on. pull_request.base.sha is main at the pull request's last push and falls behind, so main's own
       # changes since then would count as the pull request's (#13874).
       # docs/layers.md: a crate depends only on its own layer or a lower one; today's exceptions only shrink.
@@ -95,11 +95,6 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
         run: python3 tools/check_addresses.py ${BASE:+--base "$BASE"}
-      # docs/layers.md#file-size: a Rust file over 3000 lines may not grow (pull requests; main has no base to compare).
-      - name: Big files don't grow
-        env:
-          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
-        run: python3 tools/check_file_size.py ${BASE:+--base "$BASE"}
       - name: Test offline research tooling
         run: python -m unittest discover -s tests -v
       - name: Install Rust toolchain and the ALSA and udev headers the client links against

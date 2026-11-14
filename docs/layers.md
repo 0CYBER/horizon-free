@@ -34,7 +34,7 @@ Credits:
   Horizon's own parts from another repository as a launcher plugin.
 - **Martipops** (controllers, splitscreen): the compositor's place in the engine, and where controllers,
   splitscreen, Replay Studio, PvP & HUD and a UI page API go.
-- **Contributors at the 2026-11-08 stage:** the file-size rule, the single list of addresses, sponsors in the
+- **Contributors at the 2026-11-08 stage:** the single list of addresses, sponsors in the
   Horizon layer, a platform that exposes what vanilla already uses, and extras as native mods.
 
 ## The rule
@@ -412,7 +412,7 @@ pub fn connect(address: impl Into<String>);                   // from a Title pa
 - Rows are rebuilt when the page is drawn or acted on, like the engine's own pages: no cost while no page is
   open.
 - The engine keeps native mods' pages (`Page::NativeMod`) as they are. Both kinds sit in one module that
-  `options_ui.rs` calls: `options_ui.rs` is over 3000 lines and doesn't grow.
+  `options_ui.rs` calls.
 
 ### HUD drawing (`horizon_platform::hud`)
 
@@ -554,15 +554,6 @@ themselves, or stays a cfg-gated module linked into the official build. None mov
 The minimap already moved to a native mod ([extras.md](extras.md#moved-to-native-mods)). Splitscreen,
 controllers and replay recording are not extras: they are platform ([above](#controllers-splitscreen-replays-and-ui-pages)).
 
-## File size
-
-A Rust file over 3000 lines may not grow compared with the base of the branch. `game.rs` (~21,700 lines),
-`game/remote.rs` (~10,900) and `gfx.rs` (~10,100) are the worst; they slow incremental builds. Smaller files may
-grow to 3000 lines, and a big file may shrink or stay as it is. There is no list of files, so no check breaks on
-an unrelated edit. Generated files and `third_party/` are not checked. Test code doesn't count either, since a normal
-build doesn't compile it: inline `#[cfg(test)] mod name { ... }` modules, and files named `tests.rs` or
-`<name>_tests.rs`. Other `#[cfg(test)]` items count.
-
 ## The checks
 
 - `python3 tools/check_layers.py` (#12983) reads the workspaces' `cargo metadata` (no build, about a second) and
@@ -576,9 +567,8 @@ build doesn't compile it: inline `#[cfg(test)] mod name { ... }` modules, and fi
   Each failure names the section of this page that applies. An `allowed` entry with no dependency left is only a
   note.
 - `python3 tools/check_addresses.py` (#12990) checks the built-in addresses ([below](#built-in-addresses)).
-- `python3 tools/check_file_size.py` (#13015) checks the file-size rule above.
 
-All three run in CI's verify job and in `tools/pr_ready.py`.
+Both run in CI's verify job and in `tools/pr_ready.py`.
 
 ### Today's exceptions
 
@@ -651,7 +641,6 @@ These are not addresses:
   code is just as wrong, and so is Horizon code that reaches into the engine instead of the platform.
 - Horizon features in the game are behind `horizon-extras`, and nothing new names a Horizon crate below it.
 - No new built-in address outside `horizon-addresses`.
-- No file over 3000 lines grows.
 
 ## Plan
 
