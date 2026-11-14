@@ -27,6 +27,9 @@ pub struct RenderPipeline {
     /// fails and keeps the previous resources. An optional one is logged once by id and resolves
     /// to [`RenderPipelineError::Invalid`] while the other pipelines draw.
     pub optional: bool,
+    /// What the shader samples with `pipeline_texture(uv)`, if anything ([`Self::textured`]).
+    /// `None`, the default, binds no texture: the shader reads only its input and `frame`.
+    pub texture: Option<PipelineTexture>,
 }
 impl RenderPipeline {
     /// Describe a required pipeline that draws [`PipelineVertexFormat::PositionTexColor`]
@@ -45,6 +48,7 @@ impl RenderPipeline {
             blend,
             depth,
             optional: false,
+            texture: None,
         }
     }
     /// The owning mod, assigned by the host after registration.
@@ -58,6 +62,34 @@ impl RenderPipeline {
         self.optional = true;
         self
     }
+
+    /// Let the shader sample `texture` with `pipeline_texture(uv)` (vanilla's `Sampler0`, as
+    /// `RenderPipeline.withSampler` declares it). A texture the load cannot find refuses the
+    /// pipeline as a missing shader does: a required one fails the load, an optional one is
+    /// logged and resolves to [`RenderPipelineError::Invalid`].
+    pub fn textured(mut self, texture: PipelineTexture) -> Self {
+        self.texture = Some(texture);
+        self
+    }
+}
+
+/// A texture a pipeline's shader samples ([`RenderPipeline::textured`]). The host owns and binds
+/// the GPU texture; the mod names it. `pipeline_texture(uv)` maps `uv` 0 to 1 across the
+/// texture once, repeats beyond that, samples the nearest texel as vanilla's atlases do, and
+/// returns linear light (the mod render colour rule) with the texel's alpha.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum PipelineTexture {
+    /// A sprite of the game's block or item atlas, by its texture id: `powah:block/energy_charge`
+    /// is `assets/powah/textures/block/energy_charge.png` as the `minecraft:blocks` atlas holds
+    /// it, `minecraft:item/diamond` an item sprite. An animated sprite animates. A sprite in
+    /// neither atlas refuses the pipeline.
+    Sprite(Identifier),
+    /// A whole texture file: `mymod:effect/glow` is `assets/mymod/textures/effect/glow.png`, from
+    /// the mod's assets or a resource pack. It is drawn as the file is, unanimated, and must be
+    /// a PNG of at most 4096 pixels a side.
+    Texture(Identifier),
 }
 
 /// The vertex data a pipeline's draws carry.

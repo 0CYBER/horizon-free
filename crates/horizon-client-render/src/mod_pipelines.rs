@@ -11,7 +11,8 @@
 //! from the quad's vanilla-space colour and to the frame, which stores vanilla's 2.2 encoding
 //! in every format the renderer draws today.
 use mod_api::{
-    Identifier, PipelineBlend, RenderPipeline, RenderPipelineError, RenderPipelineRef, WorldDepth,
+    Identifier, PipelineBlend, PipelineTexture, RenderPipeline, RenderPipelineError,
+    RenderPipelineRef, WorldDepth,
 };
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 use std::sync::OnceLock;
@@ -44,6 +45,25 @@ struct PipelineFrame {
 @group(0) @binding(0) var<uniform> horizon_pipeline_view: mat4x4<f32>;
 @group(0) @binding(1) var<uniform> frame: PipelineFrame;
 ";
+
+/// What a textured pipeline's file can use as well ([`RenderPipeline::textured`]): its texture,
+/// bound by the renderer in group 1, and the function that samples it.
+const TEXTURE_PRELUDE: &str = "\
+@group(1) @binding(0) var horizon_pipeline_texture: texture_2d<f32>;
+@group(1) @binding(1) var horizon_pipeline_sampler: sampler;
+// Where the texture lies in what is bound: [u0, v0, u1, v1].
+@group(1) @binding(2) var<uniform> horizon_pipeline_rect: vec4<f32>;
+// The pipeline's texture at `uv`: 0 to 1 spans it once and beyond that it repeats. The nearest
+// texel, in linear light, with its alpha.
+fn pipeline_texture(uv: vec2<f32>) -> vec4<f32> {
+    let at = mix(horizon_pipeline_rect.xy, horizon_pipeline_rect.zw, fract(uv));
+    let texel = textureSampleLevel(horizon_pipeline_texture, horizon_pipeline_sampler, at, 0.0);
+    return vec4<f32>(horizon_decode(texel.rgb), texel.a);
+}
+";
+
+/// The largest side, in pixels, of a [`PipelineTexture::Texture`] file.
+pub const TEXTURE_MAX_SIDE: u32 = 4096;
 
 /// The entry points, after the pipeline's file: the vertex stage, and a fragment stage that
 /// hands the mod linear light and stores its answer as the frame holds colour.
@@ -103,6 +123,22 @@ pub struct Built {
     pub depth: WorldDepth,
     /// Whether the load may go on without it ([`RenderPipeline::optional()`]).
     pub optional: bool,
+    /// What its shader samples, if anything.
+    pub texture: Option<BuiltTexture>,
+}
+
+/// A textured pipeline's texture as a load found it ([`PipelineTexture`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BuiltTexture {
+    /// A sprite of the 2D atlas, by its name there (`block/stone`, `powah:block/energy_charge`),
+    /// looked up when the renderer builds the pipeline.
+    Sprite(String),
+    /// A texture file's RGBA pixels, `width` by `height`, each side 1 to [`TEXTURE_MAX_SIDE`].
+    Image {
+        width: u32,
+        height: u32,
+        pixels: std::sync::Arc<[u8]>,
+    },
 }
 
 /// The registered pipelines as one resource load built them, by slot. An optional pipeline the
@@ -124,29 +160,65 @@ impl Pipelines {
         source: &crate::resource_source::ResourceSource,
         generation: u64,
     ) -> Result<Self, String> {
-        Self::build(registered(), generation, |file| {
-            source.read_to_string(file).map_err(|e| e.to_string())
-        })
+        Self::build_with_images(
+            registered(),
+            generation,
+            |file| source.read_to_string(file).map_err(|e| e.to_string()),
+            |file| {
+                let bytes = source.read(file).map_err(|e| e.to_string())?;
+                crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string())
+            },
+        )
     }
 
+    /// [`Self::build_with_images`] for pipelines that read no texture file.
+    #[cfg(test)]
     pub(crate) fn build(
         registered: &[RenderPipeline],
         generation: u64,
         read: impl Fn(&str) -> Result<String, String>,
     ) -> Result<Self, String> {
+        Self::build_with_images(registered, generation, read, |_| {
+            Err("no texture files in this load".into())
+        })
+    }
+
+    /// Build every registered pipeline, reading fragment files with `read` and
+    /// [`PipelineTexture::Texture`] files as RGBA pixels with `image`.
+    pub(crate) fn build_with_images(
+        registered: &[RenderPipeline],
+        generation: u64,
+        read: impl Fn(&str) -> Result<String, String>,
+        image: impl Fn(&str) -> Result<(u32, u32, Vec<u8>), String>,
+    ) -> Result<Self, String> {
         let mut required = Vec::new();
         let built = registered
             .iter()
             .map(|pipeline| {
-                let file = fragment_file(&pipeline.fragment);
-                match read(&file).and_then(|text| compose(&text)) {
-                    Ok(shader) => Some(Built {
+                let mut file = fragment_file(&pipeline.fragment);
+                let loaded = read(&file)
+                    .and_then(|text| compose_with(&text, pipeline.texture.is_some()))
+                    .and_then(|shader| {
+                        let texture = match &pipeline.texture {
+                            None => None,
+                            Some(texture) => Some(load_texture(texture, &image).map_err(
+                                |(path, reason)| {
+                                    file = path;
+                                    reason
+                                },
+                            )?),
+                        };
+                        Ok((shader, texture))
+                    });
+                match loaded {
+                    Ok((shader, texture)) => Some(Built {
                         owner: pipeline.owner().to_owned(),
                         id: pipeline.id.clone(),
                         shader,
                         blend: pipeline.blend,
                         depth: pipeline.depth,
                         optional: pipeline.optional,
+                        texture,
                     }),
                     Err(reason) => {
                         let refusal = format!(
@@ -257,18 +329,67 @@ fn fragment_file(fragment: &Identifier) -> String {
     )
 }
 
+/// `texture` as a load finds it, or the file it read and why it is refused.
+fn load_texture(
+    texture: &PipelineTexture,
+    image: &impl Fn(&str) -> Result<(u32, u32, Vec<u8>), String>,
+) -> Result<BuiltTexture, (String, String)> {
+    match texture {
+        // Named as the 2D atlas names the blocks and items atlases' sprites.
+        PipelineTexture::Sprite(id) => Ok(BuiltTexture::Sprite(match id.namespace() {
+            "minecraft" => id.path().to_owned(),
+            _ => id.to_string(),
+        })),
+        PipelineTexture::Texture(id) => {
+            let file = format!("assets/{}/textures/{}.png", id.namespace(), id.path());
+            let (width, height, pixels) = image(&file).map_err(|e| (file.clone(), e))?;
+            check_image(width, height, pixels.len()).map_err(|reason| (file, reason))?;
+            Ok(BuiltTexture::Image {
+                width,
+                height,
+                pixels: pixels.into(),
+            })
+        }
+        _ => Err((
+            "its texture".into(),
+            "a texture kind this game doesn't know".into(),
+        )),
+    }
+}
+
+/// Whether a decoded texture file is one a pipeline may sample: each side 1 to
+/// [`TEXTURE_MAX_SIDE`], with exactly its RGBA pixels.
+fn check_image(width: u32, height: u32, bytes: usize) -> Result<(), String> {
+    let sides = 1..=TEXTURE_MAX_SIDE;
+    if !sides.contains(&width) || !sides.contains(&height) {
+        return Err(format!(
+            "the texture is {width}x{height}; each side must be 1 to {TEXTURE_MAX_SIDE} pixels"
+        ));
+    }
+    if u64::from(width) * u64::from(height) * 4 != bytes as u64 {
+        return Err("the texture's pixels don't match its size".into());
+    }
+    Ok(())
+}
+
 /// The prelude a pipeline's file follows.
-fn prelude() -> String {
+fn prelude(textured: bool) -> String {
     format!(
-        "{PRELUDE_TYPES}{}",
+        "{PRELUDE_TYPES}{}{}",
+        if textured { TEXTURE_PRELUDE } else { "" },
         horizon_shader_api::stages::COLOR_HELPERS
     )
 }
 
-/// The whole shader of a pipeline whose file is `text`, or why the file is refused, with the
-/// file's own line where there is one.
+/// The whole shader of an untextured pipeline whose file is `text` ([`compose_with`]).
 pub fn compose(text: &str) -> Result<String, String> {
-    let prelude = prelude();
+    compose_with(text, false)
+}
+
+/// The whole shader of a pipeline whose file is `text`, with `pipeline_texture` when it is
+/// `textured`, or why the file is refused, with the file's own line where there is one.
+pub fn compose_with(text: &str, textured: bool) -> Result<String, String> {
+    let prelude = prelude(textured);
     let mut shader = format!("{prelude}{text}\n");
     let located = |at: Option<usize>, message: String| match at
         .and_then(|at| at.checked_sub(prelude.len()))
@@ -292,7 +413,11 @@ pub fn compose(text: &str) -> Result<String, String> {
             .next()
             .and_then(|(span, _)| span.to_range())
             .map(|range| range.start);
-        located(at, e.message().to_owned())
+        let mut message = e.message().to_owned();
+        if !textured && text.contains("pipeline_texture") {
+            message += " (`pipeline_texture` needs a texture: RenderPipeline::textured)";
+        }
+        located(at, message)
     })?;
     for (_, function) in module.functions.iter() {
         if function.expressions.iter().any(|(_, expression)| matches!(expression,
@@ -312,7 +437,7 @@ pub fn compose(text: &str) -> Result<String, String> {
         .iter()
         .filter(|(_, variable)| variable.binding.is_some())
         .count()
-        != 2
+        != if textured { 5 } else { 2 }
     {
         return Err("it declares a binding; a pipeline reads only `frame` and its input".into());
     }
@@ -557,5 +682,109 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
         assert_eq!(fixed.slot(handle), Err(RenderPipelineError::Stale));
         let again = fixed.resolve(&id("example:glow")).unwrap();
         assert_eq!(fixed.slot(again), Ok(0));
+    }
+
+    /// A textured pipeline's file can call `pipeline_texture`; an untextured one is told why
+    /// it can't, and neither may declare a binding of its own.
+    #[test]
+    fn only_a_textured_pipeline_samples_and_neither_binds_its_own() {
+        let sample = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return pipeline_texture(input.uv) * input.color; }";
+        let shader = compose_with(sample, true).unwrap();
+        assert!(shader.contains("@group(1) @binding(0) var horizon_pipeline_texture"));
+        assert!(compose(sample).unwrap_err().contains("RenderPipeline::textured"));
+        let own = "@group(1) @binding(3) var<uniform> mine: f32;
+fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return pipeline_texture(input.uv) * mine; }";
+        assert!(compose_with(own, true).unwrap_err().contains("declares a binding"));
+        // Untextured pipelines compose as before: no group 1.
+        assert!(!compose(GLOW).unwrap().contains("@group(1)"));
+    }
+
+    /// Sprites are named as the 2D atlas names them; texture files are read from `textures/`,
+    /// and one of no pixels, too big a side or pixels that don't match its size is refused,
+    /// naming the file. A required one fails the load.
+    #[test]
+    fn a_textured_pipeline_names_its_sprite_and_checks_its_file() {
+        use mod_api::PipelineTexture;
+        let pipeline = |texture| {
+            let id = Identifier::parse("test:glow").unwrap();
+            RenderPipeline::new(id.clone(), id, PipelineBlend::Additive, WorldDepth::Tested)
+                .textured(texture)
+        };
+        let shader = |_: &str| Ok(GLOW.to_owned());
+        let built = |texture, image: (u32, u32, usize)| {
+            Pipelines::build_with_images(&[pipeline(texture)], 1, shader, |_| {
+                Ok((image.0, image.1, vec![0; image.2]))
+            })
+            .map(|set| set.built()[0].as_ref().unwrap().texture.clone().unwrap())
+        };
+        let sprite = |id: &str| PipelineTexture::Sprite(Identifier::parse(id).unwrap());
+        let file = |id: &str| PipelineTexture::Texture(Identifier::parse(id).unwrap());
+        assert_eq!(
+            built(sprite("minecraft:block/stone"), (0, 0, 0)).unwrap(),
+            BuiltTexture::Sprite("block/stone".into())
+        );
+        assert_eq!(
+            built(sprite("powah:block/energy_charge"), (0, 0, 0)).unwrap(),
+            BuiltTexture::Sprite("powah:block/energy_charge".into())
+        );
+        assert!(matches!(
+            built(file("test:effect/glow"), (2, 3, 24)).unwrap(),
+            BuiltTexture::Image { width: 2, height: 3, ref pixels } if pixels.len() == 24
+        ));
+        for (image, reason) in [
+            ((0, 4, 0), "each side must be 1 to 4096"),
+            ((TEXTURE_MAX_SIDE + 1, 1, (TEXTURE_MAX_SIDE as usize + 1) * 4), "each side"),
+            ((u32::MAX, u32::MAX, 4), "each side"),
+            ((2, 2, 15), "don't match its size"),
+        ] {
+            let error = built(file("test:effect/glow"), image).unwrap_err();
+            assert!(
+                error.contains("assets/test/textures/effect/glow.png") && error.contains(reason),
+                "{error}"
+            );
+        }
+        let missing = Pipelines::build_with_images(&[pipeline(file("test:gone"))], 1, shader, |_| {
+            Err("not found".into())
+        })
+        .unwrap_err();
+        assert_eq!(
+            missing,
+            "required render pipeline test:glow from mod  refused: assets/test/textures/gone.png: not found"
+        );
+    }
+
+    /// The real resources' textures decode for a pipeline as the game loads them.
+    #[test]
+    #[ignore = "daily"]
+    fn a_textured_pipeline_reads_a_real_texture_file() {
+        use mod_api::PipelineTexture;
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        let source = crate::resource_source::ResourceSource::directory(root);
+        let id = Identifier::parse("test:glint").unwrap();
+        let glint = Identifier::parse("minecraft:misc/enchanted_glint_item").unwrap();
+        let registered = [RenderPipeline::new(
+            id.clone(),
+            id,
+            PipelineBlend::Additive,
+            WorldDepth::Tested,
+        )
+        .textured(PipelineTexture::Texture(glint))];
+        let set = Pipelines::build_with_images(
+            &registered,
+            1,
+            |_| Ok(GLOW.to_owned()),
+            |file| {
+                let bytes = source.read(file).map_err(|e| e.to_string())?;
+                crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string())
+            },
+        )
+        .unwrap();
+        let Some(BuiltTexture::Image { width, height, pixels }) = &set.built()[0].as_ref().unwrap().texture else {
+            panic!("no image");
+        };
+        assert!(*width > 0 && *height > 0);
+        assert_eq!(pixels.len(), (*width * *height * 4) as usize);
     }
 }

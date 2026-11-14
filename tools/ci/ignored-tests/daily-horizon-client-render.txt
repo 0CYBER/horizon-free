@@ -25,6 +25,7 @@ horizon-client-render gfx::tests::shaders_translate_to_hlsl_for_directx_12_and_g
 horizon-client-render graphics_ui::tests::hdr_sliders_step_through_every_value_they_can_be_set_to lib daily slow
 horizon-client-render hud::pictures::tests::realms_pictures_do_not_enlarge_the_startup_atlas lib daily slow
 horizon-client-render light::tests::a_tall_column_relights_as_its_full_light_and_keys_its_sections lib daily slow
+horizon-client-render mod_pipelines::tests::a_textured_pipeline_reads_a_real_texture_file lib daily slow
 horizon-client-render pack_screen::click_sound_tests::the_browsers_search_button_submits_what_was_typed lib daily network
 horizon-client-render packs::tests::a_pack_that_unpacks_past_its_budget_fails_and_leaves_nothing lib daily slow
 horizon-client-render perf_capture::tests::a_converted_profile_written_to_a_file_reads_back_through_the_queries lib daily slow

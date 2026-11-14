@@ -113,5 +113,43 @@ pipeline that cannot be built does.
 lines, in the order submitted. Under a shader pack they follow the plain quads: a stage the pack
 draws itself is drawn with the next stage the game reaches.
 
-A pipeline cannot sample textures, take values of its own from the mod, or replace the vertex
-stage.
+## Sampling a texture
+
+A pipeline can sample one texture (vanilla's `Sampler0`). Name it when you register the pipeline:
+
+```rust,ignore
+event.pipelines.push(
+    RenderPipeline::new(id.clone(), id, PipelineBlend::Additive, WorldDepth::Tested)
+        .textured(PipelineTexture::Sprite(Identifier::parse("example:block/charge").unwrap())),
+);
+```
+
+| Texture | What is bound |
+| --- | --- |
+| `PipelineTexture::Sprite(id)` | A sprite of the block or item atlas by its texture id: `example:block/charge` is `assets/example/textures/block/charge.png` as the `minecraft:blocks` atlas holds it, `minecraft:item/diamond` an item sprite. An animated sprite animates. |
+| `PipelineTexture::Texture(id)` | A whole texture file: `example:effect/glow` is `assets/example/textures/effect/glow.png`. It is drawn as the file is, unanimated, and each side must be 1 to 4,096 pixels (and within the GPU's limit). |
+
+The shader then has one more function:
+
+```wgsl
+fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
+    // The texture in linear light, tinted by the quad's colour, as vanilla's position_tex_color does.
+    return pipeline_texture(input.uv) * input.color;
+}
+```
+
+`pipeline_texture(uv)` maps `uv` 0 to 1 across the texture (or sprite) once, and repeats beyond
+that. It samples the nearest texel, as vanilla's atlases do, and returns it in linear light with
+its alpha. `input.uv` is still what the quad's corners gave, so the quads you already draw keep
+their coordinates.
+
+A texture is part of the pipeline, so it is checked when the pipeline is built, at startup and on
+each reload. A sprite neither atlas has, or a texture file that is missing, not a PNG, or of a size
+outside those limits, refuses the pipeline as a missing shader does: a required one fails the load,
+and an optional one is logged (`render pipeline <id> from mod <owner> refused: <file>: <reason>`,
+or `… refused by the GPU: its texture sprite <name> is in neither the block nor the item atlas`)
+and resolves to `Invalid`. A pipeline without `.textured(…)` has no `pipeline_texture`: its file is
+refused with a note naming `RenderPipeline::textured`.
+
+A pipeline cannot take values of its own from the mod, sample more than one texture, or replace the
+vertex stage.
