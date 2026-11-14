@@ -1,6 +1,6 @@
 //! `BrewingStandBlockEntity.serverTick` after the model tick: the native
 //! hooks, `setChanged`, the bottle bits, the drops and sleeping. Kept out of
-//! `stations.rs`, which is over the file-size limit and may not grow.
+//! `stations.rs`.
 use super::super::Game;
 use horizon_client::{Result, brewing::BrewTick, containers::BlockEntity};
 

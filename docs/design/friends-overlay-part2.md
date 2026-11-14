@@ -108,7 +108,7 @@ Before opening each PR measure additions, deletions, non-test code and hook/glue
 actual base. New code plus integration must remain around 500 lines; if not, return to the spec
 with a narrower independently reviewable behaviour. File partitioning alone is not a split.
 
-`title.rs`, `game.rs` and `hud.rs` must not grow when already over 3000 lines. Where no small
+Where no small
 existing seam exists, first propose a **separate pure-move PR** with before/after equivalence;
 never hide a relocation inside a parity fix. Keep `hud.rs`'s legitimate NUL bytes intact using
 Read-before-edit and an anchored binary patch under `.local` if it is eventually modified.
