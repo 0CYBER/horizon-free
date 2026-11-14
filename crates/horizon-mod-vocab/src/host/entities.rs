@@ -48,7 +48,9 @@ pub trait EntitiesServerHost {
     /// <kind> <pos> <nbt>` takes it; passengers included): its id. None on a
     /// client's copy of the world, for another dimension, a position outside
     /// `/summon`'s bounds, a chunk that isn't loaded, a kind Horizon can't
-    /// load, or one a mod kept out (`entity_join_level`).
+    /// load, or one a mod kept out (`entity_join_level`). Inside a transaction its join waits for
+    /// the root commit, so a mod keeping it out is not known at the call: the id is returned and
+    /// names nothing from the commit on.
     #[access(WorldOnly)]
     fn summon(&mut self, dimension: &str, kind: &str, pos: [f64; 3], nbt: Compound) -> Option<u32>;
     /// Side: server.
@@ -780,6 +782,8 @@ pub trait EntitiesBackendMut {
     /// default pickup delay: the item entity. None for an empty stack or an
     /// unknown item, a stale handle, a player in another level, or an item a
     /// mod kept out.
+    /// Inside a transaction its join waits for the root commit, so a mod keeping the item out is not
+    /// known at the call: the handle is returned and reads stale from the commit on.
     #[access(WorldOnly)]
     fn entity_spawn_at_location(
         &mut self,

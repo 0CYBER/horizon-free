@@ -78,6 +78,7 @@
   "crate::entity::types::MainHand",
   "crate::entity::behaviors::MemoryStatus",
   "crate::entity::types::MinecartKind",
+  "crate::entity::types::MoveCause",
   "crate::world::types::MobCategory",
   "crate::world::phase::ModPhase",
   "crate::item::types::ModelError",

@@ -177,8 +177,14 @@ fn only_can_equip_changes_when_prepared_marker_is_removed() {
                         .map(|parameter| (hook.name.clone(), parameter.clone()))
                 })
                 .collect::<Vec<_>>();
+            let isolated = catalog
+                .hooks
+                .iter()
+                .filter(|hook| hook.isolate)
+                .map(|hook| hook.name.clone())
+                .collect::<std::collections::HashSet<_>>();
             let mut surface = super::surface(&root, &included).unwrap();
-            let host = super::host::generate(&mut surface, &markers).unwrap();
+            let host = super::host::generate(&mut surface, &markers, &isolated).unwrap();
             let guest = super::calls::dispatch(&surface.types, &surface.methods, &markers).0;
             (
                 syn::parse_file(&host).unwrap(),

@@ -103,6 +103,9 @@ pub(super) struct Committing {
     /// What is left to tell, in the order it was asked for: the transaction's own
     /// announcements, then those the listeners ask for. Entries stay, so an index is a place.
     queue: Vec<Step>,
+    /// The entity whose removal is running: it reads as present until it has run, as it does
+    /// outside a transaction.
+    removing: Option<u32>,
 }
 
 /// Takes the commit it pushed, and any a listener's left, off the stack when it ends, however
@@ -209,6 +212,26 @@ impl Game<'_> {
             None => false,
         }
     }
+    /// The join number the joins held in the level in place reach: those entities were
+    /// constructed when they were held.
+    pub(in crate::game) fn held_joins_through(&self) -> JoinSeq {
+        let dim = self.dim;
+        let held = |announcement: &Announcement| match announcement {
+            Announcement::Joins { through, .. } => Some(*through),
+            _ => None,
+        };
+        let open = (self.transactions.iter())
+            .filter(|level| level.dimension == Some(dim))
+            .flat_map(|level| level.lifetimes.announcements.iter().filter_map(held));
+        let told = (self.transactions.committing.iter())
+            .filter(|commit| commit.dimension == dim)
+            .flat_map(|commit| commit.queue.iter())
+            .filter_map(|step| match step {
+                Step::Tell(announcement) => held(announcement),
+                Step::Remove(_) => None,
+            });
+        open.chain(told).max().unwrap_or_default()
+    }
     /// A spawn wrote over `was` in `persist.anon` under `key`: an abort puts it back.
     pub(in crate::game) fn journal_anon(&mut self, kept: KeptAnon) {
         let dim = self.dim;
@@ -225,15 +248,21 @@ impl Game<'_> {
     }
     /// Whether an open transaction removes `target`, which reads as gone until it closes.
     pub(in crate::game) fn removal_pending(&self, target: &Target) -> bool {
+        self.removal_pending_in(self.dim, target)
+    }
+    /// [`Self::removal_pending`] of the entity in `dimension`, parked or not: the transactions
+    /// stay with the game when a level is swapped out.
+    pub(in crate::game) fn removal_pending_in(&self, dimension: Dim, target: &Target) -> bool {
         let id = super::super::native_entities::target_id(*target);
         let open = self.transactions.iter().any(|level| {
-            level.dimension == Some(self.dim)
+            level.dimension == Some(dimension)
                 && (level.lifetimes.removals.iter())
                     .any(|removal| matches!(removal, Removal::Other(e) if Some(e.id()) == id))
         });
         // A commit's removals wait for its joins to be told: its entities read as gone until then.
         open || (self.transactions.committing.iter()).any(|commit| {
-            commit.dimension == self.dim && id.is_some_and(|id| commit.removed.contains(&id))
+            commit.dimension == dimension
+                && id.is_some_and(|id| commit.removed.contains(&id) && commit.removing != Some(id))
         })
     }
     /// `entity_remove` of `target`, which `entity` names, inside a transaction: marked now and
@@ -265,7 +294,13 @@ impl Game<'_> {
     /// leaves. What the listeners ask for meanwhile waits in the commit's queue and is told after
     /// it, in the order it was asked for; a transaction a listener commits tells through the
     /// running commit too.
-    pub(super) fn commit_entity_journal(&mut self, journal: EntityJournal) {
+    /// `effects` is what the root transaction's other deferred effects do (`root_commit`): it runs
+    /// with the commit in place, so a join it causes waits behind the commit's own batches.
+    pub(super) fn commit_entity_journal(
+        &mut self,
+        journal: EntityJournal,
+        effects: impl FnOnce(&mut Self),
+    ) {
         let removed: Vec<u32> = (journal.removals.iter())
             .map(|removal| match removal {
                 Removal::Mob { id, .. } => *id,
@@ -277,16 +312,19 @@ impl Game<'_> {
         if let Some(commit) = committing_in(&mut self.transactions.committing, dimension) {
             commit.removed.extend(removed);
             commit.queue.extend(steps);
+            effects(self);
             return;
         }
         let commit = Committing {
             dimension,
             removed,
             queue: steps,
+            removing: None,
         };
         let frame = self.transactions.committing.len();
         self.transactions.committing.push(commit);
         let telling = Telling { game: self, frame };
+        effects(telling.game);
         telling.game.tell_commit(frame);
     }
     /// The step `next` of the queue of the commit at `frame`, with the entities never to join. The
@@ -335,6 +373,13 @@ impl Game<'_> {
             next += 1;
         }
     }
+    /// Marks `id` as the entity being removed in the commit of the level in place; the mark it
+    /// replaced.
+    fn set_removing(&mut self, id: Option<u32>) -> Option<u32> {
+        let dimension = self.dim;
+        let commit = committing_in(&mut self.transactions.committing, dimension)?;
+        std::mem::replace(&mut commit.removing, id)
+    }
     /// Runs the removals a commit holds, as a removal outside a transaction does.
     fn remove_committed(&mut self, removals: Vec<Removal>) {
         for removal in removals {
@@ -345,9 +390,17 @@ impl Game<'_> {
                     }
                 }
                 Removal::Other(entity) => {
+                    // The commit lists the entity as removed until now, so the handle resolves
+                    // only while it is marked as being removed. `remove_target_now` records the
+                    // removal (`persist.removals`) before any callback runs: what a callback
+                    // reads of the entity is "gone" whatever the mark. A callback may commit a
+                    // transaction of its own, which marks and unmarks its removals: the mark
+                    // this one set is put back as it was.
+                    let outer = self.set_removing(Some(entity.id()));
                     if let Some(target) = self.native_entity_target(entity) {
                         self.remove_target_now(entity, target);
                     }
+                    self.set_removing(outer);
                 }
             }
         }

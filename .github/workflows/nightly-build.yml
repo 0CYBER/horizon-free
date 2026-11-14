@@ -177,6 +177,7 @@ jobs:
       ref: ${{ needs.pick.outputs.sha }}
       version: ${{ needs.pick.outputs.version }}
       nightly: ${{ needs.pick.outputs.nightly }}
+      kind: ${{ inputs.kind }}
       developer_id: false
       trusted: false  # it can hold unreviewed pull requests: their own cache key, never saved, not the release runner
 
@@ -214,12 +215,17 @@ jobs:
           else echo "::warning::horizon-windows-arm64.zip is missing: SHA256SUMS goes out without it"; fi
           musl=(); if [[ -f dist/horizon-linux-musl-x86_64.tar.gz ]]; then musl=(dist/horizon-linux-musl-x86_64.tar.gz)
           else echo "::warning::horizon-linux-musl-x86_64.tar.gz is missing: SHA256SUMS goes out without it"; fi
+          macos_x64=(dist/horizon-macos-x64.zip)
+          if [[ "$KIND" == snapshot && ! -f dist/horizon-macos-x64.zip ]]; then
+            macos_x64=()
+            echo "::warning::horizon-macos-x64.zip is missing: the snapshot goes out without it"
+          fi
           # The fork's Nightly carries its SDK's index (the pick job fetched it); upstream's has no SDK.
           # A snapshot's dry run of a commit whose SDK is not published yet has none (nightly.py pick_snapshot warns).
           sdk=(); if [[ "$GITHUB_REPOSITORY" == arismoko/horizon && ( "$KIND" == nightly || -f dist/sdk.json ) ]]; then sdk=(dist/sdk.json); fi
           bash tools/ci/sign_release.sh "$KIND" dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
             ${arm64[@]+"${arm64[@]}"} ${musl[@]+"${musl[@]}"} ${sdk[@]+"${sdk[@]}"} \
-            dist/horizon-macos-arm64.zip dist/horizon-macos-x64.zip dist/horizon-server-linux-x86_64.tar.gz \
+            dist/horizon-macos-arm64.zip ${macos_x64[@]+"${macos_x64[@]}"} dist/horizon-server-linux-x86_64.tar.gz \
             dist/horizon-source.tar.gz
       - uses: actions/upload-artifact@v7
         with:
@@ -335,6 +341,16 @@ jobs:
           python3 tools/ci/nightly.py require-sdk "$SHA"
           # The title is what launchers parse (strictly) into the version SHA256SUMS.v2.sig is signed for: the tag.
           [[ "${SHA:0:7}" == "$SHORT" && "$TAG" == "snapshot-$DATE-$SHORT" ]] || { echo "::error::the build's commit isn't the one signed"; exit 1; }
+          # Archive presence records what was actually built, not an unsupported platform promise.
+          printf '\n## Platform build results\n\n' >> dist/nightly-notes.md
+          for archive in horizon-linux-x86_64.tar.gz horizon-server-linux-x86_64.tar.gz horizon-windows-x64.zip \
+              horizon-macos-arm64.zip horizon-linux-musl-x86_64.tar.gz horizon-windows-arm64.zip horizon-macos-x64.zip; do
+            if [[ -f "dist/$archive" ]]; then
+              printf -- '- Built: `%s`.\n' "$archive"
+            else
+              printf -- '- Failed or unavailable; not published: `%s`.\n' "$archive"
+            fi
+          done >> dist/nightly-notes.md
           # Exactly the files SHA256SUMS lists (the sign job left out a missing optional archive), and the signatures.
           files=(); while read -r _ name; do files+=("dist/${name#\*}"); done < dist/SHA256SUMS
           # A pre-release, never GitHub's latest, under its own tag: no launcher lists or updates to it.
