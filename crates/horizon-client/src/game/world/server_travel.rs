@@ -2349,7 +2349,8 @@ mod credits_respawn_tests {
     /// A server on a scratch world with one guest, placed in the Overworld,
     /// whose own point is a respawn anchor in the Nether.
     fn server_with_a_nether_anchor() -> (Game<'static>, std::path::PathBuf) {
-        let mut game = crate::game::native_machines::tests::server_game();
+        let mut resources = None;
+        let mut game = crate::game::game_tests::tests::server_game(&mut resources);
         let scratch = std::env::temp_dir().join(format!(
             "horizon-credits-anchor-{}-{}",
             std::process::id(),

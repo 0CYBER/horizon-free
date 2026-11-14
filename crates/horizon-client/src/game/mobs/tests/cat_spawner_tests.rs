@@ -1,13 +1,14 @@
 //! `CatSpawner.spawnCat`: the cat is created and finalized for a natural
 //! spawn, then snapped to the spawn block with `snapTo(spawnPos, 0.0F, 0.0F)`,
 //! so it faces yaw 0 and its facing takes no draw from the level's random.
-use crate::game::native_machines::tests::server_game;
+use crate::game::game_tests::tests::server_game;
 use horizon_client::mobs::Species;
 
 #[test]
 #[ignore = "daily"]
 fn a_cat_spawner_cat_faces_south_without_a_level_draw() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     let level = game.world.random.state();
     for _ in 0..8 {
         let before = game.mobs.len();

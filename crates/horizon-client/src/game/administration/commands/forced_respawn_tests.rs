@@ -84,9 +84,11 @@ fn overworld_spawnpoint_is_validated_at_both_player_blocks() {
 
 /// A server's game on the prepared resources, or None when they are absent
 /// (CI has none: the test then skips quietly).
-fn server() -> Option<crate::game::Game<'static>> {
+fn server(
+    resources: &mut Option<std::sync::Arc<crate::game::Resources>>,
+) -> Option<crate::game::Game<'_>> {
     std::env::var_os("HORIZON_TEST_RESOURCES")?;
-    Some(crate::game::native_machines::tests::server_game())
+    Some(crate::game::game_tests::tests::server_game(resources))
 }
 
 #[test]
@@ -97,7 +99,8 @@ fn a_forced_spawnpoint_on_a_respawn_anchor_still_depletes_with_its_sound() {
     // (ServerPlayer.findRespawnAndUseSpawnBlock only consumes one when the
     // config is not forced).
     use crate::game::{Dim, respawn_anchor::RespawnConfig};
-    let Some(mut game) = server() else {
+    let mut resources = None;
+    let Some(mut game) = server(&mut resources) else {
         return;
     };
     let stone = game

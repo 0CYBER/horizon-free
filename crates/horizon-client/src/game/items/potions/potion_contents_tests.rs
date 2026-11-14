@@ -2,12 +2,13 @@
 //! potion's effects and the stack's `custom_effects`, the colour they mix to
 //! (or `custom_color`) and its `potion_duration_scale`.
 use super::*;
-use crate::game::native_machines::tests::server_game;
+use crate::game::game_tests::tests::server_game;
 use horizon_client::motion::PlayerMotion;
 
 /// A server's game with a player standing at the origin's block.
 fn player_game() -> Game<'static> {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
     // A fixed name: no generated horizon-player.txt in the working directory.
     game.options.player_name = Some("PotionContents".into());
@@ -183,7 +184,8 @@ fn a_water_potion_refills_an_axolotl_once() {
 #[test]
 #[ignore = "daily"]
 fn a_water_potion_with_custom_effects_does_not_douse_fire() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     let pos = [2, 4, 3];
     let campfire = game
         .pack

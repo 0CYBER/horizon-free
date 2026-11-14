@@ -35,7 +35,8 @@ fn use_item(sequence: i32) -> Serverbound {
 #[test]
 #[ignore = "daily"]
 fn a_guest_without_build_rights_neither_empties_nor_fills_a_bucket_under_spawn_protection() {
-    let mut game = crate::game::native_machines::tests::server_game();
+    let mut resources = None;
+    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
     game.build_registries();
     game.set_allow_commands(true);
     game.block_ticks

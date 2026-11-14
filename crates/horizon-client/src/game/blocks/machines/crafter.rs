@@ -506,11 +506,12 @@ mod tests {
     #[ignore = "daily"]
     fn a_crafter_fills_the_cart_in_front_of_it() {
         use crate::game::boats::Boat;
+        use crate::game::game_tests::tests::server_game;
         use crate::game::minecarts::{CartKind, Minecart};
-        use crate::game::native_machines::tests::server_game;
         use horizon_core::geometry::Vec3;
         // One game for the three vehicles: loading the resources is the slow part.
-        let mut game = server_game();
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
         let at = Vec3::new(9.5, 64.0, 8.5);
         for kind in [CartKind::Chest, CartKind::Hopper] {
             game.carts.clear();
@@ -545,8 +546,9 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn one_transfer_to_a_composter_adds_one_layer_and_eats_one_item() {
-        use crate::game::native_machines::tests::server_game;
-        let mut game = server_game();
+        use crate::game::game_tests::tests::server_game;
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
         let pos = (8, 63, 8);
         let state = game
             .pack

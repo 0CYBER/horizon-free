@@ -2,16 +2,16 @@
 //! flint and steel leaves the cart alone (`Entity.interact` passes), and
 //! `primeFuse` plays `entity.tnt.primed` on the blocks source only when the
 //! cart is not silent.
-use super::super::native_machines::tests::server_game;
 use super::super::*;
 use super::{CartKind, Minecart};
+use crate::game::game_tests::tests::server_game;
 use horizon_client::items::ItemStack;
 
 /// A server's game on the prepared resources, or None when they are absent
 /// (CI has none: the tests then skip quietly).
-fn server() -> Option<Game<'static>> {
+fn server(resources: &mut Option<std::sync::Arc<crate::game::Resources>>) -> Option<Game<'_>> {
     std::env::var_os("HORIZON_TEST_RESOURCES")?;
-    Some(server_game())
+    Some(server_game(resources))
 }
 
 /// A lone TNT cart at (0.5, 64, 0.5); a silent one keeps `Silent:1b` where
@@ -23,14 +23,15 @@ fn tnt_cart(game: &mut Game<'_>, id: u32, silent: bool) {
     game.persist.raw.remove(&id);
     game.lan_entity_events.clear();
     if silent {
-        let (tag, _) = horizon_world::nbt::parse_snbt("{Silent:1b}").unwrap();
+        let (tag, _) = horizon_core::nbt::parse_snbt("{Silent:1b}").unwrap();
         game.persist.raw.insert(id, tag);
     }
 }
 
 #[test]
 fn flint_and_steel_passes_on_a_tnt_cart_without_lighting_it() {
-    let Some(mut game) = server() else {
+    let mut resources = None;
+    let Some(mut game) = server(&mut resources) else {
         return;
     };
     tnt_cart(&mut game, 42, false);
@@ -48,7 +49,8 @@ fn flint_and_steel_passes_on_a_tnt_cart_without_lighting_it() {
 
 #[test]
 fn a_silent_tnt_cart_primes_without_its_sound() {
-    let Some(mut game) = server() else {
+    let mut resources = None;
+    let Some(mut game) = server(&mut resources) else {
         return;
     };
     // Silent: the fuse is lit, the entity event goes out, no sound is played.

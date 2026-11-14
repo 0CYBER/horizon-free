@@ -643,6 +643,12 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
             ],
         ),
     ];
+    // The fork forces ticking serial, so Parallel Tick would be a no-op setting.
+    for (_, groups) in &mut pages {
+        for (_, rows) in groups {
+            rows.retain(|r| !matches!(r.item, Item::Horizon(H::ParallelTick)));
+        }
+    }
     // Only Windows and Linux have more than one graphics API, translucent batching (Metal
     // draws flat) and GPU culling (Metal draws no count the GPU wrote).
     if cfg!(target_os = "macos") {

@@ -9,7 +9,8 @@ use super::*;
 #[test]
 #[ignore = "daily"]
 fn a_guest_stonecutter_take_counts_the_item_crafted() {
-    let mut game = crate::game::native_machines::tests::server_game();
+    let mut resources = None;
+    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
     let _rx = crate::game::lan::world_spawn_sync_tests::host_for(&mut game);
     let conn = game.lan.as_ref().expect("a LAN host").hub.guests[0].conn;
     let mut menu = Menu::new(Kind::Stonecutter);

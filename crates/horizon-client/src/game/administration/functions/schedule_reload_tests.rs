@@ -34,7 +34,8 @@ fn schedule_game(label: &str) -> (Game<'static>, std::path::PathBuf) {
         "scoreboard players add fired hs 1\n",
     )
     .unwrap();
-    let mut game = crate::game::native_machines::tests::server_game();
+    let mut resources = None;
+    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
     game.world_root = dir.clone();
     game.build_registries();
     game.set_allow_commands(true);

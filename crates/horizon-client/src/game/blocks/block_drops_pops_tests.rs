@@ -6,12 +6,13 @@
 //! `SweetBerryBushBlock.java:122`) all pop through it, so they drop nothing with
 //! the rule off and their usual item with it on.
 use super::*;
-use crate::game::native_machines::tests::server_game;
+use crate::game::game_tests::tests::server_game;
 use horizon_client::items::ItemStack;
 use horizon_core::position::ChunkPos;
 
 fn game() -> Game<'static> {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.build_registries();
     game.set_allow_commands(true);
     game.block_ticks

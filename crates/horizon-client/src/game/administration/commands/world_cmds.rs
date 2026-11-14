@@ -2843,8 +2843,8 @@ mod attribute_modifier_command_tests {
     use horizon_client::motion::PlayerMotion;
     use horizon_client_core::nbt_value::text;
     use horizon_core::geometry::Vec3;
+    use horizon_core::nbt::Tag;
     use horizon_core::position::ChunkPos;
-    use horizon_world::nbt::Tag;
     use std::sync::Arc;
 
     fn with_game(test: impl FnOnce(&mut Game<'_>)) {

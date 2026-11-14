@@ -3,7 +3,7 @@
 //! `CauldronInteractions`' bucket and bottle interactions award it next to
 //! their own cauldron statistic (washing a shulker box does not).
 use super::*;
-use crate::game::{Hit, native_machines::tests::server_game};
+use crate::game::{Hit, game_tests::tests::server_game};
 use horizon_client::items::ItemStack;
 
 const POS: [i32; 3] = [2, 4, 3];
@@ -11,7 +11,8 @@ const POS: [i32; 3] = [2, 4, 3];
 /// A local server game with `state` at `POS`, holding `held`, the click
 /// forced onto the block's top.
 fn cauldron_game(state: &str, level: Option<u8>, held: ItemStack) -> Game<'static> {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.creative = false;
     let block = game
         .pack

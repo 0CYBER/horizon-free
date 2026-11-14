@@ -143,7 +143,7 @@ pub fn villager_type(b: &BiomeFacts) -> u8 {
     }
 }
 #[cfg(test)]
-mod tests {
+pub(in crate::mobs) mod tests {
     use super::*;
     use crate::mobs::finalize::{Attr, has_modifier, value};
 
@@ -203,7 +203,7 @@ mod tests {
             }
         }
     }
-    fn run_finalize(m: &mut Mob, difficulty: LocalDifficulty) {
+    pub(in crate::mobs) fn run_finalize(m: &mut Mob, difficulty: LocalDifficulty) {
         static LEVEL: std::sync::OnceLock<std::sync::Mutex<Level>> = std::sync::OnceLock::new();
         let mut level = LEVEL
             .get_or_init(|| {

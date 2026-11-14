@@ -6,8 +6,8 @@
 //! minecart under a chest got nothing.
 use super::super::{
     Game,
+    game_tests::tests::server_game,
     minecarts::{CartKind, Minecart},
-    native_machines::tests::server_game,
 };
 use horizon_client::{containers::BlockEntity, items::ItemStack};
 use horizon_core::geometry::Vec3;
@@ -49,7 +49,8 @@ fn counts(game: &Game<'_>, x: i32, id: u32) -> (u32, u32) {
 #[test]
 #[ignore = "daily"]
 fn a_ridden_hopper_cart_takes_one_item_a_tick() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     chest(&mut game, 8);
     chest(&mut game, 12);
     let ridden = Minecart::new(1, CartKind::Hopper, Vec3::new(8.5, 64.0625, 8.5));

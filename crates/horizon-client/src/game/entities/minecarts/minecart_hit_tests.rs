@@ -4,14 +4,15 @@
 use super::super::{CartKind, Minecart};
 use super::CartHit;
 use crate::game::Game;
-use crate::game::native_machines::tests::server_game;
+use crate::game::game_tests::tests::server_game;
 use horizon_client::mobs::{Species, Who};
 use horizon_core::geometry::Vec3;
 
 /// A server game with a player at `(8.5, 64, 8.5)`, as a window's player is
 /// there for the piglins that look at it.
 fn game_with_player() -> Game<'static> {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.build_registries();
     game.set_allow_commands(true);
     game.player = Some(

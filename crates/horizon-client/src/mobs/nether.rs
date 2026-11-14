@@ -214,15 +214,15 @@ pub fn register_ghast(m: &mut Mob) {
 }
 /// `Ghast.addAdditionalSaveData`: `putByte("ExplosionPower", (byte)explosionPower)`,
 /// the power the blast of the fireball it shoots uses (`LargeFireball.onHit`).
-pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
+pub fn to_nbt(m: &Mob, map: &mut horizon_core::nbt::Compound) {
     map.insert(
         "ExplosionPower".into(),
-        horizon_world::nbt::Tag::Byte(m.extra.ints[EXPLOSION_POWER] as i8),
+        horizon_core::nbt::Tag::Byte(m.extra.ints[EXPLOSION_POWER] as i8),
     );
 }
 /// `Ghast.readAdditionalSaveData`: `getByteOr("ExplosionPower", (byte)1)`, any
 /// numeric tag narrowed to a byte.
-pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
+pub fn from_nbt(m: &mut Mob, tag: &horizon_core::nbt::Tag) {
     m.extra.ints[EXPLOSION_POWER] =
         i32::from(crate::save::number(tag.get("ExplosionPower")).unwrap_or(1) as i8);
 }

@@ -1,4 +1,4 @@
-use crate::game::native_machines::tests::server_game;
+use crate::game::game_tests::tests::server_game;
 use horizon_client::{
     brewing::BrewingStand, containers::BlockEntity, gamerules::Value, items::ItemStack,
 };
@@ -36,7 +36,8 @@ fn place(game: &mut crate::game::Game<'_>, pos: (i32, i32, i32), entity: BlockEn
 #[test]
 #[ignore = "daily"]
 fn a_brewed_remainder_ignores_the_block_drops_rule() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     assert!(game.ui.rules.set("block_drops", Value::Bool(false)));
     let pos = (8, 64, 8);
     place(
@@ -81,7 +82,8 @@ fn a_brewed_remainder_ignores_the_block_drops_rule() {
 #[test]
 #[ignore = "daily"]
 fn a_fuel_item_with_no_uses_marks_the_chunk() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     let pos = (8, 64, 8);
     let mut fuel = ItemStack::new("minecraft:blaze_powder", 1);
     fuel.data_mut().set_loot_component(

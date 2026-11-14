@@ -3,10 +3,10 @@
 //! hands its kind and UUID to the TNT it primes.
 use super::*;
 use crate::game::boats::Boat;
-use crate::game::native_machines::tests::server_game;
+use crate::game::game_tests::tests::server_game;
 use horizon_client::gamerules::Value;
 use horizon_client::mobs::{Mob, MobEvent, Species};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// Blasts a boat 7.7 blocks away with `owner` as the indirect source, and
 /// returns what the boat took: its damage and its push.
@@ -32,7 +32,8 @@ fn blast_boat(
 #[test]
 #[ignore = "daily"]
 fn a_mob_owned_blast_spares_vehicles_only_without_mob_griefing() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.build_registries();
     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
     game.mobs
@@ -61,7 +62,8 @@ fn a_mob_owned_blast_spares_vehicles_only_without_mob_griefing() {
 #[test]
 #[ignore = "daily"]
 fn a_creeper_blast_primes_tnt_with_the_creeper_as_its_owner() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.build_registries();
     let creeper = 77;
     let kind = game
@@ -106,7 +108,8 @@ fn a_creeper_blast_primes_tnt_with_the_creeper_as_its_owner() {
 #[test]
 #[ignore = "daily"]
 fn a_projectiles_owner_primes_tnt_and_a_gone_owner_does_not() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.build_registries();
     let ghast = 91;
     let kind = game.res.mob_types().get("minecraft:ghast").unwrap().clone();

@@ -4,7 +4,7 @@
 //! bed slept in (`ServerPlayer.startSleepInBed`, whose statistic the bed picks:
 //! `StrawBedBlock.getSleptInBedStatType`).
 use super::super::*;
-use crate::game::native_machines::tests::server_game;
+use crate::game::game_tests::tests::server_game;
 use crate::motion::{MotionWorld, PlayerMotion};
 use horizon_client::items::ItemStack;
 use horizon_world::registry::BlockStateId;
@@ -13,7 +13,8 @@ use horizon_world::registry::BlockStateId;
 #[test]
 #[ignore = "daily"]
 fn a_ground_jump_awards_the_jump_statistic() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)).unwrap();
     player.ground.on_ground = true;
     {
@@ -41,7 +42,8 @@ fn a_ground_jump_awards_the_jump_statistic() {
 #[test]
 #[ignore = "daily"]
 fn a_worn_out_helmet_awards_the_broken_statistic() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)).unwrap());
     let mut helmet = ItemStack::new("minecraft:leather_helmet", 1);
     helmet.damage = 54;
@@ -84,7 +86,8 @@ fn place_bed(game: &mut Game<'_>, x: i32, kind: &str) -> [i32; 3] {
 #[test]
 #[ignore = "daily"]
 fn sleeping_in_a_straw_bed_awards_its_own_statistic() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     // `Level.isDarkOutside`: midnight, so a bed may be slept in.
     game.world.day_time = 18000;
     let straw = place_bed(&mut game, 2, "minecraft:straw_bed");

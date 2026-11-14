@@ -9,7 +9,8 @@ use super::*;
 #[ignore = "daily"]
 fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
     use horizon_core::random::{EntityRandom, LegacyRandom, LevelRandom, RandomSource};
-    let mut game = super::super::native_machines::tests::server_game();
+    let mut resources = None;
+    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
     let kind = game
         .res
         .mob_types()

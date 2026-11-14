@@ -1,7 +1,7 @@
 //! `Player.giveExperiencePoints` with a negative amount, through the game's own walk:
 //! the loss goes down a level at a time through `Player.giveExperienceLevels(-1)`.
 use super::*;
-use crate::game::native_machines::tests::server_game;
+use crate::game::game_tests::tests::server_game;
 use horizon_client::entities::Experience;
 
 /// A point lost at level 0 leaves nothing of the 100: `giveExperienceLevels(-1)` zeroes the
@@ -9,7 +9,8 @@ use horizon_client::entities::Experience;
 #[test]
 #[ignore = "daily"]
 fn a_point_lost_at_level_zero_zeroes_the_total() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.experience = Experience {
         level: 0,
         progress: 0.0,
@@ -25,7 +26,8 @@ fn a_point_lost_at_level_zero_zeroes_the_total() {
 #[test]
 #[ignore = "daily"]
 fn a_point_lost_above_level_zero_only_takes_that_point() {
-    let mut game = server_game();
+    let mut resources = None;
+    let mut game = server_game(&mut resources);
     game.experience = Experience {
         level: 5,
         progress: 0.0,

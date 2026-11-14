@@ -4,7 +4,7 @@ mod benches {
         Record,
         compression_pool::{CompressionPool, compress_records_with_pool},
     };
-    use horizon_world::nbt::{NamedTag, Tag};
+    use horizon_core::nbt::{NamedTag, Tag};
     use std::{sync::Arc, time::Instant};
 
     fn sample_chunk_tag(x: i32, z: i32) -> NamedTag {

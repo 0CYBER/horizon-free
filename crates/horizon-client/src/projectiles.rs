@@ -3271,8 +3271,8 @@ mod render_light_tests {
 mod arrow_color_tests {
     use super::*;
     use crate::items::ItemStack;
+    use horizon_core::nbt::Tag;
     use horizon_core::random::LegacyRandom;
-    use horizon_world::nbt::Tag;
 
     /// `Arrow.updateColor`: `ID_EFFECT_COLOR` is -1 only while the pickup
     /// item's contents are `PotionContents.EMPTY`, and otherwise

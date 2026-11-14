@@ -6,7 +6,6 @@ use horizon_client::items::ItemStack;
 use horizon_client::mobs::{Mob, Who, ai::do_hurt_target, bee, goals::Cx};
 use horizon_client::motion::PlayerMotion;
 use horizon_core::geometry::Vec3;
-use horizon_core::random::LegacyRandom;
 use horizon_world::food::Difficulty;
 
 fn spawn(game: &mut Game<'_>, id: u32, kind: &str, position: Vec3) -> u32 {
@@ -19,13 +18,13 @@ fn spawn(game: &mut Game<'_>, id: u32, kind: &str, position: Vec3) -> u32 {
 fn sting(game: &mut Game<'_>, bee_id: u32, who: Who) {
     let mut mobs = game.mobs.lift();
     let i = mobs.iter().position(|m| m.id == bee_id).unwrap();
-    let mut random = LegacyRandom::new(0);
+    let mut test_level = horizon_client::health::TestLevel::new(0);
     let mut events = Vec::new();
     {
         let w = game.mob_world_base(&[]);
         let mut cx = Cx {
             w: &w,
-            lr: &mut random,
+            level: &mut test_level.level(),
             events: &mut events,
         };
         do_hurt_target(&mut mobs[i], who, &mut cx);
@@ -50,7 +49,8 @@ fn sting_sounds(game: &mut Game<'_>) -> Vec<(f32, [f64; 3])> {
 #[test]
 #[ignore = "daily"]
 fn a_refused_sting_leaves_the_bee_alone() {
-    let mut game = super::super::native_machines::tests::server_game();
+    let mut resources = None;
+    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
     game.world.health_rules.difficulty = Difficulty::Normal;
     // `Invulnerable:1b`: `hurtServer` reports no hurt.
     game.audio.capture = Some(Vec::new());
@@ -101,7 +101,8 @@ fn a_refused_sting_leaves_the_bee_alone() {
 #[test]
 #[ignore = "daily"]
 fn a_landed_sting_sets_the_stinger_and_poisons_on_normal_and_hard() {
-    let mut game = super::super::native_machines::tests::server_game();
+    let mut resources = None;
+    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
     for (difficulty, poison_ticks) in [(Difficulty::Normal, 200), (Difficulty::Hard, 360)] {
         game.mobs.clear();
         game.world.health_rules.difficulty = difficulty;

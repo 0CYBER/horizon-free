@@ -5,7 +5,7 @@
 //! a flat third each. The float itself is drawn whenever the scale is below
 //! 2, whatever the multiplier (vanilla's `&&` tests it after the `nextInt`),
 //! and never at scale 2.
-use super::super::spawning::{self, BiomeFacts, LocalDifficulty};
+use super::super::spawning::{LocalDifficulty, tests::run_finalize};
 use super::super::world::with_test_world;
 use super::super::{Mob, MobTypes};
 use horizon_core::{
@@ -39,7 +39,7 @@ fn the_difficulty_bonus_makes_bigger_slimes_and_magma_cubes() {
             let trials = 3000;
             for seed in 0..i64::from(trials) {
                 let mut m = cube(types, id, seed);
-                spawning::finalize(&mut m, &BiomeFacts::default(), &full());
+                run_finalize(&mut m, full());
                 match m.extra.size {
                     1 => one += 1,
                     2 => two += 1,
@@ -61,7 +61,7 @@ fn the_difficulty_bonus_makes_bigger_slimes_and_magma_cubes() {
             let (mut one, mut two, mut four) = (0, 0, 0);
             for seed in 0..i64::from(trials) {
                 let mut m = cube(types, id, seed);
-                spawning::finalize(&mut m, &BiomeFacts::default(), &none());
+                run_finalize(&mut m, none());
                 match m.extra.size {
                     1 => one += 1,
                     2 => two += 1,

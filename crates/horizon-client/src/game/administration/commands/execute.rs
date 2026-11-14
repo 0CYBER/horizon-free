@@ -1707,10 +1707,11 @@ mod terminal_fork_tests {
 #[cfg(test)]
 mod score_condition_tests {
     use super::*;
-    use crate::game::native_machines::tests::server_game;
+    use crate::game::game_tests::tests::server_game;
 
     fn game() -> Game<'static> {
-        let mut game = server_game();
+        let mut resources = None;
+        let mut game = server_game(&mut resources);
         game.build_registries();
         game.set_allow_commands(true);
         game
