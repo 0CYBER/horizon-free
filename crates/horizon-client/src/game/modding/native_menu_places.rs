@@ -106,7 +106,10 @@ impl Game<'_> {
             return Err(MenuSlotBackRefusal::TooManyPlaces);
         }
         let host: &mut dyn ServerHost = self;
-        if let Some(index) = places.iter().position(|place| !place.resolves(host, player)) {
+        if let Some(index) = places
+            .iter()
+            .position(|place| !place.resolves(host, player))
+        {
             return Err(MenuSlotBackRefusal::PlaceUnresolved { index });
         }
         let locked = places
@@ -547,7 +550,10 @@ mod tests {
                 game.player_back_mod_menu_slots(player, window + 1, places.clone()),
                 Err(MenuSlotBackRefusal::NoPlayerOrWindow)
             );
-            assert_eq!(game.player_back_mod_menu_slots(player, window, places), Ok(()));
+            assert_eq!(
+                game.player_back_mod_menu_slots(player, window, places),
+                Ok(())
+            );
             let host: &mut dyn ServerHost = game;
             assert_eq!(
                 menu.slot_backing(host, 0),
@@ -576,7 +582,8 @@ mod tests {
 
             // The box gone from the hand, the write's notice closes the menu once taken.
             let resource = held.resource(host).unwrap();
-            let taken = host.transaction(|host, tx| Ok::<_, ()>(held.extract(host, tx, &resource, 1)));
+            let taken =
+                host.transaction(|host, tx| Ok::<_, ()>(held.extract(host, tx, &resource, 1)));
             assert_eq!(taken, Ok(1));
             game.run_native_menu_events();
             let host: &mut dyn ServerHost = game;
@@ -592,7 +599,9 @@ mod tests {
     }
 
     fn held_places(hand: Hand, slots: std::ops::Range<usize>) -> Vec<MenuSlotPlace> {
-        slots.map(|slot| MenuSlotPlace::HeldItem { hand, slot }).collect()
+        slots
+            .map(|slot| MenuSlotPlace::HeldItem { hand, slot })
+            .collect()
     }
 
     /// Stone in the box, inventory slot 9 and the menu's own slots: un-backing keeps it at 64.
@@ -619,18 +628,27 @@ mod tests {
             let menu = host.menu(123, window).unwrap();
             let player = menu.fields().player;
             let places = held_places(Hand::Main, 0..27);
-            assert_eq!(game.player_back_mod_menu_slots(player, window, places), Ok(()));
+            assert_eq!(
+                game.player_back_mod_menu_slots(player, window, places),
+                Ok(())
+            );
             assert!(game.place_menu_click(123, window, 27, 0, 1));
             assert_eq!(stone(game, menu), 64);
             // Shortened to slot 1 of the box: menu slot 0 shows that empty slot, the rest nothing.
             let places = held_places(Hand::Main, 1..2);
-            assert_eq!(game.player_back_mod_menu_slots(player, window, places), Ok(()));
+            assert_eq!(
+                game.player_back_mod_menu_slots(player, window, places),
+                Ok(())
+            );
             let host: &mut dyn ServerHost = game;
             assert_eq!(ItemPlace::MenuSlot { menu, slot: 0 }.amount(host), 0);
             assert_eq!(held_slot(0).amount(host), 64);
             assert_eq!(stone(game, menu), 64);
             // Un-backed: the menu's own slots hold no copy to take out.
-            assert_eq!(game.player_back_mod_menu_slots(player, window, Vec::new()), Ok(()));
+            assert_eq!(
+                game.player_back_mod_menu_slots(player, window, Vec::new()),
+                Ok(())
+            );
             let host: &mut dyn ServerHost = game;
             assert_eq!(menu.slot_backing(host, 0), Some(MenuSlotBacking::Native(0)));
             assert_eq!(ItemPlace::MenuSlot { menu, slot: 0 }.stack(host), None);
@@ -681,7 +699,10 @@ mod tests {
             let menu = host.menu(123, window).unwrap();
             let player = menu.fields().player;
             let places = held_places(Hand::Main, 0..27);
-            assert_eq!(game.player_back_mod_menu_slots(player, window, places), Ok(()));
+            assert_eq!(
+                game.player_back_mod_menu_slots(player, window, places),
+                Ok(())
+            );
             let host: &mut dyn ServerHost = game;
             let stone = ItemPlace::PlayerSlot {
                 player: 123,
@@ -689,9 +710,8 @@ mod tests {
             }
             .resource(host)
             .unwrap();
-            let put = host.transaction(|host, tx| {
-                Ok::<_, ()>(held_slot(4).insert(host, tx, &stone, 5))
-            });
+            let put =
+                host.transaction(|host, tx| Ok::<_, ()>(held_slot(4).insert(host, tx, &stone, 5)));
             assert_eq!(put, Ok(5));
             let shown = |game: &Game<'_>| {
                 let guest = game.lan.as_ref().unwrap().hub.guest(1).unwrap();
@@ -715,7 +735,10 @@ mod tests {
             let menu = host.menu(123, window).unwrap();
             let player = menu.fields().player;
             let places = held_places(hand, 0..27);
-            assert_eq!(game.player_back_mod_menu_slots(player, window, places), Ok(()));
+            assert_eq!(
+                game.player_back_mod_menu_slots(player, window, places),
+                Ok(())
+            );
             edit_guest(game, replace);
             assert!(game.place_menu_click(123, window, 27, 0, 1));
             let host: &mut dyn ServerHost = game;
