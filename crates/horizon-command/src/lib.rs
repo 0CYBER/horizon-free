@@ -637,6 +637,9 @@ fn compare_suggestions(a: &Suggestion, b: &Suggestion) -> std::cmp::Ordering {
         _ => compare_ignore_case(&a.text, &b.text),
     }
 }
+/// The longest completion text a suggestion packet carries: `ByteBufCodecs.STRING_UTF8` counts
+/// 32767 UTF-16 code units, which is what vanilla's reader and its client both enforce.
+const MAX_SUGGESTION_TEXT: usize = 32767;
 /// Suggestions.create: merged, expanded to a common range and sorted case-insensitively.
 pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Suggestion>) {
     if list.is_empty() {
@@ -655,6 +658,13 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
             s.text,
             &input[s.range.1..end]
         );
+        // Padding grows the text past what the suggestion itself holds: a long prefix, and a
+        // suggestion starting later, expand to the whole merged range. Each one was within the
+        // packet's limit alone, so the expanded text is measured again and the ones that no
+        // longer fit are left out, keeping the others.
+        if text.encode_utf16().count() > MAX_SUGGESTION_TEXT {
+            continue;
+        }
         let expanded = Suggestion {
             range: (start, end),
             text,
@@ -668,6 +678,10 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
         if seen.insert((expanded.text.clone(), expanded.tooltip.clone())) {
             out.push(expanded);
         }
+    }
+    if out.is_empty() {
+        // Every completion was too long to send: nothing to show, and no range to show it in.
+        return ((0, 0), out);
     }
     let ints = out.iter().filter(|s| s.int_value.is_some()).count();
     if ints == 0 || ints == out.len() {
@@ -1191,6 +1205,16 @@ impl Dispatcher {
             all.extend(builder.out);
         }
         let (range, list) = merge_suggestions(truncated, all);
+        // The reply's range is the builder's, covering the token being typed, even when nothing
+        // is suggested locally: a node that asks the server (`ask_server`, and the mods' own
+        // `tab_complete` answers for the free `id`) brings its completions with the server's
+        // reply, which the chat applies to that token. The empty list's `(0, 0)` would paste
+        // what the server adds at the start of the line.
+        let range = if list.is_empty() {
+            (start, truncated.len())
+        } else {
+            range
+        };
         (range, list, ask)
     }
     fn smart_usage_of(&self, node: usize, optional: bool, deep: bool, level: u8) -> Option<String> {

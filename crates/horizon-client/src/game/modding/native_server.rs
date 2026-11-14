@@ -139,12 +139,12 @@ fn usage_nodes(
         if kind == "vec3_uncentered" {
             node[UNCENTERED] = true.into();
         }
-        if let Some(id) = custom {
-            // A client that does not know the type parses a word (or the rest of the line).
-            // Fabric sends the registered type's id, which an unmodded client cannot read and
-            // whose node it drops; a Brigadier string keeps the tree valid and asks the server
-            // for the completions.
-            node["custom_argument"] = id.into();
+        // A registered type goes out as a Brigadier string an unmodded client can read; it and
+        // the free `id`, which has no list of its own, ask the server (the mods' `tab_complete`).
+        if custom.is_some() || kind == "id" {
+            if let Some(id) = custom {
+                node["custom_argument"] = id.into();
+            }
             node["suggestions"] = "minecraft:ask_server".into();
         }
         out.push((name.to_owned(), node, optional));
@@ -3160,6 +3160,9 @@ mod tests {
             world.get("properties").is_none(),
             "ResourceLocationArgument carries no properties"
         );
+        // The free `id` has no list of its own: its node asks the server, which answers from the
+        // mods' own suggestions (`tab_complete`), so an unmodded client is not left with nothing.
+        assert_eq!(world["suggestions"], "minecraft:ask_server");
 
         let mut dispatcher = Dispatcher::new();
         register_dispatcher(

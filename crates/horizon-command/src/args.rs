@@ -140,7 +140,8 @@ pub enum ArgType {
     Id(&'static str),
     /// Vanilla's free identifier (`minecraft:resource_location`): a `namespace:path` of
     /// identifier characters, canonical with the `minecraft` namespace when it is left out, with
-    /// no registry to check and nothing to suggest.
+    /// no registry to check and no list of its own to suggest: the node asks the server, which
+    /// answers from the mods' own suggestions.
     Identifier,
     /// ResourceArgument over a registry (the element must exist).
     Res(&'static str),

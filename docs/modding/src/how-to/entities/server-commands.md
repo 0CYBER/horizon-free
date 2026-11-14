@@ -28,10 +28,12 @@ from the source's world, relative or local coordinates without loading chunks.
 digits and `_ - . : /`, canonicalised to `namespace:path` with `minecraft` when the namespace is
 left out, and checked against no registry. `Command::new("map fullrender <world:id>")` takes
 `minecraft:overworld`, `mymod:custom` and `overworld` (delivered as `minecraft:overworld`), and
-refuses an upper-case token or a second colon. The value arrives as a plain string. It completes
-nothing, as vanilla's identifier argument does: a mod that wants completions for its own
-identifiers takes the text as `Greedy` and completes the token being typed
-([below](#completing-one-token-of-a-greedy-text)).
+refuses an upper-case token or a second colon. The value arrives as a plain string. It offers no
+list of its own, so its node declares `minecraft:ask_server`: the client, modded or not, asks the
+server for the completions, as it does for a mod argument type. The identifiers are yours to
+supply in `tab_complete`, which receives the command, the replaced byte range and the suggestions
+the server computed, and may add to or filter them, matching its own command path and the
+argument's position.
 
 Positions, rotations, dimensions and compound tags have their own kinds, each sent to clients
 as vanilla's parser so `~`, `^` and the dimension list complete as in a vanilla command:

@@ -178,7 +178,9 @@ pub(super) fn parser(kind: &str) -> Option<(&'static str, Value, ArgType)> {
         "dimension" => ("minecraft:dimension", Value::Null, ArgType::Dimension),
         "nbt" => ("minecraft:nbt_compound_tag", Value::Null, ArgType::Nbt),
         // `ResourceLocationArgument`: a free `namespace:path` of identifier characters, with no
-        // registry to check. An unmodded client parses and refuses it the same way.
+        // registry to check. An unmodded client parses and refuses it the same way; the node
+        // declares `minecraft:ask_server` (`usage_nodes`), so the identifiers it completes are the
+        // mods' own (`tab_complete`).
         "id" => (
             "minecraft:resource_location",
             Value::Null,
