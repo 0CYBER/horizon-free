@@ -65,3 +65,13 @@ entity unsheared, and `None` leaves it to the species (a sheep keeps shearing as
 negative amounts repair. It returns the pre-shrink stack only on break, and `None` when
 nothing breaks or the entity or slot is unavailable. Creative players' equipment is
 exempt. The operation does not fire equip effects.
+
+`mob.set_wanted_position(host, [x, y, z], speed)` writes `MoveControl` directly,
+without pathfinding or requiring loaded terrain. `wanted_position(host)` and
+`speed_modifier(host)` read its stored position and speed, including after the
+wish is consumed. The mob moves by its own control; its AI may replace the wish
+next tick. Finite negative speed is accepted as in vanilla. Non-finite coordinates
+return `WantedPositionError::NonFinitePosition`; non-finite speed returns
+`NonFiniteSpeed`. Refused inputs leave the old wish intact. The setter returns
+`Ok(false)` (reads return `None`) for stale handles, clients, the dragon and mobs
+held out of the level. These methods are server side.

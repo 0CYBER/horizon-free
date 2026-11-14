@@ -70,6 +70,17 @@ pub trait MobsBackend {
     #[access(WorldOnly)]
     fn mob_navigation_speed(&self, mob: MobRef) -> Option<f64>;
     /// Side: server.
+    /// `MoveControl.getWantedX/Y/Z`: the stored wish, even after consumption.
+    /// None for a stale mob, a client, the dragon or a mob held out of the level.
+    #[access(WorldOnly)]
+    fn mob_wanted_position(&self, mob: MobRef) -> Option<[f64; 3]>;
+    /// Side: server.
+    /// `MoveControl.getSpeedModifier`: the stored move-control speed.
+    /// None for a stale mob, a client, the dragon or a mob held out of the level.
+    #[access(WorldOnly)]
+    fn mob_speed_modifier(&self, mob: MobRef) -> Option<f64>;
+
+    /// Side: server.
     /// `Mob.getPathfindingMalus`: what a node of `kind` costs this mob's
     /// pathfinder — its own override, else the kind's default (a negative
     /// malus closes the kind). None for a stale or unavailable mob, the
@@ -329,6 +340,20 @@ pub trait MobsBackendMut {
     /// unavailable mob, a client, and the dragon.
     #[access(WorldOnly)]
     fn mob_look_at(&mut self, mob: MobRef, at: [f64; 3]) -> bool;
+    /// Side: server.
+    /// `MoveControl.setWantedPosition`: a momentary wish consumed by the mob's
+    /// own movement. Its AI may replace it next tick. Unloaded positions and
+    /// finite negative speeds are accepted. Non-finite inputs return named
+    /// errors without changing the wish. Ok(false) for a stale mob, a client,
+    /// the dragon or a mob held out of the level.
+    #[access(WorldOnly)]
+    fn mob_set_wanted_position(
+        &mut self,
+        mob: MobRef,
+        at: [f64; 3],
+        speed: f64,
+    ) -> Result<bool, WantedPositionError>;
+
     /// Side: server.
     /// `JumpControl.jump`: the mob jumps on its next own tick by its own
     /// jump path — no velocity is written, and the control consumes the

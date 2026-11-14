@@ -96,6 +96,8 @@ horizon-client game::native_menu_places::tests::another_stack_in_the_offhand_clo
 horizon-client game::native_menu_places::tests::un_backing_or_shortening_empties_the_mirrored_slots_and_keeps_the_items_once lib daily resources
 horizon-client game::native_hooks::runtime_environment::server_data_version_tests::host_data_version_matches_a_freshly_saved_chunk lib daily resources
 horizon-client game::native_menus::tests::container_hooks_follow_actual_open_boundaries_without_a_tick lib daily game-boot
+horizon-client game::native_mob_wanted_position_tests::wanted_position_moves_and_navigation_replaces_the_wish lib daily resources
+horizon-client game::native_mob_wanted_position_tests::wanted_position_names_invalid_inputs_and_refuses_unavailable_mobs lib daily resources
 horizon-client game::native_passage_cross::tests::a_crossing_into_another_level_is_refused_far_level lib daily resources
 horizon-client game::native_passages::tests::a_destination_level_must_be_open_and_another_level lib daily resources
 horizon-client game::native_passages::tests::a_passage_into_another_level_is_not_sent_to_the_clients lib daily resources
