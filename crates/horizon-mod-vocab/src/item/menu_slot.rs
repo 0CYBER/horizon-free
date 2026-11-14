@@ -45,3 +45,24 @@ impl MenuRef {
         ItemPlace::PlayerCursor { menu: self }
     }
 }
+
+/// A slot's role in the client's layout, not its server backing or acceptance rules.
+/// Player indices are hotbar 0..=8, main 9..=35, armour 36..=39 (feet to head),
+/// and off hand 40. Equipment belongs to the open container, never the player.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+pub enum MenuSlotKind {
+    /// The player inventory index, independent of menu order.
+    Player(u32),
+    /// Storage declared by the layout, including linked storage.
+    Storage,
+    /// A crafting input grid.
+    CraftingGrid,
+    /// An output slot.
+    Result,
+    /// Equipment of the open container, such as a horse saddle.
+    Equipment,
+    /// A role the client layout cannot classify.
+    #[default]
+    Other,
+}
