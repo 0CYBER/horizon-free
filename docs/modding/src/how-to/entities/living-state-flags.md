@@ -77,6 +77,24 @@ attribute, navigation and AI changes. Their age is saved as `Age` where the kind
 such as zombies and piglins, keep their non-growing baby state instead. A species with no baby form refuses
 `set_baby` without changing anything. Neither `set_baby` nor `set_no_ai` changes `PersistenceRequired`.
 
+`brain_frozen`/`set_brain_frozen` pause a mob's own AI while its physics runs on, as Apothic Spawners' movable
+no-AI modifier does in Java. A frozen mob skips `Mob.serverAiStep` whole: its Brain's sensors, activities and
+behaviours, its goal and target selectors, its navigation and its controls. `LivingEntity.aiStep` runs as for an
+immobile mob (`isImmobile`), with no input, so it still falls, swims and is pushed and knocked back, which `NoAI`
+does not allow. It works for Brain mobs (piglins, villagers, axolotls, goats), which have no goals to remove, as
+for goal mobs. Its memories and goals stay and resume with it. `NoAI` is neither read nor set. The flag is not
+saved, since vanilla has no such flag. A mod that keeps it stores it in an attachment and freezes the mob again
+from `entity_join_level`, which also fires for a loaded chunk's mobs. A refusal is a `BrainFreezeRefusal`:
+`NoMob` (a stale handle, a mob held out for its own tick, a client) or `NotAMob` (a player, an armor stand,
+the dragon). Both change nothing.
+
+```rust
+// A spawner's movable no-AI mob, on spawn and again on load.
+if let Some(mob) = host.mob(entity) {
+    let _ = mob.set_brain_frozen(host, true);
+}
+```
+
 The persistence pair `persistence_required`/`set_persistence_required` reads and sets `Mob.isPersistenceRequired`;
 vanilla gives that setter no way back. `requires_custom_persistence` is a separate despawn predicate
 (`Mob.requiresCustomPersistence` and its species overrides): passengers, leashes and species-specific reasons
