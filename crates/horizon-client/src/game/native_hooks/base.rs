@@ -4859,10 +4859,6 @@ impl Game<'_> {
     pub(in crate::game) fn transfer_recipe(&mut self, book_id: i32) {
         self.transfer_viewer_recipe(book_id);
     }
-    /// A viewer's transfer of a recipe by id, into a mod menu or a grid.
-    pub(in crate::game) fn transfer_recipe_id(&mut self, recipe: &str, max: bool) {
-        self.transfer_viewer_recipe_id(recipe, max);
-    }
     /// Creative mode only: gives the player `count` of `item`
     /// (`minecraft:diamond`) as taking it from the creative inventory does
     /// (`ServerboundSetCreativeModeSlot`): the selected slot first, then the
@@ -4894,8 +4890,12 @@ mod text_tests {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let drawn = |argb: u32| {
                 let mut batch = HudBatch::scratch([640, 480]);
-                crate::game::host::draw::GameDrawContext::new(game, &mut batch)
-                    .text("Hi", [4.0, 4.0], argb, false);
+                crate::game::host::draw::GameDrawContext::new(game, &mut batch).text(
+                    "Hi",
+                    [4.0, 4.0],
+                    argb,
+                    false,
+                );
                 batch.vertices
             };
             let opaque = drawn(0xFFFF_FFFF);

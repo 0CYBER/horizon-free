@@ -194,6 +194,11 @@ fn sprite(name: &str) -> String {
 }
 
 impl Game<'_> {
+    /// A viewer's transfer of a recipe by id, into a mod menu or a grid.
+    pub(in crate::game) fn transfer_recipe_id(&mut self, recipe: &str, max: bool) {
+        self.transfer_viewer_recipe_id(recipe, max);
+    }
+
     /// The vanilla book the open screen has, if any.
     pub(super) fn active_book(&self) -> Option<BookType> {
         if self.screen != Screen::Inventory || self.station.is_some() {
@@ -1383,7 +1388,11 @@ impl Game<'_> {
             self.local_grid_transfer(recipe, max);
             return;
         }
-        if !self.remote.as_ref().is_some_and(|r| r.recipe_viewer.transfer) {
+        if !self
+            .remote
+            .as_ref()
+            .is_some_and(|r| r.recipe_viewer.transfer)
+        {
             self.show_transfer_result(RecipeTransferResult::NotIntoMenu);
             return;
         }
