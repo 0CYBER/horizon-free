@@ -213,3 +213,39 @@ fn registered_kind_reload_removing_last_recipe_rejects_cached_result() {
         });
     });
 }
+
+/// Menu grids are untrimmed squares, even when the occupied cells form a rectangle.
+#[test]
+fn registered_kind_pickup_uses_opened_menu_shape_not_occupied_bounds() {
+    for shape in [(1, 2), (2, 2), (3, 3)] {
+        crate::crafting::mod_kinds::tests::with_shape_recipe(0, Some(shape), |recipes, calls| {
+            bare_env(|base| {
+                let env = Env {
+                    recipes: &recipes,
+                    ..*base
+                };
+                for (kind, size) in [
+                    (Kind::Inventory, 2),
+                    (Kind::Crafting, 3),
+                    (mod_crafting_table(), 3),
+                ] {
+                    let mut menu = Menu::new(kind);
+                    menu.set_slot(&env, 1, Some(ItemStack::new("test:input", 2)));
+                    // Also exercise a cached result from a differently shaped lookup.
+                    menu.containers[RESULT][0] = Some(ItemStack::new("test:output", 3));
+                    calls.lock().unwrap().clear();
+                    menu.click(&env, 0, 0, Input::Pickup).unwrap();
+                    if shape == (size, size) {
+                        assert_eq!(menu.carried, Some(ItemStack::new("test:output", 3)));
+                        assert_eq!(menu.slot(1), Some(&ItemStack::new("test:input", 1)));
+                        assert_eq!(calls.lock().unwrap()[0].len(), (size * size) as usize);
+                    } else {
+                        assert!(menu.carried.is_none());
+                        assert_eq!(menu.slot(1), Some(&ItemStack::new("test:input", 2)));
+                        assert!(calls.lock().unwrap().is_empty());
+                    }
+                }
+            });
+        });
+    }
+}

@@ -3,6 +3,7 @@ use super::*;
 use std::sync::Mutex;
 type Calls = Arc<Mutex<Vec<Vec<u32>>>>;
 struct Kind {
+    shape: Option<(u32, u32)>,
     input: mod_api::ItemKey,
     output: mod_api::ItemKey,
     rest: mod_api::ItemKey,
@@ -25,6 +26,12 @@ impl mod_api::CraftingRecipeKind for Kind {
         Ok(format!("{{\"rest\":{value}}}"))
     }
     fn matches(&self, _: &u32, grid: CraftingGrid) -> bool {
+        if self
+            .shape
+            .is_some_and(|shape| shape != (grid.width, grid.height))
+        {
+            return false;
+        }
         grid.cells.iter().enumerate().all(|(i, cell)| {
             if i == 0 {
                 cell.as_ref().is_some_and(|s| s.item() == self.input)
@@ -57,12 +64,14 @@ impl mod_api::CraftingRecipeKind for Kind {
     }
 }
 struct Mod {
+    shape: Option<(u32, u32)>,
     calls: Calls,
 }
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Mod {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         let kind = Kind {
+            shape: self.shape,
             input: r.item_key("test:input"),
             output: r.item_key("test:output"),
             rest: r.item_key("test:rest"),
@@ -72,10 +81,18 @@ impl mod_api::Hooks for Mod {
     }
 }
 pub(crate) fn with_recipe(rest: u32, f: impl FnOnce(Recipes, Calls)) {
+    with_shape_recipe(rest, None, f);
+}
+pub(crate) fn with_shape_recipe(
+    rest: u32,
+    shape: Option<(u32, u32)>,
+    f: impl FnOnce(Recipes, Calls),
+) {
     let calls: Calls = Default::default();
     let mods = vec![mod_api::ModEntry::new(
         "test",
         Box::new(Mod {
+            shape,
             calls: calls.clone(),
         }),
     )];
@@ -83,6 +100,7 @@ pub(crate) fn with_recipe(rest: u32, f: impl FnOnce(Recipes, Calls)) {
         let entries = [mod_api::ModEntry::new(
             "test",
             Box::new(Mod {
+                shape,
                 calls: calls.clone(),
             }),
         )];
