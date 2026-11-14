@@ -8,7 +8,8 @@
 //!
 //! On the float frame Horizon's world light is the same on every display (`TIERS`,
 //! `SUNLIT_GAIN`, up to `SCENE_PEAK`), and the tone curve alone fits it to the display's
-//! peak (docs/design/hdr-linear-light.md, step 6a).
+//! peak (docs/design/hdr-linear-light.md, step 6a). The sun's disc alone follows the display
+//! past the scene's peak (`SUN_CAP`).
 
 /// The swapchain HDR output presents to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -156,10 +157,16 @@ pub const TIERS: [Tier; 4] = [
 /// onto the display's peak; light past it (where the sky adds onto the sun) is held at it. The
 /// world is mastered for a 1000-nit display at ITU-R BT.2408's 203-nit reference white, as
 /// HDR10 content usually is: there it shows as written, a dimmer display eases its highlights
-/// into its peak (BT.2390's EETF), and a brighter one shows it as at 1000.
+/// into its peak (BT.2390's EETF), and a brighter one shows it as at 1000, but for the sun's
+/// disc (`SUN_CAP`).
 pub const SCENE_PEAK: f32 = 1000.0 / 203.0;
 /// HDR lighting: what the strongest light multiplies a surface by (`hdr_light.wgsl`).
 pub const SUNLIT_GAIN: f32 = 3.0;
+/// How far the sun's disc may pass the scene's peak, in multiples of paper white: on a display
+/// above `SCENE_PEAK` its white is the display's peak, up to this, 2000 nits at a paper white of
+/// 203. Nothing else the world writes passes the scene's peak, so a brighter display shows a
+/// brighter sun and the same world.
+pub const SUN_CAP: f32 = 2000.0 / 203.0;
 /// The compatibility frame's tiers (the 16-bit or 8-bit frame, until step 5 removes it): each
 /// one's share of the display's headroom, as before one peak, so the look HDR has by default
 /// changes once, when the float frame replaces it.
@@ -978,12 +985,23 @@ impl Hdr {
         })
     }
 
-    /// What the world's writers read (`hdr_written`): the scene's peak, HDR lighting's gain,
-    /// world/look and debug, then the tiers' gains. No part of the display reaches them.
+    /// The sun's disc's white, in multiples of paper white: the scene's peak, and on a display
+    /// above it the display's, up to `SUN_CAP`.
+    fn sun_peak(&self) -> f32 {
+        (self.peak / self.paper_white.max(1.0)).clamp(SCENE_PEAK, SUN_CAP)
+    }
+
+    /// What the world's writers read (`hdr_written`): the sun's disc's peak (`fs_sky_sun`, the
+    /// only writer that reads a peak: the others leave theirs to the tone curve), HDR lighting's
+    /// gain, world/look and debug, then the tiers' gains. Of the display only the sun's peak
+    /// reaches them.
     pub(super) fn draw_params(&self, world: bool) -> ([f32; 4], [f32; 4]) {
         let p = self.params(world, false);
         let sunlit = if self.lighting { SUNLIT_GAIN } else { 1.0 };
-        ([SCENE_PEAK, sunlit, p[2], p[3]], self.tiers.map(|t| t.gain))
+        (
+            [self.sun_peak(), sunlit, p[2], p[3]],
+            self.tiers.map(|t| t.gain),
+        )
     }
 
     /// hdr.wgsl's `Params`.
@@ -1011,11 +1029,10 @@ impl Hdr {
         params[14] = c.map_or(0.0, |c| c.band);
         // Only Horizon's lifted world is known to end at the scene's peak; elsewhere (HDR
         // Lighting off, a pack's own light, the title) the curve's source follows the display.
-        params[16] = if world && self.lighting {
-            SCENE_PEAK
-        } else {
-            0.0
-        };
+        if world && self.lighting {
+            params[16] = SCENE_PEAK;
+            params[17] = self.sun_peak();
+        }
         params
     }
 
@@ -1547,37 +1564,36 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
         assert!(above[0] > white[0] && above[1] > white[1]);
     }
 
-    /// The world's writers read nothing of the display: the same gains and the same scene peak
-    /// at any paper white and peak (docs/design/hdr-linear-light.md, step 6a).
+    /// The world's writers read the same gains at any paper white and peak
+    /// (docs/design/hdr-linear-light.md, step 6a). Of the display only the sun's disc's peak
+    /// reaches them: the scene's up to a display at it, so there nothing differs; above it the
+    /// display's, up to `SUN_CAP`.
     #[test]
-    fn the_writers_light_is_the_same_on_every_display() {
+    fn the_writers_light_is_the_same_on_every_display_but_the_suns_disc() {
         let Some((device, queue)) = gpu() else {
             return;
         };
         let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
-        let written = hdr.draw_params(true);
-        assert_eq!(
-            written,
-            (
-                [super::SCENE_PEAK, super::SUNLIT_GAIN, 1.0, 0.0],
-                [1.6, 2.4, 2.8, 4.0]
-            )
-        );
-        for (paper, peak) in [
-            (203.0, 300.0),
-            (203.0, 600.0),
-            (203.0, 1500.0),
-            (400.0, 600.0),
-            (480.0, 200.0),
-            (80.0, 10000.0),
+        let (scene, cap) = (super::SCENE_PEAK, super::SUN_CAP);
+        for (paper, peak, sun) in [
+            (203.0, 300.0, scene),
+            (203.0, 600.0, scene),
+            (203.0, 1000.0, scene),
+            (400.0, 600.0, scene),
+            (480.0, 200.0, scene),
+            (203.0, 1500.0, 1500.0 / 203.0),
+            (203.0, 2000.0, cap),
+            (203.0, 4000.0, cap),
+            (80.0, 10000.0, cap),
         ] {
             (hdr.paper_white, hdr.peak) = (paper, peak);
-            assert_eq!(hdr.draw_params(true), written, "{paper}/{peak}");
             assert_eq!(
-                hdr.params(true, false)[16],
-                super::SCENE_PEAK,
+                hdr.draw_params(true),
+                ([sun, super::SUNLIT_GAIN, 1.0, 0.0], [1.6, 2.4, 2.8, 4.0]),
                 "{paper}/{peak}"
             );
+            let params = hdr.params(true, false);
+            assert_eq!((params[16], params[17]), (scene, sun), "{paper}/{peak}");
         }
         // The title, and frames Horizon doesn't light (HDR Lighting off, a pack drawing):
         // nothing says where their light ends, so the curve's source follows the display.
@@ -1626,9 +1642,11 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
         };
         let near = |got: f32, want: f32| (got - want).abs() <= 0.005 * want.max(1.0);
         // A display at or above the mastering one (T >= S): every stored value up to S comes
-        // out exactly as it went in, grey or coloured, and light above S is held at S with its
-        // hue, so 1500 and 10 000 nits show what 1000 does; so do the settings' extremes (Paper
-        // White 10 to 480 nits, Peak up to 10 000) wherever T reaches S.
+        // out exactly as it went in, grey or coloured, so 1500 and 10 000 nits show what 1000
+        // does; so do the settings' extremes (Paper White 10 to 480 nits, Peak up to 10 000)
+        // wherever T reaches S. Past S only the sun's disc is written, up to its peak (T, at
+        // most `SUN_CAP`): that too comes out as it went in, and light above it is held at it
+        // with its hue.
         for (setting, (paper, peak)) in [
             (203.0, 1000.0),
             (203.0, 1500.0),
@@ -1656,10 +1674,19 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
                     "{peak}: {i}"
                 );
             }
-            for light in [8.0f32, 50.0] {
+            let sun_peak = (peak / paper).clamp(scene_peak, super::SUN_CAP);
+            for i in 0..64 {
+                let light = scene_peak + (sun_peak - scene_peak) * i as f32 / 64.0;
+                let g = f64::from(light.powf(1.0 / 2.2));
+                assert!(
+                    unchanged(&mut hdr, [g, g * 0.6, g * 0.1, 1.0], light > scene_peak),
+                    "{peak}: {light}"
+                );
+            }
+            for light in [sun_peak, 8.0, 50.0] {
                 let [r, g, b] = mapped(&mut hdr, [light, light / 4.0, 0.0]);
                 assert!(
-                    near(r, scene_peak) && near(g * 4.0, r) && b == 0.0,
+                    near(r, light.min(sun_peak)) && near(g * 4.0, r) && b == 0.0,
                     "{peak}: {light}: {r} {g} {b}"
                 );
             }

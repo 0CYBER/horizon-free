@@ -34,6 +34,9 @@ struct Params {
     // The scene's peak in units of paper white where Horizon lifts the world (hdr.rs
     // `SCENE_PEAK`), else 0: what the tone curve maps onto the display's peak (`tone_scale`).
     scene_peak: f32,
+    // The sun's disc's white in units of paper white (hdr.rs `sun_peak`): the scene's peak, and
+    // on a display above it the display's, up to `SUN_CAP`. Light past it is held at it.
+    sun_peak: f32,
 };
 @group(0) @binding(2) var<uniform> params: Params;
 // Horizon's logo, 1 inside, 0 outside, for calibration's test pictures.
@@ -281,17 +284,20 @@ fn tone_knee(headroom: f32) -> f32 {
 //
 // The source is the scene's peak S where Horizon lifts the world (`scene_peak`, hdr.rs
 // `SCENE_PEAK`): the world's light is the same on every display, light past S is held at S, and
-// where T reaches S that is all, so a display above S shows the world as one at S. Where the
+// where T reaches S that is all, so a display above S shows the world as one at S. The sun's disc
+// is the exception: where T passes S it alone is written past S, up to `sun_peak` (T, capped), so
+// there the hold is at `sun_peak` and everything up to it shows as written; up to T = S
+// `sun_peak` is S. Where the
 // scene's range is unknown (`scene_peak` 0: a 0.2 pack's own light, HDR Lighting off), the
 // source follows the display, as the 0.2 contract has it: the peak that puts the EETF's knee at
 // `tone_knee`, PQ's 10 000 nits at most.
-fn tone_scale(top: f32, scene_peak: f32, headroom: f32, paper: f32) -> f32 {
+fn tone_scale(top: f32, scene_peak: f32, sun_peak: f32, headroom: f32, paper: f32) -> f32 {
     let peak = pq(vec3(headroom * paper)).x;
     var source: f32;
     var e: f32;
     var held = 1.0;
     if scene_peak > 0.0 {
-        held = min(1.0, scene_peak / max(top, 1e-6));
+        held = min(1.0, sun_peak / max(top, 1e-6));
         if scene_peak <= headroom {
             return held;
         }
@@ -330,7 +336,7 @@ fn tone_scale(top: f32, scene_peak: f32, headroom: f32, paper: f32) -> f32 {
         return vec4(min(g, vec3(1.0)), 1.0);
     }
     let top = pow(max(max(g.r, max(g.g, g.b)), 0.0), 2.2);
-    let s = tone_scale(top, params.scene_peak, params.peak, params.paper * 80.0);
+    let s = tone_scale(top, params.scene_peak, params.sun_peak, params.peak, params.paper * 80.0);
     return vec4(select(g * pow(s, 1.0 / 2.2), g, s == 1.0), 1.0);
 }
 

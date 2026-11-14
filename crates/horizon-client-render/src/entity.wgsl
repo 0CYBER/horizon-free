@@ -484,7 +484,8 @@ fn sky_celestial(in: Out) -> vec4<f32> {
 }
 
 // The sun in Horizon's lifted world (gfx/celestial.rs): its disc shows vanilla's colour, the sky
-// plus the sun clipped at white channel by channel, with white at the scene's peak S. The sky
+// plus the sun clipped at white channel by channel, with white at S: the scene's peak, and on a
+// display above it the display's, up to a cap (`hdr_settings.x`, hdr.rs `sun_peak`). The sky
 // under it is vanilla's times one gain (sky_finished's lift), so in the frame's encoding that
 // is min(S * sun + S / sky gain * frame, S): this pass blends src + frame * alpha, then
 // fs_sky_sun_clip takes the min. Added in the frame's gamma instead, sky and sun pass S and the

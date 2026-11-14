@@ -320,7 +320,13 @@ Behind `HORIZON_HDR_FRAME=float` until the last step, each a small pull request:
      onto a bright sky), then maps S onto the display's peak T with BT.2390's EETF in PQ on the brightest
      channel: the identity where T reaches S, that is where Peak Brightness is at least 1000/203 times Paper White,
      so at a paper white of 203 a display at 1000 nits or more shows the scene as written and one above 1000 shows
-     it as at 1000. Light Horizon doesn't lift (HDR Lighting off, the title, a 0.2 pack's own) has
+     it as at 1000, but for the sun's disc: where T passes S its white is min(T, `SUN_CAP`) (2000 nits at a paper
+     white of 203; `Hdr::sun_peak`), so Peak Brightness above S moves the disc alone, and nothing from the cap up.
+     The disc's writer reads that peak, the one thing of the display a writer reads, and the curve holds light at
+     it instead of at S: min(light, the disc's peak), the identity up to it. The frame carries no mark for the
+     disc, so light that adds up past S (additive particles over a light source, lightning's quads over a bright
+     background, the moon over a bright sky) is held at the disc's peak there too. Where T is at most S the disc's
+     peak is S and every pass computes what it did. Light Horizon doesn't lift (HDR Lighting off, the title, a 0.2 pack's own) has
      no known peak, so there the curve's source still follows the display, as the 0.2 rule above describes. HDR off,
      the HUD, the black lift, the SDR screenshot's shoulder and the compatibility frame (HDR's default until step 5,
      whose look then changes once) don't change.

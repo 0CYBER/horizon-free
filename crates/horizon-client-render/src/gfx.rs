@@ -397,7 +397,7 @@ struct Globals {
     /// full (`hdr::Hdr::windows`); zero without HDR.
     hdr_windows: [[f32; 4]; 2],
     hdr_light: [f32; 4],
-    /// The scene's peak, HDR lighting's gain, world/look and debug; then the tiers' gains
+    /// The sun's disc's peak, HDR lighting's gain, world/look and debug; then the tiers' gains
     /// (`Hdr::draw_params`).
     hdr_settings: [f32; 4],
     hdr_gains: [f32; 4],
