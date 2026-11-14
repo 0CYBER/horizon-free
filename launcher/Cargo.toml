@@ -24,6 +24,10 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 # Checks the client jar and the version file found in other launchers' folders (sources.rs).
 sha1 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "fs", "io-util", "sync", "time", "macros", "net"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "socks", "stream"] }
+futures-util = "0.3"
+httpdate = "1"
 # The mod browser checks Modrinth's SHA-512 before a pack reaches the game folder (browser/download.rs).
 sha2 = "0.10"
 # The secrets file is encrypted where no keychain answers (account.rs, FileStore).
@@ -107,6 +111,7 @@ winreg = "0.56"
 winresource = "0.1"
 
 [dev-dependencies]
+tempfile = "3"
 # Tokenize source strings for the translation completeness test, including multiline calls.
 syn = "2"
 
