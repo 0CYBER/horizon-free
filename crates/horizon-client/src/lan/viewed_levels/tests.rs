@@ -1306,7 +1306,7 @@ fn a_travel_is_followed_by_a_swap_from_revision_4() {
     let swap = sent
         .iter()
         .position(|g| *g == Bound::Swap { slot: 0, epoch: 1 });
-    assert!(respawn.is_some() && swap > respawn, "{sent:?}");
+    assert_eq!(swap, Some(respawn.expect("Respawn sent") + 1), "{sent:?}");
     let g = &hub.guests[0];
     let left = g.viewed.view("test:r").expect("test:r kept as a view");
     let mut kept: Vec<_> = left.sent.iter().copied().collect();

@@ -4951,13 +4951,15 @@ impl Hub {
                 // ClientboundRespawnPacket.KEEP_ALL_DATA.
                 keep: 3,
             }));
+        });
+        // Its chunks, queues and entities left behind, or kept as a viewed level (#3716).
+        self.leave_level(i, &left);
+        self.guests.update(i, |g| {
             g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
                 difficulty: ctx.difficulty,
                 locked: ctx.difficulty_locked,
             }));
         });
-        // Its chunks, queues and entities left behind, or kept as a viewed level (#3716).
-        self.leave_level(i, &left);
         self.send_permission_level(i);
         if portal {
             // A teleport still pending from the old level is void: its late

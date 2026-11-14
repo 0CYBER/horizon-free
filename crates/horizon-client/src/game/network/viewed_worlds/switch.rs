@@ -5,12 +5,11 @@
 //! viewed world of the level left with all it holds, and no loading screen starts. The server sends
 //! neither level's chunks again; it sends both levels' entities again, as the client drops them.
 //!
-//! There is no marker: the client swaps exactly when it holds the level entered as a viewed world,
-//! which is when the server has its view open. Any other Respawn (a death's or an End exit's,
-//! `PlayerList.respawn`, keep 0 or 1, or a travel into a level it does not view) drops every
-//! viewed world and enters the level as before. It is revision 2 of `horizon:levels`, which this
-//! client answers (`viewed_levels::REVISION_2`): a server serves it views only when it serves
-//! that revision, and swaps only for a client that answered it.
+//! Revision 4 of `horizon:levels` binds the swap explicitly: a kind-3 marker immediately after
+//! Respawn names the slot and epoch holding the entered world and the epoch for the world left.
+//! This client validates that binding before swapping. A death, End exit, or ordinary travel
+//! without a matching binding drops the views and enters the level normally. Older served
+//! clients retain their revision's implicit swap behavior; this client answers revision 4.
 use super::{routing::default_clock, worlds::ViewedWorld};
 use crate::game::Game;
 use horizon_client::level_loading::Reason;
