@@ -1000,33 +1000,8 @@ impl Launcher {
             ),
             &t,
         );
-        // The last native build's log, as a quiet button.
-        let build_log = self.native_log.available.then(|| {
-            keyboard(
-                div()
-                    .id("topbar-native-log")
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(8.))
-                    .h(px(38.))
-                    .px(px(12.))
-                    .rounded(px(radius::CONTROL))
-                    .bg(white(fill::BUTTON))
-                    .hover(|s| s.bg(white(fill::BUTTON_HOVER)))
-                    .cursor_pointer()
-                    .child(ui::icon("computer-terminal-01", 16., white(ink::SOFT)))
-                    .when(!compact, |d| {
-                        d.child(ui::text(14., FontWeight::MEDIUM, ink::FULL).child(tr("Build log")))
-                    })
-                    .when(compact, |d| d.tooltip(ui::tip(tr("Build log"))))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.native_log_open();
-                        cx.notify();
-                    })),
-                &t,
-            )
-        });
+        // The build log isn't a top-bar button: it pushed the pages off the bar during a build.
+        // It opens from the build card and from each mod's menu.
         div()
             .flex()
             .flex_none()
@@ -1047,7 +1022,6 @@ impl Launcher {
                     .items_center()
                     .gap(px(8.))
                     .child(search)
-                    .children(build_log)
                     .child(account)
                     .children(sign_in),
             )

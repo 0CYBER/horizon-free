@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
 use winreg::RegKey;
 
-pub const APP_NAME: &str = crate::identity::DISPLAY_NAME;
+pub const APP_NAME: &str = crate::identity::INSTALL_NAME;
 const BINARY: &str = crate::identity::WINDOWS_EXECUTABLE;
 const PUBLISHER: &str = crate::identity::PUBLISHER;
 const ABOUT_URL: &str = crate::identity::ABOUT_URL;

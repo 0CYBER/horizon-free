@@ -380,7 +380,7 @@ impl Launcher {
             .child(
                 text_in(14., pal.ink)
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(tr("Native mod build")),
+                    .child(tr("Mod build")),
             )
             .child(right)
     }

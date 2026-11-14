@@ -777,6 +777,16 @@ pub(super) fn version_label(tag: &str) -> String {
     if let Some(developer) = horizon_launcher::developer_install::label(tag) {
         return developer;
     }
+    // A game built with mods reads as what it was built on: "Nov 13 update, with your mods".
+    if native_mods::is_native(tag) {
+        return match native_base(tag) {
+            Some(base) => trf(
+                "{version}, with your mods",
+                &[("version", &version_label(&base))],
+            ),
+            None => tr("A build with your mods").to_string(),
+        };
+    }
     match horizon_launcher::nightly::date_of(tag) {
         Some(date) => trf(
             "{date} update",
@@ -784,6 +794,21 @@ pub(super) fn version_label(tag: &str) -> String {
         ),
         None => build_import::label(tag).unwrap_or_else(|| tag.to_string()),
     }
+}
+
+/// The release a native build started from, read once per build: a new build has a new tag.
+fn native_base(tag: &str) -> Option<String> {
+    thread_local! {
+        static BASES: std::cell::RefCell<std::collections::HashMap<String, Option<String>>> =
+            Default::default();
+    }
+    BASES.with(|bases| {
+        bases
+            .borrow_mut()
+            .entry(tag.to_string())
+            .or_insert_with(|| native_mods::about(tag).map(|about| about.base))
+            .clone()
+    })
 }
 
 /// A build's commit, for the details under its name: `4baa571` of `nightly-2026-10-29-4baa571`.

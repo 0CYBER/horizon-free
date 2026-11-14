@@ -545,7 +545,9 @@ impl Launcher {
                         .flex()
                         .flex_1()
                         .justify_center()
-                        .pr(px(40.))
+                        .pl(px(16.))
+                        .pr(px(48.))
+                        .whitespace_nowrap()
                         .text_color(on_accent)
                         .font_family(horizon_theme::glass::FONT)
                         .text_size(px(16.))
@@ -574,6 +576,15 @@ impl Launcher {
                     Some(true)
                 } else {
                     self.owner
+                };
+                // `HORIZON_LAUNCHER_PREVIEW_OWNER=1`: Play as for an owner with the game's files
+                // ready, to drive Build and play in debug builds without a sign-in.
+                let preview = cfg!(debug_assertions)
+                    && std::env::var_os("HORIZON_LAUNCHER_PREVIEW_OWNER").is_some_and(|v| v == "1");
+                let (ready, owner) = if preview {
+                    (true, Some(true))
+                } else {
+                    (ready, owner)
                 };
                 let press = play_press(ready, owner, false);
                 let build_first =

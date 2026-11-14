@@ -7,9 +7,12 @@ macro_rules! identity {
 identity! {
     VERSION_PREFIX: "horizon-launcher " => "horizon-fork-launcher ",
     DESKTOP_ENTRY: "horizon-launcher.desktop" => "io.github.arismoko.horizonfork.launcher.desktop",
-    WINDOW_TITLE: "Horizon" => "Horizon Fork Launcher (arismoko)",
-    QUIT_LABEL: "Quit Horizon Launcher" => "Quit Horizon Fork Launcher (arismoko)",
-    DISPLAY_NAME: "Horizon Launcher" => "Horizon Fork Launcher (arismoko)",
+    WINDOW_TITLE: "Horizon Launcher" => "Horizon Launcher",
+    QUIT_LABEL: "Quit Horizon Launcher" => "Quit Horizon Launcher",
+    DISPLAY_NAME: "Horizon Launcher" => "Horizon Launcher",
+    // The installed copy's folder, shortcuts and Add/Remove entry keep the fork's own name, so it
+    // never takes an upstream install's place.
+    INSTALL_NAME: "Horizon Launcher" => "Horizon Fork Launcher (arismoko)",
     EXECUTABLE: "horizon-launcher" => "horizon-fork-launcher",
     WINDOWS_EXECUTABLE: "horizon-launcher.exe" => "horizon-fork-launcher.exe",
     WINDOWS_EXECUTABLE_PREFIX: "horizon-launcher.exe." => "horizon-fork-launcher.exe.",
