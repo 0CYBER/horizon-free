@@ -22,6 +22,7 @@ pub(crate) mod fluid_draw;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod fog;
+pub(crate) mod gui_clip;
 pub(crate) mod gui_layers;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
@@ -48,7 +49,6 @@ mod particle_stacks;
 #[doc(hidden)]
 pub mod particles;
 // hidden: a module of game-side types; mods use their re-exports
-pub(crate) mod gui_clip;
 #[doc(hidden)]
 pub mod player_chat;
 pub(crate) mod posed_parts;
