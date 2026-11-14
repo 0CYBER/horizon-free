@@ -2,9 +2,10 @@
 //! `server.toml`, each player's violation levels, and the rules of the checks. The server's hub
 //! (`horizon_client::lan`) feeds it what players send and carries out what it decides.
 //!
-//! It is on by default, and so is every check, but only the checks a vanilla client can't trip act on
-//! their own (`combat`); the others log only until they have shown no false positive with real
-//! players (their `setback`, `alert` and `kick` are 0). `enabled = false` turns the anticheat, or one
+//! It is on by default, and so is every check, but only the checks that have shown no false positive
+//! act on their own: `combat`, which a vanilla client can't trip, and `ground`, which players who
+//! weren't cheating never took near its thresholds on the official server; the others log only until
+//! they have (their `setback`, `alert` and `kick` are 0). `enabled = false` turns the anticheat, or one
 //! check, off. A check that fails *flags* the player: its violation level (VL) rises by the flag's
 //! weight and falls back by `decay` a second. From `setback` on, the move or action is cancelled (the
 //! player is sent back where the server last had them); from `alert` on, online operators and the
@@ -187,7 +188,7 @@ checks! {
 pub const CHECKS: usize = Check::ALL.len();
 
 impl Config {
-    /// The `[anticheat]` section of a whole `server.toml`; the default (off) when it has none.
+    /// The `[anticheat]` section of a whole `server.toml`; the default (on) when it has none.
     pub fn from_server_toml(text: &str) -> Result<Self, String> {
         #[derive(Deserialize)]
         struct File {
