@@ -775,9 +775,10 @@ impl Launcher {
     }
 
     /// Sculk's banner (sponsor, not in the mockup) on a glass card: "Partner" as the cards' small
-    /// headings, Hide once it has been on screen a while, the banner Sculk made.
+    /// headings, Hide once it has been on screen a while, the banner Sculk made. Horizon-free has
+    /// no sponsor, so it never draws.
     fn glass_sculk(&mut self, cx: &mut Context<Self>) -> Option<Div> {
-        if self.settings.partner_hidden {
+        if !crate::backend::PARTNER_BANNERS || self.settings.partner_hidden {
             return None;
         }
         let t = self.theme;

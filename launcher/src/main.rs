@@ -13,6 +13,7 @@ mod console;
 mod console_page;
 mod cull;
 mod datapacks_page;
+mod dev_options;
 mod export_page;
 mod frame;
 mod game_tools;
@@ -68,6 +69,7 @@ mod servers_page;
 mod setup_page;
 mod shell;
 mod shortcut_page;
+mod skin_page;
 mod sky;
 mod specimen;
 mod sticky;
@@ -313,6 +315,8 @@ struct Launcher {
     /// Where the mouse went down to close a menu by pressing outside it, so that the
     /// same press, ending on the menu's own button, doesn't open it again.
     menu_closed_at: Option<Point<Pixels>>,
+    /// Settings > Account's skin panel for an offline name (`skin_page.rs`).
+    skin: Option<skin_page::SkinPanel>,
     /// The Wardrobe page's account and outfit (`wardrobe_page.rs`).
     wardrobe: Option<wardrobe_page::Wardrobe>,
     /// Name tag styles' marks; they outlive the account's `wardrobe`.
@@ -379,6 +383,10 @@ struct Launcher {
     owner: Option<bool>,
     /// Play was refused (or Home's Sign in pressed): the owner gate's screen is open.
     owner_screen_open: bool,
+    /// Clicks on the sidebar's launcher version, and whether they revealed the developer options
+    /// (`dev_options`) for this run.
+    dev_clicks: u8,
+    dev_options: bool,
     /// The game is waiting for its session (a token renewal), or a Java instance for its files
     /// and Java (`start_java`), before it starts.
     starting_client: Option<String>,
@@ -493,6 +501,8 @@ struct Launcher {
     aside: while_playing::Aside,
     /// The selected instance's desktop shortcut (`shortcut_page.rs`).
     shortcuts: shortcut_page::Shortcuts,
+    /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
+    offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
     side_servers: Vec<horizon_launcher::servers::Entry>,
     /// The pixel art made for this window (`art.rs`), and pictures downloaded by URL.
@@ -529,7 +539,11 @@ impl Launcher {
                 .await;
             let counting = this.update(cx, |this, cx| {
                 let s = &mut this.settings;
-                if s.partner_hidden || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
+                // Horizon-free has no sponsor: nothing to count.
+                if !backend::PARTNER_BANNERS
+                    || s.partner_hidden
+                    || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE
+                {
                     return false;
                 }
                 // On screen on every page: the card in the sidebar, the banner on Servers.
@@ -636,6 +650,7 @@ impl Launcher {
             row_menu: Default::default(),
             look: horizon_theme::glass::Glass::default_look(),
             menu_closed_at: None,
+            skin: None,
             wardrobe: None,
             wardrobe_marks: Default::default(),
             wardrobe_reload: false,
@@ -687,6 +702,8 @@ impl Launcher {
             keychain: None,
             owner: None,
             owner_screen_open: false,
+            dev_clicks: 0,
+            dev_options: false,
             starting_client: None,
             play_when_prepared: None,
             friend_code: line_edit::LineEdit::new(String::new(), 256, 32),
@@ -750,6 +767,7 @@ impl Launcher {
             console: Default::default(),
             aside: while_playing::Aside::new(window.window_handle()),
             shortcuts: Default::default(),
+            offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             sky: sky::Sky::default(),
             scene: cx.new(|_| scene::Scene::new()),
@@ -866,8 +884,9 @@ impl Launcher {
     }
 
     fn go(&mut self, page: Page) {
-        // The CLI or another window may have changed the accounts: read them again (a small
-        // file, once a switch).
+        // The game may have made up a name since, and the CLI or another window may have
+        // changed the accounts: read them again (small files, once a switch).
+        self.offline_name = offline_name();
         self.accounts = Accounts::load();
         // Each check reads the keychain (a prompt on macOS): page switches check every account
         // at most once a minute, and an account added meanwhile at once.
@@ -1247,7 +1266,10 @@ impl Launcher {
                                 continue;
                             }
                         };
-                        self.owner = Some(true);
+                        // Past the gate by the developer option alone is no owner.
+                        if !self.settings.dev_offline {
+                            self.owner = Some(true);
+                        }
                         if let Some(file) = file {
                             cmd.arg("--session-file").arg(file);
                         }
@@ -1259,6 +1281,11 @@ impl Launcher {
                             self.client_error = Some(e);
                         }
                         self.accounts = Accounts::load();
+                        // An offline name the player picked (the quick switch).
+                        if let Some(name) = self.accounts.name_arg() {
+                            cmd.arg("--name").arg(name);
+                        }
+                        cmd.envs(self.accounts.look_env());
                         // A pack's Play button plays that pack; Play plays the selected instance.
                         let (profile, run) = match self.starting_pack.take() {
                             Some(work) => {
@@ -1908,6 +1935,7 @@ impl Launcher {
         self.starting_client = Some(tag.clone());
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
+        let offline_without_owner = self.settings.dev_offline;
         // Registry mods update before the game reads them (`horizon::auto`); native mods only
         // at start, where a build can follow.
         let auto = self
@@ -1931,7 +1959,7 @@ impl Launcher {
                 }
             }
             backend::play_step("reading the sign-in");
-            let session = account::session_for_game(&backend::game_home());
+            let session = account::session_for_game(&backend::game_home(), offline_without_owner);
             backend::play_step("starting the game");
             let _ = tx.send(Msg::Session(session));
         });
@@ -1948,8 +1976,15 @@ impl Launcher {
 
     fn load_profile_heads(&mut self) {
         let resources = self.game_resources();
+        // Offline names wear their own skin's face, or the default skin of their offline UUID.
+        let offline: Vec<String> = self
+            .players()
+            .into_iter()
+            .filter(|(who, _, _)| !matches!(who, account::Player::Microsoft(_)))
+            .map(|(_, name, _)| name)
+            .collect();
         self.profile_heads
-            .request(&self.accounts.accounts, resources, &self.tx);
+            .request(&self.accounts.accounts, &offline, resources, &self.tx);
     }
 
     fn begin_auth_job(&mut self, uuid: &str) -> Option<u64> {
@@ -2065,6 +2100,31 @@ impl Launcher {
                     let _ = this.update(cx, |this, cx| {
                         this.settings.minecraft_dir = Some(path);
                         this.save_settings();
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Horizon-free: Settings > Game's own game folder (`Settings::game_dir`): the Horizon
+    /// instance plays in it, so its saves, `options.txt` and packs come from there.
+    fn choose_game_folder(&mut self, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(tr("Choose").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(mut paths))) = paths.await {
+                if let Some(path) = paths.pop() {
+                    let _ = this.update(cx, |this, cx| {
+                        this.settings.game_dir = Some(path);
+                        this.save_settings();
+                        // The Horizon instance's folder is the game folder, which just changed.
+                        this.reload_instances();
                         cx.notify();
                     });
                 }
@@ -2772,6 +2832,21 @@ fn centered(text_: &str, t: &Theme) -> Div {
         .child(text(theme::UI).text_color(t.muted).child(text_.to_string()))
 }
 
+/// The name the game made up for a player without an account, once it has run.
+fn offline_name() -> Option<String> {
+    player_name(&std::fs::read_to_string(backend::game_home().join("horizon-player.txt")).ok()?)
+}
+
+/// The name in `horizon-player.txt`: the game writes `name:Player12345` (horizon-client's
+/// offline_name.rs).
+fn player_name(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("name:"))
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(str::to_owned)
+}
+
 /// `1234` as `1,234`.
 fn thousands(n: u64) -> String {
     let digits = n.to_string();
@@ -2835,9 +2910,13 @@ impl Launcher {
                 ),
             );
         }
-        // A signed-in account shows its face (its skin, else its UUID's default).
+        // Only a signed-in account says "Microsoft account"; otherwise an offline name, or the
+        // one the game made up. A signed-in one shows its face (its skin, else its UUID's default).
         let (name, how) = self.who_plays();
-        let face = self.accounts.selected().map(|a| a.uuid.clone());
+        let face = match self.accounts.player() {
+            account::Player::Microsoft(_) => self.accounts.selected().map(|a| a.uuid.clone()),
+            _ => None,
+        };
         let picture = match face {
             Some(uuid) => (self.profile_heads)
                 .draw(Some(&uuid), 28., self.scale, &t)
@@ -3118,8 +3197,12 @@ impl Launcher {
         // Sculk's card above the links: seen without scrolling, on every page but Servers, which shows
         // its wide banner. Tall where the sidebar has the height for it besides the wordmark, its rows
         // (52 high each, under headings of 40) and the links, compact otherwise. After a while on
-        // screen a "Hide" beside its label puts it away for good.
-        if self.page != Page::Servers && !self.settings.partner_hidden {
+        // screen a "Hide" beside its label puts it away for good. Horizon-free has no sponsor, so
+        // the card never draws.
+        if self.page != Page::Servers
+            && crate::backend::PARTNER_BANNERS
+            && !self.settings.partner_hidden
+        {
             let free = f32::from(window.viewport_size().height)
                 - theme::TOPBAR
                 - 40. * headings as f32
@@ -3143,6 +3226,14 @@ impl Launcher {
             }
             foot = foot.child(side);
         }
+        // Horizon-Free: link to the fork's repository.
+        foot = foot.child(div().h(px(1.)).w_full().bg(t.rule).my(px(4.)));
+        foot = foot.child(link(
+            "horizon-free",
+            "Horizon-Free",
+            "globe",
+            "https://github.com/0CYBER/horizon-free".to_string(),
+        ));
         if !self.links.sponsor.is_empty() {
             foot = foot.child(link(
                 "sponsor",
@@ -3172,7 +3263,11 @@ impl Launcher {
                 .id("launcher-version")
                 .px(px(8.))
                 .pt(px(6.))
-                .child(trf("Launcher {version}", &[("version", backend::VERSION)])),
+                .child(trf("Launcher {version}", &[("version", backend::VERSION)]))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.version_clicked();
+                    cx.notify();
+                })),
         );
         // Custom title bars carry the mark and name already.
         let brand = (!titlebar::draws_brand(window)).then(|| {
@@ -3390,7 +3485,7 @@ impl Launcher {
         // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
         // owner there is nothing to play, so signing in comes first.
         let first = (!prepared && !self.preparing)
-            .then_some(self.owner)
+            .then_some(self.owner_shown())
             .flatten();
         // No launcher folder with Minecraft on this computer: an owner needs none.
         let no_install = self.settings.minecraft_dir.is_none();
@@ -3464,6 +3559,7 @@ impl Launcher {
                         cx.notify();
                     })),
                 ),
+            Some(false) if backend::OFFLINE_PLAY => div(),
             Some(false) => div().child(microsoft::sign_in_button("prepare-sign-in", &t).on_click(
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.sign_in_to_play();
@@ -3541,7 +3637,7 @@ impl Launcher {
         // account that owns the game (Play needs one), or offline. The glass look's top bar has
         // Sign in with Microsoft and says Offline itself.
         if !t.glass {
-            if self.owner == Some(false) {
+            if self.owner_shown() == Some(false) {
                 rows = rows.child(index_row(
                     5,
                     tr("Microsoft account"),
@@ -3884,8 +3980,8 @@ impl Launcher {
                 backend::VERSION,
                 trf("the update failed: {error}", &[("error", e)])
             ),
-            SelfUpdate::Idle => match &self.updates.launcher {
-                Some(r) => format!(
+            SelfUpdate::Idle => match (&self.updates.launcher, &self.updates.launcher_error) {
+                (Some(r), _) => format!(
                     "{}  ·  {}",
                     backend::VERSION,
                     trf(
@@ -3896,10 +3992,15 @@ impl Launcher {
                         )]
                     )
                 ),
-                None if self.checked.is_some() && self.update_error.is_none() => {
+                (None, Some(e)) => format!(
+                    "{}  ·  {}",
+                    backend::VERSION,
+                    trf("couldn't check for updates: {error}", &[("error", e)])
+                ),
+                (None, None) if self.checked.is_some() && self.update_error.is_none() => {
                     format!("{}  ·  {}", backend::VERSION, tr("up to date"))
                 }
-                None => backend::VERSION.to_string(),
+                (None, None) => backend::VERSION.to_string(),
             },
         };
         let launcher_action = match &self.self_update {
@@ -3980,6 +4081,7 @@ impl Launcher {
             );
         }
         let (accounts, n) = self.account_rows(cx);
+        let (offline, n) = self.offline_rows(n, cx);
         let group = |label: &'static str, icon: &'static str| {
             section_title(label, icon, &t).mt(px(20.)).mb(px(12.))
         };
@@ -3998,6 +4100,7 @@ impl Launcher {
                     .flex_col()
                     .child(group("Account", "user").mt_0())
                     .child(accounts)
+                    .child(offline)
                     .child(group("Updates", "reload"))
                     .child(index_row(n + 1, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
@@ -4053,6 +4156,8 @@ impl Launcher {
                     .child(group("Network", "globe"))
                     .child(self.proxy_row(n + 4, cx))
                     .child(group("Game", "gamepad"))
+                    .child(self.game_folder_row(n + 5, cx))
+                    .child(self.minecraft_folder_row(n + 5, cx))
                     .child(self.game_architecture_row(n + 5, cx))
                     .child(self.game_args_row(n + 6, cx))
                     .child(group("AI", "terminal"))
@@ -4094,6 +4199,7 @@ impl Launcher {
             )
             .child(self.collection_section(cx))
             .children(self.agents_section(cx))
+            .children(self.dev_options_section(cx))
     }
 
     /// The warning before a native build: what the mods can do and which mods. The build starts
@@ -4311,6 +4417,119 @@ impl Launcher {
         )
     }
 
+    /// Settings > Game: the folder the game keeps its saves and options.txt in (`game_home`).
+    /// Horizon-free: upstream left the choice out of Settings; the default folder stands if none
+    /// is chosen, and the setting changes which folder the Horizon instance plays in.
+    fn game_folder_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let dir = backend::game_home();
+        let chosen = self.settings.game_dir.is_some();
+        let mut buttons = div()
+            .flex()
+            .gap(px(8.))
+            .child(
+                button("game-folder-open", "Open", Kind::Secondary, &t).on_click(|_, _, cx| {
+                    let dir = backend::game_home();
+                    let _ = std::fs::create_dir_all(&dir);
+                    crate::glass_toast::open(cx, &dir);
+                }),
+            )
+            .child(
+                button("game-folder-change", "Change", Kind::Secondary, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| this.choose_game_folder(cx)),
+                ),
+            );
+        if chosen {
+            buttons = buttons.child(
+                button("game-folder-reset", "Use the default", Kind::Secondary, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.settings.game_dir = None;
+                        this.save_settings();
+                        this.reload_instances();
+                        cx.notify();
+                    }),
+                ),
+            );
+        }
+        let detail = div()
+            .child(tr(
+                "Saves, options.txt and packs. Point it at the folder you already play in, or at an \
+                 empty one: nothing is moved for you.",
+            ))
+            .child(
+                div()
+                    .font_family(theme::MONO)
+                    .text_size(px(12.))
+                    .child(short(&dir)),
+            )
+            .into_any_element();
+        if glass_ui::flat() {
+            return glass_ui::setting_row_stacked(
+                tr("Game folder"),
+                Some(detail),
+                buttons.into_any_element(),
+            );
+        }
+        index_row(
+            n,
+            tr("Game folder"),
+            Some(detail),
+            Some(buttons.into_any_element()),
+            &t,
+        )
+    }
+
+    /// Settings > Game: the Minecraft: Java Edition install the launcher prepares a version's game
+    /// files from (`Settings::minecraft_dir`). Play's folder menu picks the same one.
+    fn minecraft_folder_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let chosen = self.settings.minecraft_dir.clone();
+        let mut buttons = div().flex().gap(px(8.));
+        if chosen.is_some() {
+            buttons = buttons.child(
+                button("minecraft-folder-open", "Open", Kind::Secondary, &t).on_click(
+                    |_, _, cx| {
+                        let dir = backend::minecraft_dir(None).unwrap_or_default();
+                        let _ = std::fs::create_dir_all(&dir);
+                        crate::glass_toast::open(cx, &dir);
+                    },
+                ),
+            );
+        }
+        buttons = buttons.child(
+            button("minecraft-folder-change", "Change", Kind::Secondary, &t)
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_folder(cx))),
+        );
+        let detail = div()
+            .child(tr(
+                "Where Minecraft: Java Edition is installed. The launcher reads the game's sounds, \
+                 assets and libraries from it, and finds the official launcher's folder by itself.",
+            ))
+            .child(
+                div()
+                    .font_family(theme::MONO)
+                    .text_size(px(12.))
+                    .child(
+                        chosen.map_or_else(|| tr("Found automatically").to_string(), |dir| short(&dir)),
+                    ),
+            )
+            .into_any_element();
+        if glass_ui::flat() {
+            return glass_ui::setting_row_stacked(
+                tr("Minecraft folder"),
+                Some(detail),
+                buttons.into_any_element(),
+            );
+        }
+        index_row(
+            n,
+            tr("Minecraft folder"),
+            Some(detail),
+            Some(buttons.into_any_element()),
+            &t,
+        )
+    }
+
     /// Settings' Proxy row: the proxy every download and sign-in goes through, kept in
     /// `settings.json` and read back by `proxy.rs` on each request.
     fn proxy_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
@@ -4397,6 +4616,10 @@ impl Launcher {
     /// rows are numbered from 01; returns them and how many there are.
     fn account_rows(&mut self, cx: &mut Context<Self>) -> (Div, usize) {
         let t = self.theme;
+        // Horizon-free: no Microsoft accounts section in the fork: the game plays offline.
+        if backend::OFFLINE_PLAY {
+            return (div().flex().flex_col(), 0);
+        }
         let (mut rows, mut n) = self.microsoft_rows(cx);
         n += 1;
         let (title, detail, action) = self.sign_in_parts(cx);
@@ -4439,7 +4662,7 @@ impl Launcher {
                 actions = actions.child(
                     button(format!("select-{i}"), "Play as", Kind::Secondary, &t).on_click(
                         cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.play_as(&uuid);
+                            this.play_as(account::Player::Microsoft(uuid.clone()));
                             cx.notify();
                         }),
                     ),
@@ -5968,6 +6191,18 @@ mod tests {
             &menus[0].items[0],
             gpui::MenuItem::Action { name, .. } if name == "Quit Horizon Launcher"
         ));
+    }
+
+    #[test]
+    fn the_offline_name_is_read_from_its_key() {
+        use super::player_name;
+        assert_eq!(
+            player_name("name:Player63010\n").as_deref(),
+            Some("Player63010")
+        );
+        assert_eq!(player_name("name:Steve\r\n").as_deref(), Some("Steve"));
+        assert_eq!(player_name("Player63010\n"), None);
+        assert_eq!(player_name(""), None);
     }
 
     #[test]
