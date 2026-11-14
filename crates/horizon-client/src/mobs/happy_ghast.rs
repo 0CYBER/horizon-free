@@ -29,9 +29,20 @@ pub fn notify_leash_holder(m: &mut Mob) {
 pub fn is_leash_holder(m: &Mob) -> bool {
     m.extra.scratch[1] > 0
 }
-/// `Attributes.FLYING_SPEED` and the speed `travel` uses (`* 5 / 3`).
+/// `createAttributes`' default `Attributes.FLYING_SPEED`, and the speed `travel` uses at it
+/// (`* 5 / 3`). A mob reads its own value through [`flying_speed`].
 pub const FLYING_SPEED: f64 = 0.05;
 pub const AIR_SPEED: f32 = 0.05 * 5.0 / 3.0;
+
+/// `getAttributeValue(FLYING_SPEED)`: the base and its modifiers (`/attribute`).
+pub fn flying_speed(m: &Mob) -> f64 {
+    super::finalize::value(m, super::finalize::Attr::FlyingSpeed)
+}
+/// `HappyGhast.travel`: `(float) getAttributeValue(FLYING_SPEED) * 5.0F / 3.0F`, in the
+/// air, in water and in lava.
+pub fn travel_speed(m: &Mob) -> f32 {
+    flying_speed(m) as f32 * 5.0 / 3.0
+}
 
 pub fn register(m: &mut Mob) {
     setup(m, m.is_baby());
@@ -158,14 +169,14 @@ pub fn move_control(m: &mut Mob, w: &MobWorld) {
     let [wx, wy, wz] = m.ai.mov.wanted;
     let travel = Vec3::new(wx - m.position.x, wy - m.position.y, wz - m.position.z);
     if can_reach(m, w, travel) {
-        // travel.normalize().scale(FLYING_SPEED * 5 / 3)
+        // travel.normalize().scale(getAttributeValue(FLYING_SPEED) * 5 / 3)
         let len = (travel.x * travel.x + travel.y * travel.y + travel.z * travel.z).sqrt();
         let unit = if len < f64::from(1.0e-5_f32) {
             Vec3::ZERO
         } else {
             Vec3::new(travel.x / len, travel.y / len, travel.z / len)
         };
-        let speed = FLYING_SPEED * 5.0 / 3.0;
+        let speed = flying_speed(m) * 5.0 / 3.0;
         m.velocity =
             m.velocity
                 .add_vector(Vec3::new(unit.x * speed, unit.y * speed, unit.z * speed));
@@ -524,7 +535,7 @@ pub fn ridden(m: &mut Mob) {
     if r.jumping {
         up += 0.5;
     }
-    let scale = 3.9 * FLYING_SPEED as f32;
+    let scale = 3.9 * flying_speed(m) as f32;
     m.ai.xxa = r.strafe * scale;
     m.ai.yya = up * scale;
     m.ai.zza = forward * scale;
@@ -670,6 +681,44 @@ mod tests {
     #[test]
     fn travel_speed_is_five_thirds_of_the_flying_speed() {
         assert!((f64::from(AIR_SPEED) - FLYING_SPEED * 5.0 / 3.0).abs() < 1e-7);
+    }
+
+    /// `HappyGhast.getRiddenInput` scales by `3.9F * getAttributeValue(FLYING_SPEED)` and
+    /// `travel` flies at `(float) getAttributeValue(FLYING_SPEED) * 5.0F / 3.0F`, so
+    /// `/attribute ... minecraft:flying_speed base set` changes both; the default is 0.05.
+    #[test]
+    fn a_happy_ghast_rides_and_flies_at_its_flying_speed_attribute() {
+        use crate::mobs::{Species, finalize};
+        let mut t = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        t.species = Species::HappyGhast;
+        // `createAttributes`' value, as the registry's table carries it.
+        t.attributes = std::sync::Arc::new(
+            [("minecraft:flying_speed".to_owned(), 0.05)]
+                .into_iter()
+                .collect(),
+        );
+        let mut m = Mob::new(
+            1,
+            std::sync::Arc::new(t),
+            horizon_core::geometry::Vec3::ZERO,
+            0.0,
+        );
+        m.rider = Some(crate::mobs::equine::Rider {
+            forward: 1.0,
+            ..Default::default()
+        });
+
+        ridden(&mut m);
+        assert_eq!(m.ai.zza, 3.9 * 0.05_f32);
+        assert_eq!(travel_speed(&m), 0.05_f32 * 5.0 / 3.0);
+        assert_eq!(travel_speed(&m), AIR_SPEED);
+
+        finalize::set_base(&mut m, finalize::Attr::FlyingSpeed, 0.17);
+
+        ridden(&mut m);
+        assert_eq!(m.ai.zza, 3.9 * 0.17_f32);
+        assert_eq!(travel_speed(&m), 0.17_f32 * 5.0 / 3.0);
+        assert_eq!(flying_speed(&m), 0.17);
     }
 
     /// `HappyGhast.ageBoundaryReached` runs the setup at the age crossing, not

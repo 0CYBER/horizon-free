@@ -1718,21 +1718,16 @@ impl Mob {
     }
     /// LivingEntity.travelFlying: no gravity, `0.91F` drag in the air,
     /// `0.8F` in water and 0.5 in lava. A happy ghast swims as fast as it
-    /// flies (`HappyGhast.travel`); the others at 0.02.
+    /// flies (`HappyGhast.travel`, at its `flying_speed` attribute); the others
+    /// at 0.02.
     fn travel_flying(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {
-        let fluid_speed = if self.species() == super::Species::HappyGhast {
-            self.kind.air_speed
+        let (fluid_speed, air_speed) = if self.species() == super::Species::HappyGhast {
+            let speed = super::happy_ghast::travel_speed(self);
+            (speed, speed)
         } else {
-            0.02
+            (0.02, self.kind.air_speed)
         };
-        self.travel_flying_speeds(
-            w,
-            input,
-            events,
-            fluid_speed,
-            fluid_speed,
-            self.kind.air_speed,
-        );
+        self.travel_flying_speeds(w, input, events, fluid_speed, fluid_speed, air_speed);
     }
     /// `LivingEntity.travelFlying(input, waterSpeed, lavaSpeed, airSpeed)`:
     /// the speeds vary per mob (an allay flies at the speed its move control
