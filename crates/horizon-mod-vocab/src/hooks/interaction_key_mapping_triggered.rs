@@ -21,9 +21,12 @@ pub trait Hooks {
     /// charges, llama spit, shulker bullets, bobbers and rockets. Other families
     /// skip breeze deflections and hits on wind charges. A dragon part or End crystal is told by the id of the
     /// dragon or crystal. Heard only when a mod also sets
-    /// `hears_projectile_impacts`. Server-side.
+    /// `hears_projectile_impacts`. Server-side. Version 2 adds bobbers and rockets;
+    /// listeners retaining the earlier family set filter out `minecraft:fishing_bobber`
+    /// and `minecraft:firework_rocket`. Named injections request `hook_version = 2`.
     #[hook(
         side = "server",
+        version = 2,
         contract = "cancel",
         out = "canceled",
         neoforge = "ProjectileImpactEvent",
