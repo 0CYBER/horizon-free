@@ -968,7 +968,9 @@ pub trait PlayersBackendMut {
     /// (`ServerGamePacketListenerImpl.ackBlockChangesUpTo`), for a mod that handled one itself,
     /// such as an editor's own message: the client's predicted blocks settle on the server's
     /// states once it gets `ClientboundBlockChangedAckPacket`, which goes after the next tick's
-    /// block changes, the highest sequence of the tick only. Refuses, queueing nothing, with
+    /// block changes. Pending acknowledgements take the maximum: a lower sequence after a
+    /// higher one has no effect. Any nonnegative sequence is accepted, so a value too high can
+    /// end pending client predictions early. Refuses, queueing nothing, with
     /// `PlayerWorldRefusal`: `Client`, `Stale`, `NoConnection` and `NegativeSequence`.
     #[access(WorldOnly)]
     fn player_ack_block_changes(
@@ -980,8 +982,9 @@ pub trait PlayersBackendMut {
     /// Shows that player alone `state` at `pos` in their level (`ClientboundBlockUpdatePacket`
     /// to their client; Paper's `Player.sendBlockChange`), at once. The world is not changed:
     /// the real block comes back when it or its chunk is next sent, as in vanilla, so a mod
-    /// sends it again while it still wants it shown. Refuses, sending nothing, with
-    /// `PlayerWorldRefusal`: `Client`, `Stale`, `NoConnection`, `UnknownState` and
+    /// sends it again while it still wants it shown. The visual override is not remembered;
+    /// it does not itself acknowledge or clear pending client predictions.
+    /// Refuses, sending nothing, with `PlayerWorldRefusal`: `Client`, `Stale`, `NoConnection`, `UnknownState` and
     /// `PositionNotSendable` (y outside -2048..=2047, x or z outside -33554432..33554432).
     #[access(WorldOnly)]
     fn player_show_block(

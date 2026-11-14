@@ -47,7 +47,7 @@ fn kept(game: &super::Game<'_>) -> i32 {
 
 /// The highest sequence of the tick waits as the player's ack, in their turn or out of it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_acknowledges_block_changes() {
     with_guests(|game| {
         let b = game.player(13).unwrap();
@@ -62,7 +62,7 @@ fn a_mod_acknowledges_block_changes() {
 
 /// Each refusal of the acknowledgement is its own name and leaves the pending ack alone.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn each_block_ack_refusal_has_its_own_name() {
     with_guests(|game| {
         let b = game.player(13).unwrap();
@@ -88,7 +88,7 @@ fn each_block_ack_refusal_has_its_own_name() {
 
 /// A block shown to one player goes to their client alone and changes nothing in the world.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_is_shown_to_one_player() {
     with_guests(|game| {
         let b = game.player(13).unwrap();
@@ -126,7 +126,7 @@ fn a_block_is_shown_to_one_player() {
 /// Each refusal of `show_block` is its own name and sends nothing; the edges of the packet's
 /// position are taken.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn each_show_block_refusal_has_its_own_name() {
     with_guests(|game| {
         let b = game.player(13).unwrap();
@@ -192,7 +192,7 @@ fn each_show_block_refusal_has_its_own_name() {
 /// A player is seen unless a mod hid them below the viewer's level, or they spectate and the
 /// viewer doesn't.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn player_sees_follows_the_trackers_rules() {
     with_guests(|game| {
         let (a, b) = (game.player(12).unwrap(), game.player(13).unwrap());
@@ -214,7 +214,7 @@ fn player_sees_follows_the_trackers_rules() {
 
 /// `sees` names a stale handle of either player and a fake player, and a client.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn each_sees_refusal_has_its_own_name() {
     with_guests(|game| {
         let (a, b) = (game.player(12).unwrap(), game.player(13).unwrap());
@@ -228,7 +228,7 @@ fn each_sees_refusal_has_its_own_name() {
 
 /// On a client all three answer `Client`.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_cannot_ack_show_or_ask_who_sees() {
     with_client_game(|game| {
         let ghost = mod_api::__private::game::player_ref(EntityRef::new(WorldEpoch::new(0), 1), 1);

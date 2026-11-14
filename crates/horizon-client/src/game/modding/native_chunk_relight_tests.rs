@@ -36,7 +36,7 @@ fn stale(level: LevelRef) -> LevelRef {
 /// A relight is queued at once, nothing is lit during the call, and the count is the columns
 /// queued (the loaded ring included); a chunk far from any loaded one queues none.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_queues_the_chunks_it_wrote() {
     with_game(|game| {
         roofed(game);
@@ -54,7 +54,7 @@ fn a_mod_queues_the_chunks_it_wrote() {
 
 /// 256 chunks are taken and 257 are refused, whole: nothing is queued.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn relight_chunks_refuses_more_than_256_chunks() {
     with_game(|game| {
         let level = game.level(game.dim.id()).unwrap();
@@ -74,7 +74,7 @@ fn relight_chunks_refuses_more_than_256_chunks() {
 
 /// A full light queue refuses a call whole, and `max` says what fits now.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn relight_chunks_refuses_a_call_that_overfills_the_queue() {
     with_game(|game| {
         roofed(game);
@@ -94,7 +94,7 @@ fn relight_chunks_refuses_a_call_that_overfills_the_queue() {
 
 /// A handle of an earlier open of the world is `Stale`, for the level and for a chunk of it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_stale_handle_is_refused_by_name() {
     with_game(|game| {
         roofed(game);
@@ -110,7 +110,7 @@ fn a_stale_handle_is_refused_by_name() {
 
 /// A level that is open but not the one being ticked is `NotInPlace`, and queues nothing.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn another_level_is_not_in_place() {
     with_game(|game| {
         roofed(game);
@@ -129,7 +129,7 @@ fn another_level_is_not_in_place() {
 
 /// A chunk that is not loaded is `NotLoaded`; a loaded one is queued to go out whole.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_chunk_is_resent_only_when_loaded() {
     with_game(|game| {
         roofed(game);
@@ -147,7 +147,7 @@ fn a_chunk_is_resent_only_when_loaded() {
 
 /// On a client both are `Client`.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_cannot_relight_or_resend() {
     with_client_game(|game| {
         roofed(game);

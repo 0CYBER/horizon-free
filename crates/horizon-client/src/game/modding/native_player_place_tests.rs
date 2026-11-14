@@ -28,7 +28,7 @@ fn loaded(game: &mut super::Game<'_>) {
 
 /// A bed written for a player gets its head (`setPlacedBy`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_placed_as_a_player_runs_set_placed_by() {
     with_guests(|game| {
         loaded(game);
@@ -58,7 +58,7 @@ fn a_block_placed_as_a_player_runs_set_placed_by() {
 
 /// Each refusal is its own name and writes nothing.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn each_place_block_refusal_has_its_own_name_and_writes_nothing() {
     with_guests(|game| {
         loaded(game);
@@ -124,7 +124,7 @@ fn each_place_block_refusal_has_its_own_name_and_writes_nothing() {
 
 /// A level that is open but is not the one the player is in is `OtherLevel`.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn another_level_is_not_where_the_player_is() {
     with_guests(|game| {
         loaded(game);
@@ -141,7 +141,7 @@ fn another_level_is_not_where_the_player_is() {
 
 /// On a client it is `Client`.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_cannot_place_a_block_as_a_player() {
     with_client_game(|game| {
         let level = mod_api::LevelRef::new(WorldEpoch::new(0), game.dim.key());
