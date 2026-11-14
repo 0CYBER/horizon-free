@@ -37,8 +37,9 @@ HUD shows at UI Brightness and nothing passes the peak.
 Both builds draw on the same adapter: Mesa's lavapipe where its Vulkan driver is installed (Linux), else the machine's
 default. When the base and the change differ only in files no game binary is built from (tools/, tests/, .github/,
 Markdown outside crates/), the base reuses the change's binaries: the comparison is then of two runs of one build.
-Each session also checks it drew what it is for (the pack changes the picture, HDR shots have their -hdr.png), so a
-pack that fails to load, or HDR that stays off, in both builds doesn't pass as identical.
+Each session also checks, in each build, that it drew what it is for (the pack changes the picture, HDR shots have
+their -hdr.png, the visibility buffer's line is in the session's whole log), so a pack that fails to load, or HDR that
+stays off, in both builds doesn't pass as identical, and a change that stops one doesn't either.
 --build-base builds it anyway. The base builds in a worktree and target folder of its own under .local/frame-identity/,
 kept between runs so that a later base rebuilds only what changed.
 
@@ -535,7 +536,7 @@ def run_session(name, label, bin_dir, out, env_base, args):
             set_hdr(game, False)
             for scene in scenes:
                 shoot_named(game, out, f'{name}.off', scene)
-        (out / f'{name}.log').write_text(str(game.ctl('logs', '--lines', '400', check=False)), encoding='utf-8')
+        save_log(game, out / f'{name}.log')
     finally:
         game.quit()
     print(f'{label} {name}: {time.monotonic() - started:.0f} s', flush=True)
@@ -547,6 +548,12 @@ def shoot_named(game, out, prefix, scene):
         shot = out / f'{scene}{suffix}'
         if shot.exists():
             shot.replace(out / f'{prefix}.{scene}{suffix}')
+
+
+def save_log(game, path):
+    """The session's whole log (horizon-ctl prints its last --lines): a line written once at start, like the visibility
+    buffer's, stays in it however long the session ran."""
+    Path(path).write_text(str(game.ctl('logs', '--lines', 10 ** 9, check=False)), encoding='utf-8')
 
 
 def session_checks(shots, sessions):
@@ -588,9 +595,12 @@ def session_checks(shots, sessions):
         if 'HORIZON_VISBUFFER' in extra and not built:
             problems.append(f'{name}: the visibility buffer didn\'t run')
         # 🤖 Agent: Improved Transparency needs blendable float targets; without them the option changes nothing.
-        if name in ('oit', 'hdr_oit', 'float_oit') and without in sessions and all(
-                compare(shots / f'{without}.{s}{x}', shots / f'{name}.{s}{x}', None) is None
-                for s in scenes for x in ('.png', '-hdr.png') if (shots / f'{name}.{s}{x}').exists()):
+        # A missing shot on either side is already reported above, so it doesn't count here.
+        pairs = [(shots / f'{without}.{s}{x}', shots / f'{name}.{s}{x}')
+                 for s in scenes for x in ('.png', '-hdr.png')]
+        pairs = [(a, b) for a, b in pairs if a.exists() and b.exists()]
+        if name in ('oit', 'hdr_oit', 'float_oit') and without in sessions and pairs and all(
+                compare(a, b, None) is None for a, b in pairs):
             problems.append(f'{name}: the same as without Improved Transparency: it didn\'t run')
     return problems
 
@@ -765,6 +775,12 @@ def hdr_gates(shots, sessions):
     return problems
 
 
+def build_checks(shots, sessions):
+    """session_checks and hdr_gates in each build's folder, each problem naming its build."""
+    return [f'{label}: {p}' for label in ('base', 'change')
+            for p in session_checks(shots / label, sessions) + hdr_gates(shots / label, sessions)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--base', help='the revision to compare with (default: BASE_SHA, else the merge-base with origin/main)')
@@ -831,9 +847,7 @@ def main():
         failures += [f'{n}: the base wrote no such screenshot' for n in extra]
     if compared == 0:
         failures.append('no screenshots were taken')
-    failures += session_checks(shots / 'base', sessions)
-    for label in ('base', 'change'):
-        failures += [f'{label}: {p}' for p in hdr_gates(shots / label, sessions)]
+    failures += build_checks(shots, sessions)
     lab.write_json(RUN / 'report.json', {'base': base, 'change': head, 'lavapipe': str(icd) if icd else None,
                                          'compared': compared, 'failures': failures, 'timings': timings})
     print(json.dumps(timings), flush=True)

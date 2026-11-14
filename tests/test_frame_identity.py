@@ -194,6 +194,39 @@ class SessionCheckTests(unittest.TestCase):
         (self.dir / 'float_visbuffer.log').write_text('drawing through a visibility buffer')
         self.assertEqual(identity.session_checks(self.dir, ['float_visbuffer']), [])
 
+    def test_a_change_that_stops_the_visibility_buffer_fails_where_the_base_ran_it(self):
+        for label in ('base', 'change'):
+            (self.dir / label).mkdir()
+            for scene in identity.SESSIONS['visbuffer'][2]:
+                encode(self.dir / label / f'visbuffer.{scene}.png', 4, 4, 8, self.rows, 0)
+        (self.dir / 'base' / 'visbuffer.log').write_text('Horizon: solid terrain through a visibility buffer')
+        (self.dir / 'change' / 'visbuffer.log').write_text('Horizon: drawing forward')
+        self.assertEqual(identity.build_checks(self.dir, ['visbuffer']),
+                         ["change: visbuffer: the visibility buffer didn't run"])
+
+    def test_improved_transparency_beside_a_missing_reference_shot_reports_the_missing_shot(self):
+        missing, *rest = identity.SESSIONS['vanilla'][2]
+        self.assertIn(missing, identity.SESSIONS['oit'][2])
+        for scene in rest:
+            self.shot(f'vanilla.{scene}.png')
+        for scene in identity.SESSIONS['oit'][2]:
+            self.shot(f'oit.{scene}.png', [row[::-1] for row in self.rows])
+        self.assertEqual(identity.session_checks(self.dir, ['vanilla', 'oit']),
+                         [f'vanilla.{missing}: screenshot missing'])
+
+    def test_the_visibility_buffer_line_stays_in_a_log_longer_than_400_lines(self):
+        for scene in identity.SESSIONS['visbuffer'][2]:
+            self.shot(f'visbuffer.{scene}.png')
+        log = self.dir / 'latest.log'
+        lines = [f'line {i}' for i in range(16)] + ['Horizon: solid terrain through a visibility buffer']
+        log.write_text('\n'.join(lines + [f'line {i}' for i in range(600)]) + '\n')
+
+        def ctl(*words, **options):
+            # 🤖 Agent: horizon-ctl logs prints the log's last --lines lines.
+            return '\n'.join(log.read_text().splitlines()[-int(words[words.index('--lines') + 1]):])
+        identity.save_log(SimpleNamespace(ctl=ctl), self.dir / 'visbuffer.log')
+        self.assertEqual(identity.session_checks(self.dir, ['visbuffer']), [])
+
 
 class HdrGateTests(unittest.TestCase):
     """The HDR gates' arithmetic, against the standards and the shader's own checkpoints, and what they report."""
