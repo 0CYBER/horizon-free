@@ -28,6 +28,7 @@ use super::{Dim, Game, Mining, Screen, level_sounds::LevelSound};
 use crate::game::api_values::TryIntoApi;
 use horizon_client::actions::Action;
 use horizon_client::first_person::{Hand, SwingAnimation};
+use horizon_client::input_queue::InputQueue;
 use horizon_client::{
     Result,
     blocks::Fluid,
@@ -85,6 +86,7 @@ use chat_received::QueuedChat;
 pub(in crate::game) mod client_level_tick;
 mod entity_section_steps;
 mod item_use;
+mod queued_keys;
 mod remote_attributes;
 mod tables;
 
@@ -728,7 +730,7 @@ pub(super) struct Remote {
     /// Keys whose presses send a packet (swap hands, drop, a mount's
     /// inventory): like the click queue, they wait for the tick's
     /// `handleKeybinds` phase rather than going out between window events.
-    pub(super) pending_keys: Vec<KeyCode>,
+    pub(super) pending_keys: InputQueue<KeyCode>,
     /// Whether the main and off hand still wait for the server's answer to
     /// a SWAP_ITEM_WITH_OFFHAND (`remote_hand_slot_set`).
     swap_answer: [bool; 2],
@@ -1232,7 +1234,7 @@ impl Game<'_> {
             interaction_swing: [true; 2],
             destroy_delay: 0,
             input: Default::default(),
-            pending_keys: Vec::new(),
+            pending_keys: InputQueue::new(queued_keys::PENDING_KEYS),
             swap_answer: [false; 2],
             stop_mining: false,
             placing: None,
@@ -1474,7 +1476,7 @@ impl Game<'_> {
             interaction_swing: [true; 2],
             destroy_delay: 0,
             input: Default::default(),
-            pending_keys: Vec::new(),
+            pending_keys: InputQueue::new(queued_keys::PENDING_KEYS),
             swap_answer: [false; 2],
             stop_mining: false,
             placing: None,
@@ -9061,42 +9063,6 @@ impl Game<'_> {
             self.send_play(S::SetCarriedItem(play::SetCarriedItem {
                 slot: self.selected as i16,
             }));
-        }
-    }
-
-    fn remote_queued_keys(&mut self) {
-        // handleKeybinds' keybind polls: the queued presses act now, in tick
-        // order, so no packet goes out between CLIENT_TICK_END and a pong.
-        let pending = self
-            .remote
-            .as_mut()
-            .map(|r| std::mem::take(&mut r.pending_keys))
-            .unwrap_or_default();
-        for key in pending {
-            match key {
-                KeyCode::KeyF if !self.spectator() => self.remote_swap_hands(),
-                KeyCode::KeyQ if !self.spectator() => {
-                    // Minecraft.hasControlDown: the physical keys, so a toggled
-                    // sprint on Left Control does not make Q drop the stack.
-                    let all = self.has_control_down() || self.input_takes_stack_drop();
-                    self.remote_drop(all);
-                }
-                KeyCode::KeyE
-                    if !self.in_portal_transition()
-                        && (self.riding_mount_with_menu() || self.riding_chest_boat()) =>
-                {
-                    let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
-                    self.send(S::PlayerCommand(play::PlayerCommand {
-                        id,
-                        action: 5,
-                        data: 0,
-                    }));
-                }
-                _ => {}
-            }
-        }
-        if self.clicks.miss_time > 0 {
-            self.clicks.miss_time -= 1;
         }
     }
 

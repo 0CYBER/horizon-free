@@ -1436,9 +1436,9 @@ struct Game<'a> {
     /// `Minecraft`'s attack handling, attack clicks since the last tick and
     /// the attack strength tickers the hand reads.
     clicks: horizon_client::first_person::Clicks<Option<ItemStack>>,
-    attack_clicks: u32,
+    attack_clicks: horizon_client::input_queue::ClickQueue,
     /// Use clicks since the last tick; `handleKeybinds` consumes them after the attack clicks.
-    use_clicks: u32,
+    use_clicks: horizon_client::input_queue::ClickQueue,
     hand_strength: horizon_client::attack_strength::AttackStrength,
     settings: Settings,
     tutorial: tutorial::Tutorial,
@@ -1888,7 +1888,7 @@ struct Game<'a> {
     tick_mob: Option<Option<(usize, f64, [f64; 3])>>,
     /// Number keys since the last tick (`keyHotbarSlots[i].consumeClick`):
     /// `Minecraft.handleKeybinds` selects them after the tick's pick.
-    hotbar_presses: Vec<usize>,
+    hotbar_presses: horizon_client::input_queue::InputQueue<usize>,
     /// `Player.entityInteractionRange` and `blockInteractionRange`, refreshed
     /// each tick from the attribute (a server's reach modifier, creative's
     /// +2): the pick helpers' `&self` reach.
@@ -10897,8 +10897,8 @@ impl<'a> Game<'a> {
             visible_hands: [(0, None), (0, None)],
             hands_replaced: [false; 2],
             clicks: Default::default(),
-            attack_clicks: 0,
-            use_clicks: 0,
+            attack_clicks: hand::ATTACK_CLICKS,
+            use_clicks: hand::USE_CLICKS,
             hand_strength: Default::default(),
             settings,
             tutorial,
@@ -11148,7 +11148,7 @@ impl<'a> Game<'a> {
             forced_hit: None,
             tick_hit: Default::default(),
             tick_mob: None,
-            hotbar_presses: Vec::new(),
+            hotbar_presses: horizon_client::input_queue::InputQueue::new(hand::HOTBAR_PRESSES),
             entity_reach: 3.0,
             block_reach: 4.5,
             client_targeting: Default::default(),

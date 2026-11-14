@@ -112,6 +112,9 @@ horizon-client game::remote::interaction_event_tests::mapping_press_tests::a_scr
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::clicking_attack_on_a_block_starts_the_break_and_punches lib daily resources
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::clicking_attack_on_nothing_punches_and_waits_out_the_miss_cooldown lib daily resources
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::holding_use_draws_a_bow_once_and_letting_go_releases_it lib daily resources
+horizon-client game::remote::interaction_event_tests::mapping_press_tests::input_burst_tests::a_full_queue_refuses_the_entry_and_the_call_returns lib daily resources
+horizon-client game::remote::interaction_event_tests::mapping_press_tests::input_burst_tests::a_mods_burst_acts_64_entries_of_each_queue_a_tick lib daily resources
+horizon-client game::remote::interaction_event_tests::mapping_press_tests::input_burst_tests::a_players_burst_acts_on_the_next_tick_in_the_order_pressed lib daily resources
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::opening_a_screen_releases_mod_holds lib daily resources
 horizon-client game::remote::interaction_event_tests::mapping_press_tests::the_host_presses_by_name_and_refuses_the_others lib daily resources
 horizon-client game::remote::interaction_event_tests::predicted_use_tests::native_client_prediction_owns_the_hand_loop lib daily game-boot
