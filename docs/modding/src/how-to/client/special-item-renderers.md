@@ -64,8 +64,10 @@ The item definition names the type in a `minecraft:special` model, with a `base`
 - `transform` is a row-major 3×4 affine transform in the special model's space: blocks, with the
   origin at the model's corner, so an element's coordinates over 16. `translated` moves a part after
   its transform; `with_transform` sets the whole of it.
-- `tints` are ARGB colours per tint index, as an item model's `tints`. A face with a tint index past
-  them, or none, draws white.
+- `tints` are ARGB colours per tint index, as an item model's `tints`: packed `0xAARRGGBB` in
+  vanilla's space, which the game decodes once, as it does vanilla's tints. A face with a tint index
+  past them, or none, draws white. A colour brighter than white (a linear value above 1) has no input
+  yet.
 
 The renderer never sees the `base` model: the game draws all the parts with its display transforms
 (`display` for a hand, the GUI, the ground, a frame, the head), its particle and its GUI light, as
