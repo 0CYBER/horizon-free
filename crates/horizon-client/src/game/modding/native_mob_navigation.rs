@@ -20,6 +20,14 @@ pub(super) fn navigation_look_accepts(at: [f64; 3]) -> bool {
     at.iter().all(|v| v.is_finite())
 }
 
+fn navigation_flags_supported(mob: &horizon_client::mobs::Mob) -> bool {
+    use horizon_client::mobs::nav::NavKind;
+    matches!(
+        mob.ai.nav.kind,
+        NavKind::Ground | NavKind::WallClimber | NavKind::Flying
+    )
+}
+
 impl Game<'_> {
     /// `PathNavigation.moveTo(x, y, z, speed)`: true if a path was started.
     /// Refuses a stale or unavailable mob, a client, non-finite arguments,
@@ -79,6 +87,78 @@ impl Game<'_> {
             return None;
         };
         Some(self.mobs.iter().find(|m| m.id == id)?.ai.nav.speed_modifier)
+    }
+
+    /// The live supported navigation's `can_open_doors` flag; unavailable mobs refuse.
+    pub(super) fn mob_can_open_doors(&self, mob: MobRef) -> Option<bool> {
+        let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
+            return None;
+        };
+        let mob = self.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        navigation_flags_supported(mob).then_some(mob.ai.nav.can_open_doors)
+    }
+
+    /// `PathNavigation.setCanOpenDoors`; leaves the current path intact.
+    pub(super) fn mob_set_can_open_doors(&mut self, mob: MobRef, value: bool) -> bool {
+        let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
+            return false;
+        };
+        let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) else {
+            return false;
+        };
+        if !navigation_flags_supported(mob) {
+            return false;
+        }
+        mob.ai.nav.can_open_doors = value;
+        true
+    }
+
+    /// The live supported navigation's `can_pass_doors` flag; unavailable mobs refuse.
+    pub(super) fn mob_can_pass_doors(&self, mob: MobRef) -> Option<bool> {
+        let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
+            return None;
+        };
+        let mob = self.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        navigation_flags_supported(mob).then_some(mob.ai.nav.can_pass_doors)
+    }
+
+    /// Sets the pass-door navigation wish; leaves the current path intact.
+    pub(super) fn mob_set_can_pass_doors(&mut self, mob: MobRef, value: bool) -> bool {
+        let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
+            return false;
+        };
+        let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) else {
+            return false;
+        };
+        if !navigation_flags_supported(mob) {
+            return false;
+        }
+        mob.ai.nav.can_pass_doors = value;
+        true
+    }
+
+    /// The live supported navigation's `can_float` flag; unavailable mobs refuse.
+    pub(super) fn mob_can_float(&self, mob: MobRef) -> Option<bool> {
+        let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
+            return None;
+        };
+        let mob = self.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        navigation_flags_supported(mob).then_some(mob.ai.nav.can_float)
+    }
+
+    /// `PathNavigation.setCanFloat`; leaves the current path intact.
+    pub(super) fn mob_set_can_float(&mut self, mob: MobRef, value: bool) -> bool {
+        let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
+            return false;
+        };
+        let Some(mob) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) else {
+            return false;
+        };
+        if !navigation_flags_supported(mob) {
+            return false;
+        }
+        mob.ai.nav.can_float = value;
+        true
     }
 
     /// `Mob.getPathfindingMalus`: what a node of `kind` costs this mob's

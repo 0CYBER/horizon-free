@@ -69,6 +69,27 @@ pub trait MobsBackend {
     /// stale or unavailable mob, or on a client, and for the dragon.
     #[access(WorldOnly)]
     fn mob_navigation_speed(&self, mob: MobRef) -> Option<f64>;
+
+    /// Side: server.
+    /// Whether this navigation may open doors.
+    /// None for a stale handle, a client, a mob held out of the level,
+    /// or a mob with no ground or flying navigation (water and amphibious refuse).
+    #[access(WorldOnly)]
+    fn mob_can_open_doors(&self, mob: MobRef) -> Option<bool>;
+
+    /// Side: server.
+    /// Whether this navigation may pass doors.
+    /// None for a stale handle, a client, a mob held out of the level,
+    /// or a mob with no ground or flying navigation (water and amphibious refuse).
+    #[access(WorldOnly)]
+    fn mob_can_pass_doors(&self, mob: MobRef) -> Option<bool>;
+
+    /// Side: server.
+    /// Whether this navigation may float.
+    /// None for a stale handle, a client, a mob held out of the level,
+    /// or a mob with no ground or flying navigation (water and amphibious refuse).
+    #[access(WorldOnly)]
+    fn mob_can_float(&self, mob: MobRef) -> Option<bool>;
     /// Side: server.
     /// `MoveControl.getWantedX/Y/Z`: the stored wish, even after consumption.
     /// None for a stale mob, a client, the dragon or a mob held out of the level.
@@ -283,6 +304,33 @@ pub trait MobsBackendMut {
     /// unavailable mob, or on a client, and for the dragon.
     #[access(WorldOnly)]
     fn mob_set_navigation_speed(&mut self, mob: MobRef, speed: f64) -> bool;
+
+    /// Side: server.
+    /// `PathNavigation.setCanOpenDoors`: sets the navigation can_open_doors flag.
+    /// Changes only this flag, leaving the current path intact. The mob's
+    /// own setup may set it again. Write from `entity_join`.
+    /// False for a stale handle, a client, a mob held out of the level,
+    /// or a mob with no ground or flying navigation (water and amphibious refuse).
+    #[access(WorldOnly)]
+    fn mob_set_can_open_doors(&mut self, mob: MobRef, value: bool) -> bool;
+
+    /// Side: server.
+    /// `PathNavigation.setCanPassDoors`: sets the navigation can_pass_doors flag.
+    /// Changes only this flag, leaving the current path intact. The mob's
+    /// own setup may set it again. Write from `entity_join`.
+    /// False for a stale handle, a client, a mob held out of the level,
+    /// or a mob with no ground or flying navigation (water and amphibious refuse).
+    #[access(WorldOnly)]
+    fn mob_set_can_pass_doors(&mut self, mob: MobRef, value: bool) -> bool;
+
+    /// Side: server.
+    /// `PathNavigation.setCanFloat`: sets the navigation can_float flag.
+    /// Changes only this flag, leaving the current path intact. The mob's
+    /// own setup may set it again. Write from `entity_join`.
+    /// False for a stale handle, a client, a mob held out of the level,
+    /// or a mob with no ground or flying navigation (water and amphibious refuse).
+    #[access(WorldOnly)]
+    fn mob_set_can_float(&mut self, mob: MobRef, value: bool) -> bool;
     /// Side: server.
     /// `Mob.setPathfindingMalus`: what the mob's next paths cost through
     /// `kind` (negative closes it, as the species' own overrides do); not

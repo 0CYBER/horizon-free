@@ -75,3 +75,11 @@ return `WantedPositionError::NonFinitePosition`; non-finite speed returns
 `NonFiniteSpeed`. Refused inputs leave the old wish intact. The setter returns
 `Ok(false)` (reads return `None`) for stale handles, clients, the dragon and mobs
 held out of the level. These methods are server side.
+
+The mob handle also reads `can_open_doors`, `can_pass_doors`, and `can_float`
+and writes them with `set_can_open_doors`, `set_can_pass_doors`, and `set_can_float`.
+Reads take `&dyn Host`; writes take `&mut dyn ServerHost`. Set these navigation
+wishes from `entity_join`; the mob's own setup may set them again. Each setter
+changes only its flag and leaves any current path intact. Reads return `None`
+and writes return `false` for stale handles, clients, mobs held out of the level,
+and mobs without ground or flying navigation (including water and amphibious navigation).
