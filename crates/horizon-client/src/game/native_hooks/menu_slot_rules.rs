@@ -6,15 +6,13 @@ impl Game<'_> {
     /// `may_place` and `max_stack` arrive holding the slot's own answers, which the menu type's
     /// parts may change; the click bounds the final maximum. A read-only fire: a click asks once
     /// for each slot and stack it consults while it plans, and never again to validate or apply.
+    /// `context` is who and where the ask is about (`MenuSlotContext`): the player, the menu's
+    /// block entity and its own container slots, read only; None where the menu has none.
     #[inline(never)]
     pub(in crate::game) fn native_menu_slot_rules(
         &self,
-        menu: &str,
-        slot: usize,
-        stack: &mod_api::ItemStack,
-        may_place: &mut bool,
-        max_stack: &mut u32,
+        call: mod_api::__private::MenuSlotRulesCall<'_>,
     ) {
-        self.fire_menu_slot_rules(menu, slot, stack, may_place, max_stack);
+        self.fire_menu_slot_rules(call);
     }
 }

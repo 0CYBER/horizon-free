@@ -480,6 +480,8 @@ pub struct View<'a> {
     pub hidden: &'a [usize],
     /// The context the hooks fired inside a click are given.
     pub loop_context: &'a LoopContext,
+    /// The parts' one copy of the container for this click (`menu_slot_rules`).
+    pub slot_snapshot: crate::menu::SlotSnapshot,
 }
 
 impl View<'_> {
@@ -554,11 +556,20 @@ impl View<'_> {
                 player_slot(i - c.len())
             }
         });
+        let context = crate::menu::SlotContext {
+            player: Some(self.guest.uuid),
+            pos: menu.pos.map(|(x, y, z)| [x, y, z]),
+            container: crate::menu::lan_container(i, self.container.as_deref()),
+            slots: self.container.as_deref().unwrap_or_default(),
+            snapshot: Some(&self.slot_snapshot),
+            ..Default::default()
+        };
         crate::menu::apply_menu_slot_rules(
             rules.slot_rules(),
             &menu.registry_id,
             index,
             stack,
+            context,
             own,
             max,
             item_max,
@@ -748,11 +759,20 @@ fn move_to(
                 } else {
                     player_slot(i - c.len())
                 };
+                let context = crate::menu::SlotContext {
+                    player: Some(view.guest.uuid),
+                    pos: menu.pos.map(|(x, y, z)| [x, y, z]),
+                    container: crate::menu::lan_container(i, Some(c)),
+                    slots: c,
+                    snapshot: Some(&view.slot_snapshot),
+                    ..Default::default()
+                };
                 if !crate::menu::apply_menu_slot_rules(
                     rules.slot_rules(),
                     &menu.registry_id,
                     index,
                     &stack,
+                    context,
                     true,
                     u32::MAX,
                     rules.max_stack(&stack.item).max(1),
@@ -1531,6 +1551,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -1562,6 +1583,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -1605,6 +1627,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -1649,6 +1672,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -1724,6 +1748,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
         // Left click with stone in hand over the refused bundle: nothing goes in.
@@ -1758,6 +1783,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
         let mut bundle = ItemStack::new("minecraft:bundle", 1);
@@ -2003,6 +2029,7 @@ pub(crate) mod tests {
                 shulker: false,
                 container_limits: Vec::new(),
                 hidden: &[],
+                slot_snapshot: Default::default(),
                 loop_context: &crate::test_resources::loop_context(
                     horizon_world::native_load_context::LoopSide::Server,
                 ),
@@ -2044,6 +2071,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &hidden,
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2068,6 +2096,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
         view.guest.carried = Some(ItemStack::new("minecraft:stone", 8));
@@ -2102,6 +2131,7 @@ pub(crate) mod tests {
                     shulker: false,
                     container_limits: Vec::new(),
                     hidden: &[],
+                    slot_snapshot: Default::default(),
                     loop_context: crate::test_resources::server_loop_context(),
                 };
                 menu.load_slot(0, view.get(0));
@@ -2153,6 +2183,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2273,6 +2304,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: crate::test_resources::server_loop_context(),
         };
         let (drops, _) = click(&mut view, &mut None, 0, 0, input::SWAP, &rules);
@@ -2313,6 +2345,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2368,6 +2401,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2417,6 +2451,7 @@ pub(crate) mod tests {
                 shulker,
                 container_limits: Vec::new(),
                 hidden: &[],
+                slot_snapshot: Default::default(),
                 loop_context: &crate::test_resources::loop_context(
                     horizon_world::native_load_context::LoopSide::Server,
                 ),
@@ -2466,6 +2501,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2548,6 +2584,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2592,6 +2629,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2632,6 +2670,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2675,6 +2714,7 @@ pub(crate) mod tests {
                     shulker: false,
                     container_limits: Vec::new(),
                     hidden: &[],
+                    slot_snapshot: Default::default(),
                     loop_context: &crate::test_resources::loop_context(
                         horizon_world::native_load_context::LoopSide::Server,
                     ),
@@ -2711,6 +2751,7 @@ pub(crate) mod tests {
                     shulker: false,
                     container_limits: Vec::new(),
                     hidden: &[],
+                    slot_snapshot: Default::default(),
                     loop_context: &crate::test_resources::loop_context(
                         horizon_world::native_load_context::LoopSide::Server,
                     ),
@@ -2745,6 +2786,7 @@ pub(crate) mod tests {
                 shulker: false,
                 container_limits: Vec::new(),
                 hidden: &[],
+                slot_snapshot: Default::default(),
                 loop_context: &context,
             };
             view.guest.carried = Some(stack.clone());
@@ -2760,6 +2802,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &context,
         };
         view.set(36, Some(stack.clone()));
@@ -2823,6 +2866,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2872,6 +2916,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: vec![Some(10); 3],
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &context,
         };
         view.guest.carried = Some(ItemStack::new("minecraft:stick", 20));
@@ -2911,6 +2956,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),
@@ -2961,6 +3007,7 @@ pub(crate) mod tests {
             shulker: false,
             container_limits: Vec::new(),
             hidden: &[],
+            slot_snapshot: Default::default(),
             loop_context: &crate::test_resources::loop_context(
                 horizon_world::native_load_context::LoopSide::Server,
             ),

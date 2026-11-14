@@ -21,8 +21,10 @@ pub use mod_api::item::menu::{LogicalSide, MenuButtonContext};
 mod models;
 pub use models::{
     AnvilCraft, AnvilUpdate, AnvilVanilla, CarriedAccess, GrindstonePlace, GrindstoneTake,
-    SlotRules, SlotView, StackedOnOther,
+    SlotContext, SlotRules, SlotView, StackedOnOther,
 };
+mod slot_context;
+pub use slot_context::{SlotSnapshot, lan_container};
 use std::sync::Arc;
 
 mod bundle;
@@ -500,17 +502,19 @@ fn tidy(slot: &mut Option<ItemStack>) {
 /// Apply the scoped rule to a slot's own answers, then enforce its item cap. The rules are asked
 /// here, while the click plans, and only for a menu type a part answers; with none lent the
 /// slot's answers stand.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_menu_slot_rules(
     rules: Option<&dyn SlotRules>,
     menu: &str,
     slot: usize,
     stack: &ItemStack,
+    context: SlotContext<'_>,
     mut may_place: bool,
     mut max_stack: u32,
     item_max: u32,
 ) -> (bool, u32) {
     if let Some(rules) = rules.filter(|rules| rules.listens(menu)) {
-        rules.rule(menu, slot, stack, &mut may_place, &mut max_stack);
+        rules.rule(menu, slot, stack, context, &mut may_place, &mut max_stack);
     }
     (may_place, max_stack.clamp(1, CONTAINER_MAX).min(item_max))
 }
@@ -862,6 +866,8 @@ impl Menu {
                     Kind::Mod(kind) => Some(kind.id.into()),
                     _ => None,
                 },
+                block_pos: None,
+                slot_snapshot: SlotSnapshot::default(),
                 slots,
                 containers,
                 grid_size,
@@ -936,6 +942,13 @@ impl Menu {
     pub fn set_registry_id(&mut self, id: Option<&str>) {
         self.touch();
         self.state.registry_id = id.map(Into::into);
+    }
+
+    /// The block whose menu this is (`ContainerLevelAccess`), told to `menu_slot_rules`;
+    /// None for a menu with no block behind it.
+    pub fn set_block_pos(&mut self, pos: Option<[i32; 3]>) {
+        self.touch();
+        self.state.block_pos = pos;
     }
 
     /// `clickMenuButton`: the loom's pattern buttons and the stonecutter's
@@ -1803,6 +1816,7 @@ impl Menu {
             id,
             self.state.slots[s].index,
             stack,
+            self.slot_context(env, s),
             own,
             max,
             Self::max_stack(env, stack),
@@ -2489,6 +2503,7 @@ impl Menu {
         end: usize,
         backwards: bool,
     ) -> bool {
+        self.touch();
         self.move_to_equip_source(env, stack, start, end, backwards)
     }
 
@@ -3721,16 +3736,25 @@ pub(crate) mod tests {
     struct ContextRules<'a>(&'a LoopContext);
     impl SlotRules for ContextRules<'_> {
         fn listens(&self, menu: &str) -> bool {
-            menu == "test:rules"
+            matches!(menu, "test:rules" | "test:context")
         }
         fn rule(
             &self,
             menu: &str,
             slot: usize,
             _: &ItemStack,
+            context: SlotContext<'_>,
             may_place: &mut bool,
             max_stack: &mut u32,
         ) {
+            // `test:context` slot 1 takes a stack only for player 7 at its block, beside an
+            // empty slot 0.
+            if menu == "test:context" && slot == 1 {
+                *may_place = context.player == Some(7)
+                    && context.pos == Some([4, 5, 6])
+                    && context.slots.len() == 2
+                    && context.slots[0].is_none();
+            }
             if menu == "test:rules" && slot == 0 {
                 *may_place = self.0.side() == LoopSide::Server;
                 *max_stack = self
@@ -4300,6 +4324,37 @@ pub(crate) mod tests {
             chest.set_slot(env, 0, stack("iron_helmet", 1));
             chest.click(env, 0, 0, Input::QuickMove).unwrap();
             assert!(chest.equipped.is_empty());
+        });
+    }
+
+    #[test]
+    fn slot_rules_are_told_the_player_the_block_and_the_other_slots() {
+        let kind = Kind::Mod(Box::leak(Box::new(crate::containers::ModMenuType {
+            id: "test:context",
+            slots: 2,
+            data_slots: 0,
+            results: vec![],
+            links: None,
+            crafting: None,
+        })));
+        let stack = ItemStack::new("minecraft:stone", 1);
+        bare_env(|env| {
+            let mut menu = Menu::new(kind);
+            menu.set_registry_id(Some("test:context"));
+            // No block: the rule refuses.
+            assert!(!menu.slot_rules(env, 1, &stack, true, CONTAINER_MAX).0);
+            menu.set_block_pos(Some([4, 5, 6]));
+            assert!(menu.slot_rules(env, 1, &stack, true, CONTAINER_MAX).0);
+            // What slot 0 holds is seen by the ask about slot 1.
+            menu.set_slot(env, 0, Some(ItemStack::new("minecraft:dirt", 1)));
+            assert!(!menu.slot_rules(env, 1, &stack, true, CONTAINER_MAX).0);
+            // Another player's menu (player 8) is refused even at the block.
+            let other = Env {
+                player: Some(8),
+                ..*env
+            };
+            menu.set_slot(env, 0, None);
+            assert!(!menu.slot_rules(&other, 1, &stack, true, CONTAINER_MAX).0);
         });
     }
 

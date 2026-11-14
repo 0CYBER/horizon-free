@@ -232,3 +232,62 @@ pub struct AnvilCraft {
     pub right: Option<ItemStack>,
     pub output: ItemStack,
 }
+
+/// One of a menu's own (non-player) containers: the key a `menu_slot_rules` ask names its slot's
+/// container by (`event.container`, with `event.slot` indexing inside it) and
+/// [`MenuSlotContext::slot`] reads by. A plain menu has `Main` only; a mod menu type with a
+/// crafting grid keeps its grid slots in `Grid` and its crafted result in `Result` (slot 0);
+/// a slot of the player's inventory is `Player`'s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum MenuContainer {
+    /// The menu's own slots (a chest's, a machine's).
+    Main,
+    /// A crafting grid's slots, row by row.
+    Grid,
+    /// A crafting grid's result slot.
+    Result,
+    /// The player's inventory, which an ask can be about but the context does not copy
+    /// ([`MenuSlotContext::slot`] reads nothing there).
+    Player,
+}
+impl Default for MenuContainer {
+    fn default() -> Self {
+        Self::Main
+    }
+}
+
+/// Who and where a `menu_slot_rules` ask is about: the menu's player, its block entity and
+/// its own containers' slots. The game fills it the same way on the server and on the client's
+/// prediction, once per click plan; mods read it.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct MenuSlotContext {
+    /// The UUID of the player whose menu it is; None where no player is known.
+    pub player: Option<u128>,
+    /// The block entity the menu belongs to; None when the menu is not a block's
+    /// (opened by a mod with no block, a vehicle's, the player's own inventory).
+    pub pos: Option<[i32; 3]>,
+    /// The menu's own containers' slots as they stand when the click plans, read only (not
+    /// the player's inventory): one entry per [`MenuContainer`] in its order (`Main`, `Grid`,
+    /// `Result`), each in that container's slot order. Read one with [`Self::slot`].
+    pub slots: Vec<Vec<Option<ItemStack>>>,
+}
+impl MenuSlotContext {
+    /// A context of `player`, the block entity at `pos` and the containers' `slots`, one entry
+    /// per [`MenuContainer`] in its order.
+    pub fn new(
+        player: Option<u128>,
+        pos: Option<[i32; 3]>,
+        slots: Vec<Vec<Option<ItemStack>>>,
+    ) -> Self {
+        Self { player, pos, slots }
+    }
+    /// What slot `index` of `container` holds, keyed as the ask names its own slot; None when
+    /// it is empty or the menu has no such slot.
+    pub fn slot(&self, container: MenuContainer, index: usize) -> Option<&ItemStack> {
+        self.slots.get(container as usize)?.get(index)?.as_ref()
+    }
+}
