@@ -50,7 +50,7 @@ impl SlotRules for Game<'_> {
         // A plan's copy made for another player or block (an env changed without a mutation)
         // is not theirs: that ask copies its own.
         let owned;
-        let snapshot = match context.snapshot.map(|cell| cell.get_or_init(&build)) {
+        let snapshot = match context.snapshot.map(|cell| cell.get_or_init(build)) {
             Some(shared) if (shared.player, shared.pos) == (context.player, context.pos) => shared,
             _ => {
                 owned = build();

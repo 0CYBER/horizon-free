@@ -238,11 +238,12 @@ pub struct AnvilCraft {
 /// [`MenuSlotContext::slot`] reads by. A plain menu has `Main` only; a mod menu type with a
 /// crafting grid keeps its grid slots in `Grid` and its crafted result in `Result` (slot 0);
 /// a slot of the player's inventory is `Player`'s.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
 pub enum MenuContainer {
     /// The menu's own slots (a chest's, a machine's).
+    #[default]
     Main,
     /// A crafting grid's slots, row by row.
     Grid,
@@ -252,12 +253,6 @@ pub enum MenuContainer {
     /// ([`MenuSlotContext::slot`] reads nothing there).
     Player,
 }
-impl Default for MenuContainer {
-    fn default() -> Self {
-        Self::Main
-    }
-}
-
 /// Who and where a `menu_slot_rules` ask is about: the menu's player, its block entity and
 /// its own containers' slots. The game fills it the same way on the server and on the client's
 /// prediction, once per click plan; mods read it.
