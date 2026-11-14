@@ -25,15 +25,15 @@ struct ProjectedQuad {
     color: u32,
 }
 
-struct SceneQuad {
-    corners: [Vec3; 4],
-    uv: [[f32; 2]; 4],
-    color: u32,
-    normal: Vec3,
+pub(super) struct SceneQuad {
+    pub(super) corners: [Vec3; 4],
+    pub(super) uv: [[f32; 2]; 4],
+    pub(super) color: u32,
+    pub(super) normal: Vec3,
     /// Dropped when it faces away: block model faces, and the quads a block
     /// entity marks for culling as `entity.wgsl` does (`CULL_BACK`,
     /// `SHADED_CULL_W`). Other quads draw both sides, as in the world.
-    cull: bool,
+    pub(super) cull: bool,
 }
 
 /// The GUI transform of `view` in the box `rect` (x0, y0, x1, y1): the view's
@@ -42,7 +42,7 @@ struct SceneQuad {
 /// up the screen's up; `yaw` turns it counterclockwise seen from above, and
 /// `pitch` tilts its top towards the viewer. The GUI's y runs down and its z
 /// towards the viewer, so the point reflection keeps the picture unmirrored.
-fn scene_matrix(rect: [f32; 4], view: SceneView) -> Mat4 {
+pub(super) fn scene_matrix(rect: [f32; 4], view: SceneView) -> Mat4 {
     let middle = Vec3::new((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0, 0.0);
     Mat4::from_translation(middle)
         * Mat4::from_scale(Vec3::splat(-view.scale))
@@ -60,13 +60,13 @@ fn step(direction: horizon_assets::model::Direction) -> [i32; 3] {
 /// How bright a face is with `normal` (world space, unit), as blocks are
 /// shaded: 1 for the top, 0.5 underneath, 0.8 north and south, 0.6 east and
 /// west, in between for a slanted face.
-fn face_shade(normal: Vec3) -> f32 {
+pub(super) fn face_shade(normal: Vec3) -> f32 {
     let up = if normal.y > 0.0 { 1.0 } else { 0.5 };
     (normal.x * normal.x * 0.6 + normal.y * normal.y * up + normal.z * normal.z * 0.8).min(1.0)
 }
 
 /// `color` (ABGR) with its red, green and blue times `shade`.
-fn shaded(color: u32, shade: f32) -> u32 {
+pub(super) fn shaded(color: u32, shade: f32) -> u32 {
     let ch = |s: u32| (((color >> s & 255) as f32 * shade) as u32).min(255) << s;
     (color & 0xFF00_0000) | ch(0) | ch(8) | ch(16)
 }
@@ -81,18 +81,23 @@ impl Game<'_> {
     /// world too, its `spin` parts turning with the game time. What lies
     /// outside the box is cut off, and the scene has a depth of its own, so
     /// it never covers the screen's other drawing or is covered by it but in
-    /// the order drawn. Draw it from a screen's drawing hook
-    /// (`native_screen_draw`). A client's call; nothing is drawn on a server.
-    /// API 422.
-    pub(super) fn native_draw_scene(
+    /// the order drawn. `extra` adds quads in the scene's coordinates before
+    /// the scene is seen and sorted (a living scene's entities and particles,
+    /// `native_scene_live`); a scene of blocks alone passes none. Nothing is
+    /// drawn when a quad seen through the view isn't finite. API 422.
+    pub(super) fn draw_scene_quads(
         &self,
         batch: &mut HudBatch,
         rect: [f32; 4],
         blocks: &[SceneBlock<'_>],
         view: SceneView,
-    ) {
-        if !self.native_window() || !view.scale.is_finite() || view.scale <= 0.0 {
-            return;
+        extra: impl FnOnce(&mut Vec<SceneQuad>),
+    ) -> Result<(), mod_api::SceneError> {
+        if !self.native_window() {
+            return Err(mod_api::SceneError::Unavailable);
+        }
+        if !view.scale.is_finite() || view.scale <= 0.0 {
+            return Err(mod_api::SceneError::BadView);
         }
         // The Game boundary prepared every state before any drawing began.
         let occupied: std::collections::HashMap<[i32; 3], _> =
@@ -204,6 +209,7 @@ impl Game<'_> {
                 }
             }
         }
+        extra(&mut quads);
         let m = scene_matrix(rect, view);
         let mut seen: Vec<ProjectedQuad> = quads
             .into_iter()
@@ -219,6 +225,11 @@ impl Game<'_> {
                 }
             })
             .collect();
+        // Mod-chosen views and positions may overflow: refuse before any vertex.
+        let finite = |q: &ProjectedQuad| q.depth.is_finite() && q.corners.iter().flatten().all(|v| v.is_finite());
+        if !seen.iter().all(finite) {
+            return Err(mod_api::SceneError::BadView);
+        }
         // Far to near, for the faces that let others show through.
         seen.sort_by(|a, b| a.depth.total_cmp(&b.depth));
         let start = batch.vertices.len();
@@ -226,6 +237,7 @@ impl Game<'_> {
             batch.quad_3d(face.corners, face.uv, face.color);
         }
         batch.depth_since(start, rect);
+        Ok(())
     }
 }
 

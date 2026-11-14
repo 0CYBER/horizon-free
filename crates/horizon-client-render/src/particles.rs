@@ -1113,6 +1113,10 @@ pub struct ParticleEngine {
     pub camera: [f64; 3],
     /// The Particles option (`ParticleStatus`): 0 all, 1 decreased, 2 minimal.
     pub particle_level: u8,
+    /// The most live particles (`len`) this engine keeps: a new one past it is not
+    /// added. None, the level's engine, has only each group's own limit; a mod screen's
+    /// scene sets its own.
+    pub live_limit: Option<usize>,
     /// FireworkParticles.Starter instances.
     starters: Vec<Starter>,
     elder_guardians: Vec<i32>,
@@ -1213,6 +1217,7 @@ impl ParticleEngine {
             providers: native::registered().clone(),
             set_sprites: Vec::new(),
             parallel_min: PARALLEL_MIN,
+            live_limit: None,
             parallel_threads: parallel_threads(),
             polytone: None,
             polytone_overrides: HashMap::new(),
@@ -1398,6 +1403,12 @@ impl ParticleEngine {
     }
     pub fn is_empty(&self) -> bool {
         self.particles.is_empty() && self.groups.iter().all(|g| g.particles.is_empty())
+    }
+    /// The live particles `len` counts: the engine's own, then each group's.
+    pub fn live(&self) -> impl Iterator<Item = &Particle> {
+        self.particles
+            .iter()
+            .chain(self.groups.iter().flat_map(|g| g.particles.iter()))
     }
     /// The live particles of the groups this engine holds, as `ParticleEngine.countParticles`
     /// counts them: ordinary particles, firework starters (`NO_RENDER`) and elder guardian
@@ -1716,6 +1727,11 @@ impl ParticleEngine {
         self.random = LegacyRandom::new(provider);
         self.level_random = LegacyRandom::new(level);
         self.spell_random = LegacyRandom::new(spell);
+    }
+    /// Seeds each new particle's own random from `seed` (a screen scene's tick), so the
+    /// same ticks give the same particles whatever the engine made before.
+    pub fn seed_particle_randoms(&mut self, seed: i64) {
+        self.seeds = LegacyRandom::new(seed);
     }
     /// Parity probes: the next long of the provider, level and spell generators.
     pub fn next_randoms(&mut self) -> [i64; 3] {
@@ -3577,7 +3593,11 @@ impl ParticleEngine {
                     let live = p.group.map_or(self.particles.len(), |handle| {
                         self.groups[handle as usize].particles.len()
                     });
-                    if self.group_has_space(live) {
+                    // A scene's own limit first: the level's engine has none, and draws
+                    // `group_has_space`'s random exactly as before.
+                    if self.live_limit.is_none_or(|limit| self.len() < limit)
+                        && self.group_has_space(live)
+                    {
                         match p.group {
                             Some(handle) => self.groups[handle as usize].particles.push(p),
                             None => self.particles.push(p),
