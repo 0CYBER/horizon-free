@@ -49,6 +49,10 @@ pub trait ClientRenderClientHost {
     /// `MOD_IMAGE_SIZE`; false when it is not that
     /// size. The upload costs a texture patch of the image, so send one when the
     /// image changed, not every frame.
+    ///
+    /// The slot exists whenever a client mod, native or wasm, is loaded: the atlas packs it at
+    /// load and on a resource reload, with no mixin and no opt-in. It is one image for all mods
+    /// together: a second mod's write replaces the first's.
     #[access(WorldOnly)]
     fn mod_image(&mut self, width: u32, height: u32, rgba: &[u8]) -> bool;
     /// Side: client.
