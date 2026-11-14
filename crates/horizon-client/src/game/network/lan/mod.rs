@@ -2915,6 +2915,8 @@ impl Game<'_> {
         {
             self.run_native_menu_events();
         }
+        // Mod menus backed by storage that is not a block entity (#3385); none in a vanilla game.
+        self.tick_menu_slot_places();
         self.run_chunk_watches();
         self.flush_passages();
         if let Some(host) = self.lan.as_mut() {

@@ -68,7 +68,7 @@ pub(super) fn fit(
 /// `native_run_mod_command`, the menus can be opened and filled).
 #[allow(dead_code)]
 impl Game<'_> {
-    fn native_conn(&self, uuid: u128) -> Option<u32> {
+    pub(super) fn native_conn(&self, uuid: u128) -> Option<u32> {
         let host = self.lan.as_ref()?;
         let g = host
             .hub
@@ -349,7 +349,12 @@ impl Game<'_> {
                     slot,
                     button,
                     mode,
-                } => self.native_menu_clicked(uuid, window, slot, button, mode),
+                } => {
+                    // A click a mod's backed slots answer (#3385); any other goes to the mods.
+                    if !self.place_menu_click(uuid, window, slot, button, mode) {
+                        self.native_menu_clicked(uuid, window, slot, button, mode);
+                    }
+                }
                 NativeMenuEvent::Closed { uuid, window } => self.native_menu_closed(uuid, window),
             }
         }

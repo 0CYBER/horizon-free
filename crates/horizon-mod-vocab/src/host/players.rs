@@ -593,6 +593,25 @@ pub trait PlayersBackendMut {
         replace: MenuReplace,
     ) -> Result<Option<i32>, OpenMenuError>;
     /// Side: server.
+    /// Backs the container slots of the mod menu `window` that `player_open_mod_menu` opened
+    /// for the player with storage that is not a block entity (#3385; NeoForge's
+    /// `StackCopySlot` and `ResourceHandlerSlot`): `places[n]` is what slot `n` shows. From then
+    /// on a click or shift-click on those slots, and an `ItemPlace::MenuSlot` write, go through
+    /// that storage's own handler, journalled; the client sees ordinary synced slots. A slot past
+    /// `places` stays the mods' own (`native_menu_clicked`). The menu closes at the next tick
+    /// once a place stops resolving (the backpack left the hand, the entity is gone). A
+    /// `MenuSlotPlace::HeldItem` locks the inventory slot holding that stack while the menu is
+    /// open, so it can't go into itself. False, and nothing changes, for a window that is not
+    /// the player's open blockless mod menu, more places than its container slots, or a place
+    /// that doesn't resolve now.
+    #[access(WorldOnly)]
+    fn player_back_mod_menu_slots(
+        &mut self,
+        player: PlayerRef,
+        window: i32,
+        places: Vec<MenuSlotPlace>,
+    ) -> bool;
+    /// Side: server.
     /// Sends the player `uuid` the whole picture of map `map_id`: 128 x 128
     /// colours (`MapColor` ids times 4 plus the shade, row by row), scale 0,
     /// locked, no decorations, as `ClientboundMapItemDataPacket`. A filled

@@ -169,3 +169,32 @@ client a close, which centres the mouse again; `MenuReplace::InPlace` sends none
 one's place and the mouse stays where it is. Opening from the player's inventory sends no close either way.
 `player.open_mod_menu` takes the same `replace` for a content mod's menu type
 ([machine menu data](../../how-to/world/machine-menu-data.md)).
+
+## Slots backed by a held item or an entity's handler
+
+A menu opened with no block (`player.open_mod_menu`, or `open_menu`'s chest menu) can show storage that is not a block
+entity, as NeoForge's `StackCopySlot` and `ResourceHandlerSlot` do. Right after the open, back its first container
+slots with `player.back_mod_menu_slots(host, window, places)`, one `MenuSlotPlace` per slot:
+
+- `MenuSlotPlace::HeldItem { hand, slot }`: slot `slot` of the container inside the stack in the player's `hand`, through
+  its `ITEM_ITEMS` handler (a backpack's contents). While the menu is open, the hotbar slot holding a main-hand stack takes
+  no click, so the backpack can't go into itself.
+- `MenuSlotPlace::EntityItems { entity, slot }`: slot `slot` of `entity`'s `ENTITY_ITEMS` handler, as a mod's provider
+  answers it.
+
+From then on `MenuRef::slot_backing` names the slot `MenuSlotBacking::Place(place)`. A pickup or shift-click on the
+menu, and an `ItemPlace::MenuSlot` write, go through that storage's own handler in one transaction, so an aborted
+transaction leaves it as it was. The client sees ordinary synced slots; there is no new packet. The menu closes at the
+next tick once a place stops resolving (the backpack left the hand, the entity is gone). Slots past `places` stay the
+mod's own (`menu_clicked`). A drag, a number-key swap, a double-click collect or a throw on a backed menu is still the
+mod's to answer.
+
+```rust,ignore
+let window = player.open_mod_menu(host, backpack_menu, title, Vec::new(), None, MenuReplace::CloseFirst)?;
+if let Some(window) = window {
+    let places = (0..27).map(|slot| MenuSlotPlace::HeldItem { hand: Hand::Main, slot }).collect();
+    player.back_mod_menu_slots(host, window, places);
+}
+```
+
+A vanilla menu and a menu no mod backed never take this path: their slots keep the backing they had.
