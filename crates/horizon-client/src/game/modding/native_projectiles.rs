@@ -19,6 +19,17 @@ use horizon_client::{
 use horizon_core::geometry::Vec3;
 use std::ops::Range;
 
+#[cfg(test)]
+#[path = "native_projectiles/impact_probe.rs"]
+pub(in crate::game) mod impact_probe;
+
+/// The hit target state an independent projectile decided against before a hook.
+#[derive(PartialEq)]
+pub(super) enum ImpactTarget {
+    Block(horizon_world::registry::BlockStateId),
+    Entity(mod_api::EntityRef, [f64; 3]),
+}
+
 /// A projectile's impact in one tick of `tick_projectiles`.
 pub(super) struct Impact {
     /// Where the projectile was in the tick's list.
@@ -54,6 +65,61 @@ impl Drop for ProjectileDispatch<'_, '_> {
 }
 
 impl Game<'_> {
+    /// Snapshot the hit precondition so listener writes can invalidate its
+    /// application without rerunning the collision decision.
+    pub(super) fn native_impact_target(&self, hit: Hit) -> Option<ImpactTarget> {
+        let (entity, block, _, _) = self.pearl_hit(hit);
+        if let Some(id) = entity {
+            let entity = self.entity(id)?;
+            Some(ImpactTarget::Entity(entity, self.entity_position(entity)?))
+        } else if matches!(hit, Hit::Block { .. }) {
+            Some(ImpactTarget::Block(
+                self.world.block(block[0], block[1], block[2]),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Dispatch a hit for a projectile ticked outside the shared projectile list.
+    /// The caller checks the server opt-in gate and exposes the live projectile
+    /// before calling; misses never dispatch.
+    pub(super) fn native_separate_projectile_impact(
+        &mut self,
+        projectile: u32,
+        kind: &str,
+        owner: Option<Who>,
+        hit: Hit,
+    ) -> bool {
+        if matches!(hit, Hit::None) {
+            return false;
+        }
+        let owner = match owner {
+            Some(Who::Mob(id)) => self.native_impact_entity_id(id),
+            Some(Who::Player) => self.own_entity_id() as u32,
+            None => 0,
+        };
+        let (entity, block, face, at) = self.pearl_hit(hit);
+        let entity_kind = entity
+            .and_then(|id| self.entity(id))
+            .and_then(|entity| self.entity_kind(entity))
+            .unwrap_or_default();
+        let mut canceled = false;
+        self.native_projectile_impact(mod_api::__private::ProjectileImpactCall {
+            dimension: self.dim.id(),
+            projectile,
+            kind,
+            owner,
+            entity,
+            entity_kind: &entity_kind,
+            block,
+            face,
+            at,
+            canceled: &mut canceled,
+        });
+        canceled
+    }
+
     /// Guard just the dispatch: normal completion returns the still-owned pass
     /// to its caller, which restores explicitly at the established tick boundary.
     pub(super) fn with_projectile_dispatch(
