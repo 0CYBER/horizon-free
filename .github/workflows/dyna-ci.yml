@@ -444,11 +444,11 @@ jobs:
         if: ${{ !cancelled() && needs.changes.outputs.rust_required != 'false' && needs.changes.outputs.self_hosted == 'true' }}
         run: |
           sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
-          # Peak includes page cache; anon and OOM kills distinguish pressure from reclaimable data.
+          # Peak includes page cache; oom_kill records OOM kills, anon is only end-of-job residue.
           grep usage_usec /sys/fs/cgroup/cpu.stat || true
           echo "memory.peak $(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)"
           grep '^oom_kill ' /sys/fs/cgroup/memory.events 2>/dev/null || echo "oom_kill unavailable"
-          grep '^anon ' /sys/fs/cgroup/memory.stat 2>/dev/null || echo "anon unavailable"
+          awk '/^anon / {print "anon at job end", $2}' /sys/fs/cgroup/memory.stat 2>/dev/null || echo "anon at job end unavailable"
       # Publish native work even if the independent wasm check fails. Pull requests only read
       # main's snapshots; they can never replace a cache subsequently consumed by main.
       - uses: actions/cache/save@v4
@@ -703,11 +703,11 @@ jobs:
         if: ${{ !cancelled() && needs.changes.outputs.rust_required != 'false' && needs.changes.outputs.self_hosted == 'true' }}
         run: |
           sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
-          # Peak includes page cache; anon and OOM kills distinguish pressure from reclaimable data.
+          # Peak includes page cache; oom_kill records OOM kills, anon is only end-of-job residue.
           grep usage_usec /sys/fs/cgroup/cpu.stat || true
           echo "memory.peak $(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unavailable)"
           grep '^oom_kill ' /sys/fs/cgroup/memory.events 2>/dev/null || echo "oom_kill unavailable"
-          grep '^anon ' /sys/fs/cgroup/memory.stat 2>/dev/null || echo "anon unavailable"
+          awk '/^anon / {print "anon at job end", $2}' /sys/fs/cgroup/memory.stat 2>/dev/null || echo "anon at job end unavailable"
       - name: Summarize failed gate steps
         if: ${{ failure() && !cancelled() && steps.setup.outcome == 'success' }}
         env:

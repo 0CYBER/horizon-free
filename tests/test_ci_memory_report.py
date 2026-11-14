@@ -25,12 +25,12 @@ class MemoryReportTests(unittest.TestCase):
                     result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script],
                                             capture_output=True, text=True, check=True)
                     self.assertEqual(result.stdout.splitlines(),
-                                     ["memory.peak 17179869184", "oom_kill 2", "anon 3456789"])
+                                     ["memory.peak 17179869184", "oom_kill 2", "anon at job end 3456789"])
                 for file in root.iterdir():
                     file.unlink()
                 with self.subTest(job=job, available=False):
                     result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script],
                                             capture_output=True, text=True, check=True)
                     self.assertEqual(result.stdout.splitlines(),
-                                     ["memory.peak unavailable", "oom_kill unavailable", "anon unavailable"])
+                                     ["memory.peak unavailable", "oom_kill unavailable", "anon at job end unavailable"])
                     self.assertEqual(result.stderr, "")
