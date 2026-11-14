@@ -283,6 +283,7 @@ impl Game<'_> {
 
     pub(super) fn native_lifecycle_server_tick_start(&mut self, world_running: bool) {
         if let Some((context, phase)) = self.native_lifecycle.server_tick_start(world_running) {
+            self.native_console_lines();
             self.native_lifecycle.read_scope = true;
             self.native_server_tick(&context, phase);
             // Tasks come due after the start phase, still inside the tick's read scope. One that

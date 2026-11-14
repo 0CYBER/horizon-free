@@ -376,6 +376,71 @@ impl Floods {
 
 static LOGGER: std::sync::OnceLock<Logger> = std::sync::OnceLock::new();
 
+/// The most lines the tap keeps between two drains (`take_tapped`); older ones are dropped.
+pub const TAP_LINES: usize = 4096;
+
+/// A line the log tap kept: its level, the thread it names and the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TappedLine {
+    pub level: log::Level,
+    pub thread: String,
+    pub message: String,
+}
+
+/// Whether the tap keeps lines (`set_tap`), read before its lock is taken.
+static TAPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The lines kept for the native mods' `console_line` hook, oldest first.
+static TAP: Mutex<VecDeque<TappedLine>> = Mutex::new(VecDeque::new());
+
+thread_local! {
+    /// Set while this thread runs `untapped`: its lines are not kept.
+    static UNTAPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keeps every line logged from now on for `take_tapped` (`on`), or stops and forgets them.
+pub fn set_tap(on: bool) {
+    TAPPING.store(on, std::sync::atomic::Ordering::Relaxed);
+    if !on {
+        TAP.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
+/// The lines the tap kept since the last call, oldest first.
+pub fn take_tapped() -> Vec<TappedLine> {
+    TAP.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .drain(..)
+        .collect()
+}
+
+/// Runs `f` without tapping the lines this thread logs meanwhile (a `console_line`
+/// listener's own lines).
+pub fn untapped<T>(f: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNTAPPED.set(self.0);
+        }
+    }
+    let _restore = Restore(UNTAPPED.replace(true));
+    f()
+}
+
+fn tap(thread: &str, level: log::Level, message: &str) {
+    if !TAPPING.load(std::sync::atomic::Ordering::Relaxed) || UNTAPPED.get() {
+        return;
+    }
+    let mut lines = TAP.lock().unwrap_or_else(|e| e.into_inner());
+    if lines.len() >= TAP_LINES {
+        lines.pop_front();
+    }
+    lines.push_back(TappedLine {
+        level,
+        thread: thread.to_owned(),
+        message: message.to_owned(),
+    });
+}
+
 fn ours(target: &str) -> bool {
     target.starts_with("horizon")
 }
@@ -424,6 +489,7 @@ impl log::Log for Logger {
             _ => {}
         }
         let stderr = horizon.then(|| message.clone());
+        tap(thread, level, &message);
         self.send(thread, level, &message, stderr);
         if gate == Gate::Last {
             self.write(
@@ -535,12 +601,14 @@ pub fn init(home: &Path, main_thread: &'static str) {
 
 /// A line in the log from code that prints it elsewhere itself (the dedicated server console).
 pub fn write_only(level: log::Level, message: &str) {
+    let current = std::thread::current();
+    let main = LOGGER.get().map_or("main", |logger| logger.main_thread);
+    let thread = match current.name() {
+        Some("main") | None => main,
+        Some(name) => name,
+    };
+    tap(thread, level, message);
     if let Some(logger) = LOGGER.get() {
-        let current = std::thread::current();
-        let thread = match current.name() {
-            Some("main") | None => logger.main_thread,
-            Some(name) => name,
-        };
         logger.write(thread, level, message);
     }
 }
@@ -548,6 +616,7 @@ pub fn write_only(level: log::Level, message: &str) {
 /// Writes `message` to the log file only, under the thread vanilla names for it (`Server thread` for
 /// a login refused on a connection's own thread), as the console line beside it shows.
 pub fn write_as(thread: &str, level: log::Level, message: &str) {
+    tap(thread, level, message);
     if let Some(logger) = LOGGER.get() {
         logger.write(thread, level, message);
     }
@@ -600,6 +669,44 @@ pub fn newest_crash_report(home: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tap keeps lines only while on, never a line logged inside `untapped`, and at most
+    /// `TAP_LINES`, dropping the oldest.
+    #[test]
+    fn the_tap_keeps_lines_while_on_and_skips_untapped_ones() {
+        let probes = |lines: Vec<TappedLine>| -> Vec<String> {
+            lines
+                .into_iter()
+                .filter(|l| l.message.starts_with("tap probe"))
+                .map(|l| format!("{}/{}: {}", l.thread, l.level, l.message))
+                .collect()
+        };
+        write_as("Server thread", log::Level::Info, "tap probe off");
+        set_tap(true);
+        write_as("Server thread", log::Level::Warn, "tap probe 1");
+        untapped(|| write_as("Server thread", log::Level::Info, "tap probe hidden"));
+        write_only(log::Level::Error, "tap probe 2");
+        let thread = std::thread::current().name().unwrap_or("main").to_owned();
+        assert_eq!(
+            probes(take_tapped()),
+            [
+                "Server thread/WARN: tap probe 1".to_owned(),
+                format!("{thread}/ERROR: tap probe 2"),
+            ]
+        );
+        for i in 0..TAP_LINES + 5 {
+            write_as("Server thread", log::Level::Info, &format!("tap probe {i}"));
+        }
+        let kept = take_tapped();
+        assert!(kept.len() <= TAP_LINES);
+        assert_eq!(
+            kept.last().unwrap().message,
+            format!("tap probe {}", TAP_LINES + 4)
+        );
+        set_tap(false);
+        write_as("Server thread", log::Level::Info, "tap probe after");
+        assert!(probes(take_tapped()).is_empty());
+    }
 
     #[test]
     fn native_mod_records_reach_the_file_with_their_targets() {
