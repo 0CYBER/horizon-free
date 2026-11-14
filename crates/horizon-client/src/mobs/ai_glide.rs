@@ -8,8 +8,8 @@ use super::*;
 /// gliding; else on every 20th glide tick one of its gliders, picked with
 /// `Util.getRandom` from the mob's own random, takes a point of wear.
 /// It starts with `checkFallDistanceAccumulation`: a glide that is not
-/// diving keeps at most 1 of its fall. The `ELYTRA_GLIDE` game event of
-/// every 10th tick is not ported here.
+/// diving keeps at most 1 of its fall. Every 10th glide tick, after the
+/// wear, the mob posts `GameEvent.ELYTRA_GLIDE` at its position.
 pub(super) fn update_fall_flying(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     use horizon_world::player_inventory::EquipmentSlot;
     if !m.extra.fall_flying {
@@ -36,13 +36,22 @@ pub(super) fn update_fall_flying(m: &mut Mob, w: &MobWorld, events: &mut Vec<Mob
         return;
     }
     let ticks = m.extra.fall_fly_ticks + 1;
-    if ticks % 10 == 0 && (ticks / 10) % 2 == 0 {
+    if ticks % 10 != 0 {
+        return;
+    }
+    if (ticks / 10) % 2 == 0 {
         let pick = m.random.next_int_bound(gliders.len() as i32).unwrap_or(0) as usize;
         events.push(MobEvent::GliderWear {
             mob: m.id,
             slot: gliders[pick],
         });
     }
+    events.push(MobEvent::GameEvent {
+        event: "minecraft:elytra_glide",
+        at: [m.position.x, m.position.y, m.position.z],
+        source: m.id,
+        state: horizon_world::registry::BlockStateId(0),
+    });
 }
 /// `EquipmentSlot`'s serialized name, which `equippable` names its slot by.
 fn glider_slot_name(slot: horizon_world::player_inventory::EquipmentSlot) -> &'static str {

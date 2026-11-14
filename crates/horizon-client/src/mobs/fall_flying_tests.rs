@@ -224,12 +224,11 @@ fn the_wear_draws_once_from_the_mobs_own_random() {
                 let mut expected = m.random.clone();
                 let mut events = Vec::new();
                 update_fall_flying(&mut m, w, &mut events);
+                let glides = (ticks + 1) % 10 == 0;
                 if wears {
                     assert_eq!(expected.next_int_bound(1), Ok(0));
-                    assert_eq!(events.len(), 1, "count {ticks}");
-                } else {
-                    assert!(events.is_empty(), "count {ticks}");
                 }
+                assert_eq!(events.len(), usize::from(wears) + usize::from(glides));
                 assert_eq!(m.random.next_long(), expected.next_long(), "count {ticks}");
             }
             two.extra.fall_fly_ticks = 19;
@@ -238,10 +237,13 @@ fn the_wear_draws_once_from_the_mobs_own_random() {
             update_fall_flying(&mut two, w, &mut events);
             assert!(matches!(
                 events[..],
-                [MobEvent::GliderWear {
-                    slot: EquipmentSlot::Chest,
-                    ..
-                }]
+                [
+                    MobEvent::GliderWear {
+                        slot: EquipmentSlot::Chest,
+                        ..
+                    },
+                    MobEvent::GameEvent { .. }
+                ]
             ));
             let _ = expected.next_int_bound(1);
             assert_eq!(two.random.next_long(), expected.next_long());
@@ -285,6 +287,51 @@ fn the_wear_of_a_glide_never_breaks_the_glider() {
                 }
             }
             assert_eq!(eligible, max - 1, "0 to 430 glide, 431 does not");
+        },
+    );
+    assert!(ran, "the prepared resources were not found");
+}
+
+/// `updateFallFlying` posts `ELYTRA_GLIDE` at the mob on every 10th glide
+/// tick, after the wear on the 20th, and on no other tick.
+#[test]
+#[ignore = "needs prepared resources in .local/horizon-client"]
+fn a_gliding_mob_posts_elytra_glide_on_every_tenth_glide_tick() {
+    let ran = crate::mobs::world::with_built_test_world(
+        &[],
+        |_, _| {},
+        |w, types| {
+            let mut m = husk(types, true, Some(0));
+            let mut glided_at = Vec::new();
+            for t in 1..=40 {
+                let mut events = Vec::new();
+                assert!(tick(&mut m, w, &mut LegacyRandom::new(2), &mut events));
+                let glides: Vec<_> = events
+                    .iter()
+                    .filter(|e| {
+                        matches!(e, MobEvent::GameEvent { event, .. }
+                            if *event == "minecraft:elytra_glide")
+                    })
+                    .collect();
+                if t % 10 == 0 {
+                    assert!(
+                        matches!(glides[..], [MobEvent::GameEvent { source: 1, at, .. }]
+                        if *at == [m.position.x, m.position.y, m.position.z])
+                    );
+                    glided_at.push(t);
+                } else {
+                    assert!(glides.is_empty(), "tick {t}");
+                }
+                if t % 20 == 0 {
+                    assert!(matches!(events.last(), Some(MobEvent::GameEvent { .. })));
+                    assert!(
+                        events
+                            .iter()
+                            .any(|e| matches!(e, MobEvent::GliderWear { .. }))
+                    );
+                }
+            }
+            assert_eq!(glided_at, [10, 20, 30, 40]);
         },
     );
     assert!(ran, "the prepared resources were not found");
