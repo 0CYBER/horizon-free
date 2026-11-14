@@ -14,8 +14,6 @@ ORIGINAL_JDK_TOOLS = {
     "tools/fixtures/paper-trace-plugin/PaperTrace.java",
     "tools/JfrSummary.java",
     "tests/java/JfrFixture.java",
-    # Our own comparison driver; it calls the player's pinned vanilla jars at run time and carries none of their code.
-    "tools/refactors/api-pr3/JsonNbtOracle.java",
 }
 # The prepared folder's files in one file (crates/horizon-core/src/prepared_files.rs): Mojang's data.
 PRIVATE_NAMES = {"horizon-data.bin"}

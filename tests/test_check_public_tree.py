@@ -42,12 +42,12 @@ class HistoryScopeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("Leak.java", result.stderr)
 
-    def test_the_api_pr3_oracle_is_allowed_and_another_java_tool_is_not(self):
+    def test_the_jfr_summary_is_allowed_and_another_java_tool_is_not(self):
         with TemporaryDirectory() as directory:
             git(directory, "init", "-q", "-b", "main")
-            tools = Path(directory) / "tools/refactors/api-pr3"
+            tools = Path(directory) / "tools"
             tools.mkdir(parents=True)
-            (tools / "JsonNbtOracle.java").write_text("class JsonNbtOracle {}\n")
+            (tools / "JfrSummary.java").write_text("class JfrSummary {}\n")
             git(directory, "add", "-A")
             git(directory, "commit", "-qm", "oracle")
             self.assertEqual(check(directory, "--history").returncode, 0)
