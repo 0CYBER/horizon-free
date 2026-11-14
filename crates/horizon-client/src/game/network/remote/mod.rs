@@ -8957,7 +8957,7 @@ impl Game<'_> {
         let Some(r) = self.remote.as_mut() else {
             return;
         };
-        let mut input = std::mem::take(&mut r.input);
+        let mut input = r.input.take_queued();
         let stop = std::mem::take(&mut r.stop_mining);
         // Minecraft.tick runs handleKeybinds only while `gui.screen() == null`: a
         // book, a sign editor, a dialog or a prompt over the world (each a

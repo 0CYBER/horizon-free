@@ -84,6 +84,18 @@ impl InteractionInput {
     pub fn press(&mut self, button: Button) {
         self.clicks[button as usize].press();
     }
+    /// Take the pending input, leaving empty callback queues with the same refusal latches.
+    /// The owner must merge callback input back after the tick. Clearing or temporarily taking
+    /// input must not restart diagnostics during the lifetime of the owning Remote.
+    pub fn take_queued(&mut self) -> Self {
+        let empty = Self {
+            clicks: self.clicks.map(|mut clicks| {
+                clicks.clear();
+                clicks
+            }),
+        };
+        std::mem::replace(self, empty)
+    }
     /// Preserve clicks queued by callbacks while the owner temporarily takes this input.
     pub fn merge_queued(&mut self, queued: Self) {
         for (clicks, added) in self.clicks.iter_mut().zip(queued.clicks) {
@@ -146,9 +158,16 @@ mod tests {
         begin_using: bool,
         events: Vec<&'static str>,
         use_attempts: Vec<bool>,
+        callback_input: Option<InteractionInput>,
     }
     impl InteractionWorld for World {
-        fn pick_hit_result(&mut self) {}
+        fn pick_hit_result(&mut self) {
+            if let Some(input) = &mut self.callback_input {
+                for _ in 0..1025 {
+                    input.press(Button::Attack);
+                }
+            }
+        }
         fn release_hit_result(&mut self) {}
         fn using_item(&self) -> bool {
             self.using
@@ -178,6 +197,60 @@ mod tests {
         fn continue_attack(&mut self, _: bool) {
             self.events.push("continue");
         }
+    }
+
+    /// Exercise the same take, callback, merge cycle as Remote without game resources.
+    #[test]
+    fn overflowing_callbacks_log_once_across_two_ticks() {
+        struct Logger;
+        thread_local! {
+            static WARNINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        }
+        impl log::Log for Logger {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                if record.level() == log::Level::Warn
+                    && record.target() == "horizon_client_input::input_queue"
+                {
+                    WARNINGS.with(|count| count.set(count.get() + 1));
+                }
+            }
+            fn flush(&self) {}
+        }
+        static LOGGER: Logger = Logger;
+        log::set_logger(&LOGGER).expect("input tests own their logger");
+        log::set_max_level(log::LevelFilter::Warn);
+        let mut world = World {
+            callback_input: Some(InteractionInput::default()),
+            ..Default::default()
+        };
+        for tick in 0..2 {
+            let mut input = world.callback_input.as_mut().unwrap().take_queued();
+            world.events.clear();
+            input.tick(&mut world, false, false);
+            let queued = world.callback_input.take().unwrap();
+            input.merge_queued(queued);
+            world.callback_input = Some(input);
+            assert_eq!(WARNINGS.with(std::cell::Cell::get), 1);
+            assert_eq!(
+                world
+                    .events
+                    .iter()
+                    .filter(|&&event| event == "attack")
+                    .count(),
+                if tick == 0 { 0 } else { 64 }
+            );
+        }
+        // Clearing on a screen transition must not restart diagnostics either.
+        let mut discarded = world.callback_input.as_mut().unwrap().take_queued();
+        discarded.tick(&mut world, false, false);
+        assert_eq!(WARNINGS.with(std::cell::Cell::get), 1);
+        // A new owner gets its own diagnostic, not a process-global latch.
+        world.callback_input = Some(InteractionInput::default());
+        InteractionInput::default().tick(&mut world, false, false);
+        assert_eq!(WARNINGS.with(std::cell::Cell::get), 2);
     }
 
     #[test]
