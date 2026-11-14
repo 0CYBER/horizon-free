@@ -199,7 +199,7 @@ mod tests {
             persistent: false,
         }];
         let level = game.natural_level();
-        let state = game.natural_spawn_state(&level, 289, player(), &zombie);
+        let state = game.natural_spawn_state(&level, 289, player(), Default::default(), &zombie);
         let categories = game.natural_categories(&state);
         (state, categories)
     }
