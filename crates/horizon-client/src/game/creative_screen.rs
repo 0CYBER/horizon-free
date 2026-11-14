@@ -400,19 +400,23 @@ impl Game<'_> {
             }
             return;
         }
-        let tabs = self.creative_screen.tabs.clone();
-        for (i, t) in tabs.iter().enumerate() {
-            if !self.creative_screen.on_page(t) {
-                continue;
-            }
+        // Only the clicked tab's index is needed: cloning the tabs here copied
+        // every tab's items on each click, saved hotbars' stacks included.
+        let creative = &self.creative_screen;
+        let clicked = creative.tabs.iter().position(|t| {
             let (tx, ty) = Creative::tab_position(t);
-            if cx >= ox + tx && cx < ox + tx + 26.0 && cy >= oy + ty && cy < oy + ty + 32.0 {
-                select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, i);
-                self.refresh_saved_hotbars();
-                self.inv_drag = None;
-                self.last_inv_click = None;
-                return;
-            }
+            creative.on_page(t)
+                && cx >= ox + tx
+                && cx < ox + tx + 26.0
+                && cy >= oy + ty
+                && cy < oy + ty + 32.0
+        });
+        if let Some(i) = clicked {
+            select_creative_tab(&mut self.creative_screen, &mut self.inv_clicks, i);
+            self.refresh_saved_hotbars();
+            self.inv_drag = None;
+            self.last_inv_click = None;
+            return;
         }
         if self.creative_inventory_open() {
             if Self::creative_trash_hovered(&batch, self.cursor) {
