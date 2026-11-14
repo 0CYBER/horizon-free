@@ -88,7 +88,9 @@ fn a_fuel_item_with_no_uses_marks_the_chunk() {
     let mut fuel = ItemStack::new("minecraft:blaze_powder", 1);
     fuel.data_mut().set_loot_component(
         "minecraft:brewing_fuel",
-        &serde_json::json!({"uses": 0, "speed_multiplier": 1.0}),
+        &Some(horizon_client::scoreboard::json_to_tag(
+            &serde_json::json!({"uses": 0, "speed_multiplier": 1.0}),
+        )),
     );
     place(
         &mut game,

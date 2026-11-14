@@ -1881,5 +1881,6 @@ mod camel_jump_tests;
 #[cfg(test)]
 #[path = "mounts/sneak_dismount_tests.rs"]
 pub(in crate::game) mod sneak_dismount_tests;
+#[cfg(test)]
 #[path = "tests/strider_lava_boarding_tests.rs"]
 mod strider_lava_boarding_tests;

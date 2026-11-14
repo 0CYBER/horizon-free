@@ -26,6 +26,10 @@ fn a_ground_jump_awards_the_jump_statistic() {
             collision_binding: game.collision,
             resources: game.motion,
             health: &game.health_resources,
+            tag_items: None,
+            loop_context: &game.loop_context,
+            damage_hooks: &game.damage_hooks,
+            block_registries: Some(&game.pack.block_registries),
         };
         world.jump_from_ground().unwrap();
     }
@@ -49,12 +53,13 @@ fn a_worn_out_helmet_awards_the_broken_statistic() {
     helmet.damage = 54;
     game.armor[0] = Some(helmet);
     // `getDamageAfterArmorAbsorb` -> `Player.hurtArmor`: max(1, 4 / 4) points.
-    let source = game
-        .health_resources
-        .damage
-        .id("minecraft:generic")
-        .unwrap();
-    game.hurt_armor(source, 4.0);
+    let source = horizon_client::health::HurtSource {
+        damage_type: "minecraft:generic",
+        causing: 0,
+        direct: 0,
+        position: None,
+    };
+    game.hurt_armor(&source, 4.0);
     assert!(game.armor[0].is_none(), "the helmet broke off the head");
     assert_eq!(game.stats.get("broken", "minecraft:leather_helmet"), 1);
 }
@@ -100,7 +105,7 @@ fn sleeping_in_a_straw_bed_awards_its_own_statistic() {
     );
     assert_eq!(game.stats.get("custom", "minecraft:sleep_in_straw_bed"), 1);
     assert_eq!(game.stats.get("custom", "minecraft:sleep_in_bed"), 0);
-    game.wake_up();
+    game.wake_up(true, true);
     // An ordinary bed keeps the plain statistic.
     let red = place_bed(&mut game, 4, "minecraft:red_bed");
     game.player.as_mut().unwrap().position = Vec3::new(4.5, 64.0, 3.5);

@@ -40,7 +40,12 @@ fn a_phantom_bite_level_event_plays_the_bite_at_0_3_volume() {
         // It goes to the guests as the level event itself, which they play.
         assert_eq!(
             g.lan_events,
-            vec![(1039, [0, 64, 0], 0, None)],
+            vec![QueuedLevelEvent {
+                kind: 1039,
+                pos: [0, 64, 0],
+                data: 0,
+                source: None,
+            }],
             "the bite reaches the guests as level event 1039"
         );
     });

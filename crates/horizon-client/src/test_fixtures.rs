@@ -6,7 +6,6 @@
 //! copy serves them all; each test still builds its own `World` over it.
 use crate::{
     assets::{Assets, RenderAssets},
-    blocks::BlockFacts,
     motion::MotionResources,
 };
 use horizon_world::block_collision::BlockCollisionRegistry;
@@ -16,12 +15,8 @@ use std::{
 };
 
 pub(crate) struct Vanilla {
-    /// The root everything below was read from: a test that also needs a file
-    /// the fixture does not carry reads it from here, never from another root.
-    pub root: PathBuf,
     pub assets: Assets,
     pub render: RenderAssets,
-    pub facts: BlockFacts,
     pub collision: BlockCollisionRegistry<'static>,
     pub motion: MotionResources,
 }
@@ -48,14 +43,11 @@ pub(crate) fn vanilla() -> Option<&'static Vanilla> {
                     root.clone(),
                 ))
                 .unwrap();
-            let facts = BlockFacts::load(&root, assets.registry).unwrap();
             let collision = crate::collisions::load(&root, assets.registry).unwrap();
             let motion = MotionResources::load(&root, &assets).unwrap();
             Some(Vanilla {
-                root,
                 assets,
                 render,
-                facts,
                 collision,
                 motion,
             })

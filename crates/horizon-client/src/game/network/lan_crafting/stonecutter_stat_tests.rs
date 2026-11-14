@@ -36,7 +36,7 @@ fn a_guest_stonecutter_take_counts_the_item_crafted() {
         .get(&conn)
         .expect("the guest")
         .stats;
-    assert_eq!(took, Some(3), "the take used one stone");
+    assert_eq!(took, Some(Some(3)), "the take used one stone");
     assert_eq!(
         stats.get("crafted", "minecraft:stone_bricks"),
         1,

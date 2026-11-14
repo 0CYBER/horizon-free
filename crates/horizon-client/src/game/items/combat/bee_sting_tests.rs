@@ -123,9 +123,9 @@ fn a_landed_sting_sets_the_stinger_and_poisons_on_normal_and_hard() {
             .extra
             .effects
             .iter()
-            .find(|(effect, _, _)| *effect == "minecraft:poison");
+            .find(|effect| effect.id == "minecraft:poison");
         assert_eq!(
-            poison.map(|(_, ticks, amplifier)| (*ticks, *amplifier)),
+            poison.map(|effect| (effect.duration, effect.amplifier)),
             Some((poison_ticks, 0)),
             "{difficulty:?}"
         );

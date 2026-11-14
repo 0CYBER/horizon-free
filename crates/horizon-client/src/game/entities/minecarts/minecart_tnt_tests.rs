@@ -62,7 +62,7 @@ fn a_silent_tnt_cart_primes_without_its_sound() {
     assert!(
         game.lan_entity_events
             .iter()
-            .any(|(id, event, _)| *id == 42 && *event == 70),
+            .any(|(id, event)| *id == 42 && *event == 70),
         "a silent cart still broadcasts EntityEvent.TNT_PRIME: {:?}",
         game.lan_entity_events
     );

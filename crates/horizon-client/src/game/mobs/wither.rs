@@ -16,17 +16,24 @@ impl Game<'_> {
     pub(super) fn create_wither_rose(&mut self, m: &horizon_client::mobs::Mob) {
         // getKillCredit: the player who last hurt it, else the last mob (kept
         // for 100 ticks).
-        let by_wither = m.ai.last_hurt_by_player <= 0
-            && m.age as i32 - m.ai.last_hurt_by_time <= 100
-            && matches!(m.ai.last_hurt_by, Some(Who::Mob(id)) if self.is_wither(id));
+        let wither = match m.ai.last_hurt_by {
+            Some(Who::Mob(id))
+                if m.ai.last_hurt_by_player <= 0
+                    && m.age as i32 - m.ai.last_hurt_by_time <= 100
+                    && self.is_wither(id) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        };
         let position = [m.position.x, m.position.y, m.position.z];
-        self.create_wither_rose_at(position, by_wither);
+        self.create_wither_rose_at(position, wither);
     }
     /// `LivingEntity.createWitherRose` for a dying player (`ServerPlayer.die`),
     /// whose kill credit is `killer`.
     pub(super) fn create_wither_rose_by(&mut self, position: [f64; 3], killer: Option<u32>) {
-        let by_wither = killer.is_some_and(|id| self.is_wither(id));
-        self.create_wither_rose_at(position, by_wither);
+        let wither = killer.filter(|&id| self.is_wither(id));
+        self.create_wither_rose_at(position, wither);
     }
     /// `getKillCredit` naming a wither that is still in the level.
     fn is_wither(&self, id: u32) -> bool {
@@ -34,10 +41,10 @@ impl Game<'_> {
             .iter()
             .any(|o| o.id == id && o.alive() && o.species() == Species::Wither)
     }
-    fn create_wither_rose_at(&mut self, position: [f64; 3], by_wither: bool) {
-        if !by_wither {
+    fn create_wither_rose_at(&mut self, position: [f64; 3], wither: Option<u32>) {
+        let Some(wither) = wither else {
             return;
-        }
+        };
         let pos = [
             position[0].floor() as i32,
             position[1].floor() as i32,

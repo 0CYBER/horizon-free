@@ -2348,9 +2348,10 @@ mod credits_respawn_tests {
 
     /// A server on a scratch world with one guest, placed in the Overworld,
     /// whose own point is a respawn anchor in the Nether.
-    fn server_with_a_nether_anchor() -> (Game<'static>, std::path::PathBuf) {
-        let mut resources = None;
-        let mut game = crate::game::game_tests::tests::server_game(&mut resources);
+    fn server_with_a_nether_anchor<'a>(
+        resources: &'a mut Option<Arc<crate::game::Resources>>,
+    ) -> (Game<'a>, std::path::PathBuf) {
+        let mut game = crate::game::game_tests::tests::server_game(resources);
         let scratch = std::env::temp_dir().join(format!(
             "horizon-credits-anchor-{}-{}",
             std::process::id(),
@@ -2426,7 +2427,8 @@ mod credits_respawn_tests {
     #[ignore = "daily"]
     fn the_credits_respawn_returns_to_a_nether_anchor_and_keeps_its_charge() {
         use horizon_client::chunk::Chunk;
-        let (mut game, scratch) = server_with_a_nether_anchor();
+        let mut resources = None;
+        let (mut game, scratch) = server_with_a_nether_anchor(&mut resources);
         let play = game.lan.as_mut().unwrap().play.entry(2).or_default();
         play.won_game = true;
         play.respawn_requested = true;
@@ -2490,13 +2492,13 @@ mod credits_respawn_tests {
     #[ignore = "daily"]
     fn a_spectator_leaves_the_end_for_its_nether_point() {
         use horizon_client::chunk::Chunk;
-        let (mut game, scratch) = server_with_a_nether_anchor();
-        {
-            let g = &mut game.lan.as_mut().unwrap().hub.guests[0];
+        let mut resources = None;
+        let (mut game, scratch) = server_with_a_nether_anchor(&mut resources);
+        game.lan.as_mut().unwrap().hub.guests.update(0, |g| {
             g.game_mode = SPECTATOR;
             g.seen_credits = true;
             g.dimension = "minecraft:the_end".into();
-        }
+        });
         game.enter_level(super::Dim::End).unwrap();
         game.streaming
             .insert_remote(&mut game.world, Chunk::empty(0, 0));

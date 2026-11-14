@@ -10,9 +10,13 @@ const POS: [i32; 3] = [2, 4, 3];
 
 /// A local server game with `state` at `POS`, holding `held`, the click
 /// forced onto the block's top.
-fn cauldron_game(state: &str, level: Option<u8>, held: ItemStack) -> Game<'static> {
-    let mut resources = None;
-    let mut game = server_game(&mut resources);
+fn cauldron_game<'a>(
+    resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
+    state: &str,
+    level: Option<u8>,
+    held: ItemStack,
+) -> Game<'a> {
+    let mut game = server_game(resources);
     game.creative = false;
     let block = game
         .pack
@@ -30,6 +34,7 @@ fn cauldron_game(state: &str, level: Option<u8>, held: ItemStack) -> Game<'stati
     *game.held_mut() = Some(held);
     game.forced_hit = Some(Hit {
         pos: POS,
+        inside: false,
         face: [0, 1, 0],
         point: [
             f64::from(POS[0]) + 0.5,
@@ -50,7 +55,9 @@ fn hand<'a>(game: &'a Game<'_>) -> &'a str {
 #[test]
 #[ignore = "daily"]
 fn emptying_a_filled_bucket_counts_as_used() {
+    let mut resources = None;
     let mut game = cauldron_game(
+        &mut resources,
         "minecraft:stone",
         None,
         ItemStack::new("minecraft:water_bucket", 1),
@@ -77,7 +84,9 @@ fn emptying_a_filled_bucket_counts_as_used() {
 #[test]
 #[ignore = "daily"]
 fn pouring_a_bucket_into_a_cauldron_counts_both() {
+    let mut resources = None;
     let mut game = cauldron_game(
+        &mut resources,
         "minecraft:cauldron",
         None,
         ItemStack::new("minecraft:water_bucket", 1),
@@ -94,7 +103,9 @@ fn pouring_a_bucket_into_a_cauldron_counts_both() {
 #[test]
 #[ignore = "daily"]
 fn filling_a_bucket_from_a_cauldron_counts_both() {
+    let mut resources = None;
     let mut game = cauldron_game(
+        &mut resources,
         "minecraft:water_cauldron",
         Some(3),
         ItemStack::new("minecraft:bucket", 1),
@@ -110,7 +121,9 @@ fn filling_a_bucket_from_a_cauldron_counts_both() {
 #[test]
 #[ignore = "daily"]
 fn a_glass_bottle_used_on_a_cauldron_counts_as_used() {
+    let mut resources = None;
     let mut game = cauldron_game(
+        &mut resources,
         "minecraft:water_cauldron",
         Some(3),
         ItemStack::new("minecraft:glass_bottle", 1),
@@ -126,7 +139,9 @@ fn a_glass_bottle_used_on_a_cauldron_counts_as_used() {
 #[test]
 #[ignore = "daily"]
 fn a_water_potion_used_on_a_cauldron_counts_as_used() {
+    let mut resources = None;
     let mut game = cauldron_game(
+        &mut resources,
         "minecraft:cauldron",
         None,
         ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"),
@@ -142,7 +157,9 @@ fn a_water_potion_used_on_a_cauldron_counts_as_used() {
 #[test]
 #[ignore = "daily"]
 fn washing_a_shulker_box_is_not_an_item_used() {
+    let mut resources = None;
     let mut game = cauldron_game(
+        &mut resources,
         "minecraft:water_cauldron",
         Some(3),
         ItemStack::new("minecraft:white_shulker_box", 1),

@@ -6,9 +6,8 @@ use crate::game::game_tests::tests::server_game;
 use horizon_client::motion::PlayerMotion;
 
 /// A server's game with a player standing at the origin's block.
-fn player_game() -> Game<'static> {
-    let mut resources = None;
-    let mut game = server_game(&mut resources);
+fn player_game(resources: &mut Option<std::sync::Arc<crate::game::Resources>>) -> Game<'_> {
+    let mut game = server_game(resources);
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
     // A fixed name: no generated horizon-player.txt in the working directory.
     game.options.player_name = Some("PotionContents".into());
@@ -45,7 +44,8 @@ fn with_custom_effects(mut stack: ItemStack, effects: &[(&str, i32, i32)]) -> It
 #[test]
 #[ignore = "daily"]
 fn a_splash_potion_applies_its_custom_effects_and_duration_scale() {
-    let mut game = player_game();
+    let mut resources = None;
+    let mut game = player_game(&mut resources);
     let mut stack = with_custom_effects(
         ItemStack::new("minecraft:splash_potion", 1).with_potion("minecraft:swiftness"),
         &[("poison", 900, 0)],
@@ -108,7 +108,8 @@ fn a_splash_potion_applies_its_custom_effects_and_duration_scale() {
 #[test]
 #[ignore = "daily"]
 fn a_lingering_potion_of_custom_effects_makes_its_cloud() {
-    let mut game = player_game();
+    let mut resources = None;
+    let mut game = player_game(&mut resources);
     let mut stack = with_custom_effects(
         ItemStack::new("minecraft:lingering_potion", 1),
         &[("poison", 900, 0)],
@@ -159,7 +160,8 @@ fn a_lingering_potion_of_custom_effects_makes_its_cloud() {
 #[test]
 #[ignore = "daily"]
 fn a_water_potion_refills_an_axolotl_once() {
-    let mut game = player_game();
+    let mut resources = None;
+    let mut game = player_game(&mut resources);
     assert!(game.run_command(
         "summon minecraft:axolotl 0.5 64 0.5 {NoAI:1b,PersistenceRequired:1b,Silent:1b}"
     ));

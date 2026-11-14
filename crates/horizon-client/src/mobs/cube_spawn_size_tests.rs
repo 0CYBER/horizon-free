@@ -8,7 +8,10 @@
 use super::super::spawning::{LocalDifficulty, tests::run_finalize};
 use super::super::world::with_test_world;
 use super::super::{Mob, MobTypes};
-use horizon_core::{geometry::Vec3, random::LegacyRandom};
+use horizon_core::{
+    geometry::Vec3,
+    random::{LegacyRandom, RandomSource},
+};
 use std::sync::Arc;
 
 fn cube(types: &MobTypes, id: &str, seed: i64) -> Mob {

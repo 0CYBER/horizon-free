@@ -10,9 +10,8 @@ use horizon_core::geometry::Vec3;
 
 /// A server game with a player at `(8.5, 64, 8.5)`, as a window's player is
 /// there for the piglins that look at it.
-fn game_with_player() -> Game<'static> {
-    let mut resources = None;
-    let mut game = server_game(&mut resources);
+fn game_with_player(resources: &mut Option<std::sync::Arc<crate::game::Resources>>) -> Game<'_> {
+    let mut game = server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);
     game.player = Some(
@@ -40,7 +39,8 @@ fn stop_events() {
 #[test]
 #[ignore = "daily"]
 fn a_hit_posts_one_entity_damage_from_its_causing_entity() {
-    let mut game = game_with_player();
+    let mut resources = None;
+    let mut game = game_with_player(&mut resources);
     let at = Vec3::new(8.5, 64.0, 8.5);
     game.carts.push(Minecart::new(1, CartKind::Rideable, at));
     start_events();
@@ -85,7 +85,8 @@ fn a_hit_posts_one_entity_damage_from_its_causing_entity() {
 #[test]
 #[ignore = "daily"]
 fn a_broken_cart_drops_its_item_under_its_name() {
-    let mut game = game_with_player();
+    let mut resources = None;
+    let mut game = game_with_player(&mut resources);
     assert!(game.run_command(r#"summon minecart 8.5 64 8.5 {CustomName:"Boat"}"#));
     assert_eq!(game.carts.len(), 1);
     assert_eq!(game.carts[0].kind, CartKind::Rideable);
@@ -115,14 +116,19 @@ fn calm(game: &mut Game<'_>, piglin: usize) {
 #[test]
 #[ignore = "daily"]
 fn a_chest_cart_broken_by_a_player_angers_the_piglins_that_see_them() {
-    let mut game = game_with_player();
+    let mut resources = None;
+    let mut game = game_with_player(&mut resources);
     assert!(game.run_command("summon piglin 8.5 64 12.5 {NoAI:1b,PersistenceRequired:1b}"));
     let piglin = game
         .mobs
         .iter()
         .position(|m| m.species() == Species::Piglin)
         .expect("the summoned piglin");
-    assert!(game.ui.rules.bool("entity_drops"));
+    assert!(
+        game.ui
+            .rules
+            .bool_at(horizon_client::gamerules::vanilla::ENTITY_DROPS)
+    );
     let at = Vec3::new(8.5, 64.0, 8.5);
     game.carts.push(Minecart::new(1, CartKind::Chest, at));
     game.carts.push(Minecart::new(2, CartKind::Chest, at));

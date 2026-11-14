@@ -2010,7 +2010,7 @@ impl Game<'_> {
 
     /// A message's `accept`: shown, it is narrated (`narrateChatMessage`) and
     /// starts the Chat Delay wait again.
-    pub(super) fn accept_chat(&mut self, chat: QueuedChat) -> bool {
+    fn accept_chat(&mut self, chat: QueuedChat) -> bool {
         let signature = chat.signature;
         let shown = self.player_chat_line(chat);
         if let Some(signature) = &signature {

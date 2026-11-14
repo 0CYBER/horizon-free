@@ -7,7 +7,10 @@ use super::*;
 
 /// A server game whose world is a fresh folder with one pack holding
 /// `hs:hello`, which counts its runs in the `hs` objective.
-fn schedule_game(label: &str) -> (Game<'static>, std::path::PathBuf) {
+fn schedule_game<'a>(
+    label: &str,
+    resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>,
+) -> (Game<'a>, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!(
         "horizon-schedule-{label}-{}-{}",
         std::process::id(),
@@ -34,12 +37,12 @@ fn schedule_game(label: &str) -> (Game<'static>, std::path::PathBuf) {
         "scoreboard players add fired hs 1\n",
     )
     .unwrap();
-    let mut resources = None;
-    let mut game = crate::game::game_tests::tests::server_game(&mut resources);
+    let mut game = crate::game::game_tests::tests::server_game(resources);
     game.world_root = dir.clone();
     game.build_registries();
     game.set_allow_commands(true);
-    game.reload_datapacks(false);
+    game.reload_datapacks(false, &game.level.enabled_features.clone())
+        .unwrap();
     assert!(game.fns.enabled.contains(&"file/hs".to_owned()));
     assert!(
         game.fns.store.errors.is_empty(),
@@ -63,7 +66,8 @@ fn fired(game: &Game<'_>) -> i32 {
 #[test]
 #[ignore = "daily"]
 fn a_fired_or_cleared_event_stays_gone_across_a_reload() {
-    let (mut game, dir) = schedule_game("gone");
+    let mut resources = None;
+    let (mut game, dir) = schedule_game("gone", &mut resources);
     // A fired event: saved while pending, then run, then reloaded.
     run(&mut game, "schedule function hs:hello 5t");
     game.save_schedule();
@@ -90,7 +94,8 @@ fn a_fired_or_cleared_event_stays_gone_across_a_reload() {
 #[test]
 #[ignore = "daily"]
 fn a_pending_event_survives_a_save_and_a_reload() {
-    let (mut game, dir) = schedule_game("pending");
+    let mut resources = None;
+    let (mut game, dir) = schedule_game("pending", &mut resources);
     run(&mut game, "schedule function hs:hello 40t");
     game.save_schedule();
     let due = game.world.game_time + 40;

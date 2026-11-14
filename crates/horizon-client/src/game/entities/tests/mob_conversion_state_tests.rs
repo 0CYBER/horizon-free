@@ -81,7 +81,11 @@ fn a_struck_pig_leaves_a_zombified_piglin_that_keeps_its_state() {
     assert!(zombified.silent, "the silence is carried over");
     assert!(zombified.no_ai, "the no-AI flag is carried over");
     assert_eq!(
-        zombified.extra.main_hand.as_deref(),
+        zombified
+            .extra
+            .equipment
+            .get(horizon_items::equipment::MAINHAND)
+            .map(|stack| stack.item.as_ref()),
         Some(expected),
         "the gear the conversion rolls"
     );
@@ -91,7 +95,7 @@ fn a_struck_pig_leaves_a_zombified_piglin_that_keeps_its_state() {
             .extra
             .effects
             .iter()
-            .any(|e| e.0 == "minecraft:nausea"),
+            .any(|e| e.id == "minecraft:nausea"),
         "a pig struck by lightning is not nauseous"
     );
 }
@@ -196,9 +200,9 @@ fn a_zombifying_piglin_leaves_a_nauseous_zombified_piglin() {
         .extra
         .effects
         .iter()
-        .find(|e| e.0 == "minecraft:nausea");
+        .find(|e| e.id == "minecraft:nausea");
     assert_eq!(
-        nausea.map(|e| e.1),
+        nausea.map(|e| e.duration),
         Some(200),
         "nauseous for 200 ticks, as `MobEffectInstance(NAUSEA, 200, 0)`"
     );

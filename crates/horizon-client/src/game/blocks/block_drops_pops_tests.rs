@@ -10,9 +10,8 @@ use crate::game::game_tests::tests::server_game;
 use horizon_client::items::ItemStack;
 use horizon_core::position::ChunkPos;
 
-fn game() -> Game<'static> {
-    let mut resources = None;
-    let mut game = server_game(&mut resources);
+fn game(resources: &mut Option<std::sync::Arc<crate::game::Resources>>) -> Game<'_> {
+    let mut game = server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);
     game.block_ticks
@@ -26,6 +25,7 @@ fn game() -> Game<'static> {
 fn hit(pos: [i32; 3]) -> Hit {
     Hit {
         pos,
+        inside: false,
         face: [0, 1, 0],
         point: [
             f64::from(pos[0]) + 0.5,
@@ -100,7 +100,8 @@ fn stack(meal: bool) -> Option<ItemStack> {
 #[test]
 #[ignore = "daily"]
 fn block_drops_off_stops_the_pop_of_bone_meal_and_harvests() {
-    let mut game = game();
+    let mut resources = None;
+    let mut game = game(&mut resources);
     assert!(game.run_command("gamerule block_drops false"));
     for (block, _, _, meal, off, _) in CASES {
         place(&mut game, off, block);
@@ -140,8 +141,13 @@ fn block_drops_off_stops_the_pop_of_bone_meal_and_harvests() {
 #[test]
 #[ignore = "daily"]
 fn block_drops_on_keeps_the_pop() {
-    let mut game = game();
-    assert!(game.ui.rules.bool("block_drops"));
+    let mut resources = None;
+    let mut game = game(&mut resources);
+    assert!(
+        game.ui
+            .rules
+            .bool_at(horizon_client::gamerules::vanilla::BLOCK_DROPS)
+    );
     for (block, item, drops, meal, _, on) in CASES {
         place(&mut game, on, block);
         let mut expected = game.world.random.clone();

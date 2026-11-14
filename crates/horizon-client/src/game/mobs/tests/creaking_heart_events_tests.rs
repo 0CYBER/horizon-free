@@ -91,11 +91,21 @@ fn a_heart_spawn_posts_entity_place_and_the_poof() {
     let poofs: Vec<_> = game
         .lan_entity_events
         .iter()
-        .filter(|(mob, event, _)| *mob == id as i32 && *event == 60)
+        .filter(|(mob, event)| *mob == id as i32 && *event == 60)
+        // The packet carries only the entity id and event; clients resolve
+        // the poof's position from that entity, not a packet coordinate.
+        .map(|&(mob, event)| {
+            let entity = game.mobs.iter().find(|m| m.id == mob as u32).unwrap();
+            (
+                mob,
+                event,
+                [entity.position.x, entity.position.y, entity.position.z],
+            )
+        })
         .collect();
     assert_eq!(
         poofs,
-        vec![&(id as i32, 60, at)],
+        vec![(id as i32, 60, at)],
         "{:?}",
         game.lan_entity_events
     );

@@ -1709,9 +1709,8 @@ mod score_condition_tests {
     use super::*;
     use crate::game::game_tests::tests::server_game;
 
-    fn game() -> Game<'static> {
-        let mut resources = None;
-        let mut game = server_game(&mut resources);
+    fn game(resources: &mut Option<std::sync::Arc<crate::game::Resources>>) -> Game<'_> {
+        let mut game = server_game(resources);
         game.build_registries();
         game.set_allow_commands(true);
         game
@@ -1733,7 +1732,8 @@ mod score_condition_tests {
     #[test]
     #[ignore = "daily"]
     fn an_unknown_source_objective_fails_a_terminal_condition() {
-        let mut game = game();
+        let mut resources = None;
+        let mut game = game(&mut resources);
         assert!(game.run_command("scoreboard objectives add a dummy"));
         for sign in ["if", "unless"] {
             let (ok, said) = say(
@@ -1754,7 +1754,8 @@ mod score_condition_tests {
     #[test]
     #[ignore = "daily"]
     fn an_unknown_source_objective_drops_a_forked_condition_silently() {
-        let mut game = game();
+        let mut resources = None;
+        let mut game = game(&mut resources);
         assert!(game.run_command("scoreboard objectives add a dummy"));
         for sign in ["if", "unless"] {
             let (ok, said) = say(

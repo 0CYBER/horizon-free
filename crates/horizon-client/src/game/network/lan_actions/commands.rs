@@ -240,7 +240,7 @@ impl Game<'_> {
         self.guest_suggestions(conn, &payload);
     }
 
-    pub(super) fn guest_suggestions(&mut self, conn: u32, payload: &[u8]) {
+    pub(in crate::game) fn guest_suggestions(&mut self, conn: u32, payload: &[u8]) {
         let Some(host) = self.lan.as_ref() else {
             return;
         };

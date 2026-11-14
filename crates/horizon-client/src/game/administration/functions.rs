@@ -704,9 +704,7 @@ impl Game<'_> {
             return Ok(());
         }
         let level = std::mem::replace(&mut self.ui.registries.permission, self.fns.command_level());
-        let d = horizon_client::command::vanilla::game_dispatcher_with_features(
-            &self.level.enabled_features,
-        );
+        let d = self.ui.dispatcher.0.clone();
         let mut out = Ok(());
         for (line, entry) in lines.iter().zip(&f.lines) {
             if matches!(entry, datapack::FunctionLine::Macro(_))
@@ -2494,13 +2492,14 @@ mod tests {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
         let loaded = load_resources(
-            root.clone(),
+            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
             None,
             &root,
             &settings,
             Instant::now(),
             false,
-            true,
+            crate::game::execution_role::ExecutionRole::IntegratedServer,
             &crate::game::Progress::new(),
             &mut |_, _| unreachable!(),
         )
@@ -2514,7 +2513,9 @@ mod tests {
             loaded.gui.unwrap(),
             options,
             settings,
-            Audio::silent(&root),
+            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+                root.clone(),
+            )),
             None,
         )
         .unwrap();
@@ -2554,7 +2555,8 @@ mod tests {
         };
         run(&mut game, "scoreboard objectives add h166 dummy").unwrap();
         run(&mut game, "scoreboard players set #ran h166 -99").unwrap();
-        game.reload_datapacks(false);
+        game.reload_datapacks(false, &game.level.enabled_features.clone())
+            .unwrap();
         assert!(!game.fns.store.functions.contains_key("h166:novar"));
         assert!(
             game.fns

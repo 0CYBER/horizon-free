@@ -1290,7 +1290,7 @@ mod attach_tests {
 
     /// A game with resources but no level: a test pushes the mobs it needs
     /// and drives the lead code alone.
-    fn game() -> super::Game<'static> {
+    fn game(resources: &mut Option<std::sync::Arc<crate::game::Resources>>) -> super::Game<'_> {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
         let loaded = load_resources(
@@ -1309,9 +1309,9 @@ mod attach_tests {
         let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
         options.resources = root.clone();
         options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
-        let res = loaded.resources;
+        let res = resources.insert(loaded.resources);
         let mut game = super::Game::new(
-            &res,
+            res,
             loaded.pack,
             loaded.gui.unwrap(),
             options,
@@ -1348,7 +1348,8 @@ mod attach_tests {
     fn a_lead_attaches_within_the_species_own_snap_distance() {
         use horizon_client::mobs::{Mob, Species};
 
-        let mut game = game();
+        let mut resources = None;
+        let mut game = game(&mut resources);
         for (id, kind, species) in [
             (1, "minecraft:happy_ghast", Species::HappyGhast),
             (2, "minecraft:cow", Species::Cow),
@@ -1392,7 +1393,8 @@ mod attach_tests {
             leash::{Holder, Pending},
         };
 
-        let mut game = game();
+        let mut resources = None;
+        let mut game = game(&mut resources);
         let kind = game
             .res
             .mob_types()

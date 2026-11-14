@@ -8,7 +8,7 @@ use super::*;
 #[test]
 #[ignore = "daily"]
 fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
-    use horizon_core::random::{EntityRandom, LegacyRandom, LevelRandom, RandomSource};
+    use horizon_core::random::{LegacyRandom, LevelRandom, RandomSource};
     let mut resources = None;
     let mut game = crate::game::game_tests::tests::server_game(&mut resources);
     let kind = game
@@ -48,7 +48,7 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
         game.next_entity = 10_000 + 4 * i;
         for (id, variant) in [(part, 0u8), (mate_id, 1)] {
             let mut m = Mob::new(id, kind.clone(), Vec3::new(8.5, 64.0, 8.5), 0.0);
-            m.random = EntityRandom::own(LegacyRandom::new(parent_seed + i64::from(id)));
+            m.random = LegacyRandom::new(parent_seed + i64::from(id));
             m.extra.variant = variant;
             m.extra.in_love = 600;
             game.mobs.push(m);
@@ -86,7 +86,11 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
         );
         // The parent's stream ends where vanilla's does: the coin, then
         // finalizeSpawnChildFromBreeding's 1-to-7 roll.
-        if game.ui.rules.bool("mob_drops") {
+        if game
+            .ui
+            .rules
+            .bool_at(horizon_client::gamerules::vanilla::MOB_DROPS)
+        {
             let _ = parent.next_int_bound(7);
         }
         let mut drawn = game

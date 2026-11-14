@@ -16,7 +16,6 @@ fn select(game: &mut Game<'_>, text: &str) -> HashSet<Target> {
 }
 
 fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -> Game<'a> {
-    use crate::game::Game;
     use horizon_client::motion::PlayerMotion;
     let mut game = crate::game::game_tests::tests::server_game(resources);
     game.build_registries();
