@@ -8,13 +8,13 @@ A comment on an issue, on its first line:
 
     /claim             assigns the commenter (GitHub lets an issue's commenters be assigned, no role needed)
     /unclaim           unassigns the commenter
-    /unclaim @login    Ludovic and the trusted reviewers (.github/trusted-reviewers.txt) release someone else's claim
+    /unclaim @login    the council and the trusted reviewers (.github/trusted-reviewers.txt) release another's claim
 
 An assigned issue is taken, and so is one claimed on Discord (Kira's `in progress` label). Trackers and proposals
 (labels `tracker`, `proposal`, `not claimable`, set by maintainers) are never claimed whole. Refused with a one-line
 answer: a pull request (claim the issue it fixes), a closed or locked issue, an issue someone else holds, more than
-8 open claims at once, not counting issues a pull request already fixes (Ludovic and the trusted reviewers have no
-limit). A success answers with a 👍 on the comment; the assignment shows in the thread.
+8 open claims at once, not counting issues a pull request already fixes (the council and the trusted reviewers have
+no limit). A success answers with a 👍 on the comment; the assignment shows in the thread.
 A claim made here is released after 5 days unless an open pull request links the issue (`Fixes #N`, a mention, or the
 sidebar's link); assignments made by hand are never released. No code of any pull request is read or run: only the
 comment's text, its author and the API's answers, which reach this script as env vars.
@@ -79,7 +79,7 @@ def parse(body: str) -> Command | None:
 
 
 def is_team(actor: ns.Actor, reviewers: ns.Reviewers) -> bool:
-    """Ludovic, or a listed reviewer while the list isn't paused. By numeric ID, never by login."""
+    """A council member, or a listed reviewer while the list isn't paused. By numeric ID, never by login."""
     return ns.is_owner(actor) or (reviewers.listed(actor.id) and not reviewers.paused)
 
 
@@ -205,7 +205,7 @@ def run(api, cmd: Command, actor: ns.Actor, number: int, reviewers: ns.Reviewers
         return None
     who = cmd.who or login
     if who.lower() != login.lower() and not is_team(actor, reviewers):
-        raise Refused(f"Only Ludovic and the trusted reviewers in `{ns.REVIEWERS}` release someone else's claim.")
+        raise Refused(f"Only the council and the trusted reviewers in `{ns.REVIEWERS}` release someone else's claim.")
     if who.lower() not in held:
         raise Refused("You don't hold this issue." if who.lower() == login.lower() else f"`{safe(who)}` doesn't hold this issue.")
     real = next(h for h in holders if h.lower() == who.lower())

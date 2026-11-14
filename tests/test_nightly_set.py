@@ -72,7 +72,7 @@ class NoReviewNeededTests(unittest.TestCase):
 
     def test_a_guarded_file_is_still_refused(self):
         for text in ("/nightly add 1", "/nightly dry-run 1"):
-            with self.assertRaisesRegex(ns.Refused, "only Ludovic merges"):
+            with self.assertRaisesRegex(ns.Refused, "only the council merges"):
                 run({}, text, "kacpherek", pr(1, files=["crates/horizon-world/src/lib.rs", ".github/CODEOWNERS"]))
 
     def test_the_other_guards_stay(self):
@@ -144,14 +144,42 @@ class AllowTests(unittest.TestCase):
         with self.assertRaises(ns.Refused):
             ns.authorize(actor("kacpherek"), reviewers)
 
-    def test_no_owner_id_means_no_owner(self):
-        saved = ns.OWNER_ID
+    def test_no_owner_id_and_no_council_means_no_owner(self):
+        saved = ns.OWNER_ID, ns.COUNCIL_IDS
         try:
-            ns.OWNER_ID = None
+            ns.OWNER_ID, ns.COUNCIL_IDS = None, frozenset()
             self.assertFalse(ns.is_owner(ns.Actor("ludovic111", LUDOVIC_ID)))
             self.assertFalse(ns.is_owner_id(None))
         finally:
-            ns.OWNER_ID = saved
+            ns.OWNER_ID, ns.COUNCIL_IDS = saved
+
+    def test_every_council_member_holds_the_owner_powers(self):
+        council = ns.read_council("# the council\n54669067 kacpherek  # a note\nnot-an-id someone\nrdbtCVS\n12 a b\n")
+        self.assertEqual(council, frozenset({54669067}), "only `<id> <login>` lines count")
+        saved = ns.COUNCIL_IDS
+        try:
+            ns.COUNCIL_IDS = council
+            member = ns.Actor("kacpherek", 54669067)
+            self.assertTrue(ns.is_owner(member))
+            paused = ns.read_reviewers("paused\n")
+            ns.authorize(member, paused)  # a council member isn't stopped by the reviewers' pause
+            with self.assertRaises(ns.Refused):
+                ns.authorize(ns.Actor("kacpherek-imposter", 54669068), paused)
+        finally:
+            ns.COUNCIL_IDS = saved
+
+    def test_the_council_file_on_main_reads_whole(self):
+        text = (ROOT / ns.COUNCIL).read_text()
+        lines = [line for line in text.splitlines() if line.split("#", 1)[0].strip()]
+        self.assertEqual(len(ns.read_council(text)), len(lines), "every member line is `<id> <login>`")
+        self.assertEqual(ns.COUNCIL_IDS, ns.read_council(text))
+
+    def test_the_commands_workflows_fetch_the_council_file(self):
+        # They check out main sparsely: a file left out of the list reads as missing, and the council loses its powers.
+        for name in ("nightly-command", "triage-command", "claim-command"):
+            text = (ROOT / ".github" / "workflows" / f"{name}.yml").read_text()
+            checkout = text[text.index("sparse-checkout: |"):text.index("sparse-checkout-cone-mode")]
+            self.assertIn(ns.COUNCIL, checkout, name)
 
     def test_paused_stops_reviewers_not_ludovic(self):
         reviewers = ns.read_reviewers(self.LIST + "paused  # Ludovic, 2026-10-29\n")

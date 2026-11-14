@@ -122,7 +122,7 @@ run there (parity has none). It is also a parity host (`playhorizon` in `tools/p
 
 Pull requests go through the merge queue, which squashes each one into a single commit titled with the pull
 request's title and number (`kind(area): what changes (#123)`); never `gh pr merge --auto`. Branch protection on main
-requires `verify` for everyone, and Ludovic's review for the files `.github/CODEOWNERS` lists (what builds, signs
+requires `verify` for everyone, and a council member's review (team `council`) for the files `.github/CODEOWNERS` lists (what builds, signs
 and ships releases). Branches don't have to be up to date with main: main's own `checks` run catches the rare
 semantic conflict.
 
@@ -452,7 +452,7 @@ commit (main's newest `checks` or `parity-main` run failed) builds nothing. A ni
 reviewer or Ludovic can pick any open pull request to main, reviewed or not (Ludovic, 2026-10-30, at the Team's
 request, because they were often blocked on the launcher; from 2026-10-28 it needed an approving review at the
 head that is built). The guards stay: the pull request must be open and target main, it must leave the
-CODEOWNERS-guarded files alone, the sets and builds stay capped, `paused` stops the reviewers, Ludovic's `remove`
+CODEOWNERS-guarded files alone, the sets and builds stay capped, `paused` stops the reviewers, the council's `remove`
 sticks, and the build runs without secrets. Each pull request is built at the head it was picked at; a push after
 the pick waits until someone picks it again (`/nightly add`).
 
@@ -486,20 +486,20 @@ Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and for Ludovic, with 
   than 60 actions per reviewer in 24 hours (counted from the workflow's own comments).
 - **Safety.** Same as `/nightly`: main's copy of the workflow runs, no pull request's code is checked out or run,
   the comment reaches the script as env vars, and the token has `issues` and `pull-requests` write only.
-- **Ludovic stays in charge.** A one-line pull request removing a reviewer's line revokes it as soon as it merges
-  (the file is his under CODEOWNERS). A line `paused` stops `/nightly`, the triage commands and the reviewers' claim
-  powers for every reviewer; his own still work.
+- **The council stays in charge.** A one-line pull request removing a reviewer's line revokes it as soon as it merges
+  (the council reviews the file under CODEOWNERS). A line `paused` stops `/nightly`, the triage commands and the
+  reviewers' claim powers for every reviewer; the council's own still work.
 - **Accounts, not names.** Each line is `<numeric GitHub ID> <login>`, and every command decides by the comment
   author's ID (`AUTHOR_ID`, from `github.event.comment.user.id`), never by the login: GitHub hands a renamed or deleted
-  account's login to whoever claims it next, while an ID is never reused. Ludovic is `OWNER_ID` in
-  `tools/ci/nightly_set.py`. A line in any other form, a bare login included, grants nothing.
+  account's login to whoever claims it next, while an ID is never reused. The council's members are listed the same way in `.github/council.txt` (and the founder is `OWNER_ID` in
+  `tools/ci/nightly_set.py`); each holds these owner powers. A line in any other form, a bare login included, grants nothing.
   `python3 tools/ci/resolve_reviewer_ids.py` fills in IDs for new lines; `--check` reports a listed ID whose login
   changed (a rename to look at) or whose account is gone.
 
 ### Trusted reviewers pick the Nightly's pull requests
 
 The Nightly is where contributors test pull requests before the gate. The trusted reviewers listed in
-`.github/trusted-reviewers.txt` (kacpherek, rdbtCVS and Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and Ludovic pick them with a
+`.github/trusted-reviewers.txt` (kacpherek, rdbtCVS and Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and the council pick them with a
 comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `tools/ci/nightly_set.py`):
 
 ```text
@@ -526,17 +526,17 @@ comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `
 - **Old builds.** The scheduled run deletes the `nightly/build-*` branches older than 7 days (Ludovic,
   2026-10-27), and lists each in its summary. It never deletes the newest build, a build a published `nightly` or
   `nightly-<date>` release points to, or any other branch (`nightly.py prune-builds`).
-- **Refused.** A pull request that changes a path CODEOWNERS gives to Ludovic (`.github/`, `tools/ci/`, the
+- **Refused.** A pull request that changes a path CODEOWNERS gives to the council (`.github/`, `tools/ci/`, the
   signing and update code, `launcher/src/backend.rs`, `launcher/links.json`…), more than 30 in a set, and more than
   12 builds a day (the scheduled one always runs; 6 until 2026-10-28).
 - **No repository role.** Reviewers need no permission on the repository: the list file and the workflow are the
   whole of it.
-- **Ludovic stays in charge.**
-  - Ludovic's `/nightly clear` or `/nightly remove` always applies. A pull request he removed can only come back
-    when he adds it.
+- **The council stays in charge.**
+  - A council member's `/nightly clear` or `/nightly remove` always applies. A pull request the council removed can
+    only come back when a council member adds it.
   - A one-line pull request removing a login from `.github/trusted-reviewers.txt` revokes it as soon as it merges
-    (the file is his under CODEOWNERS).
-  - A line `paused` in that file stops every reviewer's `/nightly` (and triage commands); his own still work.
+    (the council reviews the file under CODEOWNERS).
+  - A line `paused` in that file stops every reviewer's `/nightly` (and triage commands); the council's still work.
   - Main and the gate don't change, but a pick reaches every player with the next Nightly.
 
 - **Jobs.** `pick` assembles the commit and writes the notes: what reached main since the previous Nightly (New and
