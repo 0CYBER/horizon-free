@@ -483,6 +483,33 @@ impl Hub {
         Some(window)
     }
 
+    /// Replaces what the guest's open native menu `window` shows with `items` (padded to its
+    /// slots, extra ones dropped) and sends them at once, as
+    /// `AbstractContainerMenu.sendAllDataToRemote`: the screen stays open. False when that window
+    /// isn't the guest's open native menu.
+    pub fn set_native_menu_items(
+        &mut self,
+        conn: u32,
+        window: i32,
+        mut items: Vec<Option<ItemStack>>,
+    ) -> bool {
+        let Some(i) = self.guests.iter().position(|g| g.conn == conn) else {
+            return false;
+        };
+        let Some(size) = self.guests[i]
+            .menu
+            .as_ref()
+            .filter(|m| m.slots == Slots::Native && m.window == window)
+            .map(|m| m.size)
+        else {
+            return false;
+        };
+        items.resize(size, None);
+        self.guests.update(i, |g| g.native_menu = items.clone());
+        self.send_menu_content(i, items);
+        true
+    }
+
     /// Open a trading window for a guest (`Merchant.openTradingScreen`):
     /// its id, or None when the menu type is unknown.
     pub fn open_merchant_window(&mut self, conn: u32, title: Tag) -> Option<i32> {
