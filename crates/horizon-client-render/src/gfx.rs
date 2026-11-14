@@ -192,6 +192,7 @@ fn packed_wanted() -> bool {
 pub(crate) mod animate;
 mod arena;
 pub mod capture;
+mod celestial;
 mod census;
 pub mod compositor;
 pub(crate) mod core_lines;
@@ -1211,7 +1212,7 @@ pub struct Renderer {
     world_text_pipeline: wgpu::RenderPipeline,
     fluid_pipeline: wgpu::RenderPipeline,
     terrain_model_pipelines: [wgpu::RenderPipeline; 3],
-    celestial_pipeline: wgpu::RenderPipeline,
+    celestial: celestial::Celestial,
     celestial_buffer: wgpu::Buffer,
     end_sky: end_sky::EndSky,
     stars: stars::Stars,
@@ -4262,58 +4263,13 @@ impl Renderer {
             },
             ..additive_descriptor
         });
-        let celestial_pipeline = kept.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Celestial bodies"),
-            layout: Some(&entity_layout),
-            vertex: wgpu::VertexState {
-                module: &entity_shader,
-                entry_point: Some("vs_entity"),
-                compilation_options: Default::default(),
-                buffers: &entity_vertex,
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Always),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &entity_shader,
-                entry_point: Some("fs_sky_celestial"),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &linear_blend::frame_constants(frame_format, linear_light),
-                    ..Default::default()
-                },
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: frame_format,
-                    // RenderPipelines.CELESTIAL: additive (src alpha, one), with
-                    // the colour premultiplied in fs_sky_celestial. Its alpha is
-                    // how much a texel adds: HDR output (hdr.wgsl) lets the sun's
-                    // and moon's discs shine; nothing else reads the frame's alpha.
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let celestial = celestial::Celestial::new(
+            &kept,
+            &entity_layout,
+            &entity_shader,
+            &entity_vertex,
+            (frame_format, linear_light),
+        );
         drop(entity_step);
         // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
         // (repeat, linear minification with mipmaps, nearest magnification).
@@ -4924,7 +4880,7 @@ impl Renderer {
             world_text_pipeline,
             fluid_pipeline,
             terrain_model_pipelines,
-            celestial_pipeline,
+            celestial,
             celestial_buffer,
             end_sky: end_sky::EndSky::default(),
             stars,
@@ -10365,7 +10321,7 @@ impl Renderer {
                     self.panorama.draw(&mut pass);
                     pass.set_bind_group(0, &self.group, &[]);
                 } else if celestial_vertices > 0 || frame.end_sky {
-                    pass.set_pipeline(&self.celestial_pipeline);
+                    pass.set_pipeline(&self.celestial.added);
                     pass.set_bind_group(0, &self.entity_group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     if frame.end_sky {
@@ -10374,7 +10330,7 @@ impl Renderer {
                         if self.custom_sky.is_drawing() && !pack_draws_sky && self.native.is_none()
                         {
                             self.custom_sky.draw(&mut pass);
-                            pass.set_pipeline(&self.celestial_pipeline);
+                            pass.set_pipeline(&self.celestial.added);
                             pass.set_bind_group(0, &self.entity_group, &[]);
                         }
                     }
@@ -10387,8 +10343,14 @@ impl Renderer {
                                 .as_ref()
                                 .is_some_and(|n| n.sky.is_some() && !n.vanilla_sun);
                         let first = if own_sun { 6 } else { 0 };
+                        // A resource pack's core/sky isn't vanilla's sky times the sky's
+                        // lift, which the sun's disc pass assumes: today's add there.
+                        let lifted = hdr_gain
+                            && self.hdr.as_ref().is_some_and(|h| h.lighting)
+                            && !self.core_sky.as_ref().is_some_and(|c| c.draws_disc());
+                        let bodies = first..(celestial_vertices as u32 / 4) * 6;
                         pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
-                        pass.draw_indexed(first..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                        self.celestial.draw_bodies(&mut pass, lifted, bodies);
                     }
                     pass.set_bind_group(0, &self.group, &[]);
                 }

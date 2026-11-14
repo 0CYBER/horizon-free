@@ -150,7 +150,7 @@ Each shader that marks the frame today writes the light instead:
 - **HDR lighting** (light levels 11 to 15, up to 4 times): the lightmap going past 1, which is what its alpha means
   now.
 - **Where:** terrain and fluids (`terrain.wgsl`, `mesher/fluid.rs`, distant terrain in `lod/mesh.rs`, the visibility
-  buffer), particles (`particles.rs`), the sun and moon (`fs_sky_celestial`), entities, dropped and held items
+  buffer), particles (`particles.rs`), the sun and moon (`fs_sky_celestial`, `fs_sky_sun`), entities, dropped and held items
   (`entity.wgsl`, `dynamic_light.rs`) and lightning (`gfx/lightning.rs`).
 - **The hand** draws at gain 1, as it stays at the world's brightness today, and before `keep_world` (see the HUD
   below), so it needs no mark.
@@ -309,8 +309,13 @@ Behind `HORIZON_HDR_FRAME=float` until the last step, each a small pull request:
      writes, and the world is mastered for a 1000-nit display at ITU-R BT.2408's 203-nit reference white, as HDR10
      content usually is: S = 1000/203 (4.93). The tiers multiply their brightest pixels by 1.6 (low), 2.4
      (incandescent), 2.8 (bright) and 4.0 (very bright), and HDR lighting the strongest-lit surfaces by 3.0
-     (`gfx/hdr.rs` `TIERS`, `SUNLIT_GAIN`, `SCENE_PEAK`). The curve holds light above S at S, keeping its hue (where
-     the sky adds onto the sun), then maps S onto the display's peak T with BT.2390's EETF in PQ on the brightest
+     (`gfx/hdr.rs` `TIERS`, `SUNLIT_GAIN`, `SCENE_PEAK`). The sun's disc shows vanilla's colour, sky plus sun
+     clipped at white channel by channel, with white at S (`gfx/celestial.rs`, `fs_sky_sun`). The sky under it is
+     vanilla's times one gain (HDR lighting's), so a blend of the frame by a weight and a min at S give it exactly;
+     added in the frame's gamma instead, sky and sun passed S and the hold flattened the disc in the sky's hue. The
+     very bright tier's lift weight takes both from the plain add, so the texture's faint halo and the moon add onto
+     the sky as before. The curve holds light above S at S, keeping its hue (where something adds onto the disc, or the moon
+     onto a bright sky), then maps S onto the display's peak T with BT.2390's EETF in PQ on the brightest
      channel: the identity where T reaches S, that is where Peak Brightness is at least 1000/203 times Paper White,
      so at a paper white of 203 a display at 1000 nits or more shows the scene as written and one above 1000 shows
      it as at 1000. Light Horizon doesn't lift (HDR Lighting off, the title, a 0.2 pack's own) has

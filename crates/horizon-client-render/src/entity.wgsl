@@ -462,6 +462,9 @@ fn celestial_color(in: Out) -> vec4<f32> {
 // tier, so the sun's and moon's discs shine; the dark rest of their quads and
 // the dim End sky stay unmarked.
 @fragment fn fs_sky_celestial(in: Out) -> @location(0) vec4<f32> {
+    return sky_celestial(in);
+}
+fn sky_celestial(in: Out) -> vec4<f32> {
     let color = celestial_color(in);
     let added = color.rgb * color.a;
     // The sun at the brightest tier, the moon at its own (in.tier); geometry that sets
@@ -478,6 +481,34 @@ fn celestial_color(in: Out) -> vec4<f32> {
     if HDR_WRITE_LIGHT { return vec4(frame_stored(color).rgb * color.a, color.a); }
     if !full { return vec4(added, 0.0); }
     return vec4(added, 1.0 - hdr_mark(tier, y));
+}
+
+// The sun in Horizon's lifted world (gfx/celestial.rs): its disc shows vanilla's colour, the sky
+// plus the sun clipped at white channel by channel, with white at the scene's peak S. The sky
+// under it is vanilla's times one gain (sky_finished's lift), so in the frame's encoding that
+// is min(S * sun + S / sky gain * frame, S): this pass blends src + frame * alpha, then
+// fs_sky_sun_clip takes the min. Added in the frame's gamma instead, sky and sun pass S and the
+// tone curve's hold flattens the disc in the sky's hue. w is the very bright tier's lift by the
+// texel's brightness (hdr_mark's): from 0 (sun.png's faint halo, the moon) to 1 both passes go
+// smoothly from fs_sky_celestial's add to the clipped disc.
+fn sun_weight(in: Out, added: vec3<f32>) -> f32 {
+    let w = smoothstep(globals.hdr_windows[0][3], globals.hdr_windows[1][3], brightness(added));
+    return select(0.0, w, in.tier == 4u);
+}
+@fragment fn fs_sky_sun(in: Out) -> @location(0) vec4<f32> {
+    let color = celestial_color(in);
+    let added = color.rgb * color.a;
+    let w = sun_weight(in, added);
+    let peak = globals.hdr_settings.x;
+    let sun = hdr_written(added, 0.0, globals.hdr_settings, vec4(peak));
+    let sky_gain = hdr_written(vec3(1.0), 1.0 - 0.24 * globals.hdr_light.y, globals.hdr_settings, globals.hdr_gains).r;
+    return vec4(mix(sky_celestial(in).rgb, sun, w), mix(1.0, pow(peak, 1.0 / 2.2) / sky_gain, w));
+}
+// The clip at S in the frame's encoding where w is 1, none (half float's largest) where it is 0.
+@fragment fn fs_sky_sun_clip(in: Out) -> @location(0) vec4<f32> {
+    let color = celestial_color(in);
+    let peak = pow(globals.hdr_settings.x, 1.0 / 2.2);
+    return vec4(vec3(peak / max(sun_weight(in, color.rgb * color.a), peak / 65504.0)), 1.0);
 }
 
 // RenderPipelines.ENERGY_SWIRL (entity.fsh with EMISSIVE and NO_OVERLAY): the sprite, scrolled by
