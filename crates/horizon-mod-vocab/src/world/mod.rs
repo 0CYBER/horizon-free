@@ -4,6 +4,7 @@ pub(crate) mod advancement_progress;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod biome;
+pub(crate) mod biome_key;
 pub(crate) mod biome_modifier;
 pub(crate) mod biome_region;
 pub(crate) mod biome_source;

@@ -5,6 +5,10 @@ use crate::*;
 /// and reached through [`Host`].
 #[horizon_mod_api_macros::host_area]
 pub trait KeysHost {
+    /// Side: server. The biome in the installed world registry, or None on a client,
+    /// before world data is installed, or for an unknown id. Reacquire after reload.
+    #[access(WorldOnly)]
+    fn biome_key(&self, id: &str) -> Option<BiomeKey>;
     /// Side: both.
     /// The key of the block named `id`, for a name that only arrives at run time (data, config,
     /// a command, a network message). `id` is the full registry name, `minecraft:stone` or
@@ -62,6 +66,10 @@ pub trait KeysHost {
 #[doc(hidden)]
 #[horizon_mod_api_macros::host_area]
 pub trait KeysBackend {
+    /// Side: server. Canonical biome id in the installed world generation.
+    /// A token from another world or reload returns `BiomeKeyError::WrongGeneration`.
+    #[access(WorldOnly)]
+    fn biome_key_id(&self, key: BiomeKey) -> Result<String, BiomeKeyError>;
     /// Side: both.
     /// The canonical block id retained by the load-owned registration slot. An invalid slot
     /// is a boundary error, including when a wasm guest supplies it.

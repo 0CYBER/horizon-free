@@ -32,7 +32,7 @@ fn folder(registry: &str) -> String {
 
 /// The registries mods read through a typed key (`DataMapEntry`): always
 /// known, even where the command registries list no ids.
-const TYPED: [&str; 8] = [
+const TYPED: [&str; 9] = [
     "minecraft:item",
     "minecraft:block",
     "minecraft:fluid",
@@ -41,6 +41,7 @@ const TYPED: [&str; 8] = [
     "minecraft:enchantment",
     "minecraft:block_entity_type",
     "minecraft:villager_profession",
+    "minecraft:worldgen/biome",
 ];
 
 /// The registries a data load resolves maps against.
@@ -166,6 +167,7 @@ pub(crate) enum MapValues {
 }
 #[derive(Default)]
 pub(crate) struct DataMaps {
+    pub(super) biome_keys: mod_api::__private::BiomeKeys,
     maps: BTreeMap<String, HashMap<String, MapValues>>,
     pub(super) mob_maps: std::sync::Arc<horizon_client::neoforge_mob_maps::NeoForgeMobMaps>,
 }
@@ -275,6 +277,10 @@ fn apply_file(
 }
 
 impl DataMaps {
+    pub(crate) fn with_biome_keys(mut self, keys: mod_api::__private::BiomeKeys) -> Self {
+        self.biome_keys = keys;
+        self
+    }
     /// The types' values from `files` (the server's tables' pack files, in
     /// pack order, mods' below the packs'), ids and tags resolved against
     /// `registries`. A type for a registry the game doesn't name, or with a
@@ -457,7 +463,7 @@ impl Game<'_> {
 impl Game<'_> {
     /// The server's merged data maps, none unless this is a server whose
     /// tables were built from packs and mods' files.
-    fn loaded_data_maps(&self) -> Result<&DataMaps, mod_api::DataMapError> {
+    pub(super) fn loaded_data_maps(&self) -> Result<&DataMaps, mod_api::DataMapError> {
         if self.serving.is_none() && self.options.dedicated.is_none() {
             return Err(mod_api::DataMapError::Unavailable);
         }

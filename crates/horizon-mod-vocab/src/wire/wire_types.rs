@@ -1675,6 +1675,20 @@ impl crate::wire::Wire for crate::AttachmentWrite {
     }
 }
 
+// Biome keys carry a slot and an engine-owned generation. Validate on the receiving host.
+impl Wire for crate::BiomeKey {
+    layout_fields!("slot" => u32, "generation" => u64);
+    const LAYOUT_SEED: u64 = crate::wire::layout_seed("crate::BiomeKey");
+    const MIN: usize = <u32 as Wire>::MIN + <u64 as Wire>::MIN;
+    fn put(&self, out: &mut Writer) {
+        out.put(&self.0);
+        out.put(&self.1);
+    }
+    fn take(input: &mut Reader<'_>) -> Result<Self, WireError> {
+        Ok(Self(input.take()?, input.take()?))
+    }
+}
+
 #[cfg(test)]
 #[path = "wire_layout_tests.rs"]
 mod layout_tests;
