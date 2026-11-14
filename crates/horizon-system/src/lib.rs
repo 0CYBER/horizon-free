@@ -765,42 +765,153 @@ pub fn load_average() -> Option<f64> {
     }
 }
 
-/// Resident memory of a process, in bytes (macOS, Linux).
+/// Resident memory of a process, in bytes: its working set on Windows.
 pub fn rss_bytes(pid: u32) -> Option<u64> {
-    if cfg!(target_os = "macos") {
-        return command_output("ps", &["-o", "rss=", "-p", &pid.to_string()])?
+    #[cfg(windows)]
+    {
+        windows_process::rss_bytes(pid)
+    }
+    #[cfg(not(windows))]
+    {
+        if cfg!(target_os = "macos") {
+            return command_output("ps", &["-o", "rss=", "-p", &pid.to_string()])?
+                .parse::<u64>()
+                .ok()
+                .map(|kb| kb * 1024);
+        }
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+        line.split_whitespace()
+            .nth(1)?
             .parse::<u64>()
             .ok()
-            .map(|kb| kb * 1024);
+            .map(|kb| kb * 1024)
     }
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
-    line.split_whitespace()
-        .nth(1)?
-        .parse::<u64>()
-        .ok()
-        .map(|kb| kb * 1024)
 }
 
-/// CPU time a process has used, user and system, in seconds (macOS, Linux).
+/// CPU time a process has used, user and system, in seconds.
 pub fn cpu_seconds(pid: u32) -> Option<f64> {
-    if cfg!(target_os = "macos") {
-        // "[[dd-]hh:]mm:ss.cc"
-        let time = command_output("ps", &["-o", "time=", "-p", &pid.to_string()])?;
-        let (rest, days) = match time.split_once('-') {
-            Some((d, rest)) => (rest.to_owned(), d.parse::<f64>().ok()?),
-            None => (time, 0.0),
-        };
-        let seconds = rest.split(':').try_fold(0.0, |acc, part| {
-            part.parse::<f64>().ok().map(|v| acc * 60.0 + v)
-        })?;
-        return Some(days * 86_400.0 + seconds);
+    #[cfg(windows)]
+    {
+        windows_process::cpu_seconds(pid)
     }
-    // utime and stime, fields 14 and 15, in clock ticks (100 per second on Linux).
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
-    let ticks: f64 = fields.get(11)?.parse::<f64>().ok()? + fields.get(12)?.parse::<f64>().ok()?;
-    Some(ticks / 100.0)
+    #[cfg(not(windows))]
+    {
+        if cfg!(target_os = "macos") {
+            // "[[dd-]hh:]mm:ss.cc"
+            let time = command_output("ps", &["-o", "time=", "-p", &pid.to_string()])?;
+            let (rest, days) = match time.split_once('-') {
+                Some((d, rest)) => (rest.to_owned(), d.parse::<f64>().ok()?),
+                None => (time, 0.0),
+            };
+            let seconds = rest.split(':').try_fold(0.0, |acc, part| {
+                part.parse::<f64>().ok().map(|v| acc * 60.0 + v)
+            })?;
+            return Some(days * 86_400.0 + seconds);
+        }
+        // utime and stime, fields 14 and 15, in clock ticks (100 per second on Linux).
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+        let ticks: f64 =
+            fields.get(11)?.parse::<f64>().ok()? + fields.get(12)?.parse::<f64>().ok()?;
+        Some(ticks / 100.0)
+    }
+}
+
+/// A process's working set and CPU time from kernel32, by its id: this process, or another the
+/// caller started (the dedicated server's game, the benchmark's client).
+#[cfg(windows)]
+mod windows_process {
+    use std::ffi::c_void;
+
+    /// Enough for `GetProcessTimes` and `K32GetProcessMemoryInfo` (Windows 7 and later).
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+
+    /// `PROCESS_MEMORY_COUNTERS`.
+    #[repr(C)]
+    #[derive(Default)]
+    struct MemoryCounters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+
+    /// `FILETIME`: 100 ns units, as two halves.
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+
+    impl FileTime {
+        fn seconds(&self) -> f64 {
+            ((u64::from(self.high) << 32) | u64::from(self.low)) as f64 / 1e7
+        }
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+        fn K32GetProcessMemoryInfo(
+            process: *mut c_void,
+            counters: *mut MemoryCounters,
+            size: u32,
+        ) -> i32;
+        fn GetProcessTimes(
+            process: *mut c_void,
+            creation: *mut FileTime,
+            exit: *mut FileTime,
+            kernel: *mut FileTime,
+            user: *mut FileTime,
+        ) -> i32;
+    }
+
+    /// An open process handle, closed when dropped.
+    struct Process(*mut c_void);
+
+    impl Process {
+        fn open(pid: u32) -> Option<Self> {
+            // SAFETY: no pointers; a null handle is the failure.
+            let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+            (!handle.is_null()).then_some(Self(handle))
+        }
+    }
+
+    impl Drop for Process {
+        fn drop(&mut self) {
+            // SAFETY: the handle OpenProcess returned, closed once.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    pub(super) fn rss_bytes(pid: u32) -> Option<u64> {
+        let process = Process::open(pid)?;
+        let mut counters = MemoryCounters {
+            cb: size_of::<MemoryCounters>() as u32,
+            ..MemoryCounters::default()
+        };
+        // SAFETY: a live handle and a counters struct of the size `cb` says.
+        let ok = unsafe { K32GetProcessMemoryInfo(process.0, &mut counters, counters.cb) } != 0;
+        ok.then_some(counters.working_set_size as u64)
+    }
+
+    pub(super) fn cpu_seconds(pid: u32) -> Option<f64> {
+        let process = Process::open(pid)?;
+        let mut times: [FileTime; 4] = Default::default();
+        let [creation, exit, kernel, user] = &mut times;
+        // SAFETY: a live handle and four FILETIME outputs.
+        let ok = unsafe { GetProcessTimes(process.0, creation, exit, kernel, user) } != 0;
+        ok.then(|| kernel.seconds() + user.seconds())
+    }
 }
 
 /// The GPU's maker from its name and the vendor ID wgpu reports (0: none, as on Metal).
@@ -832,6 +943,43 @@ pub fn gpu_vendor(name: &str, vendor_id: u32) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// This process and a child it started have resident memory and CPU time, which grows with
+    /// work; a process that doesn't exist has neither.
+    #[test]
+    fn a_process_has_resident_memory_and_cpu_time() {
+        let me = std::process::id();
+        assert!(super::rss_bytes(me).is_some_and(|b| b > 1 << 20), "own RSS");
+        let before = super::cpu_seconds(me).expect("own CPU time");
+        let start = std::time::Instant::now();
+        let mut n = 0u64;
+        while start.elapsed() < std::time::Duration::from_millis(300) {
+            n = std::hint::black_box(n.wrapping_mul(31).wrapping_add(7));
+        }
+        let after = super::cpu_seconds(me).unwrap();
+        assert!(
+            after > before,
+            "{before} s, then {after} s after 0.3 s of work"
+        );
+        assert_eq!(super::rss_bytes(u32::MAX), None);
+        assert_eq!(super::cpu_seconds(u32::MAX), None);
+        // Another process: the dedicated server reads its game's, the benchmark its client's.
+        let mut child = if cfg!(windows) {
+            std::process::Command::new("ping")
+                .args(["-n", "4", "127.0.0.1"])
+                .stdout(std::process::Stdio::null())
+                .spawn()
+        } else {
+            std::process::Command::new("sleep").arg("3").spawn()
+        }
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let (rss, cpu) = (super::rss_bytes(child.id()), super::cpu_seconds(child.id()));
+        child.kill().ok();
+        child.wait().ok();
+        assert!(rss.is_some_and(|b| b > 0), "child RSS {rss:?}");
+        assert!(cpu.is_some(), "child CPU time");
+    }
+
     #[test]
     fn an_arm64_kernels_cpuinfo_names_the_core_by_implementer_and_part() {
         // An arm64 kernel prints no `model name` (a Neoverse-N1 and a Cortex-A72 Pi 4).
