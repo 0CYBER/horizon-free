@@ -4894,11 +4894,8 @@ mod text_tests {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let drawn = |argb: u32| {
                 let mut batch = HudBatch::scratch([640, 480]);
-                crate::game::host::draw::GameDrawContext {
-                    game,
-                    surface: &mut batch,
-                }
-                .text("Hi", [4.0, 4.0], argb, false);
+                crate::game::host::draw::GameDrawContext::new(game, &mut batch)
+                    .text("Hi", [4.0, 4.0], argb, false);
                 batch.vertices
             };
             let opaque = drawn(0xFFFF_FFFF);
