@@ -24,6 +24,15 @@ must be a `namespace:path` resource location of at most 256 bytes, and the serve
 most 256 distinct registries; a usage past either is left out, with the reason in the log. Block positions are resolved and floored
 from the source's world, relative or local coordinates without loading chunks.
 
+`id` is a free identifier: vanilla's `minecraft:resource_location` argument, lowercase letters,
+digits and `_ - . : /`, canonicalised to `namespace:path` with `minecraft` when the namespace is
+left out, and checked against no registry. `Command::new("map fullrender <world:id>")` takes
+`minecraft:overworld`, `mymod:custom` and `overworld` (delivered as `minecraft:overworld`), and
+refuses an upper-case token or a second colon. The value arrives as a plain string. It completes
+nothing, as vanilla's identifier argument does: a mod that wants completions for its own
+identifiers takes the text as `Greedy` and completes the token being typed
+([below](#completing-one-token-of-a-greedy-text)).
+
 Positions, rotations, dimensions and compound tags have their own kinds, each sent to clients
 as vanilla's parser so `~`, `^` and the dimension list complete as in a vanilla command:
 
@@ -171,9 +180,9 @@ ones, and completes the choices that start with the typed text.
 
 `CommandArgumentKind::Word` takes one word of ASCII letters, digits and `_ - . +`; the
 word ends at the first other character, a space included, so a value with `:` or `/`
-needs `Greedy`, which takes the rest of the line and must be the usage's last argument.
-Players whose client does not know the type
-parse and complete the command: the server sends the argument as a Brigadier string
+needs `Greedy`, which takes the rest of the line. `suggest` receives that text as typed so
+far: one word, or the whole tail of the line up to the cursor. Players whose client does not know
+the type parse and complete the command: the server sends the argument as a Brigadier string
 of that shape with `minecraft:ask_server`, and their chat asks the server for the
 suggestions.
 
@@ -181,6 +190,36 @@ The namespaced id is in the registering mod's namespace; an id registered twice,
 name in another namespace or an empty name refuses the mods at startup, naming the
 mod. A client mod registers client command argument types the same way; they are
 available to `register_client_commands`.
+
+### Completing one token of a greedy text
+
+A `Greedy` argument holds free text, and the tokens in it are yours to split. A completion
+replaces all of that text by default, so `suggest` names the token it completes with
+`CommandSuggestion::replacing_from`, a byte offset into the prefix:
+
+```rust,ignore
+// `//replace 50%stone,50%dirt st` completes only the block being typed.
+fn suggest(&self, prefix: &str) -> Vec<CommandSuggestion> {
+    let start = prefix.rfind(' ').map_or(0, |space| space + 1);
+    ["stone", "dirt"]
+        .into_iter()
+        .filter(|block| block.starts_with(&prefix[start..]))
+        .map(|block| CommandSuggestion::new(block).replacing_from(start))
+        .collect()
+}
+```
+
+The offset reaches the player's client as the suggestion's range, so vanilla clients replace
+the same token in place and keep the text in front of it. An offset past the prefix, or inside
+a character, refuses that suggestion: the reason is logged with the type's id, the other
+suggestions stay, and nothing panics.
+
+A greedy `text` argument is the last one: no word may follow it, and a usage that puts one
+after it is left out, with the reason in the log. Such a usage is written with the free text
+last and the mod splitting what it needs from that text: `//undo <text>` for
+`//undo 1 <player>`, `/music <text>` for `/music volume 20 30`, `/corecarol <text>` for
+`/corecarol skip now`. Vanilla has no reachable node after a greedy argument either, so a
+trailing word would never be matched there.
 
 `player_command` provides player-only pre-execution cancellation (NeoForge's `CommandEvent`), including vanilla commands.
 

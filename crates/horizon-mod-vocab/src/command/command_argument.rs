@@ -65,18 +65,29 @@ impl From<CommandArgumentError> for Text {
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
 pub struct CommandSuggestion {
-    /// The text that replaces the typed prefix.
+    /// The text that replaces the typed prefix, or the part of it
+    /// [`replace_start`](Self::replace_start) sends the replacement from.
     pub text: String,
     /// An optional explanation shown beside the completion.
     pub tooltip: Option<String>,
+    /// The byte offset into the prefix where the replacement starts; `None` replaces the whole
+    /// prefix, as a completion does by default.
+    ///
+    /// A greedy text argument holds several tokens, and a player typing the last of them wants
+    /// one completion for it, not a rewrite of the rest: for the prefix `stone st` and an offset
+    /// of 6, the suggestion `stone` replaces `st` and keeps `stone ` in front of it. The offset
+    /// must be inside the prefix and on a character boundary; a suggestion this build cannot
+    /// apply is refused (reported, and left out) rather than panicking on the player's input.
+    pub replace_start: Option<usize>,
 }
 
 impl CommandSuggestion {
-    /// A completion without a tooltip.
+    /// A completion without a tooltip that replaces the whole typed prefix.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             tooltip: None,
+            replace_start: None,
         }
     }
 
@@ -85,7 +96,14 @@ impl CommandSuggestion {
         Self {
             text: text.into(),
             tooltip: Some(tooltip.into()),
+            replace_start: None,
         }
+    }
+
+    /// The same completion, replacing the prefix from byte `replace_start` on.
+    pub fn replacing_from(mut self, replace_start: usize) -> Self {
+        self.replace_start = Some(replace_start);
+        self
     }
 }
 
@@ -114,8 +132,13 @@ pub trait CommandArgumentType: Send + Sync + 'static {
 
     /// The completions for the text `prefix` being typed at this argument.
     ///
-    /// Return the values that match, in the order the chat should show them; the game keeps each
-    /// suggestion's replacement range and tooltip. An empty list leaves the input as typed.
+    /// `prefix` is the text the argument holds so far: one word's worth for
+    /// [`Word`](CommandArgumentKind::Word), and the whole tail of the line up to the cursor for
+    /// [`Greedy`](CommandArgumentKind::Greedy). Return the values that match, in the order the
+    /// chat should show them; the game keeps each suggestion's replacement range and tooltip. A
+    /// suggestion replaces the whole prefix unless it names a
+    /// [`replace_start`](CommandSuggestion::replace_start), which is how a type completes the
+    /// token being typed inside a longer greedy text. An empty list leaves the input as typed.
     ///
     /// Native and wasm results share the vanilla packet limits: completion text may contain
     /// at most 32767 UTF-16 code units; a literal tooltip may occupy at most 65535 bytes in
@@ -205,5 +228,20 @@ mod tests {
             crate::wire::Reader::decode::<CommandArgumentValue>(out.bytes()).unwrap(),
             value
         );
+    }
+
+    #[test]
+    fn a_suggestion_crosses_the_wire_with_its_replacement_start() {
+        for suggestion in [
+            CommandSuggestion::new("stone"),
+            CommandSuggestion::with_tooltip("stone", "a block").replacing_from(6),
+        ] {
+            let mut out = crate::wire::Writer::new();
+            out.put(&suggestion);
+            assert_eq!(
+                crate::wire::Reader::decode::<CommandSuggestion>(out.bytes()).unwrap(),
+                suggestion
+            );
+        }
     }
 }

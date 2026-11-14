@@ -22,10 +22,14 @@ pub enum CustomArgumentKind {
 /// One completion a registered custom argument offers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomSuggestion {
-    /// The text that replaces the typed prefix.
+    /// The text that replaces the typed prefix, or the part of it `replace_start` sends the
+    /// replacement from.
     pub text: String,
     /// An optional explanation shown beside the completion.
     pub tooltip: Option<String>,
+    /// The byte offset into the prefix where the replacement starts; `None` replaces the whole
+    /// prefix. A mod uses it to complete one token inside a greedy text argument.
+    pub replace_start: Option<usize>,
 }
 
 /// A mod's registered argument type, as the dispatcher parses and completes it.
@@ -134,6 +138,10 @@ pub enum ArgType {
     Resource(Resource),
     /// A plain identifier; suggestions come from the named list.
     Id(&'static str),
+    /// Vanilla's free identifier (`minecraft:resource_location`): a `namespace:path` of
+    /// identifier characters, canonical with the `minecraft` namespace when it is left out, with
+    /// no registry to check and nothing to suggest.
+    Identifier,
     /// ResourceArgument over a registry (the element must exist).
     Res(&'static str),
     /// ResourceKeyArgument (checked when the command runs).
@@ -1169,6 +1177,9 @@ impl ArgType {
             }
             ArgType::Word => Arg::Str(reader.read_unquoted_string().to_owned()),
             ArgType::Str => Arg::Str(reader.read_string()?),
+            // ResourceLocationArgument: the longest run of identifier characters, canonicalised
+            // to `namespace:path`; an upper-case or two-colon token is `argument.id.invalid`.
+            ArgType::Identifier => Arg::Str(read_id(reader)?),
             ArgType::Greedy => {
                 let s = reader.remaining().to_owned();
                 reader.cursor = reader.string.len();
@@ -1940,9 +1951,24 @@ impl ArgType {
             ArgType::Custom(custom) => {
                 let prefix = builder.remaining().to_owned();
                 for suggestion in (custom.suggest)(&prefix) {
+                    // A suggestion may replace only the tail of the text argument, from its
+                    // offset: a completion for the token a greedy text is typing. One that
+                    // starts past the typed text or inside a character is left out rather than
+                    // panicking where the chat applies it (the game refuses it by name first).
+                    let start = match suggestion.replace_start {
+                        Some(offset)
+                            if offset <= prefix.len() && prefix.is_char_boundary(offset) =>
+                        {
+                            builder.start + offset
+                        }
+                        Some(_) => continue,
+                        None => builder.start,
+                    };
                     match suggestion.tooltip {
-                        Some(tooltip) => builder.suggest_tooltip(suggestion.text, tooltip),
-                        None => builder.suggest(suggestion.text),
+                        Some(tooltip) => {
+                            builder.suggest_at_tooltip(start, suggestion.text, tooltip)
+                        }
+                        None => builder.suggest_at(start, suggestion.text),
                     }
                 }
             }

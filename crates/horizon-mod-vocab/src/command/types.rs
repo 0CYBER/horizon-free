@@ -5,7 +5,8 @@
 /// `pay <player:player> <amount:integer>`, `balance [player:player]`,
 /// `eco give <player:player> <amount:integer>`. Kinds: `word`, `text` (the
 /// rest of the line, last), `integer`, `number`, `boolean`, `player`, `players`,
-/// `entity`, `entities`, `item`, `block_pos`, `mod_id` (a loaded package id, delivered as a
+/// `entity`, `entities`, `item`, `block_pos`, `id` (a free `namespace:path` identifier, delivered
+/// as that canonical string), `mod_id` (a loaded package id, delivered as a
 /// string), `resource:<registry>` (an id that registry holds, delivered as `Id`:
 /// `<kind:resource:minecraft:entity_type>`), or a command argument type a mod registered with
 /// `Registrar::register_command_argument`, named by its namespaced id:

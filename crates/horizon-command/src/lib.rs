@@ -534,15 +534,7 @@ impl<'a> SuggestionsBuilder<'a> {
         self.remaining().to_lowercase()
     }
     pub fn suggest(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        if text != self.remaining() {
-            self.out.push(Suggestion {
-                range: (self.start, self.input.len()),
-                text,
-                tooltip: None,
-                int_value: None,
-            });
-        }
+        self.suggest_at(self.start, text);
     }
     /// SuggestionsBuilder.suggest(int).
     pub fn suggest_int(&mut self, value: i32) {
@@ -554,15 +546,46 @@ impl<'a> SuggestionsBuilder<'a> {
         });
     }
     pub fn suggest_tooltip(&mut self, text: impl Into<String>, tooltip: impl Into<String>) {
+        self.suggest_at_tooltip(self.start, text, tooltip);
+    }
+    /// `SuggestionsBuilder.suggest` for a replacement that starts `start` bytes into the input:
+    /// the text from there to the cursor is replaced, so a completion can apply to one token of a
+    /// longer text argument (a mod's greedy text being split into words). A `start` past the
+    /// input or inside a character suggests nothing, rather than panicking where the range is
+    /// used.
+    pub fn suggest_at(&mut self, start: usize, text: impl Into<String>) {
         let text = text.into();
-        if text != self.remaining() {
-            self.out.push(Suggestion {
-                range: (self.start, self.input.len()),
-                text,
-                tooltip: Some(tooltip.into()),
-                int_value: None,
-            });
+        if !self.replaces_something(start) || text == self.input[start..] {
+            return;
         }
+        self.out.push(Suggestion {
+            range: (start, self.input.len()),
+            text,
+            tooltip: None,
+            int_value: None,
+        });
+    }
+    /// [`Self::suggest_at`] with an explanation.
+    pub fn suggest_at_tooltip(
+        &mut self,
+        start: usize,
+        text: impl Into<String>,
+        tooltip: impl Into<String>,
+    ) {
+        let text = text.into();
+        if !self.replaces_something(start) || text == self.input[start..] {
+            return;
+        }
+        self.out.push(Suggestion {
+            range: (start, self.input.len()),
+            text,
+            tooltip: Some(tooltip.into()),
+            int_value: None,
+        });
+    }
+    /// Whether `start` can begin a replacement range of the input.
+    fn replaces_something(&self, start: usize) -> bool {
+        start <= self.input.len() && self.input.is_char_boundary(start)
     }
     pub fn offset(&self, start: usize) -> SuggestionsBuilder<'a> {
         SuggestionsBuilder::new(self.input, start)

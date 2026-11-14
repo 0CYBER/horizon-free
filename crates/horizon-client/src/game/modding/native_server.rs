@@ -3151,6 +3151,157 @@ mod tests {
     }
 
     #[test]
+    fn the_id_kind_reads_a_free_identifier_with_no_registry() {
+        let (tree, _, problems) = tree(&[mod_api::Command::new("map fullrender <world:id>")]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let world = &tree["children"]["map"]["children"]["fullrender"]["children"]["world"];
+        assert_eq!(world["parser"], "minecraft:resource_location");
+        assert!(
+            world.get("properties").is_none(),
+            "ResourceLocationArgument carries no properties"
+        );
+
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(
+            &mut dispatcher,
+            &tree,
+            "native_mod_command",
+            &HashMap::new(),
+        );
+        let registries = horizon_client::command::Registries::default();
+        for (line, id) in [
+            ("map fullrender minecraft:overworld", "minecraft:overworld"),
+            ("map fullrender mymod:custom", "mymod:custom"),
+            ("map fullrender overworld", "minecraft:overworld"),
+        ] {
+            let parsed = dispatcher.parse(line, &registries);
+            let (context, _) = parsed.executable().unwrap_or_else(|e| {
+                panic!("{line}: {}", e.message.plain());
+            });
+            assert_eq!(context.get("world"), Some(&Arg::Str(id.into())), "{line}");
+        }
+        for refused in [
+            "map fullrender Minecraft:overworld",
+            "map fullrender minecraft:overworld:again",
+            "map fullrender 50%stone,50%dirt",
+        ] {
+            assert!(
+                dispatcher.parse(refused, &registries).executable().is_err(),
+                "{refused}"
+            );
+        }
+    }
+
+    /// A test mod's argument type for a WorldEdit-style pattern list: the greedy text holds
+    /// several tokens, and the completion is for the one being typed.
+    struct PatternArgument;
+
+    impl mod_api::CommandArgumentType for PatternArgument {
+        fn kind(&self) -> mod_api::CommandArgumentKind {
+            mod_api::CommandArgumentKind::Greedy
+        }
+
+        fn parse(&self, input: &str) -> Result<String, mod_api::CommandArgumentError> {
+            Ok(input.trim().to_owned())
+        }
+
+        fn suggest(&self, prefix: &str) -> Vec<mod_api::CommandSuggestion> {
+            let start = prefix.rfind(' ').map_or(0, |space| space + 1);
+            ["stone", "dirt"]
+                .into_iter()
+                .filter(|block| block.starts_with(&prefix[start..]))
+                .map(|block| mod_api::CommandSuggestion::new(block).replacing_from(start))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn a_greedy_argument_completes_the_token_being_typed() {
+        let arguments: CommandArguments = HashMap::from([(
+            "test:pattern".into(),
+            Arc::new(PatternArgument) as Arc<dyn mod_api::CommandArgumentType>,
+        )]);
+        let (tree, _, problems) = super::command_tree(
+            &[mod_api::Command::new("replace <pattern:test:pattern>")],
+            |_| false,
+            &arguments,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(&mut dispatcher, &tree, "native_mod_command", &arguments);
+        let registries = horizon_client::command::Registries::default();
+
+        // The second token: the range covers it, and the text in front of it is kept.
+        let typed = "replace stone st";
+        let parse = dispatcher.parse(typed, &registries);
+        let (range, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+        assert_eq!(
+            suggestions
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>(),
+            ["stone"]
+        );
+        assert_eq!(range, (14, typed.len()), "the token, not the whole text");
+        assert_eq!(suggestions[0].apply(typed), "replace stone stone");
+
+        // The first token of the text replaces it whole, as before.
+        let typed = "replace dir";
+        let parse = dispatcher.parse(typed, &registries);
+        let (range, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+        assert_eq!(range, (8, typed.len()));
+        assert_eq!(suggestions[0].apply(typed), "replace dirt");
+    }
+
+    /// A type whose completion mixes one the text can hold with one it cannot.
+    struct MixedOffsets;
+
+    impl mod_api::CommandArgumentType for MixedOffsets {
+        fn kind(&self) -> mod_api::CommandArgumentKind {
+            mod_api::CommandArgumentKind::Greedy
+        }
+
+        fn parse(&self, input: &str) -> Result<String, mod_api::CommandArgumentError> {
+            Ok(input.to_owned())
+        }
+
+        fn suggest(&self, prefix: &str) -> Vec<mod_api::CommandSuggestion> {
+            vec![
+                mod_api::CommandSuggestion::new("stone").replacing_from(0),
+                mod_api::CommandSuggestion::new("dirt").replacing_from(prefix.len() + 1),
+            ]
+        }
+    }
+
+    #[test]
+    fn a_suggestion_with_an_offset_past_the_text_is_refused_and_the_others_stay() {
+        let arguments: CommandArguments = HashMap::from([(
+            "test:mixed".into(),
+            Arc::new(MixedOffsets) as Arc<dyn mod_api::CommandArgumentType>,
+        )]);
+        let (tree, _, problems) = super::command_tree(
+            &[mod_api::Command::new("fill <blocks:test:mixed>")],
+            |_| false,
+            &arguments,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(&mut dispatcher, &tree, "native_mod_command", &arguments);
+        let registries = horizon_client::command::Registries::default();
+        let typed = "fill st";
+        let parse = dispatcher.parse(typed, &registries);
+        let (_, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+        assert_eq!(
+            suggestions
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>(),
+            ["stone"],
+            "the suggestion past the typed text is left out, never applied"
+        );
+    }
+
+    #[test]
     fn resource_and_mod_id_kinds_accept_only_known_ids() {
         let mut arguments = command_arguments();
         // The test process loads no package: stand in for one the way `command_arguments` does.

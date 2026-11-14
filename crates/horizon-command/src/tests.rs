@@ -1495,6 +1495,7 @@ fn a_custom_argument_parses_completes_and_keeps_its_id() {
                 .map(|text| CustomSuggestion {
                     text: text.to_owned(),
                     tooltip: None,
+                    replace_start: None,
                 })
                 .collect()
         },
@@ -1560,6 +1561,52 @@ fn a_greedy_custom_argument_takes_the_rest_of_the_line() {
             value: "hello there".into(),
         })
     );
+}
+
+#[test]
+fn a_custom_suggestion_replaces_only_the_token_it_names() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:pattern",
+        CustomArgumentKind::Greedy,
+        |input| Ok(input.to_owned()),
+        |prefix| {
+            let start = prefix.rfind(' ').map_or(0, |space| space + 1);
+            let mut out: Vec<CustomSuggestion> = ["stone", "dirt"]
+                .into_iter()
+                .filter(|block| block.starts_with(&prefix[start..]))
+                .map(|block| CustomSuggestion {
+                    text: block.to_owned(),
+                    tooltip: None,
+                    replace_start: Some(start),
+                })
+                .collect();
+            // A suggestion past the typed text is left out, never applied.
+            out.push(CustomSuggestion {
+                text: "nowhere".to_owned(),
+                tooltip: None,
+                replace_start: Some(prefix.len() + 1),
+            });
+            out
+        },
+    ));
+    let mut dispatcher = Dispatcher::new();
+    let replace = dispatcher.literal(0, "replace");
+    let pattern = dispatcher.argument(replace, "pattern", argument);
+    dispatcher.executes(pattern, "test");
+
+    let registries = reg();
+    let typed = "replace stone st";
+    let parse = dispatcher.parse(typed, &registries);
+    let (range, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+    assert_eq!(range, (14, typed.len()), "the range covers the typed token");
+    assert_eq!(
+        suggestions
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>(),
+        ["stone"]
+    );
+    assert_eq!(suggestions[0].apply(typed), "replace stone stone");
 }
 
 #[test]
