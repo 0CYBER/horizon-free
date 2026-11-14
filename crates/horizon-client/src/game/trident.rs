@@ -268,6 +268,16 @@ impl ThrownTrident {
         self.in_ground
             && scene.no_block_collision(Aabb::new(at, at).inflate(Vec3::new(0.06, 0.06, 0.06)))
     }
+    /// `ThrownTrident.tickDespawn`: a Loyalty trident that can be picked up never
+    /// counts; any other adds one to `life` (`AbstractArrow.tickDespawn`) and
+    /// is discarded at 1200. True when it is discarded.
+    fn tick_despawn(&mut self) -> bool {
+        if self.loyalty > 0 && self.pickup == Pickup::Allowed {
+            return false;
+        }
+        self.life += 1;
+        self.life >= 1200
+    }
     /// `AbstractArrow.startFalling`: unstick, scaling the velocity by three
     /// draws of `nextFloat() * 0.2F` in x, y, z order.
     fn start_falling(&mut self) {
@@ -911,9 +921,9 @@ impl Game<'_> {
             if t.in_ground {
                 // AbstractArrow.tick: `if (lastState != blockState && shouldFall())
                 // startFalling();` (`blockState` is the block at its position).
-                // Its `else tickDespawn()` counts `life` (`ThrownTrident.tickDespawn`:
-                // not for a Loyalty trident that can be picked up); the discard
-                // at 1200 has no counterpart here.
+                // Its `else tickDespawn()` counts `life` and discards at 1200
+                // (`ThrownTrident.tickDespawn`: not for a Loyalty trident that
+                // can be picked up).
                 let mut falls = false;
                 if !t.no_physics {
                     let rain = self.arrow_rain();
@@ -923,8 +933,10 @@ impl Game<'_> {
                 }
                 if falls {
                     t.start_falling();
-                } else if t.loyalty == 0 || t.pickup != Pickup::Allowed {
-                    t.life += 1;
+                } else if t.tick_despawn() {
+                    // `discard()`: gone for everything after, so no block
+                    // effects (`isAlive`) and no pickup this tick.
+                    continue;
                 }
                 t.in_ground_time += 1;
                 if !t.no_physics {
@@ -1420,6 +1432,44 @@ mod tests {
         up.velocity = Vec3::new(0.0, 0.5, 0.0);
         up.turn_towards_movement();
         assert_eq!(up.pitch, 17.999998);
+    }
+
+    /// `AbstractArrow.tickDespawn` through `ThrownTrident.tickDespawn`: the tick
+    /// that brings `life` to 1200 discards a stuck trident, one loaded past
+    /// 1200 goes on its first count, and a Loyalty trident that can be picked
+    /// up never counts.
+    #[test]
+    fn a_stuck_trident_is_discarded_when_life_reaches_1200() {
+        use horizon_client::arrows::Pickup;
+        let mut t = ThrownTrident::remote(1, Vec3::ZERO, 0.0, 0.0);
+        t.life = 1198;
+        assert!(!t.tick_despawn());
+        assert_eq!(t.life, 1199);
+        assert!(t.tick_despawn());
+        assert_eq!(t.life, 1200);
+        let mut loaded = ThrownTrident::remote(2, Vec3::ZERO, 0.0, 0.0);
+        loaded.life = 5000;
+        assert!(loaded.tick_despawn());
+        // Loyalty only exempts a trident that can be picked up.
+        let mut loyal = ThrownTrident::remote(3, Vec3::ZERO, 0.0, 0.0);
+        (loyal.loyalty, loyal.pickup, loyal.life) = (3, Pickup::Allowed, 1199);
+        assert!(!loyal.tick_despawn());
+        assert_eq!(loyal.life, 1199);
+        loyal.pickup = Pickup::CreativeOnly;
+        assert!(loyal.tick_despawn());
+        loyal.pickup = Pickup::Allowed;
+        loyal.loyalty = 0;
+        assert!(loyal.tick_despawn());
+    }
+
+    /// `AbstractArrow.startFalling` sets `life = 0`: a block removed under a
+    /// trident that was about to despawn starts the count over.
+    #[test]
+    fn a_trident_that_starts_falling_restarts_its_life() {
+        let mut t = ThrownTrident::remote(1, Vec3::ZERO, 0.0, 0.0);
+        (t.in_ground, t.life) = (true, 1199);
+        t.start_falling();
+        assert_eq!((t.in_ground, t.life), (false, 0));
     }
 
     /// A block registry with air and stone, for save round trips.
