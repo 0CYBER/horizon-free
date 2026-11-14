@@ -2158,12 +2158,7 @@ impl Game<'_> {
                             Some(horizon_client::lan::data::component_nbt(&text.component()));
                         line = format!("<{name}> {}", text.plain());
                     }
-                    let mut chat = Vec::new();
-                    let host = self.lan.as_mut()?;
-                    host.hub.broadcast_chat(&message, &bound, line, &mut chat);
-                    for event in chat {
-                        self.lan_log_event(event);
-                    }
+                    self.lan_broadcast_chat(&message, &bound, line, &name, &text.plain())?;
                     self.lan_player_chatted(sender, &raw);
                 }
                 HostEvent::ChatSessionStarted(update) => {
