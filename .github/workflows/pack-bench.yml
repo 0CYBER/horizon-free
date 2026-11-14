@@ -65,8 +65,11 @@ jobs:
             --example pack_load_bench -- --scale "$SCALE") > base.md \
             || echo "The bench does not build on the base." > base.md
       - name: Summary
+        # Through the environment, as the step before: an input pasted into the script would run.
+        env:
+          BASE: ${{ inputs.base || 'main' }}
         run: |
           {
             echo "### Branch ($(git rev-parse --short HEAD))"; cat head.md
-            echo; echo "### Base (${{ inputs.base || 'main' }})"; cat base.md
+            echo; echo "### Base ($BASE)"; cat base.md
           } | tee -a "$GITHUB_STEP_SUMMARY"
