@@ -1,0 +1,2 @@
+ids = ["type:ItemPlace", "fn:fluid_util::dispense_container", "method:host::items::ItemsServerHost::scratch_slots", "method:host::items::ItemsServerHost::scratch_take_slots", "method:host::items::ItemsServerHost::dispense_with_remainder"]
+why = "Add the explicit two-slot dispense-container helper and its server scratch/remainder operations. ScratchSlots appends a wire variant to ItemPlace; affected WebAssembly mods must rebuild for the changed layout. No hook meaning changes."

@@ -166,7 +166,7 @@ fn item(stack: &Option<ItemStack>) -> Option<(String, u32)> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_bucket_like_container_fills_from_a_source_and_empties_into_the_air() {
     with_dispenser(|game, _| {
         set_front(game, "minecraft:water");
@@ -181,7 +181,7 @@ fn a_bucket_like_container_fills_from_a_source_and_empties_into_the_air() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_stack_of_three_in_a_full_dispenser_drops_the_new_container_out_of_the_front() {
     with_dispenser(|game, _| {
         let pos = (DISPENSER[0], DISPENSER[1], DISPENSER[2]);
@@ -207,7 +207,7 @@ fn a_stack_of_three_in_a_full_dispenser_drops_the_new_container_out_of_the_front
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_failed_transfer_dispenses_one_unchanged_container_and_changes_nothing() {
     with_dispenser(|game, _| {
         set_front(game, "minecraft:stone");
@@ -226,7 +226,7 @@ fn a_failed_transfer_dispenses_one_unchanged_container_and_changes_nothing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_container_that_could_give_picks_up_first_and_its_event_comes_before_the_click() {
     with_dispenser(|game, _| {
         crate::game::native_item_places::tests::open_to_lan(game);
@@ -262,7 +262,7 @@ fn a_container_that_could_give_picks_up_first_and_its_event_comes_before_the_cli
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_stack_of_custom_containers_gives_their_handler_one_at_a_time() {
     with_dispenser(|game, _| {
         set_front(game, "minecraft:water");
