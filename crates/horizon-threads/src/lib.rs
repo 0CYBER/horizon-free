@@ -362,6 +362,14 @@ pub fn behind_server() -> bool {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
+fn idle_sched_param() -> libc::sched_param {
+    // SAFETY: `sched_param` is a plain C struct; zero-init also covers musl's extra fields.
+    let mut param: libc::sched_param = unsafe { std::mem::zeroed() };
+    param.sched_priority = 0;
+    param
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn behind() -> bool {
     // SAFETY: these read and set the calling thread's own nice value or
     // policy (who 0, pid 0 is the calling thread on Linux and Android); `param` lives
@@ -371,7 +379,7 @@ fn behind() -> bool {
         if nice + BEHIND <= 19 {
             libc::setpriority(libc::PRIO_PROCESS as _, 0, nice + BEHIND) == 0
         } else {
-            let param = libc::sched_param { sched_priority: 0 };
+            let param = idle_sched_param();
             libc::sched_setscheduler(0, libc::SCHED_IDLE, &param) == 0
         }
     }
@@ -456,7 +464,7 @@ pub fn idle_current() -> bool {
 
 #[cfg(target_os = "linux")]
 fn idle() -> bool {
-    let param = libc::sched_param { sched_priority: 0 };
+    let param = idle_sched_param();
     // SAFETY: sets the calling thread's own policy (pid 0); `param` lives
     // across the call.
     unsafe { libc::sched_setscheduler(0, libc::SCHED_IDLE, &param) == 0 }
