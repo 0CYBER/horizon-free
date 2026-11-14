@@ -8,6 +8,7 @@ pub(crate) mod biome_modifier;
 pub(crate) mod biome_region;
 pub(crate) mod biome_source;
 pub(crate) mod chunk_generator;
+pub(crate) mod chunk_refusal;
 pub(crate) mod clock_adjustment;
 pub(crate) mod criteria;
 pub(crate) mod custom_spawners;
@@ -19,7 +20,6 @@ pub(crate) mod dimension;
 pub(crate) mod dimension_transition;
 pub(crate) mod explosion_settings;
 pub(crate) mod game_rule_value;
-pub(crate) mod chunk_refusal;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod ground;
