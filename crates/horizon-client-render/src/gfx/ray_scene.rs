@@ -93,6 +93,9 @@ pub(in crate::gfx) struct RayScene {
     slots: Slots,
     /// Whether the log said the store is at its largest.
     full_logged: bool,
+    /// `Resident::removals` when the scene last dropped the sections no longer resident:
+    /// gfx.rs releases sections (unloaded columns, far terrain's fade-out) without `ray_mark`.
+    removals: u64,
 }
 
 impl RayScene {
@@ -123,6 +126,7 @@ impl RayScene {
             unpacker: Unpacker::new(device, slots.capacity),
             slots,
             full_logged: false,
+            removals: 0,
         })
     }
 
@@ -193,6 +197,10 @@ impl RayScene {
         // doesn't build the same ones over and over.
         let keep = self.reach + 2;
         let mut changed = self.compact(queue);
+        if self.removals != sections.removals() {
+            self.removals = sections.removals();
+            changed |= drop_released(&mut self.blas, &mut self.slots, |k| sections.contains(k));
+        }
         if self.anchor != Some(column) {
             let before = self.blas.len();
             let slots = &mut self.slots;
@@ -296,6 +304,23 @@ impl RayScene {
         encoder.build_acceleration_structures(entries.iter(), std::iter::once(&self.tlas));
         self.anchor = Some(column);
     }
+}
+
+/// Drops the BLAS and slot of every section not `resident`; whether any went.
+fn drop_released<B>(
+    blas: &mut FxHashMap<SectionKey, B>,
+    slots: &mut Slots,
+    resident: impl Fn(SectionKey) -> bool,
+) -> bool {
+    let before = blas.len();
+    blas.retain(|&k, _| {
+        let kept = resident(k);
+        if !kept {
+            slots.free(k);
+        }
+        kept
+    });
+    blas.len() != before
 }
 
 /// Whether section `key` is within `reach` chunks of column `column`, along x and z.
@@ -647,6 +672,23 @@ mod tests {
         assert_eq!(slots.alloc(A, 32), Some(0));
         assert_eq!(slots.alloc(B, 8), Some(48));
         assert_eq!(slots.capacity, 64);
+    }
+
+    #[test]
+    fn sections_no_longer_resident_leave_the_scene_and_the_store() {
+        let mut slots = Slots::new(64, 64);
+        let mut blas = FxHashMap::default();
+        for key in [A, B, C] {
+            slots.alloc(key, 8);
+            blas.insert(key, ());
+        }
+        // B's column was unloaded without a new mesh.
+        assert!(drop_released(&mut blas, &mut slots, |k| k != B));
+        assert_eq!(blas.len(), 2);
+        assert!(!blas.contains_key(&B));
+        assert_eq!(slots.first(B), None);
+        assert_eq!(slots.alloc(B, 8), Some(8), "its slot is free again");
+        assert!(!drop_released(&mut blas, &mut slots, |_| true));
     }
 
     #[test]
