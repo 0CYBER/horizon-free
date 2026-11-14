@@ -109,6 +109,19 @@ pub trait DrawContext {
     fn draw_scene(&mut self, rect: [f32; 4], blocks: &[SceneBlock], view: SceneView) {
         unimplemented!("DrawContext::draw_scene")
     }
+    /// Draws living entity `entity` standing in `view.rect`, `view.size` GUI
+    /// pixels a block, turned as `view.look` says: vanilla's
+    /// `InventoryScreen.renderEntityInInventoryFollowsMouse` (`GuiEntityLook::At`
+    /// the cursor) and `renderEntityInInventory` (`GuiEntityLook::Turned`), as
+    /// a mob page, an entity icon or a data model's mob shows it. It is drawn by
+    /// its type's renderer as in the world (a mod's `register_entity_renderers`
+    /// renderer and `register_entity_layers` layers included, else the vanilla
+    /// model), full bright, lit by `Lighting.ENTITY_IN_UI`'s two lights, with a
+    /// depth of its own and cut off at the box. A client's call from a drawing
+    /// hook (`screen_draw`, `gui_render_post`); on a server it is refused.
+    fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
+        Err(GuiEntityError::Unavailable)
+    }
     /// `Screen.renderMenuBackground`: draws the tiled menu background (32x32) across `rect`
     /// (`[x, y, w, h]` in GUI pixels). If `in_world` is true, uses the dark translucent
     /// texture (`gui/inworld_menu_background`); otherwise uses the opaque dirt-like

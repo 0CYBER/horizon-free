@@ -30,6 +30,7 @@ horizon-client game::explosion_detonate::tests::special_query_excludes_a_box_tha
 horizon-client game::explosion_detonate::tests::the_exploding_source_is_not_in_the_list_nor_hurt lib daily game-boot
 horizon-client game::explosion_detonate::tests::the_list_order_is_the_walk_order lib daily game-boot
 horizon-client game::explosion_detonate::tests::with_no_listener_the_blast_is_unchanged lib daily game-boot
+horizon-client game::gui_entity::tests::a_screen_draws_a_mob_by_type_once_and_refuses_what_it_cant_draw lib daily game-boot
 horizon-client game::launch_api::tests::developer_offline_never_consumes_inherited_sessions lib daily child-process
 horizon-client game::maps::tests::map_on_banner_in_adventure_mode_honours_can_place_on lib daily game-boot
 horizon-client game::mods::tests::a_shared_missing_jar_stops_native_load_and_refuses_each_content_mod_row lib daily child-process
