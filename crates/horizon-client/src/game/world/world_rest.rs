@@ -49,12 +49,7 @@ pub(super) fn load_world_rest(
         // hold its files so it is read once.
         let _recipe_files = horizon_client::json_folder::read(&root.join("data/minecraft/recipe"));
         let sources = startup::time("rest.recipe_sources", || {
-            lan::sync::load_sources(
-                root,
-                &resources.core.item_data,
-                resources.core.item_data.context().origin(),
-                overlay,
-            )
+            lan::sync::initial_sources(root, &resources.core.item_data, overlay)
         })?;
         let recipes = startup::time("rest.recipes", || {
             Recipes::from_resolved(root, &items, overlay, &sources)

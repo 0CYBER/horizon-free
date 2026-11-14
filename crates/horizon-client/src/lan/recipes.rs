@@ -513,6 +513,20 @@ pub fn transfer_result(
     }
 }
 
+/// A `menu_transfer` part's answer as the engine's transfer result (`transfer_result` back).
+pub fn transfer_outcome(
+    result: mod_api::RecipeTransferResult,
+) -> Result<(), crate::menu::place::TransferError> {
+    use crate::menu::place::TransferError;
+    use mod_api::RecipeTransferResult as R;
+    match result {
+        R::Moves => Ok(()),
+        R::Missing => Err(TransferError::Missing),
+        R::NoRoom => Err(TransferError::NoRoom),
+        R::NotIntoMenu => Err(TransferError::Unavailable),
+    }
+}
+
 /// The byte both transfer channels carry a result as.
 pub fn result_byte(result: mod_api::RecipeTransferResult) -> u8 {
     use mod_api::RecipeTransferResult as R;

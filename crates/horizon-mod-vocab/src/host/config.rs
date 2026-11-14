@@ -11,6 +11,11 @@ pub trait ConfigHost {
     /// Exact Minecraft version supported by this process.
     #[access(Metadata)]
     fn game_version(&self) -> &'static str;
+    /// The engine's `DataVersion` written into level data and chunks.
+    /// Constant on both sides, including before a world is open; this describes this
+    /// game build, not the version of a remote server or an older save.
+    #[access(Metadata)]
+    fn server_data_version(&self) -> i32;
     /// Horizon version printed in crash reports.
     #[access(Metadata)]
     fn horizon_version(&self) -> &'static str;

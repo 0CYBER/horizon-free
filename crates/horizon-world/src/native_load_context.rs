@@ -1,6 +1,7 @@
 //! Data-only inputs carried from an owning load boundary to native load hooks.
 use std::{
     collections::{BTreeMap, HashMap},
+    ffi::{OsStr, OsString},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -51,13 +52,13 @@ impl LoadInputs {
 #[derive(Clone)]
 struct Snapshot {
     inputs: Arc<LoadInputs>,
-    settings: BTreeMap<String, BTreeMap<String, String>>,
+    settings: Arc<[(String, Arc<[(String, String)]>)]>,
 }
 
 impl Snapshot {
     /// Captures settings for `mod_ids`; the registry inputs are shared, not scanned again.
     fn capture<'a>(inputs: Arc<LoadInputs>, mod_ids: impl IntoIterator<Item = &'a str>) -> Self {
-        let settings = capture_settings(&inputs.settings_root, mod_ids);
+        let settings = shared_settings(capture_settings(&inputs.settings_root, mod_ids));
         Self { inputs, settings }
     }
 
@@ -72,12 +73,30 @@ impl Snapshot {
     }
 
     fn setting(&self, mod_id: &str, key: &str) -> Option<String> {
-        self.settings.get(mod_id)?.get(key).cloned()
+        let mod_at = self
+            .settings
+            .binary_search_by(|(known, _)| known.as_str().cmp(mod_id))
+            .ok()?;
+        let values = &self.settings[mod_at].1;
+        let at = values
+            .binary_search_by(|(known, _)| known.as_str().cmp(key))
+            .ok()?;
+        Some(values[at].1.clone())
     }
+}
+
+fn shared_settings(
+    settings: BTreeMap<String, BTreeMap<String, String>>,
+) -> Arc<[(String, Arc<[(String, String)]>)]> {
+    settings
+        .into_iter()
+        .map(|(id, values)| (id, values.into_iter().collect()))
+        .collect()
 }
 
 /// Origin and borrowed engine inputs for one owning load. This contains no
 /// game, world handles or mutable registry access.
+#[derive(Clone)]
 pub struct LoadContext {
     origin: DataLoadOrigin,
     snapshot: Snapshot,
@@ -95,6 +114,31 @@ impl LoadContext {
         Self {
             origin,
             snapshot: Snapshot::capture(inputs, mod_ids),
+        }
+    }
+
+    /// The initial resource load over registration's already-captured, sorted
+    /// settings. Only this load's admitted package IDs remain visible; values
+    /// and (when the scope is unchanged) the outer snapshot are shared.
+    pub fn from_settings_snapshot<'a>(
+        origin: DataLoadOrigin,
+        inputs: Arc<LoadInputs>,
+        mod_ids: impl IntoIterator<Item = &'a str>,
+        settings: Arc<[(String, Arc<[(String, String)]>)]>,
+    ) -> Self {
+        let ids: std::collections::BTreeSet<_> = mod_ids.into_iter().collect();
+        let settings = if settings.iter().all(|(id, _)| ids.contains(id.as_str())) {
+            settings
+        } else {
+            settings
+                .iter()
+                .filter(|(id, _)| ids.contains(id.as_str()))
+                .cloned()
+                .collect()
+        };
+        Self {
+            origin,
+            snapshot: Snapshot { inputs, settings },
         }
     }
 
@@ -134,6 +178,16 @@ impl LoadContext {
     /// fluids, in the sources' order. Empty where no recipe pass filled them.
     pub fn fluid_tags(&self) -> &Arc<[(String, Arc<[String]>)]> {
         self.snapshot.fluid_tags()
+    }
+
+    /// Readers of this load's resource generation, with the same captured
+    /// settings. Starting a distinct generation uses `loop_context` instead.
+    pub fn captured_loop_context(&self, side: LoopSide) -> LoopContext {
+        LoopContext {
+            side,
+            snapshot: self.snapshot.clone(),
+            recipe_properties: Default::default(),
+        }
     }
 
     /// The context of a menu, recipe or player-list loop of `side`, over this
@@ -204,6 +258,14 @@ impl LoopContext {
         self.side
     }
 
+    /// The same resource generation's settings and registries for world generation.
+    /// Sharing this snapshot performs no capture or diagnostic reporting.
+    pub fn worldgen_context(&self) -> WorldgenContext {
+        WorldgenContext {
+            snapshot: self.snapshot.clone(),
+        }
+    }
+
     /// Names in registry ID order, from the registry snapshot it was built over.
     pub fn registry(&self, name: &str) -> Option<Arc<[String]>> {
         self.snapshot.registry(name)
@@ -226,9 +288,38 @@ pub fn capture_settings<'a>(
     settings_root: &Path,
     mod_ids: impl IntoIterator<Item = &'a str>,
 ) -> BTreeMap<String, BTreeMap<String, String>> {
+    capture_settings_with_diagnostics(settings_root, mod_ids, |diagnostics| {
+        log::warn!("Mod settings snapshot omissions at {settings_root:?}:\n{diagnostics}");
+    })
+}
+
+fn capture_settings_with_diagnostics<'a>(
+    settings_root: &Path,
+    mod_ids: impl IntoIterator<Item = &'a str>,
+    report: impl FnOnce(&str),
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    use std::fmt::Write;
+    let mut diagnostics = String::new();
+    let settings = capture_settings_with_report(settings_root, mod_ids, |mod_id, key, reason| {
+        match key {
+            Some(key) => writeln!(diagnostics, "  {mod_id:?}/{key:?}: {reason}"),
+            None => writeln!(diagnostics, "  mod {mod_id:?}: {reason}"),
+        }
+        .expect("writing diagnostics to a String");
+    });
+    if !diagnostics.is_empty() {
+        report(&diagnostics);
+    }
+    settings
+}
+
+fn capture_settings_with_report<'a>(
+    settings_root: &Path,
+    mod_ids: impl IntoIterator<Item = &'a str>,
+    mut report: impl FnMut(&str, Option<&OsStr>, &dyn std::fmt::Display),
+) -> BTreeMap<String, BTreeMap<String, String>> {
     let mut settings = BTreeMap::new();
     let mut total = 0;
-    let mut refused = [false; 4];
     for mod_id in mod_ids
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>()
@@ -241,73 +332,197 @@ pub fn capture_settings<'a>(
                 Some(std::path::Component::Normal(_))
             )
         {
-            refused[0] = true;
+            report(mod_id, None, &"unsafe package path");
             continue;
         }
-        let Ok(files) = snapshot_files(settings_root, mod_id) else {
-            refused[0] = true;
-            continue;
+        let files = match snapshot_files(settings_root, mod_id) {
+            Ok(files) => files,
+            // A mod need not declare or save any settings. Absence of its
+            // directory (or the settings root) does not omit a key.
+            Err(SnapshotError::Missing) => continue,
+            Err(SnapshotError::Directory(error)) => {
+                report(
+                    mod_id,
+                    None,
+                    &format_args!("cannot inspect settings directory: {error}"),
+                );
+                continue;
+            }
+            Err(SnapshotError::Enumeration { names, error }) => {
+                for key in &names {
+                    report(
+                        mod_id,
+                        Some(key),
+                        &format_args!("enumeration failed: {error}"),
+                    );
+                }
+                report(
+                    mod_id,
+                    None,
+                    &format_args!("cannot finish enumerating settings: {error}"),
+                );
+                continue;
+            }
+            Err(SnapshotError::EnumerationLimit(names)) => {
+                for key in &names {
+                    report(
+                        mod_id,
+                        Some(key),
+                        &format_args!(
+                            "package exceeds enumeration limit ({MAX_VISITED_NAMES} names)"
+                        ),
+                    );
+                }
+                continue;
+            }
+            Err(SnapshotError::InvalidKey { names, index }) => {
+                for key in &names {
+                    report(
+                        mod_id,
+                        Some(key),
+                        &format_args!("package contains a non-UTF-8 key: {:?}", names[index]),
+                    );
+                }
+                continue;
+            }
         };
         let mut values = BTreeMap::new();
-        for entry in files {
-            let Ok((key, mut file)) = entry else {
-                refused[0] = true;
-                continue;
+        for (key, file) in files {
+            let key = key.into_string().expect("validated UTF-8 setting name");
+            let mut file = match file {
+                Ok(file) => file,
+                Err(error) => {
+                    report(
+                        mod_id,
+                        Some(key.as_ref()),
+                        &format_args!("unsafe or unreadable entry: {error}"),
+                    );
+                    continue;
+                }
             };
             if values.len() >= MAX_SETTING_KEYS {
-                refused[1] = true;
-                break;
+                report(
+                    mod_id,
+                    Some(key.as_ref()),
+                    &format_args!("key limit ({MAX_SETTING_KEYS})"),
+                );
+                continue;
             }
             use std::io::Read;
             let mut bytes = Vec::new();
-            if file
+            if let Err(error) = file
                 .by_ref()
                 .take((MAX_SETTING_BYTES + 1) as u64)
                 .read_to_end(&mut bytes)
-                .is_err()
             {
-                refused[0] = true;
+                report(
+                    mod_id,
+                    Some(key.as_ref()),
+                    &format_args!("read failed: {error}"),
+                );
                 continue;
             }
-            if bytes.len() > MAX_SETTING_BYTES || bytes.len() > MAX_SNAPSHOT_BYTES - total {
-                refused[2] = true;
+            if bytes.len() > MAX_SETTING_BYTES {
+                report(
+                    mod_id,
+                    Some(key.as_ref()),
+                    &format_args!("file byte limit ({MAX_SETTING_BYTES})"),
+                );
                 continue;
             }
-            let Ok(value) = String::from_utf8(bytes) else {
-                refused[3] = true;
+            if bytes.len() > MAX_SNAPSHOT_BYTES - total {
+                report(
+                    mod_id,
+                    Some(key.as_ref()),
+                    &format_args!("snapshot byte limit ({MAX_SNAPSHOT_BYTES})"),
+                );
                 continue;
+            }
+            let value = match String::from_utf8(bytes) {
+                Ok(value) => value,
+                Err(error) => {
+                    report(
+                        mod_id,
+                        Some(key.as_ref()),
+                        &format_args!("invalid UTF-8: {}", error.utf8_error()),
+                    );
+                    continue;
+                }
             };
             total += value.len();
             values.insert(key, value.trim().to_owned());
         }
         settings.insert(mod_id.to_owned(), values);
     }
-    for (refused, class) in refused.into_iter().zip([
-        "unsafe or unreadable entry, or enumeration limit",
-        "key limit",
-        "byte limit",
-        "invalid UTF-8",
-    ]) {
-        if refused {
-            log::warn!("Mod settings snapshot omitted keys: {class}");
-        }
-    }
     settings
+}
+
+#[derive(Debug)]
+enum SnapshotError {
+    Missing,
+    Directory(std::io::Error),
+    Enumeration {
+        names: Vec<OsString>,
+        error: std::io::Error,
+    },
+    EnumerationLimit(Vec<OsString>),
+    InvalidKey {
+        names: Vec<OsString>,
+        index: usize,
+    },
+}
+
+impl From<std::io::Error> for SnapshotError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Directory(error)
+    }
+}
+
+// Only a missing root/package directory means no settings. A missing individual
+// entry or a failed enumeration still reports the unreadable scope or key.
+fn settings_directory<T>(result: std::io::Result<T>) -> Result<T, SnapshotError> {
+    result.map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            SnapshotError::Missing
+        } else {
+            SnapshotError::Directory(error)
+        }
+    })
 }
 
 // Reject the whole package beyond the enumeration budget: retaining an arbitrary
 // prefix would make the result depend on filesystem enumeration order again.
 fn sorted_names(
-    names: impl Iterator<Item = std::io::Result<String>>,
-) -> std::io::Result<Vec<String>> {
+    names: impl Iterator<Item = std::io::Result<OsString>>,
+) -> Result<Vec<OsString>, SnapshotError> {
     let mut result = Vec::new();
     for name in names {
-        if result.len() == MAX_VISITED_NAMES {
-            return Err(std::io::ErrorKind::InvalidData.into());
+        let name = match name {
+            Ok(name) => name,
+            Err(error) => {
+                return Err(SnapshotError::Enumeration {
+                    names: result,
+                    error,
+                });
+            }
+        };
+        result.push(name);
+        if result.len() > MAX_VISITED_NAMES {
+            result.sort_unstable();
+            return Err(SnapshotError::EnumerationLimit(result));
         }
-        result.push(name?);
     }
-    result.sort_unstable();
+    // The native encoding is a superset of UTF-8: valid keys retain their
+    // existing byte order without revalidating UTF-8 on every comparison.
+    result.sort_unstable_by(|a, b| a.as_encoded_bytes().cmp(b.as_encoded_bytes()));
+    // Preserve whole-package refusal for an invalid filename, but retain the
+    // actual names so the diagnostic identifies what was discarded and why.
+    if let Some(index) = result.iter().position(|key| key.to_str().is_none()) {
+        return Err(SnapshotError::InvalidKey {
+            names: result,
+            index,
+        });
+    }
     Ok(result)
 }
 
@@ -315,7 +530,7 @@ fn sorted_names(
 fn snapshot_files(
     root: &Path,
     mod_id: &str,
-) -> std::io::Result<impl Iterator<Item = std::io::Result<(String, fs::File)>>> {
+) -> Result<impl Iterator<Item = (OsString, std::io::Result<fs::File>)>, SnapshotError> {
     snapshot_files_with_hook(root, mod_id, |_| {})
 }
 
@@ -324,12 +539,17 @@ fn snapshot_files_with_hook(
     root: &Path,
     mod_id: &str,
     after_open: impl Fn(&str),
-) -> std::io::Result<impl Iterator<Item = std::io::Result<(String, fs::File)>>> {
+) -> Result<impl Iterator<Item = (OsString, std::io::Result<fs::File>)>, SnapshotError> {
     use rustix::fs::{Dir, Mode, OFlags, open, openat};
+    use std::os::unix::ffi::OsStrExt;
     let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let root = open(root, flags | OFlags::DIRECTORY, Mode::empty())?;
-    let directory = openat(&root, mod_id, flags | OFlags::DIRECTORY, Mode::empty())?;
-    let entries = Dir::read_from(&directory)?;
+    let root = settings_directory(
+        open(root, flags | OFlags::DIRECTORY, Mode::empty()).map_err(Into::into),
+    )?;
+    let directory = settings_directory(
+        openat(&root, mod_id, flags | OFlags::DIRECTORY, Mode::empty()).map_err(Into::into),
+    )?;
+    let entries = Dir::read_from(&directory).map_err(std::io::Error::from)?;
     let names = sorted_names(entries.filter_map(|entry| {
         let entry = match entry {
             Ok(entry) => entry,
@@ -339,19 +559,23 @@ fn snapshot_files_with_hook(
         if name.to_bytes() == b"." || name.to_bytes() == b".." {
             return None;
         }
-        Some(
-            name.to_str()
-                .map(str::to_owned)
-                .map_err(|_| std::io::ErrorKind::InvalidData.into()),
-        )
+        Some(Ok(OsStr::from_bytes(name.to_bytes()).to_owned()))
     }))?;
     Ok(names.into_iter().map(move |key| {
-        let file = fs::File::from(openat(&directory, key.as_str(), flags, Mode::empty())?);
-        after_open(&key);
-        if !file.metadata()?.is_file() {
-            return Err(std::io::ErrorKind::InvalidInput.into());
-        }
-        Ok((key, file))
+        let file = (|| {
+            let file = fs::File::from(openat(&directory, key.as_os_str(), flags, Mode::empty())?);
+            if let Some(key) = key.to_str() {
+                after_open(key);
+            }
+            if !file.metadata()?.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "entry is not a regular file",
+                ));
+            }
+            Ok(file)
+        })();
+        (key, file)
     }))
 }
 
@@ -359,36 +583,44 @@ fn snapshot_files_with_hook(
 fn snapshot_files(
     root: &Path,
     mod_id: &str,
-) -> std::io::Result<impl Iterator<Item = std::io::Result<(String, fs::File)>>> {
+) -> Result<impl Iterator<Item = (OsString, std::io::Result<fs::File>)>, SnapshotError> {
     use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
     use cap_std::fs::{Dir, OpenOptions};
     // Open the parent as a capability, then refuse a reparse point at the root
     // and package boundary as well as at each individual file boundary.
-    let parent = root.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
-    let name = root.file_name().ok_or(std::io::ErrorKind::InvalidInput)?;
-    let parent = Dir::open_ambient_dir(parent, cap_std::ambient_authority())?;
-    let root = parent.open_dir_nofollow(name)?;
-    let directory = root.open_dir_nofollow(mod_id)?;
-    let names = sorted_names(directory.entries()?.map(|entry| {
-        entry?
-            .file_name()
-            .into_string()
-            .map_err(|_| std::io::ErrorKind::InvalidData.into())
-    }))?;
+    let parent = root
+        .parent()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let name = root
+        .file_name()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let parent = settings_directory(Dir::open_ambient_dir(parent, cap_std::ambient_authority()))?;
+    let root = settings_directory(parent.open_dir_nofollow(name))?;
+    let directory = settings_directory(root.open_dir_nofollow(mod_id))?;
+    let names = sorted_names(directory.entries()?.map(|entry| Ok(entry?.file_name())))?;
     Ok(names.into_iter().map(move |key| {
-        let metadata = directory.symlink_metadata(&key)?;
-        use cap_std::fs::MetadataExt;
-        if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
-            return Err(std::io::ErrorKind::InvalidInput.into());
-        }
-        let mut options = OpenOptions::new();
-        options.read(true).follow(FollowSymlinks::No);
-        let file = directory.open_with(&key, &options)?;
-        let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
-            return Err(std::io::ErrorKind::InvalidInput.into());
-        }
-        Ok((key, file.into_std()))
+        let file = (|| {
+            let metadata = directory.symlink_metadata(&key)?;
+            use cap_std::fs::MetadataExt;
+            if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "entry is not a regular file or is a reparse point",
+                ));
+            }
+            let mut options = OpenOptions::new();
+            options.read(true).follow(FollowSymlinks::No);
+            let file = directory.open_with(&key, &options)?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "entry is not a regular file or is a reparse point",
+                ));
+            }
+            Ok(file.into_std())
+        })();
+        (key, file)
     }))
 }
 
@@ -396,11 +628,11 @@ fn snapshot_files(
 fn snapshot_files(
     root: &Path,
     mod_id: &str,
-) -> std::io::Result<impl Iterator<Item = std::io::Result<(String, fs::File)>>> {
+) -> Result<impl Iterator<Item = (OsString, std::io::Result<fs::File>)>, SnapshotError> {
     // Fail closed on targets without descriptor-relative no-follow traversal.
     let _ = (root, mod_id);
-    Err::<std::iter::Empty<std::io::Result<(String, fs::File)>>, _>(
-        std::io::ErrorKind::Unsupported.into(),
+    Err::<std::iter::Empty<(OsString, std::io::Result<fs::File>)>, _>(
+        std::io::Error::from(std::io::ErrorKind::Unsupported).into(),
     )
 }
 
@@ -444,6 +676,203 @@ mod tests {
         ));
         fs::create_dir_all(root.join("reader")).unwrap();
         root
+    }
+
+    #[test]
+    fn missing_and_empty_settings_do_not_report_omissions() {
+        let root = root("empty");
+        let captured = capture_settings_with_diagnostics(&root, ["reader", "absent"], |reason| {
+            panic!("empty settings reported an omission: {reason}");
+        });
+        assert!(captured["reader"].is_empty());
+        assert!(!captured.contains_key("absent"));
+        fs::remove_dir_all(&root).unwrap();
+        assert!(
+            capture_settings_with_diagnostics(&root, ["reader"], |reason| {
+                panic!("missing settings root reported an omission: {reason}");
+            })
+            .is_empty()
+        );
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn failed_enumeration_retains_known_omitted_keys() {
+        let names = [
+            Ok(OsString::from("known")),
+            Err(std::io::ErrorKind::PermissionDenied.into()),
+        ];
+        let error = sorted_names(names.into_iter()).unwrap_err();
+        let SnapshotError::Enumeration { names, error } = error else {
+            panic!("expected an enumeration failure");
+        };
+        assert_eq!(names, ["known"]);
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        let error = sorted_names((0..=MAX_VISITED_NAMES).map(|i| Ok(format!("key{i:04}").into())))
+            .unwrap_err();
+        let SnapshotError::EnumerationLimit(names) = error else {
+            panic!("expected an enumeration limit");
+        };
+        assert_eq!(names.len(), MAX_VISITED_NAMES + 1);
+        assert_eq!(names.first().unwrap(), "key0000");
+        assert_eq!(names.last().unwrap(), "key4096");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unsafe_unreadable_and_non_utf8_entries_keep_their_names() {
+        use std::os::unix::ffi::OsStringExt;
+        let root = root("named-refusals");
+        fs::write(root.join("reader/value"), "inside").unwrap();
+        fs::create_dir(root.join("reader/directory")).unwrap();
+        std::os::unix::fs::symlink("missing", root.join("reader/dangling")).unwrap();
+        let mut refused = BTreeMap::new();
+        let captured =
+            capture_settings_with_report(&root, ["reader", "reader"], |mod_id, key, reason| {
+                assert_eq!(mod_id, "reader");
+                assert!(
+                    refused
+                        .insert(key.unwrap().to_owned(), reason.to_string())
+                        .is_none()
+                );
+            });
+        assert_eq!(captured["reader"].len(), 1);
+        assert_eq!(refused.len(), 2);
+        assert!(refused[OsStr::new("directory")].contains("not a regular file"));
+        assert!(refused[OsStr::new("dangling")].starts_with("unsafe or unreadable entry:"));
+        let invalid_key = OsString::from_vec(vec![0xff]);
+        fs::write(root.join("reader").join(&invalid_key), "invalid key").unwrap();
+        refused.clear();
+        let captured = capture_settings_with_report(&root, ["reader"], |_, key, reason| {
+            refused.insert(key.unwrap().to_owned(), reason.to_string());
+        });
+        assert!(!captured.contains_key("reader"));
+        assert_eq!(refused.len(), 4);
+        assert!(refused[&invalid_key].starts_with("package contains a non-UTF-8 key:"));
+        assert!(refused[OsStr::new("value")].starts_with("package contains a non-UTF-8 key:"));
+        std::os::unix::fs::symlink(root.join("reader"), root.join("alias")).unwrap();
+        let mut scopes = Vec::new();
+        let captured = capture_settings_with_report(&root, ["alias"], |mod_id, key, reason| {
+            assert_eq!(mod_id, "alias");
+            assert!(key.is_none());
+            scopes.push(reason.to_string());
+        });
+        assert!(captured.is_empty());
+        assert_eq!(scopes.len(), 1);
+        assert!(scopes[0].starts_with("cannot inspect settings directory:"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn published_loop_readers_share_one_immutable_settings_capture() {
+        let root = root("published");
+        fs::write(root.join("reader/value"), "before").unwrap();
+        fs::write(root.join("reader/invalid"), [0xff]).unwrap();
+        fs::write(root.join("reader/large"), vec![b'x'; MAX_SETTING_BYTES + 1]).unwrap();
+        let load = LoadContext::new(
+            DataLoadOrigin::ServerDataLoad,
+            Arc::new(LoadInputs::new(BTreeMap::new(), root.clone())),
+            [],
+        );
+        let mut diagnostics = Vec::new();
+        let settings = capture_settings_with_diagnostics(&root, ["reader"], |report| {
+            diagnostics.push(report.to_owned());
+        });
+        let game = LoopContext {
+            side: LoopSide::Server,
+            snapshot: Snapshot {
+                inputs: load.snapshot.inputs.clone(),
+                settings: shared_settings(settings),
+            },
+            recipe_properties: Default::default(),
+        };
+        fs::write(root.join("reader/value"), "after").unwrap();
+        fs::write(root.join("reader/later-invalid"), [0xff]).unwrap();
+        let audio = game.clone();
+        let worldgen = game.worldgen_context();
+        assert!(Arc::ptr_eq(
+            &game.snapshot.settings,
+            &audio.snapshot.settings
+        ));
+        assert!(Arc::ptr_eq(
+            &game.snapshot.settings,
+            &worldgen.snapshot.settings
+        ));
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                assert_eq!(
+                    worldgen.setting("reader", "value").as_deref(),
+                    Some("before")
+                );
+                assert_eq!(worldgen.setting("reader", "invalid"), None);
+            });
+            scope.spawn(|| {
+                assert_eq!(audio.setting("reader", "value").as_deref(), Some("before"));
+                assert_eq!(audio.setting("reader", "later-invalid"), None);
+            });
+        });
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains("\"reader\"/\"invalid\": invalid UTF-8:"));
+        assert!(diagnostics[0].contains("\"reader\"/\"large\": file byte limit"));
+        capture_settings_with_diagnostics(&root, ["reader"], |report| {
+            diagnostics.push(report.to_owned());
+        });
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics[1].contains("\"reader\"/\"later-invalid\": invalid UTF-8:"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn initial_snapshot_is_shared_scoped_and_renewed_only_by_a_new_load() {
+        let root = root("initial-publication");
+        fs::create_dir(root.join("inactive")).unwrap();
+        fs::write(root.join("reader/mode"), "before").unwrap();
+        fs::write(root.join("inactive/mode"), "not admitted").unwrap();
+        let settings = shared_settings(capture_settings_with_diagnostics(
+            &root,
+            ["reader", "inactive"],
+            |reason| panic!("valid initial settings reported a refusal: {reason}"),
+        ));
+        let inputs = Arc::new(LoadInputs::new(BTreeMap::new(), root.clone()));
+        let initial = LoadContext::from_settings_snapshot(
+            DataLoadOrigin::ClientPreload,
+            inputs.clone(),
+            ["reader", "inactive"],
+            settings.clone(),
+        );
+        assert!(Arc::ptr_eq(&settings, &initial.snapshot.settings));
+        let admitted = LoadContext::from_settings_snapshot(
+            DataLoadOrigin::ClientPreload,
+            inputs,
+            ["reader"],
+            settings.clone(),
+        );
+        assert_eq!(admitted.setting("inactive", "mode"), None);
+        assert!(Arc::ptr_eq(
+            &settings[1].1,
+            &admitted.snapshot.settings[0].1
+        ));
+        fs::write(root.join("reader/mode"), "after").unwrap();
+        fs::write(root.join("reader/late"), "later key").unwrap();
+        let loop_context = admitted.captured_loop_context(LoopSide::Client);
+        let worldgen = loop_context.worldgen_context();
+        assert!(Arc::ptr_eq(
+            &admitted.snapshot.settings,
+            &loop_context.snapshot.settings
+        ));
+        assert_eq!(
+            loop_context.setting("reader", "mode").as_deref(),
+            Some("before")
+        );
+        assert_eq!(worldgen.setting("reader", "late"), None);
+        let next = admitted.for_load(DataLoadOrigin::ClientPreload, ["reader"]);
+        assert_eq!(next.setting("reader", "mode").as_deref(), Some("after"));
+        assert_eq!(next.setting("reader", "late").as_deref(), Some("later key"));
+        assert_eq!(
+            loop_context.setting("reader", "mode").as_deref(),
+            Some("before")
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -512,9 +941,9 @@ mod tests {
             fs::write(root.join(format!("reader/key{i:04}")), "x").unwrap();
         }
         assert!(!capture_settings(&root, ["reader"]).contains_key("reader"));
-        assert!(sorted_names((0..4097).map(|i| Ok(i.to_string()))).is_err());
+        assert!(sorted_names((0..4097).map(|i| Ok(i.to_string().into()))).is_err());
         assert_eq!(
-            sorted_names((0..4096).map(|i| Ok(i.to_string())))
+            sorted_names((0..4096).map(|i| Ok(i.to_string().into())))
                 .unwrap()
                 .len(),
             4096
@@ -541,7 +970,8 @@ mod tests {
             );
         })
         .unwrap();
-        let (_, mut file) = entries.into_iter().next().unwrap().unwrap();
+        let (_, file) = entries.into_iter().next().unwrap();
+        let mut file = file.unwrap();
         let mut value = String::new();
         file.read_to_string(&mut value).unwrap();
         assert_eq!(value, "opened value");
@@ -553,7 +983,7 @@ mod tests {
             fs::write(&path, "replacement").unwrap();
         })
         .unwrap();
-        assert!(entries.into_iter().next().unwrap().is_err());
+        assert!(entries.into_iter().next().unwrap().1.is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -563,20 +993,40 @@ mod tests {
         fs::write(root.join("reader/exact"), vec![b'a'; 65536]).unwrap();
         fs::write(root.join("reader/large"), vec![b'b'; 65537]).unwrap();
         fs::write(root.join("reader/invalid"), [0xff]).unwrap();
-        let captured = capture_settings(&root, ["reader"]);
+        let mut refused = Vec::new();
+        let captured = capture_settings_with_report(&root, ["reader"], |mod_id, key, reason| {
+            refused.push((
+                mod_id.to_owned(),
+                key.unwrap().to_owned(),
+                reason.to_string(),
+            ));
+        });
         assert_eq!(captured["reader"]["exact"].len(), 65536);
         assert_eq!(captured["reader"].get("large"), None);
         assert_eq!(captured["reader"].get("invalid"), None);
+        assert_eq!(refused.len(), 2);
+        assert_eq!(refused[0].0, "reader");
+        assert_eq!(refused[0].1, "invalid");
+        assert!(refused[0].2.starts_with("invalid UTF-8:"));
+        assert_eq!(refused[1].1, "large");
+        assert!(refused[1].2.starts_with("file byte limit"));
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn key_limit() {
         let root = root("count");
-        for i in 0..1025 {
-            fs::write(root.join(format!("reader/key{i}")), "x").unwrap();
+        for i in 0..1027 {
+            fs::write(root.join(format!("reader/key{i:04}")), "x").unwrap();
         }
-        assert_eq!(capture_settings(&root, ["reader"])["reader"].len(), 1024);
+        let mut refused = Vec::new();
+        let captured = capture_settings_with_report(&root, ["reader"], |mod_id, key, reason| {
+            assert_eq!(mod_id, "reader");
+            assert!(reason.to_string().starts_with("key limit"));
+            refused.push(key.unwrap().to_owned());
+        });
+        assert_eq!(captured["reader"].len(), 1024);
+        assert_eq!(refused, ["key1024", "key1025", "key1026"]);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -587,9 +1037,15 @@ mod tests {
             fs::write(root.join(format!("reader/key{i:04}")), vec![b' '; 65536]).unwrap();
         }
         fs::write(root.join("reader/z-extra"), "x").unwrap();
-        let captured = capture_settings(&root, ["reader"]);
+        let mut refused = Vec::new();
+        let captured = capture_settings_with_report(&root, ["reader"], |mod_id, key, reason| {
+            assert_eq!(mod_id, "reader");
+            assert!(reason.to_string().starts_with("snapshot byte limit"));
+            refused.push(key.unwrap().to_owned());
+        });
         assert_eq!(captured["reader"].len(), 256);
         assert!(!captured["reader"].contains_key("z-extra"));
+        assert_eq!(refused, ["z-extra"]);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -606,7 +1062,8 @@ mod tests {
             std::os::unix::fs::symlink(root.join("target"), &path).unwrap();
         })
         .unwrap();
-        let (_, mut file) = entries.into_iter().next().unwrap().unwrap();
+        let (_, file) = entries.into_iter().next().unwrap();
+        let mut file = file.unwrap();
         let mut value = String::new();
         file.read_to_string(&mut value).unwrap();
         assert_eq!(value, "opened");

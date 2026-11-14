@@ -12,7 +12,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::{Damage, Species, Who},
     particles::{FireworkExplosion, ParticleOptions, ParticleType},
-    projectiles::ProjectileWorld,
+    projectiles::{Hit as ProjectileHit, ProjectileWorld},
     random_source,
     text::Text,
 };
@@ -23,11 +23,8 @@ use horizon_core::{
 
 pub(super) const FIREWORK_EXPLODE_EVENT: i8 = 17;
 
-/// What `ProjectileUtil.getHitResultOnMoveVector` found along a rocket's move.
-enum RocketHit {
-    Entity(Who),
-    Block,
-}
+#[path = "fireworks/impact.rs"]
+mod impact;
 
 pub(super) struct Rocket {
     /// Entity-owned registration metadata; content clones are detached.
@@ -635,6 +632,7 @@ impl Game<'_> {
             self.rocket_targets()
         };
         let ticking = self.entity_ticking_area();
+        let hears_impacts = !self.rockets.is_empty() && self.native_hears_impacts();
         let mut i = 0;
         while i < self.rockets.len() {
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
@@ -644,7 +642,8 @@ impl Game<'_> {
                 i += 1;
                 continue;
             }
-            let mut r = self.rockets.remove(i);
+            let join = self.rockets[i].join;
+            let mut r = self.rockets.extract(join).unwrap();
             r.previous = r.position;
             // Entity.baseTick's setOldRot: where updateRotation eases from.
             let old_rotation = r.rotation;
@@ -696,7 +695,7 @@ impl Game<'_> {
             }
             r.first_tick = false;
             let skip = owner.filter(|_| !r.left_owner);
-            let mut hit = None;
+            let mut hit = ProjectileHit::None;
             if r.attached
                 && let Some(conn) = r.guest
             {
@@ -734,18 +733,22 @@ impl Game<'_> {
             // (ProjectileDeflection.REVERSE), anything else sets it off.
             // onHitBlock: only a rocket with explosions (hasExplosion) goes
             // off on a block; a plain one flies on to its lifetime.
-            match hit {
-                Some(RocketHit::Entity(Who::Mob(id)))
-                    if self
-                        .mobs
-                        .iter()
-                        .any(|m| m.id == id && m.species() == Species::Breeze) =>
-                {
-                    r.velocity = r.velocity.scale(-0.5);
+            let deflected = matches!(hit, ProjectileHit::Entity { who: Who::Mob(id), .. }
+                if self.mobs.iter().any(|m| m.id == id && m.species() == Species::Breeze));
+            if deflected {
+                r.velocity = r.velocity.scale(-0.5);
+            } else {
+                let Some((rocket, canceled)) = self.rocket_impact(i, r, hit, hears_impacts) else {
+                    continue;
+                };
+                r = rocket;
+                match hit {
+                    ProjectileHit::Entity { .. } if !canceled => r.life = r.lifetime,
+                    ProjectileHit::Block { .. } if !canceled && !r.explosions.is_empty() => {
+                        r.life = r.lifetime;
+                    }
+                    _ => {}
                 }
-                Some(RocketHit::Entity(_)) => r.life = r.lifetime,
-                Some(RocketHit::Block) if !r.explosions.is_empty() => r.life = r.lifetime,
-                Some(RocketHit::Block) | None => {}
             }
             r.update_rotation(old_rotation);
             let at = [r.position.x, r.position.y, r.position.z];
@@ -761,10 +764,11 @@ impl Game<'_> {
             self.rocket_spark(&r);
             if r.life > r.lifetime {
                 self.explode_rocket(&r);
+                self.rockets.retire_extracted(r.id, r.join);
                 continue;
             }
             let (id, from, to) = (r.id, r.previous, r.position);
-            self.rockets.insert(i, r);
+            self.rockets.put_back(i, r);
             self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
             i = self
                 .rockets
@@ -963,7 +967,7 @@ impl Game<'_> {
         r: &Rocket,
         motion: Vec3,
         skip: Option<Who>,
-    ) -> Option<RocketHit> {
+    ) -> ProjectileHit {
         let from = r.position;
         let mut to = from.add_vector(motion);
         let w = self.mob_world_base(&[]);
@@ -984,11 +988,12 @@ impl Game<'_> {
                 let at = b
                     .inflate(Vec3::new(margin, margin, margin))
                     .clip(from, to)?;
-                Some((*who, from.distance_squared(at)))
+                Some((*who, at, from.distance_squared(at)))
             })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(who, _)| RocketHit::Entity(who))
-            .or(block.map(|_| RocketHit::Block))
+            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(who, at, _)| ProjectileHit::Entity { who, at })
+            .or(block.map(|(at, pos, face)| ProjectileHit::Block { pos, face, at }))
+            .unwrap_or(ProjectileHit::None)
     }
     /// FireworkRocketEntity.handleEntityEvent: use the synchronized item data.
     pub(super) fn remote_firework_explosion(&mut self, id: i32) {

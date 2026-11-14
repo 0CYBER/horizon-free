@@ -294,6 +294,10 @@ fn checked(parts: &[SpecialModelPart]) -> Result<Vec<SpecialPart>, String> {
 }
 
 #[cfg(test)]
+#[path = "native_special_renderers/frame_tests.rs"]
+pub(in crate::game) mod frame_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
