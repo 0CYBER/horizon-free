@@ -2021,7 +2021,12 @@ impl HudBatch {
                 v.pos = [x, y];
                 v.uv = std::array::from_fn(|i| mix(tl.uv[i], tr.uv[i], br.uv[i], bl.uv[i]));
                 v.glint_uv = std::array::from_fn(|i| {
-                    mix(tl.glint_uv[i], tr.glint_uv[i], br.glint_uv[i], bl.glint_uv[i])
+                    mix(
+                        tl.glint_uv[i],
+                        tr.glint_uv[i],
+                        br.glint_uv[i],
+                        bl.glint_uv[i],
+                    )
                 });
                 v.depth = mix(tl.depth, tr.depth, br.depth, bl.depth);
                 v
@@ -3372,8 +3377,26 @@ mod tests {
         // Two axis-aligned model faces at different depths, as an item model or a
         // `draw_scene` picture leaves them after `depth_since`.
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
-        batch.quad_3d([[0.0, 0.0, 1.0], [8.0, 0.0, 1.0], [8.0, 8.0, 1.0], [0.0, 8.0, 1.0]], uv, u32::MAX);
-        batch.quad_3d([[2.0, 2.0, 3.0], [6.0, 2.0, 3.0], [6.0, 6.0, 5.0], [2.0, 6.0, 5.0]], uv, u32::MAX);
+        batch.quad_3d(
+            [
+                [0.0, 0.0, 1.0],
+                [8.0, 0.0, 1.0],
+                [8.0, 8.0, 1.0],
+                [0.0, 8.0, 1.0],
+            ],
+            uv,
+            u32::MAX,
+        );
+        batch.quad_3d(
+            [
+                [2.0, 2.0, 3.0],
+                [6.0, 2.0, 3.0],
+                [6.0, 6.0, 5.0],
+                [2.0, 6.0, 5.0],
+            ],
+            uv,
+            u32::MAX,
+        );
         batch.depth_since(start, [0.0, 0.0, 320.0, 240.0]);
         let before = batch.vertices.clone();
         assert!(before.iter().any(|v| v.depth > 0.0));
@@ -3388,7 +3411,10 @@ mod tests {
         }
         // A clip cutting the sloped face keeps its depth across the cut.
         batch.clip_since(start, 0.0, 0.0, 16.0, 4.0);
-        let sloped: Vec<_> = batch.vertices[6..].iter().map(|v| (v.pos[1], v.depth)).collect();
+        let sloped: Vec<_> = batch.vertices[6..]
+            .iter()
+            .map(|v| (v.pos[1], v.depth))
+            .collect();
         let at = |y: f32| before[6..].iter().find(|v| v.pos[1] == y).unwrap().depth;
         for (y, depth) in sloped {
             let want = at(2.0) + (at(6.0) - at(2.0)) * (y - 2.0) / 4.0;
