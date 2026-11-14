@@ -5151,7 +5151,7 @@ mod query_feedback_tests {
         };
         use std::sync::Arc;
         with_game(|game| {
-            let registry = RuleRegistry::with_bool_rules(
+            let registry = RuleRegistry::with_mod_rules(
                 &["test:feedback".into()],
                 &[Rule {
                     name: "test:spawn_monsters".into(),

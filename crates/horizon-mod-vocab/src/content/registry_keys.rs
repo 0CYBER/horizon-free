@@ -590,3 +590,15 @@ impl crate::BoolGameRuleKey {
         known.then_some(Self(slot)).ok_or("unknown bool rule slot")
     }
 }
+
+impl crate::IntGameRuleKey {
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
+        let known = crate::parts::registration_membership(
+            crate::parts::RegistrationKeyKind::GameRule,
+            slot,
+        )
+        .unwrap_or_else(|| crate::parts::requested_keys().game_rules.id(slot).is_some());
+        known.then_some(Self(slot)).ok_or("unknown int rule slot")
+    }
+}

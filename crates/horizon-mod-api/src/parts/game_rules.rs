@@ -132,6 +132,48 @@ pub mod tests {
     }
 
     #[test]
+    pub(crate) fn int_rule_declarations_check_their_range_and_install_with_slots() {
+        let mut refused = super::PartRegistrar::new("example");
+        refused.game_rule_category("machines").unwrap();
+        assert_eq!(
+            refused.game_rule_int("cap", "example:machines", 70, 0, 64),
+            Err(crate::GameRuleError::InvalidRange)
+        );
+        assert_eq!(
+            refused.game_rule_int("flipped", "example:machines", 0, 1, -1),
+            Err(crate::GameRuleError::InvalidRange)
+        );
+        let errors = super::install_registrar(refused, &crate::parts::tests::rule_schema())
+            .unwrap_err()
+            .join(" ");
+        assert!(errors.contains("InvalidRange") && errors.contains("flipped"));
+        let mut good = super::PartRegistrar::new("example");
+        good.game_rule_category("machines").unwrap();
+        good.game_rule_int("cap", "example:machines", 8, 0, 64)
+            .unwrap();
+        assert_eq!(
+            good.game_rule_int("cap", "example:machines", 8, 0, 64),
+            Err(crate::GameRuleError::Duplicate)
+        );
+        let mut good = super::PartRegistrar::new("example");
+        good.game_rule_category("machines").unwrap();
+        let key = good
+            .game_rule_int("cap", "example:machines", 8, 0, 64)
+            .unwrap();
+        super::install_registrar(good, &crate::parts::tests::rule_schema()).unwrap();
+        let slot = mod_vocab::__private::parts_installation::int_game_rule_key_slot(key);
+        assert!(mod_vocab::__private::parts_installation::validate_int_game_rule_key(slot).is_ok());
+        assert!(super::game_rule_int_slot(key).is_some());
+        assert!(super::game_rules().iter().any(|rule| rule.name == "example:cap"
+            && rule.default
+                == crate::GameRuleDefault::Int {
+                    default: 8,
+                    min: 0,
+                    max: 64
+                }));
+    }
+
+    #[test]
     pub(crate) fn category_registration_refuses_ignored_errors_and_installs_snapshot() {
         let mut foreign = super::PartRegistrar::new("example");
         assert_eq!(
@@ -197,7 +239,7 @@ impl GameRulesRegistrar for PartRegistrar {
                 mod_vocab::__private::parts_installation::game_rule_declaration(
                     id,
                     category.into(),
-                    default,
+                    crate::GameRuleDefault::Bool(default),
                 ),
             );
             Ok(mod_vocab::__private::parts_installation::bool_game_rule_key(slot))
@@ -205,6 +247,44 @@ impl GameRulesRegistrar for PartRegistrar {
         if let Err(error) = &result {
             self.refused
                 .push(format!("mod {} rule {id:?}: {error:?}", self.mod_id));
+        }
+        result
+    }
+
+    fn game_rule_int(
+        &mut self,
+        id: &str,
+        category: &str,
+        default: i32,
+        min: i32,
+        max: i32,
+    ) -> Result<crate::IntGameRuleKey, crate::GameRuleError> {
+        let result = (|| {
+            let id = self.game_rule_id(id)?;
+            if self.game_rules.iter().any(|r| r.name == id) {
+                return Err(crate::GameRuleError::Duplicate);
+            }
+            if !(min..=max).contains(&default) {
+                return Err(crate::GameRuleError::InvalidRange);
+            }
+            let slot = self
+                .registry_keys
+                .borrow_mut()
+                .game_rules
+                .request(self.mod_id, &id)
+                .map_err(|_| crate::GameRuleError::InvalidId)?;
+            self.game_rules.push(
+                mod_vocab::__private::parts_installation::game_rule_declaration(
+                    id,
+                    category.into(),
+                    crate::GameRuleDefault::Int { default, min, max },
+                ),
+            );
+            Ok(mod_vocab::__private::parts_installation::int_game_rule_key(slot))
+        })();
+        if let Err(error) = &result {
+            self.refused
+                .push(format!("mod {} int rule {id:?}: {error:?}", self.mod_id));
         }
         result
     }
