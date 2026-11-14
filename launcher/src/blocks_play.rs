@@ -252,6 +252,7 @@ impl Launcher {
                 .gap(px(24.))
                 .child(self.glass_home_head(&tag, prepared, cx))
                 .children(steps)
+                .children(self.glass_build_notice(cx))
         } else {
             let hero = match &java {
                 // Its own game: the Minecraft version and the loader, never Horizon's.

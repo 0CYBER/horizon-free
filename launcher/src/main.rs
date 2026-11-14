@@ -37,6 +37,7 @@ mod glass_home_packs;
 mod glass_home_tabs;
 mod glass_instance;
 mod glass_instance_java;
+mod glass_mod_states;
 mod glass_palette;
 mod glass_settings;
 mod glass_sheet;
@@ -493,6 +494,8 @@ struct Launcher {
     client_since: Option<Instant>,
     /// The selected instance's mods, for Home's Mods tab (`instance_mods.rs`).
     instance_mods: instance_mods::InstanceMods,
+    /// Debug-build previews of the native mod states (`glass_mod_states.rs`).
+    mod_preview: glass_mod_states::Preview,
     /// Modrinth projects' icon URLs (`instance_mods.rs`).
     project_icons: instance_mods::ProjectIcons,
     play_pressed: Option<Instant>,

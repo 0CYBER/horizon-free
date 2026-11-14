@@ -329,6 +329,13 @@ impl Launcher {
                 cx.notify();
             }))
         });
+        // A local unsigned developer base is said as such, with its trust warning.
+        let developer = self
+            .selected_instance()
+            .and_then(|i| self.version_of(i))
+            .and_then(|tag| {
+                horizon_launcher::developer_install::instance_status(tag, backend::is_prepared(tag))
+            });
         ui::text(15., FontWeight::NORMAL, ink::STRONG)
             .mt(px(16.))
             .flex()
@@ -337,6 +344,7 @@ impl Launcher {
             .child(line)
             .children(playing)
             .children(official)
+            .children(developer.map(|status| div().w_full().text_color(ui::warn()).child(status)))
     }
 
     /// Play and its ⋯ menu (`PlayGroup`): Stop while the game runs, Update when the launcher's

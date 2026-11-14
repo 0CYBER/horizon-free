@@ -23,6 +23,7 @@ impl HomeTab {
     pub(super) fn from_env() -> Self {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
             Ok("instance-mods") => HomeTab::Mods,
+            Ok(page) if page.starts_with("mod-") => HomeTab::Mods,
             Ok("worlds") => HomeTab::Worlds,
             Ok("multiplayer") => HomeTab::Multiplayer,
             Ok("packs") => HomeTab::Packs,
