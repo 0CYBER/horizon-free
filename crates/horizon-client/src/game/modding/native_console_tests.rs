@@ -124,7 +124,7 @@ fn a_blank_line_or_no_server_runs_nothing() {
     });
 }
 
-/// The lines kept are capped: at most `MAX_LINES` lines, none above `MAX_LINE_BYTES` bytes, cut
+/// The lines kept are capped: at most `MAX_FEEDBACK_LINES` lines, none above `MAX_FEEDBACK_LINE_BYTES` bytes, cut
 /// at a character boundary (the line below ends in a three-byte character on the cap).
 #[test]
 fn the_feedback_kept_is_capped() {
