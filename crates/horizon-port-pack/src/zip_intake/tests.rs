@@ -21,6 +21,16 @@ fn pack(entries: u64, with_manifest: bool) -> Vec<u8> {
     writer.finish().unwrap().into_inner()
 }
 
+// Both shape and prefix tests read the same large archive without modifying it.
+fn modpack(entries: u64) -> std::borrow::Cow<'static, [u8]> {
+    if entries == 65_536 {
+        static ZIP64: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        std::borrow::Cow::Borrowed(ZIP64.get_or_init(|| pack(65_536, true)))
+    } else {
+        std::borrow::Cow::Owned(pack(entries, true))
+    }
+}
+
 fn oversized_entry_count() -> [u8; END64_LEN + LOCATOR64_LEN + END_LEN] {
     // A ZIP64 footer can declare a large entry table in a tiny file.
     let mut archive = [0; END64_LEN + LOCATOR64_LEN + END_LEN];
@@ -66,8 +76,8 @@ fn zero_length_entries_consume_the_entry_budget() {
 #[test]
 fn accepts_large_zip32_and_zip64_modpack_shapes() {
     for entries in [20_000, 65_536] {
-        let archive = pack(entries, true);
-        let mut zip = open(Cursor::new(archive)).unwrap();
+        let archive = modpack(entries);
+        let mut zip = open(Cursor::new(archive.as_ref())).unwrap();
         assert_eq!(zip.len(), entries as usize + 1);
         let mut text = String::new();
         zip.by_name("manifest.json")
@@ -122,7 +132,7 @@ fn refuses_records_past_the_declared_count_or_directory() {
 fn keeps_offsets_for_prefixed_archives() {
     for entries in [0, 65_536] {
         let mut prefixed = b"prefix bytes".to_vec();
-        prefixed.extend(pack(entries, true));
+        prefixed.extend_from_slice(&modpack(entries));
         let mut zip = open(Cursor::new(prefixed)).unwrap();
         assert_eq!(zip.offset(), 12);
         assert!(zip.by_name("manifest.json").is_ok());
