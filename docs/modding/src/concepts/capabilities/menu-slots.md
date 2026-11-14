@@ -161,6 +161,15 @@ if let Some(menu) = host.menu(uuid, window) {
 }
 ```
 
+To rebuild the whole menu at once (a page turned, a list refiltered) `host.menu_set_items(uuid, window, items)`
+replaces everything it shows and sends it as one `ContainerSetContent` for that window, now rather than with the next
+tick's sync, as vanilla's `sendAllDataToRemote` does: the screen, the title and the cursor stay. Like `open_menu` it pads
+`items` with empty slots and drops the ones past the menu's last. It returns `Result<(), MenuItemsRefusal>` and each
+refusal sends and changes nothing: `Client`, `NoPlayer` (no placed player has that UUID), `NotOpen` (`window` is not
+the player's open `open_menu` menu: another window, a closed menu, or a menu the game opened) and
+`Stack(StackWriteError)` (an item the world lacks, a count or damage the item does not allow). For one slot or a few,
+write them through `host.menu` as above: they cost one packet each and no replacement of the others.
+
 A title or a row count changes only with a new menu, as in vanilla: `open_menu` again, with a new window id, the
 title and all the items. The old menu closes on the server as a close does, its cursor stack going back to the
 player's inventory, and packets for its window are ignored. `replace` is the choice a Java `MenuProvider` makes

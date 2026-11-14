@@ -25,6 +25,8 @@ horizon-client game::mods::tests::content_overlay_validates_dependencies_and_ord
 horizon-client game::mods::tests::native_content_follows_the_build_and_misplaced_content_follows_its_selection lib daily child-process
 horizon-client game::mounts::tests::feeding_a_mount_draws_from_its_own_random_and_posts_eat lib daily game-boot
 horizon-client game::native_block_entity_transform_tests::structure_transform_placement_rotations_mirrors_unset_and_refusal lib daily child-process
+horizon-client game::native_chat_recipients_tests::a_chat_line_hidden_from_one_receiver_reaches_the_others lib daily resources
+horizon-client game::native_chat_recipients_tests::say_and_me_are_asked_per_receiver_and_a_whisper_is_not lib daily resources
 horizon-client game::native_datafix_tests::a_mods_host_upgrades_old_data_and_refuses_by_name lib daily game-boot
 horizon-client game::native_entity_selectors::tests::nearest_teammate_filters_before_limit_and_drops_false_and_panicking_candidates lib daily game-boot
 horizon-client game::native_entity_selectors::tests::synced_selector_tokens_survive_client_registry_refresh lib daily game-boot
@@ -33,7 +35,11 @@ horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::act
 horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::bed_leave_carries_the_wake_flags_before_the_sleep_clears lib daily game-boot
 horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::guest_missing_bed_death_and_bed_rule_keep_their_distinct_literal_pairs lib daily game-boot
 horizon-client game::native_hooks::player_bed_leave::player_bed_leave_tests::guest_wake_counters_match_the_same_reasons_without_listeners lib daily game-boot
+horizon-client game::native_menus::tests::a_menus_items_are_replaced_in_one_packet_without_reopening lib daily resources
 horizon-client game::native_menus::tests::container_hooks_follow_actual_open_boundaries_without_a_tick lib daily game-boot
+horizon-client game::native_menus::tests::each_menu_items_refusal_has_its_own_name_and_sends_nothing lib daily resources
+horizon-client game::native_player_respawn_tests::a_dead_player_is_respawned_once lib daily resources
+horizon-client game::native_player_respawn_tests::each_respawn_refusal_has_its_own_name_and_changes_nothing lib daily resources
 horizon-client game::native_server::network_settings_tests::server_settings_follow_the_network_config lib daily slow
 horizon-client game::natural_spawning::tests::spawn_candidates_match_the_uncached_union_while_players_move lib daily slow
 horizon-client game::screen_render_phase_tests::chest_render_phases_cover_panel_but_preserve_items_tooltips_and_carried_stack lib daily resources # HORIZON_TEST_RESOURCES and software Vulkan required.
