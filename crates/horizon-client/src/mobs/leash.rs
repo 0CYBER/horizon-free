@@ -330,11 +330,11 @@ pub fn can_be_leashed(m: &Mob) -> bool {
         | S::Pufferfish
         | S::Tadpole => false,
         S::Wolf => !super::tame::angry(m),
-        // Nautilus.canBeLeashed and ZombieNautilus.canBeLeashed: never while
-        // it is aggravated. The zombie also refuses while a mob is riding it
-        // (`isMobControlled`), which a mob alone cannot see.
-        // shortcut: isMobControlled, when a mob can ride a zombie nautilus.
-        S::Nautilus | S::ZombieNautilus => !super::nautilus::aggravated(m),
+        // Nautilus.canBeLeashed: never while it is aggravated.
+        S::Nautilus => !super::nautilus::aggravated(m),
+        // ZombieNautilus.canBeLeashed: also not while a mob rides it
+        // (`isMobControlled`; `extra.rider` is the mob passenger).
+        S::ZombieNautilus => !super::nautilus::aggravated(m) && m.extra.rider.is_none(),
         // SulfurCube.canBeLeashed: `hasBodyItem()`, so only a cube with a
         // block in its body takes a lead. Its category is a monster's, which
         // `Mob.canBeLeashed`'s `!(this instanceof Enemy)` rule would refuse.
@@ -1008,6 +1008,12 @@ mod tests {
                 can_be_leashed(&new("minecraft:zombie_nautilus")),
                 "a calm zombie nautilus"
             );
+            let mut jockey = new("minecraft:zombie_nautilus");
+            jockey.extra.rider = Some(2);
+            assert!(!can_be_leashed(&jockey), "isMobControlled");
+            let mut ridden = new("minecraft:nautilus");
+            ridden.extra.rider = Some(2);
+            assert!(can_be_leashed(&ridden), "a plain nautilus has no check");
         });
         let _ = ran;
     }
