@@ -123,3 +123,14 @@ read the distances in chunks; `host.server_set_view_distance(d)` and
 `host.server_set_simulation_distance(d)` change them live for 2 to 32 on a
 dedicated server and return `false` otherwise. `server.properties` is not
 written.
+
+## Console and player limit
+
+For a mod that mirrors or drives the server's console (a Discord console channel, a remote assistant) or
+sets how many players may be on. Server only.
+
+| Call | Behavior |
+|---|---|
+| `console_line` hook | Every line the server logs (what its console prints and `logs/latest.log` keeps): `level` (`INFO`, `WARN` or `ERROR`), the `thread` it names and the `message` without time or thread. Lines are collected from every thread while a mod listens and heard on the server thread at the start of the next server tick, in the order logged, so a listener may use the host. A line a `console_line` listener logs itself is not collected, so a listener that logs what it hears does not feed itself. At most 4096 lines wait between two ticks; the oldest are dropped with no notice, and the lines logged before the first tick a mod listens are not heard. Paper has no event for this (plugins add a Log4j appender), and neither has NeoForge. |
+| `host.server_run_command_captured(line)` | Runs `line` as the console does (one leading slash dropped, permission level 4, from the overworld's spawn) and keeps its feedback: `Ok((ran, lines))`, `ran` being whether it ran without failing and `lines` what the console would print, as plain text. A command that ran and failed is `Ok((false, lines))` with its message, not a refusal. Refuses, running nothing, with `ConsoleRefusal::NotOpen` (no server open to players) or `Blank` (nothing left once whitespace and the slash are dropped). The dedicated console's own commands (`stop`, `op`, `whitelist`, `ban`) are not reached and answer as a command that failed. A call made while another capture is open captures its own lines; the outer capture keeps what it had. |
+| `host.server_max_players()` / `host.server_set_max_players(n)` | Paper's `Server.getMaxPlayers` and `setMaxPlayers`: the limit logins are refused beyond and the server list shows, live. The read is `None` where no server is open to players, its one reason. The write takes effect from the next login and ping, changes players already on nothing, and does not write `server.properties` (a restart goes back to it, as Paper's does; the management protocol's `max_players` setting does write it). Zero is taken. Refuses, changing nothing, with `PlayerLimitRefusal::NotOpen` or `TooHigh { maximum }` for a limit above `i32::MAX`, vanilla's `int`. |
