@@ -280,20 +280,42 @@ impl Game<'_> {
                                 | horizon_client::mobs::Species::Mannequin
                         )
                         && let Some(epoch) = self.native_lifecycle.epoch()
-                        && let Err(payload) =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                self.native_mob_despawn(
-                                    self.dim.id(),
-                                    mod_api::MobRef::new(mod_api::EntityRef::new(epoch, m.id)),
-                                    &m.kind.id,
-                                    [m.position.x, m.position.y, m.position.z],
-                                    &mut m.despawn,
-                                );
-                            }))
                     {
-                        m.despawn = mod_api::Despawn::default();
-                        dispatch_panic = Some(payload);
-                        break;
+                        let (id, kind, at) = (
+                            m.id,
+                            std::sync::Arc::clone(&m.kind),
+                            [m.position.x, m.position.y, m.position.z],
+                        );
+                        let mut result = mod_api::Despawn::default();
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                // The handle resolves through the tick's own view:
+                                // the game has lent its mob list to this pass (#795).
+                                let world = MobWorld {
+                                    others: snapshot.as_slice(),
+                                    others_grid: Some(&grid),
+                                    others_index: Some(&index),
+                                    others_villagers: Some(&villager_slots),
+                                    others_solid: Some(&solid_slots),
+                                    live_mobs: None,
+                                    ..base.clone()
+                                };
+                                self.native_mob_despawn_in_tick(
+                                    m,
+                                    &world,
+                                    self.dim.id(),
+                                    mod_api::MobRef::new(mod_api::EntityRef::new(epoch, id)),
+                                    &kind.id,
+                                    at,
+                                    &mut result,
+                                );
+                            }));
+                        m.despawn = result;
+                        if let Err(payload) = outcome {
+                            m.despawn = mod_api::Despawn::default();
+                            dispatch_panic = Some(payload);
+                            break;
+                        }
                     }
                     // ServerLevel.tick: every loaded entity checks despawning, but
                     // only those in entity-ticking chunks (within the simulation
@@ -981,3 +1003,7 @@ mod hoglin_routing_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mob_tick_access_tests.rs"]
+mod mob_tick_access_tests;

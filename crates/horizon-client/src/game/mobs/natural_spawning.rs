@@ -2530,7 +2530,7 @@ mod tests {
                         id,
                     ));
                     let pos = [mob.position.x, mob.position.y, mob.position.z];
-                    game.native_mob_despawn(
+                    crate::game::native_hooks::NativeHookHost { host: game }.native_mob_despawn(
                         "minecraft:overworld",
                         handle,
                         &mob.kind.id,

@@ -786,6 +786,34 @@ impl mobs::part_goals::GoalHost for Game<'_> {
 }
 
 impl Game<'_> {
+    /// Tell `mob_despawn` for a mob the tick holds out of the game. The handle
+    /// resolves through the tick's own read view (#795) — the ticking mob
+    /// itself, the player it sees and the snapshot of the others — because the
+    /// game has lent its mob list to the tick and `Game` itself would answer
+    /// nothing for any of them.
+    pub(in crate::game) fn native_mob_despawn_in_tick(
+        &self,
+        mob: &mut Mob,
+        world: &MobWorld<'_>,
+        dimension: &str,
+        entity: MobRef,
+        kind: &str,
+        pos: [f64; 3],
+        result: &mut mod_api::Despawn,
+    ) {
+        // The despawn check needs no mod goal of its own, but the goal view is
+        // what resolves a handle in a tick that has lent its list: stand the
+        // game in as its goal host for this call only.
+        let mut world = world.clone();
+        world.goal_host = Some(self as &dyn mobs::part_goals::GoalHost);
+        let context = GoalCx {
+            m: mob,
+            w: &world,
+            host: self,
+        };
+        super::native_hooks::NativeHookHost { host: &context }
+            .native_mob_despawn(dimension, entity, kind, pos, result);
+    }
     /// Dispatch a target change against the mob tick's scoped read view. The
     /// game has lent its mob list to the tick, so using `Game` itself as the
     /// host here would make the actor and other mob handles unresolvable.
