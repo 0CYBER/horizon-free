@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use horizon_core::position::ChunkPos;
-use horizon_world::{
+use horizon_core::{
     nbt::{Limits, NamedTag, Tag},
-    region::RegionFile,
+    position::ChunkPos,
 };
+use horizon_world::region::RegionFile;
 
 use super::{
     Record,

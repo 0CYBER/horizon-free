@@ -3272,7 +3272,6 @@ mod arrow_color_tests {
     use super::*;
     use crate::items::ItemStack;
     use horizon_core::nbt::Tag;
-    use horizon_core::random::LegacyRandom;
 
     /// `Arrow.updateColor`: `ID_EFFECT_COLOR` is -1 only while the pickup
     /// item's contents are `PotionContents.EMPTY`, and otherwise
@@ -3288,7 +3287,7 @@ mod arrow_color_tests {
                 effect: None,
             };
             let mut p = Projectile::new(kind, Vec3::new(0.5, 64.0, 0.5), None);
-            let mut arrow = crate::arrows::ArrowState::new(LegacyRandom::new(0));
+            let mut arrow = crate::arrows::ArrowState::new();
             arrow.set_item(stack);
             p.arrow = Some(Box::new(arrow));
             p.arrow_effect_color()

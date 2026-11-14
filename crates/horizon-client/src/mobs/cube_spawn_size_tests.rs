@@ -8,15 +8,12 @@
 use super::super::spawning::{LocalDifficulty, tests::run_finalize};
 use super::super::world::with_test_world;
 use super::super::{Mob, MobTypes};
-use horizon_core::{
-    geometry::Vec3,
-    random::{EntityRandom, LegacyRandom, RandomSource},
-};
+use horizon_core::{geometry::Vec3, random::LegacyRandom};
 use std::sync::Arc;
 
 fn cube(types: &MobTypes, id: &str, seed: i64) -> Mob {
     let mut m = Mob::new(1, Arc::new(types.types[id].clone()), Vec3::ZERO, 0.0);
-    m.random = EntityRandom::own(LegacyRandom::new(seed));
+    m.random = LegacyRandom::new(seed);
     m
 }
 /// Hard, a long-played area, full moon: `calculateDifficulty` gives

@@ -322,7 +322,7 @@ impl PlayerSender {
                     Ok(h) => format!(
                         "items={} bytes={}",
                         h.len(),
-                        h.iter().map(Vec::len).sum::<usize>()
+                        h.iter().map(|body| body.len()).sum::<usize>()
                     ),
                     Err(_) => "busy/poisoned".into(),
                 },
@@ -503,7 +503,7 @@ impl PlayerSender {
         if matches!(self.to, To::Disabled) {
             return;
         }
-        if !self.reserve(io_pool::charge(&body)) {
+        if !self.reserve(io_pool::charge(body.retained())) {
             self.close();
             return;
         }
@@ -3713,7 +3713,7 @@ mod outgoing_budget_tests {
     fn empty_prepared_journal_records_are_bounded_and_fully_refunded() {
         let s = sender(Framing::Memory);
         let id = PayloadId("test:raw".into());
-        let cost = io_pool::charge(&Vec::new()) + 512;
+        let cost = io_pool::charge(0) + 512;
         let mut permits = Vec::new();
         for _ in 0..io_pool::MAX_PENDING / cost {
             permits.push(s.prepare_payload(Vec::new(), &id).unwrap());
@@ -3768,7 +3768,7 @@ mod outgoing_budget_tests {
         s.send(Vec::with_capacity(20000));
         assert_eq!(
             s.pending.load(Ordering::Relaxed),
-            before + io_pool::charge(&Vec::with_capacity(20000))
+            before + io_pool::charge(20000)
         );
         drop(hold);
         s.flush();
@@ -3785,7 +3785,7 @@ mod outgoing_budget_tests {
         ));
         assert_eq!(s.pending.load(Ordering::Relaxed), 0);
         let _hold = Holding::start();
-        for _ in 0..(io_pool::MAX_PENDING / io_pool::charge(&Vec::new()) + 10) {
+        for _ in 0..(io_pool::MAX_PENDING / io_pool::charge(0) + 10) {
             s.send(Vec::new());
         }
         assert!(s.pending.load(Ordering::Relaxed) <= io_pool::MAX_PENDING);

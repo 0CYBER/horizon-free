@@ -5505,12 +5505,26 @@ mod tests {
         };
         let root = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"));
         let assets = Arc::new(crate::assets::Assets::load(&root).expect("assets"));
-        let biomes = Arc::new(Biomes::load(&root).expect("biomes"));
+        let biomes = Arc::new(
+            Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+                root.clone(),
+            ))
+            .expect("biomes"),
+        );
+        let item_data = crate::test_resources::item_data(
+            &root,
+            horizon_world::native_load_context::DataLoadOrigin::ServerDataLoad,
+        )
+        .expect("item data");
         let inner = Arc::new(
             crate::vanillagen::VanillaTerrain::new(
-                &root.join("worldgen"),
-                assets.registry,
-                &biomes,
+                crate::vanillagen::TerrainResources {
+                    data: None,
+                    dir: &root.join("worldgen"),
+                    registry: assets.registry,
+                    biomes: &biomes,
+                    item_data: &item_data,
+                },
                 12345,
             )
             .unwrap(),
@@ -6289,13 +6303,17 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn saved_far_surface_checks_packed_indices_against_their_palettes() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
             return;
         };
         let root = PathBuf::from(root);
         let assets = crate::assets::Assets::load(&root).expect("assets");
-        let biomes = Biomes::load(&root).expect("biomes");
+        let biomes = Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+            root.clone(),
+        ))
+        .expect("biomes");
         let stone = assets.registry.default_state("minecraft:stone").unwrap();
         let forest = biomes.id("minecraft:forest");
         let desert = biomes.id("minecraft:desert");
@@ -6365,13 +6383,17 @@ mod tests {
     /// milliseconds for one saved chunk, most of them over the air above the
     /// ground, on every far sampling thread.
     #[test]
+    #[ignore = "daily"]
     fn saved_far_surface_reads_a_section_once_not_once_a_block() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
             return;
         };
         let root = PathBuf::from(root);
         let assets = crate::assets::Assets::load(&root).expect("assets");
-        let biomes = Biomes::load(&root).expect("biomes");
+        let biomes = Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+            root.clone(),
+        ))
+        .expect("biomes");
         let dandelion = assets
             .registry
             .default_state("minecraft:dandelion")

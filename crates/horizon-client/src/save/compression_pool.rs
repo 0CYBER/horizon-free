@@ -8,7 +8,8 @@ use std::{
     },
 };
 
-use horizon_world::{compression::Compression, nbt::Limits, region::ChunkRecord};
+use horizon_core::nbt::Limits;
+use horizon_world::{compression::Compression, region::ChunkRecord};
 
 use super::Record;
 
