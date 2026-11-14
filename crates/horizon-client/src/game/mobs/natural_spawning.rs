@@ -13,8 +13,9 @@ use horizon_client::{
         seen_grid::SeenGrid,
         spawn_rules::{Reason, SpawnLevel},
         spawn_selection::{
-            self, Category, Counted, Heightmap, NaturalLevel, PlayerSquares, SpawnCost,
-            SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureAt, StructureSpawns,
+            self, Category, Counted, Heightmap, NaturalLevel, PlayerSquares, SpawnBuffers,
+            SpawnCost, SpawnPlayer, SpawnRequest, SpawnState, Spawned, StructureAt,
+            StructureSpawns,
         },
     },
 };
@@ -65,6 +66,8 @@ pub(super) struct SpawnScratch {
     /// dx/dz order, that no earlier player's square holds.
     segments: Vec<Vec<(i32, i32)>>,
     stale: Vec<bool>,
+    /// The spawn state's allocations, reused across passes.
+    spawn_buffers: SpawnBuffers,
 }
 impl SpawnScratch {
     fn chunk(p: &LevelPlayer) -> (i32, i32) {
@@ -1168,9 +1171,10 @@ impl<'a> Game<'a> {
         level: &GameLevel<'_, '_>,
         spawnable: i32,
         players: Vec<SpawnPlayer>,
+        buffers: SpawnBuffers,
         counted: &[Counted],
     ) -> SpawnState {
-        SpawnState::new(level, spawnable, players, counted, |cx, cz| {
+        SpawnState::new_in(level, spawnable, players, buffers, counted, |cx, cz| {
             self.world.chunks.contains_key(&(cx, cz))
         })
         .with_limits(self.spawn_policy(self.dim.key()).limits)
@@ -1280,7 +1284,8 @@ impl<'a> Game<'a> {
                 })
                 .collect();
             laps.lap("sn_materialize");
-            let mut state = self.natural_spawn_state(&level, spawnable, players, &counted);
+            let buffers = std::mem::take(&mut scratch.spawn_buffers);
+            let mut state = self.natural_spawn_state(&level, spawnable, players, buffers, &counted);
             laps.lap("sn_state");
             last_state = state.counts();
             let categories = self.natural_categories(&state);
@@ -1317,6 +1322,7 @@ impl<'a> Game<'a> {
                     );
                 }
             }
+            scratch.spawn_buffers = state.into_parts().1;
             let created = std::mem::take(&mut *level.spawned.borrow_mut());
             let rides = std::mem::take(&mut *level.rides.borrow_mut());
             (created, rides)
