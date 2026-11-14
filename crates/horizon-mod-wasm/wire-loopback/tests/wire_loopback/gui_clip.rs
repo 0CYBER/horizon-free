@@ -11,7 +11,10 @@ fn gui_clip_refusals_round_trip_by_ordinal() {
         let mut out = Writer::new();
         out.put(&refusal);
         assert_eq!(out.bytes(), ordinal.to_le_bytes());
-        assert_eq!(Reader::decode::<GuiClipRefusal>(out.bytes()).unwrap(), refusal);
+        assert_eq!(
+            Reader::decode::<GuiClipRefusal>(out.bytes()).unwrap(),
+            refusal
+        );
     }
 }
 
