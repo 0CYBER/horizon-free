@@ -5408,7 +5408,7 @@ mod forced_respawn_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_forced_spawnpoint_on_a_respawn_anchor_still_depletes_with_its_sound() {
         // PlayerList.respawn: the deplete sound has no `forced` test, so a point
         // that `/spawnpoint` kept (a forced anchor config) whooshes on every
