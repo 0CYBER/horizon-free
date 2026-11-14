@@ -256,8 +256,8 @@ mod tests {
                     forced_cover,
                     band: None,
                 };
-                let (scan, map) = (ranges(None), ranges(Some(made)));
-                // The scan goes through every forced chunk: fewer columns for more of them.
+                let map = ranges(Some(made));
+                // Keep every sampled column and reach; reuse its nearest forced chunk below.
                 let near: Vec<_> = forced.iter().step_by(forced.len() / 40).copied().collect();
                 let offsets = chunks(&mut seed, 6, 12);
                 let far = chunks(&mut seed, 12, 3000);
@@ -266,6 +266,19 @@ mod tests {
                     .flat_map(|&(x, z)| offsets.iter().map(move |&(dx, dz)| (x + dx, z + dz)))
                     .chain(far);
                 for (x, z) in columns {
+                    // All concentric Chebyshev queries have the same nearest chunk.
+                    // Find it by one independent full scan, instead of rescanning
+                    // thousands of forced chunks for each reach and margin. The
+                    // indexed cover still contains the complete original set.
+                    let nearest = *forced
+                        .iter()
+                        .min_by_key(|&&(fx, fz)| (x - fx).abs().max((z - fz).abs()))
+                        .unwrap();
+                    let nearest = HashSet::from([nearest]);
+                    let scan = Ranges {
+                        forced: &nearest,
+                        ..ranges(None)
+                    };
                     for reach in [-1, 0, 1, 2, 3, 4, 5, 6, 8, 11, 40] {
                         assert_eq!(
                             map.forced_within(x, z, reach),
