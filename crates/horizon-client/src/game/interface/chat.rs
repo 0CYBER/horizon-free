@@ -1824,10 +1824,7 @@ impl Game<'_> {
             return false;
         };
         let mut cancel = false;
-        let mut draw = super::host::draw::GameDrawContext {
-            game: self,
-            surface: batch,
-        };
+        let mut draw = super::host::draw::GameDrawContext::new(self, batch);
         self.native_component_hover(mod_api::__private::ComponentHoverCall {
             draw: &mut draw,
             hover: &hover,

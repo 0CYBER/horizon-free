@@ -425,7 +425,7 @@ pub(super) fn emit<'a>(
                 surface_calls.insert(
                     name.as_str(),
                     format!(
-                        "&mut crate::game::host::draw::{} {{ game: self, surface: {name} }}",
+                        "&mut crate::game::host::draw::{}::new(self, {name})",
                         context.game_struct()
                     ),
                 );

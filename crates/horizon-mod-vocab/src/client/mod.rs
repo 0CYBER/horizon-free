@@ -52,6 +52,7 @@ pub mod particles;
 pub mod player_chat;
 pub(crate) mod posed_parts;
 pub(crate) mod render_pipeline;
+pub(crate) mod gui_clip;
 pub(crate) mod scene;
 pub(crate) mod screenshot;
 pub(crate) mod skull_models;

@@ -418,10 +418,7 @@ impl Game<'_> {
                     pos,
                     partial_tick: partial,
                     hide_gui: self.ui.hide_gui,
-                    draw: &mut GameCameraDrawContext {
-                        game: self,
-                        surface: &mut quads,
-                    },
+                    draw: &mut GameCameraDrawContext::new(self, &mut quads),
                     replace_vanilla: &mut replace_vanilla,
                 },
             );
