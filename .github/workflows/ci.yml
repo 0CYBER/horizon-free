@@ -195,7 +195,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-lint's clippy
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
-      # cargo test, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
+      # cargo test --locked, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
       # these 4-core runners it was no faster (#4978).
       - name: Build the runtime holder test actor
         if: steps.rust.outputs.required != 'false'
@@ -215,12 +215,12 @@ jobs:
         env:
           PACKAGES: ${{ steps.scope.outputs.packages }}
         run: |
-          cargo +stable test ${PACKAGES:---workspace} --lib --bins --tests
+          cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests
           # The full content-root tests (#[ignore]d: minutes each on a laptop). The same build as above; they need the
           # prepared vanilla data, so without it they pass at once. Keep the target selection identical to avoid
           # recompiling the workspace with a different dependency graph.
-          cargo +stable test ${PACKAGES:---workspace} --lib --bins --tests mod_content::tests:: -- --ignored
-          cargo +stable test ${PACKAGES:---workspace} --doc
+          cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests mod_content::tests:: -- --ignored
+          cargo +stable test --locked ${PACKAGES:---workspace} --doc
   verify:
     needs: [verify-tree, verify-lint, verify-test]
     if: always()
