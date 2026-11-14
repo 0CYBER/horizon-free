@@ -1389,6 +1389,39 @@ pub enum Sentiment {
     Neutral,
 }
 
+/// Why an entity physically moves (`Entity.move`'s `MoverType`, the
+/// `entity_move` hook of #2308/#2414): itself, the player behind a position
+/// packet, a piston, a shulker box lid, a shulker mob's opening lid. Boats
+/// and minecarts pass `SelfMovement`, as vanilla's own kinds do; `Player` is
+/// the server packet sites only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum MoveCause {
+    /// `MoverType.SELF`: the body's own tick, travel or packet follow-up.
+    SelfMovement,
+    /// `MoverType.PLAYER`: the server applying a player's position or vehicle
+    /// packet.
+    Player,
+    /// `MoverType.PISTON`: a moving piston block pushes the body.
+    Piston,
+    /// `MoverType.SHULKER_BOX`: a shulker box's opening lid pushes it away.
+    ShulkerBox,
+    /// `MoverType.SHULKER`: a shulker mob's opening lid pushes it away.
+    Shulker,
+}
+
+impl MoveCause {
+    /// Every cause, in ordinal order.
+    pub const ALL: [Self; 5] = [
+        Self::SelfMovement,
+        Self::Player,
+        Self::Piston,
+        Self::ShulkerBox,
+        Self::Shulker,
+    ];
+}
+
 /// How a declared attribute's modifier lines read on item tooltips: NeoForge's
 /// `RangedAttribute`, `PercentageAttribute` and `BooleanAttribute`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

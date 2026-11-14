@@ -2,6 +2,7 @@
 own tag, never as the Nightly and never moving `daily-green`."""
 import datetime as dt
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -90,6 +91,48 @@ class NightlyBuildSnapshotTests(unittest.TestCase):
         self.assertIn('--tag "$KIND" --publishing', verify)
         self.assertIn('--tag "${KIND}-${DATE}-${SHORT}"', verify)
         self.assertEqual(self.workflow["on"]["workflow_dispatch"]["inputs"]["kind"]["default"], "nightly")
+
+    def test_snapshot_optional_platforms_keep_nightly_and_release_requirements(self):
+        game = load("game-build.yml")
+        build = game["jobs"]["build"]
+        expression = build["continue-on-error"].removeprefix("${{").removesuffix("}}").strip()
+        self.assertEqual(game["on"]["workflow_call"]["inputs"]["kind"]["default"], "release")
+        self.assertEqual(self.workflow["jobs"]["build"]["with"]["kind"], "${{ inputs.kind }}")
+        for kind in ("snapshot", "nightly", "release"):
+            optional = set()
+            for row in build["strategy"]["matrix"]["include"]:
+                condition = expression.replace("matrix.name", repr(row["name"])).replace("inputs.kind", repr(kind))
+                if eval(condition.replace("||", "or").replace("&&", "and"), {"__builtins__": {}}):
+                    optional.add(row["name"])
+            self.assertEqual(optional, {"windows-arm64", "linux-musl"} | ({"macos-x64"} if kind == "snapshot" else set()))
+        self.assertEqual(game["jobs"]["linux-smoke"]["needs"], ["runner-configuration", "build"])
+        self.assertEqual(self.workflow["jobs"]["sign"]["needs"], ["pick", "build"])
+        self.assertEqual(self.workflow["jobs"]["publish"]["needs"], ["pick", "build", "sign"])
+
+    @unittest.skipIf(os.name == "nt", "executes the POSIX signing step")
+    def test_missing_intel_mac_is_signed_only_for_snapshot_and_notes_name_missing_assets(self):
+        sign = self.workflow["jobs"]["sign"]["steps"][2]["run"]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "dist").mkdir()
+            (root / "tools/ci").mkdir(parents=True)
+            (root / "tools/ci/sign_release.sh").write_text(
+                'for file in "${@:2}"; do test -f "$file" || exit 9; done\nprintf "%s\\n" "$@" > signed\n')
+            for name in ("horizon-linux-x86_64.tar.gz", "horizon-windows-x64.zip", "horizon-macos-arm64.zip",
+                         "horizon-server-linux-x86_64.tar.gz", "horizon-source.tar.gz"):
+                (root / "dist" / name).touch()
+            for kind, code in (("snapshot", 0), ("nightly", 9)):
+                result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", sign], cwd=root,
+                                        env=dict(os.environ, KIND=kind, GITHUB_REPOSITORY="example/test"),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+            published = self.steps["Publish as the snapshot-<date>-<short> pre-release"]["run"]
+            notes = published[published.index("# Archive presence"):].split("# Exactly the files", 1)[0]
+            subprocess.run(["bash", "-e", "-o", "pipefail", "-c", notes], cwd=root, check=True)
+            body = (root / "dist/nightly-notes.md").read_text()
+            self.assertIn("Built: `horizon-macos-arm64.zip`", body)
+            for missing in ("horizon-macos-x64.zip", "horizon-windows-arm64.zip", "horizon-linux-musl-x86_64.tar.gz"):
+                self.assertIn(f"Failed or unavailable; not published: `{missing}`", body)
 
     def test_snapshots_never_replace_a_waiting_nightly(self):
         group = self.workflow["concurrency"]["group"]

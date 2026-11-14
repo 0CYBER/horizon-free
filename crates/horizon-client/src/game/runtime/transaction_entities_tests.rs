@@ -595,7 +595,7 @@ struct Fixture {
 #[ignore = "daily"]
 fn exhausted_ids_refuse_every_mod_spawn() {
     const NAME: &str = "game::transaction_entities_tests::exhausted_ids_refuse_every_mod_spawn";
-    let rows: [(&str, Spawn); 12] = [
+    let rows: [(&str, Spawn); 13] = [
         ("summon", |game, _| {
             summon(game, "minecraft:pig", "{}").is_some()
         }),
@@ -634,6 +634,11 @@ fn exhausted_ids_refuse_every_mod_spawn() {
             let settings = mod_api::ExplosionSettings::default();
             (game.level_explode(f.level, None, [1.5, 70.0, 14.5], 1.0, false, none, settings))
                 .is_ok()
+        }),
+        ("level_pop_resource", |game, f| {
+            let stack = ItemStack::new("minecraft:stone", 1);
+            game.level_pop_resource(f.level, [1, 70, 1], stack)
+                .is_some()
         }),
         ("level_spawn_item", |game, f| {
             let stack = ItemStack::new("minecraft:stone", 1);
@@ -983,5 +988,141 @@ fn a_level_commit_told_inside_another_levels_commit_keeps_its_own_batch() {
         game.native_joins_flush(false, 0);
         game.native_leaves_flush();
         assert_eq!(heard(), Heard::default(), "nothing is told twice");
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_block_break_at_the_commit_never_announces_a_mob_the_transaction_removed() {
+    const NAME: &str = "game::transaction_entities_tests::a_block_break_at_the_commit_never_announces_a_mob_the_transaction_removed";
+    with_observer(NAME, |game| {
+        // A poppy the pour of water breaks: `level_place_fluid` makes its drops at the call and
+        // `After::FluidWrite` spawns them at the root commit (`commit_fluid_write`, `flush_spill`),
+        // whose item join flushes joins as the commit's own effect.
+        let at = [2, 65, 2];
+        let poppy = (game.pack.assets.registry)
+            .default_state("minecraft:poppy")
+            .unwrap();
+        game.world.set(at[0], at[1], at[2], poppy).unwrap();
+        let level = game.level(game.dim.id()).unwrap();
+        let water = mod_api::__private::fluid_key("minecraft:water").unwrap();
+        let items = game.dropped.len();
+        let seal = game.transaction_open();
+        let pig = summon(game, "minecraft:pig", "{}").unwrap();
+        assert!(game.entity_discard(game.entity(pig).unwrap()));
+        assert!(game.level_place_fluid(level, at, water, None, false, seal.transaction()));
+        assert_eq!(game.dropped.len(), items, "the drop waits for the commit");
+        game.transaction_close(&seal, true);
+        assert_eq!(game.dropped.len(), items + 1, "the broken poppy dropped");
+        let told = heard();
+        assert!(
+            !told.joined.contains(&pig),
+            "the removed pig is never told: {told:?}"
+        );
+        assert_eq!(
+            told.joined.len(),
+            1,
+            "only the dropped item joins: {told:?}"
+        );
+        game.native_leaves_flush();
+        assert!(heard().left.is_empty(), "and the pig never leaves");
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn an_exhausted_level_pop_draws_nothing_from_the_level_random() {
+    use horizon_core::random::RandomSource;
+    const NAME: &str = "game::transaction_entities_tests::an_exhausted_level_pop_draws_nothing_from_the_level_random";
+    with_observer(NAME, |game| {
+        let level = game.level(game.dim.id()).unwrap();
+        game.next_entity = u32::MAX - ENTITY_ID_HEADROOM;
+        let expected = game.world.random.clone().next_long();
+        let stack = ItemStack::new("minecraft:stone", 1);
+        assert!(game.level_pop_resource(level, [1, 70, 1], stack).is_none());
+        assert_eq!(game.world.random.clone().next_long(), expected);
+        assert_eq!(game.next_entity, u32::MAX - ENTITY_ID_HEADROOM);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_parked_levels_pending_removal_is_hidden_from_another_level_until_it_aborts() {
+    use horizon_client::join_seq::residency::table::EntityLookup;
+    const NAME: &str = "game::transaction_entities_tests::a_parked_levels_pending_removal_is_hidden_from_another_level_until_it_aborts";
+    with_observer(NAME, |game| {
+        game.enter_level(Dim::Nether).unwrap();
+        game.enter_level(Dim::Overworld).unwrap();
+        let boat = summon(game, "minecraft:oak_boat", "{}").unwrap();
+        let target = super::commands::Target::Boat(boat);
+        MARK.set(game, Holder::Entity(boat), 7).unwrap();
+        // Parked, nothing pending: the boat is found and visible (else the checks below prove
+        // nothing).
+        game.enter_level(Dim::Nether).unwrap();
+        assert!(
+            matches!(
+                game.server_resident_entity(boat),
+                EntityLookup::Found { .. }
+            ),
+            "the parked boat is in the resident table"
+        );
+        assert!(game.resident_source_target_visible(mod_api::DimensionKey::OVERWORLD, target));
+        // An attachment is reached through the level in place only (`attachment_slot` asks the
+        // resident table for `self.dim`), so from the nether the overworld boat's is out of reach,
+        // pending removal or not.
+        assert!(MARK.get(game, Holder::Entity(boat)).is_err());
+        game.enter_level(Dim::Overworld).unwrap();
+        let seal = game.transaction_open();
+        assert!(game.entity_discard(game.entity(boat).unwrap()));
+        game.enter_level(Dim::Nether).unwrap();
+        assert!(
+            matches!(game.server_resident_entity(boat), EntityLookup::Missing),
+            "the parked level's boat reads as gone while its removal is pending"
+        );
+        assert!(!game.resident_source_target_visible(mod_api::DimensionKey::OVERWORLD, target));
+        assert!(MARK.get(game, Holder::Entity(boat)).is_err());
+        game.enter_level(Dim::Overworld).unwrap();
+        game.transaction_close(&seal, false);
+        game.enter_level(Dim::Nether).unwrap();
+        assert!(
+            matches!(
+                game.server_resident_entity(boat),
+                EntityLookup::Found { .. }
+            ),
+            "the abort put it back"
+        );
+        assert!(game.resident_source_target_visible(mod_api::DimensionKey::OVERWORLD, target));
+        assert!(MARK.get(game, Holder::Entity(boat)).is_err());
+        game.enter_level(Dim::Overworld).unwrap();
+        assert_eq!(
+            MARK.get(game, Holder::Entity(boat)),
+            Ok(7),
+            "kept by the abort"
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn each_spawn_in_a_transaction_is_constructed_at_its_own_call_and_joins_at_the_commit() {
+    const NAME: &str = "game::transaction_entities_tests::each_spawn_in_a_transaction_is_constructed_at_its_own_call_and_joins_at_the_commit";
+    with_observer(NAME, |game| {
+        let seal = game.transaction_open();
+        let a = summon(game, "minecraft:pig", "{}").unwrap();
+        let told = heard();
+        assert_eq!(told.constructed, [a], "a is constructed at its call");
+        assert!(told.joined.is_empty(), "and its join is held");
+        let b = summon(game, "minecraft:pig", "{}").unwrap();
+        let told = heard();
+        assert_eq!(
+            told.constructed,
+            [b],
+            "b is constructed at its call, once and alone"
+        );
+        assert!(told.joined.is_empty(), "and its join is held");
+        game.transaction_close(&seal, true);
+        let told = heard();
+        assert_eq!(told.joined, [a, b], "both join at the commit, in order");
+        assert!(told.constructed.is_empty(), "nothing is constructed twice");
     });
 }

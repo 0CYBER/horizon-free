@@ -481,6 +481,12 @@
       "canonical_path": "crate::entity::types::MinecartKind"
     },
     {
+      "name": "MoveCause",
+      "path": "crate::entity::types::MoveCause",
+      "hash": "00bec45d5d6aef41",
+      "canonical_path": "crate::entity::types::MoveCause"
+    },
+    {
       "name": "MobCategory",
       "path": "crate::world::types::MobCategory",
       "hash": "663292b422d610b3",

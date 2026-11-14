@@ -167,27 +167,30 @@ struct EventLifetimes {
     in_mut: bool,
 }
 
+/// The primitive types a `&mut` argument crosses as a copied value — every one of them `Copy`.
+pub(crate) const PRIMITIVE_SCALARS: &[&str] = &[
+    "bool", "char", "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128",
+    "usize", "f32", "f64",
+];
+
+/// Whether `ty` names one of [`PRIMITIVE_SCALARS`].
+pub(crate) fn is_primitive_scalar(ty: &Type) -> bool {
+    matches!(ty, Type::Path(path)
+        if path.qself.is_none()
+            && path
+                .path
+                .get_ident()
+                .is_some_and(|ident| PRIMITIVE_SCALARS.contains(&ident.to_string().as_str())))
+}
+
 impl EventLifetimes {
     /// The field's type, and whether it is a scalar copied in and written back.
     fn field(&mut self, ty: &Type) -> (Type, bool) {
         let scalar = match ty {
-            Type::Reference(reference) if reference.mutability.is_some() => {
-                match &*reference.elem {
-                    Type::Path(path)
-                        if path.qself.is_none()
-                            && path.path.get_ident().is_some_and(|ident| {
-                                [
-                                    "bool", "char", "i8", "i16", "i32", "i64", "i128", "isize",
-                                    "u8", "u16", "u32", "u64", "u128", "usize", "f32", "f64",
-                                ]
-                                .iter()
-                                .any(|scalar| ident == scalar)
-                            }) =>
-                    {
-                        Some(&*reference.elem)
-                    }
-                    _ => None,
-                }
+            Type::Reference(reference)
+                if reference.mutability.is_some() && is_primitive_scalar(&reference.elem) =>
+            {
+                Some(&*reference.elem)
             }
             _ => None,
         };

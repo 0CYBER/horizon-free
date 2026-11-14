@@ -18,6 +18,10 @@ on:
         description: The version built in (HORIZON_VERSION), e.g. 0.2.81 or nightly-2026-10-28
         type: string
         required: true
+      kind:
+        description: Build channel; snapshots require only SDK-supported platforms
+        type: string
+        default: release
       nightly:
         description: A nightly's "<date> <short sha>" (HORIZON_NIGHTLY), shown by the game; empty for a release
         type: string
@@ -130,10 +134,10 @@ jobs:
   build:
     needs: [runner-configuration, exporters]
     name: build ${{ matrix.name }}
-    # Windows ARM64 and musl are new: a failure never holds the other platforms' release (the signing job
-    # needs this job, and a failed entry of it would fail it). The release steps leave the missing
-    # optional archives out with a warning.
-    continue-on-error: ${{ matrix.name == 'windows-arm64' || matrix.name == 'linux-musl' }}
+    # Windows ARM64 and musl stay optional. Snapshots also leave Intel macOS optional: only the SDK's
+    # platforms are required there. Nightlies and releases retain their existing Intel macOS requirement.
+    # Optional failed legs still run; signing omits their absent archives, and snapshot notes name them.
+    continue-on-error: ${{ matrix.name == 'windows-arm64' || matrix.name == 'linux-musl' || (inputs.kind == 'snapshot' && matrix.name == 'macos-x64') }}
     strategy:
       fail-fast: false
       matrix:
@@ -323,6 +327,24 @@ jobs:
         run: |
           python3 .workflow-tools/tools/check_glibc.py \
             "$BIN/horizon-client" "$BIN/horizon-ctl" "$BIN/horizon-prepare" "$BIN/horizon-server"
+      - name: macOS main-stack diagnostics
+        if: runner.os == 'macOS'
+        run: |
+          echo "LC_MAIN of horizon-client:"
+          otool -l "$BIN/horizon-client" | grep -A4 LC_MAIN || true
+          if [[ "$(lipo -archs "$BIN/horizon-client")" == x86_64 ]]; then
+            translated=$(arch -x86_64 /usr/sbin/sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
+            stack_limit=$(arch -x86_64 /bin/sh -c 'ulimit -s' || true)
+          else
+            translated=$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)
+            stack_limit=$(ulimit -s || true)
+          fi
+          echo "sysctl.proc_translated (horizon-client architecture): $translated"
+          echo "ulimit -s (horizon-client architecture): $stack_limit"
+          echo "Runner uname -m:"
+          uname -m || true
+          echo "Runner arch:"
+          arch || true
       - name: Every program starts
         if: ${{ !matrix.musl }}
         run: |

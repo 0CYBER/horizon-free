@@ -599,6 +599,9 @@ jobs:
         # Build the exact test graph on green. A workspace proc-macro can have different build/test
         # dependency profiles; cargo build first would make cargo test compile its consumers again.
         run: |
+          # Keep other compiles parallel, but prevent the two large lib tests from exhausting memory together.
+          export HORIZON_TEST_RUSTC_WRAPPER="${RUSTC_WRAPPER:-}"
+          export RUSTC_WRAPPER="$GITHUB_WORKSPACE/tools/ci/test-compile-lock.sh"
           build_log=$(mktemp)
           trap 'rm -f "$build_log"' EXIT
           if cargo test $JOBS --profile test --workspace --lib --bins --tests --no-run --timings 2>&1 | tee "$build_log"; then
