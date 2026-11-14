@@ -186,15 +186,16 @@ impl Hub {
             return;
         }
         let dimension = self.config.dimension.clone();
-        let Some(level) = self.level_keys().iter().position(|k| *k == dimension) else {
-            return;
-        };
         let active = self.viewed.active.clone();
         for i in 0..self.guests.len() {
             if !self.guests[i].views_level(&dimension) {
                 continue;
             }
-            if self.open_view(i, level as i32, ctx) && self.update_viewed(i) {
+            // A level its client was not told of at Login is one it cannot name.
+            let Some(level) = self.guests[i].viewed.login_index(&dimension) else {
+                continue;
+            };
+            if self.open_view(i, level, ctx) && self.update_viewed(i) {
                 self.send_view_batch(i, ctx.world, ctx.streaming);
                 self.send_view_state(i, ctx.world, ctx.clock_rate);
             }

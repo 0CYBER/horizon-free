@@ -1,7 +1,7 @@
 # Read-only equipment predicates inside menu loops
 
-Design proposal for #2669, inspected at main `c6ba817607` and contributor head
-`f516b9dd62`. No implementation is authorized by this note.
+Implemented boundary for #2669 and #3549. The historical conversion analysis below
+explains why the engine stack and API stack remain distinct owned types.
 
 ## Can we just borrow the existing stack?
 
@@ -84,12 +84,24 @@ registration/load with a named reason on both targets; no silent wasm skip.
 The generator layer of #3549 implements prepared ownership per participating guest instance,
 borrowed token-based asks, generation/release checks and load/registration refusal for missing
 prepared exports. Slot and entity-kind names are prepared outside traversal and asks carry IDs.
-Gameplay integration is still pending: ordinary wasm callbacks create their own preparation;
-the decision-barrier PR must hoist that scope across candidates, invalidate on scoped mutable
-access (revision) and replacement/removal (identity generation), and refuse stale apply decisions.
-Pickup scope is one mob's attempt. Native's synchronous immutable borrow needs no revision
-recheck. No-listener paths retain their data answer without a new entity lookup. Only the
-Host observations listed above belong to the prepared-read budget; other reads may allocate.
+Gameplay hoists preparation across candidates for one dispense, menu input scope and
+one mob's pickup attempt. `EquipDecision` exclusively owns the source slot during
+mutation; every mutable field access bumps its revision before lending, and
+replacement/removal bumps its identity generation. Overflow retires the scope.
+A changed-and-restored source remains stale. Menu reuse uses scope and scalar stamps,
+not stack equality. Apply checks the source, menu and entity admission preconditions;
+a recycled numeric entity id does not reuse an earlier admission. No-listener paths
+retain their data answer without conversion or a new entity lookup.
+
+The prepared target rows retain entity type (`EntityTypeKey`), position, health,
+maximum health, alive/living status and the eight physical equipment slots. Native
+lends these through an observation Host; wasm sends the rows once with the stack,
+and serves these reads from guest storage. Equipment components remain shared API
+owners rather than being converted or encoded again per read. `entity_kind` uses the
+same allocation-free key API for every caller, with explicit `key.id(host)` name
+resolution outside this budget. Other allocating Host reads remain ordinary calls;
+this is not a promise that every Host operation is allocation-free. Registry/tag/settings
+observations use scalar lookups; owned names and enumerations are outside the budget.
 
 The required engine/bridge budget **per candidate** is 0 heap allocations, 0 stack or
 component payload clones/copies, and only bounded scalar/handle copies, including
@@ -101,6 +113,6 @@ leaves the source and all other slots unchanged, stale revisions refuse, and dat
 stack overrides work. Mod-authored allocations are outside the bridge budget. Generator
 loopback tests now cover retained stack identity, payload-size-independent scalar asks,
 native/guest answers and token refusals; runtime tests cover memory-copy counts and
-missing-export load refusal. Whole-operation allocation budgets, prepared Host reads,
-source mutation barriers and gameplay apply checks remain acceptance work for the
-follow-up decision-barrier PR.
+missing-export load refusal. Decision tests cover source mutation barriers, entity admission checks, gameplay apply
+preconditions and the no-listener path. Native warmed traversal checks allocations;
+wasm copy probes separate preparation bytes from payload-independent scalar asks.

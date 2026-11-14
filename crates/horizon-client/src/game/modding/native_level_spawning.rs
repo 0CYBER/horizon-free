@@ -19,6 +19,9 @@ impl Game<'_> {
         pos: [f64; 3],
         reason: mod_api::SpawnReason,
     ) -> Option<EntityRef> {
+        if self.entity_ids_exhausted() {
+            return None;
+        }
         if !self.level_in_place(level) || !pos.iter().all(|v| v.is_finite()) {
             return None;
         }
@@ -136,7 +139,10 @@ mod tests {
                         mod_api::SpawnReason::Command,
                     )
                     .unwrap();
-                assert_eq!(game.entity_kind(cow).as_deref(), Some("minecraft:cow"));
+                assert_eq!(
+                    game.entity_kind(cow).map(|kind| kind.id(game)).as_deref(),
+                    Some("minecraft:cow")
+                );
                 assert_eq!(game.entity_position(cow), Some([8.5, 64.0, 8.25]));
                 let mob = game.mobs.iter().find(|m| m.id == cow.id()).unwrap();
                 assert!(!mob.persistent);

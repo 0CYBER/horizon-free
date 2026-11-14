@@ -278,11 +278,11 @@ impl GoalCx<'_, '_> {
         }
     }
 
-    fn r_entity_kind(&self, entity: EntityRef) -> Option<String> {
+    fn r_entity_kind(&self, entity: EntityRef) -> Option<mod_api::EntityTypeKey> {
         match self.resolve(entity)? {
             // The snapshot carries the species, not its type id.
-            Resolved::Own => Some(self.m.kind.id.clone()),
-            Resolved::Live(mob) => Some(mob.kind.id.clone()),
+            Resolved::Own => mod_api::__private::resolved_entity_type_key(&self.m.kind.id),
+            Resolved::Live(mob) => mod_api::__private::resolved_entity_type_key(&mob.kind.id),
             _ => None,
         }
     }

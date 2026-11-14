@@ -36,27 +36,35 @@ impl Hub {
         };
         // A Player-cause move through the move gate (#2414); the gate records the movement
         // unchanged and its delta is what the collision resolves.
+        let requested = Vec3::new(
+            to[0] - g.position[0],
+            to[1] - g.position[1],
+            to[2] - g.position[2],
+        );
         let gate = crate::move_gate::armed(
             &self.loop_context,
             g.entity_id as u32,
             "minecraft:player",
             horizon_world::entity_move::MoverType::Player,
-            Vec3::new(
-                to[0] - g.position[0],
-                to[1] - g.position[1],
-                to[2] - g.position[2],
-            ),
+            requested,
         );
         let movement = gate.delta();
+        // A listener's decision that is not the request (#2414, ruling 5): the
+        // flag comes from the gate, not from comparing deltas here — a walk's
+        // step is below «moved wrongly»'s threshold, and its cancel must
+        // correct the guest all the same.
+        let overridden = gate.overridden();
         // A move with no exclusions pays this one check.
         if g.collision_exclusions.is_empty() {
-            return check_move(g, to, movement, &mut scene);
+            return check_move(g, to, requested, movement, overridden, &mut scene);
         }
         let boxes = g.collision_exclusions.boxes();
         check_move(
             g,
             to,
+            requested,
             movement,
+            overridden,
             &mut Excluding {
                 world: &mut scene,
                 boxes,
@@ -66,7 +74,14 @@ impl Hub {
 }
 
 /// [`Hub::collide`] against `world`'s blocks.
-fn check_move<W>(g: &Guest, to: [f64; 3], movement: Vec3, world: &mut W) -> (bool, bool, bool)
+fn check_move<W>(
+    g: &Guest,
+    to: [f64; 3],
+    requested: Vec3,
+    movement: Vec3,
+    overridden: bool,
+    world: &mut W,
+) -> (bool, bool, bool)
 where
     W: BlockCollisionWorld<Error = io::Error> + EntityMovementWorld<Error = io::Error>,
 {
@@ -99,11 +114,23 @@ where
         },
     )
     .ok();
-    let fail = !g.creative()
+    // The gate decides what actually moves: the requested delta, a listener's
+    // replacement, or nothing (a cancel). «Moved wrongly» still measures the
+    // **requested** move against what happened, as vanilla measures the
+    // packet's target - a cancelled move that went nowhere is the full
+    // discrepancy. A decision that is not the request fails whatever the
+    // distance (#2414, ruling 5): a cancel or a replacement always sends the
+    // guest a correction, so a walk's small step cannot slip under the
+    // threshold and keep going. Vanilla's exemptions - a creative guest, and
+    // the unobstructed-start check below - belong to the distance test alone
+    // (review round 1): an overridden move is refused for a creative guest
+    // and from an obstructed start too.
+    let moved_wrongly = !g.creative()
         && done.is_some_and(|done| {
-            let (dx, dz) = (movement.x - done.x, movement.z - done.z);
+            let (dx, dz) = (requested.x - done.x, requested.z - done.z);
             dx * dx + dz * dz > 0.0625
         });
+    let fail = overridden || moved_wrongly;
     // Entity.move: verticalCollisionBelow, the player "stands on something".
     let stands = done.is_some_and(|done| movement.y < 0.0 && done.y != movement.y);
     if fail {
@@ -116,7 +143,10 @@ where
                 candidate_budget: 1_000_000,
             },
         );
-        if unobstructed.unwrap_or(true) {
+        // An overridden decision is refused from wherever it starts: the
+        // unobstructed-old-box exemption is the distance test's, like
+        // creative above (review round 1).
+        if overridden || unobstructed.unwrap_or(true) {
             return (true, true, stands);
         }
     }

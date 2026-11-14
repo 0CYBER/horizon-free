@@ -1,0 +1,4 @@
+horizon-client game::native_hotbar_slot::hotbar_slot_tests::a_selection_goes_out_before_an_attack_in_the_same_tick lib daily resources
+horizon-client game::native_hotbar_slot::hotbar_slot_tests::a_selection_reaches_the_server_at_the_next_tick_and_only_once lib daily resources
+horizon-client game::native_hotbar_slot::hotbar_slot_tests::a_spectator_gets_no_hotbar_selection lib daily resources
+horizon-client game::native_hotbar_slot::hotbar_slot_tests::an_out_of_range_slot_is_refused_and_keeps_the_selection lib daily resources

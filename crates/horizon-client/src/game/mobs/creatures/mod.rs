@@ -8689,8 +8689,15 @@ mod enchanted_entity_loot_tests {
             event: &mut mod_api::EnchantedEntityLootEvent<'_>,
         ) {
             self.0.lock().unwrap().push(Heard {
-                entity: event.entity.entity().kind(&*host),
-                attacker: event.attacker.and_then(|a| a.kind(&*host)),
+                entity: event
+                    .entity
+                    .entity()
+                    .kind(&*host)
+                    .map(|kind| kind.id(&*host)),
+                attacker: event
+                    .attacker
+                    .and_then(|a| a.kind(&*host))
+                    .map(|kind| kind.id(&*host)),
                 damage_type: event.source.damage_type.to_owned(),
                 enchantment: event.enchantment.to_string(),
                 level: event.level,

@@ -1475,6 +1475,127 @@ mod order_tests {
         assert!(moved[1] < 0.02, "far stone still in the way: {}", moved[1]);
     }
 
+    /// A cancelled push spends none of the piston budget (#2414, design
+    /// #2308: the hook fires before `limit_piston`). A listener cancels the
+    /// first push of a tick - the TNT does not move - and then lets the
+    /// second push of the same tick through: it still travels the whole
+    /// per-tick budget, which a spent one would have clamped to almost
+    /// nothing.
+    #[test]
+    #[ignore = "daily"]
+    fn a_cancelled_push_spends_none_of_the_piston_budget() {
+        use mod_api::{EntityMoveEvent, Flow, Hooks, LoopContext};
+        struct Gate(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Gate {
+            fn entity_move(&self, _: &dyn LoopContext, _: &mut EntityMoveEvent<'_>) -> Flow {
+                if self.0.load(std::sync::atomic::Ordering::Relaxed) {
+                    Flow::Cancel
+                } else {
+                    Flow::Continue
+                }
+            }
+        }
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "cancel_gate",
+            Box::new(Gate(cancel.clone())),
+        )]
+        .into();
+        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let settings = Settings::default();
+        let loaded = load_resources(
+            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            crate::game::execution_role::ExecutionRole::IntegratedServer,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.game_dir = Some(
+            std::env::temp_dir().join(format!("horizon-piston-budget-unit-{}", std::process::id())),
+        );
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+                root.clone(),
+            )),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        let registry = &game.pack.assets.registry;
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        let moving = registry.default_state("minecraft:moving_piston").unwrap();
+        let mut chunk = Chunk::empty(0, 0);
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set(x, 199, z, stone.0);
+            }
+        }
+        chunk.set(5, 200, 5, moving.0);
+        game.world.chunks.insert((0, 0), Arc::new(chunk));
+        let piston = |id, direction, progress| MovingPiston {
+            moved_state: stone,
+            direction,
+            extending: true,
+            source: false,
+            progress,
+            progress_o: progress,
+            last_ticked: 0,
+            death_ticks: 0,
+            id,
+        };
+        mod_platform::testing::with_mods(mods, || {
+            let mut travelled = Vec::new();
+            for cancelled in [true, false] {
+                cancel.store(cancelled, std::sync::atomic::Ordering::Relaxed);
+                game.block_ticks.moving_pistons =
+                    vec![(BlockPos::new(5, 200, 5), piston(1, Direction::East, 0.0))];
+                game.sync_moving_pistons();
+                game.tnts.clear();
+                assert!(
+                    game.run_command("summon tnt 5.5 200 5.5 {fuse:80,Motion:[0.0d,0.0d,0.0d]}")
+                );
+                let before = game.tnts[0].position.x;
+                let pushes: Vec<_> = game
+                    .block_ticks
+                    .moving_pistons
+                    .iter()
+                    .map(|&(pos, old)| (pos, old, old.progress + 0.5))
+                    .collect();
+                for (_, piston) in &mut game.block_ticks.moving_pistons {
+                    piston.progress += 0.5;
+                }
+                game.push_piston_entities(pushes);
+                travelled.push(game.tnts[0].position.x - before);
+            }
+            assert!(
+                travelled[0].abs() < 1e-9,
+                "the cancelled push moved the TNT: {}",
+                travelled[0]
+            );
+            assert!(
+                travelled[1] > 0.4,
+                "the second push of the same tick lost the budget: {}",
+                travelled[1]
+            );
+        });
+    }
+
     /// A primed TNT pushed east by a piston into a stone wall loses its
     /// horizontal velocity, matching `Entity.move(MoverType.PISTON, …)`
     /// restitution even in a chunk that does not tick entities (#12022).

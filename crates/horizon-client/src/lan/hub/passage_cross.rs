@@ -12,7 +12,7 @@ use mod_api::PassageCrossRefusal as Refusal;
 pub const REACH: u32 = 20;
 
 /// The server's refusals as they travel: a refusal's code is its place here.
-const REFUSALS: [Refusal; 11] = [
+const REFUSALS: [Refusal; 12] = [
     Refusal::UnknownPassage,
     Refusal::Pending,
     Refusal::NotLoaded,
@@ -24,6 +24,7 @@ const REFUSALS: [Refusal; 11] = [
     Refusal::NearEndNotTracked,
     Refusal::FarEndNotTracked,
     Refusal::Vetoed,
+    Refusal::FarLevel,
 ];
 
 /// Where a crossing starts on the server: the client's `from` clamped as a move's position

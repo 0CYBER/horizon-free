@@ -6,10 +6,10 @@ GitHub's merge commit, whose first parent is the base; on a dispatch with `pr`, 
 base of that pull request's head and its base branch. Only that one commit is fetched (`--depth 1`), and only its
 `crates/` and `tools/layering` are unpacked.
 
-It reports; it does not gate. It passes when the base cannot be found or fetched, or when the head's tool cannot read
+It passes when the base cannot be found or fetched, or when the head's tool cannot read
 the base tree (a change to the declaration format), saying so in one line. It fails for a new change note that names
-an id that did not change or cannot be read, and, with `gate = true` in tools/ci/surface.toml, for a breaking change
-no new note names.
+an id that did not change or cannot be read, and, with `gate = true` in tools/ci/surface.toml (on), for a breaking
+change no new note names.
 """
 
 import json

@@ -365,6 +365,15 @@ impl Game<'_> {
                     };
                     horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
                     horizon_client::mobs::blocks_changed(m, &path_changes);
+                    if !resuming {
+                        // LivingEntity.aiStep -> EntityEquipment.tick, before movement.
+                        super::super::inventory_tick::equipment_inventory_tick(
+                            &self.world,
+                            self.res.facts(),
+                            level_id,
+                            &mut m.extra.equipment,
+                        );
+                    }
                     let from = if resuming { resume_from } else { events.len() };
                     // The guest's view is lent to the mob for its tick, not copied:
                     // the tick only reads it (`&MobWorld`), and it goes back to the

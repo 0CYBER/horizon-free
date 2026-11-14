@@ -7,6 +7,7 @@ use crate::uses_table::{self, Scanned, surface_of};
 use horizon_mod_package::{
     Manifest, Package,
     manifest::{MANIFEST, MAX_MANIFEST, MAX_USES},
+    sdk::{self, ChangeNote, Index},
 };
 use mod_surface::child::ChildEntry;
 use mod_surface::uses::{Change, Fit, USES_FILE, UsesTable, fits as fit};
@@ -190,10 +191,30 @@ pub(crate) fn sdk(args: &[String]) -> Result<(), String> {
     let project = Path::new(".");
     let old = fetch_build(project, a)?;
     let new = fetch_build(project, b)?;
-    let diff = mod_surface::diff(&surface_of(&old)?, &surface_of(&new)?);
+    let notes = build_notes(&new)?;
     println!("{} to {}", old.name, new.name);
-    print!("{}", diff.to_text());
+    print!(
+        "{}",
+        diff_text(&surface_of(&old)?, &surface_of(&new)?, &new.name, &notes)
+    );
     Ok(())
+}
+
+/// The diff from `old` to `new`, with the change notes of the build `new` (named `new_name`)
+/// under the changes they name: the notes of the changes since the SDK published before it.
+fn diff_text(old: &Surface, new: &Surface, new_name: &str, notes: &[ChangeNote]) -> String {
+    let mut diff = mod_surface::diff(old, new);
+    for note in notes {
+        let text = mod_surface::diff::Note {
+            file: new_name.to_owned(),
+            why: note.why.clone(),
+            migrate: note.migrate.clone(),
+        };
+        // An id the note names may be unchanged here when `old` is not the build `new`
+        // was compared with; the note then explains a change this diff does not show.
+        diff.attach(&text, &note.ids);
+    }
+    diff.to_text()
 }
 
 /// The mod's display name, from its manifest text.
@@ -404,7 +425,7 @@ pub(crate) fn update_report(
     };
     let new = fetch_build(root, to.unwrap_or("nightly"))?;
     let new_surface = surface_of(&new)?;
-    let notes = migrate_notes(&new.dir);
+    let notes = migrate_notes(&build_notes(&new)?);
     print!(
         "{}",
         report(&name, &old, &new, &uses, &old_surface, &new_surface, &notes)
@@ -412,25 +433,24 @@ pub(crate) fn update_report(
     Ok(())
 }
 
-/// Each changed id's `migrate` line from the change notes a build's `sdk.json` carries
-/// (`surface.notes`, each `{ ids, why, migrate }`), from the SDK folder `dir`; empty when it
-/// carries none. The fetch verified the file; a note without a `migrate` line adds nothing.
-fn migrate_notes(dir: &Path) -> std::collections::BTreeMap<String, String> {
+/// The change notes `sdk`'s `sdk.json` carries (`surface.notes`): those of the changes since the
+/// SDK published before it. The fetch verified the file.
+fn build_notes(sdk: &PinnedSdk) -> Result<Vec<ChangeNote>, String> {
+    let path = sdk.dir.join(sdk::INDEX);
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let index = Index::read(&bytes, &sdk.build).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(index.surface.notes)
+}
+
+/// Each changed id's `migrate` line from `notes`; a note without one adds nothing.
+fn migrate_notes(notes: &[ChangeNote]) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
-    let Ok(bytes) = std::fs::read(dir.join("sdk.json")) else {
-        return out;
-    };
-    let Ok(index) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return out;
-    };
-    for note in index["surface"]["notes"].as_array().into_iter().flatten() {
-        let Some(migrate) = note["migrate"].as_str() else {
+    for note in notes {
+        let Some(migrate) = &note.migrate else {
             continue;
         };
-        for id in note["ids"].as_array().into_iter().flatten() {
-            if let Some(id) = id.as_str() {
-                out.insert(id.to_owned(), migrate.to_owned());
-            }
+        for id in &note.ids {
+            out.insert(id.clone(), migrate.clone());
         }
     }
     out
@@ -610,19 +630,24 @@ mod tests {
         assert!(ids("teleport").is_empty());
     }
 
+    fn note(ids: &[&str], why: &str, migrate: Option<&str>) -> ChangeNote {
+        ChangeNote {
+            ids: ids.iter().map(|id| id.to_string()).collect(),
+            why: why.into(),
+            migrate: migrate.map(str::to_owned),
+        }
+    }
+
     #[test]
-    fn the_update_report_reads_the_change_notes_when_a_build_carries_them() {
-        let dir = std::env::temp_dir().join(format!("horizon-mod-notes-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert!(migrate_notes(&dir).is_empty());
-        std::fs::write(dir.join("sdk.json"), r#"{"surface":{"hash":"h"}}"#).unwrap();
-        assert!(migrate_notes(&dir).is_empty());
-        std::fs::write(
-            dir.join("sdk.json"),
-            r#"{"surface":{"hash":"h","notes":[{"ids":["method:ServerHost::give_item"],"why":"Parts","migrate":"items go through Parts under a transaction"},{"ids":["hook:x"],"why":"only why"}]}}"#,
-        )
-        .unwrap();
-        let notes = migrate_notes(&dir);
+    fn the_update_report_takes_each_ids_migrate_line() {
+        let notes = migrate_notes(&[
+            note(
+                &["method:ServerHost::give_item"],
+                "Parts",
+                Some("items go through Parts under a transaction"),
+            ),
+            note(&["hook:x"], "only why", None),
+        ]);
         assert_eq!(
             notes
                 .get("method:ServerHost::give_item")
@@ -630,7 +655,28 @@ mod tests {
             Some("items go through Parts under a transaction")
         );
         assert_eq!(notes.len(), 1);
-        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sdk_diff_prints_the_newer_builds_notes_under_the_changes_they_name() {
+        let old = surface(vec![hook("hook:gone", "", &[])]);
+        let new = surface(vec![]);
+        let text = diff_text(
+            &old,
+            &new,
+            "42c5f70",
+            &[note(
+                &["hook:gone"],
+                "It fired twice.",
+                Some("Listen to hook:once."),
+            )],
+        );
+        assert!(text.contains("0 breaking without a note"), "{text}");
+        assert!(
+            text.contains("    why (42c5f70): It fired twice.\n"),
+            "{text}"
+        );
+        assert!(text.contains("Listen to hook:once."), "{text}");
     }
 
     #[test]

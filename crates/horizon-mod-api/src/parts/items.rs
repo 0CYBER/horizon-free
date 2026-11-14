@@ -63,6 +63,7 @@ pub mod tests {
         player.slots.extend(main_hand.map(|stack| (5, stack)));
         host.level.entity(2, "minecraft:pig");
         host.level.entity(3, "test:robot");
+        host.resolve_entity_types().unwrap();
         let nether = LevelRef::new(WorldEpoch::new(1), crate::DimensionKey::NETHER);
         host.players.join(4, 4, nether);
         let head = [("slot".into(), Tag::String("head".into()))];

@@ -230,6 +230,9 @@ impl Game<'_> {
             .passages
             .find(level.dimension(), id)
             .ok_or(Refusal::UnknownPassage)?;
+        if p.destination_level.is_some() {
+            return Err(Refusal::FarLevel);
+        }
         if !within_reach(&p, from) {
             return Err(Refusal::TooFar { limit: REACH });
         }
@@ -261,13 +264,14 @@ mod tests {
     use super::super::native_guest_turn_tests::with_guests;
     use super::super::native_passages::tests::{doorway, listen, packets, passage_messages};
     use super::{carried, turned, within_reach, yaw_turn};
+    use crate::game::Dim;
     use horizon_client::chunk::Chunk;
     use horizon_client::lan::guest::InboxItem;
     use horizon_client::lan::hub::passage_cross::refusal_code;
     use horizon_protocol::packets::configuration::CustomPayload;
     use horizon_protocol::packets::play::{self, Clientbound as C, Serverbound as S, relative};
     use horizon_protocol::passage_sync::{CROSS_CHANNEL, Cross, Message, encode_cross};
-    use mod_api::{Passage, PassageCrossRefusal as Refusal, PassageId, Vec3};
+    use mod_api::{DimensionKey, Passage, PassageCrossRefusal as Refusal, PassageId, Vec3};
     use std::sync::{Arc, mpsc};
 
     /// The doorway comes out 24 blocks east, turned a clockwise quarter.
@@ -587,6 +591,33 @@ mod tests {
             HEARD.lock().unwrap().push((e.passage, e.from));
             mod_api::Flow::Cancel
         }
+    }
+
+    /// A passage into another level is refused `FarLevel` however near the player is, and
+    /// the player stays: crossing another level waits for clients that can follow.
+    #[test]
+    #[ignore = "daily"]
+    fn a_crossing_into_another_level_is_refused_far_level() {
+        with_guests(|game| {
+            game.enter_level(Dim::Nether).unwrap();
+            game.enter_level(Dim::Overworld).unwrap();
+            let rx = scene(game, [0.5, 65.0, 8.25]);
+            let level = game.level(game.dim.id()).unwrap();
+            let far = Passage {
+                destination_level: Some(DimensionKey::NETHER),
+                ..near_doorway()
+            };
+            assert_eq!(
+                game.level_register_passage(level, far),
+                Ok(PassageId::from_raw(2))
+            );
+            tick(game, vec![cross(2, [0.5, 65.0, 8.25])]);
+            let sent = packets(&rx);
+            let reason = refusal_code(Refusal::FarLevel);
+            assert_eq!(refusals(&sent), [Message::Refused { id: 2, reason }]);
+            assert_eq!(position_packets(&sent)[0].relatives, 0);
+            assert_eq!(guest(game).position, [0.5, 65.0, 8.25]);
+        });
     }
 
     /// A mod hears the crossing, its passage and the feet before it, before the server

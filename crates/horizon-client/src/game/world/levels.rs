@@ -226,7 +226,11 @@ impl Game<'_> {
             return self.locate_specialized_resident_owner(at);
         }
         if at.owner.dimension == self.dim.key() {
-            return self.locate_resident_owner(at);
+            // An open transaction's removal reads as gone already.
+            return self.locate_resident_owner(at).map(|mut source| {
+                source.value.1 &= !self.removal_pending(&source.value.0);
+                source
+            });
         }
         let dim = match at.owner.dimension {
             DimensionKey::OVERWORLD => Dim::Overworld,
@@ -234,10 +238,26 @@ impl Game<'_> {
             DimensionKey::END => Dim::End,
             key => Dim::Extra(key),
         };
-        self.levels.parked.get(&dim)?.locate_resident_owner(at)
+        // The transactions stay with the game when a level is parked: its pending removals too.
+        self.levels
+            .parked
+            .get(&dim)?
+            .locate_resident_owner(at)
+            .map(|mut source| {
+                source.value.1 &= !self.removal_pending_in(dim, &source.value.0);
+                source
+            })
     }
 
-    pub(super) fn resident_source_target_visible(
+    /// Whether `target` counts as removed in the level in place: a mod removed it, or an open
+    /// transaction did and its root commit has not run the removal yet.
+    pub(in crate::game) fn target_removed(&self, target: &Target) -> bool {
+        self.persist.removals.contains(target)
+            || self.persist.destroying_vehicles.contains(target)
+            || self.removal_pending(target)
+    }
+
+    pub(in crate::game) fn resident_source_target_visible(
         &self,
         dimension: DimensionKey,
         target: Target,
@@ -254,8 +274,7 @@ impl Game<'_> {
             return false;
         }
         if dimension == self.dim.key() {
-            return !self.persist.removals.contains(&target)
-                && !self.persist.destroying_vehicles.contains(&target);
+            return !self.target_removed(&target);
         }
         let dim = match dimension {
             DimensionKey::OVERWORLD => Dim::Overworld,
@@ -266,6 +285,7 @@ impl Game<'_> {
         self.levels.parked.get(&dim).is_none_or(|parked| {
             !parked.persist.removals.contains(&target)
                 && !parked.persist.destroying_vehicles.contains(&target)
+                && !self.removal_pending_in(dim, &target)
         })
     }
 
@@ -331,7 +351,7 @@ impl Game<'_> {
         }
     }
 
-    pub(super) fn server_resident_entity(&self, id: u32) -> EntityLookup<Target> {
+    pub(in crate::game) fn server_resident_entity(&self, id: u32) -> EntityLookup<Target> {
         let found = self
             .resident_entities
             .table
@@ -1088,6 +1108,7 @@ impl Game<'_> {
                 cart.id
             }
         };
+        self.journal_arrival(id);
         if self.uuid_admission_refused(self.persist.uuids.get(&id).copied()) {
             self.persist.off_level.insert(id, object);
             return;

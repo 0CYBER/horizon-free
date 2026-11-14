@@ -21,3 +21,14 @@ fn wire_loopback_a_guest_crash_section_answers_through_its_proxy() {
     assert_eq!(*owner, "wire_test");
     assert_eq!(line.value().as_deref(), Some("3 caches"));
 }
+
+pub(super) struct CrashSectionsHooks;
+impl CrashSectionsHooks {
+    pub(super) fn register(
+        &self,
+        registrar: &mut dyn mod_api::Registrar,
+        cx: &mod_api::RegistrationContext,
+    ) {
+        self::register(registrar);
+    }
+}

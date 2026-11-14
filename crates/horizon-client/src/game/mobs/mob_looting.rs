@@ -101,7 +101,10 @@ impl Game<'_> {
         let m = &self.mobs[index];
         let tags = &self.stations().enchantments.entity_tags;
         let data = equip::equippable_in_slot(self.items(), tags, stack, slot.name(), &m.kind.id);
-        let prepared = self.equip_stack(stack);
+        let observed = mod_api::__private::item_listens(mod_api::HookId::CanEquip, &stack.item);
+        let source = observed
+            .then(|| horizon_client::mobs::equip::EquipInput::new(u64::from(m.id), stack.clone()));
+        let prepared = self.equip_stack(source.as_deref().unwrap_or(stack), &[&m.kind.id], &[m.id]);
         if !self.can_equip(&prepared, slot.name(), m.id, &m.kind.id, data) {
             return None;
         }
@@ -122,6 +125,9 @@ impl Game<'_> {
         } else {
             stack.count.max(1)
         };
+        if !self.equip_can_apply(&prepared, self.mobs[index].id) {
+            return None;
+        }
         let m = &mut self.mobs[index];
         let old = finalize::item_stack(m, slot.index());
         let chance = stored_drop_chance(m, slot.index());
@@ -282,6 +288,7 @@ mod tests {
                     finalize::item(&game.mobs[index], slot.index()).map(|item| item.to_string())
                 };
                 let helmet = ItemStack::new("minecraft:iron_helmet", 1);
+                crate::game::equip_answers::take_equip_conversions();
                 // The zombie is refused, and nothing it was asked about changed.
                 assert_eq!(game.equip_item_if_possible(0, &helmet), None);
                 assert_eq!(worn(game, 0, Slot::Head), None);
@@ -307,6 +314,11 @@ mod tests {
                     std::mem::take(&mut *asked.lock().unwrap()),
                     [("head".to_owned(), 3)]
                 );
+                assert_eq!(
+                    crate::game::equip_answers::take_equip_conversions(),
+                    3,
+                    "one preparation per mob pickup attempt"
+                );
                 // No part for a diamond helmet: the zombie takes it as vanilla.
                 let diamond = ItemStack::new("minecraft:diamond_helmet", 1);
                 assert_eq!(game.equip_item_if_possible(0, &diamond), Some(1));
@@ -315,6 +327,7 @@ mod tests {
                     Some("minecraft:diamond_helmet")
                 );
                 assert!(asked.lock().unwrap().is_empty());
+                assert_eq!(crate::game::equip_answers::take_equip_conversions(), 0);
             });
         });
     }

@@ -1,0 +1,216 @@
+{
+  "ruling": "#3549 maintainer ruling 2026-11-13 04:49; mechanical phase only",
+  "key": "Reuse mod_api::EntityTypeKey; existing checked scalar Wire codec and key.id(host). Do not invent a new key.",
+  "hand_fixes": [
+    "Resolve real EntityTypeKey values without allocating names in Game::entity_kind, the scoped goal view and FakeHost; do not synthesize slots.",
+    "Convert EntityTypeKey to a Wire derive while preserving native slot validation and opaque wasm token behaviour; remove its old manual slot_keys implementation only with that semantic fix.",
+    "Review explicit-name consumers for retained-key comparisons where needed by the barrier; no compatibility name getter is introduced.",
+    "Regenerate the API, add key/native/wasm semantic coverage and run checks after the hand fixes; this intermediate output is not compile-ready."
+  ],
+  "other_reads": {
+    "changed_in_this_phase": [
+      "entity_kind return type and its name-consuming callers"
+    ],
+    "unchanged_already_scalar": [
+      "entity_position",
+      "living_health",
+      "living_max_health",
+      "living_alive",
+      "living_baby and other scalar living-state flags"
+    ],
+    "barrier_work_not_this_migration": [
+      "living_equipment: retain its existing ItemStack return type; prepare/reuse conversions and guest payloads where the barrier needs them",
+      "living_hand_item: reuse the same prepared hand-slot data if needed by the barrier; no return-type change in this migration"
+    ],
+    "follow_up_not_in_this_PR": [
+      "living_weapon_item active auto-spin / attack-source lookup: not a physical equipment-slot read required by this barrier",
+      "entity_name / entity_tags owned strings and collections",
+      "living_effects / living_attributes / living_attribute_modifiers owned collections",
+      "unrelated registry enumeration, inventory/container and other allocating observations"
+    ]
+  },
+  "edits": [
+    {
+      "path": "crates/horizon-mod-vocab/src/host/entities.rs",
+      "label": "backend return key",
+      "old": "fn entity_kind(&self, entity: EntityRef) -> Option<String>;",
+      "new": "fn entity_kind(&self, entity: EntityRef) -> Option<EntityTypeKey>;",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-mod-vocab/src/testing.rs",
+      "label": "fake host return key",
+      "old": "fn entity_kind(&self, entity: EntityRef) -> Option<String> {",
+      "new": "fn entity_kind(&self, entity: EntityRef) -> Option<crate::EntityTypeKey> {",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_entity_refs.rs",
+      "label": "game return key",
+      "old": "pub(super) fn entity_kind(&self, entity: EntityRef) -> Option<String> {",
+      "new": "pub(super) fn entity_kind(&self, entity: EntityRef) -> Option<mod_api::EntityTypeKey> {",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_goal_ticks/mod.rs",
+      "label": "goal view return key",
+      "old": "fn r_entity_kind(&self, entity: EntityRef) -> Option<String> {",
+      "new": "fn r_entity_kind(&self, entity: EntityRef) -> Option<mod_api::EntityTypeKey> {",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_dragon_refs.rs",
+      "label": "explicit name request: game.entity_kind(*part)",
+      "old": "game.entity_kind(*part)",
+      "new": "game.entity_kind(*part).map(|kind| kind.id(game))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_living_refs.rs",
+      "label": "explicit name request: game.entity_kind(item)",
+      "old": "game.entity_kind(item)",
+      "new": "game.entity_kind(item).map(|kind| kind.id(game))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/entity_initialization.rs",
+      "label": "explicit name request: self.entity_kind(entity)",
+      "old": "self.entity_kind(entity)",
+      "new": "self.entity_kind(entity).map(|kind| kind.id(self))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_components.rs",
+      "label": "explicit name request: self.entity_kind(target)",
+      "old": "self.entity_kind(target)",
+      "new": "self.entity_kind(target).map(|kind| kind.id(self))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_components.rs",
+      "label": "explicit name request: self.entity_kind(attacker.entity())",
+      "old": "self.entity_kind(attacker.entity())",
+      "new": "self.entity_kind(attacker.entity()).map(|kind| kind.id(self))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_level_spawning.rs",
+      "label": "explicit name request: game.entity_kind(cow)",
+      "old": "game.entity_kind(cow)",
+      "new": "game.entity_kind(cow).map(|kind| kind.id(game))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_entity_refs.rs",
+      "label": "explicit name request: game.entity_kind(found[0])",
+      "old": "game.entity_kind(found[0])",
+      "new": "game.entity_kind(found[0]).map(|kind| kind.id(game))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_level_items.rs",
+      "label": "explicit name request: game.entity_kind(popped)",
+      "old": "game.entity_kind(popped)",
+      "new": "game.entity_kind(popped).map(|kind| kind.id(game))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/network/remote/native_entity_tests.rs",
+      "label": "explicit name request: game.entity_kind(me)",
+      "old": "game.entity_kind(me)",
+      "new": "game.entity_kind(me).map(|kind| kind.id(game))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/network/remote/native_entity_tests.rs",
+      "label": "explicit name request: game.entity_kind(stand)",
+      "old": "game.entity_kind(stand)",
+      "new": "game.entity_kind(stand).map(|kind| kind.id(game))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/network/remote/native_entity_tests.rs",
+      "label": "explicit name request: game.entity_kind(display).as_deref()",
+      "old": "game.entity_kind(display).as_deref()",
+      "new": "game.entity_kind(display).map(|kind| kind.id(game)).as_deref()",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-mod-vocab/src/entity/entity_capability.rs",
+      "label": "existing player-name consumer",
+      "old": "entity.kind(host)? != \"minecraft:player\"",
+      "new": "entity.kind(host)?.id(host) != \"minecraft:player\"",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-mod-vocab/src/entity/entity_capability.rs",
+      "label": "existing named capability provider table",
+      "old": ".then(|| self.kind(host))",
+      "new": ".then(|| self.kind(host).map(|kind| kind.id(host)))",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-mod-vocab/src/entity/entity_capability.rs",
+      "label": "existing string kind_of consumer",
+      "old": "entity.kind(host).unwrap_or_default()",
+      "new": "entity.kind(host).map(|kind| kind.id(host)).unwrap_or_default()",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-mod-vocab/src/parts/entities.rs",
+      "label": "existing named entity provider lookup",
+      "old": ".get(&*entity.kind(host)?)?;",
+      "new": ".get(entity.kind(host)?.id(host).as_str())?;",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_player_destroyed_block_tests.rs",
+      "label": "test name assertion",
+      "old": "entity.kind(host).as_deref()",
+      "new": "entity.kind(host).map(|kind| kind.id(host)).as_deref()",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/modding/native_item_places.rs",
+      "label": "cart name assertion",
+      "old": "cart.kind(host).as_deref()",
+      "new": "cart.kind(host).map(|kind| kind.id(host)).as_deref()",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/entities/lightning.rs",
+      "label": "conversion log name records",
+      "old": ".and_then(|entity| entity.kind(host))",
+      "new": ".and_then(|entity| entity.kind(host).map(|kind| kind.id(host)))",
+      "count": 2
+    },
+    {
+      "path": "crates/horizon-mod-vocab/src/host/entities.rs",
+      "label": "entity kind API documentation",
+      "old": "    /// The entity's type (`Entity.getType`): `minecraft:zombie`. API\n    /// 373.",
+      "new": "    /// The entity's resolved type key (`Entity.getType`). Compare keys directly;\n    /// request `key.id(host)` explicitly when its canonical name is needed. API 373.",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-mod-vocab/src/entity/types.rs",
+      "label": "entity key documentation",
+      "old": "/// A mob entity type (`minecraft:zombie`) in the built-in entity-type registry, in\n/// registration order. A key stays valid until the game exits.",
+      "new": "/// An entity type (`minecraft:zombie`) in the built-in entity-type registry, in\n/// registration order. Returned by `EntityRef::kind`; Copy/Eq comparisons do not\n/// allocate. Request `key.id(host)` for its namespaced name (an owned diagnostic\n/// string). A key stays valid until the game exits.",
+      "count": 1
+    },
+    {
+      "path": "docs/modding/src/concepts/registry-keys.md",
+      "label": "registry-keys book entity read section",
+      "old": "## Block states\n",
+      "new": "## Entity-type reads\n\n`EntityRef::kind(host)` and the handles that delegate to it return\n`Option<EntityTypeKey>`, using the existing entity-type registry. The key is a\ncopyable scalar on native and wasm; compare it with a retained key instead of\nallocating and comparing a type-name string on every read. A stale or missing\nentity still returns `None`. There is no separate equipment-only type read.\n\nAfter the registry is available, resolve the type keys your Part needs once and\nretain them. `host.entity_type_keys()` enumerates that registry; `key.id(host)`\nexplicitly requests its canonical namespaced name. Name resolution returns an\nowned diagnostic string and can allocate. Persist the name, never the scalar slot.\nFor example, retain the zombie key at setup, then compare\n`entity.kind(host) == Some(zombie_key)` in a predicate.\n\nThis is a clean break from `Option<String>`: callers that need textual names must\nrequest `.id(host)` explicitly. `UnspawnedMobRef::kind` keeps its separate scoped\n`Identifier`/error contract, and block-entity type reads keep `BlockEntityTypeKey`.\n\n## Block states\n",
+      "count": 1
+    },
+    {
+      "path": "crates/horizon-client/src/game/entities/explosion/explosion_part_tests.rs",
+      "label": "new main skull proof explicit name",
+      "old": "let kind = event.entity.kind(host);",
+      "new": "let kind = event.entity.kind(host).map(|kind| kind.id(host).to_owned());",
+      "count": 1
+    }
+  ]
+}

@@ -1,9 +1,8 @@
 //! Real generated host/guest prepared dispatch, using the existing loopback transport.
+use super::prepared as slots;
 use super::*;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[path = "../../../src/prepared.rs"]
-mod slots;
 thread_local! {
     static REGISTER_PART: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     static EXPECTED: RefCell<Option<mod_api::ItemStack>> = const { RefCell::new(None) };
@@ -40,6 +39,9 @@ pub(super) fn record(id: u32, bytes: &[u8]) {
     });
 }
 impl WasmMod {
+    pub(super) fn equip_instance(&self) -> usize {
+        usize::from(self.group)
+    }
     pub(super) fn prepare(&self, bytes: &[u8]) -> Option<(u32, u32)> {
         let token =
             SLOTS.with(|slots| slots.borrow_mut().entry(self.group).or_default().prepare())?;
@@ -113,7 +115,7 @@ fn event<'a>(stack: &'a mod_api::ItemStack, slot: &'a str) -> mod_api::CanEquipE
     mod_api::CanEquipEvent {
         stack,
         slot,
-        entity: mod_api::LivingRef::new(mod_api::EntityRef::new(mod_api::WorldEpoch::new(1), 7)),
+        entity: mod_api::LivingRef::new(mod_api::EntityRef::new(mod_api::WorldEpoch::new(1), 21)),
         kind: "minecraft:zombie",
         can_equip: true,
     }
@@ -284,5 +286,85 @@ fn prepared_item_part_missing_exports_refuses_registration() {
         )
         .unwrap_err();
         assert!(format!("{error:?}").contains("prepare_can_equip"));
+    }
+}
+
+struct PreparedReads;
+#[mod_api::horizon_part]
+impl mod_api::ItemPart for PreparedReads {
+    fn can_equip(&self, host: &dyn mod_api::Host, event: &mut mod_api::CanEquipEvent<'_>) {
+        let entity = event.entity.entity();
+        assert_eq!(entity.kind(host), None);
+        assert_eq!(entity.position(host), Some([1.0, 64.0, 2.0]));
+        assert_eq!(event.entity.health(host), Some(17.0));
+        assert_eq!(event.entity.max_health(host), Some(20.0));
+        assert_eq!(event.entity.alive(host), Some(true));
+        let held = event.entity.hand_item(host, mod_api::Hand::Main).unwrap();
+        assert_eq!(held.count(), 3);
+        assert!(held.components().is_some());
+        assert!(
+            event
+                .entity
+                .equipment(host, mod_api::EquipmentSlot::Head)
+                .is_none()
+        );
+        event.can_equip = event.slot == "feet";
+    }
+}
+#[test]
+fn prepared_target_reads_need_no_host_round_trip_or_payload_conversion() {
+    install_counter();
+    let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
+    let mut stack = mod_api::ItemStack::new(HELMET.get().unwrap(), 3).unwrap();
+    stack
+        .set_components(horizon_core::nbt::Compound::from([(
+            horizon_core::nbt::JavaString::from("minecraft:custom_name"),
+            horizon_core::nbt::Tag::String("C".repeat(4096).as_str().into()),
+        )]))
+        .unwrap();
+    let entity = event(&stack, "head").entity.entity();
+    let mut equipment: [Option<mod_api::ItemStack>; 8] = Default::default();
+    equipment[0] = Some(stack.clone());
+    let row = mod_api::EquipReadRow {
+        position: Some([1.0, 64.0, 2.0]),
+        health: Some(17.0),
+        max_health: Some(20.0),
+        alive: Some(true),
+        living: true,
+        equipment,
+        ..mod_api::EquipReadRow::new(entity)
+    };
+    let proxy = WasmHandler {
+        index: guest::add_handler(vec![guest::view::<dyn mod_api::ItemPart>(Arc::new(
+            PreparedReads,
+        ))]),
+        module: WasmMod {
+            group: 7,
+            subscribed: &[],
+            listeners: &[],
+            corrupt: false,
+        },
+    };
+    let prepared = proxy
+        .prepare_can_equip_with_reads(&stack, &["minecraft:zombie"], &[row])
+        .unwrap();
+    for _ in 0..2 {
+        let answers = ["head", "chest", "legs", "feet"].map(|slot| {
+            let mut event = event(&stack, slot);
+            proxy.ask_can_equip(&prepared, &World, &mut event);
+            event.can_equip
+        });
+        assert_eq!(answers, [false, false, false, true]);
+    }
+}
+
+pub(super) struct PreparedEquipHooks;
+impl PreparedEquipHooks {
+    pub(super) fn register(
+        &self,
+        registrar: &mut dyn mod_api::Registrar,
+        _cx: &mod_api::RegistrationContext,
+    ) {
+        self::register(registrar);
     }
 }

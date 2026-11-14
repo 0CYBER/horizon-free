@@ -4,6 +4,7 @@ horizon-mod-wasm compile_budget_tests::actual_child_timeout_then_same_module_suc
 horizon-mod-wasm compile_budget_tests::invalid_startup_settings_publish_and_report_refusals_on_both_sides lib daily child-process
 horizon-mod-wasm compile_budget_tests::unavailable_or_untrusted_cache_refuses_applied_unix_budget lib daily child-process
 horizon-mod-wasm compiled_guest_reads_predicted_like_native test:predicted_block_notice daily wasm-fixture
+horizon-mod-wasm runtime::equip_scope_tests::equip_scope_copies_once_per_instance_for_eight_candidates_and_two_parts lib daily wasm-fixture
 horizon-mod-wasm module_cache::tests::child_failures_refuse_without_unbounded_compilation lib daily slow
 horizon-mod-wasm module_cache::tests::child_success_avoids_in_process_compile lib daily child-process
 horizon-mod-wasm native_registration_refuses_registration_data_without_wire test:no_wire_registration daily slow

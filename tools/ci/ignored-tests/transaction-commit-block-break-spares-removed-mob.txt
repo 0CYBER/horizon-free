@@ -1,0 +1,2 @@
+# Entity joins at a transaction's root commit: a block break's drop never announces a removed mob.
+horizon-client game::transaction_entities_tests::a_block_break_at_the_commit_never_announces_a_mob_the_transaction_removed lib daily child-process

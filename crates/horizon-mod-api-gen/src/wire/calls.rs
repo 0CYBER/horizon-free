@@ -328,7 +328,7 @@ fn resource_codec(types: &Types<'_>) -> String {
         }
     }
     format!(
-        "struct GuestCodec; impl crate::wire::ResourceCodec for GuestCodec {{ fn store(&self,value:Box<dyn std::any::Any>)->Result<crate::wire::Id,crate::wire::WireError> {{ {store} Err(crate::wire::WireError::Invalid(\"unknown handler type\")) }} fn load(&self,id:crate::wire::Id,view:std::any::TypeId)->Result<Box<dyn std::any::Any>,crate::wire::WireError> {{ {load} Err(crate::wire::WireError::Invalid(\"unknown held view\")) }} }} pub fn resource_scope()->crate::wire::ResourceScope {{ crate::wire::ResourceScope::new(std::rc::Rc::new(GuestCodec)) }}\n"
+        "struct GuestCodec; impl crate::wire::ResourceCodec for GuestCodec {{ fn store(&self,value:Box<dyn std::any::Any>)->Result<crate::wire::Id,crate::wire::WireError> {{ {store} Err(crate::wire::WireError::Invalid(\"unknown handler type\")) }} fn load(&self,id:crate::wire::Id,view:std::any::TypeId)->Result<Box<dyn std::any::Any>,crate::wire::WireError> {{ {load} Err(crate::wire::WireError::Invalid(\"unknown held view\")) }} }} thread_local! {{ static CODEC:std::rc::Rc<dyn crate::wire::ResourceCodec> = std::rc::Rc::new(GuestCodec); }} pub fn resource_scope()->crate::wire::ResourceScope {{ CODEC.with(|codec| crate::wire::ResourceScope::new(codec.clone())) }}\n"
     )
 }
 
@@ -387,6 +387,29 @@ pub(super) fn mutable_scalar(ty: &Ty) -> bool {
 /// frame object it returns is a local proxy; file capabilities retain their root selector.
 /// A handler it passes is kept under every trait it answers as and crosses as its id.
 fn import_body(types: &Types<'_>, m: &Method, id: usize, prefix: &str) -> String {
+    let normal = uncached_import_body(types, m, id, prefix);
+    let cache = match m.name.as_str() {
+        "entity_kind" => Some("cached_equip_kind(p0)"),
+        "entity_position" => Some("cached_equip_position(p0)"),
+        "living_health" => Some("cached_equip_health(p0)"),
+        "living_max_health" => Some("cached_equip_max_health(p0)"),
+        "living_alive" => Some("cached_equip_alive(p0)"),
+        "living" => Some("cached_equip_living(p0)"),
+        "living_equipment" => Some("cached_equip_equipment(p0,p1)"),
+        "living_hand_item" => Some("cached_equip_hand_item(p0,p1)"),
+        _ => None,
+    };
+    if let Some(cache) = cache {
+        normal.replacen(
+            " {",
+            &format!(" {{ if let Some(value)=crate::__private::{cache} {{ crate::__private::check_access({:?}, crate::__private::LoadAccess::WorldOnly); return value; }}", m.name),
+            1,
+        )
+    } else {
+        normal
+    }
+}
+fn uncached_import_body(types: &Types<'_>, m: &Method, id: usize, prefix: &str) -> String {
     let sig = rust_sig(types, m);
     let guest = "crate::wire::guest";
     if let Some((root, _, _)) = super::FILE_ROOTS
@@ -1016,11 +1039,11 @@ pub(super) fn dispatch(
             let upper = hook.to_uppercase();
             let prepare = super::prepared::PREPARE;
             let release = super::prepared::RELEASE;
-            writeln!(preparation, "thread_local! {{ static PREPARED_{upper}: std::cell::RefCell<crate::wire::guest::PreparedSlots<(crate::ItemStack,Vec<String>)>> = std::cell::RefCell::default(); }}").unwrap();
+            writeln!(preparation, "thread_local! {{ static PREPARED_{upper}: std::cell::RefCell<crate::wire::guest::PreparedSlots<(crate::ItemStack,Vec<String>,std::rc::Rc<crate::__private::EquipReadSet>)>> = std::cell::RefCell::default(); }}").unwrap();
             writeln!(preparation, "#[cfg(target_arch=\"wasm32\")] #[unsafe(export_name=\"prepare_{hook}\")] pub extern \"C\" fn entry_prepare_{hook}()->u64 {{ let (p,n)=crate::wire::guest::run({prepare}); (p as usize as u64)<<32 | u64::from(n) }}").unwrap();
             writeln!(preparation, "#[cfg(target_arch=\"wasm32\")] #[unsafe(export_name=\"ask_{hook}\")] pub extern \"C\" fn entry_ask_{hook}()->u64 {{ let (p,n)=crate::wire::guest::run({id}); (p as usize as u64)<<32 | u64::from(n) }}").unwrap();
             writeln!(preparation, "#[cfg(target_arch=\"wasm32\")] #[unsafe(export_name=\"release_{hook}\")] pub extern \"C\" fn entry_release_{hook}()->u64 {{ let (p,n)=crate::wire::guest::run({release}); (p as usize as u64)<<32 | u64::from(n) }}").unwrap();
-            writeln!(arms, "{prepare} => {{ let slot:u32=input.take()?; let generation:u32=input.take()?; let stack:crate::ItemStack=input.take()?; let kinds:Vec<String>=input.take()?; if !input.rest().is_empty() {{ return Err(crate::wire::WireError::Trailing); }} PREPARED_{upper}.with(|slots| slots.borrow_mut().prepare(slot,generation,(stack,kinds)))?; out.put(&(slot,generation)); }}, {release} => {{ let slot:u32=input.take()?; let generation:u32=input.take()?; if !input.rest().is_empty() {{ return Err(crate::wire::WireError::Trailing); }} PREPARED_{upper}.with(|slots| slots.borrow_mut().release(slot,generation))?; }}").unwrap();
+            writeln!(arms, "{prepare} => {{ let slot:u32=input.take()?; let generation:u32=input.take()?; let stack:crate::ItemStack=input.take()?; let kinds:Vec<String>=input.take()?; let reads:Vec<crate::EquipReadRow>=input.take()?; if !input.rest().is_empty() {{ return Err(crate::wire::WireError::Trailing); }} PREPARED_{upper}.with(|slots| slots.borrow_mut().prepare(slot,generation,(stack,kinds,std::rc::Rc::new(crate::__private::EquipReadSet::new(reads)))))?; out.put(&(slot,generation)); }}, {release} => {{ let slot:u32=input.take()?; let generation:u32=input.take()?; if !input.rest().is_empty() {{ return Err(crate::wire::WireError::Trailing); }} PREPARED_{upper}.with(|slots| slots.borrow_mut().release(slot,generation))?; }}").unwrap();
         }
         let mut body = String::new();
         let mut args = Vec::new();
@@ -1095,6 +1118,9 @@ pub(super) fn dispatch(
                     args.push(format!("p{i}"));
                 }
             }
+        }
+        if prepared_parameter.is_some() {
+            body.push_str("let _reads=crate::__private::enter_equip_reads(std::rc::Rc::clone(&p1_0.2),p1.entity.entity());");
         }
         let call = format!("receiver.{}({})", m.name, args.join(", "));
         let answer = if m.owner == "Hooks" && m.name == "subscribed" {

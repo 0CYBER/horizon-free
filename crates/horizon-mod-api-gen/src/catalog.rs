@@ -114,6 +114,10 @@ pub struct Hook {
     pub owner: Option<String>,
     /// Validate a collector's edits at the per-listener ownership boundary.
     pub collect_validator: Option<String>,
+    /// A global cancel hook whose dispatch runs every listener inside `catch_unwind`: one that
+    /// unwinds is switched off for this hook for the session, and the outputs it had written roll
+    /// back to what the game requested (#2414 ruling).
+    pub isolate: bool,
     pub scope: Option<PartScope>,
     pub host: Option<HostAccess>,
     pub context: Option<PhaseContext>,
@@ -271,6 +275,7 @@ struct ModApiEntry {
     answered_by: Option<AnsweredBy>,
     owner: Option<String>,
     collect_validator: Option<String>,
+    isolate: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -356,6 +361,15 @@ impl Hook {
         {
             return Err(CatalogError::InvalidContract(name));
         }
+        // Isolation is the cancel loop's own: a listener that unwinds rolls the outputs back
+        // to the requested ones and is skipped for the hook for the session (#2414 ruling).
+        let isolate = api.isolate.unwrap_or(false);
+        if isolate && (api.contract != Contract::Cancel || scope.is_some()) {
+            return Err(CatalogError::InvalidHook {
+                hook: name.clone(),
+                error: "isolate is for a global cancel hook".into(),
+            });
+        }
         let counterparts = Counterparts {
             neoforge: counterparts(&name, "neoforge", entry.neoforge)?,
             fabric: counterparts(&name, "fabric", entry.fabric)?,
@@ -372,6 +386,7 @@ impl Hook {
             answered_by_mod,
             owner: api.owner,
             collect_validator: api.collect_validator,
+            isolate,
             scope,
             host: entry.host,
             context: entry.context,
@@ -628,6 +643,7 @@ impl Declared {
                             "answered_by",
                             "owner",
                             "collect_validator",
+                            "isolate",
                         ] {
                             if let Some(value) = entry.remove(key) {
                                 api.insert(key.into(), value);
@@ -809,6 +825,7 @@ impl Hook {
             answered_by_mod: false,
             owner: None,
             collect_validator: None,
+            isolate: false,
             scope: None,
             host: None,
             context: None,

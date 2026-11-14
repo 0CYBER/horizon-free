@@ -46,6 +46,7 @@ fn collect(
     for item in file.items {
         let (scope, items) = if let Item::Mod(module) = &item {
             let scope = match module.ident.to_string().as_str() {
+                "root" => Some("root"),
                 "stubs" => Some("stubs"),
                 "crate_root" => Some("crate_root"),
                 "api" => Some("api"),
@@ -195,7 +196,7 @@ mod tests {
         generate(&root, &root).unwrap();
         fs::write(
             dir.join("alpha.rs"),
-            "fn check() {} mod stubs { struct Stub; } mod api { pub struct Api; } mod crate_root { mod item {} }", 
+            "fn check() {} mod root { mod runtime {} } mod stubs { struct Stub; } mod api { pub struct Api; } mod crate_root { mod item {} }",
         )
         .unwrap();
         fs::write(root.join(DECLARATIONS).join("zeta.rs"), "").unwrap();
@@ -205,6 +206,7 @@ mod tests {
         assert!(ordered.find("check").unwrap() < ordered.find("last").unwrap());
         for (scope, name) in [
             ("root", "check"),
+            ("root", "runtime"),
             ("stubs", "Stub"),
             ("api", "Api"),
             ("crate_root", "item"),
@@ -262,6 +264,10 @@ mod tests {
             ("mod other {}", "unsupported"),
             ("#[allow(dead_code)] mod stubs {}", "no attributes"),
             ("mod api;", "inline"),
+            ("pub mod root {}", "private"),
+            ("#[allow(dead_code)] mod root {}", "no attributes"),
+            ("mod root;", "inline"),
+            ("struct Same; mod root { struct Same; }", "duplicate"),
         ] {
             fs::write(dir.join("alpha.rs"), source).unwrap();
             assert!(generate(&root, &root).unwrap_err().contains(error));

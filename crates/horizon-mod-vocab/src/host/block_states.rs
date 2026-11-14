@@ -127,6 +127,14 @@ pub trait BlockStatesBackend {
     #[access(Metadata)]
     fn block_state_destroy_speed(&self, state: BlockState) -> Option<f32>;
     /// Side: both.
+    /// The explosion resistance the block of this state declares (`Block.getExplosionResistance`,
+    /// `BlockBehaviour.Properties.explosionResistance`): stone 6, obsidian 1200, bedrock 3,600,000,
+    /// water 100. Not what a blast meets at a position, which parts, fluids and the blast's own
+    /// rules change (`LevelRef::explosion_resistance`). None for an unknown state. A Horizon
+    /// addition: vanilla only reads it per position.
+    #[access(Metadata)]
+    fn block_state_explosion_resistance(&self, state: BlockState) -> Option<f32>;
+    /// Side: both.
     /// `BlockState.getSoundType()`: its volume, pitch and the sound events for breaking,
     /// stepping on, placing, hitting and falling on it. None for an unknown state.
     #[access(Metadata)]

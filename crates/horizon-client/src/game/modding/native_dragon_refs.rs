@@ -446,7 +446,7 @@ mod tests {
                 ])
             );
             assert_eq!(
-                game.entity_kind(*part).as_deref(),
+                game.entity_kind(*part).map(|kind| kind.id(game)).as_deref(),
                 Some("minecraft:ender_dragon")
             );
             assert_eq!(game.entity_rotation(*part), Some([0.0, 0.0]));

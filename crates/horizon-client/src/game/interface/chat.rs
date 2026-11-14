@@ -518,7 +518,8 @@ fn resource_ids(root: &Path) -> Arc<ResourceIds> {
         recipes: json_ids_of_every_namespace(root, "recipe"),
         templates: templates_under(&root.join("worldgen/structure")),
         entity_types,
-        enchantments: json_ids_in(&data.join("enchantment")),
+        // A content mod's enchantments too (`/enchant`, `/give` components).
+        enchantments: json_ids_of_every_namespace(root, "enchantment"),
         structures: json_ids_in(&data.join("worldgen/structure")),
         biomes: json_ids_in(&data.join("worldgen/biome")),
         clocks: json_ids_in(&data.join("world_clock")),

@@ -57,7 +57,7 @@ impl Game<'_> {
     /// The open screen's widgets: those the last frame drew, then the slots
     /// of an open inventory or menu (`slot-ID`, the ids of `click-slot`).
     pub(super) fn ui_nodes(&self) -> Vec<Node> {
-        let size = self.gui_scale().map(|b| [b.width, b.height]);
+        let size = self.gui_batch().map(|b| [b.width, b.height]);
         let mut nodes = widgets::tree(&widgets::last_labelled(), &widgets::last_targets(), size);
         if matches!(self.screen, Screen::Inventory | Screen::Creative)
             && self.title.is_none()
@@ -151,7 +151,7 @@ impl Game<'_> {
                 let nodes = self.ui_nodes();
                 let widgets: Vec<Value> = nodes.iter().map(|n| self.node_value(n)).collect();
                 let size = self
-                    .gui_scale()
+                    .gui_batch()
                     .map(|b| [b.width.round(), b.height.round()]);
                 Ok(Handled::Reply(json!({
                     "screen": self.screen_label(),

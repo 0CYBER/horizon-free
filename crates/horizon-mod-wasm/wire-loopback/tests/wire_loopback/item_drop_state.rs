@@ -69,3 +69,22 @@ fn wire_loopback_living_drops_carries_the_item_entity_state_both_ways() {
         ]
     );
 }
+
+pub(super) struct ItemDropStateHooks;
+impl ItemDropStateHooks {
+    pub(super) fn living_drops(
+        &self,
+        _: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::LivingDropsEvent<'_>,
+    ) -> mod_api::Flow {
+        if event.kind != "test:state_drops" {
+            return mod_api::Flow::Continue;
+        }
+        use self::{TARGET, THROWER, state_drop};
+        let full = state_drop(Some(THROWER), Some(TARGET), true, -32768);
+        let plain = state_drop(None, None, false, 0);
+        assert_eq!(*event.drops, vec![plain.clone(), full.clone()]);
+        *event.drops = vec![full, plain];
+        mod_api::Flow::Continue
+    }
+}

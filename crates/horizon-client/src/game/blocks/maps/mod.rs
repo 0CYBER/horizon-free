@@ -14,36 +14,6 @@ use horizon_client::{
 use horizon_core::nbt::{JavaString, Tag};
 use std::collections::HashMap;
 
-/// `LodestoneTracker.tick`: existing native eligibility/loaded-block predicate.
-/// The POI/unloaded boundary is unchanged; callers mutate their actual stacks.
-pub(super) fn lodestone_target_gone(game: &Game<'_>, stack: &ItemStack, dim: &str) -> bool {
-    let Some(tracker) = stack
-        .data()
-        .and_then(|d| d.other("minecraft:lodestone_tracker"))
-    else {
-        return false;
-    };
-    let (Some(target), true) = (
-        tracker.get("target"),
-        horizon_client::save::number(tracker.get("tracked")).is_none_or(|v| v != 0),
-    ) else {
-        return false;
-    };
-    let Some(Tag::IntArray(pos)) = target.get("pos") else {
-        return false;
-    };
-    let [x, y, z] = [pos[0], pos[1], pos[2]];
-    horizon_client::save::text(target.get("dimension")).as_deref() == Some(dim)
-        && game.world.chunks.contains_key(&(x >> 4, z >> 4))
-        && game
-            .res
-            .facts()
-            .get(game.world.block(x, y, z))
-            .name
-            .as_ref()
-            != "minecraft:lodestone"
-}
-
 /// What a decoration is filed under in `MapItemSavedData.decorations` (a
 /// `LinkedHashMap<String, MapDecoration>`): a player's marker by their
 /// connection, the banner at a position (`MapBanner.getId`), a framed map's
@@ -1333,73 +1303,14 @@ impl Game<'_> {
         self.swing_arm();
         true
     }
-    /// `CompassItem.inventoryTick` / `LodestoneTracker.tick`: a compass whose
-    /// lodestone is gone loses its target. A target in an unloaded chunk waits.
+    /// `Inventory.tick` (and `EntityEquipment.tick` for the armour) ->
+    /// `CompassItem.inventoryTick`: each compass the player carries whose
+    /// lodestone is gone loses its target (`inventory_tick`).
     pub(super) fn tick_lodestone_compasses(&mut self) {
-        let dim = self.dimension_id();
-        for slot in (0..self.inventory.len()).chain([super::shield::OFFHAND_SLOT]) {
-            if self
-                .stack_in(slot)
-                .is_some_and(|s| lodestone_target_gone(self, s, dim))
-                && let Some(s) = self.stack_in_mut(slot)
-            {
-                s.data_mut().set_other(
-                    "minecraft:lodestone_tracker",
-                    Some(Tag::Compound(Default::default())),
-                );
-            }
-        }
-        // `LivingEntity.tick` ticks `EntityEquipment` (the armour slots) as
-        // well as the inventory, so a compass worn there loses its target too.
-        let gone = self.armor.each_ref().map(|stack| {
-            stack
-                .as_ref()
-                .is_some_and(|s| lodestone_target_gone(self, s, dim))
-        });
-        for (stack, gone) in self.armor.iter_mut().zip(gone) {
-            if gone && let Some(stack) = stack {
-                stack.data_mut().set_other(
-                    "minecraft:lodestone_tracker",
-                    Some(Tag::Compound(Default::default())),
-                );
-            }
-        }
-    }
-    /// `LivingEntity.aiStep` -> `EntityEquipment.tick` for the host's player
-    /// and every mob: [`Self::tick_lodestone_compasses`] and
-    /// [`Self::tick_mob_compasses`].
-    pub(super) fn tick_equipment_compasses(&mut self) {
-        self.tick_lodestone_compasses();
-        self.tick_mob_compasses();
-    }
-    /// `EntityEquipment.tick` -> `CompassItem.inventoryTick` for mobs: a
-    /// compass in any of a mob's equipment slots loses its target when
-    /// the lodestone is gone.
-    fn tick_mob_compasses(&mut self) {
-        use horizon_items::equipment;
-        const TRACKER: &str = "minecraft:lodestone_tracker";
-        let dim = self.dimension_id();
-        let gone_in = |stack: Option<&ItemStack>| {
-            stack.is_some_and(|s| {
-                s.item.as_ref() == "minecraft:compass" && lodestone_target_gone(self, s, dim)
-            })
-        };
-        let mut gone: Vec<(usize, usize)> = Vec::new();
-        for (i, m) in self.mobs.iter().enumerate() {
-            for slot in 0..equipment::SLOT_NAMES.len() {
-                if gone_in(m.extra.slot_stack(slot)) {
-                    gone.push((i, slot));
-                }
-            }
-        }
-        for (i, slot) in gone {
-            let m = &mut self.mobs[i];
-            if let Some(mut stack) = m.extra.slot_stack(slot).cloned() {
-                stack
-                    .data_mut()
-                    .set_other(TRACKER, Some(Tag::Compound(Default::default())));
-                m.extra.set_slot_stack(slot, Some(stack));
-            }
+        let (world, facts, dim) = (&self.world, self.res.facts(), self.dim.id());
+        let stacks = self.inventory.iter_mut().chain([&mut self.offhand]);
+        for stack in stacks.chain(self.armor.iter_mut()).flatten() {
+            super::inventory_tick::compass_inventory_tick(world, facts, dim, stack);
         }
     }
     fn give_or_drop_stack(&mut self, stack: ItemStack) {

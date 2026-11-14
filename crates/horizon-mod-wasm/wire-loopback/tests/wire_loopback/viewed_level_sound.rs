@@ -52,3 +52,14 @@ fn wire_loopback_viewed_level_sound_places_the_sound() {
     assert_eq!((event.volume, event.pitch), (0.5, 1.5));
     assert_eq!(play_at, Some([7.0, 64.0, 1.0]));
 }
+
+pub(super) struct ViewedLevelSoundHooks;
+impl ViewedLevelSoundHooks {
+    pub(super) fn viewed_level_sound(
+        &self,
+        _: &mut dyn mod_api::ClientHost,
+        event: &mut mod_api::ViewedLevelSoundEvent<'_>,
+    ) {
+        self::listen(event);
+    }
+}

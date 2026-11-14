@@ -803,6 +803,8 @@ impl LootData {
                 )
             })
             .collect();
+        // Every namespace's, as the item tables read them: a content mod's
+        // `data/<ns>/enchantment/` lands in the root beside vanilla's.
         let mut raw_enchantments = HashMap::new();
         load_kind(&all, "enchantment", &mut raw_enchantments)?;
         overlay_map(overlay, "enchantment", &mut raw_enchantments);
@@ -2333,6 +2335,61 @@ mod namespace_tests {
         drop(tables);
         fs::write(dir.join("dirt.json"), r#"{"pools": [}"#).unwrap();
         assert!(shared_tables(&root, &PackOverlay::NONE).is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A content mod's enchantments (`data/<ns>/enchantment/`) load beside
+    /// vanilla's, and a world's pack replaces one.
+    #[test]
+    fn loads_every_namespace_enchantments() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-loot-enchant-ns-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let files = [
+            ("items.json", r#"{"minecraft:diamond_hoe": {}}"#),
+            ("data/harvestmod/enchantment/tools/broken.json", "{"),
+            (
+                "data/minecraft/enchantment/mending.json",
+                r#"{"supported_items": "minecraft:diamond_hoe", "max_level": 1}"#,
+            ),
+            (
+                "data/harvestmod/enchantment/scythe.json",
+                r#"{"supported_items": "minecraft:diamond_hoe", "max_level": 3}"#,
+            ),
+            (
+                "data/harvestmod/enchantment/tools/sweep.json",
+                r#"{"supported_items": "minecraft:diamond_hoe", "max_level": 1}"#,
+            ),
+        ];
+        for (name, text) in files {
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        // A valid folder or namespace named enchantment must not change another kind's error policy.
+        let unrelated = root.join("data/enchantment/recipe/enchantment/broken.json");
+        fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+        fs::write(&unrelated, b"{").unwrap();
+        assert!(load_kind(&root.join("data"), "recipe", &mut HashMap::new()).is_err());
+        fs::remove_file(unrelated).unwrap();
+        let defaults = crate::item_defaults::read(&root).unwrap();
+        let data = LootData::load(&root, &PackOverlay::NONE, &defaults).unwrap();
+        let level = |data: &LootData, name: &str| {
+            data.enchantments
+                .iter()
+                .find(|e| e.name == name)
+                .map(|e| e.max_level)
+        };
+        assert_eq!(level(&data, "minecraft:mending"), Some(1));
+        assert_eq!(level(&data, "harvestmod:scythe"), Some(3));
+        assert_eq!(level(&data, "harvestmod:tools/broken"), None);
+        assert_eq!(level(&data, "harvestmod:tools/sweep"), Some(1));
+        let pack = vec![(
+            "enchantment/harvestmod:scythe".to_owned(),
+            vec![br#"{"supported_items": "minecraft:diamond_hoe", "max_level": 5}"#.to_vec()],
+        )];
+        let data = LootData::load(&root, &PackOverlay::new(&pack), &defaults).unwrap();
+        assert_eq!(level(&data, "harvestmod:scythe"), Some(5));
         let _ = fs::remove_dir_all(&root);
     }
 

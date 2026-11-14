@@ -16,6 +16,28 @@ Keys identify entries for the running mod load, not persistent data. Persist can
 and property strings rather than registration slots or state ordinals. Reload preserves key identity;
 world numeric mappings and tag membership are separate reloadable data.
 
+## Entity-type reads
+
+`EntityRef::kind(host)` and the handles that delegate to it return
+`Option<EntityTypeKey>`, using the existing entity-type registry. The key is a
+copyable scalar on native and wasm; compare it with a retained key instead of
+allocating and comparing a type-name string on every read. A stale or missing
+entity still returns `None`. There is no separate equipment-only type read.
+
+After the registry is available, resolve the type keys your Part needs once and
+retain them. `host.entity_type_keys()` enumerates that registry; `key.id(host)`
+explicitly requests its canonical namespaced name. Name resolution returns an
+owned diagnostic string and can allocate. Persist the name, never the scalar slot.
+For example, retain the zombie key at setup, then compare
+`entity.kind(host) == Some(zombie_key)` in a predicate.
+
+The key derives `Wire` through its scalar slot: host decoding checks the registered
+slot, while a wasm guest carries the host-issued key without a separate name table.
+
+This is a clean break from `Option<String>`: callers that need textual names must
+request `.id(host)` explicitly. `UnspawnedMobRef::kind` keeps its separate scoped
+`Identifier`/error contract, and block-entity type reads keep `BlockEntityTypeKey`.
+
 ## Block states
 
 `BlockState` is a small owned value with private fields, not a tint-specific snapshot or an

@@ -23,6 +23,23 @@ as vanilla's `minecraft:resource_key`, so unmodded clients complete it too. The 
 must be a `namespace:path` resource location of at most 256 bytes, and the server takes at
 most 256 distinct registries; a usage past either is left out, with the reason in the log. Block positions are resolved and floored
 from the source's world, relative or local coordinates without loading chunks.
+
+Positions, rotations, dimensions and compound tags have their own kinds, each sent to clients
+as vanilla's parser so `~`, `^` and the dimension list complete as in a vanilla command:
+
+| Kind | Vanilla parser | `CommandArgumentValue` |
+|---|---|---|
+| `vec3` | `minecraft:vec3`, whole `x` and `z` centred on the block | `Vec3([f64; 3])` |
+| `vec3_uncentered` | `minecraft:vec3`, coordinates as written | `Vec3([f64; 3])` |
+| `column_pos` | `minecraft:column_pos` | `ColumnPos([i32; 2])`, floored |
+| `rotation` | `minecraft:rotation` | `Rotation([f32; 2])`, yaw then pitch |
+| `dimension` | `minecraft:dimension` | `Dimension(LevelRef)` |
+| `nbt` | `minecraft:nbt_compound_tag` | `Nbt(Compound)` |
+
+`~` and `^` resolve against the command source's position and rotation, as `block_pos` does. A
+`dimension` the world has not loaded is refused with `argument.dimension.invalid` before a
+listener runs. A `vec3` and a `vec3_uncentered` cannot share a position in one command's
+usages, as they look the same to a client.
 A player's source is their position and rotation. The console has no source
 entity and uses the Overworld spawn's block corner with zero rotation, so `@s`
 cannot resolve there. Every source receives the same owned data, on native and wasm.
@@ -42,6 +59,23 @@ skin (empty for an offline-mode player). `host.advancement(&id)` returns a loade
 `AdvancementInfo`: its parent, display (title, description, icon stack with its components, frame and
 flags), criterion names and requirements, from the set the last `/reload` built. Feedback through
 `host.commands().feedback` honours the underlying source's silence and track-output.
+
+## Run a command as a player
+
+`player.entity().run_command_with_output(host, line, level)` runs a command as that
+player, from their position and rotation, with `@s` selecting them. Pass
+`PermissionLevel::from_level(i32::from(player.permission_level(host)?))` to use
+the player's own permission level. The supplied level is taken as given, so a mod
+can also choose a different level explicitly. A leading slash is allowed.
+
+The returned `CommandResult` has `success` (the same bool as `run_command`) and
+`feedback`: the success and failure lines received by the source, in order, as
+plain text. The player still receives those lines in chat, and operator
+notifications follow the normal rules. Feedback silenced by the source or game
+rules is absent. Other entities use a silent source and return no lines; a stale,
+removed or unavailable entity returns `success: false` and no lines. Teleports to
+another level still happen at the next tick's start. Native and wasm mods use the
+same method and runner. `run_command(host, line, level)` keeps its bool return.
 
 ## Entity and player selectors
 

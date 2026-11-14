@@ -29,6 +29,16 @@ fn target_parameters(name: &str, native: &str, count: usize, carrier: &str) -> R
     Ok(())
 }
 
+/// Whether an isolated dispatch can roll a listener's writes through a mutable-reference field
+/// back to the requested value: the pointee must be a `Copy` primitive or a fixed array of them.
+fn rollback_pointee_is_copy(field_ty: &Type) -> bool {
+    match field_ty {
+        Type::Reference(reference) => rollback_pointee_is_copy(&reference.elem),
+        Type::Array(array) => is_primitive_scalar(&array.elem),
+        other => is_primitive_scalar(other),
+    }
+}
+
 pub(super) fn is_render(hook: &Hook) -> bool {
     hook.target.starts_with("mod_render::render::")
 }
@@ -376,6 +386,9 @@ pub(super) fn emit<'a>(
         let mut fields = String::new();
         let mut inits = Vec::new();
         let mut write_back = String::new();
+        // The fields an isolated dispatch rolls back to the requested values on a listener's
+        // unwind (#2414 ruling), each with whether the event holds it behind a `&mut`.
+        let mut rollback: Vec<(String, bool)> = Vec::new();
         let stack_outputs: Vec<_> = args
             .iter()
             .chain(output.as_ref().filter(|_| contract == Contract::Collect))
@@ -457,6 +470,20 @@ pub(super) fn emit<'a>(
                 ty.clone()
             };
             let (field, scalar) = lifetimes.field(&field_ty);
+            if scalar {
+                rollback.push((name.clone(), false));
+            } else if matches!(&field_ty, Type::Reference(reference) if reference.mutability.is_some())
+            {
+                if hook.isolate && !rollback_pointee_is_copy(&field_ty) {
+                    return Err(format!(
+                        "{}: isolate rolls a listener's writes back to the requested values; \
+                         its mutable argument {name} must be a Copy primitive or a fixed array \
+                         of them",
+                        hook.name
+                    ));
+                }
+                rollback.push((name.clone(), true));
+            }
             let visibility = if event_type == "ApplyEffectTickEvent" && name == "changes" {
                 "pub(super)"
             } else {
@@ -854,6 +881,38 @@ pub(super) fn emit<'a>(
         } else {
             mod_item.clone()
         };
+        // The #2414 ruling an isolated cancel hook carries: a listener that unwinds keeps the
+        // **requested** outputs — not one an earlier listener had proposed — is skipped by this
+        // hook for the session, and no later listener runs on this invocation.
+        let (isolate_snapshot, isolate_restore) = if hook.isolate {
+            let snapshot = rollback
+                .iter()
+                .map(|(name, by_reference)| {
+                    format!(
+                        "let __requested_{name} = {}{event}.{name}; ",
+                        if *by_reference { "*" } else { "" }
+                    )
+                })
+                .chain(std::iter::once(format!(
+                    "let __requested_cancelled = {event}.cancelled; "
+                )))
+                .collect::<String>();
+            let restore = rollback
+                .iter()
+                .map(|(name, by_reference)| {
+                    format!(
+                        "{}{event}.{name} = __requested_{name}; ",
+                        if *by_reference { "*" } else { "" }
+                    )
+                })
+                .chain(std::iter::once(format!(
+                    "{event}.cancelled = __requested_cancelled; "
+                )))
+                .collect::<String>();
+            (snapshot, restore)
+        } else {
+            (String::new(), String::new())
+        };
         // A listener's stack-list commit follows the cancel statement, separated by `;` so the
         // generated `if` is never read as the start of an `else if`.
         let cancel_step = {
@@ -878,6 +937,13 @@ pub(super) fn emit<'a>(
                 format!(
                     "{{ let mut {entered} = super::runtime::ListenerScope::new(); for (_, owner) in super::listening(HookId::{hook_id}) {{ if owner.id != {event}.mod_id {{ continue; }} let {mod_item} = {entered}.enter(owner, \"{name}\"); {} }} }}",
                     call(&mod_item, "break"),
+                ),
+            ),
+            None if mod_cancel && hook.isolate => (
+                String::new(),
+                format!(
+                    "{{ {isolate_snapshot} let mut {entered} = super::runtime::ListenerScope::new(); for ({receives}, {mod_entry}) in super::listening(HookId::{hook_id}) {{ if super::runtime::poisoned(HookId::{hook_id}, {mod_entry}.id) || ({event}.cancelled && !{receives}) {{ continue; }} let {mod_item} = {entered}.enter({mod_entry}, \"{name}\"); match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {mod_item}.{name}({invoke}))) {{ Ok(Flow::Cancel) => {{ {event}.cancelled = true; }} Ok(_) => {{}} Err(_unwound) => {{ {isolate_restore} super::runtime::poison(HookId::{hook_id}, {mod_entry}.id); *{o} = {event}.cancelled; return; }} }} }} }} *{o} = {event}.cancelled;",
+                    o = out.unwrap()
                 ),
             ),
             None if mod_cancel => (

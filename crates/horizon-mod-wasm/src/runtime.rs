@@ -3,6 +3,9 @@
 //! prepared release poison it, since the guest may still own retained state.
 //! The preallocated call path adds an Arc increment/decrement per call, without
 //! allocating on success. Diagnostic keys are built and checked only on refusal.
+#[cfg(all(test, feature = "test-copy-probe"))]
+#[path = "equip_scope_tests.rs"]
+mod equip_scope_tests;
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod runtime_tests;
@@ -400,6 +403,9 @@ pub(crate) struct WeakWasmMod {
     subscriptions: Arc<Mutex<std::collections::HashMap<(Id, u32), &'static [Option<HookId>]>>>,
 }
 impl WeakWasmMod {
+    pub(crate) fn equip_instance(&self) -> usize {
+        Arc::as_ptr(&self.prepared) as usize
+    }
     /// Whether the module's group has stopped or the module has been dropped.
     pub(crate) fn is_stopped(&self) -> bool {
         self.running
@@ -1075,7 +1081,10 @@ impl WasmMod {
         if store.data().replies.len() <= depth {
             store.data_mut().replies.resize_with(depth + 1, Writer::new);
             store.data_mut().inputs.resize_with(depth + 1, Writer::new);
-            store.data_mut().outputs.resize_with(depth + 1, Vec::new);
+            store
+                .data_mut()
+                .outputs
+                .resize_with(depth + 1, || Vec::with_capacity(64));
             store.data_mut().imports.resize_with(depth + 1, Vec::new);
         }
         store.data_mut().cx.frames.push(Frame::default());

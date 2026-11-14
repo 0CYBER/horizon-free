@@ -596,7 +596,7 @@ pub(super) struct BodyPotions {
 #[derive(Default)]
 pub(super) struct PotionState {
     pub(super) effects: PlayerEffects,
-    thrown: Vec<ThrownPotion>,
+    pub(super) thrown: Vec<ThrownPotion>,
     /// The area effect clouds a server tracks (game/network/remote_projectiles.rs).
     pub(super) clouds: Vec<super::remote_projectiles::RemoteCloud>,
     pub(super) applied: Vec<(&'static str, &'static str, f64, &'static str)>,

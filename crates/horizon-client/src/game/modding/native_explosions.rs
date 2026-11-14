@@ -6,6 +6,7 @@ use super::{
     commands::Target,
     explosion::{BlockInteraction, ExplosionSource},
     explosion_settings::{BlastCalculator, BlastEffects, BlastSettings, SourceCalculator},
+    minecarts::CartKind,
     native_hooks::{mod_particles_ok, sound_id},
 };
 use horizon_client::particles::{ExplosionParticle, ParticleOptions, ParticleType};
@@ -84,18 +85,7 @@ impl Game<'_> {
         }
         let settings = self.native_blast_settings(settings)?;
         let id = source.map(|(id, _)| id);
-        // `ServerLevel.explode`'s `ExplosionInteraction` to the blast's.
-        let interaction = match interaction {
-            ExplosionInteraction::None => BlockInteraction::Keep,
-            ExplosionInteraction::Block => self.destroy_type(vanilla::BLOCK_EXPLOSION_DROP_DECAY),
-            ExplosionInteraction::Mob if self.can_entity_grief(id) => {
-                self.destroy_type(vanilla::MOB_EXPLOSION_DROP_DECAY)
-            }
-            ExplosionInteraction::Mob => BlockInteraction::Keep,
-            ExplosionInteraction::Tnt => self.destroy_type(vanilla::TNT_EXPLOSION_DROP_DECAY),
-            ExplosionInteraction::Trigger => BlockInteraction::Trigger,
-            _ => unreachable!("ExplosionInteraction: unhandled variant"),
-        };
+        let interaction = self.native_blast_interaction(interaction, id);
         // Called from inside another blast (`native_explosion_detonate`), it
         // neither takes that blast's source, cause or flags nor leaves its own
         // behind: that blast gets them back after.
@@ -215,6 +205,26 @@ impl Game<'_> {
         })
     }
 
+    /// `ServerLevel.explode`'s `ExplosionInteraction` to the blast's, for a
+    /// blast whose source is `id`.
+    pub(super) fn native_blast_interaction(
+        &self,
+        interaction: ExplosionInteraction,
+        id: Option<u32>,
+    ) -> BlockInteraction {
+        match interaction {
+            ExplosionInteraction::None => BlockInteraction::Keep,
+            ExplosionInteraction::Block => self.destroy_type(vanilla::BLOCK_EXPLOSION_DROP_DECAY),
+            ExplosionInteraction::Mob if self.can_entity_grief(id) => {
+                self.destroy_type(vanilla::MOB_EXPLOSION_DROP_DECAY)
+            }
+            ExplosionInteraction::Mob => BlockInteraction::Keep,
+            ExplosionInteraction::Tnt => self.destroy_type(vanilla::TNT_EXPLOSION_DROP_DECAY),
+            ExplosionInteraction::Trigger => BlockInteraction::Trigger,
+            _ => unreachable!("ExplosionInteraction: unhandled variant"),
+        }
+    }
+
     /// The blast's source `id` and its causing entity
     /// (`Explosion.getIndirectSourceEntity`): a primed TNT's owner; a living
     /// entity itself (a player; a mob, which `blast_attacker` falls back to;
@@ -222,7 +232,7 @@ impl Game<'_> {
     /// living (one in the projectile list, a thrown trident, a firework
     /// rocket, a fishing bobber); anything else causes none. The damage
     /// source and kill credit follow the cause.
-    fn attribute_native_blast(&mut self, id: u32, target: Target) {
+    pub(super) fn attribute_native_blast(&mut self, id: u32, target: Target) {
         self.combat.explosion_source = Some(id);
         // `getEntities(this.source, ...)`: the source is no victim of its own blast.
         self.combat.explosion_source_named = true;
@@ -275,6 +285,27 @@ impl Game<'_> {
     /// calculator. The rays take it from the blast state
     /// (`blast_calculator_step`).
     pub(super) fn native_blast_calculator(&mut self, id: u32, target: Target) {
+        match target {
+            Target::Projectile(_)
+                if self.creatures.projectiles.iter().any(|p| {
+                    p.id == id && matches!(p.kind, ProjectileKind::WitherSkull { dangerous: true })
+                }) =>
+            {
+                self.combat.blast_resistance_cap = Some(0.8);
+                self.combat.explosion_direct = Some(id);
+            }
+            // MinecartTNT.isPrimed (fuse > -1).
+            Target::Cart(_)
+                if self
+                    .carts
+                    .iter()
+                    .any(|c| c.id == id && c.kind == CartKind::Tnt && c.fuse >= 0) =>
+            {
+                self.combat.rail_proof_blast = true;
+                self.combat.explosion_direct = Some(id);
+            }
+            _ => {}
+        }
         let calculator = match target {
             Target::Tnt(_) if self.tnts.iter().any(|t| t.id == id && t.used_portal) => {
                 SourceCalculator::PortalProof
@@ -300,7 +331,7 @@ impl Game<'_> {
     }
 
     /// The blast going off now, cleared to a sourceless one.
-    fn take_blast_state(&mut self) -> BlastState {
+    pub(super) fn take_blast_state(&mut self) -> BlastState {
         let c = &mut self.combat;
         BlastState {
             explicit_cause: c.explicit_explosion_cause.take(),
@@ -314,6 +345,7 @@ impl Game<'_> {
             in_water: std::mem::take(&mut c.explosion_in_water),
             hive_emptying: std::mem::take(&mut c.hive_emptying_blast),
             rail_proof: std::mem::take(&mut c.rail_proof_blast),
+            cap: c.blast_resistance_cap.take(),
             owner: c.explosion_owner.take(),
             tnt_owner_player: std::mem::take(&mut c.blast_owner_player),
             settings: std::mem::take(&mut c.blast_settings),
@@ -321,7 +353,7 @@ impl Game<'_> {
     }
 
     /// Puts back what `take_blast_state` cleared.
-    fn restore_blast_state(&mut self, s: BlastState) {
+    pub(super) fn restore_blast_state(&mut self, s: BlastState) {
         let c = &mut self.combat;
         c.explicit_explosion_cause = s.explicit_cause;
         c.blast_owner = s.blast_owner;
@@ -334,6 +366,7 @@ impl Game<'_> {
         c.explosion_in_water = s.in_water;
         c.hive_emptying_blast = s.hive_emptying;
         c.rail_proof_blast = s.rail_proof;
+        c.blast_resistance_cap = s.cap;
         c.explosion_owner = s.owner;
         c.blast_owner_player = s.tnt_owner_player;
         c.blast_settings = s.settings;
@@ -341,7 +374,7 @@ impl Game<'_> {
 }
 
 /// The fields of `CombatTracker` that describe the blast going off now.
-struct BlastState {
+pub(super) struct BlastState {
     explicit_cause: Option<Option<super::explosion::ExplosionCause>>,
     blast_owner: Option<(u32, horizon_client::text::Text)>,
     blast_guest: Option<u32>,
@@ -353,6 +386,7 @@ struct BlastState {
     in_water: bool,
     hive_emptying: bool,
     rail_proof: bool,
+    cap: Option<f32>,
     owner: Option<u32>,
     tnt_owner_player: bool,
     settings: BlastSettings,

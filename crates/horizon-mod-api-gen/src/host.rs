@@ -4,6 +4,7 @@
 //! forwarding methods and the mob tick's goal view.
 use super::*;
 use heck::ToUpperCamelCase;
+use std::fmt::Write as _;
 
 /// Reads implemented by the scoped goal context over the active mob and its
 /// disjoint live mob loans. Players are read from the game's backend; other
@@ -520,6 +521,62 @@ pub(super) fn game_forwarders(root: &Path) -> Result<String, String> {
                 code.push_str(&format!("{sig} {{ {access} {setup} {call} }}\n"));
             }
             code.push_str("}\n");
+            if matches!(tier, Tier::Host | Tier::Backend | Tier::ClientBackend) {
+                let area_trait = area.trait_name(*tier);
+                writeln!(code,"#[deny(unconditional_recursion)] impl mod_api::prelude::{area_trait} for crate::game::equip_host::EquipHost<'_, '_> {{").unwrap();
+                for entry in entries {
+                    let name = &entry.name;
+                    let sig = entry.sig.to_token_stream();
+                    if entry
+                        .sig
+                        .receiver()
+                        .is_some_and(|receiver| receiver.mutability.is_some())
+                    {
+                        let unused = entry
+                            .sig
+                            .inputs
+                            .iter()
+                            .filter_map(|arg| match arg {
+                                FnArg::Typed(arg) => {
+                                    Some(format!("let _ = {};", arg.pat.to_token_stream()))
+                                }
+                                _ => None,
+                            })
+                            .collect::<String>();
+                        writeln!(code,"{sig} {{ {unused} panic!(\"mutable access through an observation-only equipment Host\") }}").unwrap();
+                        continue;
+                    }
+                    let args = signature_args(&entry.sig, name)?;
+                    let tail = if args.is_empty() {
+                        String::new()
+                    } else {
+                        format!(",{args}")
+                    };
+                    let call = format!(
+                        "<Game<'_> as mod_api::prelude::{area_trait}>::{name}(self.game{tail})"
+                    );
+                    let cached = match name.as_str() {
+                        "entity_kind" => Some(("entity", "self.row.kind")),
+                        "entity_position" => Some(("entity", "self.row.position")),
+                        "living" => Some((
+                            "entity",
+                            "self.row.living.then_some(LivingRef::new(entity))",
+                        )),
+                        "living_health" => Some(("living.entity()", "self.row.health")),
+                        "living_max_health" => Some(("living.entity()", "self.row.max_health")),
+                        "living_alive" => Some(("living.entity()", "self.row.alive")),
+                        "living_equipment" => Some(("living.entity()", "self.equipment(slot)")),
+                        "living_hand_item" => Some((
+                            "living.entity()",
+                            "self.equipment(match hand { Hand::Main => EquipmentSlot::MainHand, Hand::Off => EquipmentSlot::OffHand })",
+                        )),
+                        _ => None,
+                    };
+                    let cached=cached.map(|(entity,value)|format!("if {entity}==self.row.entity {{ mod_api::__private::check_access({name:?},mod_api::__private::LoadAccess::WorldOnly); return {value}; }}")).unwrap_or_default();
+                    writeln!(code, "{sig} {{ {cached} {call} }}").unwrap();
+                }
+                code.push_str("}\n");
+            }
         }
     }
     let parsed = syn::parse_file(&code).map_err(|e| e.to_string())?;
@@ -829,13 +886,16 @@ fn handle_method(
         format!("{backend}(host).expect(\"registry key metadata requires a game host\").{call}")
     } else if returns("bool") {
         format!("{backend}(host).map(|backend| backend.{call}).unwrap_or(false)")
+    } else if returns("CommandResult") {
+        // An unresolved command source has neither a successful run nor feedback.
+        format!("{backend}(host).map(|backend| backend.{call}).unwrap_or_default()")
     } else if returns("Result") {
         format!(
             "{backend}(host).map_or_else(|| Err(crate::NoBackend::no_backend()), |backend| backend.{call})"
         )
     } else {
         return Err(format!(
-            "{name}: a {receiver} helper returns Option, bool or Result, the value a host without a backend refuses"
+            "{name}: a {receiver} helper returns Option, bool, CommandResult or Result, the value a host without a backend refuses"
         ));
     };
     Ok(Some((
@@ -1188,6 +1248,17 @@ mod tests {
             .unwrap();
         assert!(code.contains("host : & mut dyn ClientHost"));
         assert!(code.contains("client_backend_mut_of(host)"));
+        // A command result refuses with an unsuccessful run and no feedback.
+        let command = entry(
+            "fn entity_run_command_with_output(&mut self, entity: EntityRef, line: &str, level: PermissionLevel) -> CommandResult;",
+        );
+        let (handle, code) = handle_method(&command, Tier::BackendMut, &handles)
+            .unwrap()
+            .unwrap();
+        assert_eq!(handle, "EntityRef");
+        assert!(code.contains(
+            "backend_mut_of(host).map(|backend| backend.entity_run_command_with_output(self, line, level)).unwrap_or_default()"
+        ));
         // A `Result` method refuses with its error's `NoBackend` value on a host without a game.
         let tried = entry("fn level_attempt(&mut self, level: LevelRef) -> Result<u8, Refused>;");
         let (_, code) = handle_method(&tried, Tier::BackendMut, &handles)
@@ -1231,7 +1302,7 @@ mod tests {
             (
                 "fn entity_x(&self, entity: EntityRef);",
                 Tier::Backend,
-                "returns Option, bool or Result",
+                "returns Option, bool, CommandResult or Result",
             ),
             (
                 "fn entity_x(&mut self, entity: EntityRef) -> bool;",
@@ -1331,6 +1402,14 @@ mod tests {
                             .parse_args::<syn::Ident>()
                             .is_ok_and(|lint| lint == "unconditional_recursion")
                 }));
+                // The generator also emits a read-only EquipHost implementation.
+                // This assertion covers Game's complete backend surface.
+                let syn::Type::Path(receiver) = &*item.self_ty else {
+                    panic!("expected named host")
+                };
+                if receiver.path.segments.last().unwrap().ident != "Game" {
+                    continue;
+                }
                 let owner = item
                     .trait_
                     .unwrap()

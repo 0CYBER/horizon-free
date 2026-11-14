@@ -25,7 +25,7 @@ pub trait Hooks {
   zero position packet; refused by name (`horizon:passage_sync`) and put back with an absolute one.
 
 
-- **`player_passage_cross(player, passage, from, cancel)`**: `player`'s client crossed `passage` from `from` (its feet before), the move there passed and both ends are tracked; the server has not worked out where the player comes out yet. Set `cancel` and the crossing is refused (`PassageCrossRefusal::Vetoed`), the player put back at `from`. Everything checked before is checked again after the listeners, so one that removes the passage or moves the player refuses it too."###]
+- **`player_passage_cross(player, passage, from, cancel)`**: `player`'s client crossed `passage` from `from` (its feet before), the move there passed and both ends are tracked; the server has not worked out where the player comes out yet. Set `cancel` and the crossing is refused (`PassageCrossRefusal::Vetoed`), the player put back at `from`. Everything checked before is checked again after the listeners, so one that removes the passage or moves the player refuses it too. A passage into another level (`destination_level`) never reaches the hook: the server refuses it `PassageCrossRefusal::FarLevel` first."###]
     #[hook(
         side = "server",
         contract = "cancel",

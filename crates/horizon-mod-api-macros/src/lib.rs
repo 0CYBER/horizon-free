@@ -150,8 +150,15 @@ fn expand(mut implementation: ItemImpl, export: bool) -> TokenStream {
     let mut methods = Vec::new();
     let mut cfgs = Vec::new();
     let mut listeners = Vec::new();
+    // A block part's plain declarations are not hooks, so their names subscribe nothing.
+    const BLOCK_PART_PLAIN: [&str; 1] = ["explosion_resistance_is_pure"];
     for item in &mut implementation.items {
         if let ImplItem::Fn(method) = item {
+            if name == "BlockPart"
+                && BLOCK_PART_PLAIN.contains(&method.sig.ident.to_string().as_str())
+            {
+                continue;
+            }
             match take_listener(method) {
                 Ok(Some(_)) if part.is_some() => {
                     return syn::Error::new_spanned(

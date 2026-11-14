@@ -74,6 +74,8 @@ pub(super) struct NativeLifecycle {
     pub(super) held_joins: Vec<u32>,
     /// Item notices waiting for their join decision.
     pub(super) pending_item_spawns: Vec<(u32, String, i32, [f64; 3])>,
+    /// The log has named the entity id exhaustion (`entity_ids_exhausted`).
+    pub(super) ids_exhausted_told: bool,
 }
 
 impl NativeLifecycle {

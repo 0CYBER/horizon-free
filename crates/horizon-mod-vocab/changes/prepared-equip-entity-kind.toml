@@ -1,0 +1,3 @@
+ids = ["handle:EntityRef::kind", "type:EntityTypeKey", "hook:can_equip"]
+why = "EntityRef::kind returns Option<EntityTypeKey> instead of Option<String>. EntityTypeKey now supports TryFrom<u32> and uses Wire via u32 on wasm. Every can_equip in a decision shares one prepared stack and target snapshot; stale asks refuse without calling the part, changing observable timing."
+migrate = "Compare entity kinds as keys and resolve names with .id(host). Rebuild against this SDK and request can_equip hook version 2. A part cannot expect target changes during the same decision to appear in reads."

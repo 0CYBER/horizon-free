@@ -77,6 +77,7 @@ fn hub_answered(uuids: &[u128], answer: Answer) -> (Hub, Vec<Receiver<Out>>) {
         crate::test_resources::loop_context(horizon_world::native_load_context::LoopSide::Server),
     );
     hub.ticks = 10;
+    let levels = hub.level_keys();
     let mut receivers = Vec::new();
     for &uuid in uuids {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -103,6 +104,7 @@ fn hub_answered(uuids: &[u128], answer: Answer) -> (Hub, Vec<Receiver<Out>>) {
         g.dimension = "minecraft:overworld".into();
         g.batch_quota = 9.0;
         g.max_unacknowledged = 10;
+        g.viewed.logged_in_with(levels.clone());
         hub.guests.push(g);
         receivers.push(rx);
     }
@@ -928,4 +930,152 @@ fn with_no_viewer_no_copy_is_built() {
     hub.send_viewed_sound("minecraft:the_end", [8.5, 64.0, 8.5], 16.0, None, built);
     hub.send_viewed_sound(NETHER, [40.5, 64.0, 8.5], 16.0, None, built);
     assert_eq!(got(&rx[0]), []);
+}
+
+/// The levels past vanilla's three that the server has open now, as runtime levels open and
+/// close (`Hub.config.levels`).
+fn open_levels(hub: &mut Hub, ids: &[&'static str]) {
+    let extra: Vec<_> = ids
+        .iter()
+        .map(|&id| crate::chunk::ExtraLevel {
+            id,
+            dimension_type: "minecraft:overworld",
+            shape: crate::chunk::LevelShape::OVERWORLD,
+            seed: None,
+        })
+        .collect();
+    hub.config.levels.extra = extra.leak();
+}
+
+/// Guest `i`'s client logged in now: it was told the levels open now.
+fn log_in_now(hub: &mut Hub, i: usize) {
+    let levels = hub.level_keys();
+    hub.guests.update(i, |g| g.viewed.logged_in_with(levels));
+}
+
+/// The levels `got` opened.
+fn opened(got: &[Got]) -> Vec<i32> {
+    got.iter()
+        .filter_map(|g| match g {
+            Got::Open(level) => Some(*level),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A level opened after a client logged in (a runtime level) is not in the Login packet's
+/// `levels` its client names viewed levels by: that client is sent nothing of it, where an `open`
+/// at an index past its list would close its connection. A client that logged in after the open
+/// views it at its index.
+#[test]
+fn a_level_opened_after_a_clients_login_is_not_viewed_by_it() {
+    let (mut hub, rx) = hub_with(&[1, 2], 2);
+    open_levels(&mut hub, &["test:r"]);
+    log_in_now(&mut hub, 1);
+    for uuid in [1, 2] {
+        let areas = vec![area("test:r", (0, 0), 1, ChunkAreaMode::Loaded)];
+        hub.set_viewed_areas(uuid, "test:portal", areas).unwrap();
+    }
+    hub.set_dimension("test:r");
+    let mut world = lit_columns(1);
+    run_level(&mut hub, &mut world);
+    let before = got(&rx[0]);
+    assert!(
+        !before
+            .iter()
+            .any(|g| matches!(g, Got::Open(_) | Got::Wrapped { .. })),
+        "{before:?}"
+    );
+    assert!(hub.guests[0].viewed.view("test:r").is_none());
+    let after = got(&rx[1]);
+    assert_eq!(opened(&after), vec![3], "{after:?}");
+    assert!(!columns_of(&after, 3, ids::LEVEL_CHUNK_WITH_LIGHT).is_empty());
+}
+
+/// A viewed level keeps the index its client was told at Login when a level before it closes:
+/// the server's own list shifts, the client's does not.
+#[test]
+fn a_viewed_level_keeps_its_login_index_after_a_level_before_it_closes() {
+    let (mut hub, rx) = hub_with(&[1], 2);
+    open_levels(&mut hub, &["test:a", "test:b"]);
+    log_in_now(&mut hub, 0);
+    open_levels(&mut hub, &["test:b"]);
+    hub.close_views_of("test:a");
+    let areas = vec![area("test:b", (0, 0), 1, ChunkAreaMode::Loaded)];
+    hub.set_viewed_areas(1, "test:portal", areas).unwrap();
+    hub.set_dimension("test:b");
+    let mut world = lit_columns(1);
+    run_level(&mut hub, &mut world);
+    let sent = got(&rx[0]);
+    assert_eq!(opened(&sent), vec![4], "test:b's index at Login: {sent:?}");
+    assert_eq!(columns_of(&sent, 4, ids::LEVEL_CHUNK_WITH_LIGHT).len(), 9);
+}
+
+/// A level that closes (a runtime level unloaded or deleted) closes its clients' views of it; once
+/// open again under its id, it is opened and sent afresh, nothing of the old level counted as
+/// sent.
+#[test]
+fn a_closed_levels_views_are_closed_and_a_reopen_is_sent_afresh() {
+    let (mut hub, rx) = hub_with(&[1], 2);
+    open_levels(&mut hub, &["test:r"]);
+    log_in_now(&mut hub, 0);
+    let areas = vec![area("test:r", (0, 0), 1, ChunkAreaMode::Loaded)];
+    hub.set_viewed_areas(1, "test:portal", areas).unwrap();
+    hub.set_dimension("test:r");
+    let mut world = lit_columns(1);
+    run_level(&mut hub, &mut world);
+    let first = got(&rx[0]);
+    assert_eq!(columns_of(&first, 3, ids::LEVEL_CHUNK_WITH_LIGHT).len(), 9);
+    hub.set_dimension("minecraft:overworld");
+    open_levels(&mut hub, &[]);
+    hub.close_views_of("test:r");
+    assert_eq!(got(&rx[0]), vec![Got::Close(3)]);
+    assert!(hub.guests[0].viewed.view("test:r").is_none());
+    // Opened again: the area is still there.
+    open_levels(&mut hub, &["test:r"]);
+    hub.set_dimension("test:r");
+    hub.ticks += 1;
+    hub.guests.update(0, |g| {
+        g.batch_quota = 9.0;
+        g.unacknowledged = 0;
+    });
+    let mut reopened = lit_columns(1);
+    run_level(&mut hub, &mut reopened);
+    let again = got(&rx[0]);
+    assert_eq!(opened(&again), vec![3], "{again:?}");
+    assert_eq!(columns_of(&again, 3, ids::LEVEL_CHUNK_WITH_LIGHT).len(), 9);
+}
+
+/// A travel out of a level opened after its client's Login, into a level it views: its client
+/// cannot name the level left, so it does not swap (it drops its viewed worlds and enters the
+/// Nether afresh), and the server does the same.
+#[test]
+fn a_travel_out_of_a_level_opened_after_login_does_not_swap() {
+    let (mut hub, rx) = hub_with(&[1], 2);
+    open_levels(&mut hub, &["test:r"]);
+    hub.guests.update(0, |g| {
+        g.dimension = "test:r".into();
+        g.sent_chunks.extend([(0, 0), (1, 0)]);
+    });
+    hub.set_viewed_areas(1, "test:portal", nether(1)).unwrap();
+    hub.set_dimension(NETHER);
+    let mut nether_world = lit_columns(1);
+    run_level(&mut hub, &mut nether_world);
+    assert_eq!(
+        wrapped_columns(&got(&rx[0]), ids::LEVEL_CHUNK_WITH_LIGHT).len(),
+        9
+    );
+    in_ctx(&mut nether_world, |ctx| {
+        hub.change_level(0, [8.5, 64.0, 8.5], 0.0, None, false, 0, ctx);
+    });
+    let g = &hub.guests[0];
+    assert_eq!(g.dimension, NETHER);
+    assert!(
+        g.viewed.views.is_empty(),
+        "test:r left is not kept as a view"
+    );
+    assert!(
+        g.sent_chunks.is_empty(),
+        "the Nether is sent again as its own"
+    );
 }

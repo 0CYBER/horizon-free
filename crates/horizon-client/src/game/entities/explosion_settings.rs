@@ -103,20 +103,20 @@ impl Game<'_> {
     /// other cell, fluids included, and no part is asked; a portal-proof
     /// blast passes through a nether portal and spares it. None for the
     /// usual rule. The rays and every resistance read take it from here.
-    pub(super) fn blast_calculator_step(&self, name: &str) -> Option<(f32, bool)> {
+    pub(super) fn blast_calculator_step(&self, name: &str) -> Option<(Option<f32>, bool)> {
         let settings = &self.combat.blast_settings;
         let immune = match (&settings.calculator, &settings.source_calculator) {
             (Some(c), _) => c.immune.as_ref()?,
             (None, SourceCalculator::WindCharge(tag)) => tag,
             (None, SourceCalculator::PortalProof) => {
-                return (name == "minecraft:nether_portal").then_some((0.0, true));
+                return (name == "minecraft:nether_portal").then_some((None, true));
             }
             (None, SourceCalculator::Default) => return None,
         };
         let taken = if immune.contains(name) {
-            (IMMUNE_RESISTANCE + 0.3) * 0.3
+            Some(IMMUNE_RESISTANCE)
         } else {
-            0.0
+            None
         };
         Some((taken, false))
     }

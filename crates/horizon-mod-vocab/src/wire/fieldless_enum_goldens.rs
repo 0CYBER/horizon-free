@@ -401,6 +401,11 @@ fn existing_fieldless_enum_layouts_match_baseline() {
         "MinecartKind"
     );
     assert_eq!(
+        <crate::entity::types::MoveCause as Wire>::layout(&mut vec![]),
+        0x00bec45d5d6aef41,
+        "MoveCause"
+    );
+    assert_eq!(
         <crate::world::types::MobCategory as Wire>::layout(&mut vec![]),
         0x663292b422d610b3,
         "MobCategory"

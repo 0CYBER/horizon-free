@@ -143,6 +143,35 @@ pub fn item_listens(hook: HookId, id: &str) -> bool {
         .is_some_and(|table| !table.item(|| Some(id)).is_empty())
 }
 
+/// Prepare the subscribed item parts once, before traversing candidate slots/entities.
+/// The source API stack must retain its address until these leases are dropped.
+// hidden: engine-owned equipment scopes retain transport leases; not a mod callback.
+#[doc(hidden)]
+pub fn prepare_equip_parts(
+    stack: &crate::ItemStack,
+    kinds: &[&str],
+    reads: &[crate::EquipReadRow],
+) -> Result<Vec<Box<dyn std::any::Any>>, crate::wire::WireError> {
+    let parts = parts(HookId::CanEquip, "equip preparation");
+    let Some(table) = parts.for_hook(HookId::CanEquip) else {
+        return Ok(Vec::new());
+    };
+    let mut leases = Vec::new();
+    for part in table.item(|| crate::content::registry_keys::item_id(stack.item())) {
+        if !crate::mod_index_on(part.mod_index) {
+            continue;
+        }
+        if let Some(lease) = part
+            .part
+            .__prepare_equip(stack, kinds, reads)
+            .map_err(crate::wire::WireError::Invalid)?
+        {
+            leases.push(lease);
+        }
+    }
+    Ok(leases)
+}
+
 /// Registrar operations for items.
 pub trait ItemsRegistrar {
     /// Request an item by registry id, validated after all declarations.

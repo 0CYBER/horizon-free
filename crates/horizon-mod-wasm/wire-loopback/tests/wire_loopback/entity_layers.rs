@@ -182,3 +182,14 @@ fn wire_loopback_entity_layers_register_and_draw_alike_for_native_and_guest_mods
         );
     }
 }
+
+pub(super) struct EntityLayersHooks;
+impl EntityLayersHooks {
+    pub(super) fn register_entity_layers(
+        &self,
+        _: &mod_api::RegistrationContext,
+        event: &mut mod_api::RegisterEntityLayersEvent<'_>,
+    ) {
+        self::register(event.layers);
+    }
+}

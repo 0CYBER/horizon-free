@@ -79,17 +79,38 @@ impl Menu {
                     }
                     let mut source = self.state.carried.clone().expect("checked");
                     let mut remaining = source.count as i64;
-                    let carried = self.state.carried.clone().expect("checked");
+                    let observed = env.player_entity_id.is_some()
+                        && env.can_equip.is_some_and(|parts| parts.listens(&source))
+                        && self
+                            .state
+                            .quick_slots
+                            .iter()
+                            .any(|slot| matches!(self.state.slots[*slot].role, Role::Armor(_)));
+                    let mut input = observed.then(|| Some(source.clone()));
+                    let mut barrier = input
+                        .as_mut()
+                        .map(|slot| crate::mobs::equip::EquipDecision::new(0, slot));
+                    let carried = barrier.as_deref().unwrap_or(&source);
+                    if observed
+                        && !env.can_equip.unwrap().prepare(
+                            carried,
+                            env.player_entity_id.unwrap() as u32,
+                            "minecraft:player",
+                        )
+                    {
+                        self.reset_quick_craft();
+                        return Ok(());
+                    }
                     for s in self.state.quick_slots.clone() {
-                        if self.quick_replace(s, &carried, env)
-                            && self.may_place(env, s, &carried)
+                        let proof = self.equip_placement(env, s, carried);
+                        if self.quick_replace(s, carried, env)
+                            && proof.allowed
                             && (self.state.quick_type == 2
                                 || carried.count as usize >= self.state.quick_slots.len())
                             && self.can_drag_to(s)
                         {
                             let have = self.slot(s).map_or(0, |c| c.count);
-                            let max =
-                                Self::max_stack(env, &source).min(self.slot_max(env, s, &source));
+                            let max = Self::max_stack(env, &source).min(proof.max);
                             let new_count = quick_craft_count(
                                 self.state.quick_type as u8,
                                 source.count,
@@ -98,14 +119,23 @@ impl Menu {
                                 max,
                                 Self::max_stack(env, &source),
                             );
+                            if !proof.can_apply(self, env, carried) {
+                                continue;
+                            }
                             remaining -= i64::from(new_count) - i64::from(have);
                             let mut placed = source.clone();
                             placed.count = new_count;
                             self.set_by_player(env, s, Some(placed));
                         }
                     }
-                    source.count = remaining.max(0) as u32;
-                    self.state.carried = Some(source);
+                    self.state.carried = if let Some(barrier) = barrier.as_mut() {
+                        *barrier.count_mut().expect("drag source retained") =
+                            remaining.max(0) as u32;
+                        barrier.remove()
+                    } else {
+                        source.count = remaining.max(0) as u32;
+                        Some(source)
+                    };
                     tidy(&mut self.state.carried);
                 }
                 self.reset_quick_craft();
@@ -260,6 +290,9 @@ impl Menu {
 
     pub(super) fn pickup_inner(&mut self, env: &Env, s: usize, primary: bool) {
         self.touch();
+        if self.pickup_equip_carried(env, s, primary) {
+            return;
+        }
         let clicked = self.slot(s).cloned();
         match clicked {
             None => {
@@ -344,6 +377,9 @@ impl Menu {
         let inv_slot = button;
         let target_slot = self.state.slots[target];
         if target_slot.container == PLAYER && target_slot.index == inv_slot {
+            return;
+        }
+        if self.swap_equip_source(env, target, inv_slot) {
             return;
         }
         let source = self.state.containers[PLAYER][inv_slot].clone();

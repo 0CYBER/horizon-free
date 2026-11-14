@@ -200,3 +200,7 @@ mod tests {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "native_rotate/jigsaw_tests.rs"]
+mod jigsaw_tests;

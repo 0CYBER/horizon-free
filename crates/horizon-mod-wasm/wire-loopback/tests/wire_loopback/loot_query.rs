@@ -37,3 +37,18 @@ fn queried_parameters_reach_wasm_mod_condition() {
 
 struct Tags;
 impl mod_api::Tags for Tags {}
+
+pub(super) struct LootQueryHooks;
+impl LootQueryHooks {
+    pub(super) fn loot_condition(&self, event: &mut mod_api::LootConditionEvent<'_>) {
+        if self::guest_condition(event) {
+            return;
+        }
+        let tag = event
+            .tags
+            .key(&mod_api::Identifier::parse("test:ingredients").unwrap())
+            .unwrap();
+        let item = event.tags.items(tag).unwrap()[0];
+        event.holds = event.tags.is_in_tag(item, tag).unwrap();
+    }
+}
