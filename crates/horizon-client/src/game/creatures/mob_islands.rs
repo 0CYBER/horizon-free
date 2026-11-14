@@ -157,11 +157,19 @@ impl Islands<'_> {
         start: &Start,
     ) -> Option<Plan> {
         let lanes = lanes();
-        if lanes < 2
-            || mods_hook_turns()
-            || mobs.len() < MIN_TICKING
-            || horizon_client::random_source::repeating_per_thread()
-        {
+        let early = if lanes < 2 {
+            Some(Verdict::OneLane)
+        } else if mods_hook_turns() {
+            Some(Verdict::ModsHookTurns)
+        } else if mobs.len() < MIN_TICKING {
+            Some(Verdict::FewMobs)
+        } else if horizon_client::random_source::repeating_per_thread() {
+            Some(Verdict::RepeatingSeeds)
+        } else {
+            None
+        };
+        if let Some(verdict) = early {
+            verdict.record(&Census::default());
             return None;
         }
         // A content mod's effect ticks through the native mods (`ModEffectTicks`), which run
@@ -174,6 +182,7 @@ impl Islands<'_> {
                     .any(|e| horizon_client_core::potions::is_mod_effect(e.0))
             })
         {
+            Verdict::ModEffect.record(&Census::default());
             return None;
         }
         // Where an owner stands: the players a pet can see this tick.
@@ -184,7 +193,22 @@ impl Islands<'_> {
             .map(|p| (p.uuid, p.position))
             .collect();
         horizon_client::spans::time("islands_plan", || {
-            islands(&reaches(mobs, snapshot, turns, &players)?, lanes)
+            let Some(list) = reaches(mobs, snapshot, turns, &players) else {
+                Verdict::Unbounded.record(&Census::default());
+                return None;
+            };
+            let mut census = Census::default();
+            let plan = islands_why(&list, lanes, &mut census);
+            match plan {
+                Ok(plan) => {
+                    Verdict::Grouped.record(&census);
+                    Some(plan)
+                }
+                Err(verdict) => {
+                    verdict.record(&census);
+                    None
+                }
+            }
         })
     }
 
@@ -879,10 +903,98 @@ impl Cells {
 /// The islands of `reaches`, packed into at most `lanes` groups; None when the loop should run
 /// serially: too few ticking mobs, a plan past its budget, one island holding most of the ticking
 /// mobs, or only one group.
+#[cfg(test)]
 fn islands(reaches: &[Reach], lanes: usize) -> Option<Plan> {
+    islands_why(reaches, lanes, &mut Census::default()).ok()
+}
+
+/// Why a tick's mobs run in groups or serially, as the `mob_islands.ticks` counter's `verdict`
+/// label: one count per tick, so a capture shows which rule keeps a server's mob loop on one
+/// thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    /// The mobs ran in groups.
+    Grouped,
+    /// One lane (a machine or `HORIZON_WORKER_THREADS` with fewer than two threads).
+    OneLane,
+    /// A native mod can run code in a mob's turn (`HORIZON_MOB_TURN`).
+    ModsHookTurns,
+    /// Fewer than `MIN_TICKING` mobs in the loop.
+    FewMobs,
+    /// `HORIZON_TEST_SEEDS`.
+    RepeatingSeeds,
+    /// A mob carries a content mod's effect while mods are loaded.
+    ModEffect,
+    /// A mob's reach has no finite bound (`reaches` gave up): this keeps every mob serial.
+    Unbounded,
+    /// Fewer than `MIN_TICKING` of the mobs tick.
+    FewTicking,
+    /// The plan used up its cell visits.
+    OverBudget,
+    /// One island holds more than three quarters of the ticking mobs.
+    OneIsland,
+    /// The islands fit in one group.
+    OneGroup,
+}
+
+impl Verdict {
+    fn label(self) -> &'static str {
+        match self {
+            Verdict::Grouped => "grouped",
+            Verdict::OneLane => "one_lane",
+            Verdict::ModsHookTurns => "mods_hook_turns",
+            Verdict::FewMobs => "few_mobs",
+            Verdict::RepeatingSeeds => "repeating_seeds",
+            Verdict::ModEffect => "mod_effect",
+            Verdict::Unbounded => "unbounded_reach",
+            Verdict::FewTicking => "few_ticking",
+            Verdict::OverBudget => "over_budget",
+            Verdict::OneIsland => "one_island",
+            Verdict::OneGroup => "one_group",
+        }
+    }
+
+    /// Counts the tick under its verdict, and sets the gauges of what the plan found when it got
+    /// that far. Nothing is read while the profiler is off.
+    fn record(self, census: &Census) {
+        if !horizon_client::spans::enabled() {
+            return;
+        }
+        horizon_perf_format::counter("mob_islands.ticks", &[("verdict", self.label())]).add(1);
+        if census.ticking > 0 {
+            for (name, value) in [
+                ("mob_islands.ticking", census.ticking),
+                ("mob_islands.islands", census.islands),
+                ("mob_islands.largest_island", census.largest),
+            ] {
+                horizon_perf_format::gauge(name, &[]).set(value as f64);
+            }
+        }
+    }
+}
+
+/// What a plan found among a tick's mobs: how many tick, how many islands they form, and how many
+/// the largest holds. Zero until the plan got that far.
+#[derive(Default)]
+struct Census {
+    ticking: usize,
+    islands: usize,
+    largest: usize,
+}
+
+/// [`islands`], with the reason a tick runs serially.
+fn islands_why(
+    reaches: &[Reach],
+    lanes: usize,
+    census: &mut Census,
+) -> std::result::Result<Plan, Verdict> {
     let ticking = reaches.iter().filter(|r| r.ticking).count();
-    if lanes < 2 || ticking < MIN_TICKING {
-        return None;
+    census.ticking = ticking;
+    if lanes < 2 {
+        return Err(Verdict::OneLane);
+    }
+    if ticking < MIN_TICKING {
+        return Err(Verdict::FewTicking);
     }
     let n = reaches.len();
     let mut budget = PLAN_BUDGET;
@@ -942,25 +1054,33 @@ fn islands(reaches: &[Reach], lanes: usize) -> Option<Plan> {
     // Columns by the cells their boxes cover.
     let (mut bodies, mut claims) = (Cells::default(), Cells::default());
     for (c, col) in columns.iter().enumerate() {
-        bodies.insert(c as u32, col.body, &mut budget)?;
+        bodies
+            .insert(c as u32, col.body, &mut budget)
+            .ok_or(Verdict::OverBudget)?;
         if let Some(b) = col.claims {
-            claims.insert(c as u32, b, &mut budget)?;
+            claims
+                .insert(c as u32, b, &mut budget)
+                .ok_or(Verdict::OverBudget)?;
         }
     }
     for col in &columns {
-        bodies.query(col.sense, &mut budget, |j| {
-            let other = &columns[j as usize];
-            if other.body.intersects(col.sense) {
-                sets.join(col.first, other.first);
-            }
-        })?;
-        if let Some(reads) = col.village_reads {
-            claims.query(reads, &mut budget, |j| {
+        bodies
+            .query(col.sense, &mut budget, |j| {
                 let other = &columns[j as usize];
-                if other.claims.is_some_and(|b| b.intersects(reads)) {
+                if other.body.intersects(col.sense) {
                     sets.join(col.first, other.first);
                 }
-            })?;
+            })
+            .ok_or(Verdict::OverBudget)?;
+        if let Some(reads) = col.village_reads {
+            claims
+                .query(reads, &mut budget, |j| {
+                    let other = &columns[j as usize];
+                    if other.claims.is_some_and(|b| b.intersects(reads)) {
+                        sets.join(col.first, other.first);
+                    }
+                })
+                .ok_or(Verdict::OverBudget)?;
         }
     }
     let mut raids = FxHashMap::<i32, u32>::default();
@@ -988,14 +1108,18 @@ fn islands(reaches: &[Reach], lanes: usize) -> Option<Plan> {
         islands[k].0 += usize::from(r.ticking);
     }
     let largest = islands.iter().map(|i| i.0).max().unwrap_or(0);
+    (census.islands, census.largest) = (islands.len(), largest);
     if largest * 4 > ticking * 3 {
-        return None;
+        return Err(Verdict::OneIsland);
     }
     // Heaviest first (stable: ties keep the list's order), each to the lightest group.
     islands.sort_by_key(|a| std::cmp::Reverse(a.0));
     let mut groups: Vec<(usize, Vec<usize>)> = vec![(0, Vec::new()); lanes];
     for (weight, members) in islands {
-        let g = groups.iter_mut().min_by_key(|g| g.0)?;
+        let g = groups
+            .iter_mut()
+            .min_by_key(|g| g.0)
+            .ok_or(Verdict::OneGroup)?;
         g.0 += weight;
         g.1.extend(members);
     }
@@ -1007,7 +1131,11 @@ fn islands(reaches: &[Reach], lanes: usize) -> Option<Plan> {
     for g in &mut groups {
         g.sort_unstable();
     }
-    (groups.len() > 1).then_some(Plan { groups })
+    if groups.len() > 1 {
+        Ok(Plan { groups })
+    } else {
+        Err(Verdict::OneGroup)
+    }
 }
 
 /// Every mob's snapshot entry across the groups, for a lookup by id of a mob in another group:
@@ -1811,6 +1939,27 @@ mod tests {
             ..r
         }));
         assert!(islands(&resting, 2).is_none());
+    }
+
+    /// A serial tick says why: the verdict the `mob_islands.ticks` counter is labelled with, and
+    /// what the plan found (how many tick, how many islands, the largest) when it got that far.
+    #[test]
+    fn a_serial_tick_names_its_rule() {
+        let why = |list: &[Reach], lanes| {
+            let mut census = Census::default();
+            let verdict = islands_why(list, lanes, &mut census).err();
+            (verdict, (census.ticking, census.islands, census.largest))
+        };
+        let mut few = herd(0, 100, 0.0, 0.0);
+        few.extend(herd(1000, 100, 1000.0, 0.0));
+        assert_eq!(why(&few, 2), (Some(Verdict::FewTicking), (200, 0, 0)));
+        let mut three = few.clone();
+        three.extend(herd(2000, 100, 2000.0, 0.0));
+        assert_eq!(why(&three, 1), (Some(Verdict::OneLane), (300, 0, 0)));
+        assert_eq!(why(&three, 2), (None, (300, 3, 100)));
+        let mut lopsided = herd(0, 400, 0.0, 0.0);
+        lopsided.extend(herd(1000, 100, 1000.0, 0.0));
+        assert_eq!(why(&lopsided, 2), (Some(Verdict::OneIsland), (500, 2, 400)));
     }
 
     fn separated_herds_game() -> Game<'static> {

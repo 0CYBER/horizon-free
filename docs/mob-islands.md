@@ -163,6 +163,16 @@ random keeps vanilla's sequence; the serial loop draws the same way, so the grou
 the serial one; with the parallel tick off nothing changes. The ordered stream stays for the
 turns' new RNGs (`in_seed_order`) and the lookups by id.
 
+## Why a tick ran serially
+
+A capture (`horizon-ctl profile`, `/profiler`) counts every tick of the loop under `mob_islands.ticks`, labelled
+`verdict`: `grouped`, or the rule that kept the tick serial: `one_lane`, `mods_hook_turns`, `few_mobs`
+(under 256 mobs in the loop), `repeating_seeds`, `mod_effect`, `unbounded_reach` (a mob's reach has no finite
+bound: the whole loop stays serial), `few_ticking`, `over_budget`, `one_island` (one island holds more than
+three quarters of the ticking mobs) and `one_group`. The gauges `mob_islands.ticking`, `.islands` and
+`.largest_island` hold what the last plan that got that far found. Read them with
+`horizon-perf query series` on the capture.
+
 ## Native mods and the profiler
 
 What a mod can run in a mob's turn: `native_living_change_target`, `native_living_heal`,
