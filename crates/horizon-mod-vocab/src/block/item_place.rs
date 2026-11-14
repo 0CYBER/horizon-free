@@ -139,6 +139,16 @@ pub enum ItemPlace {
         /// The place the player reaches.
         inner: Box<ItemPlace>,
     },
+    /// A stack outside the world whose item may change: a private two-slot copy, as
+    /// `DispenseFluidContainer` runs a dispensed container, so an empty bucket can become a
+    /// full one. [`ItemsServerHost::scratch_slots`](crate::prelude::ItemsServerHost::scratch_slots)
+    /// makes one in a transaction with the stack in its first slot, and
+    /// [`scratch_take_slots`](crate::prelude::ItemsServerHost::scratch_take_slots) takes both
+    /// slots back out. Reads and extracts are the first slot's; an insert fills the first slot
+    /// where it is empty or holds the same item and components, and what doesn't fit goes to
+    /// the second (`forHandlerIndex`), as a changed item split off a stack does. It lives and
+    /// aborts as a [`Scratch`](Self::Scratch) stack does.
+    ScratchSlots(u64),
 }
 
 impl Clone for ItemPlace {
@@ -221,6 +231,7 @@ impl Clone for ItemPlace {
                     };
                 }
                 Self::Scratch(id) => break Self::Scratch(*id),
+                Self::ScratchSlots(id) => break Self::ScratchSlots(*id),
             }
         };
         for link in links.into_iter().rev() {
@@ -502,7 +513,8 @@ impl ItemPlace {
     /// none, as `forInfiniteMaterials`); an item entity's dropped beside it at the root commit; a
     /// block entity's, an entity's or an item's slot's into that container's other slots
     /// (`forHandlerIndex`, refused instead around [`Strict`](Self::Strict)); a mod's place's
-    /// where its [`PlaceProvider`] puts it; a [`Scratch`](Self::Scratch) stack's nowhere.
+    /// where its [`PlaceProvider`] puts it; a [`Scratch`](Self::Scratch) stack's nowhere; a
+    /// [`ScratchSlots`](Self::ScratchSlots) stack's into its second slot.
     pub fn insert(
         &self,
         host: &mut dyn ServerHost,
