@@ -43,6 +43,9 @@ impl Game<'_> {
         velocity: [f64; 3],
         falling: mod_api::Falling,
     ) -> bool {
+        if self.entity_ids_exhausted() {
+            return false;
+        }
         if (self.serving.is_none() && self.options.dedicated.is_none())
             || dimension != self.dim.id()
             || self.pack.assets.registry.state(state).is_none()

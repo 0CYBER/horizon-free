@@ -1126,6 +1126,9 @@ impl Game<'_> {
         throw_randomly: bool,
         include_thrower_name: bool,
     ) -> Option<EntityRef> {
+        if self.entity_ids_exhausted() {
+            return None;
+        }
         let target = self.native_living_target(living)?;
         let stack = equipment_stack(Some(stack))?;
         let mut item = None;
@@ -2548,7 +2551,10 @@ mod tests {
                 .is_none()
         );
         let item = game.living_drop(wolf, bone.clone(), false, true).unwrap();
-        assert_eq!(game.entity_kind(item).as_deref(), Some("minecraft:item"));
+        assert_eq!(
+            game.entity_kind(item).map(|kind| kind.id(&game)).as_deref(),
+            Some("minecraft:item")
+        );
         let wolf_uuid = game.uuid_for(id);
         let thrown = game.dropped.last().unwrap();
         let eye = game.mobs.iter().find(|m| m.id == id).unwrap().eye_y();

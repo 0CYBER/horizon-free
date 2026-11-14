@@ -127,6 +127,13 @@ impl Game<'_> {
     ) -> Result<PassageId, Refused> {
         self.native_level_world_result(level)?;
         check(&passage)?;
+        if let Some(to) = passage.destination_level {
+            let open =
+                mod_api::__private::dimension_id(to).is_some_and(|id| self.level(id).is_some());
+            if to == level.dimension() || !open {
+                return Err(Refused::UnknownLevel);
+            }
+        }
         let chunk = passage.chunk();
         let passages = &mut self.passages;
         let held = passages.levels.entry(level.dimension()).or_default();
@@ -208,6 +215,9 @@ impl Game<'_> {
                     let Some(p) = passages.find(key, id) else {
                         continue;
                     };
+                    if p.destination_level.is_some() {
+                        continue;
+                    }
                     (key, chunk, Message::Add(vec![form(id, &p)]))
                 }
                 Dirty::Removed(key, chunk) => (key, chunk, Message::Remove(vec![id.raw()])),
@@ -243,9 +253,16 @@ impl Game<'_> {
         if !g.tracks_chunk(level.dimension_id(), (chunk[0], chunk[1])) {
             return;
         }
-        let forms = list.iter().map(|(id, p)| form(*id, p)).collect();
+        let told: Vec<_> = list
+            .iter()
+            .filter(|(_, p)| p.destination_level.is_none())
+            .collect();
+        if told.is_empty() {
+            return;
+        }
+        let forms = told.iter().map(|(id, p)| form(*id, p)).collect();
         g.send_passage_sync(&Message::Add(forms));
-        for (id, _) in list {
+        for (id, _) in told {
             if let Some(Dirty::Added { told }) = self.passages.dirty.get_mut(id) {
                 *told = true;
             }
@@ -388,18 +405,20 @@ fn passage(f: &PassageForm) -> Passage {
             3 => PassageTurn::Counterclockwise90,
             _ => PassageTurn::None,
         },
+        destination_level: None,
     }
 }
 
 #[cfg(test)]
 pub(in crate::game) mod tests {
     use super::{HeldRefusal, Message, PassageForm, Refused, check};
+    use crate::game::Dim;
     use crate::game::native_entity_refs::tests::{with_client_game, with_game};
     use crate::game::native_guest_turn_tests::with_guests;
     use horizon_client::chunk::Chunk;
     use horizon_protocol::packets::play::Clientbound;
     use horizon_protocol::passage_sync::encode;
-    use mod_api::{LevelRef, Passage, PassageId, PassageTurn, Vec3, WorldEpoch};
+    use mod_api::{DimensionKey, LevelRef, Passage, PassageId, PassageTurn, Vec3, WorldEpoch};
     use std::sync::{Arc, mpsc};
 
     /// A 2 by 3 doorway facing south at (0.5, 65.5, 8.5) in chunk (0, 0), coming out 100
@@ -413,6 +432,7 @@ pub(in crate::game) mod tests {
             height: 3.0,
             destination: Vec3::new(100.5, 65.5, 8.5),
             turn: PassageTurn::Clockwise90,
+            destination_level: None,
         }
     }
 
@@ -625,6 +645,82 @@ pub(in crate::game) mod tests {
             game.native_lifecycle_world_failed("test failure");
             assert!(game.passages.levels.is_empty() && game.passages.index.is_empty());
             assert!(game.passages.dirty.is_empty() && game.passages.held.is_empty());
+        });
+    }
+
+    /// A destination in another level is registered only while that level is open: one that
+    /// is not open, and the passage's own level, are refused `UnknownLevel`, with nothing
+    /// registered.
+    #[test]
+    #[ignore = "daily"]
+    fn a_destination_level_must_be_open_and_another_level() {
+        with_game(|game| {
+            let level = game.level(game.dim.id()).unwrap();
+            let to = |key| Passage {
+                destination_level: Some(key),
+                ..doorway()
+            };
+            assert_eq!(
+                game.level_register_passage(level, to(DimensionKey::NETHER)),
+                Err(Refused::UnknownLevel),
+                "not open"
+            );
+            assert_eq!(
+                game.level_register_passage(level, to(level.dimension())),
+                Err(Refused::UnknownLevel),
+                "its own level"
+            );
+            assert!(game.passages.index.is_empty());
+            game.enter_level(Dim::Nether).unwrap();
+            assert_eq!(
+                game.level_register_passage(level, to(DimensionKey::NETHER)),
+                Ok(PassageId::from_raw(1))
+            );
+        });
+    }
+
+    /// A passage into another level is registered but not sent: neither at the tick's end
+    /// nor after its chunk. The client hears only of the passage within the level.
+    #[test]
+    #[ignore = "daily"]
+    fn a_passage_into_another_level_is_not_sent_to_the_clients() {
+        with_guests(|game| {
+            game.enter_level(Dim::Nether).unwrap();
+            game.enter_level(Dim::Overworld).unwrap();
+            game.native_lifecycle.world_open_ready().unwrap();
+            let receivers = listen(game, ["horizon", "vanilla"]);
+            let level = game.level(game.dim.id()).unwrap();
+            let far = Passage {
+                destination_level: Some(DimensionKey::NETHER),
+                ..doorway()
+            };
+            assert_eq!(
+                game.level_register_passage(level, far),
+                Ok(PassageId::from_raw(1))
+            );
+            assert_eq!(
+                game.level_register_passage(level, doorway()),
+                Ok(PassageId::from_raw(2))
+            );
+            for cz in -1..=1 {
+                for cx in -1..=1 {
+                    let mut chunk = Chunk::empty(cx, cz);
+                    chunk.lit = true;
+                    game.world.chunks.insert((cx, cz), Arc::new(chunk));
+                }
+            }
+            let hub = &mut game.lan.as_mut().unwrap().hub;
+            hub.ticks = 10;
+            hub.guests.update_all(|g| g.max_unacknowledged = 64);
+            let mut sent = Vec::new();
+            for _ in 0..5 {
+                game.tick_lan(false);
+                sent.extend(packets(&receivers[0]));
+            }
+            assert_eq!(
+                passage_messages(&sent),
+                [Message::Add(vec![doorway_form(2)])]
+            );
         });
     }
 

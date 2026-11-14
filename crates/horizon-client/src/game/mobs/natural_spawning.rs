@@ -1194,8 +1194,12 @@ impl<'a> Game<'a> {
     /// tick first (`this.raids.tick`), then the chunk source's
     /// (`getChunkSource().tick`): natural spawning, then the custom spawners
     /// of `ServerChunkCache.tickChunks`. A wave that lands this tick therefore
-    /// joins before that tick's spawns, with the lower entity ids.
+    /// joins before that tick's spawns, with the lower entity ids. Nothing spawns once the
+    /// entity ids are exhausted (`entity_ids_exhausted`).
     pub(super) fn tick_spawners(&mut self) {
+        if self.entity_ids_exhausted() {
+            return;
+        }
         let from = self.lan_synced_from();
         horizon_client::spans::time("spawn_raids", || self.tick_raids());
         horizon_client::spans::time("spawn_natural", || self.spawn_natural());

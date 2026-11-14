@@ -228,7 +228,10 @@ pub(in crate::game) mod tests {
         guest.loaded = true;
         guest.dimension = Dim::Overworld.id().into();
         guest.max_unacknowledged = 1000;
-        game.lan.as_mut().unwrap().hub.guests.push(guest);
+        let hub = &mut game.lan.as_mut().unwrap().hub;
+        // Its client was told at Login the levels the server has now.
+        guest.viewed.logged_in_with(hub.level_keys());
+        hub.guests.push(guest);
         rx
     }
 

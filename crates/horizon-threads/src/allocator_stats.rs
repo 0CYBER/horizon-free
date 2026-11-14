@@ -30,7 +30,7 @@ fn stats_json() -> Option<String> {
         return None;
     }
     // SAFETY: mimalloc returns a NUL-terminated string.
-    let text = unsafe { std::ffi::CStr::from_ptr(raw) }
+    let text = unsafe { std::ffi::CStr::from_ptr(raw.cast()) }
         .to_string_lossy()
         .into_owned();
     // SAFETY: `raw` came from `mi_stats_get_json` with no buffer given.

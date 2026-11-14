@@ -20,7 +20,10 @@ use super::api_values::{TryIntoApi, TryIntoEngine};
 use super::{Dim, Game, commands::execute, lan::LanHost, respawn_anchor::RespawnConfig};
 use crate::game::level_control_hooks::LevelControl;
 pub(super) use argument_kinds::{CommandArguments, command_arguments};
-use argument_kinds::{argument_type, custom_value, parser, resource_parser};
+use argument_kinds::{
+    UNCENTERED, argument_type, custom_value, dimension_value, nbt_value, parsed_type, parser,
+    positional_value, resource_parser,
+};
 use mod_api::__private::game::*;
 // Their old home, for mixin code that names them here.
 use horizon_client::{
@@ -133,6 +136,9 @@ fn usage_nodes(
         if !properties.is_null() {
             node["properties"] = properties;
         }
+        if kind == "vec3_uncentered" {
+            node[UNCENTERED] = true.into();
+        }
         if let Some(id) = custom {
             // A client that does not know the type parses a word (or the rest of the line).
             // Fabric sends the registered type's id, which an unmodded client cannot read and
@@ -188,6 +194,7 @@ pub(super) fn command_tree(
                 || entry["parser"] != node["parser"]
                 || entry["properties"] != node["properties"]
                 || entry["custom_argument"] != node["custom_argument"]
+                || entry[UNCENTERED] != node[UNCENTERED]
             {
                 conflict = Some(name);
                 break;
@@ -1067,6 +1074,9 @@ impl Game<'_> {
         stack: ItemStack,
         thrown_by_player: bool,
     ) -> Option<ItemStack> {
+        if self.entity_ids_exhausted() {
+            return Some(stack);
+        }
         if stack.count == 0 {
             return Some(stack);
         }
@@ -1660,128 +1670,6 @@ impl Game<'_> {
         self.command_source = outer;
         ok
     }
-    /// Runs the command `line` (a leading slash allowed) with the entity as
-    /// its source, as vanilla runs a portal's or a sign's command:
-    /// `ServerPlayer.createCommandSourceStack` (another entity:
-    /// `Entity.createCommandSourceStackForNameResolution`), `.withPermission(level)`,
-    /// then `Commands.performPrefixedCommand`. `level` is taken as given, above
-    /// or below the entity's own. `@s` is the entity, and the command runs from
-    /// its position and rotation in its level. A player is answered as for their
-    /// own command (feedback and failures), and the other operators hear of it
-    /// (`broadcastToAdmins`); another entity's source is silent
-    /// (`CommandSource.NULL`). Whether the command ran: false for a line that
-    /// fails to parse or to run, and, with nothing run, for a stale or removed
-    /// entity, an entity outside the level in place (a player in another level
-    /// included: that level is parked while the hook runs), and on a client.
-    /// During a guest's turn, displaced outer players are excluded, as in
-    /// `native_run_command`.
-    pub(super) fn entity_run_command(
-        &mut self,
-        entity: mod_api::EntityRef,
-        line: &str,
-        level: mod_api::PermissionLevel,
-    ) -> bool {
-        use super::commands::Target;
-        if self.lan.is_none() {
-            return false;
-        }
-        let Some(target) = self.native_entity_target(entity) else {
-            return false;
-        };
-        let line = line.strip_prefix('/').unwrap_or(line);
-        let permission = level.level();
-        match target {
-            // The acting player, in place for this turn.
-            Target::Player => match self.lan_acting_uuid {
-                Some(uuid) => self.run_command_as_player(uuid, line, permission),
-                None => false,
-            },
-            Target::Guest(conn) => {
-                let Some(host) = &self.lan else {
-                    return false;
-                };
-                let Some(uuid) = host
-                    .hub
-                    .guest(conn)
-                    .filter(|g| host.hub.here(g))
-                    .map(|g| g.uuid)
-                else {
-                    return false;
-                };
-                self.as_guest(conn, |game| {
-                    game.run_command_as_player(uuid, line, permission)
-                })
-                .unwrap_or(false)
-            }
-            target => {
-                let Some(pos) = self.target_position(target) else {
-                    return false;
-                };
-                // `CommandSource.NULL`: no feedback, no failure, no operator told.
-                let source = execute::Source {
-                    entity: Some(target),
-                    pos,
-                    rot: self.target_rotation(target),
-                    eyes: false,
-                    silent: true,
-                    store: None,
-                    dimension: self.dim,
-                    origin_dimension: self.dim,
-                    origin_player: false,
-                    level: None,
-                    block: None,
-                    cart: None,
-                };
-                self.run_command_from(source, line, permission).0
-            }
-        }
-    }
-    /// `entity_run_command` for the player `uuid` in place: their own source,
-    /// its lines sent to them and its `broadcastToAdmins` to the other operators.
-    fn run_command_as_player(&mut self, uuid: u128, line: &str, permission: u8) -> bool {
-        use super::commands::Target;
-        // `ServerPlayer.createCommandSourceStack`: the player's own position and
-        // rotation, never an outer command's (`player_source` reads those).
-        let Some(pos) = self.target_position(Target::Player) else {
-            return false;
-        };
-        let source = execute::Source {
-            pos,
-            rot: self.target_rotation(Target::Player),
-            ..self.player_source()
-        };
-        let outer_admins = std::mem::take(&mut self.admin_feedback);
-        let (ok, lines) = self.run_command_from(source, line, permission);
-        for line in &lines {
-            self.native_send(uuid, system_chat(line));
-        }
-        self.send_admin_feedback(self.lan_acting);
-        self.admin_feedback = outer_admins;
-        ok
-    }
-    /// `line` run from `source` at `permission`, with what it tells its source:
-    /// the outer command's source, state and output are kept apart and put back.
-    fn run_command_from(
-        &mut self,
-        source: execute::Source,
-        line: &str,
-        permission: u8,
-    ) -> (bool, Vec<Text>) {
-        let outer = self.command_source.replace(source);
-        let filter = std::mem::replace(&mut self.native_command_filter, true);
-        let console = self.console_broadcast.take();
-        let capture = self.chat_capture.replace(Vec::new());
-        let outer_exec = std::mem::take(&mut self.exec);
-        let level = std::mem::replace(&mut self.ui.registries.permission, permission);
-        let ok = self.run_command(line);
-        self.ui.registries.permission = level;
-        self.exec = outer_exec;
-        let lines = std::mem::replace(&mut self.chat_capture, capture).unwrap_or_default();
-        self.console_broadcast = console;
-        self.native_command_filter = filter;
-        self.command_source = outer;
-        (ok, lines)
-    }
     /// The open world's folder (`world/`, beside its `level.dat`): a server
     /// mod keeps its data in a folder of its own there, so the world's
     /// backups carry it. None when no world is open.
@@ -1855,7 +1743,10 @@ impl Game<'_> {
     /// (orbs merged into it, each worth `value`) and `age` (ticks lived; an orb
     /// despawns at 6000); a `None` is left as it is.
     /// False, and nothing written, for an orb not in the server level `dimension`, a
-    /// a `count` of 0, and on a client of a server.
+    /// `count` of 0 or above `i32::MAX`, a `value` outside -32768..=32767 (a save keeps
+    /// `Value` as a short and `Count` as an int, so a write it accepts reloads
+    /// unchanged), and on a client of a server. In `experience_orb_merge`, a write to
+    /// `into` is the merged orb.
     pub(super) fn set_experience_orb(
         &mut self,
         dimension: &str,
@@ -1867,6 +1758,8 @@ impl Game<'_> {
         if (self.serving.is_none() && self.options.dedicated.is_none())
             || dimension != self.dim.id()
             || count == Some(0)
+            || count.is_some_and(|c| c > crate::orb_limits::MAX_COUNT)
+            || value.is_some_and(|v| !crate::orb_limits::value_fits(v))
         {
             return false;
         }
@@ -1933,7 +1826,7 @@ impl Game<'_> {
     }
 }
 
-fn system_chat(line: &Text) -> C {
+pub(super) fn system_chat(line: &Text) -> C {
     C::SystemChat(play::SystemChat {
         content: component_nbt(&line.component()),
         overlay: false,
@@ -2190,7 +2083,9 @@ impl Game<'_> {
         use mod_api::{CommandArgument, CommandArgumentValue as Value};
         let mut arguments = Vec::with_capacity(context.args.len());
         for argument in context.args {
+            let ty = parsed_type(&self.ui.dispatcher.0, &context.nodes, argument.range);
             let value = match argument.value {
+                Arg::Str(text) if matches!(ty, Some(ArgType::Nbt)) => nbt_value(&text)?,
                 Arg::Str(value) => Value::String(value),
                 Arg::Int(value) => Value::Integer(value),
                 Arg::Double(value) => Value::Number(value),
@@ -2257,14 +2152,20 @@ impl Game<'_> {
                         Value::Entities(selected)
                     }
                 }
-                Arg::Coords(coordinates) => {
-                    Value::BlockPos(self.resolve_coords(&coordinates).map(|v| v.floor() as i32))
-                }
+                Arg::Coords(coordinates) => positional_value(
+                    ty.as_ref(),
+                    &coordinates,
+                    self.resolve_coords(&coordinates),
+                    self.source_rotation(),
+                ),
                 Arg::Item(input) => Value::Item(
                     self.command_item_stack(&input, 1)?
                         .try_into_api()
                         .expect("command item validation resolves registered items"),
                 ),
+                Arg::Resource(id) if matches!(ty, Some(ArgType::Dimension)) => {
+                    dimension_value(&id, |dimension| self.level(dimension))?
+                }
                 Arg::Resource(id) => Value::Id(
                     mod_api::Identifier::parse(&id).map_err(|_| err("command.failed", &[]))?,
                 ),
@@ -2936,6 +2837,108 @@ mod tests {
                 "{first} then {second}: {other}"
             );
         }
+    }
+
+    const POSITIONED: &str = "kinds <at:vec3> <by:vec3_uncentered> <column:column_pos> \
+         <look:rotation> <level:dimension> <tag:nbt>";
+
+    #[test]
+    fn position_rotation_dimension_and_nbt_kinds_are_vanillas_parsers() {
+        let (tree, _, problems) = tree(&[mod_api::Command::new(POSITIONED)]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut node = &tree["children"]["kinds"];
+        for (name, parser) in [
+            ("at", "minecraft:vec3"),
+            ("by", "minecraft:vec3"),
+            ("column", "minecraft:column_pos"),
+            ("look", "minecraft:rotation"),
+            ("level", "minecraft:dimension"),
+            ("tag", "minecraft:nbt_compound_tag"),
+        ] {
+            node = &node["children"][name];
+            assert_eq!(node["parser"], parser, "{name}");
+            assert_eq!(node["uncentered"] == true, name == "by", "{name}");
+        }
+    }
+
+    #[test]
+    fn vec3_and_vec3_uncentered_do_not_share_a_node() {
+        let (_, _, problems) = tree(&[
+            mod_api::Command::new("go <to:vec3>"),
+            mod_api::Command::new("go <to:vec3_uncentered>"),
+        ]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("another kind"), "{problems:?}");
+    }
+
+    #[test]
+    fn positions_and_rotations_resolve_against_the_source() {
+        let (tree, _, problems) = tree(&[mod_api::Command::new(POSITIONED)]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(
+            &mut dispatcher,
+            &tree,
+            "native_mod_command",
+            &HashMap::new(),
+        );
+        let registries = horizon_client::command::Registries::default();
+        let (origin, rotation) = ([10.0, 70.0, -2.0], [45.0, 30.0]);
+        let value = |line: &str, name: &str, kind: &str| {
+            let parsed = dispatcher.parse(line, &registries);
+            let (context, _) = parsed.executable().unwrap();
+            let Some(Arg::Coords(coordinates)) = context.get(name) else {
+                panic!("{name} is a position")
+            };
+            let range = context.args.iter().find(|a| a.name == name).unwrap().range;
+            let ty = parsed_type(&dispatcher, &context.nodes, range);
+            assert_eq!(
+                format!("{ty:?}"),
+                format!("{:?}", Some(parser(kind).unwrap().2)),
+                "{name}: the type comes from the parsed node"
+            );
+            positional_value(
+                ty.as_ref(),
+                coordinates,
+                coordinates.position(origin, rotation),
+                rotation,
+            )
+        };
+        let relative = "kinds ~1 ~ ~-1 ~1 ~ ~-1 ~3 ~-4 ~10 ~-5 minecraft:the_nether {}";
+        assert_eq!(
+            value(relative, "at", "vec3"),
+            mod_api::CommandArgumentValue::Vec3([11.0, 70.0, -3.0])
+        );
+        assert_eq!(
+            value(relative, "column", "column_pos"),
+            mod_api::CommandArgumentValue::ColumnPos([13, -6])
+        );
+        assert_eq!(
+            value(relative, "look", "rotation"),
+            mod_api::CommandArgumentValue::Rotation([55.0, 25.0])
+        );
+        // A whole `x` and `z` is centred by `vec3` and kept by `vec3_uncentered`.
+        let absolute = "kinds 5 64 -7 5 64 -7 0 0 0 0 minecraft:overworld {}";
+        assert_eq!(
+            value(absolute, "at", "vec3"),
+            mod_api::CommandArgumentValue::Vec3([5.5, 64.0, -6.5])
+        );
+        assert_eq!(
+            value(absolute, "by", "vec3_uncentered"),
+            mod_api::CommandArgumentValue::Vec3([5.0, 64.0, -7.0])
+        );
+    }
+
+    #[test]
+    fn a_dimension_the_world_lacks_is_refused_and_an_nbt_argument_is_a_compound() {
+        let refusal = dimension_value("minecraft:nowhere", |_| None).unwrap_err();
+        assert_eq!(refusal.key, "argument.dimension.invalid");
+        let mut expected = horizon_core::nbt::Compound::new();
+        expected.insert("answer".into(), horizon_core::nbt::Tag::Byte(42));
+        assert_eq!(
+            nbt_value("{answer:42b}").unwrap(),
+            mod_api::CommandArgumentValue::Nbt(expected)
+        );
     }
 
     #[test]

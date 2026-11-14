@@ -34,3 +34,14 @@ pub(super) fn register(registrar: &mut dyn mod_api::Registrar) {
         .declare_biome_region("ember_marsh", region())
         .unwrap();
 }
+
+pub(super) struct BiomeRegionRegistrationHooks;
+impl BiomeRegionRegistrationHooks {
+    pub(super) fn register(
+        &self,
+        registrar: &mut dyn mod_api::Registrar,
+        cx: &mod_api::RegistrationContext,
+    ) {
+        self::register(registrar);
+    }
+}

@@ -152,6 +152,28 @@ fn prepared(dir: &Path) -> Option<Vec<File>> {
     Some(files)
 }
 
+/// The namespace folders under a `data` folder, sorted: those on the disk and
+/// those a prepared root holds only in its data file.
+pub fn namespaces(data: &Path) -> Vec<String> {
+    let mut out: Vec<String> = fs::read_dir(data)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+        .collect();
+    if let Some(files) = horizon_core::prepared_files::files_under(data) {
+        out.extend(
+            files
+                .iter()
+                .filter_map(|f| Some(f.split_once('/')?.0.to_owned())),
+        );
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// The `.json` files under `dir` and its subfolders, in name order: each
 /// one's path inside the folder without the extension (`a/b`) and its file.
 /// An error when `dir` itself can't be listed; a subfolder or an entry that
@@ -193,6 +215,17 @@ pub fn list(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
     // a path's components put the subfolder's file first.
     named.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(named)
+}
+
+/// Decode an enchantment definition at its resource boundary, naming a malformed file.
+pub fn enchantment_definition(bytes: &[u8], path: &Path) -> Option<serde_json::Value> {
+    match serde_json::from_slice(bytes) {
+        Ok(value) => Some(value),
+        Err(error) => {
+            log::warn!("Skipping malformed enchantment {}: {error}", path.display());
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +289,26 @@ mod tests {
         assert_eq!(folder.files[2].bytes().unwrap(), b"{\"a\":1}");
         assert_eq!(folder.files[2].path, recipes.join("stick.json"));
         drop(folder);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A prepared root's namespaces count when its data file holds them
+    /// and the disk doesn't: each once, sorted, beside those on the disk.
+    #[test]
+    fn namespaces_include_a_prepared_roots_data_file() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-json-folder-ns-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let data = root.join("data");
+        fs::create_dir_all(data.join("minecraft/enchantment")).unwrap();
+        fs::create_dir_all(data.join("harvestmod/enchantment")).unwrap();
+        fs::write(root.join("horizon-resources.json"), b"{}").unwrap();
+        fs::write(data.join("minecraft/enchantment/sharpness.json"), b"{}").unwrap();
+        fs::write(data.join("harvestmod/enchantment/scythe.json"), b"{}").unwrap();
+        horizon_core::prepared_files::write(&root).unwrap();
+        // Only the data file still holds the mod's namespace.
+        fs::remove_dir_all(data.join("harvestmod")).unwrap();
+        assert_eq!(namespaces(&data), ["harvestmod", "minecraft"]);
         fs::remove_dir_all(&root).unwrap();
     }
 

@@ -1,0 +1,3 @@
+ids = ["hook:entity_join_level", "hook:entity_leave_level"]
+why = "Inside a transaction, the joins and leaves of the entities of the level it was opened in now fire at the root commit, not during the spawn or remove call. An aborted transaction fires neither; a spawn the commit cancels is never announced and its handle goes stale."
+migrate = "Read the entity from the listener at commit time rather than during the spawn or remove call. Do not rely on a join or leave having been told by the time a spawn or remove returns inside a transaction. Rebuild against this SDK."

@@ -94,7 +94,7 @@ pub fn entity_providers<T: ?Sized + 'static, C: Copy + 'static>(
         .keys
         .entity_capabilities
         .get(key.name)?
-        .get(&*entity.kind(host)?)?;
+        .get(entity.kind(host)?.id(host).as_str())?;
     Some(EntityProviders {
         parts,
         entity,

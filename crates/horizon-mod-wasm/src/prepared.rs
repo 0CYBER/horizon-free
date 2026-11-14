@@ -58,3 +58,49 @@ impl Slots {
         self.0[slot as usize] = None;
     }
 }
+
+// The key is host-local authority only; no engine pointer is sent to a guest.
+type DecisionKey = (usize, usize);
+thread_local! {
+    static DECISIONS: std::cell::RefCell<std::collections::HashMap<DecisionKey,std::rc::Rc<crate::boundary::Prepared<'static>>>> = std::cell::RefCell::default();
+}
+pub(crate) fn lookup(
+    instance: usize,
+    stack: &mod_api::ItemStack,
+) -> Option<std::rc::Rc<crate::boundary::Prepared<'static>>> {
+    DECISIONS.with(|decisions| {
+        decisions
+            .borrow()
+            .get(&(instance, stack as *const _ as usize))
+            .cloned()
+    })
+}
+pub(crate) struct DecisionLease {
+    key: DecisionKey,
+    value: std::rc::Rc<crate::boundary::Prepared<'static>>,
+}
+pub(crate) fn activate(
+    instance: usize,
+    stack: &mod_api::ItemStack,
+    prepared: crate::boundary::Prepared<'static>,
+) -> DecisionLease {
+    let key = (instance, stack as *const _ as usize);
+    let value = std::rc::Rc::new(prepared);
+    DECISIONS.with(|decisions| {
+        assert!(decisions.borrow_mut().insert(key, value.clone()).is_none());
+    });
+    DecisionLease { key, value }
+}
+impl Drop for DecisionLease {
+    fn drop(&mut self) {
+        DECISIONS.with(|decisions| {
+            let mut decisions = decisions.borrow_mut();
+            if decisions
+                .get(&self.key)
+                .is_some_and(|current| std::rc::Rc::ptr_eq(current, &self.value))
+            {
+                decisions.remove(&self.key);
+            }
+        });
+    }
+}

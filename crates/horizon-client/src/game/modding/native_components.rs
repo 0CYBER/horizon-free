@@ -329,8 +329,10 @@ impl Game<'_> {
             return None;
         }
         self.native_entity_read_target(target)?;
-        let target = self.entity_kind(target)?;
-        let actor = self.entity_kind(attacker.entity())?;
+        let target = self.entity_kind(target).map(|kind| kind.id(self))?;
+        let actor = self
+            .entity_kind(attacker.entity())
+            .map(|kind| kind.id(self))?;
         let source = self.item_resource_damage_source(stack, attacker)?;
         let source = source.damage_type.to_string();
         let effective = self.item_combat_stack(stack);

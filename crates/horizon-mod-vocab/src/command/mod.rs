@@ -1,6 +1,7 @@
 //! Parsed native command input and the source that executes it.
 
-use crate::{DimensionKey, EntityRef, Identifier, ItemStack, PermissionLevel, PlayerRef};
+use crate::{DimensionKey, EntityRef, Identifier, ItemStack, LevelRef, PermissionLevel, PlayerRef};
+use horizon_core::nbt::Compound;
 
 /// The origin of a registered mod command, independent of `execute as`'s executor.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,6 +92,21 @@ pub enum CommandArgumentValue {
     /// A `block_pos` argument resolved from world, relative or local coordinates.
     /// Resolution does not load chunks or require the block to be loaded.
     BlockPos([i32; 3]),
+    /// A `vec3` or `vec3_uncentered` argument resolved against the source: `~` and `^` offsets
+    /// applied to its position and rotation. `vec3` centres whole `x` and `z` on their block
+    /// (`5` is `5.5`); `vec3_uncentered` keeps them as written. Resolution does not load chunks.
+    Vec3([f64; 3]),
+    /// A `column_pos` argument: a block `x z`, `~` resolved against the source's block and
+    /// floored.
+    ColumnPos([i32; 2]),
+    /// A `rotation` argument as yaw and pitch in degrees, `~` resolved against the source's
+    /// rotation, as `entity_rotation` returns them.
+    Rotation([f32; 2]),
+    /// A `dimension` argument: the level of a dimension the world has loaded. An unknown one is
+    /// refused with `argument.dimension.invalid`. Side: server.
+    Dimension(LevelRef),
+    /// An `nbt` argument: a compound tag written as SNBT.
+    Nbt(Compound),
     /// A custom argument type's canonical value: the registered type's id
     /// (`mymod:machine`) and what its parser returned for the typed text.
     Custom {
@@ -167,6 +183,28 @@ impl CommandInvocation {
             .rev()
             .find(|argument| argument.name == name)
             .map(|argument| &argument.value)
+    }
+}
+
+/// A command's outcome and the messages received by its source.
+///
+/// The default is an unsuccessful run with no feedback, including when a handle
+/// cannot resolve or its host has no backend.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct CommandResult {
+    /// Whether the command parsed and ran successfully, as `EntityRef::run_command` reports.
+    pub success: bool,
+    /// Success and failure messages received by the source, in order, as plain text.
+    /// Player chat delivery is preserved. Silent sources have no feedback lines.
+    pub feedback: Vec<String>,
+}
+
+impl CommandResult {
+    /// Build a result from the execution outcome and the source's feedback lines.
+    pub fn new(success: bool, feedback: Vec<String>) -> Self {
+        Self { success, feedback }
     }
 }
 

@@ -17,6 +17,9 @@ impl Game<'_> {
         power: f32,
         inaccuracy: f32,
     ) -> Option<ProjectileRef> {
+        if self.entity_ids_exhausted() {
+            return None;
+        }
         if self.remote.is_some() || ![offset, power, inaccuracy].into_iter().all(f32::is_finite) {
             return None;
         }

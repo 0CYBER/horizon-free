@@ -55,6 +55,7 @@
 //! - [Wire types](https://arismoko.github.io/horizon/concepts/wire-types.html)
 //! - [The manifest and the package](https://arismoko.github.io/horizon/reference/manifest.html)
 extern crate self as mod_api;
+mod equip_reads;
 
 pub use mod_vocab::*;
 /// Shared Wire values and the mod-side transport.

@@ -85,7 +85,7 @@ StructureTemplate.newIntegerList	skip:java		NBT list builder for template save o
 StructureTemplate.newDoubleList	skip:java		NBT list builder for template save only
 StructureTemplate.getJointType	inline	crates/horizon-world/src/worldgen/structure/template.rs::StructureTemplate::jigsaws	joint read from NBT, default from block facing inside jigsaws
 StructureTemplate.JigsawBlockInfo.toString	skip:debug
-StructureTemplate.JigsawBlockInfo.withInfo	inline	crates/horizon-world/src/worldgen/structure/jigsaw.rs::template_jigsaws	moved and rotated jigsaw position and state computed here
+StructureTemplate.JigsawBlockInfo.withInfo	inline	crates/horizon-world/src/worldgen/structure/jigsaw.rs::template_jigsaws	moved jigsaw position and plain rotated state computed here; connector discovery deliberately does not consult the placement-only rotate Part
 StructureTemplate.SimplePalette.idFor	inline	crates/horizon-world/src/worldgen/structure/template.rs::save_nbt	palette ids handed out in first-use order, a new state appended, inside save_nbt
 StructureTemplate.SimplePalette.stateFor	inline	crates/horizon-world/src/worldgen/structure/template.rs::StructureTemplate::from_nbt	palette index resolved to states inside from_nbt
 StructureTemplate.StructureBlockInfo.toString	skip:debug

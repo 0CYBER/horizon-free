@@ -504,8 +504,9 @@ impl Generate {
 }
 
 impl Dim {
-    /// Drops the dimension `id` that [`Self::add_extra`] added: its level is closed.
-    fn remove_extra(id: &str) {
+    /// Drops the dimension `id` that [`Self::add_extra`] added: its level is closed, or a remote
+    /// server's level that its client left.
+    pub(in crate::game) fn remove_extra(id: &str) {
         super::EXTRA_DIMS
             .write()
             .unwrap()
@@ -866,6 +867,7 @@ impl Game<'_> {
         self.level_shapes.extra = extras.leak();
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.levels = self.level_shapes;
+            host.hub.close_views_of(id);
         }
         if let Ok(key) = LevelKey::parse(id) {
             DimensionFacts::remove_level(key);

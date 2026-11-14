@@ -65,6 +65,10 @@ pub struct Viewed {
     counts: BTreeMap<String, (u32, u32)>,
     /// The viewed levels open on the client, by dimension.
     pub(super) views: BTreeMap<String, View>,
+    /// The levels its client was told at Login, which name a viewed level by its index there: a
+    /// level opened since (a runtime level) is not among them, and one closed since keeps its
+    /// place.
+    login_levels: Vec<String>,
     counted: Option<Counted>,
 }
 
@@ -83,6 +87,16 @@ impl Viewed {
             .values()
             .flatten()
             .filter(move |a| a.level == dimension)
+    }
+    /// The Login packet's `levels`, as its client was sent them.
+    pub fn logged_in_with(&mut self, levels: Vec<String>) {
+        self.login_levels = levels;
+    }
+    /// `dimension`'s index in the levels its client was told at Login: none for a level opened
+    /// since, which its client cannot name, so does not view.
+    fn login_index(&self, dimension: &str) -> Option<i32> {
+        let i = self.login_levels.iter().position(|l| l == dimension)?;
+        i32::try_from(i).ok()
     }
     /// The client dropped every viewed world (a Respawn that is no travel into one of them,
     /// `switch`): they are forgotten without `close`, and opened again for what the areas still
@@ -225,6 +239,25 @@ impl Hub {
                 .guests
                 .iter()
                 .any(|g| g.views_level(&self.config.dimension))
+    }
+
+    /// The level `dimension` closed (a runtime level unloaded or deleted): each client that
+    /// views it is told `close`, so that a level opened again under its id is sent afresh. The
+    /// areas there stay, and view it again once it is open.
+    pub fn close_views_of(&mut self, dimension: &str) {
+        if !self.viewed.active() {
+            return;
+        }
+        let active = self.viewed.active.clone();
+        for i in 0..self.guests.len() {
+            self.guests.update(i, |g| {
+                if let Some(view) = g.viewed.views.remove(dimension) {
+                    g.sender
+                        .send(horizon_protocol::viewed_levels::close(view.level));
+                }
+                g.viewed.recount(&active);
+            });
+        }
     }
 
     /// The view of the level in place `g`'s client holds, if it holds one.

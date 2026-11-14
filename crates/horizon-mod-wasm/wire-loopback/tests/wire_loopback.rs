@@ -7,6 +7,8 @@ use mod_api::{Hooks, LoopContext, StructurePiece};
 use std::{rc::Rc, sync::Arc};
 // One module per file of tests/wire_loopback/, written by build.rs: a new test goes in a file there.
 include!(concat!(env!("OUT_DIR"), "/wire_loopback_modules.rs"));
+// The guest's one Hooks object, assembled by build.rs from the inherent `impl <Feature>Hooks` of those files.
+include!(concat!(env!("OUT_DIR"), "/wire_loopback_hooks.rs"));
 mod boundary {
     include!(concat!(env!("OUT_DIR"), "/wire_host_generated.rs"));
 }
@@ -195,7 +197,7 @@ impl LoopContext for Context {
 }
 #[unsafe(no_mangle)]
 fn __horizon_mod_hooks() -> Box<dyn Hooks> {
-    Box::new(interaction_fixture::Mod)
+    Box::new(Mod)
 }
 #[derive(Debug)]
 struct Piece;

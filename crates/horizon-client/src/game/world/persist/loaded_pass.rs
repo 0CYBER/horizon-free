@@ -113,9 +113,9 @@ impl Game<'_> {
         ) || horizon_client::projectiles::thrown_type(&kind).is_some())
             && let Some(at) = entity_nbt::position(&tag)
         {
-            self.persist
-                .anon
-                .insert(anon_key(&kind, at), (at, tag.clone()));
+            let key = anon_key(&kind, at);
+            let was = self.persist.anon.insert(key.clone(), (at, tag.clone()));
+            self.journal_anon((key, was));
         }
         // Kinds outside `entity_lists!` first, then the listed kinds
         // (`Entity::load_nbt`), then whatever else is a compound.
@@ -155,5 +155,19 @@ impl Game<'_> {
         } else {
             self.native_joins_flush(from_disk, 0);
         }
+    }
+}
+
+impl EntityMemory {
+    /// Puts back the raw record `kept` holds, or takes out the one a spawn added where none was:
+    /// the abort of a transaction whose spawn wrote over it (`journal_anon`).
+    pub(in crate::game) fn put_back_anon(
+        &mut self,
+        (key, was): ((String, [u64; 3]), Option<(Vec3, Tag)>),
+    ) {
+        match was {
+            Some(record) => self.anon.insert(key, record),
+            None => self.anon.remove(&key),
+        };
     }
 }

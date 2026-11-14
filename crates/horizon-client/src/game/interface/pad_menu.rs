@@ -351,7 +351,7 @@ impl Game<'_> {
         key_focus::tab_step(&rest, None, true).map(|i| rest[i])
     }
 
-    pub(super) fn gui_scale(&self) -> Option<HudBatch> {
+    pub(super) fn gui_batch(&self) -> Option<HudBatch> {
         self.renderer.as_ref().map(|r| {
             HudBatch::new(
                 [r.config.width, r.config.height],
@@ -411,7 +411,7 @@ impl Game<'_> {
 
     fn pad_visible_targets(&self) -> Vec<Target> {
         let targets = self.pad_all_targets();
-        match self.gui_scale() {
+        match self.gui_batch() {
             Some(batch) => key_focus::on_screen(targets, (batch.width, batch.height)),
             None => targets,
         }
@@ -426,7 +426,7 @@ impl Game<'_> {
         {
             return targets;
         }
-        let Some(batch) = self.gui_scale() else {
+        let Some(batch) = self.gui_batch() else {
             return targets;
         };
         let slot = |x: f32, y: f32| Target {
@@ -516,7 +516,7 @@ impl Game<'_> {
         {
             return Some(targets[i]);
         }
-        let batch = self.gui_scale()?;
+        let batch = self.gui_batch()?;
         let at = |x: f32, y: f32| {
             targets
                 .iter()
@@ -571,7 +571,7 @@ impl Game<'_> {
 
     /// Send the window a pointer move to `at` (GUI pixels), as the mouse would.
     fn pad_pointer_to(&mut self, event_loop: &dyn EventLoopCtl, at: (f32, f32)) {
-        let (Some(window), Some(batch)) = (self.window.as_ref(), self.gui_scale()) else {
+        let (Some(window), Some(batch)) = (self.window.as_ref(), self.gui_batch()) else {
             return;
         };
         let id = window.id();
@@ -1690,7 +1690,7 @@ impl Game<'_> {
     /// same widget. Too far for `pad_follow_focus` and `snap::follow`, which it
     /// holds off (true) until then.
     fn pad_follow_resize(&mut self, event_loop: &dyn EventLoopCtl) -> bool {
-        let Some(batch) = self.gui_scale() else {
+        let Some(batch) = self.gui_batch() else {
             return false;
         };
         let (screen, size) = (self.key_screen(), (batch.width, batch.height));

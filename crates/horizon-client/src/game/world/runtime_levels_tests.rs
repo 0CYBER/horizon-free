@@ -1260,3 +1260,48 @@ fn a_delete_keeps_references_when_shared_level_metadata_is_unreadable() {
         assert!(!folder.exists() && !references.exists());
     });
 }
+
+/// Single player: the integrated server and the window's client share the process's table of
+/// levels. A runtime level the server opened, which the client entered and left, stays the
+/// server's: it still unloads, and, opened again, entered and left again, still deletes.
+#[test]
+#[ignore = "daily"]
+fn a_level_the_player_left_in_single_player_still_unloads_and_deletes() {
+    use horizon_protocol::packets::play::{self, Clientbound as C};
+    let travel = |dimension: &str| {
+        C::Respawn(play::Respawn {
+            spawn: super::viewed_worlds::tests::spawn(dimension),
+            keep: 3,
+        })
+    };
+    with_opener("solo", "solo:a", flat(), |game, _| {
+        tick_post(game);
+        game.apply_runtime_levels();
+        assert!(game.runtime_level_is_open("solo:a"));
+        let mut resources = None;
+        let mut window = super::viewed_worlds::tests::client(&mut resources);
+        window.handle_packet(travel("solo:a")).unwrap();
+        window.handle_packet(travel("minecraft:overworld")).unwrap();
+        assert!(
+            super::Dim::extra("solo:a").is_some(),
+            "still the server's level"
+        );
+        assert_eq!(unload_as(game, "solo", "solo:a"), Ok(()));
+        game.apply_runtime_levels();
+        assert!(!game.runtime_level_is_open("solo:a"));
+        assert!(
+            super::Dim::extra("solo:a").is_none(),
+            "closed by the server"
+        );
+        // Opened again by the mod, entered and left again, then deleted.
+        tick_post(game);
+        game.apply_runtime_levels();
+        assert!(game.runtime_level_is_open("solo:a"));
+        window.handle_packet(travel("solo:a")).unwrap();
+        window.handle_packet(travel("minecraft:overworld")).unwrap();
+        assert_eq!(delete_as(game, "solo", "solo:a"), Ok(()));
+        game.apply_runtime_levels();
+        assert!(!game.runtime_level_is_open("solo:a"));
+        assert!(!game.world_root.join("dimensions/solo/a").exists());
+    });
+}

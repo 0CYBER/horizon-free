@@ -6,7 +6,9 @@ use std::sync::OnceLock;
 #[derive(Default)]
 pub struct Target {
     tid: libc::c_int,
-    pthread: libc::pthread_t,
+    // Opaque id, never dereferenced: musl uses a pointer while glibc uses an integer.
+    // Store it as an integer so Target stays Send + Sync, as in stack_dump's thread handle.
+    pthread: usize,
 }
 
 pub struct Timer(libc::timer_t);
@@ -20,7 +22,7 @@ impl Target {
         let (tid, pthread) = unsafe {
             (
                 libc::syscall(libc::SYS_gettid) as libc::c_int,
-                libc::pthread_self(),
+                libc::pthread_self() as usize,
             )
         };
         Some(Self { tid, pthread })
@@ -46,7 +48,7 @@ fn arm_clock(target: &Target, hz: u32, wall: Option<libc::clockid_t>) -> io::Res
     unsafe {
         let mut clock = wall.unwrap_or(0);
         if wall.is_none() {
-            let rc = libc::pthread_getcpuclockid(target.pthread, &mut clock);
+            let rc = libc::pthread_getcpuclockid(target.pthread as libc::pthread_t, &mut clock);
             if rc != 0 {
                 return Err(io::Error::from_raw_os_error(rc));
             }

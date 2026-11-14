@@ -1,0 +1,3 @@
+ids = ["hook:experience_orb_merge"]
+why = "experience_orb_merge now tells the listener both orbs' values and counts (into_value, into_count, from_count). A write to into with set_experience_orb is the merged orb: from is taken in without adding its count. set_experience_orb refuses a count past i32::MAX or a value outside a short."
+migrate = "Add the new arguments to listeners and rebuild against this SDK. To merge to an exact total, write into's value and count with set_experience_orb; do not add from's count yourself."

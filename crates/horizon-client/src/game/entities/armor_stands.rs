@@ -1030,22 +1030,13 @@ impl Game<'_> {
             // aiStep's freezing step (removeFrost) makes the speed instance.
             a.speed_instance = true;
             // LivingEntity.aiStep -> EntityEquipment.tick, before movement.
-            // Inspect in slot order, then mutate only each actual owned compass.
-            for slot in 0..horizon_items::equipment::SLOT_NAMES.len() {
-                let Some(mut stack) = self.armor_stands[i].equipment.get(slot).cloned() else {
-                    continue;
-                };
-                if stack.item.as_ref() == "minecraft:compass"
-                    && super::maps::lodestone_target_gone(self, &stack, self.dim.id())
-                {
-                    stack.data_mut().set_other(
-                        "minecraft:lodestone_tracker",
-                        Some(horizon_core::nbt::Tag::Compound(Default::default())),
-                    );
-                    self.armor_stands[i].equipment.set(slot, Some(stack));
-                }
-            }
             let a = &mut self.armor_stands[i];
+            super::inventory_tick::equipment_inventory_tick(
+                &self.world,
+                self.res.facts(),
+                self.dim.id(),
+                &mut a.equipment,
+            );
             let (water_height, lava_height) =
                 a.push_by_fluid(&self.world, &self.res.motion().fluids, &self.loop_context);
             let in_water = water_height > 0.0;

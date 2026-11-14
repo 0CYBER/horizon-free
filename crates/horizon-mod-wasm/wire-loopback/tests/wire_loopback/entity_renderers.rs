@@ -168,3 +168,14 @@ fn wire_loopback_entity_renderers_register_and_draw_alike_for_native_and_guest_m
         );
     }
 }
+
+pub(super) struct EntityRenderersHooks;
+impl EntityRenderersHooks {
+    pub(super) fn register_entity_renderers(
+        &self,
+        _: &mod_api::RegistrationContext,
+        event: &mut mod_api::RegisterEntityRenderersEvent<'_>,
+    ) {
+        self::register(event.renderers);
+    }
+}

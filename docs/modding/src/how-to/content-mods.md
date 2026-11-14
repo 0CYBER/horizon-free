@@ -849,6 +849,16 @@ Use `data/minecraft/tags/block/walls.json` for a narrow block that should join w
 and glass panes. The tags tell vanilla neighbours to draw their arms. Give the custom block
 its own model and shapes for any arms it needs to draw.
 
+Enchantments use vanilla files at `data/<namespace>/enchantment/<name>.json` (subfolders keep their path in the id,
+`<namespace>:<sub>/<name>`), with the mod's own tags in `data/<namespace>/tags/enchantment/` and its English names
+(`enchantment.<namespace>.<name>`) in `assets/<namespace>/lang/en_us.json`. They join vanilla's in the enchanting
+table, the anvil, loot, commands and the registry a server sends its players, whose data no client knows, so it is
+always sent. An enchantment reaches the enchanting table through vanilla's tags (`data/minecraft/tags/enchantment/
+in_enchanting_table.json` and the others), which a mod adds to as any tag. A world's data pack replaces a mod's
+enchantment of the same id. What an enchantment does beyond vanilla's effect components is the mod's code: a native
+hook reads the held stack's enchantments, or claims a `post_attack` effect of its own kind
+([enchantment effect kinds](items/enchantment-effect-kinds.md)).
+
 A mod adds to structure sets, template pools and processor lists that are not its own (vanilla's villages, another
 mod's houses) with a set, pool or processor list file in its own namespace holding `horizon:add_to`, a key vanilla data
 never has. Its entries are appended to each set, pool or list named, after every mod's own files, by

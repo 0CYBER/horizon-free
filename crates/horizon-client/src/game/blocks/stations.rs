@@ -1243,7 +1243,7 @@ impl Game<'_> {
     /// under the cursor: the list scrolls a row, if it can, and the cursor
     /// stays. False leaves the step to go on to whatever is that way.
     pub(super) fn station_list_step(&mut self, up: bool) -> bool {
-        let Some(batch) = self.gui_scale() else {
+        let Some(batch) = self.gui_batch() else {
             return false;
         };
         let (ox, oy) = self.inventory_origin(&batch);

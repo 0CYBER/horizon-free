@@ -26,6 +26,7 @@ let _ = player.set_chunk_areas(host, &[]);
 - **Not a player.** An area is a chunk ticket. It counts as no player for natural spawning, mob caps, despawning, spawners, sleeping, raids, the dragon fight or the random-tick rules that look for a player nearby. Terrain generated for an area is saved like any other.
 - **Lifetime.** Areas are never saved. They end when the player leaves.
 - **The player's own level.** An area there holds its ticket, but its chunks are sent only within the player's normal view.
+- **A level opened after the player logged in** (a [runtime level](../world/runtime-levels.md#players-and-clients)): its client cannot name it, so an area there is kept but nothing of the level is sent to it. When a runtime level closes, the clients that viewed it drop its world.
 - **Refusals.** A call that breaks a limit changes nothing; the areas asked before stay. `ChunkAreaRefusal` names the limit and its value:
   - `NotOnline`: the player is not online on this server.
   - `RadiusTooLarge { radius, max: 32 }`.

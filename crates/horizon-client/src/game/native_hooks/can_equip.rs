@@ -1,6 +1,7 @@
+pub(in crate::game) use super::living_change_target::NativeHookHost;
 use super::*;
 
-impl Game<'_> {
+impl NativeHookHost<'_> {
     /// NeoForge's `IItemExtension.canEquip`: may `stack` go into the equipment slot `slot` (an
     /// `EquipmentSlot` name) of `entity`, of type `kind`? `can_equip` arrives holding the stack's
     /// `equippable` answer (`LivingEntity.isEquippableInSlot`) and the parts of its item may

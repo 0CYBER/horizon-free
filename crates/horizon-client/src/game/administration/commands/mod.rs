@@ -486,7 +486,7 @@ impl Game<'_> {
             [s.x.floor(), s.y.floor(), s.z.floor()]
         })
     }
-    fn source_rotation(&self) -> [f32; 2] {
+    pub(super) fn source_rotation(&self) -> [f32; 2] {
         self.command_source
             .map_or([self.yaw, self.pitch], |s| s.rot)
     }
@@ -792,7 +792,7 @@ impl Game<'_> {
     /// `EntityLookup.getEntities`: insertion order for the joined families in
     /// unbounded arbitrary queries. Spatial queries keep their existing path;
     /// their section membership order is a separate traversal.
-    fn global_selector_candidates(&self) -> Vec<Target> {
+    pub(in crate::game) fn global_selector_candidates(&self) -> Vec<Target> {
         use super::entity::{Entity as _, entity_lists_of, with_entity};
         let original = self.level_candidates();
         // Counts preserve every occurrence, including nonwalk fallback targets.
@@ -829,7 +829,7 @@ impl Game<'_> {
     /// the entity lists (a kind added there joins `@e` once it names its
     /// `Target`), then the kinds that are not on the walk. An
     /// unsorted selector lists them in that order.
-    fn level_candidates(&self) -> Vec<Target> {
+    pub(in crate::game) fn level_candidates(&self) -> Vec<Target> {
         use super::entity::{Entity as _, entity_lists_of, for_each_entity};
         let mut candidates = Vec::new();
         for_each_entity!(entity_lists_of!(self), entity => {
@@ -855,11 +855,7 @@ impl Game<'_> {
         );
         candidates.extend(self.natural_knot_ids().into_iter().map(Target::Knot));
         // `isRemoved` from a mod's call on, though the sweep has not taken it out.
-        if !self.persist.removals.is_empty() || !self.persist.destroying_vehicles.is_empty() {
-            candidates.retain(|t| {
-                !self.persist.removals.contains(t) && !self.persist.destroying_vehicles.contains(t)
-            });
-        }
+        candidates.retain(|t| !self.target_removed(t));
         candidates
     }
     /// The loaded levels, in the order the server holds them: the

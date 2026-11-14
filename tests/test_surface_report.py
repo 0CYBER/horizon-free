@@ -50,7 +50,7 @@ class BaseCommitTests(unittest.TestCase):
 
 class GateTests(unittest.TestCase):
     def test_the_tracked_switch_is_read_and_must_be_a_boolean(self):
-        self.assertIs(surface_report.gate(ROOT / "tools/ci/surface.toml"), False)
+        self.assertIs(surface_report.gate(ROOT / "tools/ci/surface.toml"), True)
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory, "surface.toml")
             config.write_text("[surface]\ngate = true\n")

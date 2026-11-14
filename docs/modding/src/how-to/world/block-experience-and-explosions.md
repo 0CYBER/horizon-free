@@ -161,6 +161,118 @@ total, past 2,147,483,647 is refused.
 | `InvalidParticle` | A particle that isn't a particle type taking no options, a block particle with a weight of 0 or a scaling or speed that isn't finite, or a weight or total of weights past 2,147,483,647 |
 | `UnknownSound` | A sound that isn't a sound event id, or a `minecraft:` one the server doesn't have |
 
+## Reading explosion resistance
+
+Three reads tell a mod what a blast would meet without setting one off, as a
+mod that casts its own rays and breaks blocks over several ticks needs.
+
+`host.block_states().explosion_resistance(state)` is the value the block of
+`state` declares (`Block.getExplosionResistance`): stone 6, obsidian 1200,
+bedrock 3,600,000, water 100, a content block's `explosion_resistance`. It is a
+Horizon addition, readable on both sides: vanilla only reads it at a position.
+Parts and fluids don't change it. `None` for an unknown state.
+
+`level.explosion_resistance(host, pos, source, center, radius, fire,
+interaction)` is what the blast `level.explode(host, source, center, radius,
+fire, interaction)` would meet in the cell at `pos`, on the server, by the rule
+its rays use. The answer is typed, because no resistance is not a resistance of
+0: a ray loses only its fixed step in a cell with no resistance.
+
+| `ExplosionResistance` | When |
+| --- | --- |
+| `Resists(r)` | The larger of the block's answer (its parts' `explosion_resistance` first, then its own value) and the fluid's (water and lava 100) |
+| `NoResistance` | Air with no fluid, or void air above and below the level |
+| `Unavailable` | A stale level or `source`, a chunk that isn't loaded, or a state the game doesn't know |
+
+A read never loads a chunk. The blast's calculator is the one `explode` gives
+the same source, chosen once for both: as vanilla's
+`EntityBasedExplosionDamageCalculator` asks the source itself,
+
+- a primed TNT minecart's rails and the blocks under them resist 0, and its
+  blast spares them;
+- a dangerous wither skull caps a block it may destroy at 0.8;
+- any other source, and no source, has the default calculator.
+
+A respawn anchor's water cell belongs to the anchor's own blast, which has no
+source and no description a mod can give, so no read sees it. Parts are asked
+with the `ExplosionStart` the blast would have: its causing entity and damage
+type come from `source` as for `explode`.
+
+`level.explosion_resistances(host, &cells, source, center, radius, fire,
+interaction)` reads many cells in one call, one answer a cell in the order
+`cells` gives:
+
+| `ResistanceCells` | Order |
+| --- | --- |
+| `Box { min, max }` | Every cell, both corners included: x fastest, then z, then y |
+| `Columns { columns, min_y, max_y }` | Each column in the order given, from `min_y` up to `max_y` |
+
+A read of more than `ResistanceCells::MAX` (262,144) cells, or of an inverted
+area, is refused with `ResistanceCellsError` and reads nothing. It runs on the
+server tick, so read a big area in pieces. A block's parts are asked once a
+cell, unless every part on the block that answers `explosion_resistance`
+declares its answer pure:
+
+```rust
+#[mod_api::horizon_part]
+impl BlockPart for Reinforced {
+    fn explosion_resistance(&self, _: &dyn LevelHost, _: &mut ExplosionResistanceEvent<'_>) -> Option<f32> {
+        Some(5000.0)
+    }
+    fn explosion_resistance_is_pure(&self) -> bool {
+        true
+    }
+}
+```
+
+Then a batched read asks them once a state per call; one part that doesn't
+declare it keeps the whole block at once a cell. Declare it only when the
+answer depends on nothing but the state and the explosion; either way the
+answer stays a pure function of its inputs, since a ray asks once as it enters
+a block.
+
+## Destroying a list of blocks as a blast
+
+`level.explosion_destroy_blocks(host, &positions, source, center, radius,
+fire, interaction)` breaks the blocks at `positions` as the blast
+`level.explode(host, source, center, radius, fire, interaction)` would break
+them, without casting its rays, hurting or pushing entities, or sending a
+packet or a sound. A mod that casts its own rays (with
+`explosion_resistances`) breaks what they found with it, spread over several
+ticks if it likes, and does the entity damage, the push and the effects with
+the entity calls and `explode`. It is a Horizon addition: vanilla has no single
+call that does this.
+
+Each call is one explosion to the hooks. `explosion_start` hears it first and
+may cancel it: then nothing breaks and the answer is 0. For a radius of at
+least 0.00001, `explosion_detonate` hears the positions as its block list, in
+the order given, a repeated one once. A listener may
+only take positions out (spare them): one it adds is ignored. Then the block
+step runs as a blast's does, in vanilla's order:
+
+1. The positions are shuffled with the level's random.
+2. Each block is hit: air is skipped; `can_drop_from_explosion` decides the
+   drops; the loot gets the radius only under the decay interaction; the
+   experience drops when the causing entity is a player; then
+   `on_block_exploded`, whose default sets air and primes TNT owned by the
+   causing entity.
+3. The drops of the whole call are merged (a stack is offered to every earlier
+   pile, up to 16 a pile; the rest starts a pile at that block) and popped
+   after the last block, in the order the piles began.
+4. With `fire`, a third of the cells left air above a solid block catch fire,
+   under `None` too.
+
+`None` breaks nothing else, and `Trigger` only works the blocks it may. The
+causing entity and the damage type come from `source` as for `explode`.
+
+Unlike vanilla's rays, a position in a chunk that isn't loaded is skipped,
+never loaded and not counted, and so is one outside the level's height. The
+answer is the number of blocks destroyed: those that were not air when their
+turn came. `Err(ExplosionDestroyError)`, with nothing changed and no hook told,
+for more than 65,536 positions (`ExplosionDestroyError::MAX_POSITIONS`), a
+stale level or `source`, or a centre or radius that isn't finite or a negative
+radius.
+
 ## Entities that destroy blocks
 
 `can_entity_destroy(host, event)` answers whether `event.entity` may destroy the

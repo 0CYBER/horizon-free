@@ -111,3 +111,14 @@ fn wire_loopback_load_conditions_native_and_guest_registrars_and_callbacks_agree
         );
     }
 }
+
+pub(super) struct LoadConditionsHooks;
+impl LoadConditionsHooks {
+    pub(super) fn register_load_conditions(
+        &self,
+        _: &mod_api::RegistrationContext,
+        event: &mut mod_api::RegisterLoadConditionsEvent<'_>,
+    ) {
+        self::register(event.conditions);
+    }
+}

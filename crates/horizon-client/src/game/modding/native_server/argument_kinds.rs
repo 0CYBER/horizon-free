@@ -2,6 +2,9 @@
 //! parser, and the types mods registered, with the dispatcher type each node parses as.
 
 use super::{ArgType, Text, TryIntoEngine};
+use horizon_client::command::{
+    CommandError, Dispatcher, NodeKind, Range, Reader, args::Coordinates, snbt,
+};
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -10,7 +13,7 @@ use std::{
 
 /// The argument kinds a native usage may name, each with a [`parser`]; `resource:<registry>`
 /// and `mod_id` come on top.
-pub(super) const KINDS: [&str; 11] = [
+pub(super) const KINDS: [&str; 17] = [
     "word",
     "text",
     "integer",
@@ -22,7 +25,17 @@ pub(super) const KINDS: [&str; 11] = [
     "players",
     "item",
     "block_pos",
+    "vec3",
+    "vec3_uncentered",
+    "column_pos",
+    "rotation",
+    "dimension",
+    "nbt",
 ];
+
+/// The tree property marking `vec3_uncentered`: vanilla's `vec3(false)` has the same parser id
+/// and properties as `vec3()`, so the report format cannot tell them apart.
+pub(super) const UNCENTERED: &str = "uncentered";
 
 /// The custom argument types the mods registered, by namespaced id, for the command tree being
 /// built and its server dispatcher.
@@ -148,8 +161,77 @@ pub(super) fn parser(kind: &str) -> Option<(&'static str, Value, ArgType)> {
         }
         "item" => ("minecraft:item_stack", Value::Null, ArgType::Item),
         "block_pos" => ("minecraft:block_pos", Value::Null, ArgType::BlockPos),
+        // `Vec3Argument.vec3()` centres whole x and z on their block, `vec3(false)` does not.
+        "vec3" => (
+            "minecraft:vec3",
+            Value::Null,
+            ArgType::Vec3 { center: true },
+        ),
+        "vec3_uncentered" => (
+            "minecraft:vec3",
+            Value::Null,
+            ArgType::Vec3 { center: false },
+        ),
+        "column_pos" => ("minecraft:column_pos", Value::Null, ArgType::ColumnPos),
+        "rotation" => ("minecraft:rotation", Value::Null, ArgType::Rotation),
+        "dimension" => ("minecraft:dimension", Value::Null, ArgType::Dimension),
+        "nbt" => ("minecraft:nbt_compound_tag", Value::Null, ArgType::Nbt),
         _ => return None,
     })
+}
+
+/// The type of the argument node that parsed `range`: the parsed node, not the value, says which
+/// kind a position, id or string is.
+pub(super) fn parsed_type(
+    dispatcher: &Dispatcher,
+    parsed_nodes: &[(usize, Range)],
+    range: Range,
+) -> Option<ArgType> {
+    parsed_nodes.iter().find_map(|(node, parsed)| {
+        if *parsed != range {
+            return None;
+        }
+        match &dispatcher.nodes[*node].kind {
+            NodeKind::Argument { ty, .. } => Some(ty.clone()),
+            _ => None,
+        }
+    })
+}
+
+/// What a `vec3`, `vec3_uncentered`, `column_pos`, `rotation` or `block_pos` argument delivers:
+/// `position` is `coordinates` resolved against the source, `rotation` the source's yaw and pitch.
+pub(super) fn positional_value(
+    ty: Option<&ArgType>,
+    coordinates: &Coordinates,
+    position: [f64; 3],
+    rotation: [f32; 2],
+) -> mod_api::CommandArgumentValue {
+    use mod_api::CommandArgumentValue as Value;
+    match ty {
+        Some(ArgType::Vec3 { .. }) => Value::Vec3(position),
+        Some(ArgType::ColumnPos) => {
+            Value::ColumnPos([position[0].floor() as i32, position[2].floor() as i32])
+        }
+        Some(ArgType::Rotation) => Value::Rotation(coordinates.rotation(rotation)),
+        _ => Value::BlockPos(position.map(|v| v.floor() as i32)),
+    }
+}
+
+/// `DimensionArgument.getDimension`: the level of a dimension the world has loaded, or
+/// `argument.dimension.invalid`.
+pub(super) fn dimension_value(
+    id: &str,
+    level: impl FnOnce(&str) -> Option<mod_api::LevelRef>,
+) -> Result<mod_api::CommandArgumentValue, CommandError> {
+    level(id)
+        .map(mod_api::CommandArgumentValue::Dimension)
+        .ok_or_else(|| CommandError::tr("argument.dimension.invalid", &[&id]))
+}
+
+/// An `nbt` argument's compound, from the SNBT the dispatcher accepted.
+pub(super) fn nbt_value(text: &str) -> Result<mod_api::CommandArgumentValue, CommandError> {
+    let mut reader = Reader::new(text);
+    snbt::parse_compound_argument(&mut reader).map(mod_api::CommandArgumentValue::Nbt)
 }
 
 /// The message a mod's argument parser refused with, as the engine's text. A text the
@@ -226,6 +308,9 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
                     .collect()
             },
         ));
+    }
+    if node["parser"] == "minecraft:vec3" && node[UNCENTERED] == true {
+        return ArgType::Vec3 { center: false };
     }
     KINDS
         .into_iter()

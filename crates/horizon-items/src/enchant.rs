@@ -209,6 +209,20 @@ fn string_list(v: &Value) -> Vec<String> {
     }
 }
 fn read_tag_dir(dir: &Path) -> HashMap<String, horizon_world::tag_layers::TagLayers> {
+    read_tag_dir_in(dir, "minecraft")
+}
+/// The resource root's `data/` namespaces other than `minecraft`, in name
+/// order: content mods' files land there (`horizon_client::mod_content`'s
+/// overlay), as a data pack's namespaces do in `RegistryDataLoader`.
+fn other_namespaces(root: &Path) -> Vec<String> {
+    let mut out = horizon_world::json_folder::namespaces(&root.join("data"));
+    out.retain(|ns| ns != "minecraft");
+    out
+}
+fn read_tag_dir_in(
+    dir: &Path,
+    namespace: &str,
+) -> HashMap<String, horizon_world::tag_layers::TagLayers> {
     let Ok(folder) = horizon_world::json_folder::read(dir) else {
         return HashMap::new();
     };
@@ -218,7 +232,7 @@ fn read_tag_dir(dir: &Path) -> HashMap<String, horizon_world::tag_layers::TagLay
         .filter_map(|file| {
             let v = serde_json::from_slice::<Value>(file.bytes().ok()?).ok()?;
             Some((
-                format!("minecraft:{}", file.name),
+                format!("{namespace}:{}", file.name),
                 horizon_world::tag_layers::TagLayers::from_file(&v),
             ))
         })
@@ -351,6 +365,15 @@ impl Enchantments {
     ) -> crate::Result<Self> {
         let data = root.join("data/minecraft");
         let mut raw_tags = read_tag_dir(&data.join("tags/enchantment"));
+        let namespaces = other_namespaces(root);
+        // Mods' own enchantment tags (`data/<ns>/tags/enchantment/`): an
+        // `exclusive_set` or a tag of the mod's enchantments.
+        for ns in &namespaces {
+            let dir = root.join("data").join(ns).join("tags/enchantment");
+            for (id, values) in read_tag_dir_in(&dir, ns) {
+                raw_tags.insert(id, values);
+            }
+        }
         for (id, files) in overlay.tag_kind("enchantment") {
             for bytes in files {
                 let Ok(v) = serde_json::from_slice::<Value>(bytes) else {
@@ -433,6 +456,23 @@ impl Enchantments {
                         || k.starts_with("recipe.toast.")
                 })
                 .collect();
+        // Mods' English names for their enchantments (`assets/<ns>/lang/`),
+        // under vanilla's, which win a clash.
+        let mut lang = lang;
+        for ns in &namespaces {
+            let path = root.join("assets").join(ns).join("lang/en_us.json");
+            let Some(map) = horizon_core::prepared_files::read(&path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<HashMap<String, String>>(&b).ok())
+            else {
+                continue;
+            };
+            for (k, v) in map {
+                if k.starts_with("enchantment.") {
+                    lang.entry(k).or_insert(v);
+                }
+            }
+        }
         let mut custom_damage = HashMap::new();
         let list = files
             .iter()
@@ -1499,6 +1539,106 @@ pub mod tests {
                 .get("wpenchant:loaded")
                 .is_none()
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A content mod's enchantments (`data/<ns>/enchantment/`, copied into the
+    /// resource root beside vanilla's) join the catalog with their own tags and
+    /// English names, nested files keep their path, and a world's pack still
+    /// replaces one.
+    #[test]
+    fn mod_namespace_definitions_join_catalog() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-enchantment-mods-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let write = |path: &str, value: &Value| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
+            std::fs::read(path).unwrap()
+        };
+        std::fs::create_dir_all(root.join("data/harvestmod/enchantment/tools")).unwrap();
+        std::fs::write(
+            root.join("data/harvestmod/enchantment/tools/broken.json"),
+            b"{",
+        )
+        .unwrap();
+        let definition = |description: Value, max_level| {
+            json!({
+                "description": description, "supported_items": "minecraft:diamond_hoe",
+                "weight": 1, "max_level": max_level,
+                "min_cost": {"base": 1, "per_level_above_first": 0},
+                "max_cost": {"base": 1, "per_level_above_first": 0},
+                "anvil_cost": 1, "slots": ["mainhand"],
+                "exclusive_set": "#harvestmod:exclusive/area"
+            })
+        };
+        write(
+            "data/minecraft/enchantment/mending.json",
+            &json!({"description": "Mending", "supported_items": "minecraft:diamond_hoe",
+                "max_level": 1, "weight": 2, "anvil_cost": 4, "slots": ["any"],
+                "min_cost": {"base": 1, "per_level_above_first": 0},
+                "max_cost": {"base": 1, "per_level_above_first": 0}}),
+        );
+        write(
+            "data/harvestmod/enchantment/scythe.json",
+            &definition(json!({"translate": "enchantment.harvestmod.scythe"}), 3),
+        );
+        write(
+            "data/harvestmod/enchantment/tools/sweep.json",
+            &definition(json!("Sweep"), 1),
+        );
+        write(
+            "data/harvestmod/tags/enchantment/exclusive/area.json",
+            &json!({"values": ["harvestmod:scythe", "harvestmod:tools/sweep"]}),
+        );
+        write(
+            "data/minecraft/tags/enchantment/in_enchanting_table.json",
+            &json!({"values": ["minecraft:mending", "harvestmod:scythe"]}),
+        );
+        write(
+            "assets/harvestmod/lang/en_us.json",
+            &json!({"enchantment.harvestmod.scythe": "Scythe", "item.harvestmod.x": "X"}),
+        );
+        write("items.json", &json!({}));
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let loaded = Enchantments::load(&root, &defaults).unwrap();
+        let scythe = loaded
+            .get("harvestmod:scythe")
+            .expect("a mod's own enchantment must enter the catalog");
+        assert_eq!(scythe.description, "Scythe");
+        assert_eq!(scythe.max_level, 3);
+        assert!(scythe.exclusive.contains("harvestmod:tools/sweep"));
+        assert_eq!(
+            loaded.get("harvestmod:tools/sweep").unwrap().description,
+            "Sweep"
+        );
+        assert!(loaded.in_tag("harvestmod:exclusive/area", "harvestmod:scythe"));
+        assert!(loaded.in_tag("minecraft:in_enchanting_table", "harvestmod:scythe"));
+        assert!(loaded.get("minecraft:mending").is_some());
+        assert!(loaded.get("minecraft:scythe").is_none());
+        assert!(loaded.get("harvestmod:tools/broken").is_none());
+
+        // A world's pack replaces the mod's definition for its id.
+        let pack = write(
+            "packs/p/data/harvestmod/enchantment/scythe.json",
+            &definition(json!("Pack scythe"), 5),
+        );
+        let files = vec![("enchantment/harvestmod:scythe".to_owned(), vec![pack])];
+        let packed = Enchantments::load_with(
+            &root,
+            &horizon_world::loot::PackOverlay::new(&files),
+            &defaults,
+        )
+        .unwrap();
+        let scythe = packed.get("harvestmod:scythe").unwrap();
+        assert_eq!(scythe.description, "Pack scythe");
+        assert_eq!(scythe.max_level, 5);
         std::fs::remove_dir_all(root).unwrap();
     }
 

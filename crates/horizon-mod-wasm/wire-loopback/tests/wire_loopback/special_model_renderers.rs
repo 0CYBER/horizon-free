@@ -129,3 +129,14 @@ fn wire_loopback_special_model_renderers_register_and_answer_alike_for_native_an
     }
     assert_eq!(answers[0], answers[1]);
 }
+
+pub(super) struct SpecialModelRenderersHooks;
+impl SpecialModelRenderersHooks {
+    pub(super) fn register_special_model_renderer(
+        &self,
+        _: &mod_api::RegistrationContext,
+        event: &mut mod_api::RegisterSpecialModelRendererEvent<'_>,
+    ) {
+        self::register(event.renderers);
+    }
+}

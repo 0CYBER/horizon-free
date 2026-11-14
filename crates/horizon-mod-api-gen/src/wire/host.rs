@@ -646,6 +646,9 @@ impl Cx {
         }
         for group in groups {
             writeln!(code, "impl {} for crate::{receiver} {{", trait_path(&group)).unwrap();
+            if receiver == "WasmHandler" && group == "ItemPart" && !prepared_hooks.is_empty() {
+                code.push_str("fn __prepare_equip(&self,stack:&mod_api::ItemStack,kinds:&[&str],reads:&[mod_api::EquipReadRow])->Result<Option<Box<dyn std::any::Any>>,&'static str> { let instance=self.module.equip_instance(); if crate::prepared::lookup(instance,stack).is_some() { return Ok(None); } let prepared=self.prepare_can_equip_with_reads(stack,kinds,reads).ok_or(\"equipment preparation refused\")?; Ok(Some(Box::new(crate::prepared::activate(instance,stack,prepared)))) }\n");
+            }
             if receiver == "WasmMod" && group == "Hooks" {
                 code.push_str(
                     "fn listeners(&self) -> &'static [mod_api::Listener] { self.listeners }\n",
@@ -850,7 +853,7 @@ impl Cx {
                         .map(|i| format!("p{i}"))
                         .collect::<Vec<_>>()
                         .join(",");
-                    writeln!(code, "{sig} {{ let Some(prepared)=self.prepare_{name}(p{event}.stack,&[p{event}.kind]) else {{ p{event}.can_equip=false; return; }}; self.ask_{name}(&prepared,{arguments}); }}").unwrap();
+                    writeln!(code, "{sig} {{ if let Some(prepared)=crate::prepared::lookup(self.module.equip_instance(),p{event}.stack) {{ self.ask_{name}(&prepared,{arguments}); return; }} let Some(prepared)=self.prepare_{name}(p{event}.stack,&[p{event}.kind]) else {{ p{event}.can_equip=false; return; }}; self.ask_{name}(&prepared,{arguments}); }}").unwrap();
                     let ask_sig = sig.replacen(
                         &format!("fn {name}(&self,"),
                         &format!("pub fn ask_{name}(&self,prepared:&Prepared<'_>,"),
@@ -858,7 +861,7 @@ impl Cx {
                     );
                     let slots = super::prepared::SLOTS;
                     let ask = method.replacen(&sig, &ask_sig, 1).replacen("let mut frame = Frame::default();", &format!("let Some(slot_id)={slots:?}.iter().position(|slot| *slot==p{event}.slot).map(|i|i as u32) else {{ p{event}.can_equip=false;return; }}; let Some(kind_id)=prepared.kinds.iter().position(|kind| kind==p{event}.kind).map(|i|i as u32) else {{ p{event}.can_equip=false;return; }}; if !self.module.check(prepared.slot,prepared.generation) {{ p{event}.can_equip=false; return; }} let mut frame = Frame::default();"), 1);
-                    writeln!(prepared_impls, "impl crate::WasmHandler {{ pub fn prepare_{name}(&self,stack:&mod_api::ItemStack,kinds:&[&str])->Option<Prepared<'_>> {{ let mut bytes=Writer::new(); bytes.put(stack); let kinds:Vec<String>=kinds.iter().map(|s|s.to_string()).collect(); bytes.put(&kinds); if bytes.error().is_some() {{ return None; }} let (slot,generation)=self.module.prepare(bytes.bytes())?; Some(Prepared {{ slot,generation,kinds,release:Some(Box::new(move || self.module.release(slot,generation))) }}) }} {ask} }}").unwrap();
+                    writeln!(prepared_impls, "impl crate::WasmHandler {{ pub fn prepare_{name}(&self,stack:&mod_api::ItemStack,kinds:&[&str])->Option<Prepared<'static>> {{ self.prepare_{name}_with_reads(stack,kinds,&[]) }} pub fn prepare_{name}_with_reads(&self,stack:&mod_api::ItemStack,kinds:&[&str],reads:&[mod_api::EquipReadRow])->Option<Prepared<'static>> {{ let mut bytes=Writer::new(); bytes.put(stack); let kinds:Vec<String>=kinds.iter().map(|s|s.to_string()).collect(); bytes.put(&kinds); bytes.put(reads); if bytes.error().is_some() {{ return None; }} let (slot,generation)=self.module.prepare(bytes.bytes())?; let module=self.module.clone(); Some(Prepared {{ slot,generation,kinds,release:Some(Box::new(move || module.release(slot,generation))) }}) }} {ask} }}").unwrap();
                 } else {
                     code.push_str(&method);
                 }
@@ -877,6 +880,7 @@ impl Cx {
         .replace("mod_api::refused", "crate::refused")
         .replace("mod_api::NoAnswer", "crate::NoAnswer")
         .replace("mod_api::wasm_call_refusal", "crate::wasm_call_refusal")
+        .replace("mod_api::prepared::", "crate::prepared::")
         .replace(
             "use mod_api::{NoAnswer, call_refused}",
             "use crate::{NoAnswer, call_refused}",

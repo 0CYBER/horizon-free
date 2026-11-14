@@ -9,6 +9,7 @@ pub(crate) mod player_data;
 pub mod behaviors;
 pub(crate) mod effect_category;
 pub(crate) mod entity_capability;
+pub(crate) mod equip_read;
 pub(crate) mod goals;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]

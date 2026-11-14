@@ -59,6 +59,34 @@ effect immediately, even inside a transaction. Equipment sounds and equip/unequi
 events from `LivingRef::set_equipment` also happen immediately. An abort does not
 undo these writes or effects. Use journaled capability handlers when you need rollback.
 
+## Spawning and removing entities
+
+Entities a transaction spawns or removes follow the same commit and rollback rules:
+
+- A spawn builds the entity at the call: its handle works, its attachments and Parts exist,
+  `entity_constructing` has run and selectors find it. Its `entity_join_level` does not run
+  until the outermost commit, in the order the entities were added, before any removal
+  of the transaction takes effect. A listener reads the entity at the commit, not during the
+  call. A join a listener cancels at the commit means the entity was never announced and the
+  handle the spawn returned reads stale from then on.
+- An abort takes out every entity the transaction spawned, with its attachments and saved data, and
+  tells no mod: neither `entity_join_level` nor `entity_leave_level` runs. An entity id is
+  never reused, so the aborted entity's id stays burnt and a stale handle never names a later entity.
+- A removal (`EntityRef::discard`, a kill) marks the entity at the call: its handle and selectors
+  stop finding it, and a mob reads as removed (it is flagged at the call; any other entity is
+  listed as removed until the commit has run its removal, joins told by then included). Passengers dismount, the leave
+  is told and the other effects of removal wait for the outermost commit; an abort puts the
+  entity back as it was and tells no one. An entity spawned and removed in the same
+  transaction is never announced, so it never leaves.
+- A spawn is refused, inside a transaction as outside one, once the entity ids run out.
+- A transaction covers the entities of the level it was opened in; with transactions of several levels open (a command run `in` another level can open one), an entity belongs to the innermost one of its own level. A command it runs in another
+  level (`execute in`) spawns or removes there as it would outside a transaction: the join and
+  the leave are told at once, and an abort does not take the entity back. A join listener that
+  spawns, removes or commits a transaction while a commit is telling its joins is told about its
+  own entities after the commit's batch, in the order it asked.
+- Travel between levels is not journaled: an entity that arrives in another level during an aborted
+  transaction stays where it arrived.
+
 ## Transaction authority
 
 `Transaction` identifies an open transaction with a game-issued write token. It

@@ -26,7 +26,26 @@ impl Game<'_> {
         self.next_entity += 1;
         self.next_entity
     }
+    /// Whether the id counter is within [`ENTITY_ID_HEADROOM`] of the end: then a mod's spawn is
+    /// refused and the tick spawns nothing of its own, named once in the log. Ids already handed
+    /// out are never taken back, so a stale handle never names a later entity.
+    pub(super) fn entity_ids_exhausted(&mut self) -> bool {
+        let exhausted = self.next_entity >= u32::MAX - ENTITY_ID_HEADROOM;
+        if exhausted && !self.native_lifecycle.ids_exhausted_told {
+            self.native_lifecycle.ids_exhausted_told = true;
+            log::error!(
+                "entity ids exhausted: {} of {} handed out; no entity spawns until the world reopens",
+                self.next_entity,
+                u32::MAX
+            );
+        }
+        exhausted
+    }
 }
+
+/// The ids kept back below `u32::MAX`: far more than one tick hands out (a whole ender dragon
+/// takes nine in a row) and the provisional ids a natural spawn pass counts down from the end.
+pub(super) const ENTITY_ID_HEADROOM: u32 = 1 << 24;
 
 fn add_state<'a>(
     out: &'a mut States,

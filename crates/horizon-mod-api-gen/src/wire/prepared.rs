@@ -46,6 +46,7 @@ pub(super) fn describe(
                             "generation:u32",
                             "stack:crate::ItemStack",
                             "kinds:Vec<String>",
+                            "reads:Vec<crate::EquipReadRow>",
                         ],
                         output: vec!["token:(u32,u32)"],
                     },

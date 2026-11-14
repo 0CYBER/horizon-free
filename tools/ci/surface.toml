@@ -2,4 +2,4 @@
 [surface]
 # Off: the report never fails the job, except for a change note that names an id that did not change.
 # On: a breaking change that no new note in crates/horizon-mod-vocab/changes/ names fails it too.
-gate = false
+gate = true

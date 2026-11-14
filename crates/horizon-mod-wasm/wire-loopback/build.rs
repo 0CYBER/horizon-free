@@ -1,6 +1,7 @@
-//! The test target's two generated inputs: the host boundary (as horizon-mod-wasm's build.rs writes it) and one
-//! module per file of tests/wire_loopback/. A package of its own, so that editing a test reruns only this script:
-//! horizon-mod-wasm's rerun would rebuild its library and every crate above it.
+//! The test target's generated inputs: the host boundary (as horizon-mod-wasm's build.rs writes it), one module per
+//! file of tests/wire_loopback/, and the guest's one Hooks object assembled from those files' `impl <Feature>Hooks`
+//! blocks. A package of its own, so that editing a test reruns only this script: horizon-mod-wasm's rerun would
+//! rebuild its library and every crate above it.
 #[path = "../../../packaging/executable_link.rs"]
 mod executable_link;
 
@@ -32,4 +33,8 @@ fn main() {
         .unwrap_or_else(|error| panic!("discovering wire_loopback test modules: {error}"));
     horizon_mod_api_gen::write_if_changed(out.join("wire_loopback_modules.rs"), modules)
         .expect("writing wire_loopback test modules");
+    let hooks = horizon_game_discovery::folder_hooks(&manifest.join("tests/wire_loopback"))
+        .unwrap_or_else(|error| panic!("assembling the wire_loopback guest hooks: {error}"));
+    horizon_mod_api_gen::write_if_changed(out.join("wire_loopback_hooks.rs"), hooks)
+        .expect("writing wire_loopback guest hooks");
 }
