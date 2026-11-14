@@ -48,11 +48,11 @@ mod particle_stacks;
 #[doc(hidden)]
 pub mod particles;
 // hidden: a module of game-side types; mods use their re-exports
+pub(crate) mod gui_clip;
 #[doc(hidden)]
 pub mod player_chat;
 pub(crate) mod posed_parts;
 pub(crate) mod render_pipeline;
-pub(crate) mod gui_clip;
 pub(crate) mod scene;
 pub(crate) mod screenshot;
 pub(crate) mod skull_models;

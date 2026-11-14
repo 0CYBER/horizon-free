@@ -46,7 +46,16 @@ fn menu_transfer_asks_the_menus_part_and_none_leaves_the_grid_transfer() {
         );
         result
     };
-    assert_eq!(transfer("test:menu", false, false), Some(RecipeTransferResult::Moves));
-    assert_eq!(transfer("test:menu", true, false), Some(RecipeTransferResult::NoRoom));
-    assert_eq!(transfer("test:menu", false, true), Some(RecipeTransferResult::Missing));
+    assert_eq!(
+        transfer("test:menu", false, false),
+        Some(RecipeTransferResult::Moves)
+    );
+    assert_eq!(
+        transfer("test:menu", true, false),
+        Some(RecipeTransferResult::NoRoom)
+    );
+    assert_eq!(
+        transfer("test:menu", false, true),
+        Some(RecipeTransferResult::Missing)
+    );
 }

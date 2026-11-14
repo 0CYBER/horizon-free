@@ -57,12 +57,28 @@ mod tests {
 
     fn square(batch: &mut HudBatch, x: f32, y: f32, size: f32) {
         let p = [[x, y], [x + size, y], [x + size, y + size], [x, y + size]];
-        batch.quad(p, [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], u32::MAX);
+        batch.quad(
+            p,
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            u32::MAX,
+        );
     }
     fn bounds(batch: &HudBatch) -> [f32; 4] {
         batch.vertices.iter().fold(
-            [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
-            |[a, b, c, d], v| [a.min(v.pos[0]), b.min(v.pos[1]), c.max(v.pos[0]), d.max(v.pos[1])],
+            [
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ],
+            |[a, b, c, d], v| {
+                [
+                    a.min(v.pos[0]),
+                    b.min(v.pos[1]),
+                    c.max(v.pos[0]),
+                    d.max(v.pos[1]),
+                ]
+            },
         )
     }
 
@@ -75,13 +91,20 @@ mod tests {
         clips.push(&batch, [10.0, 10.0, 100.0, 100.0]).unwrap();
         square(&mut batch, 0.0, 0.0, 300.0);
         clips.pop(&mut batch).unwrap();
-        let kept: Vec<_> = batch.vertices[..before.len()].iter().map(|v| v.pos).collect();
+        let kept: Vec<_> = batch.vertices[..before.len()]
+            .iter()
+            .map(|v| v.pos)
+            .collect();
         assert_eq!(kept, before, "drawn before the clip");
         let mut inside = HudBatch::scratch([640, 480]);
         inside.vertices = batch.vertices[before.len()..].to_vec();
         assert_eq!(bounds(&inside), [10.0, 10.0, 110.0, 110.0]);
         square(&mut batch, 0.0, 0.0, 300.0);
-        assert_eq!(bounds(&batch), [0.0, 0.0, 300.0, 300.0], "drawn after the pop");
+        assert_eq!(
+            bounds(&batch),
+            [0.0, 0.0, 300.0, 300.0],
+            "drawn after the pop"
+        );
     }
 
     #[test]
@@ -104,7 +127,10 @@ mod tests {
         clips.push(&batch, [0.0, 0.0, -5.0, 10.0]).unwrap();
         square(&mut batch, 0.0, 0.0, 300.0);
         clips.pop(&mut batch).unwrap();
-        assert!(batch.vertices.is_empty(), "a negative width clips everything");
+        assert!(
+            batch.vertices.is_empty(),
+            "a negative width clips everything"
+        );
     }
 
     #[test]
@@ -112,14 +138,21 @@ mod tests {
         let mut batch = HudBatch::scratch([640, 480]);
         let mut clips = GuiClips::default();
         assert_eq!(clips.pop(&mut batch), Err(GuiClipRefusal::NoneOpen));
-        for rect in [[f32::NAN, 0.0, 1.0, 1.0], [0.0, 0.0, f32::INFINITY, 1.0], [f32::MAX, 0.0, f32::MAX, 1.0]] {
+        for rect in [
+            [f32::NAN, 0.0, 1.0, 1.0],
+            [0.0, 0.0, f32::INFINITY, 1.0],
+            [f32::MAX, 0.0, f32::MAX, 1.0],
+        ] {
             assert_eq!(clips.push(&batch, rect), Err(GuiClipRefusal::NotFinite));
         }
         assert!(clips.0.is_empty());
         for _ in 0..MAX_OPEN {
             clips.push(&batch, [0.0, 0.0, 10.0, 10.0]).unwrap();
         }
-        assert_eq!(clips.push(&batch, [0.0, 0.0, 10.0, 10.0]), Err(GuiClipRefusal::TooDeep));
+        assert_eq!(
+            clips.push(&batch, [0.0, 0.0, 10.0, 10.0]),
+            Err(GuiClipRefusal::TooDeep)
+        );
         assert_eq!(clips.0.len(), MAX_OPEN);
         clips.close_all(&mut batch);
         assert!(clips.0.is_empty());
@@ -176,7 +209,11 @@ mod dispatch_tests {
         let inside = |color: u32, [x0, y0, x1, y1]: [f32; 4]| {
             let quads: Vec<_> = batch.vertices.iter().filter(|v| v.color == color).collect();
             assert_eq!(quads.len(), 6, "{color:x}");
-            assert!(quads.iter().all(|v| (x0..=x1).contains(&v.pos[0]) && (y0..=y1).contains(&v.pos[1])));
+            assert!(
+                quads
+                    .iter()
+                    .all(|v| (x0..=x1).contains(&v.pos[0]) && (y0..=y1).contains(&v.pos[1]))
+            );
         };
         inside(batch.vertices[0].color, [10.0, 10.0, 15.0, 15.0]);
         inside(batch.vertices[6].color, [20.0, 20.0, 24.0, 24.0]);
