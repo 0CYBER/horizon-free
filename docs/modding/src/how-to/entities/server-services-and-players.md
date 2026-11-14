@@ -86,7 +86,7 @@ are placed at their respawn point or the world spawn and `player_respawned` is h
 hook (from `server_tick`, say). It returns `Result<(), RespawnRefusal>`, and each refusal changes nothing, checked in
 this order: `Client`, `InPlayerHook` (a player's state is swapped in), `Stale` (no player on this server behind the
 handle), `NoConnection` (a fake player, or the world's own player in a single-player world, which respawns through its
-own screen) and `Alive`.
+own screen) and `Alive` (health above 0 and the game not won: the case the button ignores; a player who has won the game and is watching the End poem is respawned even alive, on the next server tick, as the button does).
 
 ## Player rules and sleep
 

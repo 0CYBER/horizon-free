@@ -1228,7 +1228,9 @@ pub enum RespawnRefusal {
     /// The player has no connection of their own to press Respawn on: a fake player, or the
     /// world's own player in a single-player world.
     NoConnection,
-    /// The player is alive; only a dead player is respawned.
+    /// The player has health above 0 and has not won the game: the case the Respawn button
+    /// ignores. A player who has won the game (the End poem is showing) is respawned even
+    /// alive, as the button does.
     Alive,
 }
 

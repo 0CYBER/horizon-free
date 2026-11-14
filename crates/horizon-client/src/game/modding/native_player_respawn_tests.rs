@@ -10,7 +10,10 @@ fn set_dead(game: &mut super::Game<'_>, conn: u32, dead: bool) {
         .unwrap()
         .hub
         .guests
-        .update_connection(conn, |g| g.dead = dead);
+        .update_connection(conn, |g| {
+            g.dead = dead;
+            g.health = if dead { 0.0 } else { 20.0 };
+        });
 }
 
 fn is_dead(game: &super::Game<'_>, conn: u32) -> bool {
@@ -51,6 +54,46 @@ fn a_dead_player_is_respawned_once() {
             assert_eq!(b.respawn(game), Err(RespawnRefusal::Alive));
             assert_eq!(heard.lock().unwrap().len(), 1, "not respawned twice");
         });
+    });
+}
+
+/// `Alive` is health above 0 and the game not won: a player who has won the game is respawned
+/// on the button even alive (the request is taken on the next server tick, as the client's own
+/// is), and a dead one is still respawned at once.
+#[test]
+#[ignore = "daily"]
+fn a_player_who_won_the_game_is_respawned_alive_as_the_button_does() {
+    with_guests(|game| {
+        let b = game.players().server_players()[1];
+        game.lan
+            .as_mut()
+            .unwrap()
+            .play
+            .entry(13)
+            .or_default()
+            .won_game = true;
+        assert!(!is_dead(game, 13));
+        assert_eq!(b.respawn(game), Ok(()));
+        assert!(
+            game.lan.as_ref().unwrap().play[&13].respawn_requested,
+            "the poem's exit is requested, as the packet does"
+        );
+        assert!(!is_dead(game, 13), "still alive, not respawned in place");
+        game.lan
+            .as_mut()
+            .unwrap()
+            .play
+            .get_mut(&13)
+            .unwrap()
+            .won_game = false;
+        game.lan
+            .as_mut()
+            .unwrap()
+            .play
+            .get_mut(&13)
+            .unwrap()
+            .respawn_requested = false;
+        assert_eq!(b.respawn(game), Err(RespawnRefusal::Alive));
     });
 }
 
