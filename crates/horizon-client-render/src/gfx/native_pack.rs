@@ -320,6 +320,14 @@ impl NativePack {
             || self.weather.is_some()
             || self.post.is_some()
     }
+
+    /// Whether a stage reads the arena's solid quads as `TerrainVertex`es, so they upload
+    /// wide (`Renderer::follow_packed_layout`): the material's vertex entries, the shadow
+    /// pass and `[displacement]`'s copy of the quads. A pack with none of them draws solid
+    /// terrain through the engine's own pipelines, which unpack compact records.
+    pub fn reads_terrain_vertices(&self) -> bool {
+        self.material.is_some() || self.shadow.is_some() || self.displacement.is_some()
+    }
 }
 
 #[cfg(test)]
@@ -379,7 +387,6 @@ file = \"material.wgsl\"
     /// a validation panic (#10095).
     #[test]
     fn a_pack_the_backend_refuses_is_an_error_not_a_panic() {
-        use horizon_shader_api::{MANIFEST, Pack, check};
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
@@ -394,32 +401,118 @@ file = \"material.wgsl\"
         else {
             return;
         };
-        // The terrain's group 0: its uniform and the 10 sampled textures (_terrain.wgsl_'s
-        // 8 sprite arrays, the lightmap and the emission thresholds).
+        let (globals, empty) = terrain_layouts(&device);
+        let report = pack("0.1", false);
+        let built = NativePack::new(
+            &device,
+            &queue,
+            &terrain_shape(&globals, &empty),
+            report,
+            &[],
+            Default::default(),
+        );
+        assert!(built.is_err(), "the pack should be refused");
+    }
+
+    /// A 0.2 pack whose stages read no terrain vertices (a sky, and the post every 0.2 pack
+    /// runs) leaves the solid quads in the compact layout; one with a material stage, whose
+    /// vertex entries take `TerrainVertex`es, does not (#16127).
+    #[test]
+    fn only_a_pack_with_a_material_shadow_or_displacement_reads_terrain_vertices() {
+        let instance = crate::gfx::test_gpu::instance();
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let Ok((device, queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                required_limits: adapter.limits(),
+                ..Default::default()
+            }))
+        else {
+            return;
+        };
+        let (globals, empty) = terrain_layouts(&device);
+        let reads = |material: bool| {
+            let report = pack("0.2", material);
+            let shape = terrain_shape(&globals, &empty);
+            let (pack, _) =
+                NativePack::new(&device, &queue, &shape, report, &[], Default::default()).unwrap();
+            assert!(pack.post.is_some() && pack.sky.is_some());
+            assert_eq!(pack.material.is_some(), material);
+            pack.reads_terrain_vertices()
+        };
+        assert!(!reads(false));
+        assert!(reads(true));
+    }
+
+    /// A pack of API `api` with a sky stage, and a material stage if `material`.
+    fn pack(api: &str, material: bool) -> horizon_shader_api::Report {
+        use horizon_shader_api::{MANIFEST, Pack, check};
+        let manifest = format!(
+            "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"{api}\"\n\
+             [sky]\nfile = \"sky.wgsl\"\n{}",
+            if material {
+                "[material]\nfile = \"material.wgsl\"\n"
+            } else {
+                ""
+            }
+        );
+        let mut files = vec![
+            (MANIFEST, manifest.as_str()),
+            (
+                "sky.wgsl",
+                "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n",
+            ),
+        ];
+        if material {
+            files.push((
+                "material.wgsl",
+                "fn material(input: MaterialInput) -> Surface { return Surface(input.albedo); }\n",
+            ));
+        }
+        let files = files
+            .into_iter()
+            .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+            .collect();
+        check(&Pack::from_files(files).unwrap()).unwrap()
+    }
+
+    /// The terrain's group 0 as the renderer makes it (`Renderer::new`), and an empty layout
+    /// for the other groups.
+    fn terrain_layouts(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
+        // Its uniform, the 10 sampled textures (_terrain.wgsl_'s 8 sprite arrays, the
+        // lightmap and the emission thresholds) and two samplers.
         let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty,
             count: None,
         };
-        let mut entries = vec![entry(
-            0,
-            wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-        )];
-        entries.extend((1..=10).map(|binding| {
-            entry(
-                binding,
-                wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-            )
-        }));
+        let texture = |view_dimension| wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension,
+            multisampled: false,
+        };
+        let sampler = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
+        let uniform = wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        };
+        let array = texture(wgpu::TextureViewDimension::D2Array);
+        let plain = texture(wgpu::TextureViewDimension::D2);
+        let entries = [
+            (0, uniform),
+            (1, array),
+            (2, sampler),
+            (3, plain),
+            (4, sampler),
+        ]
+        .into_iter()
+        .chain((5..=11).map(|binding| (binding, array)))
+        .chain([(12, plain)])
+        .map(|(binding, ty)| entry(binding, ty))
+        .collect::<Vec<_>>();
         let globals = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &entries,
@@ -428,32 +521,25 @@ file = \"material.wgsl\"
             label: None,
             entries: &[],
         });
-        let terrain = TerrainShape {
-            globals: &globals,
+        (globals, empty)
+    }
+
+    fn terrain_shape<'a>(
+        globals: &'a wgpu::BindGroupLayout,
+        empty: &'a wgpu::BindGroupLayout,
+    ) -> TerrainShape<'a> {
+        TerrainShape {
+            globals,
             flat: None,
             sprites: [1.0, 2048.0],
             format: wgpu::TextureFormat::Rgba8Unorm,
             linear: false,
             sprite_tags: &[],
             sprite_materials: &[],
-            entities: &empty,
-            weather_groups: [&empty, &empty],
+            entities: empty,
+            weather_groups: [empty, empty],
             pbr: None,
-        };
-        let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.1\"\n\
-            [sky]\nfile = \"sky.wgsl\"\n";
-        let files = [
-            (MANIFEST, manifest),
-            (
-                "sky.wgsl",
-                "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n",
-            ),
-        ]
-        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
-        .into();
-        let report = check(&Pack::from_files(files).unwrap()).unwrap();
-        let built = NativePack::new(&device, &queue, &terrain, report, &[], Default::default());
-        assert!(built.is_err(), "the pack should be refused");
+        }
     }
 
     fn option(id: &str, kind: OptionKind) -> PackOption {
