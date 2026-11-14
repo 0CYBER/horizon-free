@@ -25,12 +25,7 @@ impl Game<'_> {
         &mut self,
         stack: &ItemStack,
         on_block: bool,
-        claimed: bool,
     ) -> Option<bool> {
-        if claimed {
-            self.swing_arm();
-            return Some(true);
-        }
         if on_block {
             return None;
         }

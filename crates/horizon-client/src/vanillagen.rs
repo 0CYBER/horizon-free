@@ -442,6 +442,10 @@ impl VanillaTerrain {
     pub fn set_spawn_conditions(&self, difficulty: u8, day_time: i64) {
         self.structure_mobs.set_conditions(difficulty, day_time);
     }
+    /// Publish this world's builtin generation to future structure finalizations.
+    pub fn set_mob_maps(&self, snapshot: &Arc<crate::neoforge_mob_maps::NeoForgeMobMaps>) {
+        self.structure_mobs.set_mob_maps(snapshot);
+    }
     /// Reads what generated mobs are finalized with on a thread of its own
     /// (`StructureMobFinalizer::load_behind`).
     pub fn load_structure_mobs_behind(&self) {

@@ -545,8 +545,8 @@ pub fn from_nbt(tag: &Tag) -> Json {
         Tag::Short(v) => Json::Num(v.to_string()),
         Tag::Int(v) => Json::Num(v.to_string()),
         Tag::Long(v) => Json::Num(v.to_string()),
-        Tag::Float(v) => Json::Num(java_float(f32::from_bits(*v))),
-        Tag::Double(v) => Json::Num(java_double(f64::from_bits(*v))),
+        Tag::Float(v) => Json::Num(float_to_string(f32::from_bits(*v))),
+        Tag::Double(v) => Json::Num(double_to_string(f64::from_bits(*v))),
         Tag::ByteArray(v) => Json::Arr(
             v.iter()
                 .map(|b| Json::Num((*b as i8).to_string()))
@@ -560,7 +560,7 @@ pub fn from_nbt(tag: &Tag) -> Json {
     }
 }
 
-use horizon_core::java_number::{java_double, java_float};
+use horizon_core::java_number::{double_to_string, float_to_string};
 
 /// A string value as a JSON text component (`{"text": s}`), stable string.
 pub fn text_component_json(text: &[u16]) -> Vec<u16> {
@@ -643,19 +643,19 @@ mod tests {
     }
     #[test]
     fn java_floating_point_strings() {
-        assert_eq!(java_float(f32::from_bits(1)), "1.4E-45");
-        assert_eq!(java_float(f32::from_bits(0x8000_0007)), "-9.8E-45");
-        assert_eq!(java_double(f64::from_bits(1)), "4.9E-324");
+        assert_eq!(float_to_string(f32::from_bits(1)), "1.4E-45");
+        assert_eq!(float_to_string(f32::from_bits(0x8000_0007)), "-9.8E-45");
+        assert_eq!(double_to_string(f64::from_bits(1)), "4.9E-324");
         assert_eq!(
-            java_double(f64::from_bits(0x8000_0000_0000_0002)),
+            double_to_string(f64::from_bits(0x8000_0000_0000_0002)),
             "-9.9E-324"
         );
-        assert_eq!(java_double(1.0), "1.0");
-        assert_eq!(java_double(0.001), "0.001");
-        assert_eq!(java_double(1e7), "1.0E7");
-        assert_eq!(java_double(123456.789), "123456.789");
-        assert_eq!(java_double(1e-4), "1.0E-4");
-        assert_eq!(java_float(0.1), "0.1");
-        assert_eq!(java_float(1.5e10), "1.5E10");
+        assert_eq!(double_to_string(1.0), "1.0");
+        assert_eq!(double_to_string(0.001), "0.001");
+        assert_eq!(double_to_string(1e7), "1.0E7");
+        assert_eq!(double_to_string(123456.789), "123456.789");
+        assert_eq!(double_to_string(1e-4), "1.0E-4");
+        assert_eq!(float_to_string(0.1), "0.1");
+        assert_eq!(float_to_string(1.5e10), "1.5E10");
     }
 }

@@ -530,7 +530,7 @@ pub fn number_string(v: f32) -> String {
     if v == (v as i32) as f32 {
         (v as i32).to_string()
     } else {
-        crate::snbt::java_float(v)
+        horizon_core::java_number::float_to_string(v)
     }
 }
 

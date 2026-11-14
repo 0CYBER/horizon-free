@@ -5,18 +5,19 @@ pub trait Hooks {
     /// A player right-clicks the entity `entity` (`Entity.getId`) of type
     /// `kind` (`minecraft:cow`) with `hand` (`Hand::Main` or `Hand::Off`), holding `stack` (none in an
     /// empty hand): where `Player.interactOn` starts, before the entity's own
-    /// `interact` and the item's `interactLivingEntity`. Set `claimed` to take
-    /// the click: the hand swings and neither runs. Asked once per hand, as
-    /// vanilla tries the main hand then the off hand. Server-side, for every
-    /// player of the world (the helpers read the acting one). Diverges from upstream: renamed from
-    /// `interact_entity`, to NeoForge's `PlayerInteractEvent.EntityInteract`.
-    /// `hand` corresponds to NeoForge's `PlayerInteractEvent.EntityInteract#getHand`.
+    /// `interact` and the item's `interactLivingEntity`. Both logical sides
+    /// answer independently, once per hand, main hand before off hand.
+    /// A consuming client result ends the loop; only Success swings there.
+    /// SuccessServer and Consume consume without a client swing. Fail,
+    /// Pass and TryWithEmptyHand fall through on this entity path.
+    /// A server-only answer leaves the client's off-hand prediction unchanged.
+    /// ClientHost permits reads and local effects, not authoritative writes.
     #[hook(
-        side = "server",
-        contract = "cancel",
-        out = "claimed",
-        neoforge = "PlayerInteractEvent.EntityInteract",
-        paper = "PlayerInteractEntityEvent"
+        side = "both",
+        version = 2,
+        contract = "replace",
+        out = "result",
+        neoforge = "PlayerInteractEvent.EntityInteract"
     )]
     fn entity_interact();
 }

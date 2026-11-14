@@ -69,6 +69,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust.outputs.version }}
+          # wasm-std uses -Zbuild-std even when this pinned toolchain is already installed.
+          components: rust-src, rustfmt
       - uses: actions/setup-python@v6
         if: runner.environment == 'github-hosted'
         with:
@@ -203,7 +205,7 @@ jobs:
           # keeps its preparations outside the checkout.
           clean: true
       - name: Workflow-owned validation tools
-        if: (runner.os == 'Linux' && !matrix.musl) || runner.environment == 'self-hosted'
+        # Every matrix leg reads the Rust pin below, not only Linux and self-hosted legs.
         uses: actions/checkout@v7
         with:
           ref: ${{ github.workflow_sha }}
@@ -223,6 +225,7 @@ jobs:
         with:
           toolchain: ${{ steps.rust.outputs.version }}
           targets: ${{ matrix.target }}
+          components: rustfmt
       - uses: actions/setup-python@v6
         if: runner.environment == 'github-hosted'
         with:

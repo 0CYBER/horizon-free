@@ -65,7 +65,7 @@ pub(super) fn validate(rule: &IngredientRule, items: &Items) -> Result<(), Strin
                 .map_err(|error| format!("component {id}: {error}"))?;
         } else {
             // component_types declares persistent, arbitrary NBT values.
-            horizon_protocol::item::custom::validate(value)
+            horizon_core::nbt::validate_component_value(value)
                 .map_err(|error| format!("component {id}: {error}"))?;
         }
     }

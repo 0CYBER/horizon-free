@@ -175,6 +175,9 @@ pub(super) struct CombatTracker {
     /// `WitherSkull.getBlockExplosionResistance`: a dangerous skull's blast
     /// caps every destroyable block's resistance at this value.
     pub(super) blast_resistance_cap: Option<f32>,
+    /// A mod blast's own damage type, calculator and effects
+    /// (`level_explode`'s settings), while it goes off.
+    pub(super) blast_settings: super::explosion_settings::BlastSettings,
     /// Charged creepers whose blast just went off and that have not dropped
     /// a head yet (`Creeper.droppedSkulls`): they are gone from the mob list,
     /// but the mobs they killed still ask for their loot.

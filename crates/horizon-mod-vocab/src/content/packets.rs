@@ -70,3 +70,27 @@ pub enum SendPacketError {
         limit: u64,
     },
 }
+
+/// Why a client mod's `disconnect` was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum DisconnectError {
+    /// No server or world is joined: there is nothing to leave.
+    Unavailable,
+    /// The reason exceeds the text boundary's size or nesting limits.
+    Text(crate::TextFormError),
+}
+
+impl From<crate::TextFormError> for DisconnectError {
+    fn from(error: crate::TextFormError) -> Self {
+        Self::Text(error)
+    }
+}
+
+impl crate::NoBackend for DisconnectError {
+    /// No game: nothing is joined.
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}

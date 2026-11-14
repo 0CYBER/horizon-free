@@ -79,6 +79,33 @@ impl Game<'_> {
             _ => None,
         }
     }
+    /// All player place mutations use the command/host slot writer (and its journal).
+    fn write_player_place(&mut self, place: &ItemPlace, stack: Option<ItemStack>) {
+        use super::commands::items::Slot;
+        let slot = match place {
+            ItemPlace::PlayerSlot {
+                slot: slot @ 0..=35,
+                ..
+            } => Slot::Inv(*slot as usize),
+            ItemPlace::PlayerSlot {
+                slot: slot @ 100..=103,
+                ..
+            } => Slot::Armor(103 - *slot as usize),
+            ItemPlace::PlayerSlot { slot: -106, .. } => Slot::Offhand,
+            ItemPlace::PlayerHand {
+                hand: Hand::Main, ..
+            } => Slot::Inv(self.selected),
+            ItemPlace::PlayerHand {
+                hand: Hand::Off, ..
+            } => Slot::Offhand,
+            ItemPlace::PlayerCursor { .. } => {
+                self.carried = stack;
+                return;
+            }
+            _ => return,
+        };
+        self.slot_set(&slot, stack);
+    }
     /// How many slots the inventory of entity `entity` in the level in place has, as
     /// `entity_slots` reaches them: none for an entity without one, and on a client.
     pub(super) fn entity_container_size(&self, entity: u32) -> Option<usize> {
@@ -266,9 +293,9 @@ impl Game<'_> {
                 }
                 return;
             }
-            if let Some(slot) = g.player_place(place) {
-                fill(slot, &mut rest);
-            }
+            let mut written = g.player_place(place).cloned().flatten();
+            fill(&mut written, &mut rest);
+            g.write_player_place(place, written);
             if let Some(rest) = (rest.count > 0)
                 .then(|| g.add_stack_to_inventory(rest))
                 .flatten()
@@ -385,10 +412,10 @@ impl Game<'_> {
                 return;
             }
             g.journal_player(player);
-            if let Some(slot) = g.player_place(place) {
-                let kept = slot.as_ref().map(|held| left(held, took));
-                *slot = kept.filter(|kept| kept.count > 0);
-            }
+            let kept = g
+                .player_place(place)
+                .and_then(|slot| slot.as_ref().map(|held| left(held, took)));
+            g.write_player_place(place, kept.filter(|kept| kept.count > 0));
         });
         took
     }

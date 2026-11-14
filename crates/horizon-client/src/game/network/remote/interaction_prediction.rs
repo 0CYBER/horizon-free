@@ -81,6 +81,9 @@ impl Game<'_> {
                 location: hit.location,
                 secondary: sneaking,
             }));
+            if let Some(done) = self.entity_interaction(hand, hit.id) {
+                return done;
+            }
             if passes {
                 return false;
             }
@@ -118,6 +121,9 @@ impl Game<'_> {
                 location,
                 secondary: sneaking,
             }));
+            if let Some(done) = self.entity_interaction(hand, id) {
+                return done;
+            }
             // Player.interactOn: another player passes, and so does a mob
             // the held item means nothing to: the item is used instead.
             let player = self
@@ -131,6 +137,13 @@ impl Game<'_> {
                 if self.remote_mob_swings(i, hand) {
                     self.with_hand(hand, Game::swing_arm);
                 }
+                return true;
+            }
+            if !player
+                && self.with_hand(hand, |g| {
+                    g.item_interact_mob(Some(crate::game::InteractTarget { id, location }))
+                })
+            {
                 return true;
             }
         }
@@ -286,6 +299,10 @@ impl Game<'_> {
             };
             let item_answer = if !spectator && !result.consumes_action() && item_used {
                 self.use_item_on_block(&hit, hand, held.as_ref(), mod_api::UsePhase::ItemAfterBlock)
+                    .or_else(|| {
+                        held.as_ref()
+                            .and_then(|stack| self.item_on_interaction(&hit, hand, stack))
+                    })
             } else {
                 None
             };

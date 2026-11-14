@@ -224,9 +224,8 @@ pub(super) struct Creatures {
     /// (game/network/lan_pvp.rs).
     pub sweeps: Vec<super::lan_pvp::Sweep>,
     /// Explosion packets from a guest's turn, waiting for it to end
-    /// (centre, small, radius, blocks hit, the players it pushed;
-    /// game/network/lan_particles.rs).
-    pub lan_explosions: Vec<([f64; 3], bool, f32, usize, Vec<(u32, [f64; 3])>)>,
+    /// (game/network/lan_particles.rs).
+    pub lan_explosions: Vec<super::lan_particles::LanExplosion>,
     /// The snapshot's buffer between ticks, empty: ~400 bytes a mob, so
     /// thousands of mobs would allocate and free megabytes every tick.
     seen_buf: Vec<Seen>,
@@ -8553,60 +8552,7 @@ fn mob_effect_instance(
     Some(instance)
 }
 
-impl horizon_client::mobs::MobHooks for Game<'_> {
-    fn living_change_target(
-        &self,
-        mob: &mut Mob,
-        world: &MobWorld<'_>,
-        is_brain: bool,
-        target: Option<Who>,
-    ) -> horizon_client::mobs::TargetChange {
-        self.native_mob_change_target_in_tick(mob, world, is_brain, target)
-    }
-
-    fn enderman_anger_suppressed(&self, enderman: u32, player: &PlayerView) -> bool {
-        if !mod_api::__private::listened(mod_api::HookId::EndermanAnger) {
-            return false;
-        }
-        let Some(epoch) = self.native_lifecycle.epoch() else {
-            return false;
-        };
-        let uuid = horizon_client::lan::playerdata::ints_uuid(player.uuid);
-        let Some(player) = self.player(uuid) else {
-            return false;
-        };
-        let mut cancel = false;
-        self.native_enderman_anger(
-            mod_api::EntityRef::new(epoch, enderman),
-            player,
-            &mut cancel,
-        );
-        cancel
-    }
-    fn can_grief(&self, mob: u32, rule: bool) -> bool {
-        self.entity_grief(mob, rule)
-    }
-    fn grief_hooked(&self) -> bool {
-        Game::grief_hooked(self)
-    }
-    fn can_entity_destroy(&self, mob: u32, pos: [i32; 3], vanilla: bool) -> bool {
-        self.entity_may_destroy(mob, pos, vanilla)
-    }
-    fn living_visibility(&self, player: &PlayerView, looking: u32, visibility: f64) -> f64 {
-        let uuid = horizon_client::lan::playerdata::ints_uuid(player.uuid);
-        match self.player(uuid) {
-            Some(player) => self.scaled_visibility(|_| player.entity(), looking, visibility),
-            None => visibility,
-        }
-    }
-    fn living_visibility_mob(&self, target: u32, looking: u32, visibility: f64) -> f64 {
-        self.scaled_visibility(
-            |epoch| mod_api::EntityRef::new(epoch, target),
-            looking,
-            visibility,
-        )
-    }
-}
+include!("mob_query_hooks.rs");
 
 impl Game<'_> {
     /// `EventHooks.canEntityGrief(level, entity)`: the `mob_griefing` rule,
@@ -10812,6 +10758,7 @@ mod pearl_tests {
         }
         let lid_openers = std::collections::HashMap::new();
         let w = MobWorld {
+            mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
             goal_host: None,
             live_mobs: None,
             teams: Default::default(),

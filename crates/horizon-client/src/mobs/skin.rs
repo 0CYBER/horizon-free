@@ -882,7 +882,7 @@ mod tests {
             pois: Default::default(),
             species_placements: Default::default(),
             mod_spawns: Default::default(),
-            pathfindable_overrides: Default::default(),
+            resolved: Default::default(),
         };
         // Every texture its own rect, so a swapped texture shows.
         let atlas = |name: &str| {

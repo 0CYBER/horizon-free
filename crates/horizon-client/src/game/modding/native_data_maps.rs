@@ -160,9 +160,14 @@ impl MapRegistries for WorldRegistries<'_> {
 
 /// The merged values of every registered type: registry, then type id, to the
 /// value of each entry that has one.
+pub(crate) enum MapValues {
+    Json(BTreeMap<String, Value>),
+    Decoded(BTreeMap<String, Tag>),
+}
 #[derive(Default)]
 pub(crate) struct DataMaps {
-    maps: BTreeMap<String, HashMap<String, BTreeMap<String, Value>>>,
+    maps: BTreeMap<String, HashMap<String, MapValues>>,
+    pub(super) mob_maps: std::sync::Arc<horizon_client::neoforge_mob_maps::NeoForgeMobMaps>,
 }
 
 /// `minecraft:` for an id written without a namespace.
@@ -280,7 +285,7 @@ impl DataMaps {
         overlay: &horizon_world::loot::PackOverlay<'_>,
         registries: &dyn MapRegistries,
     ) -> Self {
-        let mut maps: BTreeMap<String, HashMap<String, BTreeMap<String, Value>>> = BTreeMap::new();
+        let mut maps: BTreeMap<String, HashMap<String, MapValues>> = BTreeMap::new();
         for ty in types {
             if !registries.known(&ty.registry) {
                 log::warn!(
@@ -344,14 +349,36 @@ impl DataMaps {
                     }
                 }
             }
-            registered.insert(ty.id.clone(), map);
+            registered.insert(ty.id.clone(), MapValues::Json(map));
         }
-        Self { maps }
+        Self {
+            maps,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn with_builtins(mut self, builtin: super::neoforge_mob_maps::Loaded) -> Self {
+        for (definition, values) in builtin.values {
+            if self
+                .maps
+                .entry(definition.registry.to_owned())
+                .or_default()
+                .insert(definition.id.to_owned(), values)
+                .is_some()
+            {
+                log::warn!(
+                    "Horizon: builtin data map {} is reserved: engine definition kept",
+                    definition.id
+                );
+            }
+        }
+        self.mob_maps = builtin.snapshot;
+        self
     }
 
     /// Every entry map `type_id` of `registry` gives a value, with its merged
     /// JSON; none where the map wasn't loaded.
-    pub(crate) fn values(
+    pub(crate) fn json_values(
         &self,
         registry: &str,
         type_id: &str,
@@ -359,6 +386,10 @@ impl DataMaps {
         self.maps
             .get(registry)
             .and_then(|maps| maps.get(type_id))
+            .and_then(|values| match values {
+                MapValues::Json(values) => Some(values),
+                MapValues::Decoded(_) => None,
+            })
             .into_iter()
             .flatten()
             .map(|(entry, value)| (entry.as_str(), value))
@@ -370,11 +401,7 @@ impl DataMaps {
     }
 
     /// Map `type_id` of `registry`, refused where no mod registered it there.
-    fn map(
-        &self,
-        registry: &str,
-        type_id: &str,
-    ) -> Result<&BTreeMap<String, Value>, mod_api::DataMapError> {
+    fn map(&self, registry: &str, type_id: &str) -> Result<&MapValues, mod_api::DataMapError> {
         self.maps
             .get(registry)
             .and_then(|maps| maps.get(type_id))
@@ -389,10 +416,10 @@ impl DataMaps {
         type_id: &str,
         entry: &str,
     ) -> Result<Option<Tag>, mod_api::DataMapError> {
-        self.map(registry, type_id)?
-            .get(entry)
-            .map(to_tag)
-            .transpose()
+        match self.map(registry, type_id)? {
+            MapValues::Json(values) => values.get(entry).map(to_tag).transpose(),
+            MapValues::Decoded(values) => Ok(values.get(entry).cloned()),
+        }
     }
 
     /// Every entry map `type_id` of `registry` gives a value, in id order.
@@ -401,10 +428,16 @@ impl DataMaps {
         registry: &str,
         type_id: &str,
     ) -> Result<Vec<(String, Tag)>, mod_api::DataMapError> {
-        self.map(registry, type_id)?
-            .iter()
-            .map(|(entry, value)| Ok((entry.clone(), to_tag(value)?)))
-            .collect()
+        match self.map(registry, type_id)? {
+            MapValues::Json(values) => values
+                .iter()
+                .map(|(entry, value)| Ok((entry.clone(), to_tag(value)?)))
+                .collect(),
+            MapValues::Decoded(values) => Ok(values
+                .iter()
+                .map(|(entry, value)| (entry.clone(), value.clone()))
+                .collect()),
+        }
     }
 }
 
@@ -472,9 +505,10 @@ mod tests {
                     "minecraft:item".to_owned(),
                     HashMap::from([(
                         "test:map".to_owned(),
-                        BTreeMap::from([("minecraft:stone".to_owned(), value)]),
+                        MapValues::Json(BTreeMap::from([("minecraft:stone".to_owned(), value)])),
                     )]),
                 )]),
+                ..DataMaps::default()
             };
             assert_eq!(
                 maps.value("minecraft:item", "test:map", "minecraft:stone"),
@@ -485,6 +519,29 @@ mod tests {
                 Ok(None)
             );
         }
+    }
+
+    #[test]
+    fn builtin_store_is_registered_without_mod_types() {
+        let builtin = super::super::neoforge_mob_maps::load(
+            &horizon_world::loot::PackOverlay::NONE,
+            |_| None,
+            |_, _| true,
+        )
+        .unwrap();
+        let maps = DataMaps::default().with_builtins(builtin);
+        assert_eq!(maps.registries().len(), 5);
+        assert_eq!(
+            maps.value(
+                "minecraft:item",
+                "neoforge:villager_compostables",
+                "minecraft:wheat_seeds"
+            ),
+            Ok(Some(Tag::compound([(
+                "can_villager_compost",
+                Tag::Byte(1)
+            )])))
+        );
     }
 
     /// Registries for tests: items, blocks and entity types; entity type ids
@@ -564,7 +621,10 @@ mod tests {
     }
 
     fn get<'a>(maps: &'a DataMaps, entry: &str) -> Option<&'a Value> {
-        maps.maps["minecraft:item"]["mymod:fuel"].get(entry)
+        let MapValues::Json(values) = &maps.maps["minecraft:item"]["mymod:fuel"] else {
+            panic!("JSON map");
+        };
+        values.get(entry)
     }
 
     #[test]
@@ -826,7 +886,7 @@ mod tests {
         assert_eq!(maps.maps.len(), 1);
         let blocks = &maps.maps["minecraft:block"];
         assert_eq!(blocks.len(), 1);
-        assert!(blocks["mymod:a"].is_empty());
+        assert!(matches!(&blocks["mymod:a"], MapValues::Json(values) if values.is_empty()));
     }
 
     #[test]
@@ -871,7 +931,9 @@ mod tests {
             },
             &registries,
         );
-        let map = &maps.maps["minecraft:block"]["mymod:hardness"];
+        let MapValues::Json(map) = &maps.maps["minecraft:block"]["mymod:hardness"] else {
+            panic!("JSON map");
+        };
         assert_eq!(map.get("minecraft:oak_log"), Some(&json!(2)));
     }
 }

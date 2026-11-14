@@ -1,0 +1,3 @@
+ids = ["hook:on_block_state_change", "type:OnBlockStateChangeEvent"]
+why = "Version 2 exposes applied local predictions immediately and distinguishes them from server writes and reconciliation through the predicted flag. Confirmed predictions do not notify twice."
+migrate = "Read event.predicted to distinguish applied local predictions from server writes and settled corrections; destructure with .. for added fields and add predicted at construction sites. Do not expect another notice for a confirmed prediction. Equal-state writes and unapplied guesses remain unheard."

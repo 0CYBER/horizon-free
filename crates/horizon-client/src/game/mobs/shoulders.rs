@@ -132,18 +132,23 @@ impl Game<'_> {
             .mobs
             .iter()
             .filter(|m| m.alive() && !m.removed && m.bounds().intersects(area))
-            .map(|m| (m.species(), m.silent))
+            .map(|m| (m.kind.id.as_str(), m.silent))
             .collect();
         let peaceful = self.ui.difficulty == 0;
+        let maps = self.world_tables.as_ref().map_or_else(
+            || horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla().as_ref(),
+            |tables| tables.data_maps.mob_maps.as_ref(),
+        );
         if let Some((sound, volume, pitch)) = horizon_client::mobs::parrot::shoulder_sound(
+            maps,
             &mut self.world.random,
             alive,
             false,
             peaceful,
             &nearby,
         ) {
-            self.audio
-                .play(&format!("minecraft:{sound}"), Some(at), volume, pitch);
+            let sound = horizon_client::mobs::entity_sounds::full_id(sound);
+            self.audio.play(&sound, Some(at), volume, pitch);
         }
     }
 

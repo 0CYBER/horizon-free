@@ -624,6 +624,9 @@ impl Game<'_> {
                 {
                     return;
                 }
+                // The first exit from the End keeps only `PlayerPersisted` of a mod's saved
+                // compound, as a death respawn does; later exits keep all of it.
+                self.keep_only_player_persisted(conn);
                 let Some(host) = self.lan.as_mut() else {
                     return;
                 };
@@ -2140,7 +2143,7 @@ mod credits_respawn_tests {
     /// respawned player is not loaded (its actions wait, `isInvulnerableTo`
     /// spares it) until the client says so or 60 ticks pass.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_credits_respawn_waits_for_the_client_to_load() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2228,6 +2231,16 @@ mod credits_respawn_tests {
             2,
         );
         guest.dimension = "minecraft:overworld".into();
+        guest.saved = Some(horizon_core::nbt::Tag::compound([(
+            "NeoForgeData",
+            horizon_core::nbt::Tag::compound([
+                ("outside", horizon_core::nbt::Tag::Int(1)),
+                (
+                    "PlayerPersisted",
+                    horizon_core::nbt::Tag::compound([("inside", horizon_core::nbt::Tag::Int(2))]),
+                ),
+            ]),
+        )]));
         guest.placed = true;
         guest.loaded = true;
         guest.loading = false;
@@ -2247,6 +2260,14 @@ mod credits_respawn_tests {
         assert_eq!(guest.load_timeout, 60);
         assert!(guest.loading);
         assert!(!guest.client_loaded());
+        assert_eq!(
+            guest.saved.as_ref().and_then(|tag| tag.get("NeoForgeData")),
+            Some(&horizon_core::nbt::Tag::compound([(
+                "PlayerPersisted",
+                horizon_core::nbt::Tag::compound([("inside", horizon_core::nbt::Tag::Int(2))]),
+            )])),
+            "the real first-End-exit path drops only data outside PlayerPersisted"
+        );
         drop(host);
         drop(game);
         std::fs::remove_dir_all(scratch).unwrap();
@@ -2256,3 +2277,7 @@ mod credits_respawn_tests {
 #[cfg(test)]
 #[path = "server_travel/hold_tests.rs"]
 mod hold_tests;
+
+#[cfg(test)]
+#[path = "server_travel/changed_dimension_tests.rs"]
+mod changed_dimension_tests;

@@ -81,7 +81,7 @@ pub(super) const IMPORTS: &[&str] = &[
 
 /// Imported traits a call never hands over, each reached through another's method instead.
 pub(super) const REACHED: &[(&str, &str, &str)] = &[
-    ("ConfigFiles", "host", "Ok(h.config_files())"),
+    ("ConfigFiles", "", ""),
     ("Commands", "server_host_mut", "Ok(h.commands())"),
     ("Levels", "server_host", "Ok(h.levels())"),
     ("Messages", "server_host", "Ok(h.messages())"),
@@ -121,6 +121,13 @@ pub(super) const REACHED: &[(&str, &str, &str)] = &[
         "client_host_mut",
         "crate::client_backend_mut_of(h).ok_or_else(|| missing(\"client game backend\"))",
     ),
+];
+
+/// Bounded file-capability selectors, shared by the guest proxy and host dispatch.
+pub(super) const FILE_ROOTS: &[(u8, &str, &str)] = &[
+    (0, "Host", "config_files"),
+    (1, "Host", "data_files"),
+    (2, "ServerHost", "world_data_files"),
 ];
 
 /// Traits a mod implements: their methods are the world's exports. The handler traits the
@@ -862,6 +869,7 @@ fn layout(surface: &Surface<'_>) -> u64 {
         "group state: 32 words in the std member's horizon_group_state; 0 handler table, 1 cache budget, 2 eviction guard, 3.. eviction callbacks; members allocate through an evicting global allocator",
     );
     feed("static replies: bounded acknowledged ids or uncached text");
+    feed("ConfigFiles imports: u8 root selector, 0 config, 1 data, 2 world; other values refused");
     feed("Hooks::subscribed: Vec<(hook name, i32 priority, bool receive_cancelled)>");
     for method in &surface.methods {
         feed(&format!("{method:?}"));

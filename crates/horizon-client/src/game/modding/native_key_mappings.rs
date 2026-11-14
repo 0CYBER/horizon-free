@@ -113,7 +113,7 @@ impl Game<'_> {
             .input(input, action, mouse, screen_open, held);
     }
     /// A screen or overlay is open: the mappings hear no presses and are released.
-    fn mod_mappings_screen_open(&self) -> bool {
+    pub(in crate::game) fn mod_mappings_screen_open(&self) -> bool {
         !gameplay_has_keyboard(
             self.screen,
             self.title.is_some(),

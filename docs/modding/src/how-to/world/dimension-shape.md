@@ -148,6 +148,14 @@ own rate and keeps its own total, saved in `world_clocks.dat`, so a level with a
 its sky, its spawning and its beds follow that clock, and `/time` in the level sets it.
 `level.clock_time(host)` reads the level's own clock in ticks (`None` on a client, for a stale handle or for a level without a default clock);
 `level.day_time(host)` reads the Overworld's clock, whichever level you ask.
+`level.clock_marker_time(host, &marker)` gives the next time the level's own clock reaches a time marker, as
+`/time set <marker>` moves it. Only the Overworld's clock defines markers today, so any other clock answers None.
+
+When enough players have slept, `sleep_finished_time` hands its listeners a `ClockAdjustment` for the level's own
+clock: `Absolute(time)`, `Relative(ticks)` from the time now, or `Marker(id)`. It starts as vanilla's
+`Marker(minecraft:wake_up_from_sleep)`, a later mod reads what an earlier one set, and the game resolves it once
+after all of them. A time before now or past `i64::MAX`, or a marker the clock does not define, is refused and the
+clock moves to the morning instead; `new_time` is that morning, read only.
 
 ## Which level a hook is in
 

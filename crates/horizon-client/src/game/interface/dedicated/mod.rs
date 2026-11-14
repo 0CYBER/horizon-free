@@ -156,23 +156,6 @@ impl Watchdog {
     }
 }
 
-/// Double.toString for the magnitudes positions have (no exponent form
-/// between 1e-3 and 1e7).
-pub(super) fn java_double(v: f64) -> String {
-    if v == 0.0 || (1e-3..1e7).contains(&v.abs()) {
-        format!("{v:?}")
-    } else {
-        let s = format!("{v:E}");
-        let (m, e) = s.split_once('E').unwrap_or((&s, "0"));
-        let m = if m.contains('.') {
-            m.to_owned()
-        } else {
-            format!("{m}.0")
-        };
-        format!("{m}E{e}")
-    }
-}
-
 /// What the startup read before the game's resources were loaded.
 struct Setup {
     props: ServerProperties,

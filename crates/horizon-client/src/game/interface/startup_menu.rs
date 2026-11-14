@@ -1366,6 +1366,8 @@ impl Loading {
                 self.progress.fraction(),
                 self.settings.file.bool("darkMojangStudiosBackground"),
             );
+            let (bars, lines) = super::startup_progress::shown();
+            horizon_client::level_loading::draw_mod_progress(batch, &gui.atlas, &bars, &lines);
         } else if let Some((win, frame)) = &mut self.menu.win {
             let now = Instant::now();
             // 20 ticks a second: the startup menu runs no tick rate.

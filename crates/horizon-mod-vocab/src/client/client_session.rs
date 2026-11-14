@@ -22,6 +22,31 @@ pub struct ClientServer {
     pub save_folder: Option<String>,
 }
 
+/// The local player's item use as the client sees it (`LivingEntity.isUsingItem`,
+/// `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct ItemUse {
+    /// The hand holding the item in use.
+    pub hand: crate::Hand,
+    /// Ticks the item has been used so far.
+    pub ticks_used: i32,
+    /// Ticks left until the use completes; with `ticks_used`, the item's use duration.
+    pub ticks_remaining: i32,
+}
+
+impl ItemUse {
+    /// An item use of `hand`, `ticks_used` ticks old with `ticks_remaining` left.
+    pub fn new(hand: crate::Hand, ticks_used: i32, ticks_remaining: i32) -> Self {
+        Self {
+            hand,
+            ticks_used,
+            ticks_remaining,
+        }
+    }
+}
+
 /// Existing local frame counters, sampled only when requested by a mod.
 #[derive(Clone, Copy, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it

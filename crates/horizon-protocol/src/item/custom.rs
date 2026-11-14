@@ -57,34 +57,6 @@ pub fn install(first: i32, mut names: Vec<String>) -> Result<(), InstallError> {
         .map_err(|_| InstallError::AlreadyInstalled)
 }
 
-/// Validate an opaque value against the same limits used by the network reader.
-pub fn validate(value: &horizon_core::nbt::Tag) -> crate::Result<()> {
-    if matches!(value, horizon_core::nbt::Tag::End) {
-        return Err(crate::Error::new("a component value cannot be NBT End"));
-    }
-    crate::buf::check_network_nbt(value)?;
-    // Disk NBT canonicalizes NaNs, and its reader normalizes negative zero.
-    // Reject values that would change when saved and reloaded.
-    let limits = horizon_core::nbt::Limits {
-        max_bytes: crate::buf::NBT_QUOTA + 2,
-        ..Default::default()
-    };
-    let named = horizon_core::nbt::NamedTag {
-        name: "".into(),
-        tag: value.clone(),
-    };
-    let saved = horizon_core::nbt::write_named(&named, limits)
-        .map_err(|error| crate::Error::new(error.to_string()))?;
-    let (loaded, _) = horizon_core::nbt::read_named(&saved, limits)
-        .map_err(|error| crate::Error::new(error.to_string()))?;
-    if loaded.tag != *value {
-        return Err(crate::Error::new(
-            "component value changes on save and reload",
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn contains(id: i32) -> bool {
     name(id).is_some()
 }

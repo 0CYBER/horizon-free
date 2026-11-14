@@ -7,7 +7,7 @@ PistonMovingBlockEntity.moveByPositionAndProgress	port	crates/horizon-world/src/
 PistonMovingBlockEntity.matchesStickyCritera	port	crates/horizon-world/src/piston_push.rs::matches_sticky_criteria	the sticky test on the block ahead of the piston
 PistonMovingBlockEntity.getCollisionRelatedBlockState	port	crates/horizon-world/src/piston_push.rs::uses_moved_state	the collision state is the moved block's, unless a retracting source piston shows its head
 PistonMovingBlockEntity.fixEntityWithinPistonBase	port	crates/horizon-world/src/piston_push.rs::fix_within_piston_base	a retracting source piston drags an entity still inside its own block out the opposite way
-PistonMovingBlockEntity.saveAdditional	port	crates/horizon-client/src/game/world/persist.rs::Game::moving_piston_to_nbt	the moved state, facing, progress, extending and source fields, into the compound the entity's id and position are written to as well
+PistonMovingBlockEntity.saveAdditional	port	crates/horizon-client/src/game/world/piston_nbt.rs::Game::moving_piston_to_nbt	the moved state, facing, progress, extending and source fields, into the compound the entity's id and position are written to as well
 PistonMovingBlockEntity.loadAdditional	port	crates/horizon-client/src/game/world/persist.rs::Game::moving_piston_from_nbt	the moved state, facing, progress, extending and source read back, for an entity whose block is still a moving piston
 SideChainPart.whenConnectedToTheRight	port	crates/horizon-world/src/level/shelf.rs::Part::connected_to_the_right	same arms as vanilla
 SideChainPart.whenConnectedToTheLeft	port	crates/horizon-world/src/level/shelf.rs::Part::connected_to_the_left	same arms as vanilla

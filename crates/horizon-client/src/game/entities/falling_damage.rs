@@ -154,7 +154,7 @@ impl Game<'_> {
                 self.world.block_entities.insert(key, entity);
             }
             if let Some(entity) = self.world.block_entities.get(&key) {
-                let mut tag = horizon_client::save::encode_block_entity(key, entity, &name);
+                let mut tag = horizon_client::save::block_entity_encode::encode(key, entity, &name);
                 // FallingBlockEntity.tick copies each supplied field over the
                 // new block entity's saved defaults before loadWithComponents.
                 if let Some(horizon_core::nbt::Tag::Compound(carried)) = block

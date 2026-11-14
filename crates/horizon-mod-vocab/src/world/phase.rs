@@ -590,7 +590,7 @@ impl std::error::Error for RegistrationReadError {}
 /// }
 /// ```
 // exhaustive: its fields are private, so mods cannot build or destructure it
-// no wire: phase context has a custom Wire layout for its derived directory value; other host tables rebind locally.
+// no wire: phase context has a custom Wire layout for its derived directory value and the game's startup screen (a held resource); other host tables rebind locally.
 pub struct RegistrationContext {
     pub(crate) mods: LoadedMods,
     pub(crate) data: Option<RegistrationData>,
@@ -598,6 +598,9 @@ pub struct RegistrationContext {
     pub(crate) self_refusal: std::sync::Mutex<Option<String>>,
     pub(crate) warnings: std::sync::Mutex<Vec<crate::LoadingMessage>>,
     pub(crate) instance_dir: Option<crate::InstanceDirectory>,
+    /// The game's startup screen, for [`progress`](Self::progress) and
+    /// [`message`](Self::message); none without a game.
+    pub(crate) startup: Option<Arc<dyn crate::StartupScreen>>,
     pub(crate) runtime: Option<crate::RuntimeEnvironment>,
 }
 
@@ -613,6 +616,7 @@ impl RegistrationContext {
             self_refusal: Default::default(),
             warnings: Default::default(),
             instance_dir,
+            startup: crate::world::startup_progress::installed(),
             runtime,
         }
     }
@@ -1050,7 +1054,11 @@ fn the_registration_context_lists_installed_packages_with_their_details() {
             vec![crate::PackageDependency::new(
                 "base".to_owned(),
                 "^1".to_owned(),
-                false,
+                crate::DependencyKind::Required,
+                crate::DependencyOrder::After,
+                crate::Side::Both,
+                None,
+                None,
             )],
         )
         .with_details(details),

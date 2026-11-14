@@ -77,6 +77,9 @@ pub const DECODED_COMPONENTS: &[&str] = &[
     "minecraft:rabbit/variant",
     "minecraft:horse/variant",
     "minecraft:llama/variant",
+    "minecraft:mooshroom/variant",
+    "minecraft:axolotl/variant",
+    "minecraft:salmon/size",
 ];
 
 /// Validate and decode a component into the value representation shared with stacks.
@@ -344,7 +347,7 @@ pub fn decode_component(id: &str, t: &Tag, reg: &Registries) -> Result<(), Strin
             if value.is_sign_negative() || !(0.0..=1.0).contains(&value) {
                 return Err(format!(
                     "Value must be within range [0.0;1.0]: {}",
-                    horizon_core::java_number::java_float(value)
+                    horizon_core::java_number::float_to_string(value)
                 ));
             }
             Ok(())
@@ -378,6 +381,12 @@ pub fn decode_component(id: &str, t: &Tag, reg: &Registries) -> Result<(), Strin
         ),
         // Llama.Variant.CODEC uses StringRepresentable names, not LEGACY_CODEC ids.
         "minecraft:llama/variant" => string_enum(t, &["creamy", "white", "brown", "gray"]),
+        // MushroomCow.Variant.CODEC uses exact persistent StringRepresentable names.
+        "minecraft:mooshroom/variant" => string_enum(t, &["red", "brown"]),
+        // Axolotl.Variant.CODEC uses StringRepresentable names under ordinary NbtOps.
+        "minecraft:axolotl/variant" => string_enum(t, &["lucy", "wild", "gold", "cyan", "blue"]),
+        // Salmon.Variant.CODEC uses StringRepresentable names under ordinary NbtOps.
+        "minecraft:salmon/size" => string_enum(t, &["small", "medium", "large"]),
         "minecraft:enchantments" | "minecraft:stored_enchantments" => enchantment_map(t, reg),
         "minecraft:tooltip_display" => tooltip_display(t, reg).map(|_| ()),
         // DataComponents.ENCHANTMENT_GLINT_OVERRIDE: Codec.BOOL through NbtOps.

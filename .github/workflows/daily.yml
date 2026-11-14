@@ -120,8 +120,8 @@ jobs:
     uses: ./.github/workflows/native-dylib-probe.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
-  # The launcher's Windows tests that start child processes: the runtime leases and, built for release, the
-  # tests/ targets that start the launcher binary (launcher-windows-check.yml launcher-processes).
+  # The launcher's Windows tests that start child processes: the runtime leases and the debug
+  # launcher binary's subprocess tests (launcher-windows-check.yml launcher-processes).
   windows-runtime-leases:
     needs: resolve
     if: needs.resolve.outputs.skip == 'false'

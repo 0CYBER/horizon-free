@@ -443,6 +443,10 @@ pub fn build_with_conditions(
             overlay.write(&own, &fs::read(&vanilla)?)?;
         }
     }
+    // Vanilla's namespace isn't a content mod's, even when a mod ships files
+    // under it (`data/minecraft/tags/...`): every loader reads it already, and
+    // listed again it read each vanilla recipe twice, once as `minecraft:<name>`.
+    namespaces.remove("minecraft");
     overlay.write(MARKER, &serde_json::to_vec(&namespaces)?)?;
     let requirements =
         collect_jar_requirements(mods.iter().map(|m| (m.id.as_str(), m.jars.as_slice())))?;

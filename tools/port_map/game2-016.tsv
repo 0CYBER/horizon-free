@@ -134,7 +134,7 @@ BaseContainerBlockEntity.applyImplicitComponents	port	crates/horizon-client/src/
 BaseContainerBlockEntity.collectImplicitComponents	port	crates/horizon-client/src/block_entity_item.rs::collect	container items, name and lock to item components
 BaseContainerBlockEntity.getLootContext	port	crates/horizon-client/src/structure_blocks.rs::roll_container	position seed and biome feed the loot table roll.
 BeaconBlockEntity.updateBase	port	crates/horizon-client/src/game/blocks/beacon.rs::Game::beacon_base	counts the pyramid levels (steps 1 to 4)
-BeaconBlockEntity.storeEffect	port	crates/horizon-client/src/save.rs::encode_block_entity	primary and secondary written to the beacon tag
+BeaconBlockEntity.storeEffect	port	crates/horizon-client/src/save/block_entity_encode.rs::encode	primary and secondary written to the beacon tag
 BeaconBlockEntity.loadEffect	port	crates/horizon-client/src/save.rs::decode_block_entity	primary and secondary read from the beacon tag
 BeaconBlockEntity.createMenu	port	crates/horizon-client/src/game/blocks/beacon.rs::Game::beacon_opened
 BeaconBlockEntity.applyImplicitComponents	port	crates/horizon-client/src/block_entity_item.rs::place	beacon name and lock from item components

@@ -1,0 +1,2 @@
+# MenuReplace ordering requires prepared resources and isolated registration.
+horizon-client game::native_menus::tests::a_mod_menu_opened_in_place_sends_no_close_and_still_closes_the_old_menu lib daily resources

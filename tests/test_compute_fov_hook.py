@@ -5,16 +5,13 @@ import subprocess
 import tempfile
 import unittest
 
-from test_world_input_capture import method
-
-ROOT = Path(__file__).resolve().parents[1]
+from rust_items import rust_fn
 
 
 class ComputeFovHookTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_computed_fov_override_and_invalid_fallback(self):
-        source = (next(ROOT.glob('crates/horizon-client/src/game/*/fov.rs'))).read_text(encoding="utf-8")
-        actual = method(source.replace("pub(super) fn", "fn"), "fov_degrees")
+        actual = rust_fn("fov_degrees", owner="Game")
         fixture = r"""
 struct View;
 impl View {

@@ -51,6 +51,7 @@ struct Seen {
     incoming: Vec<Hit>,
     deaths: Vec<Hit>,
     armor: Vec<Hit>,
+    kinds: Vec<(String, String)>,
 }
 struct Probe {
     seen: Arc<Mutex<Seen>>,
@@ -79,6 +80,13 @@ impl Hooks for Probe {
             event.source,
             event.weapon,
         ));
+        let entity = host.entity(event.entity).expect("dying mob still resolves");
+        let kind = entity.kind(host).expect("dying entity has a type");
+        self.seen
+            .lock()
+            .unwrap()
+            .kinds
+            .push((event.kind.to_owned(), kind));
         if self.heal {
             let entity = host
                 .entity(event.entity)
@@ -741,6 +749,45 @@ fn later_cancelled_player_revival_is_transactional_and_a_second_kill_drops_inven
                         .map(|drop| drop.stack.count)
                         .sum::<u32>(),
                     5
+                );
+            })
+        },
+    );
+}
+
+/// Hook payloads and entity handles preserve mod namespaces and qualify bare vanilla ids.
+#[test]
+#[ignore = "daily"]
+fn mob_death_and_handle_preserve_namespaced_types() {
+    crate::game::in_own_process(
+        "game::native_hooks::death_source_tests::mob_death_and_handle_preserve_namespaced_types",
+        || {
+            observed(false, false, |game, seen| {
+                let sheep = game.res.mob_types().get("minecraft:sheep").unwrap().clone();
+                for (index, id) in ["vulture:vulture", "sheep", "minecraft:sheep"]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut kind = (*sheep).clone();
+                    kind.id = id.to_owned();
+                    let mut mob = Mob::new(
+                        201 + index as u32,
+                        Arc::new(kind),
+                        Vec3::new(4.5, 80.0, 4.5),
+                        0.0,
+                    );
+                    mob.persistent = true;
+                    mob.no_ai = true;
+                    game.mobs.push(mob);
+                }
+                assert!(game.run_command("kill @e"));
+                assert_eq!(
+                    seen.lock().unwrap().kinds,
+                    [
+                        ("vulture:vulture".to_owned(), "vulture:vulture".to_owned()),
+                        ("minecraft:sheep".to_owned(), "minecraft:sheep".to_owned()),
+                        ("minecraft:sheep".to_owned(), "minecraft:sheep".to_owned()),
+                    ]
                 );
             })
         },

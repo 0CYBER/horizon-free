@@ -260,7 +260,7 @@ impl<'a> JsonTag<'a> {
                         Tag::Long(v) => Value::from(*v),
                         Tag::Float(bits) => Value::Number(
                             Number::from_f64(
-                                crate::java_number::java_float(f32::from_bits(*bits))
+                                crate::java_number::float_to_string(f32::from_bits(*bits))
                                     .parse::<f64>()
                                     .expect("validated finite float"),
                             )

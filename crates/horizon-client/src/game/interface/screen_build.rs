@@ -476,6 +476,7 @@ impl Game<'_> {
         // Gui.setScreen: KeyMapping.releaseAll, as the screen or overlay opens.
         if shown {
             self.native_input.mappings.release_all();
+            self.keys.release_source(horizon_client::held::Source::Mod);
         }
         let (framebuffer, gui) = self.gui_frame_now();
         let identity = self

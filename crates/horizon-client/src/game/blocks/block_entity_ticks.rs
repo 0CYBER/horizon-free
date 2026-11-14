@@ -1082,11 +1082,12 @@ mod add_blocks_tests {
                     panic!("must create vanilla vault")
                 };
                 assert_eq!(vault.state_updating_resumes_at, 120);
-                let tag = horizon_client::save::encode_block_entity((1, 64, 1), entity, BLOCK);
+                let tag =
+                    horizon_client::save::block_entity_encode::encode((1, 64, 1), entity, BLOCK);
                 let (_, restored) =
                     horizon_client::save::decode_block_entity_for_block(&tag, BLOCK).unwrap();
                 assert_eq!(
-                    horizon_client::save::encode_block_entity((1, 64, 1), &restored, BLOCK),
+                    horizon_client::save::block_entity_encode::encode((1, 64, 1), &restored, BLOCK),
                     tag
                 );
                 let BlockEntity::Vault(restored) = restored else {

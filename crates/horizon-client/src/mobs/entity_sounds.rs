@@ -56,7 +56,7 @@ pub fn full_id(id: &str) -> Cow<'_, str> {
     }
 }
 
-fn intern_full_id(id: &str) -> &'static str {
+pub(crate) fn intern_full_id(id: &str) -> &'static str {
     use std::{collections::HashSet, sync::Mutex};
     static IDS: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
     let mut ids = IDS.lock().unwrap_or_else(|e| e.into_inner());

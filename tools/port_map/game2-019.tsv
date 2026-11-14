@@ -68,7 +68,7 @@ LevelChunk.createBlockEntity	port	crates/horizon-client-render/src/containers.rs
 LevelChunk.getBlockEntity	skip:other	-	World.block_entities is read directly by the game (game.rs:764, 4000); no lookup function
 LevelChunk.addAndRegisterBlockEntity	skip:other	-	World.block_entities is written directly (game.rs:1134); no registration step
 LevelChunk.isInLevel	port	crates/horizon-world/src/level/update.rs::Sim::is_in_valid_bounds	-
-LevelChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save.rs::encode_block_entity	-
+LevelChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save/block_entity_encode.rs::encode	-
 LevelChunk.removeGameEventListener	skip:java	-	listener registry bookkeeping; game events dispatch by position
 LevelChunk.removeBlockEntityTicker	skip:java	-	tickers are rebuilt from block state (block_entities.rs tickers)
 LevelChunk.runPostLoad	missing	-	minor: unsure: no post-load step for block entities found
@@ -108,7 +108,7 @@ ProtoChunk.setPersistedStatus	missing	-	minor: unsure: no setter for a proto chu
 ProtoChunk.packOffsetCoordinates	inline	crates/horizon-world/src/worldgen/terrain.rs::TerrainChunk::mark_postprocessing	the packed x|y|z offset is built inline
 ProtoChunk.unpackOffsetCoordinates	inline	crates/horizon-client/src/save.rs::decode_proto	the stored PostProcessing shorts are unpacked to block positions: chunk x/z, the section's Y, and the packed 4-bit offsets
 ProtoChunk.markPosForPostProcessing	port	crates/horizon-world/src/worldgen/terrain.rs::TerrainChunk::mark_postprocessing	-
-ProtoChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save.rs::encode_block_entity	the tag a chunk writes per block entity: id, x, y, z, keepPacked and the components
+ProtoChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save/block_entity_encode.rs::encode	the tag a chunk writes per block entity: id, x, y, z, keepPacked and the components
 ProtoChunk.removeBlockEntity	inline	crates/horizon-world/src/worldgen/generator_decoration.rs::World::set_block	entry is dropped when the block at the position changes
 Strategy.getIndex	port	crates/horizon-client-render/src/chunk.rs::index	block form (y<<8 | z<<4 | x); the biome form is biome_chunk.rs::index
 ChunkStatus.register	skip:data	-	status registry entry

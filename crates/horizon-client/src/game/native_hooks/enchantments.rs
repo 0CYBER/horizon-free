@@ -26,6 +26,10 @@ impl Game<'_> {
             .get(id)
             .map(|e| e.min_cost.calculate(level))
     }
+    /// `ItemStack.getHoverName()` as plain text, in the client's language.
+    pub(in crate::game) fn hover_name(&self, stack: &ItemStack) -> String {
+        horizon_client::stations::hover_name(&self.pack.names, stack)
+    }
     /// Whether enchantment `id` can go on `item` (`Enchantment.isSupportedItem`).
     pub(in crate::game) fn enchantment_supports(&self, id: &str, item: mod_api::ItemKey) -> bool {
         let Some(item) = mod_api::__private::item_key_id(item) else {

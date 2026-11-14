@@ -16,9 +16,9 @@ pub fn main() {
             writeln!(
                 out,
                 "{line}\t{}\t{}\t{}",
-                horizon_core::java_number::java_float(value),
+                horizon_core::java_number::float_to_string(value),
                 snbt_text::to_snbt(&tag),
-                horizon_core::java_number::java_float(value)
+                horizon_core::java_number::float_to_string(value)
             )
             .unwrap();
         } else {
@@ -28,9 +28,9 @@ pub fn main() {
             writeln!(
                 out,
                 "{line}\t{}\t{}\t{}",
-                horizon_core::java_number::java_double(value),
+                horizon_core::java_number::double_to_string(value),
                 snbt_text::to_snbt(&tag),
-                horizon_core::java_number::java_double(value)
+                horizon_core::java_number::double_to_string(value)
             )
             .unwrap();
         }

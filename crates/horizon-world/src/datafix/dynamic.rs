@@ -84,8 +84,8 @@ impl Number {
             Self::Short(v) => v.to_string(),
             Self::Int(v) => v.to_string(),
             Self::Long(v) => v.to_string(),
-            Self::Float(v) => horizon_core::java_number::java_float(v),
-            Self::Double(v) => horizon_core::java_number::java_double(v),
+            Self::Float(v) => horizon_core::java_number::float_to_string(v),
+            Self::Double(v) => horizon_core::java_number::double_to_string(v),
         }
     }
 }

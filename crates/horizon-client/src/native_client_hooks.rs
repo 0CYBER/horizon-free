@@ -25,6 +25,8 @@ pub struct NativeClientHooks {
     pub block_jump_factor: fn(&LoopContext, BlockStateId, &mut f32),
     pub block_speed_factor: fn(&LoopContext, BlockStateId, &mut f32),
     pub is_ladder: fn(&LoopContext, u32, BlockPos, BlockStateId, &mut bool),
+    pub makes_open_trapdoor_above_climbable:
+        fn(&LoopContext, BlockStateId, BlockPos, BlockStateId, &mut bool),
     pub friction: fn(&LoopContext, u32, &str, BlockPos, BlockStateId, &mut f32),
     pub player_stays_on_ground_surface: fn(&LoopContext, u32, &mut bool),
     pub ender_entity_teleport: fn(&LoopContext, u32, &str, [f64; 3], &mut [f64; 3], &mut bool),
@@ -215,6 +217,18 @@ pub(crate) fn is_ladder(
 ) {
     if let Some(hooks) = HOOKS.get() {
         (hooks.is_ladder)(context, entity, pos, state, ladder);
+    }
+}
+
+pub(crate) fn makes_open_trapdoor_above_climbable(
+    context: &LoopContext,
+    state: BlockStateId,
+    pos: BlockPos,
+    trapdoor: BlockStateId,
+    climbable: &mut bool,
+) {
+    if let Some(hooks) = HOOKS.get() {
+        (hooks.makes_open_trapdoor_above_climbable)(context, state, pos, trapdoor, climbable);
     }
 }
 

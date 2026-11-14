@@ -258,6 +258,11 @@ struct ExplosionHookContext<'a> {
     direct_name: Option<Text>,
     held_item: Option<Text>,
     credit: bool,
+    /// The calculator's `shouldDamageEntity`, and its knockback multiplier for
+    /// a player that isn't flying and for one that is.
+    hurts: bool,
+    knockback: f32,
+    flying_knockback: f32,
 }
 
 /// An entity in the blast's reach: how far (as a share of the blast's
@@ -501,6 +506,9 @@ impl Game<'_> {
     ) -> (f32, bool) {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let f = self.res.facts().get(state);
+        if let Some(step) = self.blast_calculator_step(&f.name) {
+            return step;
+        }
         // USED_PORTAL_DAMAGE_CALCULATOR returns no resistance and never explodes a portal.
         if portal_proof && &*f.name == "minecraft:nether_portal" {
             return (0.0, true);
@@ -647,6 +655,12 @@ impl Game<'_> {
         cause: Option<&horizon_client::advancements::EntityView>,
     ) -> Option<[f64; 3]> {
         let ExplosionHookContext { center, blocks, .. } = *context;
+        let flying = self.player.as_ref().is_some_and(|p| p.flying);
+        let knockback = if flying {
+            context.flying_knockback
+        } else {
+            context.knockback
+        };
         let diameter = f64::from(radius * 2.0);
         // Blast protection: `EXPLOSION_KNOCKBACK_RESISTANCE` (0.15 per level and
         // piece, so two Blast Protection IV pieces cancel it).
@@ -679,11 +693,16 @@ impl Game<'_> {
             feet[1] + f64::from(p.dimensions.eye_height),
             feet[2],
         ];
-        let exposure = self.seen_percent(
-            center,
-            [feet[0] - w, feet[1], feet[2] - w],
-            [feet[0] + w, feet[1] + h, feet[2] + w],
-        );
+        // Neither hurt nor pushed: not checked for exposure.
+        let exposure = if context.hurts || knockback != 0.0 {
+            self.seen_percent(
+                center,
+                [feet[0] - w, feet[1], feet[2] - w],
+                [feet[0] + w, feet[1] + h, feet[2] + w],
+            )
+        } else {
+            0.0
+        };
         let pow = (1.0 - dist) * f64::from(exposure);
         let amount = ((pow * pow + pow) / 2.0 * 7.0 * diameter + 1.0) as f32;
         let d = [eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]];
@@ -693,15 +712,20 @@ impl Game<'_> {
         } else {
             [d[0] / l, d[1] / l, d[2] / l]
         };
-        let power = pow * (1.0 - resistance);
-        // `source.doTeamsAllowDamage(entity)`.
-        let hurtable = exploding.is_none_or(|id| {
-            horizon_client::scoreboard::teams_allow_damage(self.mob_team(id), self.player_team())
-        });
-        let blocking = self.player_blocking(Some(center), damage_type, false);
+        let power = pow * f64::from(knockback) * (1.0 - resistance);
+        // `shouldDamageEntity`, then `source.doTeamsAllowDamage(entity)`.
+        let hurtable = context.hurts
+            && exploding.is_none_or(|id| {
+                horizon_client::scoreboard::teams_allow_damage(
+                    self.mob_team(id),
+                    self.player_team(),
+                )
+            });
+        let blocking = self
+            .player_blocking(Some(center), damage_type, false)
+            .filter(|_| context.hurts);
         let raised = blocking.is_some();
         let (creative, spectator) = (self.creative, self.spectator());
-        let flying = self.player.as_ref().is_some_and(|p| p.flying);
         let mut outcome = horizon_client::health::BlockOutcome::default();
         let mut pushed = None;
         let explicit = context.explicit_cause.as_ref().and_then(|c| c.as_ref());
@@ -806,6 +830,7 @@ impl Game<'_> {
         center: [f64; 3],
         diameter: f64,
         blast: &Blast,
+        seen: bool,
     ) -> Option<Hit> {
         if entity.ignores_explosion(blast) || !entity.pushed_by_explosion() {
             return None;
@@ -817,7 +842,11 @@ impl Game<'_> {
         }
         let b = entity.explosion_box();
         let (lo, hi) = (b.min_position(), b.max_position());
-        let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
+        let exposure = if seen {
+            self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
+        } else {
+            0.0
+        };
         let dir = blast_direction(
             center,
             [feet.x, feet.y + entity.explosion_eye_height(), feet.z],
@@ -843,7 +872,15 @@ impl Game<'_> {
         if radius < 1.0e-5 {
             return Vec::new();
         }
-        self.explosion_hits_special(center, radius, blocks, damage_type);
+        // The calculator's answers, read before the guests' turns swap their
+        // own combat state in.
+        let hurts = self.blast_damages_entities();
+        let (knockback, flying_knockback) =
+            (self.blast_knockback(false), self.blast_knockback(true));
+        let kind = self.blast_damage_kind();
+        if hurts {
+            self.explosion_hits_special(center, radius, blocks, damage_type);
+        }
         let diameter = f64::from(radius * 2.0);
         let damage = |dist: f64, exposure: f32| {
             let pow = (1.0 - dist) * f64::from(exposure);
@@ -889,6 +926,9 @@ impl Game<'_> {
                         self.mob_main_hand_name(c.entity.0)
                     }
                 }),
+            hurts,
+            knockback,
+            flying_knockback,
         };
         let own = if self
             .lan_acting_entity
@@ -1008,7 +1048,8 @@ impl Game<'_> {
             // An entity the blast's list does not name is neither hurt nor
             // pushed; without a listener the storages are the walk.
             let hit = if with_entity!(self, handle, e => self.combat.visits(e.id())) {
-                with_entity!(self, handle, e => self.blast_hit(e, center, diameter, &blast))
+                let seen = hurts || knockback != 0.0;
+                with_entity!(self, handle, e => self.blast_hit(e, center, diameter, &blast, seen))
             } else {
                 None
             };
@@ -1021,6 +1062,7 @@ impl Game<'_> {
             {
                 let amount = damage(dist, exposure);
                 match handle {
+                    _ if !hurts => {}
                     EntityHandle::Mob(i) => {
                         let hurtable = teams_allow(self, self.mob_team(self.mobs[i].id));
                         let m = &mut self.mobs[i];
@@ -1028,7 +1070,7 @@ impl Game<'_> {
                         // victims it kills drop its charged-creeper loot
                         // (`Creeper.killedEntity`).
                         let source = horizon_client::mobs::Damage {
-                            kind: horizon_client::mobs::DamageKind::Explosion,
+                            kind,
                             // A projectile's owner (`getIndirectSourceEntity`),
                             // else the exploding mob itself.
                             attacker: self
@@ -1187,7 +1229,8 @@ impl Game<'_> {
                         _ => {}
                     }
                 }
-                let mut velocity = [push.x, push.y, push.z];
+                let k = f64::from(knockback);
+                let mut velocity = [push.x * k, push.y * k, push.z * k];
                 self.native_explosion_knockback(
                     self.dim.id(),
                     center,
@@ -1220,8 +1263,10 @@ impl Game<'_> {
         // here are neither destroyed nor pushed by the same blast.
         // BlockAttachedEntity.kill / ArmorStand.kill credit DamageSource.getEntity.
         // VehicleEntity.destroy above uses Entity.kill and keeps the vehicle as source.
-        self.explosion_breaks_frames(center, diameter, interaction);
-        self.explosion_breaks_decorations(center, diameter, interaction);
+        if hurts {
+            self.explosion_breaks_frames(center, diameter, interaction);
+            self.explosion_breaks_decorations(center, diameter, interaction);
+        }
         pushed
     }
 
@@ -1315,10 +1360,7 @@ impl Game<'_> {
         }
         // `DamageSources.explosion`: a caused blast is `player_explosion`.
         let cause = self.blast_attacker().map(|(id, _)| id);
-        let damage_type = super::creatures::damage_type(
-            horizon_client::mobs::DamageKind::Explosion,
-            cause.is_some(),
-        );
+        let damage_type = self.blast_damage_type();
         let causing = cause.unwrap_or(0);
         let mut i = 0;
         while i < self.armor_stands.len() {
@@ -1456,10 +1498,7 @@ impl Game<'_> {
         cause: Option<Option<ExplosionCause>>,
     ) -> Result<()> {
         let blast = |g: &mut Self| {
-            let damage_type = super::creatures::damage_type(
-                horizon_client::mobs::DamageKind::Explosion,
-                g.blast_attacker().is_some(),
-            );
+            let damage_type = g.blast_damage_type();
             g.server_explode_as_source(center, radius, interaction, fire, damage_type, None, source)
         };
         match cause {
@@ -1550,6 +1589,10 @@ impl Game<'_> {
         self.post_game_event("minecraft:explode", center, ctx);
         let mut targets =
             self.exploded_positions(center, radius, resists, source.portal_proof, &start);
+        // `shouldBlockExplode`: a calculator that explodes no blocks keeps none.
+        if !self.blast_explodes_blocks() {
+            targets.clear();
+        }
         // The walks that hurt entities follow the list a listening
         // `explosion_detonate` leaves: a blast set off inside one of them
         // (its own detonate, a nested `level_explode`) keeps its own list.
@@ -1596,21 +1639,24 @@ impl Game<'_> {
                 }
             }
         }
+        let effects = self.blast_effects();
         if !source.silent {
             let pitch = (1.0 + (client_float() - client_float()) * 0.2) * 0.7;
-            self.audio
-                .play("minecraft:entity.generic.explode", Some(center), 4.0, pitch);
+            self.audio.play(&effects.sound, Some(center), 4.0, pitch);
         }
         // ServerLevel.explode sends toBlow.size() whatever the interaction, and
         // `ServerExplosion.isSmall` also covers an explosion that keeps blocks.
         let block_count = targets.len();
         let small = radius < 2.0 || interaction == BlockInteraction::Keep;
-        let (world, facts) = (&self.world, self.res.facts());
-        self.particles
-            .explosion(center, small, block_count, radius, &|b| {
-                facts.is_air(world.block(b[0], b[1], b[2]))
-            });
-        self.lan_explode(center, small, radius, block_count, pushed);
+        let emitter = effects.emitter(small);
+        self.particles.explosion(
+            center,
+            emitter,
+            block_count,
+            radius,
+            &effects.block_particles,
+        );
+        self.lan_explode(center, small, radius, block_count, pushed, effects);
         Ok(())
     }
     /// `InfestedBlock.spawnAfterBreak` without a tool that prevents it: while
@@ -2798,7 +2844,7 @@ mod shulker_lock_drop_tests {
                 .get(&key)
                 .expect("actual command-created source");
             assert!(
-                save::encode_block_entity(key, entity, &format!("minecraft:{kind}"))
+                save::block_entity_encode::encode(key, entity, &format!("minecraft:{kind}"))
                     .get("lock")
                     .is_none(),
                 "external lock must not be invented in modeled serializer"
@@ -2936,14 +2982,18 @@ mod explicit_source_tests {
                     game.combat.blast_guest = Some(17);
                     let center = [8.5, 64.0, 8.5];
                     let level = game.level("minecraft:overworld").unwrap();
-                    assert!(game.level_explode(
-                        level,
-                        None,
-                        center,
-                        2.0,
-                        false,
-                        mod_api::ExplosionInteraction::None
-                    ));
+                    assert_eq!(
+                        game.level_explode(
+                            level,
+                            None,
+                            center,
+                            2.0,
+                            false,
+                            mod_api::ExplosionInteraction::None,
+                            mod_api::ExplosionSettings::default()
+                        ),
+                        Ok(())
+                    );
                     assert!(matches!(
                         game.combat.explicit_explosion_cause,
                         Some(Some(_))

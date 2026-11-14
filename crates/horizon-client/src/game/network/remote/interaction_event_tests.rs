@@ -5,6 +5,8 @@ mod interaction_event_wasm_tests;
 mod item_fallthrough_tests;
 #[path = "item_used_on_block_tests.rs"]
 mod item_used_on_block_tests;
+#[path = "predicted_use_tests.rs"]
+mod predicted_use_tests;
 #[path = "use_item_hand_tests.rs"]
 mod use_item_hand_tests;
 #[path = "use_item_result_tests.rs"]
@@ -247,9 +249,12 @@ impl ItemPart for Observer {
         }
         state.first_part_answer
     }
-    fn use_on(&self, _: &mut dyn ServerHost, _: &mut UseOnEvent<'_>) -> Flow {
+    fn use_on(&self, host: HostSide<'_>, _: &mut UseOnEvent<'_>) -> Option<Answer> {
+        let HostSide::Server(_) = host else {
+            return None;
+        };
         self.0.lock().unwrap().steps.push(Step::UseOnPart);
-        Flow::Cancel
+        Some(Answer::SuccessServer)
     }
     fn use_item(&self, host: HostSide<'_>, event: &mut UseItemEvent<'_>) -> Option<Answer> {
         if let Some(hand) = self.0.lock().unwrap().expected_hand {
@@ -274,7 +279,16 @@ impl ItemPart for Observer {
 // The same real Game runs either its server path or its normal local-client
 // connection/prediction path, as the existing remote menu fixture does.
 fn with_interaction_game(client: bool, test: impl FnOnce(&mut Game<'_>)) {
-    with_game(|game| {
+    let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    with_interaction_game_at(client, root, test);
+}
+
+fn with_interaction_game_at(
+    client: bool,
+    root: std::path::PathBuf,
+    test: impl FnOnce(&mut Game<'_>),
+) {
+    super::super::native_entity_refs::tests::with_game_at(root, |game| {
         let _peer = if client {
             game.options.execution_role = ExecutionRole::Client;
             let (client, server) = Pipe::pair();
@@ -1588,6 +1602,8 @@ fn a_creative_hand_replaced_by_a_finish_listener_is_not_sent_as_a_creative_slot(
 
 #[path = "interaction_key_tests.rs"]
 mod interaction_key_tests;
+#[path = "mapping_press_tests.rs"]
+mod mapping_press_tests;
 
 #[test]
 #[ignore = "requires prepared game resources"]

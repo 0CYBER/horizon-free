@@ -40,6 +40,9 @@ impl FinalizeGame<'_, '_> {
 }
 
 impl finalize::FinalizeLevel for FinalizeGame<'_, '_> {
+    fn mob_maps(&self) -> &horizon_client::neoforge_mob_maps::NeoForgeMobMaps {
+        self.game.mob_maps()
+    }
     fn biome(&self, pos: [i32; 3]) -> String {
         // A spawn site without its chunk (a loaded marker mob) is neutral.
         biome_or_plains(self.biome_name(pos))

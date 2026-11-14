@@ -3,7 +3,7 @@
 //! a tag's string form.
 use horizon_core::nbt::Tag;
 
-use horizon_core::java_number::{java_double, java_float};
+use horizon_core::java_number::{double_to_string, float_to_string};
 
 /// `SnbtGrammar.escapeControlCharacters`.
 fn escape_control(c: char) -> Option<&'static str> {
@@ -77,11 +77,11 @@ fn visit(tag: &Tag, out: &mut String) {
         Tag::Int(v) => out.push_str(&v.to_string()),
         Tag::Long(v) => out.push_str(&format!("{v}L")),
         Tag::Float(v) => {
-            out.push_str(&java_float(f32::from_bits(*v)));
+            out.push_str(&float_to_string(f32::from_bits(*v)));
             out.push('f');
         }
         Tag::Double(v) => {
-            out.push_str(&java_double(f64::from_bits(*v)));
+            out.push_str(&double_to_string(f64::from_bits(*v)));
             out.push('d');
         }
         Tag::String(s) => out.push_str(&quote_and_escape(&string_of(s))),
@@ -158,7 +158,7 @@ mod tests {
             for (sign, prefix) in [(0, ""), (1 << 31, "-")] {
                 let bits = bits | sign;
                 assert_eq!(
-                    java_float(f32::from_bits(bits)),
+                    float_to_string(f32::from_bits(bits)),
                     format!("{prefix}{expected}")
                 );
                 assert_eq!(to_snbt(&Tag::Float(bits)), format!("{prefix}{expected}f"));
@@ -173,7 +173,7 @@ mod tests {
             for (sign, prefix) in [(0, ""), (1 << 63, "-")] {
                 let bits = bits | sign;
                 assert_eq!(
-                    java_double(f64::from_bits(bits)),
+                    double_to_string(f64::from_bits(bits)),
                     format!("{prefix}{expected}")
                 );
                 assert_eq!(to_snbt(&Tag::Double(bits)), format!("{prefix}{expected}d"));

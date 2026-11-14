@@ -43,6 +43,13 @@ pub trait ConfigHost {
     #[access(WorldOnly)]
     #[static_call]
     fn config_files(&self) -> &'static dyn ConfigFiles;
+    /// Side: both. The calling mod's bulk files in
+    /// `horizon-mod-data/<mod id>/` in the game folder, never scanned as
+    /// settings or config. Paths omit the mod id; `ConfigPath::root()` names
+    /// its root. Horizon allows at most `DATA_FILE_MAX` bytes per file.
+    #[access(WorldOnly)]
+    #[static_call]
+    fn data_files(&self) -> &'static dyn ConfigFiles;
     /// Side: both.
     /// The level in place (`minecraft:overworld`), for a hook that isn't told
     /// which it runs in.
@@ -135,6 +142,12 @@ pub trait ConfigServerHost {
     /// keeps world data in level attachments.
     #[access(WorldOnly)]
     fn world_dir(&self) -> Option<PathBuf>;
+    /// Side: server. The calling mod's bulk files in the current save's
+    /// `horizon-mod-data/<mod id>/`, copied, backed up and deleted with that
+    /// save. Paths omit the mod id. Calls refuse with `NoWorld` before a
+    /// save is open; this service never outlives its borrowed world host.
+    #[access(WorldOnly)]
+    fn world_data_files(&self) -> &dyn ConfigFiles;
     /// Side: server.
     /// Every current rule in the one server-wide store, by namespaced id.
     /// Readable from `server_about_to_start`, before any level exists.

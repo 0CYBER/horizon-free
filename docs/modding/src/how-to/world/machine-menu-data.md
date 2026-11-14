@@ -244,14 +244,26 @@ unconnected/wrong-level player, and `Err(BlockEntityError::Stale)` means the ent
 does not resolve. It never opens a replacement through an old handle.
 
 To open a content mod menu type with no block (a backpack item's use, an entity, a command),
-call `player.open_mod_menu(host, menu, title, extra, pos)` (NeoForge's
+call `player.open_mod_menu(host, menu, title, extra, pos, replace)` (NeoForge's
 `openMenu(provider, extraDataWriter)`). `menu` is the type's `MenuKey`. `extra`, at most
 32 KiB, is what the client's `host.screen_extra_data()` returns while the screen is open, on
 native and wasm alike. `pos`, when given, is what `screen_pos()` returns; otherwise it returns
 `None`. The type's container slots show empty, and their clicks reach `native_menu_clicked`,
 as `open_menu`'s do. It returns the window id, or `Ok(None)` when a mod cancelled the open.
 It refuses with an `OpenMenuError`: `NotModMenu`, `PlayerUnavailable` (stale, fake, or a
-vanilla client), `TooLarge`, or `Title` when the title could not cross.
+vanilla client), `TooLarge`, or `Title` when the title could not cross; a cancelled or
+refused open closes nothing.
+
+The menu the player had open closes on the server first, as a close does: its `removed`, one
+`player_container_close`, and the cursor stack and crafting grids back to the inventory. Then
+the new menu is built, its screen opened and its contents sent, and the next tick's
+`player_container_open` tells of it. `replace` is the Java `MenuProvider`'s choice
+(`shouldTriggerClientSideContainerClosingOnOpen`), as for
+[`open_menu`](../../concepts/capabilities/menu-slots.md#a-mods-chest-menu):
+`MenuReplace::CloseFirst`, vanilla's default, first sends the client a close for the old
+window, which centres the mouse again; `MenuReplace::InPlace` sends none, so the client keeps
+its screen and its mouse where they are until the new screen replaces it, as when one
+screen of a machine leads to the next.
 
 ## Receiving synchronized data
 

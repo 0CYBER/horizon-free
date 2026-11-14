@@ -93,6 +93,7 @@ pub struct StructureMobFinalizer {
     /// The level's difficulty (0 peaceful to 3 hard) and overworld clock.
     difficulty: AtomicU8,
     day_time: AtomicI64,
+    mob_maps: std::sync::RwLock<Arc<crate::neoforge_mob_maps::NeoForgeMobMaps>>,
 }
 impl StructureMobFinalizer {
     pub fn new(root: PathBuf, dimension: &str, item_data: Arc<ItemData>) -> Self {
@@ -103,7 +104,13 @@ impl StructureMobFinalizer {
             data: Arc::new(OnceLock::new()),
             difficulty: AtomicU8::new(2),
             day_time: AtomicI64::new(0),
+            mob_maps: std::sync::RwLock::new(Arc::clone(
+                crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
+            )),
         }
+    }
+    pub fn set_mob_maps(&self, snapshot: &Arc<crate::neoforge_mob_maps::NeoForgeMobMaps>) {
+        *self.mob_maps.write().unwrap() = Arc::clone(snapshot);
     }
     pub fn set_conditions(&self, difficulty: u8, day_time: i64) {
         self.difficulty.store(difficulty, Ordering::Relaxed);
@@ -113,6 +120,7 @@ impl StructureMobFinalizer {
 
 struct Level<'a> {
     data: &'a Data,
+    mob_maps: &'a crate::neoforge_mob_maps::NeoForgeMobMaps,
     biome: &'a str,
     structures: &'a [String],
     difficulty: u8,
@@ -120,6 +128,9 @@ struct Level<'a> {
     next_id: u32,
 }
 impl FinalizeLevel for Level<'_> {
+    fn mob_maps(&self) -> &crate::neoforge_mob_maps::NeoForgeMobMaps {
+        self.mob_maps
+    }
     fn biome(&self, _: [i32; 3]) -> String {
         self.biome.to_owned()
     }
@@ -315,8 +326,11 @@ impl StructureMobFinalizer {
     ) -> Option<Compound> {
         let base = self.difficulty.load(Ordering::Relaxed);
         let day_time = self.day_time.load(Ordering::Relaxed);
+        // Release the publication lock before any finalize body runs.
+        let mob_maps = Arc::clone(&self.mob_maps.read().unwrap());
         let mut level = Level {
             data,
+            mob_maps: &mob_maps,
             biome,
             structures,
             difficulty: base,
@@ -349,6 +363,69 @@ impl StructureMobFinalizer {
 mod tests {
     use super::*;
     use horizon_world::native_load_context::DataLoadOrigin;
+
+    #[test]
+    #[ignore = "daily"]
+    fn structure_maps_reload_without_cross_world_bleed() {
+        use crate::neoforge_mob_maps::NeoForgeMobMaps;
+        use std::collections::BTreeMap;
+        let root = PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("explicit fixture resources"),
+        );
+        let item_data =
+            crate::test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad).unwrap();
+        let first =
+            StructureMobFinalizer::new(root.clone(), "minecraft:overworld", item_data.clone());
+        let mut second = StructureMobFinalizer::new(root, "minecraft:overworld", item_data);
+        // Resource decoding can be shared; the two worlds' published snapshots cannot.
+        second.data = first.data.clone();
+        let mut desert = NeoForgeMobMaps::default();
+        desert.set_villager_types(BTreeMap::from([("minecraft:plains".into(), 1)]));
+        let desert = Arc::new(desert);
+        let mut snow = NeoForgeMobMaps::default();
+        snow.set_villager_types(BTreeMap::from([("minecraft:plains".into(), 4)]));
+        let snow = Arc::new(snow);
+        let mut removed = NeoForgeMobMaps::default();
+        removed.set_villager_types(BTreeMap::new());
+        let removed = Arc::new(removed);
+        first.set_mob_maps(&desert);
+        second.set_mob_maps(&snow);
+        for (world, snapshot, expected) in [
+            (&first, None, "minecraft:desert"),
+            (&second, None, "minecraft:snow"),
+            (&first, Some(&removed), "minecraft:plains"),
+            (&second, None, "minecraft:snow"),
+            (&first, Some(&desert), "minecraft:desert"),
+        ] {
+            if let Some(snapshot) = snapshot {
+                world.set_mob_maps(snapshot);
+            }
+            let Tag::Compound(mut nbt) = Tag::compound([
+                ("id", Tag::String("minecraft:villager".into())),
+                (
+                    "Pos",
+                    Tag::List(vec![
+                        Tag::Double(0.0f64.to_bits()),
+                        Tag::Double(64.0f64.to_bits()),
+                        Tag::Double(0.0f64.to_bits()),
+                    ]),
+                ),
+            ]) else {
+                unreachable!()
+            };
+            assert!(world.finalize(
+                &mut nbt,
+                "minecraft:plains",
+                &[],
+                &mut LegacyRandom::new(12345)
+            ));
+            let result = Tag::Compound(nbt);
+            assert!(
+                matches!(result.get("VillagerData").and_then(|value| value.get("type")), Some(Tag::String(value)) if value.to_string_lossy() == expected),
+                "{result:?}"
+            );
+        }
+    }
 
     #[test]
     fn structure_zombie_preserves_unknown_profession() {

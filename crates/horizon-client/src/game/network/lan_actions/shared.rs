@@ -1126,8 +1126,8 @@ mod tests {
         use horizon_protocol::packets::{configuration::ClientInformation, play};
         use mod_api::InteractionResult as Answer;
         use mod_api::{
-            self, BlockPart, CloneItemStackEvent, Flow, Hooks, Host, ItemPart, ItemStack,
-            Registrar, ServerHost, UseItemOnEvent, UseOnEvent, UseWithoutItemEvent,
+            self, BlockPart, CloneItemStackEvent, Hooks, Host, ItemPart, ItemStack, Registrar,
+            ServerHost, UseItemOnEvent, UseOnEvent, UseWithoutItemEvent,
         };
         use std::sync::{
             Arc, Mutex,
@@ -1209,10 +1209,10 @@ mod tests {
         // The held items' own `Item.useOn`, counted, taking the click.
         #[mod_api::horizon_part]
         impl ItemPart for User {
-            fn use_on(&self, _: &mut dyn ServerHost, _: &mut UseOnEvent<'_>) -> Flow {
+            fn use_on(&self, _: mod_api::HostSide<'_>, _: &mut UseOnEvent<'_>) -> Option<Answer> {
                 self.item_uses
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Flow::Cancel
+                Some(Answer::SuccessServer)
             }
         }
         struct Mod {

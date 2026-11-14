@@ -51,7 +51,7 @@ pub fn main_with(
             let mut mods = mods;
             mods.extend(std::mem::take(&mut wasm.mods));
             // One installed dispatch order for both targets; ties retain bundle order.
-            let manifests: Vec<_> = native
+            let code_manifests: Vec<_> = native
                 .packages()
                 .iter()
                 .map(|p| &p.manifest)
@@ -59,31 +59,78 @@ pub fn main_with(
                 .filter(|m| mods.iter().any(|entry| entry.fields().id == m.id))
                 .collect();
             assert_eq!(
-                manifests.len(),
+                code_manifests.len(),
                 mods.len(),
                 "loaded code has checked manifests"
             );
-            let declared: Vec<_> = manifests
+            let side = launch.installation_side();
+            let declared: Vec<_> = code_manifests
                 .iter()
-                .map(|m| horizon_mod_package::dependencies::from_manifest(&m.dependencies))
+                .map(|m| horizon_mod_package::dependencies::from_manifest(&m.dependencies, side))
                 .collect();
-            let inputs: Vec<_> = manifests
+            let inputs: Vec<_> = code_manifests
                 .iter()
                 .zip(&declared)
                 .map(|(m, dependencies)| horizon_mod_package::dependencies::Mod {
                     id: &m.id,
                     version: &m.version,
                     has_api: true,
+                    code: true,
                     dependencies,
                 })
                 .collect();
-            let order = horizon_mod_package::dependencies::resolve(&inputs)
-                .unwrap_or_else(|error| panic!("mod load refused: {error}"));
+            let code_ids: std::collections::HashSet<_> =
+                mods.iter().map(|entry| entry.fields().id).collect();
+            let settings = horizon_mod_package::mod_list::ModList::load(&launch.context.game_dir);
+            let content: Vec<_> = horizon_mod_package::selection::content_packages(
+                &launch.context.game_dir,
+                &settings.enabled,
+                &launch.context.dev_mods,
+            )
+            .collect();
+            let manifests: Vec<_> = code_manifests
+                .iter()
+                .copied()
+                .chain(
+                    content
+                        .iter()
+                        .filter(|source| {
+                            let manifest = &source.package.manifest;
+                            let code = manifest.native.is_some() || manifest.wasm.is_some();
+                            !code || !code_ids.contains(manifest.id.as_str())
+                        })
+                        .map(|source| &source.package.manifest),
+                )
+                .collect();
+            let order = horizon_mod_package::dependencies::Overrides::read(
+                &launch
+                    .context
+                    .game_dir
+                    .join(horizon_mod_package::mod_list::DIR),
+            )
+            .and_then(|overrides| {
+                let resolution = horizon_mod_package::dependencies::resolve_manifests(
+                    &manifests, side, &overrides,
+                )
+                .map_err(|error| error.to_string())?;
+                horizon_mod_package::dependencies::resolve_links(&inputs)
+                    .map_err(|error| format!("code link requirements refused: {error}"))?;
+                Ok(resolution)
+            })
+            .unwrap_or_else(|error| {
+                eprintln!("Horizon: mod load refused: {error}");
+                horizon_client::logging::flush();
+                std::process::exit(1);
+            });
+            for warning in &order.warnings {
+                log::warn!("Horizon: {warning}");
+            }
             // What every level.dat this game saves records (`fml.LoadingModList`).
             horizon_client::save::level_mods::set_loaded(Some(
                 order
                     .order
                     .iter()
+                    .filter(|&&i| code_ids.contains(manifests[i].id.as_str()))
                     .map(|&i| horizon_client::save::level_mods::ModRecord {
                         id: manifests[i].id.clone(),
                         version: manifests[i].version.clone(),
@@ -97,6 +144,7 @@ pub fn main_with(
             let mods: Vec<_> = order
                 .order
                 .into_iter()
+                .filter(|&i| code_ids.contains(manifests[i].id.as_str()))
                 .map(|i| entries.remove(manifests[i].id.as_str()).unwrap())
                 .collect();
             let ids: Vec<_> = mods.iter().map(|entry| entry.fields().id).collect();

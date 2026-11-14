@@ -200,6 +200,8 @@ struct KeptMobHealth {
 
 #[derive(Clone)]
 struct KeptPlayer {
+    ender_items: Vec<Option<ItemStack>>,
+    player_extra: Option<horizon_core::nbt::Tag>,
     inventory: Vec<Option<ItemStack>>,
     armor: [Option<ItemStack>; 4],
     offhand: Option<ItemStack>,
@@ -257,6 +259,10 @@ pub(super) enum After {
     Drop([i32; 3], ItemStack),
     /// `Player.drop(stack, false)` by the player with this UUID: what no longer fits.
     PlayerDrop(u128, ItemStack),
+    GivePickup(u128),
+    InventoryTrigger(u128),
+    GiveRest(u128, ItemStack, Option<[i32; 4]>),
+    PlayerEquip(u128, String, Option<ItemStack>),
     /// An item split off an item entity, dropped where it is (`Block.popResource`'s delay).
     Spawn([f64; 3], ItemStack),
     /// The item entity with this id was emptied: removed, unless it holds items again.
@@ -704,6 +710,8 @@ impl Game<'_> {
             return;
         };
         level.players.entry(uuid).or_insert_with(|| KeptPlayer {
+            ender_items: self.ender_items.clone(),
+            player_extra: self.level.player_extra.clone(),
             inventory: self.inventory.clone(),
             armor: self.armor.clone(),
             offhand: self.offhand.clone(),
@@ -889,6 +897,23 @@ impl Game<'_> {
             After::Block(_) => {}
             After::Drop(pos, stack) => {
                 self.spawn_item(stack, pos.map(|p| f64::from(p) + 0.5), [0.0; 3], 10);
+            }
+            After::GivePickup(uuid) => {
+                self.native_as_player(uuid, |g| g.give_pickup());
+            }
+            After::InventoryTrigger(uuid) => {
+                self.native_as_player(uuid, |g| {
+                    g.check_inventory_trigger();
+                });
+            }
+            After::GiveRest(uuid, stack, owner) => {
+                self.native_as_player(uuid, |g| g.give_remainder(stack, owner));
+            }
+            After::PlayerEquip(uuid, slot, stack) => {
+                self.native_as_player(uuid, |g| {
+                    g.player_equipped(&slot, stack.as_ref());
+                    g.apply_equipment();
+                });
             }
             After::PlayerDrop(uuid, stack) => {
                 // A player who left meanwhile drops nothing; their inventory had changed for good.
@@ -1170,6 +1195,8 @@ impl Game<'_> {
         level.actions.rollback_in(self);
         for (uuid, kept) in level.players {
             self.native_as_player(uuid, |g| {
+                g.ender_items = kept.ender_items;
+                g.level.player_extra = kept.player_extra;
                 g.inventory = kept.inventory;
                 g.armor = kept.armor;
                 g.offhand = kept.offhand;

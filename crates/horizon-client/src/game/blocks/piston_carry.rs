@@ -175,8 +175,11 @@ impl Game<'_> {
             && let Tag::Compound(map) = &mut tag
         {
             let block = &self.res.facts().get(piston.moved_state).name;
-            let mut carried =
-                horizon_client::save::encode_block_entity((pos.x, pos.y, pos.z), entity, block);
+            let mut carried = horizon_client::save::block_entity_encode::encode(
+                (pos.x, pos.y, pos.z),
+                entity,
+                block,
+            );
             if let Tag::Compound(fields) = &mut carried {
                 fields.insert(
                     "horizon:position_data".into(),

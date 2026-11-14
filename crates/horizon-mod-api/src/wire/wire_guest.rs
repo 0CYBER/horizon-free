@@ -756,6 +756,7 @@ mod tests {
 
     #[test]
     fn attachment_refusals_decode_in_guest_reply_without_reinterning() {
+        crate::wire::initialize().unwrap();
         let mut writer = Writer::new();
         for value in [
             crate::AttachmentRowError::HolderBusy,

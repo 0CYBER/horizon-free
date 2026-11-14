@@ -135,12 +135,19 @@ impl Game<'_> {
                     &mut claimed,
                 );
             }
-            if !claimed {
-                self.native_entity_interact(self.hand, id, &kind, stack.as_ref(), &mut claimed);
-            }
             if claimed {
                 self.swing_arm();
                 return Ok(true);
+            }
+            let mut result = None;
+            self.native_entity_interact(self.hand, id, &kind, stack.as_ref(), &mut result);
+            if let Some(answer) = result
+                && !matches!(
+                    answer,
+                    mod_api::InteractionResult::Pass | mod_api::InteractionResult::TryWithEmptyHand
+                )
+            {
+                return Ok(self.interaction_consumed(answer));
             }
         }
         Ok(self.interact_frame(target)

@@ -1781,6 +1781,7 @@ mod tests {
     /// pass in order: a crowd of players with mobs, arrows and items walking, crossing sections,
     /// joining (some synced as they join), leaving, idling, going bare and changing their data.
     #[test]
+    #[ignore = "daily"]
     fn send_on_threads_matches_send_in_order() {
         let mut seed = 0x853c_49e6_748f_ea9b_u64;
         let mut next = move |n: u64| {

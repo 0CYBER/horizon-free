@@ -76,6 +76,7 @@ impl<'p> MobsNearest<'p> {
 pub(super) fn hookless<'w>(base: &MobWorld<'w>) -> impl Fn() -> MobWorld<'w> + Sync + use<'w> {
     // Every field but the two hooks, named, so that a field added to `MobWorld` is decided here.
     let MobWorld {
+        mob_maps,
         world,
         registry,
         facts,
@@ -121,6 +122,7 @@ pub(super) fn hookless<'w>(base: &MobWorld<'w>) -> impl Fn() -> MobWorld<'w> + S
         border,
     } = base.clone();
     move || MobWorld {
+        mob_maps,
         world,
         registry,
         facts,

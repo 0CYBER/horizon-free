@@ -16,8 +16,11 @@ pub fn namespaces(root: &Path) -> Vec<String> {
 }
 
 /// Namespaces from the generated content marker, shared with resource-source loaders.
+/// Never `minecraft`, which a root built before that was left out could list.
 pub fn decode_namespaces(bytes: &[u8]) -> Vec<String> {
-    serde_json::from_slice(bytes).unwrap_or_default()
+    let mut namespaces: Vec<String> = serde_json::from_slice(bytes).unwrap_or_default();
+    namespaces.retain(|namespace| namespace != "minecraft");
+    namespaces
 }
 
 /// The namespaces whose tags loaders read in `root`: `minecraft`, and in a
@@ -31,4 +34,17 @@ pub fn tag_namespaces(root: &Path) -> Vec<String> {
         out.extend(mods);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    /// A root built while a mod's `data/minecraft/...` files still listed
+    /// vanilla's namespace reads as if they hadn't.
+    #[test]
+    fn vanilla_is_never_a_content_namespace() {
+        assert_eq!(
+            super::decode_namespaces(br#"["minecraft", "salvage"]"#),
+            ["salvage"]
+        );
+    }
 }

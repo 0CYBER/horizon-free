@@ -220,7 +220,7 @@ impl Default for WorldClock {
         }
     }
 }
-/// A clock time marker from the timelines (ClockTimeMarker).
+/// A clock time marker from the timelines (ClockTimeMarker); `resolve` is None past `i64::MAX`.
 #[derive(Clone, Copy, Debug)]
 pub struct TimeMarker {
     pub ticks: i64,
@@ -234,13 +234,13 @@ impl TimeMarker {
             None => self.ticks == total,
         }
     }
-    pub fn resolve(&self, total: i64) -> i64 {
+    pub fn resolve(&self, total: i64) -> Option<i64> {
         match self.period {
             Some(p) => {
                 let d = self.ticks - total.rem_euclid(p);
-                total + if d > 0 { d } else { p + d }
+                total.checked_add(if d > 0 { d } else { p + d })
             }
-            None => self.ticks,
+            None => Some(self.ticks),
         }
     }
 }

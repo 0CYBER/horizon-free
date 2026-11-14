@@ -21,6 +21,8 @@ use horizon_world::{
     movement_restitution::{RestitutionInput, RestitutionWorld, restitute_movement},
     registry::BlockStateId,
 };
+#[path = "climbing.rs"]
+mod climbing;
 
 /// `DeathProtection.TOTEM_EFFECTS`: clear, then regeneration II, absorption II
 /// and fire resistance.
@@ -386,56 +388,6 @@ impl Mob {
     }
     pub fn eye_y(&self) -> f64 {
         self.position.y + self.eye_height()
-    }
-    /// `LivingEntity.onClimbable` (`Spider.onClimbable`: the climbing flag):
-    /// the block it stands in is `#minecraft:climbable` (vines, ladders,
-    /// scaffolding...) or its mod parts' `is_ladder` says it is, or an open trapdoor over a ladder facing the same way
-    /// (`trapdoorUsableAsLadder`). A mob gliding (`isFallFlying`) through a
-    /// `#minecraft:can_glide_through` block (vines) is not on it: that test
-    /// comes first.
-    pub fn on_climbable(&self, w: &MobWorld) -> bool {
-        if self.kind.flags.climber {
-            return self.climbing;
-        }
-        // `AbstractHorse.onClimbable`, `Ghast.onClimbable`, `Phantom.onClimbable`
-        // and `HappyGhast.onClimbable` are a plain false: no horse, donkey,
-        // mule, undead horse, llama, trader llama, camel or camel husk (nor
-        // those flying monsters) is ever on a climbable block, whatever it
-        // stands in.
-        if super::equine::is_equine(self.species())
-            || matches!(
-                self.species(),
-                super::Species::Ghast | super::Species::Phantom | super::Species::HappyGhast
-            )
-        {
-            return false;
-        }
-        let (x, y, z) = (
-            self.position.x.floor() as i32,
-            self.position.y.floor() as i32,
-            self.position.z.floor() as i32,
-        );
-        let state = w.world.block(x, y, z);
-        let facts = w.facts.get(state);
-        if self.extra.fall_flying && w.has_tag("minecraft:can_glide_through", &facts.name) {
-            return false;
-        }
-        // `IBlockExtension.isLadder`: the block's parts answer after the tag.
-        let mut ladder = w.has_tag("minecraft:climbable", &facts.name);
-        crate::motion::native_is_ladder(
-            w.loop_context,
-            self.id,
-            BlockPos::new(x, y, z),
-            state,
-            &mut ladder,
-        );
-        if ladder {
-            return true;
-        }
-        facts.has_class("TrapDoorBlock")
-            && w.prop(x, y, z, "open") == Some("true")
-            && w.block_name(x, y - 1, z) == "minecraft:ladder"
-            && w.prop(x, y - 1, z, "facing") == w.prop(x, y, z, "facing")
     }
     /// `LivingEntity.getScale`: the `minecraft:scale` the server sent on this
     /// living entity (`extra.model_scale`, 0 when none came), through the
@@ -2607,6 +2559,7 @@ mod tests {
                 }
             }
             let w = MobWorld {
+                mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                 goal_host: None,
                 live_mobs: None,
                 teams: Default::default(),
@@ -2738,6 +2691,7 @@ mod tests {
                 .set(1, 0, 0, registry.default_state("minecraft:stone").unwrap())
                 .unwrap();
             let w = MobWorld {
+                mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                 goal_host: None,
                 live_mobs: None,
                 teams: Default::default(),
@@ -2870,6 +2824,7 @@ mod tests {
             }
         }
         let w = MobWorld {
+            mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
             goal_host: None,
             live_mobs: None,
             teams: Default::default(),
@@ -3007,6 +2962,7 @@ mod tests {
         let mut landing = |below: &Mob| -> f64 {
             let others = [below.seen(None, &crate::items::Items::empty())];
             let w = MobWorld {
+                mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
                 professions: crate::mobs::villager::profession_table(),
                 loop_context: crate::test_resources::server_loop_context(),
                 attributes: &motion.attributes,

@@ -34,7 +34,11 @@ impl Game<'_> {
         };
         let down = match key {
             Some(k) => self.movement_key_held(k),
-            None => self.mouse_held()[usize::from(name == "key.use")],
+            // The button, or the mapping's own held state (a toggle, a pad, `set_mapping_down`).
+            None => {
+                let use_key = usize::from(name == "key.use");
+                self.mouse_held()[use_key] || [self.left, self.right][use_key]
+            }
         };
         Ok(Some(mod_api::KeyMapping {
             down,

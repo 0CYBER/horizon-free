@@ -41,4 +41,15 @@ pub trait NetworkClientHost {
     /// state required by a packet remain the mod's responsibility. API 409.
     #[access(WorldOnly)]
     fn send_packet(&mut self, packet: ServerboundPlayPacket) -> Result<(), SendPacketError>;
+    /// Side: client.
+    /// Leaves the server or the single-player world (NeoForge's
+    /// `IClientCommonPacketListenerExtension.disconnect(Component)`), at the end of this frame,
+    /// not inside the calling hook. With a reason, the disconnect screen shows it (a
+    /// single-player world is saved first); with none, it leaves as the pause menu's Disconnect
+    /// does. The request belongs to the world it was made in: one made while that world closes
+    /// is dropped, never carried into the next. A second call in the same frame replaces the
+    /// reason. `DisconnectError::Unavailable` when no server or world is joined.
+    #[access(WorldOnly)]
+    /// Refuses text deeper than 512 component nodes before applying any changes.
+    fn disconnect(&mut self, reason: Option<Text>) -> Result<(), DisconnectError>;
 }

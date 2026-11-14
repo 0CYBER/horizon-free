@@ -3,6 +3,7 @@
 //! context of the source, optionally with a block or a target entity.
 use super::{Arg, Context, Game, R, Target, err};
 use horizon_client::{command::CommandError, text::Text};
+use horizon_core::java_number::float_to_string;
 use horizon_core::random::RandomSource;
 use serde_json::Value;
 
@@ -17,10 +18,6 @@ pub(in crate::game) struct ComputeContext {
 
 /// An ArithmeticException's message.
 type Arith = String;
-
-fn java_float(v: f32) -> String {
-    horizon_client::snbt::java_float(v)
-}
 
 impl Game<'_> {
     /// A provider argument: its registry id (None when inline) and value.
@@ -117,14 +114,14 @@ impl Game<'_> {
         };
         let original = self.provider_float(&provider, &c, 0).map_err(invalid)?;
         if !original.is_finite() {
-            return Err(invalid(java_float(original)));
+            return Err(invalid(float_to_string(original)));
         }
         // Mth.floor(original * scale)
         let result = (original * scale).floor() as i32;
         if result as f32 == original {
             self.feedback(exact(result));
         } else {
-            let original_text = Text::literal(java_float(original));
+            let original_text = Text::literal(float_to_string(original));
             let message = match &id {
                 Some(id) => Text::translate(
                     "command.compute.result.named.rounded",
@@ -256,7 +253,7 @@ impl Game<'_> {
                         if !f.is_finite() {
                             return Err(format!(
                                 "Value {} can't be safely converted to int",
-                                java_float(f)
+                                float_to_string(f)
                             ));
                         }
                         long_to_int(f as i64)?

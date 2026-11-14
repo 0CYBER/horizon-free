@@ -73,6 +73,18 @@ pub trait ClientSession {
         )
     }
     /// Side: client.
+    /// The local player's latency in milliseconds as the tab list draws it
+    /// (`PlayerInfo.getLatency`): the server's smoothed keep-alive average, refreshed by its own
+    /// broadcast. 0 before the server's first measurement, as vanilla; None outside a logged-in
+    /// client world or before the server lists this player. Sends nothing.
+    fn client_latency(&self) -> Option<u32> {
+        crate::world::phase::unprovided(
+            "ClientSession::client_latency",
+            "client_latency",
+            crate::world::phase::LoadAccess::ClientSetup,
+        )
+    }
+    /// Side: client.
     /// Existing local frame counters; None outside a logged-in client world.
     /// This read collects no history and sends nothing anywhere.
     fn client_frame_stats(&self) -> Option<ClientFrameStats> {

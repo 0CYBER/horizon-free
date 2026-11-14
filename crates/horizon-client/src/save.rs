@@ -17,6 +17,7 @@ use crate::mod_chunk_tickets::{ModTicket, ModTickets, TicketOwner};
 mod backpressure;
 use backpressure::compress_records;
 pub mod biome_regions;
+pub mod block_entity_encode;
 mod block_entity_order;
 pub mod level_mods;
 mod respawn;
@@ -651,200 +652,6 @@ pub fn block_entity_id<'a>(e: &'a crate::containers::BlockEntity, block: &'a str
         _ => e.id(),
     }
 }
-pub fn encode_block_entity(
-    p: (i32, i32, i32),
-    e: &crate::containers::BlockEntity,
-    block: &str,
-) -> Tag {
-    use crate::containers::BlockEntity;
-    if let BlockEntity::Mod(m) = e {
-        let mut map = m.nbt.clone();
-        map.insert("id".into(), string(m.id()));
-        if m.items.iter().any(Option::is_some) {
-            map.insert("Items".into(), encode_items(&m.items));
-        }
-        for (key, v) in [("x", p.0), ("y", p.1), ("z", p.2)] {
-            map.insert(key.into(), Tag::Int(v));
-        }
-        return Tag::Compound(map);
-    }
-    let components = match e {
-        BlockEntity::Banner(b) => b.components.clone(),
-        BlockEntity::CopperGolemStatue(components) => components.clone(),
-        _ => Compound::new(),
-    };
-    let mut entries = vec![
-        ("id", string(block_entity_id(e, block))),
-        ("x", Tag::Int(p.0)),
-        ("y", Tag::Int(p.1)),
-        ("z", Tag::Int(p.2)),
-        ("keepPacked", Tag::Byte(0)),
-        ("components", Tag::Compound(components)),
-    ];
-    match e {
-        // EnderChestBlockEntity saves nothing of its own: the items are the player's.
-        BlockEntity::Chest(_) if block == "minecraft:ender_chest" => {}
-        BlockEntity::Chest(items) => {
-            let list = encode_items(items);
-            // ShulkerBoxBlockEntity.saveAdditional: `saveAllItems(.., false)`
-            // writes no list for an empty box; other containers always do.
-            let empty = matches!(&list, Tag::List(l) if l.is_empty());
-            if !(empty && block.ends_with("shulker_box")) {
-                entries.push(("Items", list));
-            }
-        }
-        BlockEntity::Furnace(f) => {
-            entries.push(("Items", encode_items(&f.items)));
-            entries.push(("lit_time_remaining", Tag::Int(f.lit_remaining)));
-            entries.push(("lit_total_time", Tag::Int(f.lit_total)));
-            entries.push(("cooking_time_spent", Tag::Int(f.cooking_timer)));
-            entries.push(("cooking_total_time", Tag::Int(f.cooking_total)));
-            entries.push(("speed_multiplier", Tag::Float(f.speed.to_bits())));
-            let used: Compound = f
-                .recipes_used
-                .iter()
-                .map(|(id, count)| (id.as_str().into(), Tag::Int(*count as i32)))
-                .collect();
-            entries.push(("RecipesUsed", Tag::Compound(used)));
-        }
-        BlockEntity::Brewing(b) => {
-            entries.push(("Items", encode_items(&b.items)));
-            entries.push(("BrewTime", Tag::Int(b.brew_time)));
-            entries.push(("total_brew_time", Tag::Int(b.total_brew_time)));
-            entries.push(("Fuel", Tag::Int(b.fuel)));
-            entries.push(("total_fuel", Tag::Int(b.total_fuel)));
-            entries.push(("speed_multiplier", Tag::Float(b.speed.to_bits())));
-        }
-        BlockEntity::Sign(sign) => entries.extend(sign.encode()),
-        BlockEntity::Jukebox(j) => {
-            if let Some(record) = j.record() {
-                entries.push(("RecordItem", item_to_nbt(record)));
-            }
-            if j.song_clock_present {
-                entries.push(("ticks_since_song_started", Tag::Long(j.ticks)));
-            }
-        }
-        BlockEntity::Beacon(b) => {
-            if let Some(p) = &b.primary {
-                entries.push(("primary_effect", string(p)));
-            }
-            if let Some(s) = &b.secondary {
-                entries.push(("secondary_effect", string(s)));
-            }
-            entries.push(("Levels", Tag::Int(b.levels)));
-        }
-        BlockEntity::Lectern(l) => {
-            if let Some(book) = &l.book {
-                entries.push(("Book", item_to_nbt(book)));
-                entries.push(("Page", Tag::Int(l.page)));
-            }
-        }
-        BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
-        BlockEntity::Shelf(shelf) => {
-            entries.push(("Items", encode_items(&shelf.items)));
-            entries.push((
-                "align_items_to_bottom",
-                Tag::Byte(i8::from(shelf.align_to_bottom)),
-            ));
-        }
-        // ChiseledBookShelfBlockEntity.saveAdditional.
-        BlockEntity::ChiseledBookshelf(b) => {
-            entries.push(("Items", encode_items(&b.items)));
-            entries.push(("last_interacted_slot", Tag::Int(b.last_slot)));
-        }
-        // CampfireBlockEntity.saveAdditional.
-        BlockEntity::Campfire(c) => {
-            entries.push(("Items", encode_items(&c.items)));
-            entries.push(("CookingTimes", Tag::IntArray(c.progress.to_vec())));
-            entries.push(("CookingTotalTimes", Tag::IntArray(c.total.to_vec())));
-        }
-        BlockEntity::Crafter(c) => {
-            entries.push(("Items", encode_items(&c.items)));
-            entries.push((
-                "disabled_slots",
-                Tag::IntArray(
-                    (0..9)
-                        .filter(|&i| c.disabled[i])
-                        .map(|i| i as i32)
-                        .collect(),
-                ),
-            ));
-            entries.push(("triggered", Tag::Int(c.triggered)));
-            entries.push(("crafting_ticks_remaining", Tag::Int(c.crafting_ticks)));
-        }
-        BlockEntity::Banner(b) => {
-            if !b.layers.is_empty() {
-                entries.push(("patterns", crate::banner::layers_to_nbt(&b.layers)));
-            }
-            if let Some(name) = &b.name {
-                entries.push(("CustomName", string(name)));
-            }
-        }
-        BlockEntity::CreakingHeart(h) => {
-            if let Some((_, uuid)) = h.creaking {
-                entries.push(("creaking", uuid_tag(uuid)));
-            }
-        }
-        BlockEntity::Skull(s) => {
-            if let Some(profile) = &s.profile {
-                entries.push(("profile", profile.clone()));
-            }
-            if let Some(sound) = &s.note_block_sound {
-                entries.push(("note_block_sound", string(sound)));
-            }
-            if let Some(name) = &s.custom_name {
-                entries.push(("custom_name", name.clone()));
-            }
-        }
-        // TheEndGatewayBlockEntity.saveAdditional.
-        BlockEntity::EndGateway(g) => {
-            entries.push(("Age", Tag::Long(g.age)));
-            if let Some(exit) = g.exit_portal {
-                entries.push(("exit_portal", Tag::IntArray(exit.to_vec())));
-            }
-            if g.exact_teleport {
-                entries.push(("ExactTeleport", Tag::Byte(1)));
-            }
-        }
-        BlockEntity::Spawner(s) => entries.extend(s.save()),
-        BlockEntity::TrialSpawner(s) => entries.extend(s.save()),
-        BlockEntity::Vault(v) => entries.extend(v.save()),
-        BlockEntity::Beehive(h) => entries.extend(h.to_nbt()),
-        BlockEntity::CommandBlock(c) => entries.extend(c.save()),
-        BlockEntity::StructureBlock(b) => entries.extend(b.save()),
-        BlockEntity::JigsawBlock(b) => entries.extend(b.save()),
-        BlockEntity::TestBlock(b) => entries.extend(b.save()),
-        BlockEntity::TestInstanceBlock(b) => entries.extend(b.save()),
-        BlockEntity::Brushable(b) => {
-            if let Some(table) = &b.loot_table {
-                entries.push(("LootTable", table.clone()));
-                if let Some(seed) = &b.table_seed_tag {
-                    entries.push(("LootTableSeed", seed.clone()));
-                }
-            } else if let Some(item) = &b.item {
-                entries.push(("item", item_to_nbt(item)));
-            }
-        }
-        // ConduitBlockEntity.saveAdditional: EntityReference.store.
-        BlockEntity::Conduit(target) => {
-            if let Some(uuid) = target {
-                entries.push(("Target", Tag::IntArray(uuid.to_vec())));
-            }
-        }
-        // Encoded above; an enchanting table's CustomName is the block name.
-        BlockEntity::DaylightDetector
-        | BlockEntity::Bell
-        | BlockEntity::EndPortal
-        | BlockEntity::EnchantingTable
-        | BlockEntity::CopperGolemStatue(_)
-        | BlockEntity::Mod(_) => {}
-        // PotentSulfurBlockEntity.saveAdditional.
-        BlockEntity::PotentSulfur(sulfur) => {
-            entries.push(("countdown", Tag::Int(sulfur.waiting_countdown)))
-        }
-    }
-    Tag::compound(entries)
-}
 /// `block_entity_nbt::overlay`, then a container that now holds items loses its
 /// loot table (vanilla clears it when the loot is generated into the container).
 fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
@@ -867,7 +674,7 @@ pub fn block_entity_data(
     block: &str,
     lock: Option<&Tag>,
 ) -> Tag {
-    let mut tag = encode_block_entity(p, e, block);
+    let mut tag = block_entity_encode::encode(p, e, block);
     if let Tag::Compound(map) = &mut tag {
         map.remove(&"keepPacked".into());
         if let Some(lock) = lock {
@@ -1512,7 +1319,7 @@ pub fn encode_with(
         .filter(|(_, e)| !block_entity_placeholder(e))
         .map(|(p, e)| {
             let block = block_name(p);
-            let mut current = encode_block_entity(*p, e, &block);
+            let mut current = block_entity_encode::encode(*p, e, &block);
             if let Some((_, name)) = chunk.block_names.iter().find(|(q, _)| q == p)
                 && let Tag::Compound(map) = &mut current
             {
@@ -1529,7 +1336,7 @@ pub fn encode_with(
                     let loaded = decode_block_entity(original).map_or_else(
                         || current.clone(),
                         |(q, e)| {
-                            let mut loaded = encode_block_entity(q, &e, &block);
+                            let mut loaded = block_entity_encode::encode(q, &e, &block);
                             if !matches!(
                                 e,
                                 crate::containers::BlockEntity::Banner(_)
@@ -5451,7 +5258,7 @@ mod tests {
         use crate::containers::BlockEntity;
         let mut slots = vec![None; 27];
         slots[0] = Some(crate::items::ItemStack::new("minecraft:diamond", 3));
-        let chest = super::encode_block_entity(
+        let chest = super::block_entity_encode::encode(
             (1, 2, 3),
             &BlockEntity::Chest(slots.clone()),
             "minecraft:chest",
@@ -5460,7 +5267,7 @@ mod tests {
             chest.get("Items").is_some(),
             "control: a chest saves its items"
         );
-        let ender = super::encode_block_entity(
+        let ender = super::block_entity_encode::encode(
             (1, 2, 3),
             &BlockEntity::Chest(slots),
             "minecraft:ender_chest",
@@ -6499,7 +6306,7 @@ mod tests {
         let encode = |entries: &[((i32, i32, i32), BlockEntity)]| {
             entries
                 .iter()
-                .map(|(p, e)| encode_block_entity(*p, e, "minecraft:chest"))
+                .map(|(p, e)| block_entity_encode::encode(*p, e, "minecraft:chest"))
                 .collect::<Vec<_>>()
         };
         for input in [&batch[..0], &batch[..1], &batch[..]] {
@@ -6806,7 +6613,7 @@ mod tests {
         crafter.disabled[4] = true;
         crafter.triggered = 1;
         crafter.crafting_ticks = 3;
-        let tag = encode_block_entity(
+        let tag = block_entity_encode::encode(
             (7, 8, 9),
             &crate::containers::BlockEntity::Crafter(crafter),
             "minecraft:crafter",
@@ -6831,7 +6638,7 @@ mod tests {
                 triggered: value,
                 ..Default::default()
             };
-            let tag = encode_block_entity(
+            let tag = block_entity_encode::encode(
                 (0, 0, 0),
                 &crate::containers::BlockEntity::Crafter(crafter),
                 "minecraft:crafter",
@@ -6868,7 +6675,7 @@ mod tests {
         c.items[1] = Some(crate::items::ItemStack::new("minecraft:beef", 1));
         c.progress[1] = 120;
         c.total[1] = 600;
-        let tag = encode_block_entity(
+        let tag = block_entity_encode::encode(
             (3, 64, -2),
             &crate::containers::BlockEntity::Campfire(Box::new(c.clone())),
             "minecraft:soul_campfire",
@@ -6938,7 +6745,7 @@ mod tests {
             panic!("not a lectern");
         };
         assert_eq!(l.page, 1);
-        let saved = encode_block_entity(
+        let saved = block_entity_encode::encode(
             pos,
             &crate::containers::BlockEntity::Lectern(l),
             "minecraft:lectern",
@@ -7066,7 +6873,7 @@ mod tests {
         assert_eq!(chest.slots().len(), 27);
         assert_eq!(pos, (1, 2, 3));
         // The encoded entity has no field to carry the lock...
-        let plain = encode_block_entity(pos, &chest, "minecraft:chest");
+        let plain = block_entity_encode::encode(pos, &chest, "minecraft:chest");
         assert!(plain.get("lock").is_none());
         // ...so `data get` puts back the one it was loaded with.
         let data = block_entity_data(pos, &chest, "minecraft:chest", saved.get("lock"));
@@ -7090,7 +6897,7 @@ mod tests {
         };
         let next = spawner.next_data().and_then(|d| d.id());
         assert_eq!(next.as_deref(), Some("minecraft:zombie"));
-        let tag = encode_block_entity(pos, &back, "minecraft:spawner");
+        let tag = block_entity_encode::encode(pos, &back, "minecraft:spawner");
         let (_, again) = decode_block_entity(&tag).expect("spawner again");
         let crate::containers::BlockEntity::Spawner(again) = again else {
             panic!("not a spawner");
@@ -7291,7 +7098,10 @@ mod tests {
         };
         let batch = Compound::from([("effect".into(), Tag::Int(23))]);
         machine.set_client_update_fields(batch.clone());
-        assert_eq!(encode_block_entity(pos, &entity, "test:machine"), saved);
+        assert_eq!(
+            block_entity_encode::encode(pos, &entity, "test:machine"),
+            saved
+        );
         assert_eq!(machine.take_client_update_fields(), Some(batch));
     }
 
@@ -7317,7 +7127,10 @@ mod tests {
         assert!(!m.nbt.contains_key(&"Items".into()));
         assert_eq!(m.items.len(), 1);
         assert_eq!(m.items[0].as_ref().map(|s| s.count), Some(3));
-        assert_eq!(encode_block_entity(pos, &back, "gtmod:macerator"), saved);
+        assert_eq!(
+            block_entity_encode::encode(pos, &back, "gtmod:macerator"),
+            saved
+        );
         // `Items` that are not an item list stay the mod's, as saved.
         for items in [
             r#"Items:{energy:5}"#,
@@ -7336,7 +7149,7 @@ mod tests {
             };
             assert!(m.items.is_empty(), "{items}");
             assert_eq!(
-                encode_block_entity(pos, &back, "gtmod:cable"),
+                block_entity_encode::encode(pos, &back, "gtmod:cable"),
                 saved,
                 "{items}"
             );
@@ -7377,7 +7190,11 @@ mod tests {
             };
         }
         let entity = BlockEntity::CopperGolemStatue(components.clone());
-        let tag = encode_block_entity((1, 2, 3), &entity, "minecraft:oxidized_copper_golem_statue");
+        let tag = block_entity_encode::encode(
+            (1, 2, 3),
+            &entity,
+            "minecraft:oxidized_copper_golem_statue",
+        );
         assert_eq!(
             tag.get("id"),
             Some(&string("minecraft:copper_golem_statue"))
@@ -7393,7 +7210,7 @@ mod tests {
         let patch = crate::block_entity_item::pick(&saved);
         assert_eq!(patch.get(&"minecraft:custom_name".into()), Some(&name));
         // Placing that item gives the entity the name back.
-        let fresh = crate::block_entity_nbt::canonical(&encode_block_entity(
+        let fresh = crate::block_entity_nbt::canonical(&block_entity_encode::encode(
             (1, 2, 3),
             &BlockEntity::CopperGolemStatue(Compound::new()),
             "minecraft:copper_golem_statue",
@@ -7410,7 +7227,7 @@ mod tests {
             name: Some("Flag".into()),
             components: [("minecraft:rarity".into(), string("uncommon"))].into(),
         };
-        let tag = encode_block_entity(
+        let tag = block_entity_encode::encode(
             (1, 2, 3),
             &crate::containers::BlockEntity::Banner(banner.clone()),
             "minecraft:red_banner",
@@ -7550,7 +7367,7 @@ mod tests {
                     exit_portal: exit,
                     exact_teleport: exact,
                 };
-                let tag = encode_block_entity(
+                let tag = block_entity_encode::encode(
                     (702, 100, 0),
                     &BlockEntity::EndGateway(gateway.clone()),
                     "minecraft:end_gateway",
@@ -7631,7 +7448,7 @@ mod tests {
             Some("minecraft:entity.player.hurt")
         );
         assert_eq!(back.id(), "minecraft:skull");
-        let tag = encode_block_entity(pos, &back, "minecraft:player_head");
+        let tag = block_entity_encode::encode(pos, &back, "minecraft:player_head");
         assert_eq!(
             crate::block_entity_nbt::id(&tag).as_deref(),
             Some("minecraft:skull")
@@ -7643,7 +7460,7 @@ mod tests {
         };
         assert_eq!(again.profile, skull.profile);
         // A profile-less head (skeleton, creeper) round-trips too.
-        let plain = encode_block_entity(
+        let plain = block_entity_encode::encode(
             pos,
             &crate::containers::BlockEntity::Skull(crate::containers::Skull::default()),
             "minecraft:creeper_head",
@@ -7683,7 +7500,7 @@ mod tests {
             creaking: Some((Some(7), [1, 2, 3, 4])),
             ..Default::default()
         };
-        let tag = encode_block_entity(
+        let tag = block_entity_encode::encode(
             (3, 70, -5),
             &BlockEntity::CreakingHeart(Box::new(heart)),
             "minecraft:creaking_heart",
@@ -7700,7 +7517,7 @@ mod tests {
         };
         // The entity id is resolved again once the creaking is loaded.
         assert_eq!(h.creaking, Some((None, [1, 2, 3, 4])));
-        let lonely = encode_block_entity(
+        let lonely = block_entity_encode::encode(
             (0, 0, 0),
             &BlockEntity::CreakingHeart(Box::default()),
             "minecraft:creaking_heart",
@@ -8463,7 +8280,8 @@ mod tests {
         };
         f.recipes_used
             .insert("minecraft:cooked_porkchop".to_owned(), 3);
-        let tag = encode_block_entity((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
+        let tag =
+            block_entity_encode::encode((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
         let Some((_, BlockEntity::Furnace(back))) = decode_block_entity(&tag) else {
             panic!("a furnace back");
         };
@@ -8652,7 +8470,8 @@ mod tests {
             .insert("iron_ingot_from_smelting_iron_ore".to_owned(), 2);
         f.recipes_used
             .insert("minecraft:iron_ingot_from_smelting_iron_ore".to_owned(), 3);
-        let tag = encode_block_entity((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
+        let tag =
+            block_entity_encode::encode((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
         let Some((_, BlockEntity::Furnace(back))) = decode_block_entity(&tag) else {
             panic!("a furnace back");
         };
@@ -9886,7 +9705,7 @@ mod jukebox_song_clock_tests {
             // `setSongWithoutPlaying`: a saved clock, unstarted; else no song.
             assert_eq!(j.playing, clock.is_some());
             assert_eq!(j.loaded_clock, clock.is_some());
-            let saved = encode_block_entity(pos, &model, "minecraft:jukebox");
+            let saved = block_entity_encode::encode(pos, &model, "minecraft:jukebox");
             let command = block_entity_data(pos, &model, "minecraft:jukebox", None);
             check(label, &saved, clock);
             check(label, &command, clock);
@@ -9903,7 +9722,7 @@ mod jukebox_song_clock_tests {
                 };
                 j.playing = false;
                 // Decoded clock state, not this separate legacy flag, owns saving.
-                let saved = encode_block_entity(pos, &detached, "minecraft:jukebox");
+                let saved = block_entity_encode::encode(pos, &detached, "minecraft:jukebox");
                 check("clock independent of legacy playing", &saved, clock);
                 record_kept(&saved);
             }
@@ -9911,12 +9730,12 @@ mod jukebox_song_clock_tests {
         let empty = BlockEntity::Jukebox(Jukebox::default());
         check(
             "default modeled/no raw",
-            &encode_block_entity((4, 200, 4), &empty, "minecraft:jukebox"),
+            &block_entity_encode::encode((4, 200, 4), &empty, "minecraft:jukebox"),
             None,
         );
         let raw = input(Some(41), true);
         let (pos, loaded_model) = decode_block_entity(&raw).unwrap();
-        let loaded = encode_block_entity(pos, &loaded_model, "minecraft:jukebox");
+        let loaded = block_entity_encode::encode(pos, &loaded_model, "minecraft:jukebox");
         let BlockEntity::Jukebox(j) = loaded_model else {
             unreachable!()
         };
@@ -9925,7 +9744,7 @@ mod jukebox_song_clock_tests {
             playing: true,
             ..Default::default()
         });
-        let current = encode_block_entity(pos, &current, "minecraft:jukebox");
+        let current = block_entity_encode::encode(pos, &current, "minecraft:jukebox");
         check("modeled record-only/no raw", &current, None);
         record_kept(&current);
         // The chunk writer uses this real overlay after encoding its model.

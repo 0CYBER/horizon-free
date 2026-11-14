@@ -535,6 +535,9 @@ impl<'a, 'g, 'h> PassLevel<'a, 'g, 'h> {
     }
 }
 impl horizon_client::mobs::finalize::FinalizeLevel for PassLevel<'_, '_, '_> {
+    fn mob_maps(&self) -> &horizon_client::neoforge_mob_maps::NeoForgeMobMaps {
+        self.l.game.mob_maps()
+    }
     fn spawn_event(
         &mut self,
         mob: &mut horizon_client::mobs::Mob,

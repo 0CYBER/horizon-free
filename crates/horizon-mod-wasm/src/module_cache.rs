@@ -125,6 +125,11 @@ impl ModuleCache {
         digest.0.update((setting.len() as u64).to_le_bytes());
         digest.0.update(setting.as_bytes());
         digest.0.update([u8::from(enabled)]);
+        for (setting, enabled) in crate::runtime::THREADS {
+            digest.0.update((setting.len() as u64).to_le_bytes());
+            digest.0.update(setting.as_bytes());
+            digest.0.update([u8::from(enabled)]);
+        }
         // Runtime stack bounds need not affect Wasmtime's compiled-code hash,
         // but a policy change still starts a new Horizon cache generation.
         digest

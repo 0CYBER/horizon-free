@@ -855,14 +855,29 @@ impl Launcher {
                         .child(trf("Uses game internals ({count})", &[("count", &count)])),
                 )
                 .tooltip(move |_, cx| {
-                    cx.new(|_| InternalsTooltip {
-                        paths: paths.clone(),
+                    cx.new(|_| NoteTooltip {
+                        lines: paths.clone(),
                         ink: pal.ink,
                         background,
                     })
                     .into()
                 }),
         )
+    }
+
+    /// `control` with `reason` shown on hover: how a disabled control says why.
+    pub(super) fn with_reason(&self, control: Stateful<Div>, reason: &str) -> Stateful<Div> {
+        let ink = Pal::of(&self.theme).ink;
+        let background = self.theme.well;
+        let reason = reason.to_owned();
+        control.tooltip(move |_, cx| {
+            cx.new(|_| NoteTooltip {
+                lines: vec![reason.clone()],
+                ink,
+                background,
+            })
+            .into()
+        })
     }
 
     /// The kind badge beside a mod's name.
@@ -880,13 +895,14 @@ impl Launcher {
     }
 }
 
-struct InternalsTooltip {
-    paths: Vec<String>,
+/// A tooltip of text lines: a mod's declared internals, or why a control is disabled.
+struct NoteTooltip {
+    lines: Vec<String>,
     ink: Hsla,
     background: Hsla,
 }
 
-impl Render for InternalsTooltip {
+impl Render for NoteTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
@@ -895,7 +911,7 @@ impl Render for InternalsTooltip {
             .rounded(px(8.))
             .bg(self.background)
             .children(
-                self.paths
+                self.lines
                     .iter()
                     .map(|path| text_in(12., self.ink).child(path.clone())),
             )

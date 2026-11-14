@@ -22,6 +22,27 @@ to replace the state's emission or `None` to keep it.
 
 Keep the callback a pure function of the level, position and state, without side effects.
 
+## Path classification
+
+`BlockPart::block_path_type` answers for `event.state` at `event.pos`, with a read-only
+host for the owning level. Return `Some(PathType)` to replace the whole static classification,
+even for air, or `None` to use vanilla. The same state may answer differently by position.
+This is separate from `is_pathfindable`, which remains state-only. The server caches the final
+static classification in 4096 direct-mapped positional slots shared by its AI workers, including
+`Open` for missing navigation-region chunks. A collision replaces a slot. A matching
+`sendBlockUpdated` notification clears it: ordinary writes require an actual state change,
+`UPDATE_CLIENTS` and full chunk status at least `BLOCK_TICKING`; direct block-entity notifications
+clear even unchanged state. Time, `/reload`, chunk load and chunk unload do not clear it. Keep
+the answer deterministic for that lifetime. Neighbour and mob-specific adjustments are not
+stored in this cache; existing per-search evaluator caches remain.
+
+`BlockPart::adjacent_block_path_type` answers for a neighbour at its own `event.pos`;
+`event.path_type` is that neighbour's classified type, not the node's type. Return `Some`
+to end the scan immediately, even if the answer equals the node's current type. Return
+`None` to retain that neighbour's fluid and vanilla contribution. Neighbours are visited
+in x, y, z order, each from -1 to 1, excluding the node's own column. No mob is supplied
+to either query. A panicking callback is contained and falls back to the default.
+
 ## Connections
 
 `BlockPart::can_be_connected_to` lets the block beside a fence, a wall, or iron bars or a pane
@@ -50,8 +71,10 @@ state whose parts are asked. The host is a read-only `LevelSide`.
 | --- | --- |
 | Moment | After the client update, the neighbour updates and the neighbours' shape updates: a fence beside new stone already shows its connection. A write made inside those updates is heard after the updates it queued itself, so its neighbours are settled too; several such writes are heard in the order they happened. |
 | Replaced writes | A write whose `on_place` replaced the block is not heard; the write that replaced it is. |
-| Sides | Servers hear every write. Clients hear the blocks the server sends, their predictions and the settled states, and their replays of piston moves; not the guesses made while deciding what an action does.  Predicted mining breaks write air directly and do not fire this hook. |
-| Not heard | World generation's writes. |
+| Sides | Servers hear every changed write with `event.predicted: false`. Clients hear server updates, applied local predictions (including breaks and placements), settled corrections and piston replays. |
+| Predictions | Applied local writes are heard immediately with `event.predicted: true`. Server updates at predicted positions stay held and unheard until acknowledgement. A confirmation of the same state has no second event; a denial is heard once from the predicted state to the server's with `predicted: false`. |
+| Not heard | Equal-state writes, unapplied guesses made while deciding an action, and world generation's writes. |
+| Cost | Without a listener, one flag check; no event or level adapter is built. |
 | `block_changed` | The global server hook hears a change earlier, right after the state is written, and also for replaced writes. |
 | Panics | A panicking part is contained with a warning. |
 

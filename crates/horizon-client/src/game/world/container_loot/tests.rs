@@ -1,4 +1,4 @@
-//! Production gameplay triggers, with an isolated game process per fixture.
+//! Production gameplay triggers, with one isolated game process per group of scenarios.
 use super::*;
 use crate::game::minecarts::{CartKind, Minecart};
 use horizon_client::save::PendingContainerLoot;
@@ -9,11 +9,14 @@ use std::sync::{Arc, Mutex};
 const POS: (i32, i32, i32) = (8, 64, 8);
 const TABLE: &str = "test:first_access";
 
-fn fresh(name: &str) -> bool {
-    if std::env::var("HORIZON_CONTAINER_LOOT_TEST").as_deref() == Ok(name) {
+/// Runs the group in one child process, so the game resources load once per group and the
+/// memory returns to the system when the child exits. Returns true in the parent, once the
+/// child passed; false inside the child, which then runs the group's scenarios itself.
+fn in_child(group: &str) -> bool {
+    if std::env::var("HORIZON_CONTAINER_LOOT_TEST").as_deref() == Ok(group) {
         std::fs::write(
             std::env::var_os("HORIZON_CONTAINER_LOOT_MARKER").unwrap(),
-            name,
+            group,
         )
         .unwrap();
         return false;
@@ -22,16 +25,16 @@ fn fresh(name: &str) -> bool {
     // memory while retaining the ordinary test runner's default parallelism.
     static FIXTURES: Mutex<()> = Mutex::new(());
     let _lock = FIXTURES.lock().unwrap_or_else(|e| e.into_inner());
-    let root = std::env::temp_dir().join(format!("container-loot-{}-{name}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("container-loot-{}-{group}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
     let result = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            &format!("game::container_loot::tests::{name}"),
+            &format!("game::container_loot::tests::{group}"),
             "--include-ignored",
             "--nocapture",
         ])
-        .env("HORIZON_CONTAINER_LOOT_TEST", name)
+        .env("HORIZON_CONTAINER_LOOT_TEST", group)
         .env("HORIZON_CONTAINER_LOOT_MARKER", root.join("executed"))
         .env("HORIZON_HOME", root.join("home"))
         .env("HORIZON_LAUNCHER_HOME", root.join("launcher"))
@@ -50,6 +53,14 @@ fn fresh(name: &str) -> bool {
         String::from_utf8_lossy(&result.stderr)
     );
     true
+}
+
+/// Runs each scenario in turn, naming it first so a failure shows which one it was.
+fn run_group(scenarios: &[(&str, fn())]) {
+    for (name, scenario) in scenarios {
+        println!("scenario {name}");
+        scenario();
+    }
 }
 
 fn with_game(test: impl FnOnce(&mut Game<'_>)) {
@@ -159,12 +170,7 @@ fn open(game: &mut Game<'_>, pos: (i32, i32, i32), luck: f64) {
     .unwrap();
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn player_open_uses_admitted_guest_luck_and_entity() {
-    if fresh("player_open_uses_admitted_guest_luck_and_entity") {
-        return;
-    }
     with_game(|g| {
         for (pos, luck, want) in [(POS, 2.0, 3), ((10, 64, 8), 0.0, 1)] {
             place(g, pos, TABLE, 37);
@@ -182,12 +188,7 @@ fn player_open_uses_admitted_guest_luck_and_entity() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn hopper_pull_unpacks_source_once() {
-    if fresh("hopper_pull_unpacks_source_once") {
-        return;
-    }
     with_game(|g| {
         assert!(g.run_command("setblock 8 63 8 minecraft:hopper"));
         place(g, POS, TABLE, 37);
@@ -206,12 +207,7 @@ fn hopper_pull_unpacks_source_once() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn hopper_push_unpacks_destination_once() {
-    if fresh("hopper_push_unpacks_destination_once") {
-        return;
-    }
     with_game(|g| {
         assert!(g.run_command("setblock 7 64 8 minecraft:hopper[facing=east]{Items:[{Slot:0b,id:\"minecraft:cobblestone\",count:1}]}"));
         place(g, POS, TABLE, 37);
@@ -229,12 +225,7 @@ fn hopper_push_unpacks_destination_once() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn comparator_first_read_unpacks_and_measures() {
-    if fresh("comparator_first_read_unpacks_and_measures") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         assert!(g.run_command("setblock 9 64 8 minecraft:comparator[facing=west]"));
@@ -257,12 +248,7 @@ fn comparator_first_read_unpacks_and_measures() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn block_break_unpacks_before_contents_drop() {
-    if fresh("block_break_unpacks_before_contents_drop") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         g.as_guest(12, |g| {
@@ -278,12 +264,7 @@ fn block_break_unpacks_before_contents_drop() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn explosion_unpacks_before_contents_drop() {
-    if fresh("explosion_unpacks_before_contents_drop") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         let explode = |g: &mut Game<'_>| {
@@ -304,12 +285,7 @@ fn explosion_unpacks_before_contents_drop() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn item_replace_unpacks_before_writing() {
-    if fresh("item_replace_unpacks_before_writing") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         assert!(g.run_command("item replace block 8 64 8 container.0 with minecraft:stone"));
@@ -328,12 +304,7 @@ fn item_replace_unpacks_before_writing() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn double_chest_rolls_each_half_once() {
-    if fresh("double_chest_rolls_each_half_once") {
-        return;
-    }
     with_game(|g| {
         assert!(g.run_command("setblock 8 64 8 minecraft:chest[facing=north,type=left]{LootTable:\"test:left\",LootTableSeed:37L}"));
         assert!(g.run_command("setblock 9 64 8 minecraft:chest[facing=north,type=right]{LootTable:\"test:right\",LootTableSeed:91L}"));
@@ -362,12 +333,7 @@ fn cart(g: &mut Game<'_>) -> u32 {
     g.carts.push(c);
     id
 }
-#[test]
-#[ignore = "requires prepared resources"]
 fn chest_minecart_open_uses_opener_once() {
-    if fresh("chest_minecart_open_uses_opener_once") {
-        return;
-    }
     with_game(|g| {
         let id = cart(g);
         g.as_guest(12, |g| {
@@ -395,12 +361,7 @@ fn chest_minecart_open_uses_opener_once() {
         );
     });
 }
-#[test]
-#[ignore = "requires prepared resources"]
 fn chest_minecart_break_unpacks_before_drop() {
-    if fresh("chest_minecart_break_unpacks_before_drop") {
-        return;
-    }
     with_game(|g| {
         let id = cart(g);
         for _ in 0..2 {
@@ -413,12 +374,7 @@ fn chest_minecart_break_unpacks_before_drop() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn hopper_minecart_pull_unpacks_source_once() {
-    if fresh("hopper_minecart_pull_unpacks_source_once") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         let mut hopper = Minecart::new(900, CartKind::Hopper, Vec3::new(8.5, 62.5, 8.5));
@@ -448,12 +404,7 @@ fn hopper_minecart_pull_unpacks_source_once() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn dropper_push_unpacks_destination_once() {
-    if fresh("dropper_push_unpacks_destination_once") {
-        return;
-    }
     with_game(|g| {
         assert!(g.run_command("setblock 7 64 8 minecraft:dropper[facing=east]{Items:[{Slot:0b,id:\"minecraft:cobblestone\",count:1}]}"));
         place(g, POS, TABLE, 37);
@@ -468,12 +419,7 @@ fn dropper_push_unpacks_destination_once() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn dispenser_selection_unpacks_source_once() {
-    if fresh("dispenser_selection_unpacks_source_once") {
-        return;
-    }
     with_game(|g| {
         assert!(g.run_command(
             "setblock 8 64 8 minecraft:dispenser{LootTable:\"test:first_access\",LootTableSeed:37L}"
@@ -488,12 +434,7 @@ fn dispenser_selection_unpacks_source_once() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn execute_if_items_unpacks_before_reading() {
-    if fresh("execute_if_items_unpacks_before_reading") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         for _ in 0..2 {
@@ -506,12 +447,7 @@ fn execute_if_items_unpacks_before_reading() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn loot_insert_unpacks_before_inserting() {
-    if fresh("loot_insert_unpacks_before_inserting") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         for _ in 0..2 {
@@ -523,12 +459,7 @@ fn loot_insert_unpacks_before_inserting() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn detector_rail_comparator_unpacks_cart_once() {
-    if fresh("detector_rail_comparator_unpacks_cart_once") {
-        return;
-    }
     with_game(|g| {
         assert!(g.run_command("fill 7 63 7 10 63 9 minecraft:stone"));
         let id = cart(g);
@@ -566,12 +497,7 @@ fn double(game: &mut Game<'_>) {
     pending(game, POS);
     pending(game, (9, 64, 8));
 }
-#[test]
-#[ignore = "requires prepared resources"]
 fn double_chest_hopper_pull_reads_only_needed_half() {
-    if fresh("double_chest_hopper_pull_reads_only_needed_half") {
-        return;
-    }
     with_game(|g| {
         assert!(g.run_command("setblock 8 63 8 minecraft:hopper"));
         double(g);
@@ -601,12 +527,7 @@ fn double_chest_hopper_pull_reads_only_needed_half() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn double_chest_hopper_push_keeps_other_half_pending() {
-    if fresh("double_chest_hopper_push_keeps_other_half_pending") {
-        return;
-    }
     with_game(|g| {
         assert!(g.run_command("setblock 7 64 8 minecraft:hopper[facing=east]{Items:[{Slot:0b,id:\"minecraft:cobblestone\",count:1}]}"));
         double(g);
@@ -640,12 +561,7 @@ fn pending_bytes(game: &Game<'_>, pos: (i32, i32, i32)) -> Vec<u8> {
     )
     .unwrap()
 }
-#[test]
-#[ignore = "requires prepared resources"]
 fn clone_copy_preserves_pending_loot_independently() {
-    if fresh("clone_copy_preserves_pending_loot_independently") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         let original = pending_bytes(g, POS);
@@ -663,12 +579,7 @@ fn clone_copy_preserves_pending_loot_independently() {
         assert_eq!(count(g, (12, 64, 8), "minecraft:diamond"), 1);
     });
 }
-#[test]
-#[ignore = "requires prepared resources"]
 fn clone_move_transfers_pending_loot() {
-    if fresh("clone_move_transfers_pending_loot") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         let original = pending_bytes(g, POS);
@@ -684,12 +595,7 @@ fn clone_move_transfers_pending_loot() {
         assert_eq!(count(g, (12, 64, 8), "minecraft:diamond"), 1);
     });
 }
-#[test]
-#[ignore = "requires prepared resources"]
 fn structure_capture_disk_round_trip_keeps_pending_loot() {
-    if fresh("structure_capture_disk_round_trip_keeps_pending_loot") {
-        return;
-    }
     with_game(|g| {
         crate::game::growth::install_live_features(
             &g.res,
@@ -764,12 +670,7 @@ fn structure_capture_disk_round_trip_keeps_pending_loot() {
     });
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn clone_selection_modes_match_pending_payloads() {
-    if fresh("clone_selection_modes_match_pending_payloads") {
-        return;
-    }
     with_game(|g| {
         place(g, POS, TABLE, 37);
         let original = pending_bytes(g, POS);
@@ -795,7 +696,7 @@ fn clone_selection_modes_match_pending_payloads() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn random_selection_streams() {
     use horizon_client::random_sequences::RandomSequences;
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
@@ -887,12 +788,7 @@ fn random_selection_streams() {
     );
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn explicit_seed_is_position_independent() {
-    if fresh("explicit_seed_is_position_independent") {
-        return;
-    }
     with_game(|g| {
         let other = (100, 70, -5);
         g.world.chunks.insert(
@@ -991,12 +887,7 @@ impl mod_api::Hooks for FillListener {
     }
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn container_fill_listener_contract() {
-    if fresh("container_fill_listener_contract") {
-        return;
-    }
     with_game(|g| {
         g.options.dedicated = Some(Vec::new());
         place(g, POS, TABLE, 37);
@@ -1115,8 +1006,6 @@ struct EmptyFillMod;
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for EmptyFillMod {}
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn saved_carts_keep_a_loot_table_only_when_they_hold_a_container() {
     with_game(|game| {
         let keys: std::collections::HashSet<_> = [(0, 0)].into();
@@ -1188,12 +1077,7 @@ impl mod_api::Hooks for DurableStickListener {
     }
 }
 
-#[test]
-#[ignore = "requires prepared resources"]
 fn container_fill_preserves_explicit_zero_damage_on_custom_durable_item() {
-    if fresh("container_fill_preserves_explicit_zero_damage_on_custom_durable_item") {
-        return;
-    }
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
         mod_platform::testing::with_mods(
@@ -1219,4 +1103,148 @@ fn container_fill_preserves_explicit_zero_damage_on_custom_durable_item() {
             },
         );
     });
+}
+
+#[test]
+#[ignore = "daily"]
+fn transfers_between_containers() {
+    if in_child("transfers_between_containers") {
+        return;
+    }
+    run_group(&[
+        (
+            "hopper_pull_unpacks_source_once",
+            hopper_pull_unpacks_source_once as fn(),
+        ),
+        (
+            "hopper_push_unpacks_destination_once",
+            hopper_push_unpacks_destination_once as fn(),
+        ),
+        (
+            "hopper_minecart_pull_unpacks_source_once",
+            hopper_minecart_pull_unpacks_source_once as fn(),
+        ),
+        (
+            "dropper_push_unpacks_destination_once",
+            dropper_push_unpacks_destination_once as fn(),
+        ),
+        (
+            "dispenser_selection_unpacks_source_once",
+            dispenser_selection_unpacks_source_once as fn(),
+        ),
+        (
+            "double_chest_hopper_pull_reads_only_needed_half",
+            double_chest_hopper_pull_reads_only_needed_half as fn(),
+        ),
+        (
+            "double_chest_hopper_push_keeps_other_half_pending",
+            double_chest_hopper_push_keeps_other_half_pending as fn(),
+        ),
+    ]);
+}
+
+#[test]
+#[ignore = "daily"]
+fn player_and_world_triggers() {
+    if in_child("player_and_world_triggers") {
+        return;
+    }
+    run_group(&[
+        (
+            "player_open_uses_admitted_guest_luck_and_entity",
+            player_open_uses_admitted_guest_luck_and_entity as fn(),
+        ),
+        (
+            "comparator_first_read_unpacks_and_measures",
+            comparator_first_read_unpacks_and_measures as fn(),
+        ),
+        (
+            "block_break_unpacks_before_contents_drop",
+            block_break_unpacks_before_contents_drop as fn(),
+        ),
+        (
+            "explosion_unpacks_before_contents_drop",
+            explosion_unpacks_before_contents_drop as fn(),
+        ),
+        (
+            "double_chest_rolls_each_half_once",
+            double_chest_rolls_each_half_once as fn(),
+        ),
+        (
+            "chest_minecart_open_uses_opener_once",
+            chest_minecart_open_uses_opener_once as fn(),
+        ),
+        (
+            "chest_minecart_break_unpacks_before_drop",
+            chest_minecart_break_unpacks_before_drop as fn(),
+        ),
+        (
+            "detector_rail_comparator_unpacks_cart_once",
+            detector_rail_comparator_unpacks_cart_once as fn(),
+        ),
+    ]);
+}
+
+#[test]
+#[ignore = "daily"]
+fn commands_clone_and_structures() {
+    if in_child("commands_clone_and_structures") {
+        return;
+    }
+    run_group(&[
+        (
+            "item_replace_unpacks_before_writing",
+            item_replace_unpacks_before_writing as fn(),
+        ),
+        (
+            "execute_if_items_unpacks_before_reading",
+            execute_if_items_unpacks_before_reading as fn(),
+        ),
+        (
+            "loot_insert_unpacks_before_inserting",
+            loot_insert_unpacks_before_inserting as fn(),
+        ),
+        (
+            "clone_copy_preserves_pending_loot_independently",
+            clone_copy_preserves_pending_loot_independently as fn(),
+        ),
+        (
+            "clone_move_transfers_pending_loot",
+            clone_move_transfers_pending_loot as fn(),
+        ),
+        (
+            "clone_selection_modes_match_pending_payloads",
+            clone_selection_modes_match_pending_payloads as fn(),
+        ),
+        (
+            "structure_capture_disk_round_trip_keeps_pending_loot",
+            structure_capture_disk_round_trip_keeps_pending_loot as fn(),
+        ),
+        (
+            "saved_carts_keep_a_loot_table_only_when_they_hold_a_container",
+            saved_carts_keep_a_loot_table_only_when_they_hold_a_container as fn(),
+        ),
+    ]);
+}
+
+#[test]
+#[ignore = "daily"]
+fn seeds_and_fill_listeners() {
+    if in_child("seeds_and_fill_listeners") {
+        return;
+    }
+    run_group(&[
+        (
+            "explicit_seed_is_position_independent",
+            explicit_seed_is_position_independent as fn(),
+        ),
+        (
+            "container_fill_listener_contract",
+            container_fill_listener_contract as fn(),
+        ),
+        (
+            "container_fill_preserves_explicit_zero_damage_on_custom_durable_item",
+            container_fill_preserves_explicit_zero_damage_on_custom_durable_item as fn(),
+        ),
+    ]);
 }

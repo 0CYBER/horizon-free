@@ -1,6 +1,6 @@
 //! Real-game regressions for native handles used during a guest's turn.
 
-use super::{lan::LanSettings, native_entity_refs::tests::with_game};
+use super::lan::LanSettings;
 use horizon_client::{
     lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig},
     mobs::Mob,
@@ -14,7 +14,15 @@ use std::sync::{
 };
 
 pub(in crate::game) fn with_guests(test: impl FnOnce(&mut super::Game<'_>)) {
-    with_game(|game| {
+    let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    with_guests_at(root, test);
+}
+
+pub(in crate::game) fn with_guests_at(
+    root: std::path::PathBuf,
+    test: impl FnOnce(&mut super::Game<'_>),
+) {
+    super::native_entity_refs::tests::with_game_at(root, |game| {
         let settings = LanSettings {
             port: 0,
             guest_commands: false,

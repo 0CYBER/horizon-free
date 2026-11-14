@@ -68,7 +68,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use winit::{event::MouseButton, keyboard::KeyCode};
+use winit::keyboard::KeyCode;
 use {
     horizon_core::nbt::Tag,
     horizon_mod_runtime::attachments::{Holder, ResidentAttachments},
@@ -724,7 +724,7 @@ pub(super) struct Remote {
     /// Per-hand swing policy, restored when the current input attempt ends.
     pub(in crate::game) interaction_swing: [bool; 2],
     destroy_delay: u32,
-    input: horizon_client::interaction_input::InteractionInput,
+    pub(super) input: horizon_client::interaction_input::InteractionInput,
     /// Keys whose presses send a packet (swap hands, drop, a mount's
     /// inventory): like the click queue, they wait for the tick's
     /// `handleKeybinds` phase rather than going out between window events.
@@ -2939,7 +2939,7 @@ impl Game<'_> {
             p.state = state;
             return;
         }
-        self.set_block(pos, state);
+        self.set_block(pos, state, false);
     }
     /// BlockStatePredictionHandler.endPredictionsUpTo (ClientboundBlockChangedAckPacket): the
     /// actions up to `sequence` are settled, so the blocks they predicted take the state the
@@ -2962,7 +2962,7 @@ impl Game<'_> {
             if self.world.block(pos[0], pos[1], pos[2]).0 as i32 == prediction.state {
                 continue;
             }
-            self.set_block(pos, prediction.state);
+            self.set_block(pos, prediction.state, false);
             // ClientLevel.syncBlockState: the block that comes back may now hold
             // the player, and then it goes to the position the prediction
             // remembered.
@@ -3025,7 +3025,7 @@ impl Game<'_> {
         let z = at[2].clamp(-3.0e7, 3.0e7);
         player.position = Vec3::new(x, at[1], z);
     }
-    fn set_block(&mut self, pos: [i32; 3], state: i32) {
+    fn set_block(&mut self, pos: [i32; 3], state: i32, predicted: bool) {
         // A state we don't have (a server with mods we lack) reads as air, as in its chunks.
         let state = state.max(0) as u32;
         let known = horizon_client::chunk::known_block_state(state);
@@ -3035,7 +3035,7 @@ impl Game<'_> {
             && self.world.set(pos[0], pos[1], pos[2], state).is_ok()
         {
             self.sync_block_entity((pos[0], pos[1], pos[2]), Some(previous), state);
-            self.client_block_written(pos, previous, state);
+            self.client_block_written(pos, previous, state, predicted);
         }
         // A block we just placed: play its place sound (the server skips the placer).
         if let Some((target, _)) = self.remote.as_ref().and_then(|r| r.placing)
@@ -5519,18 +5519,7 @@ impl Game<'_> {
                 self.clock.set_frozen(p.frozen);
             }
             C::TickingStep(p) => self.clock.set_frozen_ticks_to_run(p.steps),
-            C::UpdateAdvancements(p) => {
-                let icons = p
-                    .added
-                    .iter()
-                    .map(|a| {
-                        a.display
-                            .as_ref()
-                            .map_or_else(String::new, |d| self.item_name(d.icon.item).to_string())
-                    })
-                    .collect();
-                self.remote_advancements(p, icons);
-            }
+            C::UpdateAdvancements(p) => self.remote_advancements(p),
             // handleAwardStats: StatsCounter.setValue for each.
             C::AwardStats(p) => {
                 let Some(r) = self.remote.as_ref() else {
@@ -8552,7 +8541,7 @@ impl Game<'_> {
                         player_pos: here,
                     });
             }
-            self.set_block(pos, state.0 as i32);
+            self.set_block(pos, state.0 as i32, true);
         }
     }
 
@@ -9020,34 +9009,6 @@ impl Game<'_> {
         // applyAfterUseComponentSideEffects, then LivingEntityUseItemEvent.Finish.
         self.remote_use_item_finished(slot, &stack, &info);
     }
-    /// MouseHandler updates KeyMapping; handleKeybinds sends packets on a tick.
-    pub(super) fn remote_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
-        use horizon_client::interaction_input::Button;
-        let input = match button {
-            MouseButton::Left => {
-                self.toggles
-                    .button(2, pressed, false, self.settings.toggle_attack);
-                self.left = self.toggles.is_down(2);
-                Some(Button::Attack)
-            }
-            MouseButton::Right => {
-                self.toggles
-                    .button(3, pressed, false, self.settings.toggle_use);
-                self.right = self.toggles.is_down(3);
-                Some(Button::Use)
-            }
-            MouseButton::Middle => Some(Button::Pick),
-            _ => None,
-        };
-        if pressed
-            && let Some(button) = input
-            && let Some(remote) = self.remote.as_mut()
-        {
-            remote.input.press(button);
-        }
-        Ok(())
-    }
-
     pub(super) fn request_remote_mining_stop(&mut self) {
         if let Some(r) = self.remote.as_mut() {
             r.stop_mining = true;
@@ -9085,6 +9046,7 @@ impl Game<'_> {
         input.tick(&mut RemoteInputWorld(self), attack, use_item);
         self.remote_queued_keys();
         if let Some(r) = self.remote.as_mut() {
+            input.merge_queued(std::mem::take(&mut r.input));
             r.input = input;
         }
     }
@@ -9247,12 +9209,11 @@ impl Game<'_> {
         self.stop_sprint_after_extra_knockback();
     }
     /// The latency the server's player list gives this player
-    /// (`PlayerInfo.getLatency`). A new entry reads 0 until the server's first
-    /// latency update (every 600 ticks), so 0 shows nothing rather than `0 ms`.
-    pub(super) fn own_latency(&self) -> Option<i32> {
+    /// (`PlayerInfo.getLatency`), none before the server lists it. A new entry reads 0 until the
+    /// server's first latency update (every 600 ticks).
+    pub(in crate::game) fn own_latency(&self) -> Option<i32> {
         let r = self.remote.as_ref()?;
-        let me = r.tab_players.get(&r.profile)?;
-        (me.latency > 0).then_some(me.latency)
+        r.tab_players.get(&r.profile).map(|me| me.latency)
     }
 
     /// An attribute's value on this client's player, if its map has the attribute.
@@ -11169,6 +11130,10 @@ mod passage_cross_tests;
 #[cfg(test)]
 pub(crate) mod tests {
     use super::super::api_values::TryIntoApi;
+
+    mod predicted_block_notice_tests {
+        include!("predicted_block_notice_tests.rs");
+    }
 
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]

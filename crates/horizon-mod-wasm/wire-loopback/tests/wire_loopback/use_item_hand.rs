@@ -5,10 +5,22 @@ thread_local! {
     static RESULT: std::cell::Cell<mod_api::InteractionResult> = const { std::cell::Cell::new(mod_api::InteractionResult::Pass) };
     static SEEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
+pub(super) fn entity_answer(
+    event: &mut mod_api::EntityInteractEvent<'_>,
+) -> Option<mod_api::InteractionResult> {
+    assert_eq!(event.hand, EXPECTED.get());
+    assert_eq!(event.entity, 42);
+    SEEN.set(true);
+    Some(RESULT.get())
+}
 struct Part;
 impl mod_api::ItemPart for Part {
     fn item_subscribed(&self) -> &'static [Option<mod_api::HookId>] {
-        &[Some(mod_api::HookId::UseItem)]
+        &[
+            Some(mod_api::HookId::UseItem),
+            Some(mod_api::HookId::UseOn),
+            Some(mod_api::HookId::ItemInteractMob),
+        ]
     }
     fn use_item(
         &self,
@@ -17,6 +29,27 @@ impl mod_api::ItemPart for Part {
     ) -> Option<mod_api::InteractionResult> {
         assert_eq!(event.hand, EXPECTED.get());
         assert_eq!((event.player, event.player_entity_id), WHO.get());
+        SEEN.set(true);
+        Some(RESULT.get())
+    }
+    fn use_on(
+        &self,
+        _: mod_api::HostSide<'_>,
+        event: &mut mod_api::UseOnEvent<'_>,
+    ) -> Option<mod_api::InteractionResult> {
+        assert_eq!(event.hand, EXPECTED.get());
+        assert_eq!((event.player, event.player_entity_id), WHO.get());
+        SEEN.set(true);
+        Some(RESULT.get())
+    }
+    fn item_interact_mob(
+        &self,
+        _: mod_api::HostSide<'_>,
+        event: &mut mod_api::ItemInteractMobEvent<'_>,
+    ) -> Option<mod_api::InteractionResult> {
+        assert_eq!(event.hand, EXPECTED.get());
+        assert_eq!(event.entity, 42);
+        assert_eq!(event.kind, "minecraft:zombie");
         SEEN.set(true);
         Some(RESULT.get())
     }
@@ -71,6 +104,64 @@ fn generated_guest_item_dispatch_preserves_hands_sides_and_results() {
                         player: who.0,
                         player_entity_id: who.1,
                         result: &mut result,
+                    },
+                );
+                assert_eq!(result, Some(answer));
+                SEEN.set(false);
+                result = None;
+                mod_api::dispatch_use_on(
+                    if client {
+                        mod_api::HostSide::Client(&mut world)
+                    } else {
+                        mod_api::HostSide::Server(&mut world)
+                    },
+                    mod_api::__private::UseOnCall {
+                        stack: &stack,
+                        pos: [0, 64, 0],
+                        face: [0, 1, 0],
+                        hand,
+                        hit: mod_api::BlockHit::new([0.5, 65.0, 0.5], [0, 1, 0], false),
+                        player: who.0,
+                        player_entity_id: who.1,
+                        result: &mut result,
+                    },
+                );
+                assert!(SEEN.get());
+                assert_eq!(result, Some(answer));
+                SEEN.set(false);
+                result = None;
+                mod_api::dispatch_item_interact_mob(
+                    if client {
+                        mod_api::HostSide::Client(&mut world)
+                    } else {
+                        mod_api::HostSide::Server(&mut world)
+                    },
+                    hand,
+                    42,
+                    "minecraft:zombie",
+                    &stack,
+                    &mut result,
+                );
+                assert!(SEEN.get());
+                assert_eq!(result, Some(answer));
+                SEEN.set(false);
+                result = WasmMod {
+                    subscribed: &[],
+                    listeners: &[],
+                    group: 0,
+                    corrupt: false,
+                }
+                .entity_interact(
+                    if client {
+                        mod_api::HostSide::Client(&mut world)
+                    } else {
+                        mod_api::HostSide::Server(&mut world)
+                    },
+                    &mut mod_api::EntityInteractEvent {
+                        hand,
+                        entity: 42,
+                        kind: "minecraft:zombie",
+                        stack: Some(&stack),
                     },
                 );
                 assert!(SEEN.get());

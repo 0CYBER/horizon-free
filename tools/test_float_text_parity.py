@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pinned numeric/SNBT text for subnormals and normal-value controls.
 
---broad also checks uniformly seeded normal bit patterns. It is diagnostic:
-existing nearest-decimal tie-breaking differences are outside this patch.
+--broad also checks uniformly seeded normal bit patterns, including nearest-decimal
+tie-breaking against the pinned Java runtime.
 """
 import argparse
 import json
@@ -52,7 +52,7 @@ def fixtures(broad=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--broad', action='store_true', help='diagnose the full seeded normal-bit corpus too')
+    parser.add_argument('--broad', action='store_true', help='check the full seeded normal-bit corpus too')
     args = parser.parse_args()
     lock, jars, libraries = base.verify_artifacts()
     build = lab.LOCAL / ('float-text-broad' if args.broad else 'float-text-parity')
@@ -60,7 +60,8 @@ def main():
     report = build / 'report.json'
     report.unlink(missing_ok=True)
     paths = ['crates/horizon-world/src/snbt_text.rs', 'crates/horizon-world/src/datafix/json.rs',
-             'crates/horizon-core/src/nbt.rs', 'crates/horizon-world/examples/probe/main.rs',
+             'crates/horizon-core/src/nbt.rs', 'crates/horizon-core/src/java_number.rs',
+             'crates/horizon-world/examples/probe/main.rs',
              'crates/horizon-world/examples/probe/float_text_fixture.rs',
              'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaFloatTextOracle.java',
              'tools/test_float_text_parity.py']
@@ -92,7 +93,7 @@ def main():
         scope='Java Float/Double.toString, actual pinned FloatTag/DoubleTag.toString and Rust '
               'SNBT/DataFixer number text. Strict scope: dense and seeded subnormal bits, both signs, '
               'normal/subnormal boundaries, decimal powers, zero signs, nonfinite values and named normal '
-              'controls. --broad diagnoses other normal patterns; known decimal tie-breaking is not fixed.'))
+              'controls. --broad checks other normal patterns, including decimal tie-breaking.'))
     print(f'{len(cases) - len(differences)}/{len(cases)} float-text cases match: {report}', flush=True)
     assert not differences, f'{len(differences)} text differences; first cases: {differences[:3]}'
 
