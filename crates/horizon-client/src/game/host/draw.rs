@@ -138,7 +138,10 @@ pub(crate) struct GameBlockEntityDrawContext<'a, 'g> {
     pub(crate) surface: &'a mut crate::game::native_block_entity_draw::BlockEntityDraw,
 }
 impl<'a, 'g> GameBlockEntityDrawContext<'a, 'g> {
-    pub(crate) fn new(game: &'a Game<'g>, surface: &'a mut crate::game::native_block_entity_draw::BlockEntityDraw) -> Self {
+    pub(crate) fn new(
+        game: &'a Game<'g>,
+        surface: &'a mut crate::game::native_block_entity_draw::BlockEntityDraw,
+    ) -> Self {
         Self { game, surface }
     }
 }
@@ -269,7 +272,10 @@ pub(crate) struct GameCameraDrawContext<'a, 'g> {
     pub(crate) surface: &'a mut crate::screen_effects::CameraQuads,
 }
 impl<'a, 'g> GameCameraDrawContext<'a, 'g> {
-    pub(crate) fn new(game: &'a Game<'g>, surface: &'a mut crate::screen_effects::CameraQuads) -> Self {
+    pub(crate) fn new(
+        game: &'a Game<'g>,
+        surface: &'a mut crate::screen_effects::CameraQuads,
+    ) -> Self {
         Self { game, surface }
     }
 }
@@ -289,7 +295,10 @@ pub(crate) struct GameWorldDrawContext<'a, 'g> {
     pub(crate) surface: &'a mut crate::world_geometry::WorldGeometry,
 }
 impl<'a, 'g> GameWorldDrawContext<'a, 'g> {
-    pub(crate) fn new(game: &'a Game<'g>, surface: &'a mut crate::world_geometry::WorldGeometry) -> Self {
+    pub(crate) fn new(
+        game: &'a Game<'g>,
+        surface: &'a mut crate::world_geometry::WorldGeometry,
+    ) -> Self {
         Self { game, surface }
     }
 }

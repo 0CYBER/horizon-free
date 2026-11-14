@@ -39,7 +39,9 @@ fn menu_transfer_answers_match_native_through_the_wire() {
     install_counter();
     let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
     let proxy = WasmHandler {
-        index: guest::add_handler(vec![guest::view::<dyn MenuPart>(std::sync::Arc::new(Press))]),
+        index: guest::add_handler(vec![guest::view::<dyn MenuPart>(std::sync::Arc::new(
+            Press,
+        ))]),
         module: WasmMod {
             group: 0,
             subscribed: &[],
@@ -68,7 +70,10 @@ fn menu_transfer_answers_match_native_through_the_wire() {
                     part.menu_transfer(&mut World, &mut event)
                 };
                 let (wasm, direct) = (ask(&proxy), ask(&Press));
-                assert_eq!(wasm, direct, "{player} {menu} {pos:?} {recipe} {max} {dry_run}");
+                assert_eq!(
+                    wasm, direct,
+                    "{player} {menu} {pos:?} {recipe} {max} {dry_run}"
+                );
                 answers.push(direct);
             }
         }
