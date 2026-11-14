@@ -554,11 +554,17 @@ impl View<'_> {
                 player_slot(i - c.len())
             }
         });
+        let context = crate::menu::SlotContext {
+            player: Some(self.guest.uuid),
+            pos: menu.pos.map(|(x, y, z)| [x, y, z]),
+            slots: self.container.as_deref().unwrap_or_default(),
+        };
         crate::menu::apply_menu_slot_rules(
             rules.slot_rules(),
             &menu.registry_id,
             index,
             stack,
+            context,
             own,
             max,
             item_max,
@@ -748,11 +754,17 @@ fn move_to(
                 } else {
                     player_slot(i - c.len())
                 };
+                let context = crate::menu::SlotContext {
+                    player: Some(view.guest.uuid),
+                    pos: menu.pos.map(|(x, y, z)| [x, y, z]),
+                    slots: c,
+                };
                 if !crate::menu::apply_menu_slot_rules(
                     rules.slot_rules(),
                     &menu.registry_id,
                     index,
                     &stack,
+                    context,
                     true,
                     u32::MAX,
                     rules.max_stack(&stack.item).max(1),

@@ -416,6 +416,7 @@ impl Game<'_> {
             self.remote_menu_type()
         };
         menu.set_registry_id(menu_id);
+        menu.set_block_pos(self.container.map(|(x, y, z)| [x, y, z]));
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
         if matches!(kind, Kind::Mount(_)) {
             menu.mount = self.mount_menu_entity();

@@ -1,0 +1,3 @@
+ids = ["hook:menu_slot_rules", "hook:menu_slot_rules.context", "type:MenuSlotRulesEvent.context", "type:MenuSlotContext"]
+why = "menu_slot_rules now tells the part who and where it is asked about: event.context (a new MenuSlotContext) carries the player whose menu it is, the block entity the menu belongs to and a read-only copy of the menu's own container slots, the same on the server and on the client's prediction. The hook moves from version 3 to 4."
+migrate = "Read event.context.player, .pos and .slots where a rule depends on them; destructure MenuSlotRulesEvent with .. for the added field. Named injections request hook_version = 4. Rebuild native and wasm mods against this SDK."

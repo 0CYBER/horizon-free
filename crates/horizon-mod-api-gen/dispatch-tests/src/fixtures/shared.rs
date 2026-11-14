@@ -403,6 +403,11 @@ impl MenuPart for Mod {
         &[]
     }
     fn menu_slot_rules(&self, _: &dyn Host, event: &mut MenuSlotRulesEvent<'_>) {
+        // The context arrives as the game passed it: who, where and the other slots.
+        let context = event.context;
+        assert_eq!((context.player, context.pos), (Some(7), Some([1, 2, 3])));
+        assert_eq!(context.slots.len(), 2);
+        assert!(context.slots[0].is_none() && context.slots[1].is_some());
         event.may_place = false;
         event.max_stack = self.id;
     }

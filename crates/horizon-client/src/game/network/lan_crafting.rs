@@ -222,6 +222,13 @@ impl Game<'_> {
             .map(|opened| opened.slots.stack_limits(&self.world, opened.size))
             .unwrap_or_default();
         menu.set_container_limits(limits);
+        menu.set_block_pos(
+            host.hub.guests[gi]
+                .menu
+                .as_ref()
+                .and_then(|opened| opened.pos)
+                .map(|(x, y, z)| [x, y, z]),
+        );
         load_player(menu, &host.hub.guests[gi]);
         menu.brewed_potion_hook = !mod_api::__private::mods().is_empty();
         menu.item_smelted_hook = menu.brewed_potion_hook;

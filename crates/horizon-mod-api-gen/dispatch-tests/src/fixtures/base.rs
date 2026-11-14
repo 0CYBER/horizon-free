@@ -260,11 +260,18 @@ fn slot_rules_mutate_and_item_tick_can_cancel() {
     let (mut may_place, mut max_stack) = (true, 64);
     dispatch_menu_slot_rules(
         &TestHost,
-        "test:menu",
-        0,
-        &ItemStack::default(),
-        &mut may_place,
-        &mut max_stack,
+        calls::MenuSlotRulesCall {
+            menu: "test:menu",
+            slot: 0,
+            stack: &ItemStack::default(),
+            context: &MenuSlotContext {
+                player: Some(7),
+                pos: Some([1, 2, 3]),
+                slots: vec![None, Some(ItemStack::default())],
+            },
+            may_place: &mut may_place,
+            max_stack: &mut max_stack,
+        },
     );
     assert_eq!((may_place, max_stack), (false, 1));
     let (mut duration, mut canceled) = (10, false);

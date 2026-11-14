@@ -232,3 +232,26 @@ pub struct AnvilCraft {
     pub right: Option<ItemStack>,
     pub output: ItemStack,
 }
+
+/// Who and where a `menu_slot_rules` ask is about: the menu's player, its block entity and
+/// its other slots. The game fills it the same way on the server and on the client's
+/// prediction; mods read it.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct MenuSlotContext {
+    /// The UUID of the player whose menu it is; None where no player is known.
+    pub player: Option<u128>,
+    /// The block entity the menu belongs to; None when the menu is not a block's
+    /// (opened by a mod with no block, a vehicle's, the player's own inventory).
+    pub pos: Option<[i32; 3]>,
+    /// The menu's own container slots as they stand, read only (not the player's
+    /// inventory), in the menu's slot order.
+    pub slots: Vec<Option<ItemStack>>,
+}
+impl MenuSlotContext {
+    /// A context of `player`, the block entity at `pos` and the container `slots`.
+    pub fn new(player: Option<u128>, pos: Option<[i32; 3]>, slots: Vec<Option<ItemStack>>) -> Self {
+        Self { player, pos, slots }
+    }
+}

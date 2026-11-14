@@ -97,6 +97,8 @@ pub struct Snapshot(State);
 pub struct State {
     pub(super) kind: Kind,
     pub(super) registry_id: Option<Box<str>>,
+    /// The block whose menu this is, for `menu_slot_rules`; None with no block.
+    pub(super) block_pos: Option<[i32; 3]>,
     pub(super) slots: Vec<Slot>,
     pub(super) containers: [Vec<Option<ItemStack>>; 4],
     pub(super) grid_size: usize,
