@@ -124,10 +124,12 @@ event.pipelines.push(
 );
 ```
 
-| Texture | What is bound |
-| --- | --- |
-| `PipelineTexture::Sprite(id)` | A sprite of the block or item atlas by its texture id: `example:block/charge` is `assets/example/textures/block/charge.png` as the `minecraft:blocks` atlas holds it, `minecraft:item/diamond` an item sprite. An animated sprite animates. |
-| `PipelineTexture::Texture(id)` | A whole texture file: `example:effect/glow` is `assets/example/textures/effect/glow.png`. It is drawn as the file is, unanimated, and each side must be 1 to 4,096 pixels (and within the GPU's limit). |
+`PipelineTexture::Sprite(id)` names a sprite of the block or item atlas by its texture id:
+`example:block/charge` is `assets/example/textures/block/charge.png` as the `minecraft:blocks`
+atlas holds it, `minecraft:item/diamond` an item sprite. An animated sprite animates. A pipeline
+always samples a rectangle of the atlas, never a texture of its own. A texture file of your mod's
+own, packed into the runtime atlas's slot pool (#4438) and drawn the same way, follows once that
+pool exists.
 
 The shader then has one more function:
 
@@ -138,18 +140,25 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
 }
 ```
 
-`pipeline_texture(uv)` maps `uv` 0 to 1 across the texture (or sprite) once, and repeats beyond
-that. It samples the nearest texel, as vanilla's atlases do, and returns it in linear light with
-its alpha. `input.uv` is still what the quad's corners gave, so the quads you already draw keep
-their coordinates.
+`pipeline_texture(uv)` maps the fraction of `uv` into the sprite's own rectangle (`uv` 0 to 1
+spans it once; beyond that, negative values too, it repeats) and loads one texel by integer
+coordinates at mip level 0: nearest, unfiltered, so no texel of a neighbouring sprite can enter,
+even at the far edge. It returns the texel in linear light with its alpha. `input.uv` is still
+what the quad's corners gave, so the quads you already draw keep their coordinates.
 
 A texture is part of the pipeline, so it is checked when the pipeline is built, at startup and on
-each reload. A sprite neither atlas has, or a texture file that is missing, not a PNG, or of a size
-outside those limits, refuses the pipeline as a missing shader does: a required one fails the load,
-and an optional one is logged (`render pipeline <id> from mod <owner> refused: <file>: <reason>`,
-or `… refused by the GPU: its texture sprite <name> is in neither the block nor the item atlas`)
-and resolves to `Invalid`. A pipeline without `.textured(…)` has no `pipeline_texture`: its file is
-refused with a note naming `RenderPipeline::textured`.
+each reload. A refused texture is named by `PipelineTextureError` and refuses the pipeline as a
+missing shader does: a required one fails the load, and an optional one is logged with the named
+cause and resolves to `Invalid`:
+
+| Cause | When |
+| --- | --- |
+| `NoSuchSprite` | Neither the block nor the item atlas has the sprite (`… refused by the GPU: its texture sprite <name>: NoSuchSprite: …`) |
+| `NotASpriteKey` | The id names a file (a `textures/` path or a `.png` name), not a sprite key |
+| `NoSuchTextureFile`, `OverCap`, `Undecodable`, `NoSlot` | Texture files, once the slot pool exists: missing, over 1024 x 1024, not an image, or no slot within the mod's budget of 16 images and 4 MiB |
+
+A pipeline without `.textured(…)` has no `pipeline_texture`: its file is refused with a note
+naming `RenderPipeline::textured`.
 
 A pipeline cannot take values of its own from the mod, sample more than one texture, or replace the
 vertex stage.

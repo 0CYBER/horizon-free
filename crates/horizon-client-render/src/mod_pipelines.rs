@@ -11,8 +11,8 @@
 //! from the quad's vanilla-space colour and to the frame, which stores vanilla's 2.2 encoding
 //! in every format the renderer draws today.
 use mod_api::{
-    Identifier, PipelineBlend, PipelineTexture, RenderPipeline, RenderPipelineError,
-    RenderPipelineRef, WorldDepth,
+    Identifier, PipelineBlend, PipelineTexture, PipelineTextureError, RenderPipeline,
+    RenderPipelineError, RenderPipelineRef, WorldDepth,
 };
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 use std::sync::OnceLock;
@@ -51,19 +51,35 @@ struct PipelineFrame {
 const TEXTURE_PRELUDE: &str = "\
 @group(1) @binding(0) var horizon_pipeline_texture: texture_2d<f32>;
 @group(1) @binding(1) var horizon_pipeline_sampler: sampler;
-// Where the texture lies in what is bound: [u0, v0, u1, v1].
+// Where the sprite lies in the atlas: [u0, v0, u1, v1].
 @group(1) @binding(2) var<uniform> horizon_pipeline_rect: vec4<f32>;
-// The pipeline's texture at `uv`: 0 to 1 spans it once and beyond that it repeats. The nearest
-// texel, in linear light, with its alpha.
+// The pipeline's sprite at `uv`: 0 to 1 spans it once and beyond that it repeats. One texel by
+// integer coordinates inside the sprite's rect at mip 0 (`repeat_texel` is the same arithmetic),
+// in linear light, with its alpha.
 fn pipeline_texture(uv: vec2<f32>) -> vec4<f32> {
-    let at = mix(horizon_pipeline_rect.xy, horizon_pipeline_rect.zw, fract(uv));
-    let texel = textureSampleLevel(horizon_pipeline_texture, horizon_pipeline_sampler, at, 0.0);
+    let size = vec2<f32>(textureDimensions(horizon_pipeline_texture, 0));
+    let origin = round(horizon_pipeline_rect.xy * size);
+    let extent = max(round(horizon_pipeline_rect.zw * size) - origin, vec2<f32>(1.0));
+    let local = clamp(floor((uv - floor(uv)) * extent), vec2<f32>(0.0), extent - 1.0);
+    let texel = textureLoad(horizon_pipeline_texture, vec2<i32>(origin + local), 0);
     return vec4<f32>(horizon_decode(texel.rgb), texel.a);
 }
 ";
 
-/// The largest side, in pixels, of a [`PipelineTexture::Texture`] file.
-pub const TEXTURE_MAX_SIDE: u32 = 4096;
+/// `pipeline_texture`'s texel arithmetic, for testing without a GPU: the integer texel of an
+/// atlas `size` texels wide and high that `uv` picks inside the sprite at `rect` (`[u0, v0, u1,
+/// v1]`). The fraction of `uv` (negative values wrap) spans the rect once; the texel is always
+/// one of the rect's own, its far edge excluded.
+pub fn repeat_texel(uv: [f32; 2], rect: [f32; 4], size: [u32; 2]) -> [u32; 2] {
+    std::array::from_fn(|axis| {
+        let size = size[axis] as f32;
+        let origin = (rect[axis] * size).round();
+        let extent = ((rect[axis + 2] * size).round() - origin).max(1.0);
+        let f = uv[axis] - uv[axis].floor();
+        let local = (f * extent).floor().clamp(0.0, extent - 1.0);
+        (origin + local) as u32
+    })
+}
 
 /// The entry points, after the pipeline's file: the vertex stage, and a fragment stage that
 /// hands the mod linear light and stores its answer as the frame holds colour.
@@ -133,12 +149,6 @@ pub enum BuiltTexture {
     /// A sprite of the 2D atlas, by its name there (`block/stone`, `powah:block/energy_charge`),
     /// looked up when the renderer builds the pipeline.
     Sprite(String),
-    /// A texture file's RGBA pixels, `width` by `height`, each side 1 to [`TEXTURE_MAX_SIDE`].
-    Image {
-        width: u32,
-        height: u32,
-        pixels: std::sync::Arc<[u8]>,
-    },
 }
 
 /// The registered pipelines as one resource load built them, by slot. An optional pipeline the
@@ -160,36 +170,17 @@ impl Pipelines {
         source: &crate::resource_source::ResourceSource,
         generation: u64,
     ) -> Result<Self, String> {
-        Self::build_with_images(
-            registered(),
-            generation,
-            |file| source.read_to_string(file).map_err(|e| e.to_string()),
-            |file| {
-                let bytes = source.read(file).map_err(|e| e.to_string())?;
-                crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string())
-            },
-        )
+        Self::build(registered(), generation, |file| {
+            source.read_to_string(file).map_err(|e| e.to_string())
+        })
     }
 
-    /// [`Self::build_with_images`] for pipelines that read no texture file.
-    #[cfg(test)]
+    /// Build every registered pipeline, reading fragment files with `read`. A pipeline's
+    /// texture is named here; its sprite is looked up when the renderer builds it.
     pub(crate) fn build(
         registered: &[RenderPipeline],
         generation: u64,
         read: impl Fn(&str) -> Result<String, String>,
-    ) -> Result<Self, String> {
-        Self::build_with_images(registered, generation, read, |_| {
-            Err("no texture files in this load".into())
-        })
-    }
-
-    /// Build every registered pipeline, reading fragment files with `read` and
-    /// [`PipelineTexture::Texture`] files as RGBA pixels with `image`.
-    pub(crate) fn build_with_images(
-        registered: &[RenderPipeline],
-        generation: u64,
-        read: impl Fn(&str) -> Result<String, String>,
-        image: impl Fn(&str) -> Result<(u32, u32, Vec<u8>), String>,
     ) -> Result<Self, String> {
         let mut required = Vec::new();
         let built = registered
@@ -201,12 +192,10 @@ impl Pipelines {
                     .and_then(|shader| {
                         let texture = match &pipeline.texture {
                             None => None,
-                            Some(texture) => Some(load_texture(texture, &image).map_err(
-                                |(path, reason)| {
-                                    file = path;
-                                    reason
-                                },
-                            )?),
+                            Some(texture) => Some(load_texture(texture).map_err(|cause| {
+                                file = "its texture".into();
+                                texture_refusal(cause)
+                            })?),
                         };
                         Ok((shader, texture))
                     });
@@ -329,47 +318,29 @@ fn fragment_file(fragment: &Identifier) -> String {
     )
 }
 
-/// `texture` as a load finds it, or the file it read and why it is refused.
-fn load_texture(
-    texture: &PipelineTexture,
-    image: &impl Fn(&str) -> Result<(u32, u32, Vec<u8>), String>,
-) -> Result<BuiltTexture, (String, String)> {
+/// `texture` as a load finds it, or its named refusal.
+fn load_texture(texture: &PipelineTexture) -> Result<BuiltTexture, PipelineTextureError> {
     match texture {
-        // Named as the 2D atlas names the blocks and items atlases' sprites.
-        PipelineTexture::Sprite(id) => Ok(BuiltTexture::Sprite(match id.namespace() {
-            "minecraft" => id.path().to_owned(),
-            _ => id.to_string(),
-        })),
-        PipelineTexture::Texture(id) => {
-            let file = format!("assets/{}/textures/{}.png", id.namespace(), id.path());
-            let (width, height, pixels) = image(&file).map_err(|e| (file.clone(), e))?;
-            check_image(width, height, pixels.len()).map_err(|reason| (file, reason))?;
-            Ok(BuiltTexture::Image {
-                width,
-                height,
-                pixels: pixels.into(),
-            })
+        PipelineTexture::Sprite(id) => {
+            // A file's path or name is not a sprite key.
+            let path = id.path();
+            if path.starts_with("textures/") || path.ends_with(".png") {
+                return Err(PipelineTextureError::NotASpriteKey);
+            }
+            // Named as the 2D atlas names the blocks and items atlases' sprites.
+            Ok(BuiltTexture::Sprite(match id.namespace() {
+                "minecraft" => path.to_owned(),
+                _ => id.to_string(),
+            }))
         }
-        _ => Err((
-            "its texture".into(),
-            "a texture kind this game doesn't know".into(),
-        )),
+        // A texture kind a later API adds is one this game has no route for yet.
+        _ => Err(PipelineTextureError::NoSuchTextureFile),
     }
 }
 
-/// Whether a decoded texture file is one a pipeline may sample: each side 1 to
-/// [`TEXTURE_MAX_SIDE`], with exactly its RGBA pixels.
-fn check_image(width: u32, height: u32, bytes: usize) -> Result<(), String> {
-    let sides = 1..=TEXTURE_MAX_SIDE;
-    if !sides.contains(&width) || !sides.contains(&height) {
-        return Err(format!(
-            "the texture is {width}x{height}; each side must be 1 to {TEXTURE_MAX_SIDE} pixels"
-        ));
-    }
-    if u64::from(width) * u64::from(height) * 4 != bytes as u64 {
-        return Err("the texture's pixels don't match its size".into());
-    }
-    Ok(())
+/// The diagnostics line of a refused texture: its named cause, then what it means.
+pub fn texture_refusal(cause: PipelineTextureError) -> String {
+    format!("{cause:?}: {cause}")
 }
 
 /// The prelude a pipeline's file follows.
@@ -699,92 +670,57 @@ fn pipeline_fragment(input: PipelineInput) -> vec4<f32> { return pipeline_textur
         assert!(!compose(GLOW).unwrap().contains("@group(1)"));
     }
 
-    /// Sprites are named as the 2D atlas names them; texture files are read from `textures/`,
-    /// and one of no pixels, too big a side or pixels that don't match its size is refused,
-    /// naming the file. A required one fails the load.
+    /// Sprites are named as the 2D atlas names them; an id naming a file is refused by name,
+    /// and a required pipeline's refusal fails the load with the named cause.
     #[test]
-    fn a_textured_pipeline_names_its_sprite_and_checks_its_file() {
+    fn a_textured_pipeline_names_its_sprite_and_refuses_a_file_path() {
         use mod_api::PipelineTexture;
-        let pipeline = |texture| {
-            let id = Identifier::parse("test:glow").unwrap();
-            RenderPipeline::new(id.clone(), id, PipelineBlend::Additive, WorldDepth::Tested)
-                .textured(texture)
+        let pipeline = |id: &str| {
+            let name = Identifier::parse("test:glow").unwrap();
+            RenderPipeline::new(name.clone(), name, PipelineBlend::Additive, WorldDepth::Tested)
+                .textured(PipelineTexture::Sprite(Identifier::parse(id).unwrap()))
         };
         let shader = |_: &str| Ok(GLOW.to_owned());
-        let built = |texture, image: (u32, u32, usize)| {
-            Pipelines::build_with_images(&[pipeline(texture)], 1, shader, |_| {
-                Ok((image.0, image.1, vec![0; image.2]))
-            })
-            .map(|set| set.built()[0].as_ref().unwrap().texture.clone().unwrap())
+        let built = |id| {
+            Pipelines::build(&[pipeline(id)], 1, shader)
+                .map(|set| set.built()[0].as_ref().unwrap().texture.clone().unwrap())
         };
-        let sprite = |id: &str| PipelineTexture::Sprite(Identifier::parse(id).unwrap());
-        let file = |id: &str| PipelineTexture::Texture(Identifier::parse(id).unwrap());
+        assert_eq!(built("minecraft:block/stone"), Ok(BuiltTexture::Sprite("block/stone".into())));
         assert_eq!(
-            built(sprite("minecraft:block/stone"), (0, 0, 0)).unwrap(),
-            BuiltTexture::Sprite("block/stone".into())
+            built("powah:block/energy_charge"),
+            Ok(BuiltTexture::Sprite("powah:block/energy_charge".into()))
         );
+        assert_eq!(load_texture(&PipelineTexture::Sprite(Identifier::parse("test:textures/glow").unwrap())), Err(PipelineTextureError::NotASpriteKey));
         assert_eq!(
-            built(sprite("powah:block/energy_charge"), (0, 0, 0)).unwrap(),
-            BuiltTexture::Sprite("powah:block/energy_charge".into())
-        );
-        assert!(matches!(
-            built(file("test:effect/glow"), (2, 3, 24)).unwrap(),
-            BuiltTexture::Image { width: 2, height: 3, ref pixels } if pixels.len() == 24
-        ));
-        for (image, reason) in [
-            ((0, 4, 0), "each side must be 1 to 4096"),
-            ((TEXTURE_MAX_SIDE + 1, 1, (TEXTURE_MAX_SIDE as usize + 1) * 4), "each side"),
-            ((u32::MAX, u32::MAX, 4), "each side"),
-            ((2, 2, 15), "don't match its size"),
-        ] {
-            let error = built(file("test:effect/glow"), image).unwrap_err();
-            assert!(
-                error.contains("assets/test/textures/effect/glow.png") && error.contains(reason),
-                "{error}"
-            );
-        }
-        let missing = Pipelines::build_with_images(&[pipeline(file("test:gone"))], 1, shader, |_| {
-            Err("not found".into())
-        })
-        .unwrap_err();
-        assert_eq!(
-            missing,
-            "required render pipeline test:glow from mod  refused: assets/test/textures/gone.png: not found"
+            built("test:effect/glow.png"),
+            Err("required render pipeline test:glow from mod  refused: its texture: NotASpriteKey: the id names a file, not a sprite key".into())
         );
     }
 
-    /// The real resources' textures decode for a pipeline as the game loads them.
+    /// `pipeline_texture`'s texel arithmetic: `uv` 0 to 1 spans the sprite's rect once, the far
+    /// edge and every repeat (negative too) land back inside it, never on a neighbour's texel.
     #[test]
-    #[ignore = "daily"]
-    fn a_textured_pipeline_reads_a_real_texture_file() {
-        use mod_api::PipelineTexture;
-        let root = std::path::PathBuf::from(
-            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
-        );
-        let source = crate::resource_source::ResourceSource::directory(root);
-        let id = Identifier::parse("test:glint").unwrap();
-        let glint = Identifier::parse("minecraft:misc/enchanted_glint_item").unwrap();
-        let registered = [RenderPipeline::new(
-            id.clone(),
-            id,
-            PipelineBlend::Additive,
-            WorldDepth::Tested,
-        )
-        .textured(PipelineTexture::Texture(glint))];
-        let set = Pipelines::build_with_images(
-            &registered,
-            1,
-            |_| Ok(GLOW.to_owned()),
-            |file| {
-                let bytes = source.read(file).map_err(|e| e.to_string())?;
-                crate::hud::decode_bytes(&bytes).map_err(|e| e.to_string())
-            },
-        )
-        .unwrap();
-        let Some(BuiltTexture::Image { width, height, pixels }) = &set.built()[0].as_ref().unwrap().texture else {
-            panic!("no image");
-        };
-        assert!(*width > 0 && *height > 0);
-        assert_eq!(pixels.len(), (*width * *height * 4) as usize);
+    fn the_repeat_picks_integer_texels_inside_the_rect_for_any_uv() {
+        // A 16 x 16 sprite at texel (32, 16) of a 64 x 64 atlas.
+        let rect = [0.5, 0.25, 0.75, 0.5];
+        let at = |u: f32, v: f32| repeat_texel([u, v], rect, [64, 64]);
+        assert_eq!(at(0.0, 0.0), [32, 16], "the near corner");
+        assert_eq!(at(0.5, 0.5), [40, 24]);
+        assert_eq!(at(0.999_999, 0.999_999), [47, 31], "just inside the far edge");
+        assert_eq!(at(1.0, 1.0), [32, 16], "the far edge repeats to the start");
+        assert_eq!(at(2.5, 3.0625), [40, 17], "repeated");
+        assert_eq!(at(-0.0625, -0.25), [47, 28], "negative wraps from the far side");
+        assert_eq!(at(-1.0, -2.0), [32, 16]);
+        // So small a negative that its fraction rounds to 1.0 still stays inside.
+        assert_eq!(at(-1.0e-9, -1.0e-9), [47, 31]);
+        assert_eq!(at(-1000.5, 1000.75), [40, 28]);
+        // The 2x1 atlas's right half: always its one texel.
+        for u in [0.0, 0.25, 0.999, 1.0, -0.5, 7.75] {
+            assert_eq!(repeat_texel([u, u], [0.5, 0.0, 1.0, 1.0], [2, 1]), [1, 0], "{u}");
+        }
+        // The left half: never the right's.
+        for u in [0.0, 0.999, -0.001, 3.5] {
+            assert_eq!(repeat_texel([u, 0.0], [0.0, 0.0, 0.5, 1.0], [2, 1]), [0, 0], "{u}");
+        }
     }
 }

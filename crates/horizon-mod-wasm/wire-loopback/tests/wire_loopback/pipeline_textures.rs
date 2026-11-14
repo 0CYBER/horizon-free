@@ -6,7 +6,7 @@ fn id(text: &str) -> Identifier {
     Identifier::parse(text).unwrap()
 }
 
-/// The pipelines a mod registers: one per texture kind, and one untextured.
+/// The pipelines a mod registers: a mod's sprite, a vanilla item sprite, and one untextured.
 fn pipelines() -> [RenderPipeline; 3] {
     let pipeline = |name: &str| {
         RenderPipeline::new(
@@ -19,10 +19,28 @@ fn pipelines() -> [RenderPipeline; 3] {
     [
         pipeline("wire_test:orb").textured(PipelineTexture::Sprite(id("wire_test:block/charge"))),
         pipeline("wire_test:glow")
-            .textured(PipelineTexture::Texture(id("wire_test:effect/glow")))
+            .textured(PipelineTexture::Sprite(id("minecraft:item/diamond")))
             .optional(),
         pipeline("wire_test:plain"),
     ]
+}
+
+/// Every named texture refusal crosses the wire as itself.
+#[test]
+fn pipeline_texture_refusals_round_trip() {
+    use mod_api::PipelineTextureError as E;
+    for cause in [
+        E::NoSuchSprite,
+        E::NoSuchTextureFile,
+        E::NotASpriteKey,
+        E::OverCap,
+        E::Undecodable,
+        E::NoSlot,
+    ] {
+        let mut out = Writer::new();
+        out.put(&cause);
+        assert_eq!(Reader::decode::<E>(out.bytes()).unwrap(), cause);
+    }
 }
 
 #[test]
@@ -94,7 +112,7 @@ fn a_wasm_mods_textured_pipelines_reach_the_host_as_a_native_mods_do() {
                     textures,
                     [
                         Some(PipelineTexture::Sprite(id("wire_test:block/charge"))),
-                        Some(PipelineTexture::Texture(id("wire_test:effect/glow"))),
+                        Some(PipelineTexture::Sprite(id("minecraft:item/diamond"))),
                         None,
                     ],
                     "guest {guest}"

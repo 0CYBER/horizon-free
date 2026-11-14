@@ -61,8 +61,6 @@ struct Run {
 /// ([`mod_api::RenderPipeline::textured`]).
 #[derive(Clone, Copy)]
 pub struct TextureSources<'a> {
-    /// Uploads a texture file's pixels.
-    pub queue: &'a wgpu::Queue,
     /// The 2D atlas the blocks and items atlases' sprites are drawn from.
     pub atlas: &'a wgpu::TextureView,
     /// A sprite's `[u0, v0, u1, v1]` in `atlas`, by its name there; `None` for no such sprite.
@@ -79,7 +77,7 @@ pub struct ModPipelines {
     /// Group 0, then a texture, its sampler and where it lies in what is bound.
     textured_layout: wgpu::PipelineLayout,
     texture_layout: wgpu::BindGroupLayout,
-    /// Nearest texels, as vanilla's atlases sample; `pipeline_texture` repeats by itself.
+    /// The atlas's one sampler binding; `pipeline_texture` loads integer texels itself.
     sampler: wgpu::Sampler,
     group: wgpu::BindGroup,
     view: wgpu::Buffer,
@@ -289,8 +287,8 @@ impl ModPipelines {
         }
     }
 
-    /// The bind group of a pipeline's texture: a sprite of the atlas, or a texture file
-    /// uploaded once for this load. Made when the pipeline is built, never in a frame.
+    /// The bind group of a pipeline's texture: the atlas and its sprite's rect. Made when the
+    /// pipeline is built, never in a frame; a sprite the atlas lacks is refused by name.
     fn texture_group(
         &self,
         device: &wgpu::Device,
@@ -299,50 +297,15 @@ impl ModPipelines {
     ) -> Result<wgpu::BindGroup, String> {
         use wgpu::util::DeviceExt;
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let (view, rect) = match texture {
-            BuiltTexture::Sprite(name) => {
-                let Some(rect) = (sources.sprite)(name) else {
-                    drop(pollster::block_on(validation.pop()));
-                    return Err(format!(
-                        "its texture sprite {name} is in neither the block nor the item atlas"
-                    ));
-                };
-                (sources.atlas.clone(), rect)
-            }
-            BuiltTexture::Image {
-                width,
-                height,
-                pixels,
-            } => {
-                let limit = device.limits().max_texture_dimension_2d;
-                if *width > limit || *height > limit {
-                    drop(pollster::block_on(validation.pop()));
-                    return Err(format!(
-                        "its texture is {width}x{height}, over this GPU's {limit} pixels a side"
-                    ));
-                }
-                let image = device.create_texture_with_data(
-                    sources.queue,
-                    &wgpu::TextureDescriptor {
-                        label: Some("Mod pipeline texture"),
-                        size: wgpu::Extent3d {
-                            width: *width,
-                            height: *height,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    },
-                    wgpu::util::TextureDataOrder::LayerMajor,
-                    pixels,
-                );
-                (image.create_view(&Default::default()), [0.0, 0.0, 1.0, 1.0])
-            }
+        let BuiltTexture::Sprite(name) = texture;
+        let Some(rect) = (sources.sprite)(name) else {
+            drop(pollster::block_on(validation.pop()));
+            return Err(format!(
+                "its texture sprite {name}: {}",
+                crate::mod_pipelines::texture_refusal(mod_api::PipelineTextureError::NoSuchSprite)
+            ));
         };
+        let view = sources.atlas.clone();
         let rect = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Mod pipeline texture rect"),
             contents: bytemuck::cast_slice(&rect),
@@ -541,7 +504,6 @@ impl super::Renderer {
         sprite: &dyn Fn(&str) -> Option<[f32; 4]>,
     ) -> Result<(), String> {
         let textures = TextureSources {
-            queue: &self.queue,
             atlas: &self.entity_atlas,
             sprite,
         };
@@ -1026,8 +988,8 @@ mod tests {
         );
     }
 
-    /// A textured pipeline samples a texture file across its quad, and one naming an atlas
-    /// sprite samples only that sprite's part of the atlas, repeating it past 1. A sprite the
+    /// A textured pipeline samples a 2x1 sprite's two texels across its quad, and one naming
+    /// half the atlas samples only that sprite's part, repeating it past 1. A sprite the
     /// atlas lacks refuses the optional pipeline, and an untextured one in the same load still
     /// draws as before. Expected bytes: stored red and green stay 255 through decode and encode.
     #[test]
@@ -1045,23 +1007,17 @@ mod tests {
         let state = (PipelineBlend::Translucent, WorldDepth::Tested);
         let pipeline = |slot| RenderPipeline::new(id(slot), id(slot), state.0, state.1).optional();
         let registered = [
-            // A 2x1 file: red on the left, green on the right.
-            pipeline(0).textured(PipelineTexture::Texture(id(0))),
+            // A 2x1 sprite, the whole atlas: red on the left, green on the right.
+            pipeline(0).textured(PipelineTexture::Sprite(id(0))),
             // The atlas's right half, green.
             pipeline(1).textured(PipelineTexture::Sprite(id(1))),
             pipeline(2).textured(PipelineTexture::Sprite(Identifier::parse("test:none").unwrap())),
             pipeline(3),
         ];
         let red_green = vec![255, 0, 0, 255, 0, 255, 0, 255];
-        let set = Pipelines::build_with_images(
-            &registered,
-            7,
-            |file| Ok(if file.ends_with("p3.wgsl") { PASS } else { sample }.to_owned()),
-            |file| {
-                assert_eq!(file, "assets/test/textures/p0.png");
-                Ok((2, 1, red_green.clone()))
-            },
-        )
+        let set = Pipelines::build(&registered, 7, |file| {
+            Ok(if file.ends_with("p3.wgsl") { PASS } else { sample }.to_owned())
+        })
         .unwrap();
         let atlas = device.create_texture_with_data(
             queue,
@@ -1083,11 +1039,14 @@ mod tests {
             &red_green,
         );
         let atlas = atlas.create_view(&Default::default());
-        let sprite = |name: &str| (name == "test:p1").then_some([0.5, 0.0, 1.0, 1.0]);
+        let sprite = |name: &str| match name {
+            "test:p0" => Some([0.0, 0.0, 1.0, 1.0]),
+            "test:p1" => Some([0.5, 0.0, 1.0, 1.0]),
+            _ => None,
+        };
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut primitives = WorldPrimitives::new(device, (format, false));
         let sources = TextureSources {
-            queue,
             atlas: &atlas,
             sprite: &sprite,
         };
@@ -1126,8 +1085,8 @@ mod tests {
             STAGES - 1,
         );
         let (red, green) = ([255.0, 0.0, 0.0, 255.0], [0.0, 255.0, 0.0, 255.0]);
-        assert_near(pixel(8, 8), red, 1.0, "the file's left texel");
-        assert_near(pixel(56, 8), green, 1.0, "the file's right texel");
+        assert_near(pixel(8, 8), red, 1.0, "the 2x1 sprite's left texel");
+        assert_near(pixel(56, 8), green, 1.0, "the 2x1 sprite's right texel");
         assert_near(pixel(8, 24), green, 1.0, "the sprite, not the atlas's red");
         assert_near(pixel(40, 24), green, 1.0, "the sprite repeated");
         assert_near(pixel(8, 40), [255.0; 4], 1.0, "the untextured pipeline");
