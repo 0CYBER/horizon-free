@@ -1830,7 +1830,9 @@ mod tests {
     #[test]
     fn edit_queue_stays_bounded_without_searches() {
         let mut o = Occlusion::new(0, 4);
-        let total = (1usize << 16) + 5000;
+        // Fill the queue, trigger the resend, then edit once while it is pending.
+        // Further edits repeat that last branch without exercising a new boundary.
+        let total = EDIT_CAP + 2;
         for i in 0..total {
             o.set(((i % 700) as i32, 1, (i / 700) as i32), 1 + (i as u64 % 5));
         }
@@ -1844,7 +1846,10 @@ mod tests {
         let mut fresh = Occlusion::new(0, 4);
         for (&(x, z), column) in &o.columns.map {
             for (y, &vis) in column.iter().enumerate() {
-                fresh.set((x, y as i32, z), vis);
+                // Missing sections in the fresh world already connect every face.
+                if vis != ALL_VISIBLE {
+                    fresh.set((x, y as i32, z), vis);
+                }
             }
         }
         let camera = at((0, 1, 0));

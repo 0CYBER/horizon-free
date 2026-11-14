@@ -985,17 +985,17 @@ mod tests {
     #[test]
     fn a_panic_in_a_converted_package_names_the_runtime_package_export_and_site() {
         let runtime = enter_native_mod(ModCall {
-            id: "portizon",
+            id: "converter_runtime",
             hook: "client_tick_pre",
             part: None,
         });
-        let packages = ConvertedPackages::new("portizon", ["example:mod"]);
+        let packages = ConvertedPackages::new("converter_runtime", ["example:mod"]);
         let package = packages.package("example:mod").unwrap();
         let scope = package
             .enter("tick", "com.example.Foo.tick(Foo.java:42)")
             .unwrap();
         assert!(attributed("boom".into()).ends_with(
-            "\nin native mod portizon, hook client_tick_pre\n\
+            "\nin native mod converter_runtime, hook client_tick_pre\n\
              in converted package example:mod, export tick, \
              call site com.example.Foo.tick(Foo.java:42)"
         ));
@@ -1016,7 +1016,8 @@ mod tests {
         );
         drop(scope);
         assert!(
-            attributed("boom".into()).ends_with("\nin native mod portizon, hook client_tick_pre")
+            attributed("boom".into())
+                .ends_with("\nin native mod converter_runtime, hook client_tick_pre")
         );
         drop(runtime);
         assert_eq!(attributed("boom".into()), "boom");
@@ -1025,11 +1026,11 @@ mod tests {
     #[test]
     fn a_guest_export_cannot_forge_a_report_line() {
         let runtime = enter_native_mod(ModCall {
-            id: "portizon",
+            id: "converter_runtime",
             hook: "client_tick_pre",
             part: None,
         });
-        let packages = ConvertedPackages::new("portizon", ["example:mod"]);
+        let packages = ConvertedPackages::new("converter_runtime", ["example:mod"]);
         let scope = packages
             .package("example:mod")
             .unwrap()
