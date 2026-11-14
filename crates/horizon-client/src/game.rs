@@ -2271,10 +2271,12 @@ struct Game<'a> {
     /// accounts), in place of the process's (P1's) for its connections and skin.
     split_auth: Option<std::sync::Arc<horizon_client::auth::AuthSession>>,
     focused: bool,
-    /// The visible window of a game an agent started, until a person focuses it: it opened
-    /// without the focus, and its pointer grab stays inside the game as `--offscreen`'s does,
-    /// so the person's pointer is never taken, hidden or moved.
+    /// The visible window of a game an agent started, until a person clicks into it: its
+    /// pointer grab stays inside the game as `--offscreen`'s does, so the person's pointer is
+    /// never taken, hidden or moved, and their keys and mouse don't reach the game.
     unclaimed_window: bool,
+    /// The modifiers the person last held at it, applied at the claim (`held_modifiers`).
+    unclaimed_modifiers: Option<winit::event::Modifiers>,
     /// The window's last focus change during a scripted run, applied once the run ends.
     focus_after_run: Option<bool>,
     /// Whether the window currently accepts input method events.
@@ -10199,12 +10201,6 @@ impl Game<'_> {
                     self.focused = focused;
                     self.focus_lost = (!focused).then(Instant::now);
                     if focused {
-                        if std::mem::take(&mut self.unclaimed_window) {
-                            // A person clicked into the agent's window: from now on it is a
-                            // window like any other, and their click takes the pointer
-                            // (`MouseHandler.onPress`) instead of attacking.
-                            self.captured = false;
-                        }
                         self.regrab_on_refocus();
                     } else {
                         // A held pointer goes with the focus, wherever the
@@ -11454,6 +11450,7 @@ impl<'a> Game<'a> {
             split_auth: None,
             focused: true,
             unclaimed_window: false,
+            unclaimed_modifiers: None,
             focus_after_run: None,
             ime_allowed: false,
             ime_area: None,

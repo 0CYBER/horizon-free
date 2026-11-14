@@ -87,7 +87,8 @@ impl HudBatch { fn new(_size: [u32; 2]) -> Self { Self { scale: 2.0 } } }
 struct Config { width: u32, height: u32 }
 struct Renderer { config: Config }
 #[derive(Default)]
-struct Window { grabs: Cell<u32>, visible: Cell<bool>, fail: bool, warps: Cell<u32>, at: Cell<(f64, f64)> }
+struct Window { grabs: Cell<u32>, visible: Cell<bool>, fail: bool, warps: Cell<u32>, at: Cell<(f64, f64)>,
+                focus: Cell<bool> }
 impl Window {
     fn inner_size(&self) -> PhysicalSize<u32> { PhysicalSize { width: 854, height: 480 } }
     fn set_cursor_position(&self, position: PhysicalPosition<f64>) -> Result<(), ()> {
@@ -103,11 +104,12 @@ impl Window {
     }
     fn set_cursor_visible(&self, visible: bool) { self.visible.set(visible); }
     fn id(&self) -> WindowId { WindowId }
+    fn has_focus(&self) -> bool { self.focus.get() }
 }
 #[derive(Clone, Copy)]
 struct WindowId;
 impl WindowId { fn dummy() -> Self { WindowId } }
-enum WindowEvent { Focused(bool) }
+enum WindowEvent { Focused(bool), ModifiersChanged(u8) }
 mod input_trace { pub enum InputOrigin { User } }
 trait EventLoopCtl {}
 struct Loop;
@@ -137,6 +139,7 @@ struct Game {
     mining: bool, lan_acting: Option<u32>, renderer: Option<Renderer>, cursor: (f32, f32),
     server_packs: ServerPacks, command_prompt: Option<()>, options: Options,
     unclaimed_window: bool, scripted: bool, focus_after_run: Option<bool>, applied_focus: Vec<bool>,
+    unclaimed_modifiers: Option<u8>, applied_modifiers: Vec<u8>,
 }
 impl Default for Game {
     fn default() -> Self {
@@ -147,7 +150,8 @@ impl Default for Game {
             mining: false, lan_acting: None,
             renderer: None, cursor: (0.0, 0.0), server_packs: ServerPacks::default(),
             command_prompt: None, options: Options::default(),
-            unclaimed_window: false, scripted: false, focus_after_run: None, applied_focus: Vec::new() }
+            unclaimed_window: false, scripted: false, focus_after_run: None, applied_focus: Vec::new(),
+            unclaimed_modifiers: None, applied_modifiers: Vec::new() }
     }
 }
 HELPER
@@ -160,9 +164,15 @@ impl Game {
     fn scripted_run(&self) -> bool { self.scripted }
     fn handle_window_event(&mut self, _: &dyn EventLoopCtl, _: WindowId, event: WindowEvent,
                            _: input_trace::InputOrigin) {
-        let WindowEvent::Focused(focused) = event;
-        self.applied_focus.push(focused);
-        self.focused = focused;
+        // The `Focused` arm of the game's handler, as far as the pointer goes.
+        match event {
+            WindowEvent::Focused(focused) => {
+                self.applied_focus.push(focused);
+                self.focused = focused;
+                if focused { self.regrab_on_refocus(); }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => self.applied_modifiers.push(modifiers),
+        }
     }
 METHODS
 }
@@ -369,6 +379,54 @@ fn main() {
         let window = game.window.as_ref().unwrap();
         assert_eq!((window.grabs.get(), window.warps.get()), (0, 0));
         assert!(window.visible.get());
+        // The person's press inside it claims it: the game's own grab is dropped, so that
+        // press takes the system pointer (`MouseHandler.onPress`) instead of attacking. The
+        // game hears of the focus the window has by then, if it didn't know.
+        game.window.as_ref().unwrap().focus.set(true);
+        game.claim_window(&Loop);
+        assert!(!game.unclaimed_window);
+        assert!(!game.captured);
+        assert_eq!(game.applied_focus, if focused { vec![] } else { vec![true] });
+        game.capture(true);
+        assert!(game.captured);
+        let window = game.window.as_ref().unwrap();
+        assert_eq!(window.grabs.get(), 1);
+        assert!(!window.visible.get());
+    }
+    // A press that reaches a window without the focus claims it too, and the game hears that
+    // the focus is elsewhere: nothing is grabbed until it comes, as in any window.
+    {
+        let mut game = Game::default();
+        game.unclaimed_window = true;
+        game.claim_window(&Loop);
+        assert_eq!(game.applied_focus, vec![false]);
+        game.capture(true);
+        assert!(!game.captured);
+        assert_eq!(game.window.as_ref().unwrap().grabs.get(), 0);
+    }
+    // An agent's `pad focus false` in play leaves a regrab owed. The claim drops it: the focus
+    // catching up takes nothing, so the press still finds the pointer free and takes it.
+    {
+        let mut game = Game::default();
+        game.unclaimed_window = true;
+        game.capture_loaded_world();
+        game.focused = false;
+        game.regrab_on_refocus = true;
+        game.window.as_ref().unwrap().focus.set(true);
+        game.claim_window(&Loop);
+        assert_eq!(game.applied_focus, vec![true]);
+        assert!(!game.captured, "the press must take the pointer, not attack");
+        assert_eq!(game.window.as_ref().unwrap().grabs.get(), 0);
+    }
+    // A Shift the person held before the click reaches the game at the claim, after the focus.
+    {
+        let mut game = Game::default();
+        game.unclaimed_window = true;
+        game.unclaimed_modifiers = Some(1);
+        game.window.as_ref().unwrap().focus.set(true);
+        game.claim_window(&Loop);
+        assert_eq!(game.applied_modifiers, vec![1]);
+        assert_eq!(game.unclaimed_modifiers, None);
     }
     // A scripted run's grab is the game's own, even in a window the person clicked into,
     // and once it ends the system pointer follows: a run that closed a screen leaves the
@@ -465,6 +523,7 @@ fn main() {
                                   method(source, "capture_loaded_world") + "\n" +
                                   method(source, "regrab_on_refocus") + "\n" +
                                   method(source, "internal_grab") + "\n" +
+                                  method(source, "claim_window") + "\n" +
                                   method(source, "settle_after_run"))
         with tempfile.TemporaryDirectory(prefix="horizon-input-") as folder:
             folder = Path(folder)
@@ -499,6 +558,7 @@ struct Pad { radial: Radial }
 struct Game {
     pending_save: Option<()>, captured: bool, focused: bool, keyboard_mouse: bool, split_window: bool,
     options: Options, screen: Screen, mouse: MouseLook, last_input: Instant, pad: Pad, scripted: bool,
+    unclaimed_window: bool,
 }
 impl Game {
     fn scripted_run(&self) -> bool { self.scripted }
@@ -512,24 +572,25 @@ METHOD
 }
 fn main() {
     // (offscreen renderer, compositor, keyboard/mouse owner, active, gameplay, saving, the pad's
-    // radial menu open, a scripted run).
-    for (offscreen, split, owner, active, playing, saving, radial, scripted, turns) in [
-        (false, false, true, true, true, false, false, false, true),
-        (true, true, true, true, true, false, false, false, true),
-        (true, true, false, true, true, false, false, false, false),
-        (true, false, true, true, true, false, false, false, false),
-        (true, true, true, false, true, false, false, false, false),
-        (true, true, true, true, false, false, false, false, false),
-        (true, true, true, true, true, true, false, false, false),
-        (false, false, true, true, true, false, true, false, false),
-        (false, false, true, true, true, false, false, true, false),
+    // radial menu open, a scripted run, an agent's window no one has clicked yet).
+    for (offscreen, split, owner, active, playing, saving, radial, scripted, unclaimed, turns) in [
+        (false, false, true, true, true, false, false, false, false, true),
+        (true, true, true, true, true, false, false, false, false, true),
+        (true, true, false, true, true, false, false, false, false, false),
+        (true, false, true, true, true, false, false, false, false, false),
+        (true, true, true, false, true, false, false, false, false, false),
+        (true, true, true, true, false, false, false, false, false, false),
+        (true, true, true, true, true, true, false, false, false, false),
+        (false, false, true, true, true, false, true, false, false, false),
+        (false, false, true, true, true, false, false, true, false, false),
+        (false, false, true, true, true, false, false, false, true, false),
     ] {
         let mut game = Game {
             pending_save: saving.then_some(()), captured: true, focused: active,
             keyboard_mouse: owner, split_window: split, options: Options { offscreen },
             screen: if playing { Screen::Playing } else { Screen::Paused },
             mouse: MouseLook::default(), last_input: Instant::now(), pad: Pad { radial: Radial(radial) },
-            scripted,
+            scripted, unclaimed_window: unclaimed,
         };
         game.device_event(&ActiveEventLoop, DeviceId, DeviceEvent::MouseMotion { delta: (0.0, 0.0) });
         game.device_event(&ActiveEventLoop, DeviceId, DeviceEvent::MouseMotion { delta: (20.0, -10.0) });
@@ -539,7 +600,7 @@ fn main() {
         rotation.turn(x, y);
         let want = if turns { (3.0, -1.5) } else { (0.0, 0.0) };
         assert!((rotation.y_rot - want.0).abs() < 0.00001 && (rotation.x_rot - want.1).abs() < 0.00001,
-            "rotation=({}, {}), offscreen={offscreen}, split={split}, owner={owner}, active={active}, playing={playing}, saving={saving}, radial={radial}, scripted={scripted}", rotation.y_rot, rotation.x_rot);
+            "rotation=({}, {}), offscreen={offscreen}, split={split}, owner={owner}, active={active}, playing={playing}, saving={saving}, radial={radial}, scripted={scripted}, unclaimed={unclaimed}", rotation.y_rot, rotation.x_rot);
     }
 }
 '''

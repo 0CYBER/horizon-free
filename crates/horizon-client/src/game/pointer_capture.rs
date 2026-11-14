@@ -263,6 +263,37 @@ impl Game<'_> {
             || self.unclaimed_window
             || self.scripted_run()
     }
+    /// A person pressed a mouse button inside the agent's window (`at_unclaimed`): from now on
+    /// it is a window like any other, and that press takes the pointer
+    /// (`MouseHandler.onPress`) instead of attacking. The focus changes it didn't hear while
+    /// unclaimed, or an agent's `pad focus`, may have left the game's idea of the focus apart
+    /// from the window's: it catches up first, as a `Focused` would have told it. So do the
+    /// modifiers the person holds (`held_modifiers`).
+    pub(super) fn claim_window(&mut self, event_loop: &dyn EventLoopCtl) {
+        self.unclaimed_window = false;
+        self.captured = false;
+        // A regrab owed since an agent's `pad focus false` would take the pointer as the focus
+        // catches up, and the press would then attack.
+        self.regrab_on_refocus = false;
+        let Some(window) = &self.window else { return };
+        let (id, focused) = (window.id(), window.has_focus());
+        if focused != self.focused {
+            self.handle_window_event(
+                event_loop,
+                id,
+                WindowEvent::Focused(focused),
+                input_trace::InputOrigin::User,
+            );
+        }
+        if let Some(modifiers) = self.unclaimed_modifiers.take() {
+            self.handle_window_event(
+                event_loop,
+                id,
+                WindowEvent::ModifiersChanged(modifiers),
+                input_trace::InputOrigin::User,
+            );
+        }
+    }
     /// Once a scripted run is over, the person's last click into the window or away from it
     /// applies (`held_focus`), and the system pointer follows the grab the run left inside the
     /// game, as if the window had taken or released it now.
