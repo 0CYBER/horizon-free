@@ -32,6 +32,7 @@ horizon-client game::explosion_detonate::tests::the_list_order_is_the_walk_order
 horizon-client game::explosion_detonate::tests::with_no_listener_the_blast_is_unchanged lib daily game-boot
 horizon-client game::launch_api::tests::developer_offline_never_consumes_inherited_sessions lib daily child-process
 horizon-client game::maps::tests::map_on_banner_in_adventure_mode_honours_can_place_on lib daily game-boot
+horizon-client game::mod_image_tests::an_api_only_mods_image_draws_with_no_mixin lib daily resources # HORIZON_TEST_RESOURCES and software Vulkan required.
 horizon-client game::mods::tests::a_shared_missing_jar_stops_native_load_and_refuses_each_content_mod_row lib daily child-process
 horizon-client game::mods::tests::content_overlay_validates_dependencies_and_orders_layers lib daily child-process
 horizon-client game::mods::tests::native_content_follows_the_build_and_misplaced_content_follows_its_selection lib daily child-process

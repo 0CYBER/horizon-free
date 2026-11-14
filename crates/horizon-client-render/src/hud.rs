@@ -869,9 +869,9 @@ impl HudAtlas {
     pub fn build_over(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
         Self::build_over_with_image(root, defaults, false)
     }
-    /// The atlas above, with a slot for a native mod's own image
-    /// (`horizon/modimage`) only when `mod_image` says a mod is loaded that
-    /// draws one: the slot costs 4 MiB of pixels, so a game without native
+    /// The atlas above, with a slot for a client mod's own image
+    /// (`horizon/modimage`) only when `mod_image` says a client mod is loaded,
+    /// native or wasm: the slot costs 4 MiB of pixels, so a game without
     /// mods holds none of them.
     pub fn build_over_with_image(
         root: &ResourceSource,
@@ -903,7 +903,7 @@ impl HudAtlas {
             crate::minimap::SIZE as u32,
             Vec::new(),
         ));
-        // A mod's own image (native `mod_image`), only when a mod is loaded.
+        // A mod's own image (`mod_image`), only when a client mod is loaded.
         if mod_image {
             images.push((
                 MOD_IMAGE_SPRITE.into(),
@@ -3118,7 +3118,7 @@ mod tests {
         assert!(atlas.object_skins.is_empty());
     }
 
-    /// The mod image slot is paid only by a game with a native mod loaded.
+    /// The mod image slot is paid only by a game with a client mod loaded.
     #[test]
     fn the_mod_image_slot_exists_only_when_a_mod_is_loaded() {
         let root = Path::new("/nonexistent/horizon-test-assets");
