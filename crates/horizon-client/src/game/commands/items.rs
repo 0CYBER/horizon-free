@@ -1242,7 +1242,12 @@ impl Game<'_> {
             .item_modifiers
             .get(&id)
             .cloned()
-            .ok_or_else(|| err("argument.item_modifier.unknown", &[&id]))
+            .ok_or_else(|| {
+                err(
+                    "argument.resource_or_id.no_such_element",
+                    &[&id, &"minecraft:item_modifier"],
+                )
+            })
     }
     /// `/item modify (entity|block) <target> <slot> <modifier>`.
     pub(super) fn cmd_item_modify(&mut self, ctx: &Context) -> R<i32> {

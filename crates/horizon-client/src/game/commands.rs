@@ -1838,7 +1838,7 @@ impl Game<'_> {
             Ok(false) => {}
             Err(error) => {
                 log::error!("entity teleport into {}: {error}", level.id());
-                return Err(err("commands.generic.exception", &[]));
+                return Err(err("command.failed", &[]));
             }
         }
         let conn = match t {

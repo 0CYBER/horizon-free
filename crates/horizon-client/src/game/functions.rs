@@ -1273,12 +1273,17 @@ impl Game<'_> {
                 .map_err(|e| err("argument.nbt.invalid", &[&e]))?;
             horizon_client::scoreboard::tag_to_json(&tag)
         } else {
-            self.fns
-                .store
-                .predicates
-                .get(id)
-                .cloned()
-                .ok_or_else(|| err("argument.predicate.unknown", &[&id]))?
+            self.fns.store.predicates.get(id).cloned().ok_or_else(|| {
+                let id = if id.contains(':') {
+                    id.to_string()
+                } else {
+                    format!("minecraft:{id}")
+                };
+                err(
+                    "argument.resource_or_id.no_such_element",
+                    &[&id, &"minecraft:predicate"],
+                )
+            })?
         };
         let source = self.command_source.unwrap_or_else(|| self.player_source());
         let view = source.entity.map(|t| {
@@ -2016,6 +2021,11 @@ mod tests {
         );
         let error = run(&mut game, "function h166:novar").unwrap_err();
         assert_eq!(error.key, "arguments.function.unknown");
+        let error = game.check_predicate("h166missing").unwrap_err();
+        assert_eq!(error.key, "argument.resource_or_id.no_such_element");
+        let text = error.message.plain();
+        assert!(text.contains("minecraft:h166missing"), "{text}");
+        assert!(text.contains("minecraft:predicate"), "{text}");
         // A substituted line that does not parse fails the call, so no line of
         // it runs, and the reason names the line `MacroEntry.instantiate` got.
         let error = run(&mut game, "function h166:bad {v:1}").unwrap_err();
