@@ -6370,6 +6370,16 @@ mod tests {
             Some(&Tag::Short(32767))
         );
     }
+    #[test]
+    fn every_orb_set_experience_orb_accepts_reloads_unchanged() {
+        let at = Tag::compound([("Pos", doubles(&[1.0, 2.0, 3.0]))]);
+        let mut o = orbs_from_nbt(&at).remove(0);
+        for (value, count) in [(11, 1), (32767, 2147483647), (-32768, 1)] {
+            (o.value, o.count) = (value, count);
+            let back = orbs_from_nbt(&orb_to_nbt(&o, [0; 4])).remove(0);
+            assert_eq!((back.value, back.count), (value, count));
+        }
+    }
 }
 
 /// `Brain`'s two measured Warden Unit memories, using actual existing slots.

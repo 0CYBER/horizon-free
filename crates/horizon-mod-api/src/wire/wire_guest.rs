@@ -702,7 +702,9 @@ pub fn run(id: u32) -> (*const u8, u32) {
         let depth = rt.keeps.len();
         rt.keeps.push(Keep::default());
         if rt.replies.len() <= depth {
-            rt.replies.push(Writer::new());
+            let mut reply = Writer::new();
+            reply.replace(Vec::with_capacity(64));
+            rt.replies.push(reply);
         }
         let mut reply = std::mem::take(&mut rt.replies[depth]);
         reply.clear();

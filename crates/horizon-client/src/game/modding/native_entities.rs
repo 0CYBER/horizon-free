@@ -71,7 +71,9 @@ impl Game<'_> {
     /// <kind> <pos> <nbt>` takes it; passengers included): its id. None on a
     /// client's copy of the world, for another dimension, a position outside
     /// `/summon`'s bounds, a chunk that isn't loaded, a kind Horizon can't
-    /// load, or one a mod kept out (`native_entity_join_level`).
+    /// load, one a mod kept out (`native_entity_join_level`), or with the entity ids exhausted.
+    /// Inside a transaction the id comes back at once: a join a mod cancels at the root commit
+    /// leaves its handle stale.
     pub(super) fn summon(
         &mut self,
         dimension: &str,
@@ -79,6 +81,9 @@ impl Game<'_> {
         pos: [f64; 3],
         nbt: Compound,
     ) -> Option<u32> {
+        if self.entity_ids_exhausted() {
+            return None;
+        }
         if !self.native_simulates_level(dimension) || !position_ok(pos) {
             return None;
         }
@@ -178,31 +183,54 @@ impl Game<'_> {
     /// with static dispatch and allocates nothing but the kind name of an
     /// entity it announces; nothing runs when no mod is loaded, on a client
     /// of a server (which tells nothing), or when nothing is new.
+    /// Inside a transaction open in this level, construction is still told now, and the join
+    /// at its root commit (`transactions/entities.rs`), with this call's `loaded_from_disk`, in
+    /// insertion order and before the transaction's removals take effect; the entity is kept
+    /// until then. The same holds for a call a listener makes while that commit is told: its
+    /// joins are told after the batch being told. A `through` is the commit's own flush of one
+    /// batch, never held.
     pub(super) fn native_joins_flush(&mut self, loaded_from_disk: bool, watch: u32) -> bool {
+        self.flush_joins(loaded_from_disk, watch, &[], None)
+    }
+    /// [`Self::native_joins_flush`], never announcing the entities `removed` names and, with a
+    /// `through`, none that joined after it: a root commit's, for the entities its transaction
+    /// added and removed, each held flush keeping its own `loaded_from_disk`.
+    pub(in crate::game) fn flush_joins(
+        &mut self,
+        loaded_from_disk: bool,
+        watch: u32,
+        removed: &[u32],
+        through: Option<horizon_client::join_seq::JoinSeq>,
+    ) -> bool {
         if self.remote.is_some() || mod_api::__private::mods().is_empty() || !self.joins_pending() {
             return true;
         }
-        let observed = horizon_client::join_seq::JoinSeq::latest();
         self.assign_pending_join_ids();
+        if through.is_none()
+            && self.hold_announcement(super::transactions::Announcement::Joins {
+                loaded_from_disk,
+                through: horizon_client::join_seq::JoinSeq::latest(),
+            })
+        {
+            let mut mark = self.persist.joined_seq;
+            while let Some((slot, id, seq)) = self.next_unannounced(mark, &[], None) {
+                mark = seq;
+                let kind = self.slot_kind_and_position(slot).0;
+                self.construct_joining(id, &kind);
+            }
+            return true;
+        }
+        let latest = horizon_client::join_seq::JoinSeq::latest();
+        let observed = through.map_or(latest, |through| through.min(latest));
         let mut kept = true;
-        while let Some((slot, id, seq)) = self.next_unannounced() {
+        while let Some((slot, id, seq)) =
+            self.next_unannounced(self.persist.joined_seq, removed, through)
+        {
             self.persist.joined_seq = seq;
             let (kind, at) = self.slot_kind_and_position(slot);
             let mut canceled = false;
             let dimension = self.dim.id();
-            // `Entity.<init>` comes before `addFreshEntity`: an entity that started on a
-            // path that doesn't tell it (`entity_initialization.rs`) is told here.
-            self.initialize_entity(mod_api::Holder::Entity(id), &kind);
-            // Constructor writes were canonical but unbound before insertion.
-            // The real lifetime is now resident, before join listeners query it.
-            if self
-                .entity_attachments
-                .get(&id)
-                .is_some_and(|map| map.has_index_entries())
-                && let Err(error) = self.bind_resident_entity_attachments(id)
-            {
-                log::warn!("constructor attachment binding failed for entity {id}: {error:?}");
-            }
+            self.construct_joining(id, &kind);
             self.native_entity_join_level(
                 dimension,
                 id,
@@ -240,6 +268,22 @@ impl Game<'_> {
         kept
     }
 
+    /// `Entity.<init>` comes before `addFreshEntity`: an entity that started on a path that
+    /// doesn't tell it (`entity_initialization.rs`) is told here.
+    fn construct_joining(&mut self, id: u32, kind: &str) {
+        self.initialize_entity(mod_api::Holder::Entity(id), kind);
+        // Constructor writes were canonical but unbound before insertion.
+        // The real lifetime is now resident, before join listeners query it.
+        if self
+            .entity_attachments
+            .get(&id)
+            .is_some_and(|map| map.has_index_entries())
+            && let Err(error) = self.bind_resident_entity_attachments(id)
+        {
+            log::warn!("constructor attachment binding failed for entity {id}: {error:?}");
+        }
+    }
+
     fn assign_pending_join_ids(&mut self) {
         self.assign_dragon_and_crystal_ids();
         use super::entity_residency::assign_resident_ids;
@@ -259,19 +303,27 @@ impl Game<'_> {
         assign_resident_ids!(self.tridents, t, &mut self.next_entity, None);
         assign_resident_ids!(self.rockets, r, &mut self.next_entity, None);
     }
-    /// The entity inserted earliest after the last one announced.
-    fn next_unannounced(&self) -> Option<(Slot, u32, horizon_client::join_seq::JoinSeq)> {
+    /// The entity inserted earliest after `mark` (and, with a `through`, no later than it), but
+    /// the `skipped`.
+    fn next_unannounced(
+        &self,
+        mark: horizon_client::join_seq::JoinSeq,
+        skipped: &[u32],
+        through: Option<horizon_client::join_seq::JoinSeq>,
+    ) -> Option<(Slot, u32, horizon_client::join_seq::JoinSeq)> {
         use super::entity::Entity;
         use horizon_client::join_seq::{JoinSeq, Joined};
-        let mark = self.persist.joined_seq;
         let mut best: Option<(Slot, u32, JoinSeq)> = None;
         let mut offer = |slot: Slot, id: u32, seq: JoinSeq| {
-            if self.persist.removals.iter().chain(self.persist.destroying_vehicles.iter()).any(|target| {
+            if skipped.contains(&id) || self.persist.removals.iter().chain(self.persist.destroying_vehicles.iter()).any(|target| {
                 matches!(*target, super::commands::Target::Boat(n) | super::commands::Target::Cart(n) if n == id)
             }) {
                 return;
             }
-            if seq > mark && best.is_none_or(|(_, _, previous)| seq < previous) {
+            if seq > mark
+                && through.is_none_or(|through| seq <= through)
+                && best.is_none_or(|(_, _, previous)| seq < previous)
+            {
                 best = Some((slot, id, seq));
             }
         };
@@ -362,7 +414,9 @@ impl Game<'_> {
         let observed = horizon_client::join_seq::JoinSeq::latest();
         if self.remote.is_none() && !mod_api::__private::mods().is_empty() {
             self.assign_pending_join_ids();
-            while let Some((slot, id, seq)) = self.next_unannounced() {
+            while let Some((slot, id, seq)) =
+                self.next_unannounced(self.persist.joined_seq, &[], None)
+            {
                 self.persist.joined_seq = seq;
                 let kind = self.slot_kind_and_position(slot).0.into_owned();
                 self.remember_join(id, kind);
@@ -380,9 +434,16 @@ impl Game<'_> {
     }
     /// Entity `id` has left the level: told once, if mods were told it joined.
     pub(super) fn native_entity_left(&mut self, id: u32) {
-        if self.remote.is_some() {
+        if self.remote.is_some()
+            || self.hold_announcement(super::transactions::Announcement::Left(id))
+        {
             return;
         }
+        self.entity_left_now(id);
+    }
+    /// [`Self::native_entity_left`] told now, though a transaction or a commit holds the rest:
+    /// the root commit's own telling.
+    pub(in crate::game) fn entity_left_now(&mut self, id: u32) {
         self.entity_section_forget(id);
         if let Ok(i) = self.persist.live.binary_search_by_key(&id, |l| l.0) {
             let (id, kind, _) = self.persist.live.remove(i);
@@ -396,11 +457,19 @@ impl Game<'_> {
     /// there in the registry and tells the rest: no allocation, and nothing
     /// runs when no mod is loaded or none was announced.
     pub(super) fn native_leaves_flush(&mut self) {
-        use super::entity::Entity;
         self.native_removals_flush();
-        if self.persist.live.is_empty() || self.remote.is_some() {
+        if self.persist.live.is_empty()
+            || self.remote.is_some()
+            || self.hold_announcement(super::transactions::Announcement::Leaves)
+        {
             return;
         }
+        self.leaves_now();
+    }
+    /// [`Self::native_leaves_flush`] past its guards and told now, though a transaction or a
+    /// commit holds the rest: the root commit's own telling.
+    pub(in crate::game) fn leaves_now(&mut self) {
+        use super::entity::Entity;
         for l in &mut self.persist.live {
             l.2 = false;
         }

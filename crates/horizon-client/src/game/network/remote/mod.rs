@@ -527,6 +527,8 @@ pub(super) struct Remote {
             Arc<horizon_world::dimension_type::DimensionFacts>,
         ),
     >,
+    /// The levels this connection added to the process's table of levels: the only ones it drops.
+    added_levels: std::collections::HashSet<String>,
     /// `ClientPlayerNetworkEvent.LoggingOut` was fired for this connection: every way out
     /// of a world reports it once.
     logged_out: bool,
@@ -1140,6 +1142,7 @@ impl Game<'_> {
             level_facts: None,
             level_environment: None,
             facts_cache: Default::default(),
+            added_levels: Default::default(),
             viewed: Default::default(),
             hashed_seed: 0,
             chunk_format: Arc::new(ChunkFormat::new(
@@ -1382,6 +1385,7 @@ impl Game<'_> {
             level_facts: None,
             level_environment: None,
             facts_cache: Default::default(),
+            added_levels: Default::default(),
             viewed: Default::default(),
             hashed_seed: 0,
             chunk_format: Arc::new(ChunkFormat::new(
@@ -2595,15 +2599,8 @@ impl Game<'_> {
         // table may still hold a local world's (a superflat Overworld's).
         if let Ok(key) = horizon_core::LevelKey::parse(&spawn.dimension) {
             horizon_world::level::register_sea_level(key, spawn.sea_level);
-            if !matches!(
-                key,
-                horizon_core::LevelKey::OVERWORLD
-                    | horizon_core::LevelKey::NETHER
-                    | horizon_core::LevelKey::END
-            ) {
-                Dim::add_extra(&spawn.dimension);
-            }
         }
+        self.track_remote_levels(&spawn.dimension);
         // The replacement player starts with its inventory menu, even if the
         // server switched levels without closing the previous container.
         self.remote_close_local();

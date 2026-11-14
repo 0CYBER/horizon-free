@@ -17,7 +17,9 @@ class GateFailuresTests(unittest.TestCase):
     def test_core_compiles_once_on_green_and_collects_errors_only_on_red(self):
         workflow = yaml.load((ROOT / ".github/workflows/dyna-ci.yml").read_text(), Loader=yaml.BaseLoader)
         step = next(s for s in workflow["jobs"]["verify"]["steps"] if s.get("id") == "core_build")
-        for mode, expected in [("green", 0), ("red-build-success", 1), ("red-build-failure", 1)]:
+        for mode, expected in [("green", 0), ("red-build-success", 1), ("red-build-failure", 1),
+                               ("sccache-kill-recovered", 0), ("rustc-kill-recovered", 0),
+                               ("linker-kill-recovered", 0), ("kill-twice", 1)]:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 cargo = root / "cargo"
@@ -25,7 +27,16 @@ class GateFailuresTests(unittest.TestCase):
                                  "import json, os, sys\n"
                                  "with open(os.environ['CALLS'], 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
                                  "mode = os.environ['MODE']\n"
-                                 "sys.exit(0 if mode == 'green' or (sys.argv[1] == 'build' and mode == 'red-build-success') else 1)\n")
+                                 "if sys.argv[1] == 'test':\n"
+                                 "    if mode == 'green' or ('-j1' in sys.argv and mode.endswith('-recovered')): sys.exit(0)\n"
+                                 "    if 'kill' in mode:\n"
+                                 "        if mode.startswith('linker'):\n"
+                                 "            print('collect2: fatal error: ld terminated with signal 9 [Killed]', file=sys.stderr)\n"
+                                 "        else:\n"
+                                 "            print('signal: 9, SIGKILL: kill' if mode.startswith('rustc') else 'sccache: Compile terminated by signal 9', file=sys.stderr)\n"
+                                 "    print('error: could not compile `horizon-client-lib` (lib test)', file=sys.stderr)\n"
+                                 "    sys.exit(1)\n"
+                                 "sys.exit(0 if mode == 'red-build-success' else 1)\n")
                 cargo.chmod(0o755)
                 env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"],
                            JOBS="-j2", MODE=mode, CALLS=str(root / "calls"))
@@ -35,11 +46,24 @@ class GateFailuresTests(unittest.TestCase):
                 calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
                 self.assertEqual(calls[0], ["test", "-j2", "--profile", "test", "--workspace", "--lib",
                                             "--bins", "--tests", "--no-run", "--timings"])
-                if mode == "green":
-                    self.assertEqual(len(calls), 1)
+                killed = "kill" in mode
+                if killed:
+                    self.assertEqual(calls[1], ["test", "-j1", "--profile", "test", "--workspace",
+                                                "--lib", "--bins", "--tests", "--no-run", "--timings"])
+                    self.assertIn("::warning::", result.stdout)
+                    self.assertIn("Failed units: error: could not compile `horizon-client-lib` (lib test)", result.stdout)
                 else:
-                    self.assertEqual(calls[1:], [["build", "-j2", "--keep-going", "--profile", "test",
-                                                   "--workspace", "--lib", "--bins", "--tests"]])
+                    self.assertNotIn("::warning::", result.stdout)
+                if expected == 0:
+                    self.assertEqual(len(calls), 2 if killed else 1)
+                    self.assertNotIn("::error::", result.stdout)
+                else:
+                    self.assertEqual(calls[2 if killed else 1:], [["build", "-j2", "--keep-going", "--profile", "test",
+                                                                 "--workspace", "--lib", "--bins", "--tests"]])
+                    self.assertIn("::error::The test build failed", result.stdout)
+                    # A failure the keep-going build cannot reproduce is named as one, not left silent.
+                    self.assertEqual("does not clear the failed test build" in result.stdout,
+                                     mode == "red-build-success")
 
     def test_summary_lists_failures_not_skips_or_successes(self):
         self.assertEqual(summary({"lint": {"outcome": "failure"}, "test": {"outcome": "success"},

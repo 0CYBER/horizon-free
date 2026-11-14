@@ -252,7 +252,7 @@ fn kill(via: Via, source: impl Fn(&mut Game<'_>) -> u32) -> (Vec<(u32, String, i
 
 /// [`kill`] through both targets, each answering `expected`.
 fn kills(name: &str, source: fn(&mut Game<'_>) -> u32, expected: (i32, &'static str, bool)) {
-    crate::game::in_own_process(&format!("game::native_explosions::tests::{name}"), || {
+    crate::game::in_own_process(&format!("game::native_explosions_tests::{name}"), || {
         run_on_guest_stack(move || {
             for via in BOTH {
                 let (causing, damage_type, credited) = expected;

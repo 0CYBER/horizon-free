@@ -119,6 +119,23 @@ A second `delete` of the id finishes the removal, and only then can it be opened
 
 A handle from before the delete reads as stale, as after an `unload`.
 
+## Players and clients
+
+A player goes into a runtime level and out of it as into any level, with
+`entity.teleport_to_level`. Its client, vanilla or Horizon, learns the level on the way in: the
+Respawn names it and its dimension type, which the client has had since it joined. On the way out
+a Horizon client forgets a level the server opened after it logged in, so a long session through
+many instances keeps none of them. A level opened again under the same id after a `delete`
+reaches the client afresh, with nothing of the old one.
+
+A client learns at login which levels the server has, and names the levels it views by their place
+in that list. A runtime level opened after a player logged in is not in that player's list:
+[chunk areas](../entities/chunk-areas.md) there are kept, but nothing of the level is sent to that
+player's client, which sees it only by going in. A player who logged in after the level opened
+views it as any other level. When a runtime level closes, by `unload` or `delete`, every client
+that viewed it drops its world of it; the areas stay, and show the level again once it is open
+again, to the clients that can name it.
+
 ## The cap
 
 A server keeps at most 64 runtime levels open or waiting, whichever mods opened them: the

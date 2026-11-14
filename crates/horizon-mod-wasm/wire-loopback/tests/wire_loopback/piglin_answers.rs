@@ -69,3 +69,14 @@ fn generated_guest_item_dispatch_writes_back_both_piglin_answers() {
         }
     }
 }
+
+pub(super) struct PiglinAnswersHooks;
+impl PiglinAnswersHooks {
+    pub(super) fn register(
+        &self,
+        registrar: &mut dyn mod_api::Registrar,
+        cx: &mod_api::RegistrationContext,
+    ) {
+        self::register(registrar);
+    }
+}

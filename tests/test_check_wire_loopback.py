@@ -39,6 +39,20 @@ class WireLoopbackRootTests(unittest.TestCase):
                 "crates/horizon-mod-wasm/tests/wire_loopback/ingredient_builtins.rs: nothing compiles this; "
                 "move it to crates/horizon-mod-wasm/wire-loopback/tests/wire_loopback/<topic>.rs"])
 
+    def test_hand_written_hooks_objects_are_refused_but_a_feature_fragment_is_not(self):
+        fragment = "pub(super) struct ItemTossHooks;\nimpl ItemTossHooks {\n    pub(super) fn item_toss(&self) {}\n}\n"
+        self.assertEqual(check_wire_loopback.hook_problems("f.rs", fragment, False), [])
+        self.assertEqual(check_wire_loopback.hook_problems("f.rs", "impl Hooks for Native {}\n", False), [])
+        for text in ("impl mod_api::Hooks for Mod {}\n", "impl Hooks for ItemTossHooks {}\n",
+                     "fn __horizon_mod_hooks() -> Box<dyn Hooks> { todo!() }\n"):
+            found = check_wire_loopback.hook_problems("f.rs", text, False)
+            self.assertEqual(len(found), 1, text)
+            self.assertIn("<Feature>Hooks", found[0])
+        self.assertEqual(check_wire_loopback.hook_problems("r.rs", "impl Hooks for First {}\n", True), [])
+        self.assertEqual(len(check_wire_loopback.hook_problems("r.rs", "impl Hooks for Mod {}\n", True)), 1)
+        export = "fn __horizon_mod_hooks() -> Box<dyn Hooks> {\n    Box::new(Mod)\n}\n"
+        self.assertEqual(check_wire_loopback.hook_problems("r.rs", export, True), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,7 @@ pub use bundle::fits_inside_container_items;
 mod click;
 mod storage;
 pub use storage::{MutationStamp, Snapshot};
+mod equip_movement;
 mod equippable;
 pub mod place;
 mod remainder;
@@ -1825,17 +1826,7 @@ impl Menu {
                 self.vanilla_slot_max(s, stack),
             )
             .1;
-        let slot = self.state.slots[s];
-        if slot.container == MAIN {
-            self.state
-                .container_limits
-                .get(slot.index)
-                .copied()
-                .flatten()
-                .map_or(max, |limit| max.min(limit))
-        } else {
-            max
-        }
+        self.limit_slot_max(s, max)
     }
 
     fn vanilla_slot_max(&self, s: usize, stack: &ItemStack) -> u32 {
@@ -2350,30 +2341,7 @@ impl Menu {
 
     /// `Slot.safeInsert`: puts up to `amount` of `input` into the slot.
     fn safe_insert(&mut self, env: &Env, s: usize, input: &mut Option<ItemStack>, amount: u32) {
-        self.touch();
-        let Some(stack) = input.as_mut() else { return };
-        if !self.may_place(env, s, stack) {
-            return;
-        }
-        let have = self.slot(s).map_or(0, |c| c.count);
-        let max = self.slot_max(env, s, stack);
-        let transferable = amount.min(stack.count).min(max.saturating_sub(have));
-        if transferable == 0 {
-            return;
-        }
-        match self.slot(s).cloned() {
-            None => {
-                let part = split(stack, transferable);
-                self.set_by_player(env, s, Some(part));
-            }
-            Some(mut current) if current.same_item_same_components(stack) => {
-                stack.count -= transferable;
-                current.count += transferable;
-                self.set_by_player(env, s, Some(current));
-            }
-            Some(_) => {}
-        }
-        tidy(input);
+        self.insert_equip_source(env, s, input, amount);
     }
 
     // ---- Inventory ----
@@ -2510,7 +2478,7 @@ impl Menu {
         self.slot(s).is_some()
     }
 
-    /// `AbstractContainerMenu.moveItemStackTo`.
+    /// `AbstractContainerMenu.moveItemStackTo`, with an owned equip source when subscribed.
     fn move_to(
         &mut self,
         env: &Env,
@@ -2519,75 +2487,7 @@ impl Menu {
         end: usize,
         backwards: bool,
     ) -> bool {
-        self.touch();
-        let mut changed = false;
-        let order = |_: ()| -> Vec<usize> {
-            if backwards {
-                (start..end).rev().collect()
-            } else {
-                (start..end).collect()
-            }
-        };
-        if Self::stackable(env, stack) {
-            for dest in order(()) {
-                if stack.count == 0 {
-                    break;
-                }
-                // A mod menu's result (unless a mod's hook opens it) and a
-                // hidden slot get no top-up either, as a furnace's quick move
-                // never aims at its result.
-                let refuses = if self.state.slots[dest].role == Role::Hidden {
-                    true
-                } else if let Some(id) = self.registry_id() {
-                    !apply_menu_slot_rules(
-                        env.slot_rules,
-                        id,
-                        self.state.slots[dest].index,
-                        stack,
-                        self.state.slots[dest].role != Role::ModResult,
-                        CONTAINER_MAX,
-                        Self::max_stack(env, stack),
-                    )
-                    .0
-                } else {
-                    false
-                };
-                let max = match self.slot(dest) {
-                    Some(target) if !refuses && target.same_item_same_components(stack) => {
-                        self.slot_max(env, dest, target)
-                    }
-                    _ => continue,
-                };
-                let slot = self.state.slots[dest];
-                let target = self.state.containers[slot.container][slot.index]
-                    .as_mut()
-                    .expect("checked");
-                let total = target.count + stack.count;
-                if total <= max {
-                    stack.count = 0;
-                    target.count = total;
-                    changed = true;
-                    self.slot_changed(env, dest);
-                } else if target.count < max {
-                    stack.count -= max - target.count;
-                    target.count = max;
-                    changed = true;
-                    self.slot_changed(env, dest);
-                }
-            }
-        }
-        if stack.count > 0 {
-            for dest in order(()) {
-                if !self.has_item(dest) && self.may_place(env, dest, stack) {
-                    let max = self.slot_max(env, dest, stack);
-                    let part = split(stack, stack.count.min(max));
-                    self.set_by_player(env, dest, Some(part));
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        changed
+        self.move_to_equip_source(env, stack, start, end, backwards)
     }
 
     /// `quickMoveStack` of the menu's kind; the moved stack's original copy

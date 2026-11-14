@@ -7,6 +7,19 @@ pub fn block_key_listens(hook: HookId, key: crate::BlockKey) -> bool {
         .is_some_and(|table| !table.block_key(Some(key)).is_empty())
 }
 
+/// Whether every part on this API block key that answers `explosion_resistance` declares the
+/// answer pure (`BlockPart::explosion_resistance_is_pure`), so a batched read may ask once a state.
+pub fn explosion_resistance_key_pure(key: crate::BlockKey) -> bool {
+    parts(HookId::ExplosionResistance, "block routing")
+        .for_hook(HookId::ExplosionResistance)
+        .is_none_or(|table| {
+            table
+                .block_key(Some(key))
+                .iter()
+                .all(|attached| attached.part.explosion_resistance_is_pure())
+        })
+}
+
 /// Whether the feature-pinned published table subscribes to this worldgen block key.
 pub fn worldgen_block_key_listens(hook: HookId, key: crate::BlockKey) -> bool {
     worldgen_parts()

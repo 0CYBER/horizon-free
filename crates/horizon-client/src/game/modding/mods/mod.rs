@@ -1036,7 +1036,9 @@ pub(super) fn content_root(
 /// Publish the built-in registry orders mods iterate. The report already
 /// includes the types and menus the content overlay registered, in registration
 /// order (`BuiltInRegistries` protocol ids).
-pub(super) fn register_iterated_registries(root: &std::path::Path) -> horizon_client::Result<()> {
+pub(in crate::game) fn register_iterated_registries(
+    root: &std::path::Path,
+) -> horizon_client::Result<()> {
     use horizon_protocol::registry::Builtin;
     let path = Builtin::find(root).ok_or("registries.json not found")?;
     let builtin = Builtin::load(&path)?;

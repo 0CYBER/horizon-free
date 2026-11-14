@@ -170,3 +170,21 @@ fn generated_guest_item_dispatch_preserves_hands_sides_and_results() {
         }
     }
 }
+
+pub(super) struct UseItemHandHooks;
+impl UseItemHandHooks {
+    pub(super) fn entity_interact(
+        &self,
+        _: mod_api::HostSide<'_>,
+        event: &mut mod_api::EntityInteractEvent<'_>,
+    ) -> Option<mod_api::InteractionResult> {
+        self::entity_answer(event)
+    }
+    pub(super) fn register(
+        &self,
+        registrar: &mut dyn mod_api::Registrar,
+        cx: &mod_api::RegistrationContext,
+    ) {
+        self::register(registrar);
+    }
+}

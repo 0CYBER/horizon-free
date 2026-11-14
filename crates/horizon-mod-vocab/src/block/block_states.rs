@@ -125,6 +125,13 @@ impl BlockStates<'_> {
     pub fn destroy_speed(&self, state: BlockState) -> Option<f32> {
         self.backend?.block_state_destroy_speed(state)
     }
+    /// The explosion resistance `state`'s block declares (`Block.getExplosionResistance`): stone
+    /// 6, obsidian 1200, bedrock 3,600,000. What a blast meets at a position, parts and fluids
+    /// included, is [`LevelRef::explosion_resistance`](crate::LevelRef::explosion_resistance).
+    /// None as for `replaceable`.
+    pub fn explosion_resistance(&self, state: BlockState) -> Option<f32> {
+        self.backend?.block_state_explosion_resistance(state)
+    }
     /// `state`'s sounds (`BlockState.getSoundType()`). None as for `replaceable`.
     pub fn sound(&self, state: BlockState) -> Option<BlockSoundType> {
         self.backend?.block_state_sound(state)

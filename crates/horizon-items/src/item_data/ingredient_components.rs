@@ -41,6 +41,11 @@ pub fn removed(stack: &ItemStack, id: &str) -> bool {
 /// Presence is checked by the caller, so empty decoded enchantment maps compare equal.
 pub fn component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
     match id {
+        "minecraft:waxed" | "minecraft:intangible_projectile" | "minecraft:glider" => {
+            matches!(a.data().and_then(|d| d.other(id)), Some(Tag::Compound(_)))
+                && matches!(b.data().and_then(|d| d.other(id)), Some(Tag::Compound(_)))
+        }
+
         "minecraft:cat/sound_variant"
         | "minecraft:cat/variant"
         | "minecraft:wolf/sound_variant"
@@ -144,6 +149,8 @@ pub fn component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
                 _ => false,
             }
         }
+        // `Unit.CODEC` has a single value; the caller already checked effective presence.
+        "minecraft:unbreakable" => true,
         "minecraft:damage" => a.damage == b.damage,
         "minecraft:map_id" => map_id(a) == map_id(b),
         "minecraft:repair_cost" => {
@@ -229,12 +236,24 @@ pub fn component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
             };
             bits(a) == bits(b)
         }
+        // `VillagerFood.equals`: only the decoded nutrition participates.
+        "minecraft:villager_food" => {
+            let nutrition = |stack: &ItemStack| {
+                stack
+                    .data()
+                    .and_then(|data| data.other(id))
+                    .and_then(|value| value.get("nutrition"))
+                    .and_then(crate::properties::component_int)
+                    .filter(|value| *value > 0)
+            };
+            nutrition(a) == nutrition(b)
+        }
         "minecraft:block_entity_data" => block_entity_equal(
             a.data().and_then(|d| d.other(id)),
             b.data().and_then(|d| d.other(id)),
         ),
         "minecraft:item_name" => item_name_equal(a, b),
-        "minecraft:item_model" => identifier_equal(
+        "minecraft:item_model" | "minecraft:tooltip_style" => identifier_equal(
             a.data().and_then(|d| d.other(id)),
             b.data().and_then(|d| d.other(id)),
         ),
@@ -270,6 +289,14 @@ pub fn component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
                 _ => false,
             }
         }
+        "minecraft:base_color" => {
+            a.data().and_then(|d| d.base_color.as_deref())
+                == b.data().and_then(|d| d.base_color.as_deref())
+        }
+        "minecraft:note_block_sound" => identifier_equal(
+            a.data().and_then(|d| d.other(id)),
+            b.data().and_then(|d| d.other(id)),
+        ),
         "minecraft:rarity" => rarity(a) == rarity(b),
         "minecraft:ominous_bottle_amplifier" => ominous_amplifier(a) == ominous_amplifier(b),
         // DyeColor.CODEC's canonical NbtOps value is its exact serialized name.
@@ -864,5 +891,35 @@ mod tests {
         assert!(component_equal("minecraft:item_name", &a, &b));
         b.data_mut().enchantments[0].1 = 3;
         assert!(!component_equal("minecraft:enchantments", &a, &b));
+    }
+
+    #[test]
+    fn decoded_base_color_equality_uses_the_dedicated_field() {
+        let mut a = ItemStack::new("minecraft:shield", 1);
+        let mut b = ItemStack::new("minecraft:shield", 1);
+        a.data_mut().base_color = Some("red".into());
+        b.data_mut().base_color = Some("red".into());
+        assert!(component_equal("minecraft:base_color", &a, &b));
+        b.data_mut().base_color = Some("blue".into());
+        assert!(!component_equal("minecraft:base_color", &a, &b));
+        b.data_mut().base_color = None;
+        assert!(!component_equal("minecraft:base_color", &a, &b));
+    }
+
+    #[test]
+    fn intangible_projectile_equality_borrows_unit_maps() {
+        let id = "minecraft:intangible_projectile";
+        let mut a = ItemStack::new("minecraft:arrow", 1);
+        let mut b = ItemStack::new("minecraft:arrow", 1);
+        a.data_mut()
+            .set_other(id, Some(Tag::Compound(Default::default())));
+        b.data_mut()
+            .set_other(id, Some(Tag::compound([("ignored", Tag::Int(42))])));
+        assert!(component_equal(id, &a, &b));
+        assert!(!stored_component_equal(id, &a, &b));
+        b.data_mut().set_other(id, Some(Tag::Byte(1)));
+        assert!(!component_equal(id, &a, &b));
+        b.data_mut().set_other(id, None);
+        assert!(!component_equal(id, &a, &b));
     }
 }

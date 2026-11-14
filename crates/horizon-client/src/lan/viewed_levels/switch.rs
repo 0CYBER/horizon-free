@@ -24,8 +24,8 @@ impl Hub {
     /// the level in place, else its views dropped. Either way it leaves `left`'s queues and
     /// entities.
     pub(in crate::lan) fn leave_level(&mut self, i: usize, left: &str) {
-        let levels = self.level_keys();
-        let left_level = levels.iter().position(|k| k == left);
+        // Its client names the level left by its index at Login: one opened since has none.
+        let left_level = self.guests[i].viewed.login_index(left);
         let entered = self.config.dimension.clone();
         let watching = self.chunk_watches.recording();
         let kept = self.guests.update(i, |g| {
@@ -44,7 +44,7 @@ impl Hub {
                 return Vec::new();
             };
             // The level left keeps what its client holds; the next pass starts its linger.
-            let mut old = View::new(level as i32);
+            let mut old = View::new(level);
             old.sent = own;
             g.viewed.views.insert(left.to_owned(), old);
             // What the view sent is the player's own now: `update_view` forgets what is past the

@@ -105,7 +105,28 @@ pub const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", horizon_protocol
 /// Synchronized registries a world's data packs add entries to (or replace
 /// them in). The others stay the game's own: Horizon's gameplay reads them
 /// from the prepared resources only.
-const PACK_REGISTRIES: &[&str] = &["minecraft:dialog", "minecraft:dimension_type"];
+/// Enchantments are among them: the items' enchantment catalog reads a
+/// world's pack definitions too, so their ids must reach clients.
+const PACK_REGISTRIES: &[&str] = &[
+    "minecraft:dialog",
+    "minecraft:dimension_type",
+    "minecraft:enchantment",
+];
+
+/// A registry's entries from the resource root's namespaces other than
+/// `minecraft` (`data/<ns>/<dir>/`): content mods' own, marked as no client's.
+fn mod_entries(resources: &Path, dir: &str, entries: &mut Vec<((String, String), Value, bool)>) {
+    let namespaces = horizon_world::json_folder::namespaces(&resources.join("data"));
+    for ns in namespaces.into_iter().filter(|ns| ns != "minecraft") {
+        let mut found = BTreeMap::new();
+        walk(
+            &resources.join("data").join(&ns).join(dir),
+            &mut found,
+            dir == "enchantment",
+        );
+        entries.extend(found.into_iter().map(|(p, v)| ((ns.clone(), p), v, true)));
+    }
+}
 
 /// A data-driven registry: entry names in network order and their NBT.
 #[derive(Clone)]
@@ -165,12 +186,21 @@ use crate::crafting::qualified;
 /// Every `*.json` under `dir`, as (path without extension relative to dir, value), sorted;
 /// a file that can't be read or doesn't parse is left out. Through `json_folder`: from the
 /// prepared data file, and read once for the tables a load builds from the same folder.
-fn walk(dir: &Path, out: &mut BTreeMap<String, Value>) {
+fn walk(dir: &Path, out: &mut BTreeMap<String, Value>, enchantment: bool) {
     let Ok(folder) = horizon_world::json_folder::read(dir) else {
         return;
     };
     for file in &folder.files {
-        if let Ok(value) = serde_json::from_slice::<Value>(file.bytes().unwrap_or_default()) {
+        let bytes = file.bytes().unwrap_or_default();
+        let value = if enchantment {
+            horizon_world::json_folder::enchantment_definition(
+                bytes,
+                &dir.join(format!("{}.json", file.name)),
+            )
+        } else {
+            serde_json::from_slice::<Value>(bytes).ok()
+        };
+        if let Some(value) = value {
             out.insert(file.name.clone(), value);
         }
     }
@@ -451,11 +481,18 @@ impl SyncData {
             }
             let path = key.trim_start_matches("minecraft:");
             let mut found = BTreeMap::new();
-            walk(&root.join(path), &mut found);
+            walk(
+                &root.join(path),
+                &mut found,
+                *key == "minecraft:enchantment",
+            );
             let mut entries: Vec<_> = found
                 .into_iter()
                 .map(|(p, v)| (("minecraft".to_owned(), p), v, false))
                 .collect();
+            if *key == "minecraft:enchantment" {
+                mod_entries(resources, path, &mut entries);
+            }
             let mut damage_entries = None;
             if *key == "minecraft:damage_type" {
                 // Validate the actual resource bytes before publishing any
@@ -830,7 +867,7 @@ impl SyncData {
         };
         let mut files: BTreeMap<String, Vec<Value>> = BTreeMap::new();
         let mut own = BTreeMap::new();
-        walk(&root.join("tags").join(kind), &mut own);
+        walk(&root.join("tags").join(kind), &mut own, false);
         for (name, value) in own {
             Self::add_tag_values(files.entry(qualified(&name)).or_default(), &value);
         }
@@ -982,7 +1019,7 @@ impl SyncData {
                 continue;
             }
             let mut files = BTreeMap::new();
-            walk(&dir, &mut files);
+            walk(&dir, &mut files, false);
             if files.is_empty() {
                 continue;
             }
@@ -1259,6 +1296,97 @@ mod tests {
         )
         .unwrap();
         assert!(fresh.id("minecraft:damage_type", "demo:heat").is_none());
+    }
+
+    /// A content mod's enchantments (`data/<ns>/enchantment/`, in the resource
+    /// root beside vanilla's) join the synchronized registry with their data,
+    /// which no client knows; a world's pack still replaces one.
+    #[test]
+    fn mod_and_pack_enchantments_join_the_synchronized_registry() {
+        use horizon_world::loot::PackOverlay;
+        let root = std::env::temp_dir().join(format!(
+            "horizon-lan-mod-enchantments-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for (path, body) in [
+            (
+                "data/harvestmod/enchantment/scythe.json",
+                r#"{"max_level":3}"#,
+            ),
+            (
+                "data/harvestmod/enchantment/tools/sweep.json",
+                r#"{"max_level":1}"#,
+            ),
+            ("data/harvestmod/recipe/x.json", r#"{}"#),
+            ("data/harvestmod/enchantment/tools/broken.json", "{"),
+        ] {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        let mut found = vec![(
+            ("minecraft".to_owned(), "mending".to_owned()),
+            serde_json::json!({ "max_level": 1 }),
+            false,
+        )];
+        mod_entries(&root, "enchantment", &mut found);
+        let files = vec![(
+            "enchantment/harvestmod:scythe".to_owned(),
+            vec![br#"{"max_level":5}"#.to_vec()],
+        )];
+        pack_entries("enchantment", &PackOverlay::new(&files), &mut found);
+        file_order(&mut found);
+        let names: Vec<String> = found
+            .iter()
+            .map(|((ns, p), _, _)| format!("{ns}:{p}"))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "minecraft:mending",
+                "harvestmod:scythe",
+                "harvestmod:tools/sweep"
+            ]
+        );
+        assert!(!found[0].2, "vanilla's entry stays the known pack's");
+        assert!(found[1].2 && found[2].2, "a mod's entries carry their data");
+        assert_eq!(found[1].1["max_level"], 5, "a pack overrides a mod's entry");
+        let mut sync = SyncData::empty();
+        sync.registries.push((
+            "minecraft:enchantment".into(),
+            Entries {
+                names: names.clone(),
+                data: found
+                    .iter()
+                    .map(|(_, value, _)| json_to_nbt(value))
+                    .collect(),
+                from_pack: found.iter().map(|(_, _, packed)| *packed).collect(),
+            },
+        ));
+        let packets = sync.registry_packets(true, &LevelShapes::VANILLA);
+        assert_eq!(
+            packets[0]
+                .entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "minecraft:mending",
+                "harvestmod:scythe",
+                "harvestmod:tools/sweep"
+            ]
+        );
+        assert!(packets[0].entries[0].data.is_none());
+        assert_eq!(
+            packets[0].entries[1].data,
+            Some(json_to_nbt(&serde_json::json!({"max_level": 5})))
+        );
+        assert!(packets[0].entries[2].data.is_some());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

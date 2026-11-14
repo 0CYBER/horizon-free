@@ -13,7 +13,7 @@ pub struct FakeLevel {
     level: LevelRef,
     blocks: HashMap<[i32; 3], String>,
     block_entities: BTreeMap<[i32; 3], FakeBlockEntity>,
-    entities: BTreeMap<u32, FakeEntity>,
+    pub(super) entities: BTreeMap<u32, FakeEntity>,
     /// Bucket sounds and game events queued for the outermost commit
     /// ([`LevelRef::play_fluid_effects`](crate::LevelRef::play_fluid_effects)): kept with the
     /// level, so an abort drops them.
@@ -75,13 +75,24 @@ impl FakeLevel {
         self.block_entities.get(&pos)
     }
     /// Entity `id` of type `kind` (`minecraft:pig`) in this level, put there if missing; its
-    /// UUID is its id until set.
+    /// UUID is its id until set. After explicit entity-type resolution, an undeclared kind
+    /// panics at setup rather than silently becoming an unresolvable entity.
     pub fn entity(&mut self, id: u32, kind: &str) -> &mut FakeEntity {
         let level = self.level;
-        self.entities.entry(id).or_insert_with(|| FakeEntity {
-            kind: kind.to_owned(),
-            level,
-            uuid: u128::from(id),
+        self.entities.entry(id).or_insert_with(|| {
+            if crate::parts::installed()
+                .is_some_and(|installed| installed.resolved_entity_types.get().is_some())
+            {
+                assert!(
+                    crate::content::registry_keys::resolved_entity_type_key(kind).is_some(),
+                    "fake entity kind {kind} was not declared before entity-type resolution"
+                );
+            }
+            FakeEntity {
+                kind: kind.to_owned(),
+                level,
+                uuid: u128::from(id),
+            }
         })
     }
 

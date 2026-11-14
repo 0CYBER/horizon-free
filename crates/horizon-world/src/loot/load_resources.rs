@@ -5,17 +5,14 @@ pub(super) fn load_kind(
     kind: &str,
     out: &mut HashMap<String, Value>,
 ) -> io::Result<()> {
-    let Ok(entries) = fs::read_dir(data) else {
-        return Ok(());
-    };
-    let mut namespaces: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
-        .collect();
-    namespaces.sort();
-    for ns in namespaces {
-        load_dir(&data.join(&ns).join(kind), &ns, "", out)?;
+    for ns in crate::json_folder::namespaces(data) {
+        load_dir(
+            &data.join(&ns).join(kind),
+            &ns,
+            "",
+            out,
+            kind == "enchantment",
+        )?;
     }
     Ok(())
 }
@@ -48,6 +45,7 @@ pub(super) fn load_dir(
     namespace: &str,
     prefix: &str,
     out: &mut HashMap<String, Value>,
+    enchantment: bool,
 ) -> io::Result<()> {
     // Through `json_folder`: a load holding the folder (the recipes, read by
     // the item tables, the recipe book and the server's sync too) shares one
@@ -56,7 +54,18 @@ pub(super) fn load_dir(
         return Ok(());
     };
     for file in &folder.files {
-        let value = serde_json::from_slice(file.bytes()?)?;
+        let bytes = file.bytes()?;
+        let value = if enchantment {
+            let Some(value) = crate::json_folder::enchantment_definition(
+                bytes,
+                &dir.join(format!("{}.json", file.name)),
+            ) else {
+                continue;
+            };
+            value
+        } else {
+            serde_json::from_slice(bytes)?
+        };
         out.insert(format!("{namespace}:{prefix}{}", file.name), value);
     }
     Ok(())

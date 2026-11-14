@@ -43,6 +43,9 @@ horizon-client-lib lan::viewed_levels::tests::with_no_viewer_no_copy_is_built li
 horizon-client-lib lan::waypoints::tests::moves_by_receiver_match_the_loop lib daily slow
 horizon-client-lib launch::tests::launch_refuses_a_socket_path_too_long bin:horizon-ctl daily child-process
 horizon-client-lib mobs::villager_client_visual_tests::villager_client_partial_hat_cache_refreshes lib daily resources
+horizon-client-lib menu::equip_movement::tests::four_slot_menu_transfer_prepares_once_and_stale_placement_refuses lib daily resources
+horizon-client-lib menu::equip_movement::tests::menus_without_actor_or_equipment_candidates_do_not_prepare lib daily resources
+horizon-client-lib menu::equip_movement::tests::occupied_equipment_cursor_and_hotbar_swaps_ask_once_per_click lib daily resources
 horizon-client-lib mobs::villager_brain::mob_map_tests::hostile_sensor_matches_registered_ids_and_world_snapshot lib daily resources
 horizon-client-lib mobs::world::missing_data_report_tests::missing_mob_data_reports_one_counted_skip_per_test lib daily child-process
 horizon-client-lib mod_content::tests::registered_conditions_tests::failed_condition_build_removes_generated_staging lib daily resources

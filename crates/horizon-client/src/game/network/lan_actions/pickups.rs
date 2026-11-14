@@ -365,3 +365,7 @@ impl Game<'_> {
 #[cfg(test)]
 #[path = "tests/pickup_post_tests.rs"]
 mod pickup_post_tests;
+
+#[cfg(test)]
+#[path = "tests/orb_merge_contract_tests.rs"]
+mod orb_merge_contract_tests;

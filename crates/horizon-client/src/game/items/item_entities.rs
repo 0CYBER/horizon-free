@@ -318,7 +318,6 @@ impl Game<'_> {
         let half = Vec3::new(0.5, 0.5, 0.5);
         let area = Aabb::new(centre.subtract(half), centre.add_vector(half));
         // A server's orbs are its own; a LAN or server guest only shows them.
-        let mut target = None;
         if self.remote.is_none() {
             for i in 0..self.orbs.len() {
                 let o = &self.orbs[i];
@@ -326,29 +325,48 @@ impl Game<'_> {
                     continue;
                 }
                 let vanilla = o.can_merge(merge_id as u32, value as i32);
-                let (id, orb_value) = (o.id, o.points());
-                if self.orb_merges(id, orb_value as i32, 0, value as i32, vanilla) {
-                    target = Some(i);
-                    break;
+                let (join, id, count, age) = (o.join, o.id, o.count, o.age);
+                let orb_value = o.value;
+                if !self.orb_merges(id, orb_value, count, 0, value as i32, 1, vanilla) {
+                    self.restore_orb(join, orb_value, count, age);
+                    continue;
                 }
+                let Some(i) = self.orbs.locate(join) else {
+                    continue;
+                };
+                let o = &mut self.orbs[i];
+                // A mod's write in the merge hook is the merged orb; else one more in its count.
+                if (o.value, o.count) == (orb_value, count) {
+                    if count >= crate::orb_limits::MAX_COUNT {
+                        continue;
+                    }
+                    o.count += 1;
+                }
+                o.age = 0;
+                return true;
             }
         }
-        if let Some(i) = target {
-            self.orbs[i].count += 1;
-            self.orbs[i].age = 0;
-            true
-        } else {
-            false
+        false
+    }
+    /// Puts back what a merge hook may have written to the orb `join`: a refused merge
+    /// leaves both orbs as they were.
+    fn restore_orb(&mut self, join: crate::join_seq::JoinSeq, value: i32, count: u32, age: u32) {
+        if let Some(i) = self.orbs.locate(join) {
+            let orb = &mut self.orbs[i];
+            (orb.value, orb.count, orb.age) = (value, count, age);
         }
     }
     /// Whether orb `into` takes orb `from` (0: a spawning orb of `from_value`),
     /// given vanilla's `canMerge` answer: the mods may flip it, then cancel the merge.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn orb_merges(
         &mut self,
         into: u32,
         into_value: i32,
+        into_count: u32,
         from: u32,
         from_value: i32,
+        from_count: u32,
         vanilla: bool,
     ) -> bool {
         let dimension = self.dim.id();
@@ -365,7 +383,16 @@ impl Game<'_> {
             return false;
         }
         let mut canceled = false;
-        self.native_experience_orb_merge(dimension, into, from, from_value, &mut canceled);
+        self.native_experience_orb_merge(mod_api::__private::ExperienceOrbMergeCall {
+            dimension,
+            into,
+            from,
+            into_value,
+            into_count,
+            from_value,
+            from_count,
+            canceled: &mut canceled,
+        });
         !canceled
     }
     /// `ExperienceOrb.tick`'s scan before movement, once every twenty ticks.
@@ -390,29 +417,41 @@ impl Game<'_> {
                 continue;
             };
             let (a, b) = (&self.orbs[i], &self.orbs[j]);
-            let (into, into_value, from, from_value, vanilla) =
-                (a.id, a.value, b.id, b.value, b.can_merge(a.id, a.value));
-            if !self.orb_merges(into, into_value, from, from_value, vanilla) {
+            let (into, into_value, into_count, into_age) = (a.id, a.value, a.count, a.age);
+            let (from, from_value, from_count) = (b.id, b.value, b.count);
+            let vanilla = b.can_merge(a.id, a.value);
+            if !self.orb_merges(
+                into, into_value, into_count, from, from_value, from_count, vanilla,
+            ) {
+                self.restore_orb(into_join, into_value, into_count, into_age);
                 continue;
             }
             let Some(i) = self.orbs.locate(into_join) else {
                 return;
             };
-            let Some(j) = self.orbs.locate(from_join) else {
+            let written = (self.orbs[i].value, self.orbs[i].count) != (into_value, into_count);
+            let fresh = self.orbs.locate(from_join).filter(|&j| {
+                let (a, b) = (&self.orbs[i], &self.orbs[j]);
+                (b.value, b.count) == (from_value, from_count)
+                    && b.bounds()
+                        .intersects(a.bounds().inflate(Vec3::new(0.5, 0.5, 0.5)))
+            });
+            // A mod's write in the merge hook is the merged orb; else `into` adds the
+            // source's count. A stale source, or a count past what a save holds, refuses
+            // the merge and puts a written `into` back.
+            let count = if written {
+                Some(self.orbs[i].count)
+            } else {
+                into_count
+                    .checked_add(from_count)
+                    .filter(|&c| c <= crate::orb_limits::MAX_COUNT)
+            };
+            let (Some(j), Some(count)) = (fresh, count) else {
+                self.restore_orb(into_join, into_value, into_count, into_age);
                 continue;
             };
-            // Refuse a stale decision rather than merging a changed pair.
-            let (a, b) = (&self.orbs[i], &self.orbs[j]);
-            if a.value != into_value
-                || b.value != from_value
-                || !b
-                    .bounds()
-                    .intersects(a.bounds().inflate(Vec3::new(0.5, 0.5, 0.5)))
-            {
-                continue;
-            }
-            let (count, age) = (b.count, b.age);
-            self.orbs[i].count = self.orbs[i].count.saturating_add(count);
+            let age = self.orbs[j].age;
+            self.orbs[i].count = count;
             self.orbs[i].age = self.orbs[i].age.min(age);
             self.orbs.remove(j);
         }

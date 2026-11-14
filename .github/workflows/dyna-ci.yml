@@ -599,11 +599,26 @@ jobs:
         # Build the exact test graph on green. A workspace proc-macro can have different build/test
         # dependency profiles; cargo build first would make cargo test compile its consumers again.
         run: |
-          if cargo test $JOBS --profile test --workspace --lib --bins --tests --no-run --timings; then
+          build_log=$(mktemp)
+          trap 'rm -f "$build_log"' EXIT
+          if cargo test $JOBS --profile test --workspace --lib --bins --tests --no-run --timings 2>&1 | tee "$build_log"; then
             exit 0
           fi
+          # Keep the fast parallel build on green. A killed compile gets one retry of the
+          # same test graph, with finished units cached and no overlapping rustc processes.
+          if grep -Eq 'Compile terminated by signal [0-9]+|signal: [0-9]+, SIG[A-Z]+|terminated with signal [0-9]+' "$build_log"; then
+            failed_units=$(grep 'error: could not compile' "$build_log" | tr '\n' ';' || true)
+            echo "::warning::A compile was killed by a signal; retrying the test build with -j1. Failed units: $failed_units"
+            if cargo test -j1 --profile test --workspace --lib --bins --tests --no-run --timings; then
+              exit 0
+            fi
+          fi
           # Only red runs pay for the other graph, to collect independent targets' errors too.
-          cargo build $JOBS --keep-going --profile test --workspace --lib --bins --tests || true
+          echo "::error::The test build failed (its errors are above); building again with --keep-going to list every target's errors."
+          if cargo build $JOBS --keep-going --profile test --workspace --lib --bins --tests; then
+            # Main 9918e72ba0: two compiles killed by signal 9, then this build passed and the step ended with no message.
+            echo "::error::The --keep-going build passed, but it builds a different graph and does not clear the failed test build: check the errors above, including any 'signal 9' (a compile killed, usually for memory), before rerunning."
+          fi
           exit 1
       # What bounds the build: the slowest compile units, from the report --timings writes.
       - name: Slowest compile units
@@ -659,9 +674,9 @@ jobs:
       - name: Report the mod API surface change
         id: report_the_mod_api_surface_change
         # What this pull request changes in what mods can name, in the job summary: the head's horizon-stage exports
-        # the merge base and this tree, then classifies the diff (tools/ci/surface_report.py). A report, not a gate:
-        # it fails only when this tree cannot be exported, for a stale or unreadable new change note, or, with
-        # tools/ci/surface.toml's gate on, for a breaking change no note declares.
+        # the merge base and this tree, then classifies the diff (tools/ci/surface_report.py). It fails when this
+        # tree cannot be exported, for a stale or unreadable new change note, and, with tools/ci/surface.toml's
+        # gate on, for a breaking change no new note declares.
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && (needs.changes.outputs.rust_required != 'false' && (github.event_name == 'pull_request' || inputs.pr != '')) && steps.stage.outcome == 'success' }}
         env:
           EVENT: ${{ github.event_name }}

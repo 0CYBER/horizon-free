@@ -110,6 +110,40 @@ fn a_wolf_tamed_in_game_saves_its_forty_health() {
 }
 
 #[test]
+fn a_wolf_with_no_stored_base_reads_forty_health_once_tamed() {
+    // A wolf tamed in game before anything stored its max_health base: `/attribute` reads the
+    // 40 `applyTamingSideEffects` sets, and a refresh keeps the cap there.
+    let (mut m, _) = loaded("minecraft:wolf", Species::Wolf, &[(HEALTH, 8.0)], "");
+    m.extra.attributes = None;
+    assert_eq!(base_value(&m, Attr::MaxHealth), 8.0);
+    crate::mobs::tame::set_tame(&mut m, true);
+    assert_eq!(base_value(&m, Attr::MaxHealth), 40.0);
+    assert_eq!(value(&m, Attr::MaxHealth), 40.0);
+    assert_eq!(m.attrs.max_health, 40.0);
+    refresh(&mut m, Attr::MaxHealth);
+    assert_eq!(m.attrs.max_health, 40.0);
+    // And back: 8 again.
+    crate::mobs::tame::set_tame(&mut m, false);
+    assert_eq!(base_value(&m, Attr::MaxHealth), 8.0);
+    assert_eq!(value(&m, Attr::MaxHealth), 8.0);
+    refresh(&mut m, Attr::MaxHealth);
+    assert_eq!(m.attrs.max_health, 8.0);
+}
+
+#[test]
+fn a_wolf_tamed_under_health_boost_loses_the_bonus_when_it_ends() {
+    // Health Boost II is +8 on top of the base 40; when it ends the maximum is 40 again.
+    let (mut m, _) = loaded("minecraft:wolf", Species::Wolf, &[(HEALTH, 8.0)], "");
+    m.extra.attributes = None;
+    m.add_effect("minecraft:health_boost", 600, 1);
+    crate::mobs::tame::set_tame(&mut m, true);
+    assert_eq!(m.attrs.max_health, 48.0);
+    assert!(m.retain_effects(|e| e.id != "minecraft:health_boost"));
+    assert_eq!(m.attrs.max_health, 40.0);
+    assert_eq!(m.health, 40.0);
+}
+
+#[test]
 fn a_baby_goat_or_hoglin_makes_its_attack_instance() {
     // AgeableMob.setAge crosses the baby boundary: Goat/Hoglin.ageBoundaryReached.
     let goat = [(DAMAGE, 2.0)];

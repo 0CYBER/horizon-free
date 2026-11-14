@@ -835,13 +835,20 @@ pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
 pub fn max_health(m: &Mob) -> f32 {
     value(m, Attr::MaxHealth) as f32
 }
+/// Whether the mob stores a base for `a`: `set_base` or a load made one.
+pub fn has_base(m: &Mob, a: Attr) -> bool {
+    m.extra
+        .attributes
+        .as_ref()
+        .is_some_and(|s| s.bases.iter().any(|(x, _)| *x == a))
+}
 /// `LivingEntity.onAttributeUpdated(MAX_HEALTH)` after a Health Boost
 /// change: the cached maximum follows the attribute model again, and Health
-/// above it is lowered (nothing is healed). Wolves write their maximum
-/// straight into the cache (`tame::set_tame`), outside the model, so they
-/// keep theirs.
+/// above it is lowered (nothing is healed). A wolf with no stored max health
+/// base keeps the cached maximum it was given outside the model; taming
+/// stores the base (`tame::set_tame`), so a tame wolf follows the model.
 pub fn health_boost_changed(m: &mut Mob) {
-    if m.species() == Species::Wolf {
+    if m.species() == Species::Wolf && !has_base(m, Attr::MaxHealth) {
         return;
     }
     refresh(m, Attr::MaxHealth);

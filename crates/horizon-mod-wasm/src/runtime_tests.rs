@@ -71,7 +71,7 @@ impl<F: FnMut() -> i64> mod_api::StructureRandom for Random<F> {
 fn guest(layout: u64, body: &str) -> Vec<u8> {
     guest_with_exports(layout, body, "")
 }
-fn guest_with_exports(layout: u64, body: &str, exports: &str) -> Vec<u8> {
+pub(super) fn guest_with_exports(layout: u64, body: &str, exports: &str) -> Vec<u8> {
     wat::parse_str(format!(
         r#"(module
       (@custom "dylink.0" "\01\04\00\00\00\00")

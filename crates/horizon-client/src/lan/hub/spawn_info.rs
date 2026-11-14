@@ -4,6 +4,22 @@ use super::Hub;
 use horizon_protocol::packets::play;
 
 impl Hub {
+    /// The levels open on the server, in MinecraftServer.levelKeys order: the Login packet's
+    /// `levels`. A runtime level is among them while it is open.
+    pub fn level_keys(&self) -> Vec<String> {
+        ["overworld", "the_end", "the_nether"]
+            .map(|l| format!("minecraft:{l}"))
+            .into_iter()
+            .chain(
+                self.config
+                    .levels
+                    .extra
+                    .iter()
+                    .map(|level| level.id.to_owned()),
+            )
+            .collect()
+    }
+
     /// `CommonPlayerSpawnInfo`, with the player's `portalCooldown`.
     pub(in crate::lan) fn spawn_info(
         &self,

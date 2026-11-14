@@ -4,12 +4,29 @@
 screen is open. A multiplayer game continues running while its pause screen is open.
 The pause-change pre hook sees the old state; the post hook sees the new state.
 
+`ClientHost::gui_scale()` reads the GUI scale in effect (`Window.getGuiScale`), at least 1,
+or `None` without a window (a server, a headless run). Vanilla's `Window.calculateScale` resolves
+it from the GUI Scale option and the window size: the option is a maximum, where 0 means automatic,
+so a large window still resolves below it, and with the Unicode font forced an odd result is raised
+by one. `ClientHost::gui_options().gui_scale` is only that option. The framebuffer size stays
+`native_physical_window_size()`; divide it by this scale, rounding up, for the GUI-scaled width and
+height (`Window.getGuiScaledWidth/Height`).
+
 `ClientHost::playing()` is true while the player is in the world with nothing over it: no screen, title, sign
 editor or book, so keys and zoom apply. `ClientHost::mapping(name)` reads a vanilla key mapping (`key.forward`,
 `key.left`, `key.back`, `key.right`, `key.jump`, `key.sneak`, `key.sprint`, `key.attack`, `key.use`) as a
 `Result<Option<KeyMapping>, TextFormError>`. `Ok(Some(mapping))` contains the held state in
 `mapping.down` and the bound key's Controls label in `mapping.label`. Other names return
 `Ok(None)`; an invalid label returns `TextFormError`, including components deeper than 512 nodes. Both read without `&mut`, so the HUD and screen hooks can ask them.
+
+`ClientHost::select_hotbar_slot(slot)` chooses the local player's hotbar slot (0 to 8) as a number key
+does (`Inventory.setSelectedSlot`), and sends nothing itself. The game sends the carried-item packet
+exactly when it does for a key press: at the next tick's start at the latest, and before an attack, a
+use, an interact, a release, a drop and a continued block break (not before a block break start), so a
+selection made earlier in the same tick goes out before the action. One packet goes per change. A slot
+above 8 is `OutOfRange { slot }`, a client with no world or player is `NoWorld`, and a spectator is
+`Refused` (its number keys open the spectator menu); each leaves the selection unchanged. Read the slot
+back with `player_selected_slot` on the local player. Native and wasm mods use the same call.
 
 `ClientHost::clipboard_text()` reads the system clipboard (`KeyboardHandler.getClipboard`, empty text when it
 holds none) and `ClientHost::set_clipboard_text(text)` writes it (`setClipboard`; empty text copies nothing). Both

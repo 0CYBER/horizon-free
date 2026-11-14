@@ -4678,7 +4678,7 @@ impl Game<'_> {
             self.lan_synced_since(from);
             horizon_client::spans::time("tick_lecterns", || self.tick_lecterns());
             horizon_client::spans::time("tick_maps", || self.tick_maps());
-            self.tick_equipment_compasses();
+            self.tick_lodestone_compasses();
             horizon_client::spans::time("tick_bolts", || self.tick_bolts());
             horizon_client::spans::time("tick_fishing", || self.tick_fishing());
             self.ordered_before(ordered_tick::Batch::Tridents)?;

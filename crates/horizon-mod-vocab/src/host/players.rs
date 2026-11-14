@@ -35,6 +35,16 @@ pub trait PlayersClientHost {
     #[access(WorldOnly)]
     fn push_player(&mut self, kick: [f32; 3]);
     /// Side: client.
+    /// For a client mod: chooses the local player's hotbar slot, `slot` (0 to 8), as
+    /// `Inventory.setSelectedSlot` does for a number key. It sends nothing itself: the game
+    /// sends the carried-item packet at the next tick's start at the latest, and before the
+    /// packets of an attack, a use, an interact, a release, a drop and a continued block break
+    /// (not before a block break start). Refused above 8 with `OutOfRange`, without a client
+    /// world with `NoWorld`, and for a spectator with `Refused` (its number keys open the
+    /// spectator menu), leaving the selection as it was.
+    #[access(WorldOnly)]
+    fn select_hotbar_slot(&mut self, slot: u8) -> Result<(), HotbarSlotError>;
+    /// Side: client.
     /// For a client mod: the local player's collision exclusions, the client half of
     /// `EntityRef::set_collision_exclusions`, with the same boxes, rules and refusals (a client
     /// with no player of its own answers `Stale`). The client moves its player itself, so a mod
@@ -156,7 +166,8 @@ pub trait PlayersBackend {
     #[access(WorldOnly)]
     fn player_dimension(&self, player: PlayerRef) -> Option<Identifier>;
     /// Side: both.
-    /// `Inventory.getSelectedSlot`: the hotbar slot the player holds, 0..9.
+    /// `Inventory.getSelectedSlot`: the hotbar slot the player holds, 0..9. On a client,
+    /// [`crate::ClientHost::select_hotbar_slot`] chooses it.
     #[access(WorldOnly)]
     fn player_selected_slot(&self, player: PlayerRef) -> Option<usize>;
     /// Side: both.

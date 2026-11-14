@@ -289,7 +289,7 @@ impl Game<'_> {
                 })
                 .collect()
         };
-        let view = self.gui_scale().map(|b| [b.width, b.height]);
+        let view = self.gui_batch().map(|b| [b.width, b.height]);
         json!({ "left": column(true), "right": column(false), "view": view })
     }
 

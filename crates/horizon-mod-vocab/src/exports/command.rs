@@ -1,1 +1,3 @@
-pub use command::{CommandArgument, CommandArgumentValue, CommandInvocation, CommandSource};
+pub use command::{
+    CommandArgument, CommandArgumentValue, CommandInvocation, CommandResult, CommandSource,
+};

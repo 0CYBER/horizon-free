@@ -174,6 +174,31 @@ mod tests {
         game.remote.as_ref().unwrap().level_load.is_active()
     }
 
+    /// A level the server opened after Login (a runtime level) is in the client's table of levels
+    /// while the player is in it, and dropped once it leaves; a level the Login named stays. The
+    /// same id entered again (a level deleted and opened again) starts with no column of the old
+    /// one.
+    #[test]
+    #[ignore = "daily"]
+    fn a_level_opened_after_login_is_forgotten_once_left() {
+        use crate::game::Dim;
+        const RUNTIME: &str = "test:instance/1";
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        game.handle_packet(respawn(RUNTIME, 3)).unwrap();
+        assert!(Dim::exists(RUNTIME));
+        game.handle_packet(column(0, 0)).unwrap();
+        assert_eq!(own(&game), vec![(0, 0)]);
+        game.handle_packet(respawn("test:void", 3)).unwrap();
+        assert!(!Dim::exists(RUNTIME), "left, and not named at Login");
+        assert!(Dim::exists("test:void"));
+        game.handle_packet(respawn(OVERWORLD, 3)).unwrap();
+        assert!(Dim::exists("test:void"), "named at Login");
+        game.handle_packet(respawn(RUNTIME, 3)).unwrap();
+        assert!(Dim::exists(RUNTIME));
+        assert!(own(&game).is_empty(), "nothing of the level before");
+    }
+
     /// A column of stone at `x, z` with a chest at (3, 70, 5) in it, which its packet lists.
     fn column_with_a_chest(game: &Game, x: i32, z: i32) -> C {
         let chest = game

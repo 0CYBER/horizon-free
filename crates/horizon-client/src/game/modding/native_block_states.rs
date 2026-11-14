@@ -230,6 +230,12 @@ impl Game<'_> {
         self.pack.assets.registry.state(state)?;
         Some(self.res.facts().get(state).hardness)
     }
+    /// The explosion resistance the block of this state declares (`Block.getExplosionResistance`):
+    /// stone 6, obsidian 1200, bedrock 3,600,000. None for an unknown state.
+    pub(super) fn block_state_explosion_resistance(&self, state: BlockStateId) -> Option<f32> {
+        self.pack.assets.registry.state(state)?;
+        Some(self.res.facts().get(state).explosion_resistance)
+    }
     /// `BlockState.getSoundType()`: its volume, pitch and the sound events for breaking,
     /// stepping on, placing, hitting and falling on it. None for an unknown state.
     pub(super) fn block_state_sound(&self, state: BlockStateId) -> Option<BlockSoundType> {

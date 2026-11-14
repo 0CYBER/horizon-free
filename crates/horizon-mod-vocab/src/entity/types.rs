@@ -45,12 +45,35 @@ pub enum AttributeRegistrationError {
 // exhaustive: its field is private, so only registration creates a key
 pub struct EffectKey(pub(crate) u32);
 
-/// A mob entity type (`minecraft:zombie`) in the built-in entity-type registry, in
-/// registration order. A key stays valid until the game exits.
-// no wire: decoding validates the u32 slot with EntityTypeKey::from_slot on the host; wasm carries the host-issued opaque token without consulting guest tables.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-// exhaustive: only the load-owned table creates keys
+/// An entity type (`minecraft:zombie`) in the built-in entity-type registry, in
+/// registration order. Returned by `EntityRef::kind`; Copy/Eq comparisons do not
+/// allocate. Request `key.id(host)` for its namespaced name (an owned diagnostic
+/// string). A key stays valid until the game exits.
+// The derived scalar codec validates host slots; wasm carries the host-issued token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, horizon_mod_api_macros::Wire)]
+#[wire(via = u32)]
+// exhaustive: incoming scalar slots are checked against the host's registry
 pub struct EntityTypeKey(pub(crate) u32);
+
+impl From<&EntityTypeKey> for u32 {
+    fn from(key: &EntityTypeKey) -> Self {
+        key.0
+    }
+}
+impl TryFrom<u32> for EntityTypeKey {
+    type Error = &'static str;
+    fn try_from(slot: u32) -> Result<Self, Self::Error> {
+        // A guest transports the host-issued identity; only the host can validate it.
+        #[cfg(target_arch = "wasm32")]
+        {
+            Ok(Self(slot))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self::from_slot(slot)
+        }
+    }
+}
 
 /// A playing sound's channel, for `play_sound_source` and
 /// `play_streaming_source`: an id only, to tell sounds apart across the two
@@ -919,6 +942,29 @@ impl NoBackend for CollisionExclusionsError {
     }
 }
 
+/// Why a client's hotbar selection was not made (`ClientHost::select_hotbar_slot`). The
+/// selection the player had stays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+// exhaustive: the three refusals are the contract; a new reason is a breaking change
+pub enum HotbarSlotError {
+    /// The client shows no world, or has no player of its own.
+    NoWorld,
+    /// A slot above 8: vanilla's range is 0 to 8, and the server ignores others.
+    OutOfRange {
+        /// The slot the caller asked for.
+        slot: u8,
+    },
+    /// The number keys do nothing for the local player, as for a spectator (its keys open
+    /// the spectator menu instead).
+    Refused,
+}
+
+impl NoBackend for HotbarSlotError {
+    fn no_backend() -> Self {
+        Self::NoWorld
+    }
+}
+
 /// A vanilla `AbstractMinecart`, narrowed from an entity with `host.minecart(entity)`.
 #[derive(horizon_mod_api_macros::Wire)]
 #[wire(internal_field_layouts)]
@@ -1372,3 +1418,6 @@ pub struct AttributeTooltip {
     /// it reads as a plain line.
     pub base_modifier: Option<String>,
 }
+#[cfg(test)]
+#[path = "entity_type_key_tests.rs"]
+mod entity_type_key_tests;

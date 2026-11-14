@@ -6,9 +6,15 @@ pub(crate) fn data_files(root: &Path, kind: &str, overlay: &PackOverlay) -> Hash
         .unwrap_or_default()
         .into_iter()
         .filter_map(|(id, bytes)| {
-            serde_json::from_slice::<Value>(&bytes)
-                .ok()
-                .map(|v| (id, v))
+            let value = if kind == "enchantment" {
+                let path = root
+                    .join("data")
+                    .join(id.replace(':', "/enchantment/") + ".json");
+                horizon_world::json_folder::enchantment_definition(&bytes, &path)
+            } else {
+                serde_json::from_slice::<Value>(&bytes).ok()
+            };
+            value.map(|v| (id, v))
         })
         .collect();
     for (id, versions) in overlay.kind(kind) {

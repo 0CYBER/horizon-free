@@ -134,6 +134,11 @@ each pool, what stops and what to do, and keeps its text current; it closes the 
 only the workflow token (`actions: read`, `issues: write`). What the Team and the council do meanwhile:
 [operations.md](operations.md#self-hosted-runners-are-offline).
 
+## Rerunning a failed job
+
+GitHub reruns a failed job only after its whole run has ended: while another job of the run (often `lint`) is still
+going, "Re-run failed jobs" is refused ("already running"). Wait for the run to finish, then rerun the failed job.
+
 ## Rust version
 
 CI, the launcher's native-mod toolchain and the wasm mods' toolchain use one Rust release, written once in

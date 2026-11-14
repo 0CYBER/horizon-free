@@ -113,6 +113,9 @@ impl Game<'_> {
         motion: Option<[f64; 3]>,
         pickup_delay: u32,
     ) -> Option<EntityRef> {
+        if self.entity_ids_exhausted() {
+            return None;
+        }
         let finite = [x, y, z]
             .into_iter()
             .chain(motion.into_iter().flatten())
@@ -204,7 +207,12 @@ mod tests {
         let popped = game
             .level_pop_resource(level, [4, 64, -2], stone())
             .unwrap();
-        assert_eq!(game.entity_kind(popped).as_deref(), Some("minecraft:item"));
+        assert_eq!(
+            game.entity_kind(popped)
+                .map(|kind| kind.id(&game))
+                .as_deref(),
+            Some("minecraft:item")
+        );
         assert_eq!(game.entity_position(popped), Some(at));
         let item = game.dropped.last().unwrap();
         assert_eq!((item.pickup_delay, item.stack.count), (10, 3));

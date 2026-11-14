@@ -1,0 +1,8 @@
+horizon-client game::lan_actions::pickups::orb_merge_contract_tests::a_canceled_merge_keeps_both_orbs_as_they_were lib daily resources
+horizon-client game::lan_actions::pickups::orb_merge_contract_tests::a_canceled_spawning_merge_puts_the_destination_back_and_spawns_its_own_orb lib daily resources
+horizon-client game::lan_actions::pickups::orb_merge_contract_tests::a_changed_source_refuses_the_merge_and_puts_the_written_orb_back lib daily resources
+horizon-client game::lan_actions::pickups::orb_merge_contract_tests::a_count_past_what_a_save_holds_refuses_the_merge lib daily resources
+horizon-client game::lan_actions::pickups::orb_merge_contract_tests::a_resident_merge_of_three_times_two_and_five_saves_and_pays_eleven lib daily resources
+horizon-client game::lan_actions::pickups::orb_merge_contract_tests::a_spawning_merge_of_three_times_two_and_five_saves_and_pays_eleven lib daily resources
+horizon-client game::lan_actions::pickups::orb_merge_contract_tests::a_spawning_merge_tells_the_hook_the_signed_destination_value lib daily resources
+horizon-client game::orb_merge_tests::set_experience_orb_refuses_a_write_a_save_cannot_hold lib daily resources

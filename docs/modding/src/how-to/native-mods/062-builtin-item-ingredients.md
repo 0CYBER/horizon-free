@@ -52,8 +52,8 @@ All preparation happens at load; candidate comparisons borrow values without
 allocating or converting them to JSON. Removal keys require registration only.
 Native registrations retain their persistent NBT validation contract.
 
-The shared decoder currently covers 54 registered built-ins:
-`cat/sound_variant`, `cat/variant`, `wolf/sound_variant`, `wolf/variant`, `container_loot`, `tooltip_display`, `tropical_fish/pattern_color`, `tropical_fish/base_color`, `cushion/color`, `recipes`, `mob_visibility`, `custom_model_data`, `wolf/collar`, `cat/collar`, `shulker/color`, `sheep/color`, `dye`, `block_state`, `use_cooldown`, `cooking_fuel`, `brewing_fuel`, `compostable`, `fox/variant`, `weapon`, `food`, `damage`, `repair_cost`, `max_damage`, `max_stack_size`, `map_id`, `rarity`, `enchantments`, `stored_enchantments`, `enchantment_glint_override`, `custom_name`, `item_name`, `item_model`, `lodestone_tracker`, `block_entity_data`, `enchantable`, `ominous_bottle_amplifier`, `potion_duration_scale`, `minimum_attack_charge`, `dyed_color`, `attack_animation`, `damage_resistant`, `use_effects`, `attack_range`, `rabbit/variant`, `horse/variant`, `llama/variant`, `mooshroom/variant`, `axolotl/variant`, `salmon/size`,
+The shared decoder currently covers 64 registered built-ins:
+`cat/sound_variant`, `cat/variant`, `wolf/sound_variant`, `wolf/variant`, `container_loot`, `tooltip_display`, `tropical_fish/pattern_color`, `tropical_fish/base_color`, `cushion/color`, `recipes`, `mob_visibility`, `custom_model_data`, `wolf/collar`, `cat/collar`, `shulker/color`, `sheep/color`, `dye`, `block_state`, `use_cooldown`, `cooking_fuel`, `brewing_fuel`, `compostable`, `fox/variant`, `weapon`, `food`, `damage`, `repair_cost`, `max_damage`, `max_stack_size`, `map_id`, `rarity`, `enchantments`, `stored_enchantments`, `enchantment_glint_override`, `custom_name`, `item_name`, `item_model`, `lodestone_tracker`, `damage_resistant`, `use_effects`, `block_entity_data`, `enchantable`, `ominous_bottle_amplifier`, `potion_duration_scale`, `minimum_attack_charge`, `dyed_color`, `attack_animation`, `attack_range`, `rabbit/variant`, `horse/variant`, `llama/variant`, `mooshroom/variant`, `axolotl/variant`, `salmon/size`, `parrot/variant`, `tropical_fish/pattern`, `villager_food`, `unbreakable`, `base_color`, `note_block_sound`, `tooltip_style`, `waxed`, `intangible_projectile`, `glider`,
 in the `minecraft` namespace.
 `enchantable` requires a positive integer `value`; extra record fields are ignored
 and equivalent numeric NBT widths match, including item defaults. Map ids accept
@@ -76,7 +76,7 @@ zero (including negative zero) is false; nonzero values, fractions and NaN are
 true. Displays retain canonical byte 0 or 1.
 `dyed_color` accepts packed integer colors or three numeric RGB channels,
 matching the decoded values without copying candidate payloads.
-The other 65 persistent registered built-ins use stored-value matching while their shared
+The other 55 persistent registered built-ins use stored-value matching while their shared
 decoders are added incrementally in **#3875**. Their absence is not a load refusal.
 The transient types `creative_slot_lock`, `additional_trade_cost` and
 `map_post_processing` are refused as stored component values, not matched as opaque NBT.
@@ -144,3 +144,61 @@ The scalar enum decoders accept exact persistent names only: rabbit uses
 horse uses `white`, `creamy`, `chestnut`, `brown`, `black`, `gray`, `dark_brown`;
 llama uses `creamy`, `white`, `brown`, `gray`.
 Numeric ordinals, namespaced names, case variants and null are refused.
+
+The `fox/variant` persistent codec accepts only the exact strings `"red"` and
+`"snow"`; `parrot/variant` accepts `"red_blue"`, `"blue"`, `"green"`,
+`"yellow_blue"`, and `"gray"`. Both reject numeric network ids, case variants
+and namespaced values. Parrot spawn eggs have no prototype `parrot/variant`;
+the mob's default variant does not supply an item component.
+
+The `tropical_fish/pattern` codec accepts only `"kob"`,
+`"sunstreak"`, `"snooper"`, `"dasher"`, `"brinely"`, `"spotty"`, `"flopper"`,
+`"stripey"`, `"glitter"`, `"blockfish"`, `"betty"`, and `"clayfish"`. It rejects
+numeric network ids, case variants and namespaced values. Tropical fish buckets
+have no pattern component by default; the mob's default pattern is not an item default.
+
+`villager_food` requires a compound with positive integer `nutrition`: numeric
+NBT uses Java's 32-bit integer conversion before the positive check, and unknown
+fields do not participate in equality. Its recipe and item-default values are
+prepared at load; live candidates are borrowed without allocation.
+
+`unbreakable` requires an object, ignores its fields and normalizes to `{}`;
+scalars and lists are rejected. Matching requires effective presence, including
+item defaults, while an explicit removal suppresses that default.
+
+`base_color` accepts exactly the 16 lowercase dye names (for example `red` and
+`light_blue`), not numeric dye ids or uppercase names. It compares the shield's
+stored base color; a banner's item color does not imply this component, and an
+undyed shield has no base color.
+
+`note_block_sound` accepts an identifier string, not a sound-registry entry.
+Omitted or empty namespaces become `minecraft`; empty paths are allowed, so
+`""`, `":"`, and `"minecraft:"` decode to the same identifier. Namespace and
+path characters follow vanilla's lowercase ASCII identifier rules (including
+the forbidden namespace `..`); malformed UTF-16 strings are rejected.
+
+Component ingredient displays contain the patch, including removals. Difference
+lists retain the base list and remove only items whose default stack passes the
+subtracted predicate. Non-simple cooking ingredients are tested outside the
+simple item index, in original recipe priority order.
+
+A non-simple ingredient may have an empty default-stack display list and still
+load. It retains its full candidate set for concrete matching and cooking.
+For example, a diamond sword minus swords with damage 0 has no default display,
+but a damage-5 sword satisfies it. Empty display lists do not erase candidates.
+
+`tooltip_style` accepts identifier strings without looking up a resource; omitted
+or empty namespaces become `minecraft`, and empty paths are valid.
+
+`waxed` requires an object (not a scalar or list); its fields are ignored and it
+decodes to an empty object. Presence still matters: an absent or explicitly removed
+`waxed` does not equal a present empty object.
+
+`intangible_projectile` requires an object, ignores its fields, and normalizes to
+`{}`; scalars and lists are invalid. Presence still matters, and
+`!minecraft:intangible_projectile` requires absence, including item defaults.
+
+`minecraft:glider` requires an object (`{}`), not a scalar or list. Its unit codec
+ignores all object fields, so nonempty objects normalize to `{}` and compare equal.
+The component must still be present, including through an item default; an explicit
+removal overrides that default. `!minecraft:glider` requires absence instead.

@@ -48,3 +48,14 @@ fn wire_loopback_container_loot_filled() {
     .container_loot_filled(&World, &mut event);
     assert_eq!(drops, vec![mod_api::ItemStack::new(key, 3).unwrap()]);
 }
+
+pub(super) struct ContainerLootFilledHooks;
+impl ContainerLootFilledHooks {
+    pub(super) fn container_loot_filled(
+        &self,
+        _: &dyn mod_api::LevelHost,
+        event: &mut mod_api::ContainerLootFilledEvent<'_>,
+    ) {
+        self::listen(event);
+    }
+}

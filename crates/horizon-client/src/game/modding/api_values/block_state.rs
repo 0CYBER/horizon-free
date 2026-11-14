@@ -24,6 +24,16 @@ pub(crate) fn block_listens(hook: mod_api::HookId, state: BlockStateId) -> bool 
         })
 }
 
+/// Whether every part on `state` that answers `explosion_resistance` declares the answer pure.
+pub(crate) fn explosion_resistance_pure(state: BlockStateId) -> bool {
+    INDEX.with_borrow(|index| {
+        index
+            .as_ref()
+            .and_then(|index| index.forward.get(state.0 as usize))
+            .is_some_and(|value| mod_api::__private::explosion_resistance_key_pure(value.block()))
+    })
+}
+
 pub(super) fn clear() {
     INDEX.with_borrow_mut(|index| *index = None);
 }

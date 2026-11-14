@@ -1,10 +1,10 @@
 //! Passages within one level (#3775): an opening a mod's server side registers with
 //! `LevelRef::register_passage`, which the engine tells the clients that hold its chunk
 //! (docs/modding/src/how-to/passages.md).
-use crate::Vec3;
+use crate::{DimensionKey, Vec3};
 
-/// An opening in a level that leads to another place in the same level, as Immersive
-/// Portals' portal: a rectangle centred on `origin`, `width` blocks along `axis_w` and
+/// An opening in a level that leads to another place in the same level, or in another
+/// open level with `destination_level`, as Immersive Portals' portal: a rectangle centred on `origin`, `width` blocks along `axis_w` and
 /// `height` along `axis_h`, whose centre comes out at `destination`, turned by `turn`.
 /// It leads one way: a way back is a second passage. Built with a literal ending in
 /// `..Passage::default()`; the default (no size, at the origin) is refused until given a size
@@ -27,6 +27,11 @@ pub struct Passage {
     pub destination: Vec3,
     /// How the far side is turned about the vertical axis.
     pub turn: PassageTurn,
+    /// The level `destination` is in: `None` for the passage's own level. Another level must
+    /// be open when the passage is registered, and a passage into one is not sent to clients
+    /// and is refused `PassageCrossRefusal::FarLevel` when crossed, until clients can follow
+    /// a player into another level.
+    pub destination_level: Option<DimensionKey>,
 }
 
 impl Passage {
@@ -123,6 +128,8 @@ pub enum PassageRegistrationError {
     },
     /// Every number was given: an id is never given twice.
     NoIdsLeft,
+    /// `destination_level` is not an open level, or is the passage's own level.
+    UnknownLevel,
 }
 
 impl From<crate::LevelReadError> for PassageRegistrationError {
@@ -203,4 +210,6 @@ pub enum PassageCrossRefusal {
     FarEndNotTracked,
     /// A mod's `player_passage_cross` cancelled the crossing.
     Vetoed,
+    /// The passage leads into another level, which a crossing cannot reach yet.
+    FarLevel,
 }

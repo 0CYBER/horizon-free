@@ -64,9 +64,9 @@ merge base with the head. It reports, and fails the check only when:
 
 - the head's tree cannot be exported;
 - a change note cannot be read, or names an item that did not change;
-- with the gate on (`gate = true` in `tools/ci/surface.toml`), a breaking change has no change note.
-
-The gate is off today.
+- a breaking change has no change note: every breaking record the report lists, members included (a removed field is
+  its own line), is named by a note the pull request adds. Conditional and additive changes need none. The gate is
+  `gate = true` in `tools/ci/surface.toml`.
 
 ## Change notes
 

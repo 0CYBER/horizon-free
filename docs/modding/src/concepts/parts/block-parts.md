@@ -87,6 +87,13 @@ template snapshots. `event.state` is already mirrored, `event.pos` is where it g
 it to another state of the same block, for example
 `context.state_with_property(event.state, "facing", "north")`.
 
+Jigsaw connector discovery is different from block placement: matching and expansion read
+the connector's plain rotated state, without calling `BlockPart::rotate`, as
+`StructureTemplate.getJigsaws` does in vanilla. The template palette still depends on the read
+position: the origin for candidate matching, the piece's real origin for expansion. Named
+start anchors likewise use the palette at the position where they are sampled. The actual
+template block writes still call the rotation Part at their placed world positions.
+
 | Rule | Behavior |
 | --- | --- |
 | Context | A worldgen Part method: a `WorldgenHost` on the worldgen workers or the server thread, no `Host`, no writes. Keep it a pure function of the event. |

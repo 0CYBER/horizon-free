@@ -8,15 +8,142 @@ use horizon_client::mobs::equip::CanEquip;
 
 /// A stack converted for the parts of its item, ready for any number of `can_equip` questions.
 /// Empty when no part of the item listens (the component's answer stands and nothing is
-/// converted), or when the stack cannot cross, which leaves the answer as the hooks' generated
-/// crossings do.
-pub(in crate::game) struct EquipStack(Option<mod_api::ItemStack>);
+/// converted). A listening stack that cannot be prepared refuses the decision.
+pub(in crate::game) struct EquipStack {
+    _leases: Vec<Box<dyn std::any::Any>>,
+    reads: Vec<mod_api::EquipReadRow>,
+    read_indices: std::collections::HashMap<u32, usize>,
+    stack: Option<Box<mod_api::ItemStack>>,
+    refused: bool,
+    epoch: Option<mod_api::WorldEpoch>,
+    admissions: std::collections::HashMap<u32, horizon_client::join_seq::JoinSeq>,
+    source: Option<(usize, horizon_client::mobs::equip::EquipStamp)>,
+}
 
 impl Game<'_> {
-    /// Prepares `stack` for [`Self::can_equip`]: one table lookup when no part of its item listens.
-    pub(in crate::game) fn equip_stack(&self, stack: &ItemStack) -> EquipStack {
-        let listens = mod_api::__private::item_listens(mod_api::HookId::CanEquip, &stack.item);
-        EquipStack(listens.then(|| stack.try_into_api().ok()).flatten())
+    pub(in crate::game) fn equip_stack(
+        &self,
+        stack: &ItemStack,
+        kinds: &[&str],
+        targets: &[u32],
+    ) -> EquipStack {
+        let empty = |refused| EquipStack {
+            _leases: Vec::new(),
+            reads: Vec::new(),
+            read_indices: Default::default(),
+            stack: None,
+            refused,
+            source: None,
+            epoch: None,
+            admissions: Default::default(),
+        };
+        if !mod_api::__private::item_listens(mod_api::HookId::CanEquip, &stack.item) {
+            return empty(false);
+        }
+        let address = stack as *const _ as usize;
+        let source = match horizon_client::mobs::equip::source_stamp_at(address) {
+            Some(Some(stamp)) => Some((address, stamp)),
+            // A retired tracked scope is different from an ordinary immutable
+            // input without a barrier. It must never prepare or ask a guest.
+            Some(None) => return empty(true),
+            None => None,
+        };
+        #[cfg(test)]
+        EQUIP_CONVERSIONS.with(|count| count.set(count.get() + 1));
+        let stack = stack.try_into_api().ok().map(Box::new);
+        let admissions = {
+            let mut table = self.resident_entities.table.borrow_mut();
+            let order = table.admission_order();
+            targets
+                .iter()
+                .filter_map(|id| order(*id).map(|generation| (*id, generation)))
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        let rows = admissions
+            .keys()
+            .filter_map(|id| self.capture_equip_read(*id))
+            .collect::<Vec<_>>();
+        let prepared = stack
+            .as_ref()
+            .map(|stack| mod_api::__private::prepare_equip_parts(stack, kinds, &rows))
+            .transpose();
+        let (leases, refused) = match prepared {
+            Ok(Some(leases)) => (leases, false),
+            Ok(None) | Err(_) => (Vec::new(), true),
+        };
+        let reads = rows;
+        let read_indices = reads
+            .iter()
+            .enumerate()
+            .map(|(i, row)| (row.entity.id(), i))
+            .collect();
+        EquipStack {
+            read_indices,
+            epoch: self.native_lifecycle.epoch(),
+            admissions,
+            reads,
+            _leases: leases,
+            stack,
+            refused,
+            source,
+        }
+    }
+
+    fn capture_equip_read(&self, id: u32) -> Option<mod_api::EquipReadRow> {
+        let entity = self.entity(id)?;
+        let living = mod_api::LivingRef::new(entity);
+        let slots = [
+            mod_api::EquipmentSlot::MainHand,
+            mod_api::EquipmentSlot::OffHand,
+            mod_api::EquipmentSlot::Feet,
+            mod_api::EquipmentSlot::Legs,
+            mod_api::EquipmentSlot::Chest,
+            mod_api::EquipmentSlot::Head,
+            mod_api::EquipmentSlot::Body,
+            mod_api::EquipmentSlot::Saddle,
+        ];
+        Some(mod_api::EquipReadRow {
+            kind: self.entity_kind(entity),
+            position: self.entity_position(entity),
+            health: self.living_health(living),
+            max_health: self.living_max_health(living),
+            alive: self.living_alive(living),
+            living: self.living(entity).is_some(),
+            equipment: std::array::from_fn(|i| {
+                self.living_equipment(living, slots[i])
+                    .and_then(|stack| stack.try_into_api().ok())
+            }),
+            ..mod_api::EquipReadRow::new(entity)
+        })
+    }
+    pub(in crate::game) fn equip_can_apply(&self, prepared: &EquipStack, id: u32) -> bool {
+        if prepared.stack.is_none() {
+            return !prepared.refused;
+        }
+        if prepared.refused
+            || prepared.epoch != self.native_lifecycle.epoch()
+            || prepared.source.is_some_and(|(address, stamp)| {
+                horizon_client::mobs::equip::source_stamp_at(address) != Some(Some(stamp))
+            })
+        {
+            return false;
+        }
+        let current = {
+            let mut table = self.resident_entities.table.borrow_mut();
+            let order = table.admission_order();
+            order(id)
+        };
+        if current.is_none() || current != prepared.admissions.get(&id).copied() {
+            return false;
+        }
+        let Some(current) = self.capture_equip_read(id) else {
+            return false;
+        };
+        prepared
+            .reads
+            .iter()
+            .find(|row| row.entity == current.entity)
+            .is_some_and(|expected| *expected == current)
     }
 
     /// `LivingEntity.isEquippableInSlot` with `IItemExtension.canEquip`: `data` is the stack's
@@ -31,14 +158,42 @@ impl Game<'_> {
         kind: &str,
         data: bool,
     ) -> bool {
-        let Some(stack) = &stack.0 else {
+        if stack.refused
+            || stack.source.is_some_and(|(address, stamp)| {
+                horizon_client::mobs::equip::source_stamp_at(address) != Some(Some(stamp))
+            })
+        {
+            return false;
+        }
+        if stack.stack.is_none() {
             return data;
+        }
+        if stack.epoch != self.native_lifecycle.epoch() {
+            return false;
+        }
+        let current = {
+            let mut table = self.resident_entities.table.borrow_mut();
+            let order = table.admission_order();
+            order(entity)
         };
+        if current.is_none() || stack.admissions.get(&entity).copied() != current {
+            return false;
+        }
+        let row = stack
+            .read_indices
+            .get(&entity)
+            .and_then(|index| stack.reads.get(*index));
+        let stack = stack.stack.as_ref().expect("prepared equip stack");
         let Some(entity) = self.entity(entity) else {
             return false;
         };
+        let Some(row) = row else {
+            return false;
+        };
+        let host = crate::game::equip_host::EquipHost { game: self, row };
+        let native = crate::game::native_hooks::NativeHookHost { host: &host };
         let mut can_equip = data;
-        self.native_can_equip(
+        native.native_can_equip(
             stack,
             slot,
             mod_api::LivingRef::new(entity),
@@ -58,14 +213,75 @@ impl Game<'_> {
     }
 }
 
-/// The game lent to a menu click as its `CanEquip`. The last stack asked about stays prepared,
-/// so a click asking about one stack slot after slot converts it once.
+/// The game lent to a menu click as its `CanEquip`. Each source scope stays prepared by its
+/// scalar identity and revision, so candidate traversal never compares stack payloads.
 pub(in crate::game) struct MenuEquip<'g, 'a> {
     game: &'g Game<'a>,
-    prepared: std::cell::RefCell<Option<(ItemStack, EquipStack)>>,
+    prepared: std::cell::RefCell<
+        std::collections::HashMap<u64, (horizon_client::mobs::equip::EquipStamp, EquipStack)>,
+    >,
+}
+
+impl MenuEquip<'_, '_> {
+    // A replacement may change to an item with no listeners. It still invalidates
+    // this decision's preparation, before the new item's data-only fast path.
+    fn stale_source(&self, stack: &ItemStack) -> bool {
+        match horizon_client::mobs::equip::source_stamp_at(stack as *const _ as usize) {
+            Some(Some(current)) => self
+                .prepared
+                .borrow()
+                .get(&current.scope())
+                .is_some_and(|(original, _)| *original != current),
+            Some(None) => true,
+            None => false,
+        }
+    }
 }
 
 impl CanEquip for MenuEquip<'_, '_> {
+    fn prepare(&self, stack: &ItemStack, entity: u32, kind: &str) -> bool {
+        if self.stale_source(stack) {
+            return false;
+        }
+        if !self.listens(stack) {
+            return true;
+        }
+        let Some(stamp) = horizon_client::mobs::equip::source_stamp(stack) else {
+            return false;
+        };
+        if let Some((original, ready)) = self.prepared.borrow().get(&stamp.scope()) {
+            return *original == stamp && !ready.refused;
+        }
+        let ready = self.game.equip_stack(stack, &[kind], &[entity]);
+        let valid = !ready.refused;
+        self.prepared
+            .borrow_mut()
+            .insert(stamp.scope(), (stamp, ready));
+        valid
+    }
+    fn can_apply(&self, stack: &ItemStack, entity: u32) -> bool {
+        if self.stale_source(stack) {
+            return false;
+        }
+        if !self.listens(stack) {
+            return true;
+        }
+        let Some(stamp) = horizon_client::mobs::equip::source_stamp(stack) else {
+            return false;
+        };
+        let prepared = self.prepared.borrow();
+        prepared
+            .get(&stamp.scope())
+            .is_some_and(|(original, prepared)| {
+                *original == stamp && self.game.equip_can_apply(prepared, entity)
+            })
+    }
+    fn listens(&self, stack: &ItemStack) -> bool {
+        // Keep stale observed inputs on the refusal path even if their replacement
+        // item has no listeners; fresh unsubscribed inputs still use the data path.
+        self.stale_source(stack)
+            || mod_api::__private::item_listens(mod_api::HookId::CanEquip, &stack.item)
+    }
     fn can_equip(
         &self,
         stack: &ItemStack,
@@ -74,23 +290,32 @@ impl CanEquip for MenuEquip<'_, '_> {
         kind: &str,
         data: bool,
     ) -> bool {
+        if self.stale_source(stack) {
+            return false;
+        }
         if !mod_api::__private::item_listens(mod_api::HookId::CanEquip, &stack.item) {
             return data;
         }
-        if self
-            .prepared
-            .borrow()
-            .as_ref()
-            .is_none_or(|(s, _)| s != stack)
-        {
-            *self.prepared.borrow_mut() = Some((stack.clone(), self.game.equip_stack(stack)));
-        }
-        let prepared = self.prepared.borrow();
-        let Some((_, ready)) = prepared.as_ref() else {
-            return data;
+        let Some(stamp) = horizon_client::mobs::equip::source_stamp(stack) else {
+            return false;
         };
+        let prepared = self.prepared.borrow();
+        let Some((original, ready)) = prepared.get(&stamp.scope()) else {
+            return false;
+        };
+        if *original != stamp {
+            return false;
+        }
+
         self.game.can_equip(ready, slot, entity, kind, data)
     }
+}
+
+#[cfg(test)]
+thread_local! { static EQUIP_CONVERSIONS:std::cell::Cell<usize>=const{std::cell::Cell::new(0)}; }
+#[cfg(test)]
+pub(in crate::game) fn take_equip_conversions() -> usize {
+    EQUIP_CONVERSIONS.with(|count| count.replace(0))
 }
 
 #[cfg(test)]
@@ -103,7 +328,14 @@ mod tests {
     struct FeetOnly(std::sync::Arc<AtomicUsize>);
     #[mod_api::horizon_part]
     impl mod_api::ItemPart for FeetOnly {
-        fn can_equip(&self, _: &dyn mod_api::Host, event: &mut mod_api::CanEquipEvent<'_>) {
+        fn can_equip(&self, host: &dyn mod_api::Host, event: &mut mod_api::CanEquipEvent<'_>) {
+            let entity = event.entity.entity();
+            assert!(entity.position(host).is_some());
+            assert!(entity.kind(host).is_some());
+            let _health = event.entity.health(host);
+            let _alive = event.entity.alive(host);
+            let _equipment = event.entity.equipment(host, mod_api::EquipmentSlot::Head);
+            let _hand = event.entity.hand_item(host, mod_api::Hand::Main);
             self.0.fetch_add(1, Ordering::Relaxed);
             event.can_equip = event.slot == "feet";
         }
@@ -163,11 +395,16 @@ mod tests {
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn warmed_can_equip_questions_allocate_nothing() {
         with_cobbler(|game, asked| {
-            let (helmet, other) = (rich_helmet(), ItemStack::new("minecraft:diamond_helmet", 1));
+            let (helmet, other) = (
+                horizon_client::mobs::equip::EquipInput::new(1, rich_helmet()),
+                ItemStack::new("minecraft:diamond_helmet", 1),
+            );
+            game.armor[0] = Some(rich_helmet());
             let (player, kind) = (game.own_entity_id() as u32, "minecraft:player");
             let slots = ["head", "chest", "legs", "feet"];
             let feet_only = [false, false, false, true];
             let lent = game.menu_can_equip();
+            assert!(lent.prepare(&helmet, player, kind));
             assert!(!lent.can_equip(&helmet, "head", player, kind, true));
             let (answers, allocations) = horizon_threads::allocation_count::measure(|| {
                 slots.map(|slot| lent.can_equip(&helmet, slot, player, kind, slot == "head"))
@@ -177,7 +414,14 @@ mod tests {
                 slots.map(|slot| lent.can_equip(&other, slot, player, kind, slot == "head"))
             });
             assert_eq!((answers, allocations), ([true, false, false, false], 0));
-            let prepared = game.equip_stack(&helmet);
+            let prepared = game.equip_stack(&helmet, &["minecraft:player"], &[player]);
+            assert!(
+                prepared.reads[0].equipment[5]
+                    .as_ref()
+                    .unwrap()
+                    .components()
+                    .is_some()
+            );
             let (answers, allocations) = horizon_threads::allocation_count::measure(|| {
                 slots.map(|slot| game.can_equip(&prepared, slot, player, kind, slot == "head"))
             });
@@ -235,12 +479,15 @@ mod tests {
                     game.lan_guest_packet(12, Serverbound::ContainerClick(click));
                 };
                 let helmet = "minecraft:iron_helmet".to_owned();
+                take_equip_conversions();
                 click(game, 5);
+                assert_eq!(take_equip_conversions(), 1);
                 assert_eq!(
                     held(game),
                     ([None, None, None, None], Some(vec![helmet.clone()]), 0)
                 );
                 click(game, 8);
+                assert_eq!(take_equip_conversions(), 1);
                 assert_eq!(
                     held(game),
                     ([None, None, None, Some(helmet)], Some(Vec::new()), 0)
@@ -248,6 +495,142 @@ mod tests {
                 // The part was asked about the helmet taken out of the bundle.
                 assert!(asked.load(Ordering::Relaxed) > 0);
             });
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn an_unpreparable_listening_stack_refuses_instead_of_using_the_data_answer() {
+        with_cobbler(|game, asked| {
+            let player = game.own_entity_id() as u32;
+            let empty = horizon_client::mobs::equip::EquipInput::new(
+                42,
+                ItemStack::new("minecraft:iron_helmet", 0),
+            );
+            let prepared = game.equip_stack(&empty, &["minecraft:player"], &[player]);
+            assert!(!game.can_equip(&prepared, "head", player, "minecraft:player", true));
+            assert!(!game.equip_can_apply(&prepared, player));
+            assert_eq!(asked.load(Ordering::Relaxed), 0);
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn local_shift_click_prepares_once_and_preserves_a_refused_helmet() {
+        with_cobbler(|game, asked| {
+            use horizon_client::menu::{Input, Kind, Menu};
+            let lent = game.menu_can_equip();
+            let mut env = game.menu_env();
+            env.can_equip = Some(&lent);
+            let mut menu = Menu::new(Kind::Inventory);
+            let helmet = rich_helmet();
+            menu.set_slot(&env, 9, Some(helmet.clone()));
+            take_equip_conversions();
+            menu.click(&env, 9, 0, Input::QuickMove).unwrap();
+            assert_eq!(take_equip_conversions(), 1);
+            assert_eq!(asked.load(Ordering::Relaxed), 1);
+            assert_eq!(menu.slot(9), Some(&helmet));
+            assert!(menu.slot(5).is_none());
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn menu_replacement_with_an_unsubscribed_item_stays_stale() {
+        use horizon_client::mobs::equip::EquipDecision;
+        with_cobbler(|game, asked| {
+            let player = game.own_entity_id() as u32;
+            let lent = game.menu_can_equip();
+            let mut slot = Some(rich_helmet());
+            let mut source = EquipDecision::new(42, &mut slot);
+            take_equip_conversions();
+            assert!(lent.prepare(&source, player, "minecraft:player"));
+            assert!(lent.can_equip(&source, "feet", player, "minecraft:player", false));
+            assert_eq!(take_equip_conversions(), 1);
+            source.replace(Some(ItemStack::new("minecraft:diamond_helmet", 3)));
+            assert!(!lent.prepare(&source, player, "minecraft:player"));
+            assert!(!lent.can_equip(&source, "head", player, "minecraft:player", true));
+            assert!(!lent.can_apply(&source, player));
+            let mut env = game.menu_env();
+            env.can_equip = Some(&lent);
+            let menu = horizon_client::menu::Menu::new(horizon_client::menu::Kind::Inventory);
+            assert!(!menu.takes_one(&env, 5, &source));
+            assert_eq!(asked.load(Ordering::Relaxed), 1);
+            assert_eq!(take_equip_conversions(), 0);
+            // A separate unsubscribed input still keeps the missing-target data answer.
+            let other = ItemStack::new("minecraft:diamond_helmet", 1);
+            assert!(lent.can_equip(&other, "head", 9999, "minecraft:player", true));
+            assert!(menu.takes_one(&env, 5, &other));
+            assert_eq!(take_equip_conversions(), 0);
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn source_mutations_refuse_prepared_equip_without_reconversion_or_callback() {
+        use horizon_client::mobs::equip::EquipDecision;
+        with_cobbler(|game, asked| {
+            let player = game.own_entity_id() as u32;
+            for mutation in 0..5 {
+                let mut helmet = rich_helmet();
+                helmet.count = 3;
+                let mut slot = Some(helmet);
+                let mut source = EquipDecision::new(42, &mut slot);
+                take_equip_conversions();
+                let prepared = game.equip_stack(&source, &["minecraft:player"], &[player]);
+                assert_eq!(take_equip_conversions(), 1);
+                assert!(game.can_equip(&prepared, "feet", player, "minecraft:player", false));
+                let before = asked.load(Ordering::Relaxed);
+                match mutation {
+                    0 => *source.count_mut().unwrap() = 2,
+                    1 => {
+                        source.data_mut().unwrap().custom_name =
+                            Some(horizon_core::nbt::Tag::String("Changed crown".into()))
+                    }
+                    2 => {
+                        source.replace(Some(rich_helmet()));
+                    }
+                    3 => {
+                        source.remove();
+                    }
+                    4 => {
+                        *source.count_mut().unwrap() = 2;
+                        *source.count_mut().unwrap() = 3;
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(!game.can_equip(&prepared, "feet", player, "minecraft:player", true));
+                assert_eq!(asked.load(Ordering::Relaxed), before);
+                assert_eq!(take_equip_conversions(), 0);
+            }
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn missing_despawned_and_readmitted_entities_refuse_but_no_listener_keeps_data() {
+        use horizon_client::{mobs::Mob, mobs::equip::EquipInput};
+        with_cobbler(|game, asked| {
+            game.options.dedicated = Some(Vec::new());
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:zombie")
+                .unwrap()
+                .clone();
+            let at = horizon_core::geometry::Vec3::new(6.5, 64.0, 5.5);
+            let index = game.mobs.len();
+            game.mobs.push(Mob::new(21, kind.clone(), at, 0.0));
+            let source = EquipInput::new(1, rich_helmet());
+            let prepared = game.equip_stack(&source, &["minecraft:zombie"], &[21]);
+            assert!(game.can_equip(&prepared, "feet", 21, "minecraft:zombie", false));
+            let before = asked.load(Ordering::Relaxed);
+            assert!(!game.can_equip(&prepared, "feet", 9999, "minecraft:zombie", true));
+            game.mobs.remove(index);
+            assert!(!game.can_equip(&prepared, "feet", 21, "minecraft:zombie", true));
+            game.mobs.push(Mob::new(21, kind, at, 0.0));
+            assert!(!game.can_equip(&prepared, "feet", 21, "minecraft:zombie", true));
+            assert_eq!(asked.load(Ordering::Relaxed), before);
+            take_equip_conversions();
+            let other = ItemStack::new("minecraft:diamond_helmet", 3);
+            let data = game.equip_stack(&other, &[], &[]);
+            assert_eq!(take_equip_conversions(), 0);
+            assert!(game.can_equip(&data, "head", 9999, "minecraft:zombie", true));
         });
     }
 }

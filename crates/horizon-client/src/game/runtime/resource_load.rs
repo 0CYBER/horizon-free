@@ -637,6 +637,9 @@ pub(super) fn load_resources(
         );
         resolved = client_reload::stage_texture_atlases(resolved, &texture_atlases);
     };
+    // Every loaded game publishes scalar registry keys, including callers that
+    // load a prepared root directly instead of building a mod content overlay.
+    crate::game::mods::register_iterated_registries(resolved.prepared())?;
     log::info!("load core tables: {:.2}s", started.elapsed().as_secs_f32());
     let CoreTables {
         item_data,
