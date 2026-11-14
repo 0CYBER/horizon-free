@@ -24,7 +24,7 @@ pub use models::{
     SlotContext, SlotRules, SlotView, StackedOnOther,
 };
 mod slot_context;
-pub use slot_context::{SlotSnapshot, lan_container};
+pub use slot_context::{SlotSnapshot, apply_menu_slot_rules, lan_container};
 use std::sync::Arc;
 
 mod bundle;
@@ -497,26 +497,6 @@ fn tidy(slot: &mut Option<ItemStack>) {
     if slot.as_ref().is_some_and(|s| s.count == 0) {
         *slot = None;
     }
-}
-
-/// Apply the scoped rule to a slot's own answers, then enforce its item cap. The rules are asked
-/// here, while the click plans, and only for a menu type a part answers; with none lent the
-/// slot's answers stand.
-#[allow(clippy::too_many_arguments)]
-pub fn apply_menu_slot_rules(
-    rules: Option<&dyn SlotRules>,
-    menu: &str,
-    slot: usize,
-    stack: &ItemStack,
-    context: SlotContext<'_>,
-    mut may_place: bool,
-    mut max_stack: u32,
-    item_max: u32,
-) -> (bool, u32) {
-    if let Some(rules) = rules.filter(|rules| rules.listens(menu)) {
-        rules.rule(menu, slot, stack, context, &mut may_place, &mut max_stack);
-    }
-    (may_place, max_stack.clamp(1, CONTAINER_MAX).min(item_max))
 }
 
 /// Vanilla quick-craft count for one slot, based on the original carried stack.

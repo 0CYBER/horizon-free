@@ -507,6 +507,7 @@ impl View<'_> {
         }
     }
     pub fn set(&mut self, i: usize, item: Option<ItemStack>) {
+        self.slot_snapshot.clear();
         match &mut self.container {
             Some(c) if i < c.len() => c[i] = item,
             Some(c) => {
@@ -515,6 +516,43 @@ impl View<'_> {
             }
             None => self.guest.set_menu_slot(i, item),
         }
+    }
+    /// Map the flattened server slots to the same containers and indices as prediction.
+    fn slot_context(&self, i: usize) -> (usize, crate::menu::SlotContext<'_>) {
+        let slots = self.container.as_deref().unwrap_or_default();
+        let menu = self.guest.menu.as_ref();
+        let crafting = menu
+            .and_then(|menu| menu.mod_type)
+            .and_then(|menu| menu.crafting);
+        let mut context = crate::menu::SlotContext {
+            player: Some(self.guest.uuid),
+            pos: menu.and_then(|menu| menu.pos).map(|(x, y, z)| [x, y, z]),
+            container: crate::menu::lan_container(i, self.container.as_deref()),
+            slots,
+            snapshot: Some(&self.slot_snapshot),
+            ..Default::default()
+        };
+        let mut index = if i < slots.len() {
+            i
+        } else {
+            player_slot(i - slots.len())
+        };
+        if let Some(crafting) = crafting {
+            let range = crafting.grid_slots();
+            context.grid = slots.get(range.clone()).unwrap_or_default();
+            context.result = slots
+                .get(crafting.result..crafting.result + 1)
+                .unwrap_or_default();
+            context.main_crafting = Some(crafting);
+            if i < slots.len() && range.contains(&i) {
+                context.container = mod_api::MenuContainer::Grid;
+                index = i - range.start;
+            } else if i < slots.len() && i == crafting.result {
+                context.container = mod_api::MenuContainer::Result;
+                index = 0;
+            }
+        }
+        (index, context)
     }
     /// Whether the slot takes part in clicks at all.
     fn enabled(&self, i: usize) -> bool {
@@ -549,21 +587,7 @@ impl View<'_> {
         else {
             return (own, max.min(item_max));
         };
-        let index = self.container.as_ref().map_or(i, |c| {
-            if i < c.len() {
-                i
-            } else {
-                player_slot(i - c.len())
-            }
-        });
-        let context = crate::menu::SlotContext {
-            player: Some(self.guest.uuid),
-            pos: menu.pos.map(|(x, y, z)| [x, y, z]),
-            container: crate::menu::lan_container(i, self.container.as_deref()),
-            slots: self.container.as_deref().unwrap_or_default(),
-            snapshot: Some(&self.slot_snapshot),
-            ..Default::default()
-        };
+        let (index, context) = self.slot_context(i);
         crate::menu::apply_menu_slot_rules(
             rules.slot_rules(),
             &menu.registry_id,
@@ -753,20 +777,7 @@ fn move_to(
                 .as_ref()
                 .filter(|_| view.container.is_some())
             {
-                let c = view.container.as_ref().unwrap();
-                let index = if i < c.len() {
-                    i
-                } else {
-                    player_slot(i - c.len())
-                };
-                let context = crate::menu::SlotContext {
-                    player: Some(view.guest.uuid),
-                    pos: menu.pos.map(|(x, y, z)| [x, y, z]),
-                    container: crate::menu::lan_container(i, Some(c)),
-                    slots: c,
-                    snapshot: Some(&view.slot_snapshot),
-                    ..Default::default()
-                };
+                let (index, context) = view.slot_context(i);
                 if !crate::menu::apply_menu_slot_rules(
                     rules.slot_rules(),
                     &menu.registry_id,
@@ -1877,8 +1888,50 @@ pub(crate) mod tests {
             });
         }
         assert_eq!(slots.get(&world, &g, 0), planks);
-        let read = slots.read(&world, &g).unwrap();
+        let mut read = slots.read(&world, &g).unwrap();
         assert_eq!((&read[0], read[1].is_some()), (&planks, true));
+        {
+            use mod_api::MenuContainer::{Grid, Main, Player, Result};
+            let mut view = View {
+                guest: &mut g,
+                container: Some(&mut read),
+                shulker: false,
+                container_limits: Vec::new(),
+                hidden: &[],
+                slot_snapshot: Default::default(),
+                loop_context: crate::test_resources::server_loop_context(),
+            };
+            let (index, context) = view.slot_context(2);
+            assert_eq!((index, context.container), (1, Grid));
+            assert_eq!(
+                context.slot(Grid, 0).unwrap().item.as_ref(),
+                "minecraft:oak_log"
+            );
+            assert_eq!(context.slot(Result, 0).unwrap().count, 4);
+            assert!(context.slot(Main, 1).is_none());
+            assert!(context.slot(Main, 0).is_none());
+            let (index, context) = view.slot_context(0);
+            assert_eq!((index, context.container), (0, Result));
+            let (index, context) = view.slot_context(5);
+            assert_eq!((index, context.container), (9, Player));
+            let builds = std::cell::Cell::new(0);
+            let build = || {
+                builds.set(builds.get() + 1);
+                mod_api::MenuSlotContext::new(None, None, Vec::new())
+            };
+            view.slot_snapshot.get_or_init(build);
+            view.slot_snapshot.get_or_init(build);
+            assert_eq!(builds.get(), 1);
+            view.set(1, Some(ItemStack::new("minecraft:birch_log", 3)));
+            let (_, context) = view.slot_context(1);
+            assert_eq!(
+                context.slot(Grid, 0).unwrap().item.as_ref(),
+                "minecraft:birch_log"
+            );
+            assert_eq!(context.slot(Grid, 0).unwrap().count, 3);
+            context.snapshot.unwrap().get_or_init(build);
+            assert_eq!(builds.get(), 2, "a mutation starts a fresh snapshot");
+        }
         slots.write(&mut world, &mut g, read);
         let Some(BlockEntity::Mod(m)) = world.block_entities.get(&k) else {
             panic!("not a mod's");

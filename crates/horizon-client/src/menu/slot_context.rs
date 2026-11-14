@@ -1,7 +1,9 @@
 //! The context a `menu_slot_rules` ask is given: which of the menu's containers the slot is in,
 //! and one copy of the containers' slots for the parts per click plan, built only when a part
 //! listens (see [`SlotSnapshot`]).
-use super::{Env, GRID, ItemStack, MAIN, Menu, PLAYER, RESULT, SlotContext};
+use super::{
+    CONTAINER_MAX, Env, GRID, ItemStack, MAIN, Menu, PLAYER, RESULT, SlotContext, SlotRules,
+};
 use mod_api::{MenuContainer, MenuSlotContext};
 use std::cell::OnceCell;
 
@@ -21,7 +23,7 @@ impl SlotSnapshot {
     pub fn is_built(&self) -> bool {
         self.0.get().is_some()
     }
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.0.take();
     }
 }
@@ -55,7 +57,14 @@ impl SlotContext<'_> {
     /// What slot `index` of `container` holds, keyed as `MenuSlotContext::slot`.
     pub fn slot(&self, container: MenuContainer, index: usize) -> Option<&ItemStack> {
         let slots = match container {
-            MenuContainer::Main => self.slots,
+            MenuContainer::Main => {
+                if self.main_crafting.is_some_and(|crafting| {
+                    crafting.grid_slots().contains(&index) || index == crafting.result
+                }) {
+                    return None;
+                }
+                self.slots
+            }
             MenuContainer::Grid => self.grid,
             MenuContainer::Result => self.result,
             _ => &[],
@@ -79,9 +88,30 @@ impl Menu {
             pos: self.state.block_pos,
             container: key(container),
             slots: &self.state.containers[MAIN],
+            main_crafting: None,
             grid: &self.state.containers[GRID],
             result: &self.state.containers[RESULT],
             snapshot: Some(&self.state.slot_snapshot),
         }
     }
+}
+
+/// Apply the scoped rule to a slot's own answers, then enforce its item cap. The rules are asked
+/// here, while the click plans, and only for a menu type a part answers; with none lent the
+/// slot's answers stand.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_menu_slot_rules(
+    rules: Option<&dyn SlotRules>,
+    menu: &str,
+    slot: usize,
+    stack: &ItemStack,
+    context: SlotContext<'_>,
+    mut may_place: bool,
+    mut max_stack: u32,
+    item_max: u32,
+) -> (bool, u32) {
+    if let Some(rules) = rules.filter(|rules| rules.listens(menu)) {
+        rules.rule(menu, slot, stack, context, &mut may_place, &mut max_stack);
+    }
+    (may_place, max_stack.clamp(1, CONTAINER_MAX).min(item_max))
 }
