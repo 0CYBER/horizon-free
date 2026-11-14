@@ -166,7 +166,7 @@ class WorkflowTests(unittest.TestCase):
         for name in ("runtime-leases", "launcher-processes"):
             self.assertEqual(jobs[name]["if"], "inputs.commit != '' || github.event_name == 'workflow_dispatch'")
 
-    def test_each_launcher_test_target_runs_once_and_spawning_ones_run_daily_in_release(self):
+    def test_each_launcher_test_target_runs_once_and_spawning_ones_run_daily(self):
         import yaml
 
         jobs = yaml.safe_load((ROOT / ".github/workflows/launcher-windows-check.yml").read_text())["jobs"]
@@ -177,7 +177,8 @@ class WorkflowTests(unittest.TestCase):
         every = {path.stem for path in (ROOT / "launcher/tests").glob("*.rs")}
         self.assertEqual(targets("launcher-processes"), spawning)
         self.assertEqual(targets("test"), every - spawning)
-        self.assertIn("--release", next(s["run"] for s in jobs["launcher-processes"]["steps"] if "--test" in s.get("run", "")))
+        # The product reserves the stack the debug launcher needs (#4052): no release-only workaround.
+        self.assertNotIn("--release", next(s["run"] for s in jobs["launcher-processes"]["steps"] if "--test" in s.get("run", "")))
 
     def test_other_pull_request_workflows_skip_what_compiles_for_forks(self):
         for workflow, jobs in (("cargo-horizon-mod.yml", ("build",)), ("modding-book.yml", ("book",))):

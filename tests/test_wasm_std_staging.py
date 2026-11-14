@@ -15,6 +15,23 @@ def resolve(expression, matrix, env):
 
 
 class WasmStdStagingTests(unittest.TestCase):
+    def test_build_prerequisites_cover_wasm_and_hosted_matrix_legs(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/game-build.yml").read_text())
+        exporters = workflow["jobs"]["exporters"]["steps"]
+        toolchain = next(step for step in exporters if step.get("uses", "").startswith("dtolnay/rust-toolchain@"))
+        components = {component.strip() for component in toolchain["with"]["components"].split(",")}
+        self.assertTrue({"rust-src", "rustfmt"}.issubset(components))
+        build = workflow["jobs"]["build"]
+        tools = next(step for step in build["steps"] if step.get("name") == "Workflow-owned validation tools")
+        self.assertIn("tools/ci/rust-version", tools["with"]["sparse-checkout"].splitlines())
+        for matrix in build["strategy"]["matrix"]["include"]:
+            with self.subTest(platform=matrix["name"]):
+                runner = {"os": "macOS" if matrix.get("mac") else "Windows" if matrix["name"].startswith("windows") else "Linux",
+                          "environment": "github-hosted"}
+                condition = tools.get("if", "true").replace("runner.", "github.runner.")
+                condition = condition.replace("!matrix.musl", "matrix.musl == false")
+                self.assertTrue(expression_value(condition, {"runner": runner}, matrix={"musl": False, **matrix}))
+
     def test_every_matrix_packer_reads_the_download_directory(self):
         job = yaml.safe_load((ROOT / ".github/workflows/game-build.yml").read_text())["jobs"]["build"]
         download, = [step for step in job["steps"]

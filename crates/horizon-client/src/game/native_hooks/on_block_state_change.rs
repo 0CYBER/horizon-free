@@ -12,8 +12,9 @@ impl GameLevel<'_> {
         state: BlockStateId,
         old: BlockStateId,
         new: BlockStateId,
+        predicted: bool,
     ) {
-        self.fire_on_block_state_change(dimension, pos, state, old, new);
+        self.fire_on_block_state_change(dimension, pos, state, old, new, predicted);
     }
 
     /// The states whose parts hear a change from `old` to `new`: `old`'s, then `new`'s when
@@ -41,7 +42,8 @@ impl GameLevel<'_> {
         old: BlockStateId,
         new: BlockStateId,
     ) -> bool {
-        self.state_change_listeners(old, new).next().is_some()
+        mod_api::__private::has_scoped_hook(mod_api::HookId::OnBlockStateChange)
+            && self.state_change_listeners(old, new).next().is_some()
     }
 
     /// `LevelAccess::observe_block_state_change`, and a client's own block writes: the parts
@@ -52,10 +54,14 @@ impl GameLevel<'_> {
         pos: BlockPos,
         old: BlockStateId,
         new: BlockStateId,
+        predicted: bool,
     ) {
+        if old == new || !mod_api::__private::has_scoped_hook(mod_api::HookId::OnBlockStateChange) {
+            return;
+        }
         for state in self.state_change_listeners(old, new) {
             if let Err(error) = horizon_client::crash::contain(|| {
-                self.native_on_block_state_change(self.dimension, pos, state, old, new);
+                self.native_on_block_state_change(self.dimension, pos, state, old, new, predicted);
             }) {
                 log::warn!("on_block_state_change callback failed: {error}");
             }

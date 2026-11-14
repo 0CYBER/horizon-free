@@ -609,7 +609,7 @@ pub(super) fn save_without_metadata(
 
 /// Whether the block entity keeps a `CustomName` (`Nameable`): its saved form does.
 fn nameable(pos: (i32, i32, i32), entity: &BlockEntity, block: &str) -> bool {
-    let mut tag = save::encode_block_entity(pos, entity, block);
+    let mut tag = save::block_entity_encode::encode(pos, entity, block);
     if let Tag::Compound(map) = &mut tag {
         map.insert("CustomName".into(), Tag::String("x".into()));
     }

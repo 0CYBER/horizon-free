@@ -28,11 +28,11 @@ fn escape(part: &str) -> String {
 
 fn waypoint_path(save: &str, dimension: &str) -> Option<ConfigPath> {
     let (save, dimension) = (escape(save), escape(dimension));
-    ConfigPath::new(&format!("waypoints/{save}/{dimension}.json")).ok()
+    ConfigPath::new(&format!("{save}/{dimension}.json")).ok()
 }
 
 fn read_waypoint(host: &dyn ClientHost, path: &ConfigPath) -> Option<[i32; 3]> {
-    match host.config_files().read(path) {
+    match host.data_files().read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes).ok(),
         Err(ConfigFileError::NotFound) => None,
         Err(error) => {
@@ -68,7 +68,7 @@ impl Hooks for Waypoints {
             }))
         {
             let bytes = serde_json::to_vec(&position).expect("integer coordinates serialize");
-            match host.config_files().write(&path, &bytes) {
+            match host.data_files().write(&path, &bytes) {
                 Ok(()) => {
                     let mut markers = self.0.lock().unwrap();
                     markers.path = Some(path);
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn waypoint_files_are_scoped_to_the_save_and_dimension() {
         let overworld = waypoint_path("Test World", "minecraft:overworld").unwrap();
-        assert!(overworld.owned_by("waypoints"));
+        assert_eq!(overworld.as_str(), "Test World/minecraft%3Aoverworld.json");
         assert_ne!(
             Some(overworld.clone()),
             waypoint_path("Test World", "minecraft:the_nether")

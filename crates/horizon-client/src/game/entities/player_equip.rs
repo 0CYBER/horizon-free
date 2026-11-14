@@ -47,7 +47,16 @@ impl Game<'_> {
         new: Option<&ItemStack>,
     ) {
         if !same(old, new) {
-            self.player_equipped(slot, new);
+            if self.transactions.is_empty() {
+                self.player_equipped(slot, new);
+                return;
+            }
+            let uuid = self.native_acting_id();
+            self.after_commit(super::transactions::After::PlayerEquip(
+                uuid,
+                slot.to_owned(),
+                new.cloned(),
+            ));
         }
     }
 

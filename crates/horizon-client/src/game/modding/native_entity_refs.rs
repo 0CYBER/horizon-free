@@ -1945,10 +1945,10 @@ pub(super) mod tests {
             // A block with no part answers as before.
             assert!(!asks("minecraft:stone", Land));
             // A reload without the mod's answers takes them back.
-            game.res
-                .rest()
-                .mob_data
-                .set_pathfindable(false, |_, _, vanilla| vanilla);
+            game.res.mob_data().resolve_parts(
+                game.res.facts(),
+                &horizon_client::mobs::data::PartAnswers::default(),
+            );
             assert!(!asks("minecraft:glass", Land));
             assert!(asks("minecraft:air", Land));
         });

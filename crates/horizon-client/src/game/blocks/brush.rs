@@ -194,7 +194,7 @@ impl Game<'_> {
             return;
         };
         let table = table.to_string_lossy();
-        let mut tag = save::encode_block_entity(
+        let mut tag = save::block_entity_encode::encode(
             key,
             &BlockEntity::Brushable(b.clone()),
             "minecraft:brushable_block",

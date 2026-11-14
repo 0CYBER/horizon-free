@@ -80,6 +80,12 @@ Clients send through `ClientHost::send_payload_to_server`; servers use
 handler has no direct world access: enqueue work to obtain the receiving main-thread
 context. Wrong-thread and wrong-side requests return explicit errors.
 
+A client mod leaves the server or world with `host.disconnect(Some(reason))`, at the end of
+the frame and outside every hook: the reason is shown on the disconnect screen, `None` leaves
+as the pause menu's Disconnect does, a request belongs to the world it was made in, and
+`DisconnectError::Unavailable` answers when no world is joined. (A server mod disconnects a
+player with `player.disconnect`, documented with the player services.)
+
 `Queued` means accepted locally, not acknowledged by the peer. Sending reserves
 physical/provider credit before acceptance. Root commit publishes staged sends;
 rollback publishes none. Replies enter a subsequent receiving turn, including

@@ -2117,9 +2117,10 @@ impl Game<'_> {
                 let Some(Arg::Resource(marker)) = ctx.get("timemarker").cloned() else {
                     return Ok(0);
                 };
-                let Some(m) = (clock == "minecraft:overworld")
+                let Some((m, target)) = (clock == "minecraft:overworld")
                     .then(|| self.ui.markers.get(&marker).copied())
                     .flatten()
+                    .and_then(|m| Some((m, m.resolve(total)?)))
                 else {
                     return Err(err(
                         "commands.time.no_time_marker_found",
@@ -2132,7 +2133,6 @@ impl Game<'_> {
                         &[&clock, &marker],
                     ));
                 }
-                let target = m.resolve(total);
                 let mut cancel = false;
                 self.native_time_skip(self.dim.id(), total, target, "command", &mut cancel);
                 if !cancel {

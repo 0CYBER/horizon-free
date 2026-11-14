@@ -320,6 +320,27 @@ pub trait PlayersBackend {
     /// local player's inventory is available.
     #[access(WorldOnly)]
     fn player_inventory(&self, player: PlayerRef) -> Option<Vec<ItemStack>>;
+    /// Side: server.
+    /// The player's non-empty inventory slots by `Inventory`'s numbers, with their
+    /// components: 0 to 35 the main inventory (0 to 8 the hotbar), 36 feet, 37 legs, 38
+    /// chest, 39 head, 40 the off hand, 41 body and 42 saddle
+    /// (`Inventory.EQUIPMENT_SLOT_MAPPING`), lowest first. The numbers
+    /// `player_set_inventory_slot` takes, and for 0 to 35 the `Slot` of a saved player's
+    /// `Inventory` list. None for a player that is not online (stale handle) and on a client.
+    #[access(WorldOnly)]
+    fn player_inventory_slots(&self, player: PlayerRef) -> Option<Vec<(u32, ItemStack)>>;
+    /// Side: server.
+    /// The player's non-empty ender chest slots (`Player.getEnderChestInventory`, 27 slots
+    /// numbered 0 to 26 as the `Slot` of a saved player's `EnderItems`), lowest first. None for
+    /// a stale or unavailable player and on a client.
+    #[access(WorldOnly)]
+    fn player_ender_chest(&self, player: PlayerRef) -> Option<Vec<(u32, ItemStack)>>;
+    /// Side: server.
+    /// The compound mods keep on a server player (NeoForge's `Entity.getPersistentData`),
+    /// saved in their file as `NeoForgeData` beside the keys the game keeps; empty when there
+    /// is none. None for a stale or unavailable player and on a client.
+    #[access(WorldOnly)]
+    fn player_persistent_data(&self, player: PlayerRef) -> Option<Compound>;
     /// Side: both.
     /// `ServerPlayerGameMode.getGameModeForPlayer`; Paper `HumanEntity#getGameMode`.
     /// None for stale, offline or unavailable players (including displaced outer players).
@@ -554,9 +575,14 @@ pub trait PlayersBackendMut {
     /// a command. The menu replaces the one they had open. Its container slots show empty
     /// and their clicks go to the mods (`native_menu_clicked`), as `open_menu`'s do. `extra`
     /// (at most 32 KiB) is what the client's `screen_extra_data` reads, and `pos`, when
-    /// given, its `screen_pos`. The window id, or Ok(None) when a mod cancelled the open.
-    /// Errors: `NotModMenu`, `PlayerUnavailable` (stale, fake or vanilla client), `TooLarge`,
-    /// or `Title` for a title that could not cross.
+    /// given, its `screen_pos`. The old menu closes on the server as a close does (its
+    /// `removed`, `player_container_close`, the cursor stack and crafting grids back to the
+    /// inventory) before the new one is built; `replace` says whether the client is first sent
+    /// a close for it, as for `open_menu`. `MenuReplace::InPlace` sends none: the client keeps
+    /// its screen and mouse until the new screen replaces it. The window id, or Ok(None) when
+    /// a mod cancelled the open. Errors: `NotModMenu`, `PlayerUnavailable` (stale, fake or
+    /// vanilla client), `TooLarge`, or `Title` for a title that could not cross; a cancelled or
+    /// refused open leaves the old menu as it was.
     #[access(WorldOnly)]
     fn player_open_mod_menu(
         &mut self,
@@ -565,6 +591,7 @@ pub trait PlayersBackendMut {
         title: Text,
         extra: Vec<u8>,
         pos: Option<[i32; 3]>,
+        replace: MenuReplace,
     ) -> Result<Option<i32>, OpenMenuError>;
     /// Side: server.
     /// Sends the player `uuid` the whole picture of map `map_id`: 128 x 128
@@ -918,4 +945,68 @@ pub trait PlayersBackendMut {
         state: BlockState,
         update_neighbour_shapes: bool,
     ) -> Result<(), PlayerWorldRefusal>;
+    /// Numbers: 0..35 main (0..8 hotbar), 36..39 feet to head, 40 offhand,
+    /// 41 body, 42 saddle. ItemPlace uses 100..103 for armour and -106 for offhand;
+    /// InventoryMenu has no 41 or 42.
+    /// `Inventory.setItem(slot, stack)` by `player_inventory_slots`' numbers: `stack` (None
+    /// empties it) goes into that slot as `/item replace entity <player> <slot>` puts it,
+    /// without the slot's item check, so a worn slot takes any item; the equip sound and
+    /// equipment changes follow for 36 to 42. The client is sent the slot with the tick's
+    /// inventory sync (`ContainerSetSlot`), as vanilla's `broadcastChanges`. Each refusal
+    /// writes nothing and is named by `PlayerDataRefusal`: `Stale` (no online player behind
+    /// the handle), `Client`, `Dead`, `SlotOutOfRange` (a slot past 42, never a panic) and
+    /// `Stack` (an item the world lacks, a count or damage the item does not allow).
+    /// An open transaction journals this write; an abort restores the previous value.
+    /// Equipment effects wait for the outermost commit.
+    #[access(WorldOnly)]
+    fn player_set_inventory_slot(
+        &mut self,
+        player: PlayerRef,
+        slot: u32,
+        stack: Option<ItemStack>,
+    ) -> Result<(), PlayerDataRefusal>;
+    /// Side: server.
+    /// `PlayerEnderChestContainer.setItem(slot, stack)`: `stack` (None empties it) in ender
+    /// chest slot `slot` (0 to 26). A player looking into their ender chest is sent the slot
+    /// with the open menu's sync. Refuses as `player_set_inventory_slot` does, with
+    /// `SlotOutOfRange { last: 26 }` for a slot past 26 (never a panic).
+    /// An open transaction journals this write; an abort restores the previous value.
+    #[access(WorldOnly)]
+    fn player_set_ender_chest_slot(
+        &mut self,
+        player: PlayerRef,
+        slot: u32,
+        stack: Option<ItemStack>,
+    ) -> Result<(), PlayerDataRefusal>;
+    /// Side: server.
+    /// Gives `stack` as `/give` does, components and all: `Inventory.add` fills matching
+    /// stacks, then empty slots (the selected one first); what does not fit is thrown from
+    /// the player's eyes with no pickup delay and only they may pick it up; a stack that went
+    /// in whole plays the pickup sound. Refuses, with nothing given, with `Stale`, `Client`,
+    /// `Dead` or `Stack`, as `player_set_inventory_slot` does.
+    /// An open transaction journals this write; an abort restores the previous value.
+    /// Overflow drops and pickup sounds wait for the outermost commit.
+    #[access(WorldOnly)]
+    fn player_give_stack(
+        &mut self,
+        player: PlayerRef,
+        stack: ItemStack,
+    ) -> Result<(), PlayerDataRefusal>;
+    /// Side: server.
+    /// Replaces the compound mods keep on a server player (`player_persistent_data`) with
+    /// `data`; an empty compound takes it away. It is saved with the player and never sent to
+    /// a client; changing it raises no notification, so a mod that wants to hear of changes
+    /// keeps its own. On a death respawn and on a player's first exit from the End (before
+    /// the credits) only the `PlayerPersisted` sub-compound is carried to the new player, as
+    /// NeoForge does, and every other key is lost; dimension changes, later End exits and
+    /// teleports keep the whole compound. For ports: new mods use attachments. Refuses,
+    /// writing nothing: `Stale`, `Client`, `Dead`, and `TooDeep` for data that would sit 512
+    /// levels deep or more in the player's file.
+    /// An open transaction journals this write; an abort restores the previous value.
+    #[access(WorldOnly)]
+    fn player_set_persistent_data(
+        &mut self,
+        player: PlayerRef,
+        data: Compound,
+    ) -> Result<(), PlayerDataRefusal>;
 }

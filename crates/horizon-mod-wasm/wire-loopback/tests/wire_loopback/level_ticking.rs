@@ -22,6 +22,7 @@ mod_api::impl_host_areas!(World);
 
 #[test]
 fn ticking_reads_round_trip_positions_and_unavailable_answers() {
+    mod_api::__private::initialize().unwrap();
     let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
     let world = World;
     let mut frame = boundary::Frame::default();

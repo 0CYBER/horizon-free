@@ -475,19 +475,22 @@ pub fn ripe_crop(w: &MobWorld, p: [i32; 3]) -> bool {
         .is_some_and(|age| age >= max)
 }
 
-/// The gift loot table of a villager (`GiveGiftToHero.getLootTableToThrow`).
-pub fn gift_table(m: &Mob) -> String {
+/// The gift loot table of a villager (`GiveGiftToHero.getLootTableToThrow`),
+/// from `neoforge:raid_hero_gifts` where a pack gives it.
+pub fn gift_table(m: &Mob, maps: &crate::neoforge_mob_maps::NeoForgeMobMaps) -> String {
     if m.is_baby() {
         return "minecraft:gameplay/hero_of_the_village/baby_gift".into();
     }
     let profession = profession(m.extra.profession.index().unwrap_or(0))
         .id
         .as_str();
-    let name = match profession {
-        "none" | "nitwit" => "unemployed",
-        other => other,
-    };
-    format!("minecraft:gameplay/hero_of_the_village/{name}_gift")
+    maps.hero_gift(&m.extra.profession.id()).unwrap_or_else(|| {
+        let name = match profession {
+            "none" | "nitwit" => "unemployed",
+            other => other,
+        };
+        format!("minecraft:gameplay/hero_of_the_village/{name}_gift")
+    })
 }
 // ---- Gossip, food, breeding and golems.
 

@@ -1233,8 +1233,10 @@ impl Game<'_> {
                         let Some(de) = de else {
                             return Ok((false, 0));
                         };
-                        let st = horizon_client::save::encode_block_entity((0, 0, 0), se, &name);
-                        let dt = horizon_client::save::encode_block_entity((0, 0, 0), de, &name);
+                        let st =
+                            horizon_client::save::block_entity_encode::encode((0, 0, 0), se, &name);
+                        let dt =
+                            horizon_client::save::block_entity_encode::encode((0, 0, 0), de, &name);
                         if st != dt {
                             return Ok((false, 0));
                         }

@@ -8,7 +8,7 @@ use crate::{
     advancements::{Progress, Tree},
     recipe_book::{Category, RecipeIndex, Settings, crafting_category, crafting_station},
 };
-use horizon_protocol::buf::Writer;
+use horizon_protocol::buf::{Codec, Writer};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -415,10 +415,12 @@ impl ServerAdvancements {
         if let Some(d) = &a.display {
             w.nbt(&json_to_nbt(&d.title));
             w.nbt(&json_to_nbt(&d.description));
-            w.varint(sync.id("minecraft:item", &d.icon.item).unwrap_or(0));
-            w.varint(1);
-            w.varint(0);
-            w.varint(0);
+            let icon = super::guest::network_stack(
+                &|name| sync.id("minecraft:item", name).unwrap_or(0),
+                &|registry, name| sync.id(registry, name),
+                &d.icon,
+            );
+            horizon_protocol::item::Template::write(&icon, w);
             w.varint(match d.frame {
                 crate::advancements::Frame::Task => 0,
                 crate::advancements::Frame::Challenge => 1,
@@ -1027,6 +1029,95 @@ mod tests {
         let entry = RecipeBookEntry::read(&mut r).unwrap();
         assert_eq!(r.remaining(), 0, "the entry ends with its flags");
         (sync, entry)
+    }
+
+    #[test]
+    fn advancement_icons_roundtrip_count_damage_and_opposite_glint_overrides() {
+        use horizon_protocol::{
+            item::{Component, component},
+            packets::play::UpdateAdvancements,
+            registry::Ids,
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../horizon-client/tests/fixtures/advancement-icons/data");
+        let tree = Tree::load(&root);
+        let mut sync = SyncData::empty();
+        sync.advancements.kids = tree.children();
+        sync.advancements.layout = tree.layout();
+        sync.advancements.tree = std::sync::Arc::new(tree);
+        sync.builtin.registries.insert(
+            "minecraft:item".into(),
+            Ids::from_names(vec![
+                "minecraft:air".into(),
+                "minecraft:wooden_pickaxe".into(),
+            ]),
+        );
+        let mut types: Vec<_> = (0..=component::ENCHANTMENT_GLINT_OVERRIDE)
+            .map(|i| format!("test:unused_{i}"))
+            .collect();
+        types[component::DAMAGE as usize] = "minecraft:damage".into();
+        types[component::ENCHANTMENT_GLINT_OVERRIDE as usize] =
+            "minecraft:enchantment_glint_override".into();
+        sync.builtin.registries.insert(
+            "minecraft:data_component_type".into(),
+            Ids::from_names(types),
+        );
+        let mut progress = Progress::default();
+        for id in ["horizon_test:glint", "horizon_test:plain"] {
+            progress.grant(id, "done", "2026-01-01 00:00:00 +0000");
+        }
+        let (bytes, _) = sync.advancements.first_snapshot(&sync, &progress, &[], 0);
+        let mut reader = Reader::new(&bytes);
+        let packet = UpdateAdvancements::read(&mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(packet.added.len(), 2);
+        for (id, foil) in [("horizon_test:glint", true), ("horizon_test:plain", false)] {
+            let wire = &packet
+                .added
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap()
+                .display
+                .as_ref()
+                .unwrap()
+                .icon;
+            assert_eq!((wire.item, wire.count, wire.damage()), (1, 3, 7));
+            assert_eq!(
+                wire.component(component::ENCHANTMENT_GLINT_OVERRIDE),
+                Some(&Component::Bool(foil)),
+            );
+            let icon = crate::item_sync::from_network(wire, &sync.builtin, &sync.dynamic);
+            assert_eq!(
+                (&*icon.item, icon.count, icon.damage),
+                ("minecraft:wooden_pickaxe", 3, 7)
+            );
+            assert_eq!(icon.has_foil(None), foil);
+            assert_eq!(
+                icon,
+                sync.advancements
+                    .definition(id)
+                    .unwrap()
+                    .display
+                    .as_ref()
+                    .unwrap()
+                    .icon
+            );
+        }
+        // Only the override changes: same advancement id, item, title, count and damage.
+        let tree = std::sync::Arc::get_mut(&mut sync.advancements.tree).unwrap();
+        let i = tree.by_id["horizon_test:glint"];
+        tree.list[i]
+            .display
+            .as_mut()
+            .unwrap()
+            .icon
+            .data_mut()
+            .set_other(
+                "minecraft:enchantment_glint_override",
+                Some(horizon_core::nbt::Tag::Byte(0)),
+            );
+        let (without_glint, _) = sync.advancements.first_snapshot(&sync, &progress, &[], 0);
+        assert_ne!(bytes, without_glint);
     }
 
     #[test]

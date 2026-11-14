@@ -15,6 +15,8 @@ pub enum Source {
     Pad,
     /// `horizon-ctl`'s `key` and `mouse` and the agent commands that walk and click.
     Agent,
+    /// A mod's `set_mapping_down`.
+    Mod,
 }
 
 impl Source {
@@ -23,6 +25,7 @@ impl Source {
             Source::Keyboard => 1,
             Source::Pad => 2,
             Source::Agent => 4,
+            Source::Mod => 8,
         }
     }
 }

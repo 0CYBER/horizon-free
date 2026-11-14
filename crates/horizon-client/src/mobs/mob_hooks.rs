@@ -1,9 +1,26 @@
 //! `MobHooks`: the native mod hooks the mob AI asks while it decides, and the
 //! `MobWorld` helpers that ask them.
-use super::{Mob, MobWorld, PlayerView, TargetChange, Who};
+use super::{Mob, MobWorld, PlayerView, TargetChange, Who, path::PathType};
+use horizon_world::registry::BlockStateId;
 
 /// Native mod hooks the mob AI asks while it decides.
 pub trait MobHooks {
+    /// Positional block classification, before air and all vanilla rules.
+    /// None declines to vanilla; the host reads the same owning level.
+    fn block_path_type(&self, _state: BlockStateId, _pos: [i32; 3]) -> Option<PathType> {
+        None
+    }
+    /// The neighbour's own classified type and position. A present answer ends
+    /// the scan even when equal to the node's type; None keeps fluid/vanilla fallback.
+    fn adjacent_block_path_type(
+        &self,
+        _state: BlockStateId,
+        _pos: [i32; 3],
+        _path_type: PathType,
+        default: Option<PathType>,
+    ) -> Option<PathType> {
+        default
+    }
     /// `EnderManAngerEvent`: whether a mod keeps enderman `enderman` calm
     /// though `player` stares at it.
     fn enderman_anger_suppressed(&self, enderman: u32, player: &PlayerView) -> bool;

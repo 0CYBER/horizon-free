@@ -378,6 +378,8 @@ impl Game<'_> {
     }
     /// `sendBlockUpdated` of a block entity: the clients load its new update tag.
     pub(super) fn mark_block_entity_updated(&mut self, key: Pos) {
+        self.world
+            .path_type_block_updated(horizon_core::position::BlockPos::new(key.0, key.1, key.2));
         if let Some(log) = self.world.block_log.as_mut() {
             log.push(key);
         }

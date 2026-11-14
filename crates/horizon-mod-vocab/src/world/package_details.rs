@@ -14,7 +14,47 @@ pub enum PackageRuntime {
     Wasm,
 }
 
-/// One `[dependencies]` row of a package's manifest.
+/// Dispatch ordering requested by a manifest dependency.
+///
+/// This changes listener/content ordering only. `None` never removes a code
+/// library's Cargo or wasm link requirements.
+#[derive(horizon_mod_api_macros::Wire)]
+#[wire(internal_field_layouts)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum DependencyOrder {
+    /// The dependency dispatches before its owner (the default).
+    #[default]
+    After,
+    /// The owner dispatches before the dependency.
+    Before,
+    /// Do not impose a dispatch edge.
+    None,
+}
+
+/// The meaning of one manifest declaration about another package.
+#[derive(horizon_mod_api_macros::Wire)]
+#[wire(internal_field_layouts)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DependencyKind {
+    /// A required dependency; code packages also require a physical API library.
+    Required,
+    /// An optional dependency, checked when present.
+    Optional,
+    /// A matching installed package refuses loading.
+    Incompatible,
+    /// A matching installed package produces a warning.
+    Discouraged,
+    /// An ordering-only `load_before` declaration, never a library requirement.
+    LoadBefore,
+}
+
+/// One dependency, incompatibility, discouragement or ordering declaration.
+///
+/// This is the manifest as written, not a side-filtered or override-rewritten
+/// resolution. Inspect `side` against the installation side when needed.
 #[derive(horizon_mod_api_macros::Wire)]
 #[wire(internal_field_layouts)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,29 +62,62 @@ pub enum PackageRuntime {
 pub struct PackageDependency {
     pub(crate) id: String,
     pub(crate) version: String,
-    pub(crate) optional: bool,
+    pub(crate) kind: DependencyKind,
+    pub(crate) order: DependencyOrder,
+    pub(crate) side: crate::Side,
+    pub(crate) reason: Option<String>,
+    pub(crate) url: Option<String>,
 }
 
 impl PackageDependency {
-    /// A dependency on `id` within the semver requirement `version`.
-    pub fn new(id: String, version: String, optional: bool) -> Self {
+    /// A complete readonly declaration. `LoadBefore` uses `*`, `Before`, and
+    /// `Both`; its version is a marker, not a version constraint.
+    pub fn new(
+        id: String,
+        version: String,
+        kind: DependencyKind,
+        order: DependencyOrder,
+        side: crate::Side,
+        reason: Option<String>,
+        url: Option<String>,
+    ) -> Self {
         Self {
             id,
             version,
-            optional,
+            kind,
+            order,
+            side,
+            reason,
+            url,
         }
     }
-    /// The package it depends on.
+    /// The other package's ID.
     pub fn id(&self) -> &str {
         &self.id
     }
-    /// The semver requirement on that package's version, such as `^1`.
+    /// The semver requirement, such as `^1`; `LoadBefore` uses the marker `*`.
     pub fn version(&self) -> &str {
         &self.version
     }
-    /// Whether the dependent loads without it.
-    pub fn optional(&self) -> bool {
-        self.optional
+    /// Whether this is required, optional, incompatible, discouraged or ordering-only.
+    pub fn kind(&self) -> DependencyKind {
+        self.kind
+    }
+    /// The requested dispatch order, independent of physical linking.
+    pub fn order(&self) -> DependencyOrder {
+        self.order
+    }
+    /// Applicable installation side; an integrated server is a client installation.
+    pub fn side(&self) -> crate::Side {
+        self.side
+    }
+    /// The author's explanation, if provided.
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+    /// The author's HTTPS information URL, if provided.
+    pub fn url(&self) -> Option<&str> {
+        self.url.as_deref()
     }
 }
 

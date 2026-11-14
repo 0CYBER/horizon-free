@@ -12,7 +12,7 @@ pub(in crate::game) use fire::{
     BlockDropsCall, BlockScreenEffectDrawCall, ConnectsToCall, EntityChangeBlockPreCall,
     ItemAfterVerticalCollisionCall, UpdateShapeCall,
 };
-use mod_api::{BlockEntityDataSource, BlockEntityRef};
+use mod_api::{BlockEntityDataSource, BlockEntityRef, ClockAdjustment};
 
 use super::native_data_maps::DataMapType;
 use super::{

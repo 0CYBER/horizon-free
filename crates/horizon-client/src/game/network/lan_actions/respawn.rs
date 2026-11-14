@@ -25,6 +25,8 @@ impl Game<'_> {
         {
             attachments.replace_contents(copy);
         }
+        // NeoForge's clone keeps only the `PlayerPersisted` part of a mod's saved compound.
+        self.keep_only_player_persisted(conn);
         self.reinitialize_server_player(uuid, conn);
         // The new `ServerPlayer` is filed where it is placed, untold.
         self.entity_section_forget(entity_id as u32);

@@ -2,12 +2,11 @@
 # Called inside rust:alpine3.22 by game-build.yml, without release credentials.
 set -eu
 
-apk add --no-cache build-base pkgconf linux-headers alsa-lib-dev eudev-dev python3 git
+apk add --no-cache build-base pkgconf linux-headers alsa-lib-dev eudev-dev python3 git bash
 git config --global --add safe.directory /work
-# Match the stable channel used by the other release jobs, not the image's bundled Rust.
-rustup update stable --no-self-update
-export RUSTUP_TOOLCHAIN=stable
-rustup component add llvm-tools
+# Match the shared release/SDK pin, not the image's bundled Rust or the moving stable channel.
+bash tools/ci/rustup_install.sh --profile minimal --component llvm-tools
+export RUSTUP_TOOLCHAIN="$(cat tools/ci/rust-version)"
 
 # Static musl cannot dlopen the graphics/window libraries. Keep audio and controllers,
 # and link against Alpine's native libraries rather than Ubuntu's glibc libraries.

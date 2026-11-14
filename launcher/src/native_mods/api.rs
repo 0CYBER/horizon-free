@@ -837,7 +837,10 @@ mod tests {
         let _ = fs::remove_dir_all(&stage_dir);
         let source = stage_dir.join("crates/horizon-client/src");
         fs::create_dir_all(&source).unwrap();
-        let resolution = super::super::dependencies::Resolution { order: vec![0] };
+        let resolution = super::super::dependencies::Resolution {
+            order: vec![0],
+            warnings: Vec::new(),
+        };
         for text in ["", "pub struct ModEntry { id: &'static str }"] {
             fs::write(source.join("mod_api.rs"), text).unwrap();
             let bundle = super::super::bundle_in(&dir).unwrap().unwrap();
@@ -858,7 +861,10 @@ mod tests {
             &stage_dir,
             &[],
             &[],
-            &super::super::dependencies::Resolution { order: vec![] },
+            &super::super::dependencies::Resolution {
+                order: vec![],
+                warnings: Vec::new(),
+            },
             &internals::Catalog::default(),
         )
         .unwrap());

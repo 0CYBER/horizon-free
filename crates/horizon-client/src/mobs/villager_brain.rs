@@ -747,28 +747,7 @@ fn sense_hurt(m: &mut Mob, w: &MobWorld) {
         mm.hurt_by_entity.clear();
     }
 }
-/// `VillagerHostilesSensor.ACCEPTABLE_DISTANCE_FROM_HOSTILES`.
-fn hostile_distance(s: Species) -> Option<f32> {
-    Some(match s {
-        Species::Drowned
-        | Species::Husk
-        | Species::Vex
-        | Species::Zombie
-        | Species::ZombieVillager => 8.0,
-        Species::Evoker | Species::Illusioner | Species::Ravager => 12.0,
-        Species::Pillager => 15.0,
-        Species::Vindicator | Species::Zoglin => 10.0,
-        _ => return None,
-    })
-}
-fn sense_hostiles(m: &mut Mob, w: &MobWorld) {
-    let hostile = find_closest(m, w, |m, who| {
-        let Who::Mob(id) = who else { return false };
-        let Some(s) = w.seen(id) else { return false };
-        hostile_distance(s.species).is_some_and(|d| m.distance_sqr(s.position) <= f64::from(d * d))
-    });
-    mem(m).nearest_hostile.set_opt(hostile);
-}
+include!("villager_brain/hostile_sensor.rs");
 fn sense_babies(m: &mut Mob, w: &MobWorld) {
     let list = mem_ref(m)
         .and_then(|mm| mm.visible_mobs.get())
@@ -2828,7 +2807,7 @@ impl B {
                 if close {
                     if now - *started > 20 {
                         cx.events.push(MobEvent::ThrowGift {
-                            table: super::villager::gift_table(m),
+                            table: super::villager::gift_table(m, cx.w.mob_maps),
                             from: [m.position.x, m.eye_y() - 0.3, m.position.z],
                             to: [p.position.x, p.position.y, p.position.z],
                         });

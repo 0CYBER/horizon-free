@@ -631,7 +631,7 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::native_entity_refs::tests::with_game;
+    use super::super::native_entity_refs::tests::{with_game, with_game_at};
     use mod_api::{ItemStack, RecipeInput, RecipeLookupError};
 
     fn stack(item: &str) -> Option<ItemStack> {
@@ -713,6 +713,88 @@ mod tests {
             assert_eq!(ids.map(|id| book_ids(game, id)), own);
             assert_eq!(book_ids(game, "zzz:sticks_from_logs").len(), 1);
         });
+    }
+
+    /// A content mod that ships files under `minecraft` (tags, as most do)
+    /// doesn't make vanilla's namespace one of the root's content namespaces:
+    /// listed, `recipe_sources::sources` read every vanilla recipe twice, as
+    /// `stick` and `minecraft:stick`, and the book held two entries of each,
+    /// numbered `n` and `n + 1`, so a viewer's "+" sent the neighbour's id. A
+    /// vanilla recipe has exactly one book id, the server's, synced or not.
+    #[test]
+    #[ignore = "daily"]
+    fn a_synced_vanilla_recipe_has_one_book_id_the_servers() {
+        use std::path::{Path, PathBuf};
+        fn book_ids(game: &mut crate::game::Game<'_>, id: &str) -> Vec<i32> {
+            (game.recipe_book_entries().into_iter())
+                .filter(|e| e.id == id && e.display_id >= 0)
+                .map(|e| e.display_id)
+                .collect()
+        }
+        let base = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+        let scratch =
+            std::env::temp_dir().join(format!("horizon-one-book-id-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let dir = scratch.join("tagger");
+        for (name, text) in [
+            (
+                "horizon-mod.toml",
+                "id = \"tagger\"\nname = \"tagger\"\nversion = \"1.0\"\napi = \"0.2\"\ncapabilities = [\"registries\"]\n",
+            ),
+            (
+                "data/minecraft/tags/item/tagger_extra.json",
+                r#"{"values": ["minecraft:stick"]}"#,
+            ),
+        ] {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let package = horizon_mod_package::Package::read(&dir).unwrap();
+        let tagger = horizon_client::mod_content::ContentMod {
+            id: package.manifest.id.clone(),
+            content: horizon_mod_package::content::Content::read(&dir, &package.manifest).unwrap(),
+            jars: Vec::new(),
+        };
+        let root = scratch.join("root");
+        let inventory = horizon_mod_package::enabled::EnabledMods::new([(
+            "tagger".to_owned(),
+            mod_api::Side::Both,
+        )]);
+        horizon_client::mod_content::build(&base, Path::new(""), &[tagger], &root, &inventory)
+            .unwrap();
+        assert_eq!(horizon_client::mod_content::namespaces(&root), ["tagger"]);
+        with_game_at(root, |game| {
+            let ids = [
+                "minecraft:stick",
+                "minecraft:stick_from_bamboo_item",
+                "minecraft:chest",
+                "minecraft:iron_ingot_from_smelting_raw_iron",
+            ];
+            // The integrated server numbers the book's displays by its index.
+            let server = ids.map(|id| {
+                let index = &game.stations().recipe_index;
+                vec![index.first_display(id).unwrap()]
+            });
+            assert_eq!(ids.map(|id| book_ids(game, id)), server);
+            let types = [
+                "minecraft:crafting_shaped",
+                "minecraft:crafting_shapeless",
+                "minecraft:smelting",
+            ]
+            .map(str::to_owned);
+            let sources = horizon_items::recipe_sources::sources(
+                &game.options.resources,
+                &horizon_world::loot::PackOverlay::NONE,
+            )
+            .unwrap();
+            for part in horizon_client::lan::recipes::encode_content(&types, &sources, false) {
+                game.remote_recipe_content(&part);
+            }
+            assert!(game.synced_recipes().is_some());
+            assert_eq!(ids.map(|id| book_ids(game, id)), server);
+        });
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]

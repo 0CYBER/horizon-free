@@ -26,8 +26,10 @@ horizon-client-lib control::tests::long_tcp_endpoint_opens lib daily network
 horizon-client-lib control::tests::tcp_endpoint_round_trip lib daily network
 horizon-client-lib control::tests::tcp_refuses_a_wrong_token lib daily network
 horizon-client-lib datapack_net::transport::tests::incompressible_large_registry_snapshot_fits_each_frame_and_activates_only_when_complete lib daily slow
+horizon-client-lib item_render::special_parts_tests::a_registered_special_model_draws_its_renderers_resource_models lib daily resources
 horizon-client-lib join_seq::visibility::tests::unbound_passes_block_until_restore_consumption_and_unwind lib daily child-process
 horizon-client-lib lan::conn::tests::profession_mod_missing_refused_before_pairing lib daily child-process
+horizon-client-lib lan::entity::tests::send_on_threads_matches_send_in_order lib daily slow
 horizon-client-lib lan::hub::tests::requeue_matches_the_scan lib daily slow
 horizon-client-lib lan::io_pool::memory_progress_tests::tcp_server_resumes_only_from_writable_readiness lib daily network
 horizon-client-lib lan::io_pool::tests::a_close_ends_a_disconnect_the_client_does_not_take lib daily network
@@ -40,6 +42,8 @@ horizon-client-lib lan::viewed_levels::tests::a_viewed_sound_reaches_a_viewer_ho
 horizon-client-lib lan::viewed_levels::tests::with_no_viewer_no_copy_is_built lib daily network
 horizon-client-lib lan::waypoints::tests::moves_by_receiver_match_the_loop lib daily slow
 horizon-client-lib launch::tests::launch_refuses_a_socket_path_too_long bin:horizon-ctl daily child-process
+horizon-client-lib mobs::villager_client_visual_tests::villager_client_partial_hat_cache_refreshes lib daily resources
+horizon-client-lib mobs::villager_brain::mob_map_tests::hostile_sensor_matches_registered_ids_and_world_snapshot lib daily resources
 horizon-client-lib mobs::world::missing_data_report_tests::missing_mob_data_reports_one_counted_skip_per_test lib daily child-process
 horizon-client-lib mod_content::tests::registered_conditions_tests::failed_condition_build_removes_generated_staging lib daily resources
 horizon-client-lib mod_content::tests::registered_conditions_tests::registered_conditions_select_content_root_tags_and_structure_modifiers lib daily resources
@@ -84,5 +88,4 @@ horizon-client-lib telemetry::tests::benchmark_reports_need_their_own_consent_an
 horizon-client-lib ticket_levels::tests::grid_matches_the_map lib daily slow
 horizon-client-lib ticket_levels::tiled_tests::tiles_match_scalar_levels_with_overlaps_and_portals lib daily slow
 horizon-client-lib title::tests::f5_reloads_the_server_list lib daily network
-horizon-client-lib mobs::villager_client_visual_tests::villager_client_partial_hat_cache_refreshes lib daily resources
-horizon-client-lib item_render::special_parts_tests::a_registered_special_model_draws_its_renderers_resource_models lib daily resources
+horizon-client-lib vanillagen::structure_mobs::tests::structure_maps_reload_without_cross_world_bleed lib daily resources

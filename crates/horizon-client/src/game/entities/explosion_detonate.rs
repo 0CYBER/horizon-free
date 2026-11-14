@@ -23,7 +23,8 @@ impl Game<'_> {
         radius: f32,
         blocks: &mut Vec<[i32; 3]>,
     ) {
-        if !mod_api::__private::listened(mod_api::HookId::ExplosionDetonate) {
+        // `ServerExplosion.hurtEntities` fires it only for a radius of at least 0.00001.
+        if radius < 1.0e-5 || !mod_api::__private::listened(mod_api::HookId::ExplosionDetonate) {
             return;
         }
         let reach = f64::from(radius) * 2.0 + 1.0;

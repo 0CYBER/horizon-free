@@ -76,6 +76,26 @@ pub struct KeyMapping {
     pub label: Text,
 }
 
+/// Why `ClientHost::set_mapping_down` or `ClientHost::click_mapping` refused a mapping.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum MappingError {
+    /// No player is in a world.
+    NoWorld,
+    /// No vanilla mapping has this name.
+    Unknown {
+        /// The name asked for.
+        key: String,
+    },
+    /// A vanilla mapping a player does not play with: one outside the movement, gameplay and
+    /// inventory categories (`key.screenshot`, `key.fullscreen`, `key.chat`...).
+    NotGameplay {
+        /// The name asked for.
+        key: String,
+    },
+}
+
 /// The metadata of a server play packet observed by `Hooks::client_packet`.
 ///
 /// Fields beyond the type id are exposed only for custom payloads. This is

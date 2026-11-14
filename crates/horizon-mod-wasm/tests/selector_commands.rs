@@ -1,15 +1,13 @@
 //! The server resolves selectors before this boundary. This harness exercises the actual
 //! Wasmtime listener and wire transport, not game selector parsing or permission checks.
+#[path = "support/bulk_files.rs"]
+mod bulk_files;
 #[path = "support/no_hooks.rs"]
 mod no_hooks;
 
 use mod_api::*;
 
-struct World;
-impl Host for World {}
-mod_api::impl_host_areas!(World);
-impl ServerHost for World {}
-mod_api::impl_server_host_areas!(World);
+use bulk_files::World;
 
 #[test]
 #[ignore = "requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree"]
@@ -84,7 +82,7 @@ fn real_wasm_command_listener_receives_ordered_selector_handles() {
         mod_api::testing::with_mods(loaded.mods.into(), || {
             mod_api::__private::mark_game_thread();
             let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
-            let mut world = World;
+            let mut world = World::default();
             let source = CommandSource::Console {
                 permission: PermissionLevel::All,
             };
@@ -100,6 +98,28 @@ fn real_wasm_command_listener_receives_ordered_selector_handles() {
                 assert!(
                     ran,
                     "{name}: guest assertions must finish and cancellation must return over the wire"
+                );
+            }
+            for (command, no_world) in [("wasmbulkfiles", false), ("wasmbulkfilesnoworld", true)] {
+                world
+                    .world
+                    .no_world
+                    .store(no_world, std::sync::atomic::Ordering::Relaxed);
+                let mut ran = false;
+                mod_api::dispatch_run_mod_command(
+                    &mut world,
+                    &source,
+                    &CommandInvocation::new(
+                        vec![command.into()],
+                        vec![],
+                        mod_api::DimensionKey::OVERWORLD,
+                        [0.0; 3],
+                    ),
+                    &mut ran,
+                );
+                assert!(
+                    ran,
+                    "{command}: file capability assertions must finish inside wasm"
                 );
             }
             let mut ran = false;

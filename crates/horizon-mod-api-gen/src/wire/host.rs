@@ -58,6 +58,22 @@ fn frame(surface: &mut super::Surface<'_>) -> Result<String, String> {
     for owner in super::imports() {
         let name = snake(owner);
         let path = trait_path(owner);
+        if *owner == "ConfigFiles" {
+            let mut roots = String::new();
+            for (root, source, accessor) in super::FILE_ROOTS {
+                let access = surface
+                    .dropped
+                    .iter()
+                    .chain(surface.methods.iter())
+                    .find(|method| method.owner == *source && method.name == *accessor)
+                    .and_then(|method| method.access.as_deref())
+                    .unwrap_or("WorldOnly");
+                let source = snake(source);
+                writeln!(roots, "{root} => {{ if !mod_api::__private::access_allowed({accessor:?}, mod_api::__private::LoadAccess::{access}) {{ return Err(ServeError::Phase {{ operation: {accessor:?}, phase: mod_api::__private::current_phase() }}); }} Ok(self.{source}()?.{accessor}()) }},").unwrap();
+            }
+            writeln!(methods, "pub unsafe fn config_files(&self, root: u8) -> Result<&'static dyn {path}, ServeError> {{ match root {{ {roots} _ => Err(ServeError::Decode(WireError::Invalid(\"file capability root\"))) }} }}").unwrap();
+            continue;
+        }
         if let Some((_, from, expr)) = super::REACHED.iter().find(|(o, ..)| o == owner) {
             let mutable = from.ends_with("_mut")
                 || (from.is_empty()
@@ -487,6 +503,9 @@ impl Cx {
         } else {
             String::new()
         };
+        if m.owner == "ConfigFiles" {
+            body.push_str("let file_root: u8 = input.take()?; if file_root > 2 { return Err(ServeError::Decode(WireError::Invalid(\"file capability root\"))); }");
+        }
         if m.ret == Ty::Str(super::ty::Str::Static) {
             body.push_str("let static_ack: u32 = input.take()?; unsafe { (&*cx).check_static_ack(static_ack)?; }");
         }
@@ -544,6 +563,8 @@ impl Cx {
                 "unsafe {{ (&*cx).held.get(held_id).map_err(|_| ServeError::Stale)?.downcast_ref::<OwnerThread<std::sync::Arc<dyn {}>>>().ok_or(ServeError::Stale)?.get()?.clone() }}",
                 trait_path(m.owner)
             )
+        } else if m.owner == "ConfigFiles" {
+            "unsafe { (&*cx).frame()?.config_files(file_root)? }".to_string()
         } else {
             format!(
                 "unsafe {{ (&*cx).frame()?.{}{}()? }}",
@@ -554,6 +575,7 @@ impl Cx {
         let accessor = super::REACHED
             .iter()
             .find(|(owner, _, _)| *owner == m.owner)
+            .filter(|_| m.owner != "ConfigFiles")
             .and_then(|_| {
                 surface.dropped.iter().find(|candidate| {
                     super::frame_accessor(candidate)

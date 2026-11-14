@@ -573,6 +573,13 @@ impl Game<'_> {
         stack: Option<ItemStack>,
         effects: bool,
     ) -> bool {
+        if matches!(
+            s,
+            Slot::Inv(_) | Slot::MainHand | Slot::Armor(_) | Slot::Offhand | Slot::Equipment(_)
+        ) {
+            let uuid = self.native_acting_id();
+            self.journal_player(uuid);
+        }
         match s {
             Slot::Contents(..) => false,
             Slot::ContentItem(parent, component, index) => {
@@ -609,7 +616,9 @@ impl Game<'_> {
                     let old = std::mem::replace(slot, stack.clone());
                     let name = ["head", "chest", "legs", "feet"][*i];
                     self.player_on_equip(name, old.as_ref(), stack.as_ref());
-                    self.apply_equipment();
+                    if self.transactions.is_empty() {
+                        self.apply_equipment();
+                    }
                     true
                 }
                 None => false,
@@ -634,7 +643,16 @@ impl Game<'_> {
             }
             Slot::Ender(i) => match self.ender_items.get_mut(*i) {
                 Some(slot) => {
-                    *slot = stack;
+                    *slot = stack.clone();
+                    // An open ender chest menu shows a copy, which closing copies back
+                    // over `ender_items`: the write goes into the copy as well.
+                    if let Some(key) = self.ender_open
+                        && let Some(BlockEntity::Chest(items)) =
+                            self.world.block_entities.get_mut(&key)
+                        && let Some(open) = items.get_mut(*i)
+                    {
+                        *open = stack;
+                    }
                     true
                 }
                 None => false,

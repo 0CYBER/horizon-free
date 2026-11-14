@@ -663,6 +663,16 @@ fn clock_time_takes_a_host(host: &dyn Host, level: LevelRef) -> Option<i64> {
     level.clock_time(host)
 }
 
+/// Compile-only: a mod reads when a level's own clock next reaches a time marker.
+#[allow(dead_code)]
+fn clock_marker_time_takes_a_host(
+    host: &dyn Host,
+    level: LevelRef,
+    marker: &crate::Identifier,
+) -> Option<i64> {
+    level.clock_marker_time(host, marker)
+}
+
 /// Compile-only: a mod reads a level's sea level from a handle on a shared host.
 #[allow(dead_code)]
 fn sea_level_takes_a_host(host: &dyn Host, level: LevelRef) -> Option<i32> {

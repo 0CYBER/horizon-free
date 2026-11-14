@@ -1,3 +1,4 @@
 # The daily tests of horizon-launcher: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
 # where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-launcher cli_settings_work_with_one_mib_process_stack test:startup daily child-process
 horizon-launcher native_mods::tests::each_command_logs_its_time lib daily child-process

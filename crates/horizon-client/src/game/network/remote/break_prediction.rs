@@ -27,6 +27,7 @@ impl Game<'_> {
         let air = self.world.air;
         if self.world.set(pos[0], pos[1], pos[2], air).is_ok() {
             self.world.block_entities.remove(&(pos[0], pos[1], pos[2]));
+            self.client_block_written(pos, state, air, true);
         }
         self.mining = None;
     }

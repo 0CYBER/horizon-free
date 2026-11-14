@@ -143,6 +143,10 @@ mod tests {
             id: id.into(),
             requirement: semver::VersionReq::STAR,
             optional,
+            side: horizon_mod_package::manifest::Side::Both,
+            reason: None,
+            url: None,
+            order: mod_vocab::DependencyOrder::After,
         };
         let (on_lib, on_addon, maybe_lib) = (
             [dep("lib", false)],

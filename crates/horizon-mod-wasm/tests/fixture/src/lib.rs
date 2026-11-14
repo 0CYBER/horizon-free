@@ -5,6 +5,8 @@ static ENTITY_PRE_CALLS: AtomicU32 = AtomicU32::new(0);
 static ENTITY_POST_CALLS: AtomicU32 = AtomicU32::new(0);
 
 pub mod area_macros;
+pub mod block_state_notice;
+pub mod bulk_files;
 pub mod capability_registration;
 pub mod cauldron;
 pub mod datapack;
@@ -14,6 +16,7 @@ pub mod lending;
 pub mod matrix;
 pub mod movement;
 pub mod part_state;
+pub mod predicted_use;
 pub mod projectile_owner;
 pub mod replace;
 pub mod runtime_environment;
@@ -33,6 +36,23 @@ pub struct Mod;
 
 #[mod_api::horizon_mod]
 impl Hooks for Mod {
+    fn entity_interact(
+        &self,
+        host: mod_api::HostSide<'_>,
+        event: &mut mod_api::EntityInteractEvent<'_>,
+    ) -> Option<mod_api::InteractionResult> {
+        predicted_use::entity_interact(host, event)
+    }
+
+    fn client_packet_send(
+        &self,
+        _: &dyn mod_api::ClientHost,
+        event: &mut mod_api::ClientPacketSendEvent<'_>,
+    ) -> mod_api::Flow {
+        predicted_use::packet(event);
+        mod_api::Flow::Continue
+    }
+
     fn living_death(
         &self,
         host: &mut dyn mod_api::ServerHost,
@@ -117,6 +137,9 @@ impl Hooks for Mod {
         _: &mut dyn mod_api::ClientHost,
         event: &mut mod_api::InteractionKeyMappingTriggeredEvent,
     ) -> mod_api::Flow {
+        if predicted_use::STATE.lock().unwrap().0[0] != 0 {
+            return mod_api::Flow::Continue;
+        }
         event.swing_hand = event.attempt == mod_api::InteractionAttempt::Held;
         if event.hand == mod_api::Hand::Off {
             mod_api::Flow::Cancel
@@ -136,6 +159,8 @@ impl Hooks for Mod {
             mod_api::Command::new("wasmentities <targets:entities>"),
             mod_api::Command::new("wasmplayer <target:player>"),
             mod_api::Command::new("wasmcauldron"),
+            mod_api::Command::new("wasmbulkfiles"),
+            mod_api::Command::new("wasmbulkfilesnoworld"),
         ]);
     }
 
@@ -144,6 +169,17 @@ impl Hooks for Mod {
         host: &mut dyn mod_api::ServerHost,
         event: &mut mod_api::RunModCommandEvent<'_>,
     ) -> mod_api::Flow {
+        match event.command.literals.first().map(String::as_str) {
+            Some("wasmbulkfiles") => {
+                bulk_files::check(host);
+                return mod_api::Flow::Cancel;
+            }
+            Some("wasmbulkfilesnoworld") => {
+                bulk_files::no_world(host);
+                return mod_api::Flow::Cancel;
+            }
+            _ => {}
+        }
         if event.command.literals.first().map(String::as_str) == Some("wasmcauldron") {
             cauldron::read(host);
             return mod_api::Flow::Cancel;
@@ -266,10 +302,12 @@ impl Hooks for Mod {
     }
 
     fn register(&self, registrar: &mut dyn mod_api::Registrar, cx: &mod_api::RegistrationContext) {
+        block_state_notice::register(registrar, cx);
         runtime_environment::register(cx);
         capability_registration::register(registrar, cx);
         game_payload::register(registrar);
         interaction::register(registrar);
+        predicted_use::register(registrar);
         cauldron::register(registrar);
         tick_reply::register(registrar);
         part_state::register(registrar);

@@ -966,7 +966,7 @@ impl Game<'_> {
     /// The time of the level's own clock (its dimension type's `default_clock`) in ticks: what the
     /// level's sky, spawning and beds go by, and what `/time` sets there. None for a level without
     /// a default clock, a stale handle and a client.
-    pub(super) fn level_clock_time(&self, level: LevelRef) -> Option<i64> {
+    pub(in crate::game) fn level_clock_time(&self, level: LevelRef) -> Option<i64> {
         self.native_level_read_world(level)?;
         if !self.is_logical_server() {
             return None;

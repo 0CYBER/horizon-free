@@ -30,6 +30,61 @@ fn package_snapshot(
             (key.clone(), value)
         })
         .collect();
+    let dependencies = manifest
+        .dependencies
+        .iter()
+        .map(|(id, declaration)| {
+            let details = declaration.details();
+            mod_api::PackageDependency::new(
+                id.clone(),
+                details.version.to_string(),
+                if details.optional {
+                    mod_api::DependencyKind::Optional
+                } else {
+                    mod_api::DependencyKind::Required
+                },
+                details.order,
+                details.side,
+                details.reason,
+                details.url,
+            )
+        })
+        .chain(
+            [
+                (
+                    &manifest.incompatible,
+                    mod_api::DependencyKind::Incompatible,
+                ),
+                (&manifest.discouraged, mod_api::DependencyKind::Discouraged),
+            ]
+            .into_iter()
+            .flat_map(|(rules, kind)| {
+                rules.iter().map(move |(id, declaration)| {
+                    let details = declaration.details();
+                    mod_api::PackageDependency::new(
+                        id.clone(),
+                        details.version.to_string(),
+                        kind,
+                        mod_api::DependencyOrder::None,
+                        details.side,
+                        details.reason,
+                        details.url,
+                    )
+                })
+            }),
+        )
+        .chain(manifest.load_before.iter().map(|id| {
+            mod_api::PackageDependency::new(
+                id.clone(),
+                "*".into(),
+                mod_api::DependencyKind::LoadBefore,
+                mod_api::DependencyOrder::Before,
+                mod_api::Side::Both,
+                None,
+                None,
+            )
+        }))
+        .collect();
     mod_api::PackageInfo::new(
         manifest.id.clone(),
         manifest.version.clone(),
@@ -39,10 +94,7 @@ fn package_snapshot(
             .chain(&manifest.namespaces)
             .cloned()
             .collect(),
-        horizon_mod_package::dependencies::from_manifest(&manifest.dependencies)
-            .into_iter()
-            .map(|d| mod_api::PackageDependency::new(d.id, d.requirement.to_string(), d.optional))
-            .collect(),
+        dependencies,
     )
     .with_details(details)
 }
@@ -104,6 +156,59 @@ mod tests {
     }
 
     #[test]
+    fn package_metadata_keeps_every_declaration_without_side_or_override_filtering() {
+        let source = manifest(
+            "load_before=['later']\n[dependencies]\nbase={version='^1',optional=true,order='none',side='server',reason='Shared API',url='https://example.test/api'}\n[incompatible]\nbad={version='<2',side='client',reason='Conflict'}\n[discouraged]\nslow='*'",
+        );
+        let snapshot = package_snapshot(&source, mod_api::PackageKind::Content, None, false);
+        let rows = snapshot.dependencies();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(
+            (
+                rows[0].id(),
+                rows[0].kind(),
+                rows[0].order(),
+                rows[0].side()
+            ),
+            (
+                "base",
+                mod_api::DependencyKind::Optional,
+                mod_api::DependencyOrder::None,
+                mod_api::Side::Server
+            )
+        );
+        assert_eq!(rows[0].reason(), Some("Shared API"));
+        assert_eq!(rows[0].url(), Some("https://example.test/api"));
+        assert_eq!(
+            (rows[1].id(), rows[1].kind(), rows[1].side()),
+            (
+                "bad",
+                mod_api::DependencyKind::Incompatible,
+                mod_api::Side::Client
+            )
+        );
+        assert_eq!(rows[1].reason(), Some("Conflict"));
+        assert_eq!(
+            (rows[2].id(), rows[2].kind()),
+            ("slow", mod_api::DependencyKind::Discouraged)
+        );
+        assert_eq!(
+            (
+                rows[3].id(),
+                rows[3].kind(),
+                rows[3].version(),
+                rows[3].order()
+            ),
+            (
+                "later",
+                mod_api::DependencyKind::LoadBefore,
+                "*",
+                mod_api::DependencyOrder::Before
+            )
+        );
+    }
+
+    #[test]
     fn package_metadata_keeps_declared_side_and_namespace_order() {
         for (side, expected) in [
             ("client", mod_api::Side::Client),
@@ -143,8 +248,8 @@ mod tests {
             panic!("one dependency")
         };
         assert_eq!(
-            (dependency.id(), dependency.version(), dependency.optional()),
-            ("other", "^1", true)
+            (dependency.id(), dependency.version(), dependency.kind()),
+            ("other", "^1", mod_api::DependencyKind::Optional)
         );
         assert_eq!(
             info.property("tier"),

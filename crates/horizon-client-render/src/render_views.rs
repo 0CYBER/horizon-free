@@ -1,4 +1,5 @@
 use glam::{DVec3, Mat4, Vec4};
+use mod_api::LevelRef;
 use std::fmt;
 
 /// The most world views ([`crate::render_slots::world_views`]) one frame draws.
@@ -39,6 +40,8 @@ pub struct WorldView {
     pub mirror: bool,
     /// The view this one is seen in ([`WorldView::with_parent`]).
     pub parent: Option<u64>,
+    /// The level the view draws ([`WorldView::with_level`]); `None` is the player's own.
+    pub level: Option<LevelRef>,
 }
 
 impl WorldView {
@@ -61,6 +64,7 @@ impl WorldView {
             clip_plane: None,
             mirror: false,
             parent: None,
+            level: None,
         }
     }
 
@@ -101,6 +105,15 @@ impl WorldView {
             parent: Some(parent),
             ..self
         }
+    }
+
+    /// Draws the level `level`, a handle from `host.level(dimension)`: `None` is the player's own
+    /// level, and so is a handle naming it. Viewed levels are not drawn yet: a view of any other
+    /// level, an open viewed one, one whose handle is stale (its epoch changed) or one closed or
+    /// never open, is refused as [`WorldViewRefusalReason::Level`]. The handle is resolved once a
+    /// frame, so a handle that goes stale is refused from the next frame on.
+    pub fn with_level(self, level: Option<LevelRef>) -> Self {
+        Self { level, ..self }
     }
 
     /// Why its values cannot be drawn on a device whose textures are at most `max_side` pixels
@@ -218,6 +231,9 @@ pub enum WorldViewRefusalReason {
     /// The frame turned out to be the title screen's or a loading screen's, which draw no view:
     /// refused after its push, which could not know.
     TitleScreen,
+    /// Its level ([`WorldView::with_level`]) is not the player's own: viewed levels are not drawn
+    /// yet, and a stale, closed or never open one is refused the same way.
+    Level,
 }
 
 impl fmt::Display for WorldViewRefusal {
@@ -244,6 +260,10 @@ impl fmt::Display for WorldViewRefusal {
                 "its {pixels} pixels are over the {left} left of {WORLD_VIEW_PIXEL_BUDGET}"
             ),
             R::TitleScreen => write!(f, "the title or a loading screen draws no view"),
+            R::Level => write!(
+                f,
+                "its level is not the player's own, which is all that is drawn"
+            ),
         }
     }
 }
@@ -294,6 +314,9 @@ pub struct WorldViews {
     pixels: u64,
     /// The device's largest texture side (`max_texture_dimension_2d`).
     max_side: u32,
+    /// The player's own level this frame, which the game resolved before the views were asked
+    /// for (its key and the client level's epoch); `None` before login.
+    own_level: Option<LevelRef>,
     logged: Logged,
 }
 
@@ -313,9 +336,16 @@ impl WorldViews {
         self.max_side = max_side;
     }
 
+    /// The player's own level this frame ([`WorldView::with_level`]): a view naming it is drawn
+    /// as one naming none, and one naming any other level is refused. Kept across `begin`.
+    pub fn set_own_level(&mut self, own_level: Option<LevelRef>) {
+        self.own_level = own_level;
+    }
+
     /// Asks for `view` this frame, or refuses it, naming it and why: a value out of range, an
     /// id already pushed, a parent not pushed before it, a depth past [`MAX_WORLD_VIEW_DEPTH`],
-    /// past [`MAX_WORLD_VIEWS`] views or past [`WORLD_VIEW_PIXEL_BUDGET`] pixels.
+    /// past [`MAX_WORLD_VIEWS`] views, past [`WORLD_VIEW_PIXEL_BUDGET`] pixels or a level other
+    /// than the player's own.
     pub fn push(&mut self, view: WorldView) -> Result<(), WorldViewRefusal> {
         match self.depth_for(&view) {
             Ok(depth) => {
@@ -340,6 +370,9 @@ impl WorldViews {
         use WorldViewRefusalReason as R;
         if let Some(reason) = view.out_of_range(self.max_side) {
             return Err(reason);
+        }
+        if view.level.is_some_and(|l| Some(l) != self.own_level) {
+            return Err(R::Level);
         }
         if self.views.iter().any(|v| v.id == view.id) {
             return Err(R::DuplicateId);
@@ -417,6 +450,7 @@ fn pixels(view: &WorldView) -> u64 {
 mod tests {
     use super::*;
     use WorldViewRefusalReason as R;
+    use mod_api::{DimensionKey, WorldEpoch};
 
     fn view(id: u64, fov: f32, size: [u32; 2]) -> WorldView {
         WorldView::new(id, DVec3::new(1.0, 70.0, -3.0), 30.0, 10.0, fov, size)
@@ -625,5 +659,71 @@ mod tests {
             let _ = views.push(view(id, 0.5, [64, 64]));
         }
         assert_eq!(views.logged(), 64);
+    }
+
+    /// The player's own level, named explicitly, resolves like no level at all: taken, and
+    /// nothing else of the view changes.
+    #[test]
+    fn the_players_own_level_named_resolves_like_none() {
+        let own = LevelRef::new(WorldEpoch::new(7), DimensionKey::OVERWORLD);
+        let mut views = WorldViews::new(MAX_WORLD_VIEW_SIDE);
+        views.set_own_level(Some(own));
+        let plain = view(1, 70.0, [64, 64]);
+        assert_eq!(views.push(plain), Ok(()));
+        assert_eq!(views.push(view(2, 70.0, [64, 64]).with_level(None)), Ok(()));
+        let named = view(3, 70.0, [64, 64]).with_level(Some(own));
+        assert_eq!(views.push(named), Ok(()));
+        assert_eq!(
+            views.views()[2],
+            WorldView {
+                id: 3,
+                level: Some(own),
+                ..plain
+            }
+        );
+        assert_eq!(ids(&views), [1, 2, 3]);
+    }
+
+    /// A viewed level the server keeps open is not the player's own, and no view of it is drawn
+    /// yet: refused as `Level`, logged once, and the views of the player's level are unaffected.
+    #[test]
+    fn an_open_viewed_level_is_refused() {
+        let own = LevelRef::new(WorldEpoch::new(7), DimensionKey::OVERWORLD);
+        let nether = LevelRef::new(WorldEpoch::new(7), DimensionKey::NETHER);
+        let mut views = WorldViews::new(MAX_WORLD_VIEW_SIDE);
+        for _ in 0..3 {
+            views.begin(MAX_WORLD_VIEW_SIDE);
+            views.set_own_level(Some(own));
+            let viewed = view(1, 70.0, [64, 64]).with_level(Some(nether));
+            assert_eq!(views.push(viewed), refused(1, R::Level));
+            assert_eq!(views.push(view(2, 70.0, [64, 64])), Ok(()));
+        }
+        assert_eq!(ids(&views), [2]);
+        assert_eq!(views.logged(), 1);
+    }
+
+    /// A handle from an earlier epoch (login, reconfiguration, a respawn into another level)
+    /// is refused, whether it names the dimension the player is in or not; before login every
+    /// named level is.
+    #[test]
+    fn a_stale_level_handle_is_refused() {
+        let old = LevelRef::new(WorldEpoch::new(7), DimensionKey::OVERWORLD);
+        let now = LevelRef::new(WorldEpoch::new(8), DimensionKey::OVERWORLD);
+        let mut views = WorldViews::new(MAX_WORLD_VIEW_SIDE);
+        views.set_own_level(Some(now));
+        let stale = view(1, 70.0, [64, 64]).with_level(Some(old));
+        assert_eq!(views.push(stale), refused(1, R::Level));
+        // The next frame resolves again: the current handle is taken.
+        views.begin(MAX_WORLD_VIEW_SIDE);
+        assert_eq!(
+            views.push(view(1, 70.0, [64, 64]).with_level(Some(now))),
+            Ok(())
+        );
+        views.begin(MAX_WORLD_VIEW_SIDE);
+        views.set_own_level(None);
+        assert_eq!(
+            views.push(view(1, 70.0, [64, 64]).with_level(Some(now))),
+            refused(1, R::Level)
+        );
     }
 }

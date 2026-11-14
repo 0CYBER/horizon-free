@@ -873,7 +873,7 @@ impl Game<'_> {
             return false;
         };
         let name = self.data_block_name(pos);
-        let before = horizon_client::save::encode_block_entity(key, e, &name);
+        let before = horizon_client::save::block_entity_encode::encode(key, e, &name);
         if let Tag::Compound(c) = &mut tag {
             for k in ["id", "x", "y", "z"] {
                 if let Some(v) = before.get(k) {
@@ -885,7 +885,7 @@ impl Game<'_> {
             return false;
         };
         let rolled = self.take_loot_table(key, &tag, &mut new);
-        let after = horizon_client::save::encode_block_entity(key, &new, &name);
+        let after = horizon_client::save::block_entity_encode::encode(key, &new, &name);
         // The lock is outside the model: a tag that only changes it still
         // changes the block entity.
         let lock_changed = self.world.block_lock(key) != tag.get("lock");

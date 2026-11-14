@@ -40,6 +40,10 @@ pub enum SpawnEvent {
 
 /// The level as finalizeSpawn reads it.
 pub trait FinalizeLevel {
+    /// The owning world's immutable builtin generation (vanilla for bare fixtures).
+    fn mob_maps(&self) -> &crate::neoforge_mob_maps::NeoForgeMobMaps {
+        crate::neoforge_mob_maps::NeoForgeMobMaps::vanilla()
+    }
     /// The biome id at a block.
     fn biome(&self, pos: [i32; 3]) -> String;
     /// The biome at a block is in a biome tag (`minecraft:...`).
@@ -1852,7 +1856,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     }
     fn villager_type(&mut self, m: &mut Mob) {
         let at = block(m);
-        m.extra.variant = villager_type(&self.level.biome(at));
+        m.extra.variant = self.level.mob_maps().villager_type(&self.level.biome(at));
     }
     /// `VariantUtils.selectVariantToSpawn` into `variant`, by registry name.
     fn variant(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {
@@ -2464,25 +2468,46 @@ pub fn variant_name(s: Species, index: u8) -> &'static str {
             .unwrap_or("temperate"),
     }
 }
-/// `VillagerType.byBiome` (index into `render::VILLAGER_TYPES`: plains,
-/// desert, jungle, savanna, snow, swamp, taiga).
+/// `VillagerType.BY_BIOME` (index into `render::VILLAGER_TYPES`: plains,
+/// desert, jungle, savanna, snow, swamp, taiga); other biomes are plains.
+pub const BIOME_VILLAGER_TYPES: &[(&str, u8)] = &[
+    ("badlands", 1),
+    ("desert", 1),
+    ("eroded_badlands", 1),
+    ("wooded_badlands", 1),
+    ("bamboo_jungle", 2),
+    ("jungle", 2),
+    ("sparse_jungle", 2),
+    ("savanna_plateau", 3),
+    ("savanna", 3),
+    ("windswept_savanna", 3),
+    ("deep_frozen_ocean", 4),
+    ("frozen_ocean", 4),
+    ("frozen_river", 4),
+    ("ice_spikes", 4),
+    ("snowy_beach", 4),
+    ("snowy_taiga", 4),
+    ("snowy_plains", 4),
+    ("grove", 4),
+    ("snowy_slopes", 4),
+    ("frozen_peaks", 4),
+    ("jagged_peaks", 4),
+    ("swamp", 5),
+    ("mangrove_swamp", 5),
+    ("old_growth_spruce_taiga", 6),
+    ("old_growth_pine_taiga", 6),
+    ("windswept_gravelly_hills", 6),
+    ("windswept_hills", 6),
+    ("taiga", 6),
+    ("windswept_forest", 6),
+];
+/// `VillagerType.byBiome` over vanilla's table.
 pub fn villager_type(biome: &str) -> u8 {
-    match biome.strip_prefix("minecraft:").unwrap_or(biome) {
-        "badlands" | "desert" | "eroded_badlands" | "wooded_badlands" => 1,
-        "bamboo_jungle" | "jungle" | "sparse_jungle" => 2,
-        "savanna_plateau" | "savanna" | "windswept_savanna" => 3,
-        "deep_frozen_ocean" | "frozen_ocean" | "frozen_river" | "ice_spikes" | "snowy_beach"
-        | "snowy_taiga" | "snowy_plains" | "grove" | "snowy_slopes" | "frozen_peaks"
-        | "jagged_peaks" => 4,
-        "swamp" | "mangrove_swamp" => 5,
-        "old_growth_spruce_taiga"
-        | "old_growth_pine_taiga"
-        | "windswept_gravelly_hills"
-        | "windswept_hills"
-        | "taiga"
-        | "windswept_forest" => 6,
-        _ => 0,
-    }
+    let biome = biome.strip_prefix("minecraft:").unwrap_or(biome);
+    BIOME_VILLAGER_TYPES
+        .iter()
+        .find(|(b, _)| *b == biome)
+        .map_or(0, |(_, t)| *t)
 }
 
 #[cfg(test)]

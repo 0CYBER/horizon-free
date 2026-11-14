@@ -54,7 +54,7 @@ pub struct ModInfo {
     pub issues: Option<String>,
     /// The PNG bytes of `icon.png`.
     pub icon: Option<std::sync::Arc<[u8]>>,
-    /// Loading warnings the mod gave as it registered: translation key and arguments.
+    /// Registration and dependency-policy warnings: translation key and literal arguments.
     pub warnings: Vec<(String, Vec<String>)>,
 }
 impl ModInfo {
@@ -283,6 +283,59 @@ fn decode_binding(value: &str) -> (String, u32) {
 }
 
 impl ModList {
+    /// Retain every applied load notice on both affected installed rows, including
+    /// failed/off rows and code rows whose descriptive metadata is unavailable.
+    pub fn apply_dependency_notices(&mut self, notices: &[crate::dependencies::Notice]) {
+        let installed: BTreeMap<_, _> = self
+            .installed
+            .iter()
+            .map(|row| (row.id.as_str(), row))
+            .collect();
+        let names: BTreeMap<_, _> = self
+            .installed
+            .iter()
+            .map(|row| {
+                let name = self
+                    .info
+                    .get(&row.id)
+                    .map(|info| info.name.as_str())
+                    .filter(|name| !name.is_empty())
+                    .or_else(|| (!row.title.is_empty()).then_some(row.title.as_str()))
+                    .unwrap_or(&row.id);
+                (row.id.clone(), name.to_owned())
+            })
+            .collect();
+        for notice in notices {
+            let (key, mut args) = notice.message();
+            args[0] = names.get(&notice.owner).unwrap_or(&notice.owner).clone();
+            args[1] = names.get(&notice.target).unwrap_or(&notice.target).clone();
+            // Line layout belongs only to the Mods page, never to refusal/log text.
+            let mut note = String::new();
+            for text in [notice.reason.as_deref(), notice.url.as_deref()]
+                .into_iter()
+                .flatten()
+            {
+                note.push('\n');
+                note.push_str(text.trim_end());
+            }
+            args.push(note);
+            let message = (key, args);
+            for (index, id) in [&notice.owner, &notice.target].into_iter().enumerate() {
+                if index == 1 && notice.owner == notice.target {
+                    continue;
+                }
+                let Some(row) = installed.get(id.as_str()) else {
+                    continue;
+                };
+                let info = self.info.entry(id.clone()).or_insert_with(|| ModInfo {
+                    name: row.title.clone(),
+                    ..ModInfo::default()
+                });
+                info.warnings.push(message.clone());
+            }
+        }
+    }
+
     pub fn load(dir: &Path) -> Self {
         fs::read_to_string(dir.join(FILE))
             .map(|t| Self::parse(&t))
@@ -505,6 +558,84 @@ mod tests {
             ("key.keyboard.q".to_owned(), CONTROL)
         );
         assert_eq!(list.serialize(), "");
+    }
+
+    #[test]
+    fn every_dependency_notice_reaches_both_rows_and_self_pairs_are_not_duplicated() {
+        use crate::dependencies::{Notice, NoticeKind};
+        let mut list = ModList::default();
+        for (id, title, problem) in [
+            ("owner", "Owner", Some("refused")),
+            ("target", "Target fallback", None),
+        ] {
+            list.installed.push(Installed {
+                id: id.into(),
+                title: title.into(),
+                description: String::new(),
+                problem: problem.map(str::to_owned),
+                dev: false,
+                native: None,
+            });
+        }
+        list.info.insert(
+            "owner".into(),
+            ModInfo {
+                name: "Owner".into(),
+                warnings: vec![("registration.warning".into(), Vec::new())],
+                ..ModInfo::default()
+            },
+        );
+        list.apply_dependency_notices(&[
+            Notice {
+                owner: "owner".into(),
+                target: "target".into(),
+                version: Some("1".into()),
+                reason: Some("reason.".into()),
+                url: Some("https://example.test/details".into()),
+                kind: NoticeKind::Discouraged,
+            },
+            Notice {
+                owner: "owner".into(),
+                target: "target".into(),
+                version: Some("1".into()),
+                reason: Some("override.".into()),
+                url: None,
+                kind: NoticeKind::OverrideDropped,
+            },
+            Notice {
+                owner: "owner".into(),
+                target: "owner".into(),
+                version: Some("1".into()),
+                reason: None,
+                url: None,
+                kind: NoticeKind::OverrideDiscouraged,
+            },
+        ]);
+        assert_eq!(list.info["owner"].warnings.len(), 4);
+        assert_eq!(list.info["owner"].warnings[0].0, "registration.warning");
+        assert_eq!(list.info["target"].name, "Target fallback");
+        assert_eq!(list.info["target"].warnings.len(), 2);
+        assert_eq!(
+            list.info["target"].warnings[0].0,
+            "horizon.mods.warning.discouraged"
+        );
+        assert_eq!(
+            list.info["target"].warnings[0].1,
+            [
+                "Owner",
+                "Target fallback",
+                "1",
+                "\nreason.\nhttps://example.test/details"
+            ]
+        );
+        assert_eq!(
+            list.info["target"].warnings[1].0,
+            "horizon.mods.warning.override_dropped"
+        );
+        assert_eq!(
+            list.info["target"].warnings[1].1,
+            ["Owner", "Target fallback", "\noverride."]
+        );
     }
 
     #[test]

@@ -215,7 +215,7 @@ impl Game<'_> {
                     }
                     let nbt = self.world.block_entities.get(&at).map(|entity| {
                         let name = &*self.res.facts().get(state).name;
-                        let mut tag = save::encode_block_entity(at, entity, name);
+                        let mut tag = save::block_entity_encode::encode(at, entity, name);
                         Self::write_pending_loot(&self.world, at, &mut tag);
                         let Tag::Compound(mut c) = tag else {
                             return Compound::new();

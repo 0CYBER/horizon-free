@@ -15,9 +15,12 @@ use horizon_protocol::packets::play::{self, Clientbound as C};
 pub(super) type GuestViews = Vec<(u32, PlayerView)>;
 
 /// The player a mob sees this tick: `None` for the host, else a guest.
-/// A mob that targets a guest, or that a guest hurt in the last 100 ticks
-/// (`LivingEntity.getLastHurtByMob`), keeps them while they are still a
-/// valid target; otherwise it sees the nearest player
+/// A mob's target is one player (`Mob.getTarget` is an entity): while it has
+/// one, it keeps that player, host or guest, as long as they are in play, and
+/// its goals drop a target that stopped being valid; it never passes to
+/// another player. A mob that a guest hurt in the last 100 ticks
+/// (`LivingEntity.getLastHurtByMob`), or an angry golem, keeps that guest while
+/// they are still a valid target; otherwise it sees the nearest player
 /// (`TargetingConditions`: alive, neither creative nor spectator), or the
 /// nearest one that is not a spectator if none qualifies.
 pub(super) fn player_for(
@@ -75,17 +78,26 @@ pub(super) fn player_for(
             return Some(*conn);
         }
     }
-    choose(m.position, targeting, host, guests, bound)
+    let aimed = m.ai.target == Some(Who::Player);
+    choose(m.position, targeting, aimed, host, guests, bound)
 }
 
 fn choose(
     at: Vec3,
     targeting: bool,
+    aimed: bool,
     host: Option<&PlayerView>,
     guests: &GuestViews,
     bound: Option<u32>,
 ) -> Option<u32> {
     let targetable = |v: &PlayerView| v.alive && !v.creative && !v.spectator;
+    if aimed {
+        match bound {
+            Some(conn) if guests.iter().any(|(c, _)| *c == conn) => return Some(conn),
+            None if host.is_some() => return None,
+            _ => {}
+        }
+    }
     if targeting
         && let Some(conn) = bound
         && guests.iter().any(|(c, v)| *c == conn && targetable(v))
@@ -531,27 +543,106 @@ mod tests {
     fn the_nearest_survival_player_is_seen() {
         let host = view(10.0, false);
         let guests = vec![(7, view(3.0, false)), (8, view(-5.0, false))];
-        assert_eq!(choose(MOB, false, Some(&host), &guests, None), Some(7));
+        assert_eq!(
+            choose(MOB, false, false, Some(&host), &guests, None),
+            Some(7)
+        );
         // A creative guest is passed over for the host further away.
         let guests = vec![(7, view(3.0, true))];
-        assert_eq!(choose(MOB, false, Some(&host), &guests, None), None);
+        assert_eq!(choose(MOB, false, false, Some(&host), &guests, None), None);
         // Nobody targetable: the nearest one is still seen.
         let host = view(10.0, true);
-        assert_eq!(choose(MOB, false, Some(&host), &guests, None), Some(7));
-        assert_eq!(choose(MOB, false, None, &Vec::new(), None), None);
+        assert_eq!(
+            choose(MOB, false, false, Some(&host), &guests, None),
+            Some(7)
+        );
+        assert_eq!(choose(MOB, false, false, None, &Vec::new(), None), None);
     }
 
     #[test]
     fn a_targeted_guest_stays_the_target() {
         let host = view(1.0, false);
         let guests = vec![(7, view(12.0, false))];
-        assert_eq!(choose(MOB, true, Some(&host), &guests, Some(7)), Some(7));
-        // Gone creative: the mob looks again.
+        assert_eq!(
+            choose(MOB, true, true, Some(&host), &guests, Some(7)),
+            Some(7)
+        );
+        // Gone creative while only recently hurt by them: the mob looks again.
         let guests = vec![(7, view(12.0, true))];
-        assert_eq!(choose(MOB, true, Some(&host), &guests, Some(7)), None);
+        assert_eq!(
+            choose(MOB, true, false, Some(&host), &guests, Some(7)),
+            None
+        );
         // Without a target the nearest player wins.
         let guests = vec![(7, view(12.0, false))];
-        assert_eq!(choose(MOB, false, Some(&host), &guests, Some(7)), None);
+        assert_eq!(
+            choose(MOB, false, false, Some(&host), &guests, Some(7)),
+            None
+        );
+    }
+
+    /// A mob's target is one player: one that stops being a valid target is
+    /// dropped by the mob's goals, never handed to a farther player.
+    #[test]
+    fn a_target_that_stops_being_valid_is_not_passed_to_another_player() {
+        let guests = vec![(7, view(18.0, false))];
+        for (alive, creative, spectator) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
+        ] {
+            let mut host = view(2.0, creative);
+            host.alive = alive;
+            host.spectator = spectator;
+            // The host it targets: kept, not swapped for the guest.
+            assert_eq!(choose(MOB, true, true, Some(&host), &guests, None), None);
+            // A targeted guest in the same state: kept too.
+            let mut guest = host.clone();
+            guest.position = Vec3::new(18.0, 64.0, 0.0);
+            let near = view(2.0, false);
+            assert_eq!(
+                choose(MOB, true, true, Some(&near), &vec![(7, guest)], Some(7)),
+                Some(7)
+            );
+        }
+        // A targeted guest who left: the mob looks again.
+        assert_eq!(
+            choose(MOB, true, true, Some(&view(2.0, false)), &guests, Some(9)),
+            None
+        );
+    }
+
+    /// #3806 cases 1 to 3: a mob's player target, host or guest, is kept tick
+    /// after tick while it stays valid, however near the other players are,
+    /// and the guests' order or a guest joining changes nothing. Each tick
+    /// feeds the binding back in, as the mob loop does.
+    #[test]
+    fn a_valid_player_target_is_kept_across_ticks_and_guest_changes() {
+        let ticks = |host: &PlayerView, rounds: &[GuestViews], start: Option<u32>| {
+            let mut bound = start;
+            for guests in rounds {
+                bound = choose(MOB, true, true, Some(host), guests, bound);
+                let order: Vec<u32> = guests.iter().map(|g| g.0).collect();
+                assert_eq!(bound, start, "with guests {order:?}");
+            }
+        };
+        let rounds = |a: f64, b: f64| {
+            vec![
+                vec![(7, view(a, false)), (8, view(b, false))],
+                // The same guests in the other order.
+                vec![(8, view(b, false)), (7, view(a, false))],
+                // A third guest joins, nearer than anyone.
+                vec![
+                    (7, view(a, false)),
+                    (9, view(0.5, false)),
+                    (8, view(b, false)),
+                ],
+            ]
+        };
+        // 1. The host it targets, farther than both guests.
+        ticks(&view(20.0, false), &rounds(2.0, 3.0), None);
+        // 2. A guest it targets, farther than the host and the other guest.
+        ticks(&view(2.0, false), &rounds(20.0, 3.0), Some(7));
     }
 
     #[test]

@@ -10,7 +10,7 @@ use horizon_core::{
 use {horizon_core::nbt::Tag, horizon_world::level::sculk::SculkSpreader};
 
 /// Every `GameEvent` with its `VibrationSystem` frequency (0: none).
-const EVENTS: &[(&str, i32)] = &[
+pub const EVENTS: &[(&str, i32)] = &[
     ("minecraft:step", 1),
     ("minecraft:swim", 1),
     ("minecraft:flap", 1),

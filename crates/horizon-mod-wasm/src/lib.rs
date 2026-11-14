@@ -227,7 +227,10 @@ impl std::error::Error for Refusal {}
 /// two mods sharing a dependency share its group, so a library has one copy. A mod whose
 /// required dependency is missing, or whose linked hashes or toolchain disagree, is refused
 /// with every mod depending on it.
-fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>) {
+fn groups(
+    packages: &[WasmPackage],
+    side: horizon_mod_package::manifest::Side,
+) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>) {
     let by_id: BTreeMap<&str, usize> = packages
         .iter()
         .enumerate()
@@ -236,7 +239,7 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
     let mut refused: BTreeMap<usize, Refusal> = BTreeMap::new();
     let declared: Vec<_> = packages
         .iter()
-        .map(|p| dependencies::from_manifest(&p.manifest.dependencies))
+        .map(|p| dependencies::from_manifest(&p.manifest.dependencies, side))
         .collect();
     // Engine internals are native-only. A mod dependency's internals stay inside the group.
     for (i, package) in packages.iter().enumerate() {
@@ -244,9 +247,10 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
             refused.insert(i, Refusal::Internals);
         }
     }
-    propagate_refusals(packages, &by_id, &mut refused);
-    // Refuse exactly the resolver's owners, then their dependents, preserving
-    // unrelated libraries. There is no second semver or topological rule here.
+    propagate_refusals(&declared, &by_id, &mut refused);
+    // Physical library ordering cannot be dropped or reversed by a manifest
+    // dispatch override. Joint host validation owns version/rule checks; the
+    // actual linked hashes and toolchains are still checked below.
     let order = loop {
         let active: Vec<_> = (0..packages.len())
             .filter(|i| !refused.contains_key(i))
@@ -257,10 +261,11 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
                 id: &packages[i].manifest.id,
                 version: &packages[i].manifest.version,
                 has_api: true,
+                code: true,
                 dependencies: &declared[i],
             })
             .collect();
-        match dependencies::resolve(&inputs) {
+        match dependencies::resolve_links(&inputs) {
             Ok(resolution) => {
                 break resolution
                     .order
@@ -279,7 +284,8 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
                     | dependencies::Error::Missing { owner, .. }
                     | dependencies::Error::NoApi { owner, .. }
                     | dependencies::Error::CargoConflict { owner, .. }
-                    | dependencies::Error::Version { owner, .. } => vec![owner],
+                    | dependencies::Error::Version { owner, .. }
+                    | dependencies::Error::Incompatible { owner, .. } => vec![owner],
                 };
                 for &i in &active {
                     if owners.contains(&packages[i].manifest.id.as_str()) {
@@ -303,7 +309,7 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
                         refused.insert(i, refusal);
                     }
                 }
-                propagate_refusals(packages, &by_id, &mut refused);
+                propagate_refusals(&declared, &by_id, &mut refused);
             }
         }
     };
@@ -314,7 +320,7 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
             .wasm
             .as_ref()
             .expect("a wasm package declares [wasm]");
-        for id in package.manifest.dependencies.keys() {
+        for id in declared[i].iter().map(|dependency| &dependency.id) {
             let Some(&d) = by_id.get(id.as_str()) else {
                 continue;
             };
@@ -340,7 +346,7 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
             }
         }
     }
-    propagate_refusals(packages, &by_id, &mut refused);
+    propagate_refusals(&declared, &by_id, &mut refused);
     // Union-find over the dependency edges of the mods that stay.
     let mut parent: Vec<usize> = (0..packages.len()).collect();
     fn root(parent: &mut [usize], mut i: usize) -> usize {
@@ -350,12 +356,12 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
         }
         i
     }
-    for (i, package) in packages
+    for (i, dependencies) in declared
         .iter()
         .enumerate()
         .filter(|(i, _)| !refused.contains_key(i))
     {
-        for id in package.manifest.dependencies.keys() {
+        for id in dependencies.iter().map(|dependency| &dependency.id) {
             if let Some(&d) = by_id.get(id.as_str()).filter(|d| !refused.contains_key(d)) {
                 let (a, b) = (root(&mut parent, i), root(&mut parent, d));
                 parent[a] = b;
@@ -385,21 +391,25 @@ fn groups(packages: &[WasmPackage]) -> (Vec<Vec<usize>>, Vec<(String, Refusal)>)
 
 /// A refused mod takes its dependents with it, until nothing changes.
 fn propagate_refusals(
-    packages: &[WasmPackage],
+    declared: &[Vec<dependencies::Dependency>],
     by_id: &BTreeMap<&str, usize>,
     refused: &mut BTreeMap<usize, Refusal>,
 ) {
     loop {
         let before = refused.len();
-        for (i, package) in packages.iter().enumerate() {
+        for (i, dependencies) in declared.iter().enumerate() {
             if refused.contains_key(&i) {
                 continue;
             }
-            if let Some(id) = package.manifest.dependencies.keys().find(|id| {
-                by_id
-                    .get(id.as_str())
-                    .is_some_and(|d| refused.contains_key(d))
-            }) {
+            if let Some(id) = dependencies
+                .iter()
+                .map(|dependency| &dependency.id)
+                .find(|id| {
+                    by_id
+                        .get(id.as_str())
+                        .is_some_and(|d| refused.contains_key(d))
+                })
+            {
                 refused.insert(
                     i,
                     Refusal::DependencyRefused {
@@ -528,7 +538,13 @@ pub fn load_installed(
             let std = std::env::current_exe()
                 .ok()
                 .and_then(|exe| std::fs::read(exe.with_file_name("horizon-wasm-std.wasm")).ok());
-            load_available_std(std.as_deref(), packages, Some(&cache), memory_cap_mib)
+            load_available_std(
+                std.as_deref(),
+                packages,
+                Some(&cache),
+                memory_cap_mib,
+                launch.installation_side(),
+            )
         }
     };
     refused.append(&mut loaded.refused);
@@ -625,9 +641,10 @@ fn load_available_std(
     packages: Vec<WasmPackage>,
     cache: Option<&module_cache::ModuleCache>,
     memory_cap_mib: u32,
+    side: horizon_mod_package::manifest::Side,
 ) -> Loaded {
     match std {
-        Some(std) => load_with_cache(std, packages, cache, memory_cap_mib),
+        Some(std) => load_with_cache(std, packages, cache, memory_cap_mib, side),
         None => Loaded {
             refused: packages
                 .into_iter()
@@ -645,6 +662,7 @@ pub fn load(std_member: &[u8], packages: Vec<WasmPackage>) -> Loaded {
         packages,
         None,
         horizon_mod_package::manifest::MAX_WASM_MEMORY_MIB,
+        horizon_mod_package::manifest::Side::Both,
     )
 }
 
@@ -675,8 +693,9 @@ fn load_with_cache(
     packages: Vec<WasmPackage>,
     cache: Option<&module_cache::ModuleCache>,
     memory_cap_mib: u32,
+    side: horizon_mod_package::manifest::Side,
 ) -> Loaded {
-    let (groups, refused) = groups(&packages);
+    let (groups, refused) = groups(&packages, side);
     let mut loaded = Loaded {
         refused,
         ..Loaded::default()
@@ -836,6 +855,7 @@ mod tests {
             vec![package("missing_std_mod", "1.0.0", "", 'a', "t", "")],
             None,
             horizon_mod_package::manifest::MAX_WASM_MEMORY_MIB,
+            horizon_mod_package::manifest::Side::Both,
         );
         assert!(loaded.mods.is_empty());
         assert!(matches!(loaded.refused[0].1, Refusal::NoStd));
@@ -968,6 +988,7 @@ mod tests {
             ],
             None,
             1024,
+            horizon_mod_package::manifest::Side::Both,
         );
         assert!(loaded.mods.is_empty());
         let mut refused: Vec<_> = loaded
@@ -998,7 +1019,7 @@ mod tests {
             package("c", "1.0.0", "lib = \"^1\"", 'c', "t", ""),
             package("alone", "1.0.0", "", 'd', "t", ""),
         ];
-        let (groups, refused) = groups(&packages);
+        let (groups, refused) = groups(&packages, horizon_mod_package::manifest::Side::Both);
         assert!(refused.is_empty());
         assert_eq!(
             ids(&packages, &groups),
@@ -1013,12 +1034,17 @@ mod tests {
             package("lib", "1.2", "", 'a', "t", ""),
             package("a", "1", "lib = '^1'", 'c', "t", ""),
         ];
-        let (group, refused) = groups(&packages);
+        let (group, refused) = groups(&packages, horizon_mod_package::manifest::Side::Both);
         assert!(refused.is_empty());
         assert_eq!(ids(&packages, &group), [vec!["lib", "z", "a"]]);
         let declared: Vec<_> = packages
             .iter()
-            .map(|p| dependencies::from_manifest(&p.manifest.dependencies))
+            .map(|p| {
+                dependencies::from_manifest(
+                    &p.manifest.dependencies,
+                    horizon_mod_package::manifest::Side::Both,
+                )
+            })
             .collect();
         let native: Vec<_> = packages
             .iter()
@@ -1027,6 +1053,7 @@ mod tests {
                 id: &p.manifest.id,
                 version: &p.manifest.version,
                 has_api: true,
+                code: true,
                 dependencies,
             })
             .collect();
@@ -1037,7 +1064,7 @@ mod tests {
             package("user", "1", "a = '^1'", 'c', "t", ""),
             package("free", "1", "", 'd', "t", ""),
         ];
-        let (group, refused) = groups(&cyclic);
+        let (group, refused) = groups(&cyclic, horizon_mod_package::manifest::Side::Both);
         assert_eq!(ids(&cyclic, &group), [vec!["free"]]);
         assert!(
             matches!(&refused[0].1, Refusal::DependencyOrder { reason } if reason.contains("a -> b -> a"))
@@ -1050,7 +1077,7 @@ mod tests {
     fn a_missing_required_dependency_refuses_the_mod_and_its_dependents() {
         let packages = vec![
             package("lib", "2.0.0", "", 'a', "t", ""),
-            package("b", "1.0.0", "lib = \"^1\"", 'b', "t", ""),
+            package("b", "1.0.0", "missing = \"^1\"", 'b', "t", ""),
             package(
                 "c",
                 "1.0.0",
@@ -1060,7 +1087,7 @@ mod tests {
                 "",
             ),
         ];
-        let (groups, refused) = groups(&packages);
+        let (groups, refused) = groups(&packages, horizon_mod_package::manifest::Side::Both);
         assert_eq!(ids(&packages, &groups), [vec!["lib"]]);
         assert_eq!(
             refused,
@@ -1068,7 +1095,7 @@ mod tests {
                 (
                     "b".to_string(),
                     Refusal::MissingDependency {
-                        dependency: "lib".into(),
+                        dependency: "missing".into(),
                         version: "^1".into()
                     }
                 ),
@@ -1097,7 +1124,7 @@ mod tests {
             package("user", "1.0.0", "deep = \"^1\"", 'b', "t", ""),
             package("typed", "1.0.0", "", 'c', "t", inject),
         ];
-        let (groups, refused) = groups(&packages);
+        let (groups, refused) = groups(&packages, horizon_mod_package::manifest::Side::Both);
         assert_eq!(ids(&packages, &groups), [vec!["typed"]]);
         assert_eq!(
             refused,
@@ -1125,7 +1152,7 @@ mod tests {
             package("b", "1.0.0", "lib = \"^1\"", 'b', "t", &linked),
             package("c", "1.0.0", "lib = \"^1\"", 'c', "other", ""),
         ];
-        let (_, refused) = groups(&packages);
+        let (_, refused) = groups(&packages, horizon_mod_package::manifest::Side::Both);
         assert_eq!(
             refused,
             [

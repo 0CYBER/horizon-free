@@ -1,6 +1,5 @@
 """The parallel test-binary runner lists Cargo's test executables and reports every failure."""
 import contextlib
-import importlib.util
 import io
 import json
 import os
@@ -13,9 +12,8 @@ import unittest
 import unittest.mock
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("run_test_binaries", ROOT / "tools/ci/run_test_binaries.py")
-runner = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runner)
+sys.path.insert(0, str(ROOT / "tools/ci"))
+import run_test_binaries as runner
 
 
 def artifact(executable, test=True, name="horizon-world", kind="lib"):
@@ -164,6 +162,10 @@ for arg in "$@"; do [ "$previous" = "--logfile" ] && log="$arg"; previous="$arg"
 echo "args=$* bootstrap=$RUSTC_BOOTSTRAP"
 echo 'child says hi test a::slow ... okok'
 [ -n "$log" ] || exit 0
+case " $* " in *' --exact '*)
+  [ "$NO_RETRY_RECORD" = 1 ] || printf 'ok a::slow <%ss>\\n' "${RETRY_SECONDS:-7.500}" > "$log"
+  exit "${RETRY_EXIT:-0}";;
+esac
 printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
 [ -n "$LOSE" ] || echo 'ok a::lost <0.002s>' >> "$log"
 """
@@ -193,6 +195,48 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
             code, output = self.run_main("--jobs", "1", "--", str(cargo), "test")
             self.assertEqual(code, 0)
             self.assertIn("args= bootstrap=\n", output)
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires a POSIX shell")
+    def test_only_an_isolated_passing_measurement_can_clear_a_hard_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "crates/horizon-world").mkdir(parents=True)
+            binary = root / "timed"
+            binary.write_text(self.FAKE_LIBTEST)
+            binary.chmod(0o755)
+            cargo = self.fake_toolchain(root, [binary])
+            for env, expected, measured in [
+                ({"RETRY_SECONDS": "0.125"}, 0, "0.12s"),
+                ({"RETRY_SECONDS": "5.001"}, 1, "5.00s"),
+                ({"RETRY_SECONDS": "0.125", "RETRY_EXIT": "101"}, 1, "0.12s"),
+                ({"NO_RETRY_RECORD": "1"}, 1, "unavailable"),
+            ]:
+                with self.subTest(env=env), unittest.mock.patch.dict(os.environ, env):
+                    code, output = self.run_main("--jobs", "2", "--time-limits", "2,5", "--", str(cargo), "test")
+                    self.assertEqual(code, expected, output)
+                    self.assertIn("--exact a::slow --test-threads=1 --logfile", output)
+                    self.assertEqual(output.count("timing confirmation:"), 1)
+                    self.assertIn(f"first 7.50s, isolated {measured}", output)
+
+    def test_a_guarded_run_confirms_a_slow_test_under_the_guard(self):
+        binary = {"label": "horizon-world lib.rs"}
+        seen = []
+
+        def guarded(invocation, env, timed, shim, run_one):
+            seen.append((invocation, shim, run_one))
+            return {"binary": binary, "seconds": 0.1, "max_rss_kib": 0, "status": "network guard: socket",
+                    "output": io.StringIO(), "log": {"a::slow": ("ok", 0.1)}}
+
+        with unittest.mock.patch.object(runner.network_guard, "run", guarded), \
+                contextlib.redirect_stdout(io.StringIO()):
+            errors = runner.confirm_slow_tests([(7.5, "a::slow", binary["label"])], [binary], {}, [], 5.0,
+                                               Path("/guard.so"))
+        self.assertEqual(len(seen), 1)
+        (rerun, args), shim, run_one = seen[0]
+        self.assertEqual((rerun, shim, run_one), (binary, Path("/guard.so"), runner.run_one))
+        self.assertIn("--exact", args)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("network guard: socket", errors[0])
 
     @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires a POSIX shell")
     def test_a_listing_without_test_binaries_fails(self):

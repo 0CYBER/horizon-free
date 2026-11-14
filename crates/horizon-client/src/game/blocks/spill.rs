@@ -93,7 +93,8 @@ impl Pending {
             _ => &[],
         };
         if !include.is_empty() {
-            let mut saved = save::encode_block_entity((pos[0], pos[1], pos[2]), entity, block);
+            let mut saved =
+                save::block_entity_encode::encode((pos[0], pos[1], pos[2]), entity, block);
             if is_shulker_box(block)
                 && let (Some(lock), Tag::Compound(tag)) = (lock, &mut saved)
             {
@@ -1482,10 +1483,10 @@ mod tests {
         for block in ["minecraft:white_banner", "minecraft:white_wall_banner"] {
             let pos = (1, 64, 2);
             let fresh = BlockEntity::for_block(block).unwrap();
-            let fresh = save::encode_block_entity(pos, &fresh, block);
+            let fresh = save::block_entity_encode::encode(pos, &fresh, block);
             let placed = block_entity_item::place(&fresh, &components, false);
             let (_, placed) = save::decode_block_entity(&placed).unwrap();
-            let saved = save::encode_block_entity(pos, &placed, block);
+            let saved = save::block_entity_encode::encode(pos, &placed, block);
             let (_, loaded) = save::decode_block_entity(&saved).unwrap();
             let BlockEntity::Banner(banner) = &loaded else {
                 panic!("placed banner");

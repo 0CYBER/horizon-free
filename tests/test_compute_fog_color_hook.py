@@ -5,17 +5,14 @@ import subprocess
 import tempfile
 import unittest
 
-from test_world_input_capture import method
-
-ROOT = Path(__file__).resolve().parents[1]
+from rust_items import rust_fn
 
 
 class ComputeFogColorHookTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_rgb_override_fallback_and_alpha(self):
-        source = (next(ROOT.glob('crates/horizon-client/src/game/*/render_tick.rs'))).read_text(encoding="utf-8")
-        actual = method(source, "native_fog_color_now")
-        frame = method(source.replace("pub(super) fn", "fn"), "frame_fog")
+        actual = rust_fn("native_fog_color_now")
+        frame = rust_fn("frame_fog")
         self.assertIn("if self.title.is_none() { fog.color = self.native_fog_color_now", " ".join(frame.split()))
         fixture = r"""
 #[derive(Clone, Copy, Debug, PartialEq)]

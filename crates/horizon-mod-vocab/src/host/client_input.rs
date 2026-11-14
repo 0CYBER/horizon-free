@@ -46,6 +46,28 @@ pub trait ClientInputClientHost {
     #[access(ClientSetup)]
     fn mapping(&self, name: &str) -> Result<Option<KeyMapping>, TextFormError>;
     /// Side: client.
+    /// Holds the vanilla gameplay mapping `key` down or lets it go (`KeyMapping.setDown`): the
+    /// held state its key gives it, without the click a press adds. `key` is a mapping of the
+    /// movement, gameplay or inventory category (`key.attack`, `key.use`, `key.sprint`,
+    /// `key.forward`, `key.hotbar.1`...); a toggled mapping (sneak, sprint, attack, use with their
+    /// toggle option on) flips on `true`, as `ToggleKeyMapping.setDown` does. The client tick's
+    /// key step acts on it with all its checks: a held use repeats every four ticks, a held attack
+    /// goes on breaking the block. With a screen or overlay open a press does nothing, and opening
+    /// one lets go of every mapping, as `KeyMapping.releaseAll` does. `key_mapping_pre` is not
+    /// asked: it is about physical keys.
+    #[access(WorldOnly)]
+    fn set_mapping_down(&mut self, key: &str, down: bool) -> Result<(), MappingError>;
+    /// Side: client.
+    /// Adds one click to the vanilla gameplay mapping `key` (`KeyMapping.click`), as a press of
+    /// its key does: the attack, use or pick a click starts on the next client tick, through the
+    /// checks of `startAttack` and `startUseItem` (the miss cooldown, busy hands, the item, the
+    /// target under the crosshair) and the packets the player's own click sends; the hotbar slot,
+    /// drop, inventory or hand swap of the inventory keys. With a screen or overlay open the click
+    /// is dropped, as `KeyMapping.releaseAll` drops it. `interaction_key_mapping_triggered` fires
+    /// at the action as for the player's click; `key_mapping_pre` is not asked.
+    #[access(WorldOnly)]
+    fn click_mapping(&mut self, key: &str) -> Result<(), MappingError>;
+    /// Side: client.
     /// Milliseconds on the game's own clock (`Util.getMillis`), counting from the game's start:
     /// what a text field's cursor blinks by and what tells a double click from two clicks.
     /// Only differences between two readings mean anything.

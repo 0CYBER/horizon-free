@@ -3,6 +3,7 @@
 //! hooks in `hooks/`.
 
 use glam::{DVec3, Mat4};
+use mod_api::LevelRef;
 mod generated {
     include!(concat!(env!("OUT_DIR"), "/native_render_generated.rs"));
 }
@@ -192,6 +193,8 @@ pub struct WorldView {
     pub mirror: bool,
     /// The view this one is seen in ([`WorldView::with_parent`]).
     pub parent: Option<u64>,
+    /// The level the view draws ([`WorldView::with_level`]); `None` is the player's own.
+    pub level: Option<LevelRef>,
 }
 
 impl WorldView {
@@ -214,6 +217,7 @@ impl WorldView {
             clip_plane: None,
             mirror: false,
             parent: None,
+            level: None,
         }
     }
 
@@ -257,6 +261,15 @@ impl WorldView {
             ..self
         }
     }
+
+    /// Draws the level `level`, a handle from `host.level(dimension)`: `None` is the player's
+    /// own level, and so is a handle naming it. Viewed levels are not drawn yet: a view of any
+    /// other level, an open viewed one, one whose handle is stale (its epoch changed) or one
+    /// closed or never open, is refused as [`WorldViewRefusalReason::Level`]. The handle is
+    /// resolved once a frame, so a handle that goes stale is refused from the next frame on.
+    pub fn with_level(self, level: Option<LevelRef>) -> Self {
+        Self { level, ..self }
+    }
 }
 
 /// The views asked for this frame ([`world_views`]): push each one.
@@ -283,6 +296,7 @@ impl WorldViews<'_> {
         engine.clip_plane = view.clip_plane;
         engine.mirror = view.mirror;
         engine.parent = view.parent;
+        engine.level = view.level;
         self.views.push(engine)
     }
 

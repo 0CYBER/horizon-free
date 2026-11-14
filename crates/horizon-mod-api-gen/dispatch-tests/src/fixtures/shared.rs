@@ -427,12 +427,12 @@ impl ItemPart for Mod {
     fn tooltip(&self, _: &dyn ClientHost, event: &mut TooltipEvent<'_>) {
         event.lines.push((Text, self.id));
     }
-    fn use_on(&self, _: &mut dyn ServerHost, _: &mut UseOnEvent<'_>) -> Flow {
+    fn use_on(&self, _: HostSide<'_>, _: &mut UseOnEvent<'_>) -> Option<InteractionResult> {
         self.calls.lock().unwrap().push(self.id);
         if self.id == 1 {
-            Flow::Cancel
+            Some(InteractionResult::SuccessServer)
         } else {
-            Flow::Continue
+            None
         }
     }
 }

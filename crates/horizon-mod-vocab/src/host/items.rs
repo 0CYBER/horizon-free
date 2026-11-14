@@ -49,6 +49,19 @@ pub trait ItemsHost {
     /// type tag `tag` (`minecraft:cannot_be_pushed_onto_boats`).
     #[access(Metadata)]
     fn entity_type_in_tag(&self, entity_type: &str, tag: &str) -> bool;
+    /// Side: both.
+    /// The stack an SNBT item compound stands for, read as `ItemStack.CODEC` reads a saved
+    /// item: `{id:"minecraft:diamond_sword",count:1,components:{"minecraft:damage":5}}`
+    /// (`count` 1 when missing, `stone` is `minecraft:stone`). This API refuses with None:
+    /// text that is no SNBT compound or has anything but whitespace after it, a `count`
+    /// outside 1 to 99 (the codec's range; it is not clamped to 1), air, and an item this
+    /// world does not have. It also refuses text over 2 MiB and nesting past 512 levels. Those
+    /// two are this API's own safety bound, the one place it differs from vanilla: vanilla's
+    /// SNBT parser has no size or depth limit (very deep text ends in a stack overflow), and
+    /// 2 MiB and 512 are binary NBT's limits, taken here so text a mod supplies cannot
+    /// overflow the parser.
+    #[access(WorldOnly)]
+    fn item_from_snbt(&self, snbt: &str) -> Option<ItemStack>;
 }
 /// The server host's methods of the `items` area, implemented by the game and reached through [`ServerHost`].
 #[horizon_mod_api_macros::host_area]

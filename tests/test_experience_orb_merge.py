@@ -5,9 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from test_world_input_capture import method
-
-ROOT = Path(__file__).resolve().parents[1]
+from rust_items import rust_fn
 
 FIXTURE = r"""
 #[derive(Clone, Copy)] struct Vec3 { x: f64, y: f64, z: f64 }
@@ -132,11 +130,10 @@ fn tick_merge_is_vanilla_unless_a_mod_decides() {
 class ExperienceOrbMergeTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_spawn_and_tick_merge_hooks(self):
-        source = (ROOT / "crates/horizon-client/src/game/items/item_entities.rs").read_text(encoding="utf-8")
-        fixture = (FIXTURE.replace("ORB_MERGES", method(source, "orb_merges"))
-                   .replace("AWARD_ORB", method(source, "award_orb"))
-                   .replace("MERGE_NEW_ORB", method(source, "merge_new_orb"))
-                   .replace("MERGE_ORB", method(source, "merge_orb")))
+        fixture = (FIXTURE.replace("ORB_MERGES", rust_fn("orb_merges"))
+                   .replace("AWARD_ORB", rust_fn("award_orb"))
+                   .replace("MERGE_NEW_ORB", rust_fn("merge_new_orb"))
+                   .replace("MERGE_ORB", rust_fn("merge_orb", owner="Game")))
         with tempfile.TemporaryDirectory() as folder:
             src, exe = Path(folder) / "orb.rs", Path(folder) / "orb.exe"
             src.write_text(fixture, encoding="utf-8")

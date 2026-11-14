@@ -48,6 +48,14 @@ flipped left to right, with face culling flipped to match, so the same faces are
 culled as in an unmirrored view. A clip plane with a zero normal, a value that is
 not finite, or the camera in front of it refuses the view.
 
+A view draws the player's level unless it names another with
+`with_level(Some(level))`, a `LevelRef` from `host.level(dimension)`; `None` is the
+player's level, and so is a handle naming it. Viewed levels are not drawn yet: a view
+of any other level (one the server keeps open for viewing, a handle from an earlier
+epoch, a level closed or never open) is refused as `WorldViewRefusalReason::Level`
+and logged once. The handle is resolved once a frame, so a stale one is refused from
+the next frame on.
+
 Use `world_view_drawn` to copy a still to your own buffer or draw into the supplied
 target with its encoder. Copy a picture you need to preserve: targets are reused
 while requested and retired when absent. Views draw before `world_drawn`, where

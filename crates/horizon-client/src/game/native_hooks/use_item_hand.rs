@@ -1,6 +1,67 @@
 use super::*;
 
 impl Game<'_> {
+    /// Apply a consuming result's swing on its owning logical side.
+    pub(in crate::game) fn interaction_consumed(
+        &mut self,
+        answer: mod_api::InteractionResult,
+    ) -> bool {
+        use mod_api::InteractionResult as Answer;
+        if (answer == Answer::Success && self.remote.is_some())
+            || (answer == Answer::SuccessServer && self.remote.is_none())
+        {
+            self.swing_arm();
+        }
+        answer.consumes_action()
+    }
+
+    /// `ItemStack.useOn` after the block and before the item's implementation.
+    pub(in crate::game) fn item_on_interaction(
+        &mut self,
+        hit: &crate::game::Hit,
+        hand: Hand,
+        stack: &ItemStack,
+    ) -> Option<mod_api::InteractionResult> {
+        if !mod_api::__private::has_part_hook(mod_api::HookId::UseOn) {
+            return None;
+        }
+        let snapshot = stack.try_into_api().ok()?;
+        let (player, player_entity_id) = self.native_clicker();
+        let mut result = None;
+        self.native_use_on(mod_api::__private::UseOnCall {
+            stack: &snapshot,
+            pos: hit.pos,
+            face: hit.face,
+            hand,
+            hit: hit.native(),
+            player,
+            player_entity_id,
+            result: &mut result,
+        });
+        result.filter(|answer| {
+            !matches!(
+                answer,
+                mod_api::InteractionResult::Pass | mod_api::InteractionResult::TryWithEmptyHand
+            )
+        })
+    }
+
+    /// `Player.interactOn`: Fail skips this interaction, not the hand loop.
+    pub(in crate::game) fn entity_interaction(&mut self, hand: Hand, id: i32) -> Option<bool> {
+        if self.spectator() || !mod_api::__private::listened(mod_api::HookId::EntityInteract) {
+            return None;
+        }
+        let entity = self.level_entity(id)?;
+        let kind = self.target_type(entity);
+        let stack = self.with_hand(hand, |g| g.held().cloned());
+        let mut result = None;
+        self.native_entity_interact(hand, id, &kind, stack.as_ref(), &mut result);
+        match result? {
+            mod_api::InteractionResult::Pass | mod_api::InteractionResult::TryWithEmptyHand => None,
+            answer => Some(self.with_hand(hand, |g| g.interaction_consumed(answer))),
+        }
+    }
+
     pub(in crate::game) fn client_item_interaction(
         &mut self,
         hand: Hand,

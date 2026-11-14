@@ -90,6 +90,9 @@ pub(super) struct ModsState {
     /// `--dev-mod PATH`: content mods always on.
     pub(super) dev: Vec<PathBuf>,
     pub(super) native: std::sync::Arc<horizon_mod_package::runtime::Runtime>,
+    pub(super) installation_side: horizon_mod_package::manifest::Side,
+    pub(super) overrides_dir: PathBuf,
+    pub(super) load_notices: Arc<Mutex<Vec<horizon_mod_package::dependencies::Notice>>>,
     pub(super) selected: std::sync::Arc<[horizon_mod_package::selection::SelectedPackage]>,
     /// The content mods the loaded resources were built with: a switch the
     /// game can apply live moves it to the player's choice (`switch_mods`).
@@ -755,29 +758,20 @@ pub(super) fn content_overlay(
                 .iter()
                 .any(|missing| missing.owners.contains(&source.manifest.id))
         })
-        .filter(|source| seen.insert(source.manifest.id.as_str()))
-        .collect();
-    let dependencies: Vec<_> = packages
-        .iter()
-        .map(|source| {
-            horizon_mod_package::dependencies::from_manifest(&source.manifest.dependencies)
+        .filter(|source| {
+            let code = source.manifest.native.is_some() || source.manifest.wasm.is_some();
+            !code || seen.insert(source.manifest.id.as_str())
         })
         .collect();
-    let inputs: Vec<_> = packages
-        .iter()
-        .zip(&dependencies)
-        .map(
-            |(source, dependencies)| horizon_mod_package::dependencies::Mod {
-                id: &source.manifest.id,
-                version: &source.manifest.version,
-                has_api: false,
-                dependencies,
-            },
-        )
-        .collect();
-    let order = horizon_mod_package::dependencies::resolve_content(&inputs)
-        .map_err(|error| error.to_string())?
-        .order;
+    let manifests: Vec<_> = packages.iter().map(|source| source.manifest).collect();
+    let overrides = horizon_mod_package::dependencies::Overrides::read(&sources.overrides_dir)?;
+    let resolution = horizon_mod_package::dependencies::resolve_manifests(
+        &manifests,
+        sources.installation_side,
+        &overrides,
+    )
+    .map_err(|error| error.to_string())?;
+    let order = resolution.order;
     // Hooks are queried on the calling thread, never from a content reader.
     let native_items = &native_declared().items;
     let requests: Vec<_> = order
@@ -857,7 +851,7 @@ pub(super) fn content_overlay(
     }
     // Content validation may refuse a package. Revalidate against what really
     // loaded so dependents cannot start with a missing required content mod.
-    let loaded: Vec<_> = inputs
+    let loaded: Vec<_> = manifests
         .into_iter()
         .filter(|package| {
             mods.iter().any(|content| content.id == package.id)
@@ -868,8 +862,12 @@ pub(super) fn content_overlay(
                     .any(|native| native.id == package.id)
         })
         .collect();
-    horizon_mod_package::dependencies::resolve_content(&loaded)
-        .map_err(|error| error.to_string())?;
+    let resolved = horizon_mod_package::dependencies::resolve_manifests(
+        &loaded,
+        sources.installation_side,
+        &overrides,
+    )
+    .map_err(|error| error.to_string())?;
     let cache = here.join(".horizon-cache");
     // Content admission and the live code-dispatch boundary jointly determine
     // what loaded. Namespaces and raw startup metadata cannot answer this.
@@ -879,6 +877,7 @@ pub(super) fn content_overlay(
     )?;
     let root = mod_content::resolved_resources(root, prepared, jar_store, &mods, cache)?;
     let _ = sources.content_base.set(original_base);
+    *sources.load_notices.lock().unwrap() = resolved.warnings;
     Ok(ContentOverlay {
         root,
         mods,
@@ -1585,6 +1584,9 @@ impl Game<'_> {
         let unbuilt = not_built(&native_dir, built, &self.settings.mods.installed);
         self.settings.mods.installed.extend(unbuilt);
         self.mods.report_refusals(&mut self.settings.mods.installed);
+        self.settings
+            .mods
+            .apply_dependency_notices(&self.mods.load_notices.lock().unwrap());
     }
     /// The content mods the resources load with: the ones applied, which a
     /// switch that needs a restart doesn't change.

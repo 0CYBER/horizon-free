@@ -30,6 +30,8 @@ use std::{
 pub use horizon_client_core::particle_type::ParticleType;
 pub use horizon_items::firework::{DYE_FIREWORK_COLORS, FireworkExplosion, FireworkShape};
 mod collide;
+mod explosions;
+pub use explosions::ExplosionParticle;
 mod groups;
 mod mod_behaviour;
 mod native;
@@ -1115,7 +1117,7 @@ pub struct ParticleEngine {
     starters: Vec<Starter>,
     elder_guardians: Vec<i32>,
     /// `ClientExplosionTracker` tracked explosions pending debris generation.
-    tracked_explosions: Vec<TrackedExplosion>,
+    tracked_explosions: Vec<explosions::TrackedExplosion>,
     /// Local sounds requested by particles (dripstone drips, firework bursts):
     /// (event, position, volume, pitch, distanceDelay).
     pub sounds: Vec<(&'static str, [f64; 3], f32, f32, bool)>,
@@ -1184,13 +1186,6 @@ fn below_half_pixel(radius: f64, distance_squared: f64, pixel_focal_length: f32)
         && projected_limit * projected_limit < distance_squared
 }
 
-/// `ClientExplosionTracker.ExplosionInfo`.
-#[derive(Clone, Copy, Debug)]
-struct TrackedExplosion {
-    center: [f64; 3],
-    radius: f32,
-    block_count: usize,
-}
 impl ParticleEngine {
     pub fn new(
         root: &ResourceSource,
@@ -1623,36 +1618,6 @@ impl ParticleEngine {
                 self.add(&options, position, velocity);
             }
         }
-    }
-    /// `ClientExplosionTracker.track`: queue an explosion's block count and position
-    /// for debris generation during `ClientLevel.tick`.
-    pub fn track_explosion(&mut self, center: [f64; 3], radius: f32, block_count: usize) {
-        if block_count > 0 {
-            self.tracked_explosions.push(TrackedExplosion {
-                center,
-                radius,
-                block_count,
-            });
-        }
-    }
-    /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the
-    /// explosion particle (the emitter unless `ServerExplosion.isSmall`) and
-    /// debris tracked for `tick`.
-    pub fn explosion(
-        &mut self,
-        center: [f64; 3],
-        small: bool,
-        block_count: usize,
-        radius: f32,
-        _is_air: &dyn Fn([i32; 3]) -> bool,
-    ) {
-        let ty = if small {
-            ParticleType::Explosion
-        } else {
-            ParticleType::ExplosionEmitter
-        };
-        self.add(&ParticleOptions::simple(ty), center, [1.0, 0.0, 0.0]);
-        self.track_explosion(center, radius, block_count);
     }
     /// `LlamaSpit.recreateFromPacket`: seven spit particles thrown ahead of a
     /// new spit, each faster than the last along x and z.
@@ -3632,81 +3597,6 @@ impl ParticleEngine {
             return self.random.next_float() < free * free;
         }
         true
-    }
-    /// `ClientExplosionTracker.tick`: throws up to 512 debris particles across all
-    /// explosions tracked in this tick, weighted by each explosion's block count.
-    fn tick_explosions(&mut self, level: &ParticleLevel) {
-        self.tick_explosions_with(&|b| level.facts.is_air(level.world.block(b[0], b[1], b[2])));
-    }
-    fn tick_explosions_with(&mut self, is_air: &dyn Fn([i32; 3]) -> bool) {
-        if self.tracked_explosions.is_empty() {
-            return;
-        }
-        let explosions = std::mem::take(&mut self.tracked_explosions);
-        if self.particle_level != 0 {
-            return;
-        }
-        let total_blocks: usize = explosions.iter().map(|e| e.block_count).sum();
-        if total_blocks == 0 {
-            return;
-        }
-        let total_particles = total_blocks.min(512);
-        for _ in 0..total_particles {
-            // `WeightedRandom.getRandomItem` draws its `nextInt(totalWeight)`
-            // even when one explosion is tracked.
-            let mut pick = self.random.next_int_bound(total_blocks as i32).unwrap_or(0) as usize;
-            let mut explosion = &explosions[0];
-            for exp in &explosions {
-                if pick < exp.block_count {
-                    explosion = exp;
-                    break;
-                }
-                pick -= exp.block_count;
-            }
-            let r = &mut self.random;
-            let d = Vec3::new(
-                f64::from(r.next_float() * 2.0 - 1.0),
-                f64::from(r.next_float() * 2.0 - 1.0),
-                f64::from(r.next_float() * 2.0 - 1.0),
-            )
-            .normalize();
-            let distance = r.next_float().cbrt() * explosion.radius;
-            let local = [
-                d.x * f64::from(distance),
-                d.y * f64::from(distance),
-                d.z * f64::from(distance),
-            ];
-            let at = [
-                explosion.center[0] + local[0],
-                explosion.center[1] + local[1],
-                explosion.center[2] + local[2],
-            ];
-            if !is_air(ParticleLevel::block_at(at)) {
-                continue;
-            }
-            let speed =
-                0.5 / (distance / explosion.radius + 0.1) * r.next_float() * r.next_float() + 0.3;
-            // Level.DEFAULT_EXPLOSION_BLOCK_PARTICLES: poof (scaling 0.5) or smoke, equally weighted.
-            let (ty, scaling) = if r.next_int_bound(2).unwrap_or(0) == 0 {
-                (ParticleType::Poof, 0.5)
-            } else {
-                (ParticleType::Smoke, 1.0)
-            };
-            let p = [
-                explosion.center[0] + local[0] * scaling,
-                explosion.center[1] + local[1] * scaling,
-                explosion.center[2] + local[2] * scaling,
-            ];
-            self.add(
-                &ParticleOptions::simple(ty),
-                p,
-                [
-                    d.x * f64::from(speed),
-                    d.y * f64::from(speed),
-                    d.z * f64::from(speed),
-                ],
-            );
-        }
     }
     #[allow(clippy::too_many_lines)]
     fn tick_particle(&mut self, p: &mut Particle, level: &ParticleLevel) {
@@ -6314,14 +6204,14 @@ mod tests {
             &HashSet::new(),
         );
         assert!(engine.tracked_explosions.is_empty());
-        engine.track_explosion([1.0, 2.0, 3.0], 4.0, 100);
-        engine.track_explosion([5.0, 6.0, 7.0], 2.0, 50);
+        engine.track_explosion([1.0, 2.0, 3.0], 4.0, 100, &ExplosionParticle::defaults());
+        engine.track_explosion([5.0, 6.0, 7.0], 2.0, 50, &ExplosionParticle::defaults());
         assert_eq!(engine.tracked_explosions.len(), 2);
         assert_eq!(engine.tracked_explosions[0].block_count, 100);
         assert_eq!(engine.tracked_explosions[1].block_count, 50);
 
         // Zero block count explosions are not queued.
-        engine.track_explosion([0.0; 3], 1.0, 0);
+        engine.track_explosion([0.0; 3], 1.0, 0, &ExplosionParticle::defaults());
         assert_eq!(engine.tracked_explosions.len(), 2);
     }
     #[test]
@@ -6332,8 +6222,8 @@ mod tests {
             &HashSet::new(),
         );
         // Queue two explosions near camera: 400 blocks and 300 blocks (total 700).
-        engine.track_explosion([0.0, 0.0, 0.0], 4.0, 400);
-        engine.track_explosion([2.0, 0.0, 2.0], 5.0, 300);
+        engine.track_explosion([0.0, 0.0, 0.0], 4.0, 400, &ExplosionParticle::defaults());
+        engine.track_explosion([2.0, 0.0, 2.0], 5.0, 300, &ExplosionParticle::defaults());
         assert_eq!(engine.tracked_explosions.len(), 2);
 
         // In pure air, total particles spawned must be capped at 512.
@@ -6348,7 +6238,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
         );
-        engine.track_explosion([0.0, 64.0, 0.0], 4.0, 100);
+        engine.track_explosion([0.0, 64.0, 0.0], 4.0, 100, &ExplosionParticle::defaults());
 
         // When no blocks are air, zero debris particles are emitted.
         engine.tick_explosions_with(&|_| false);

@@ -1,20 +1,42 @@
-//! `Host::config_files`: the calling mod's own files in the game's `config/`
-//! folder, for every mod (native or wasm) without a file system of its own.
+//! One checked implementation for config, game bulk data and world bulk data.
 use super::Game;
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::fs::{Dir, Metadata, OpenOptions};
 use mod_api::{
     CONFIG_FILE_MAX, CONFIG_LIST_MAX, ConfigEntry, ConfigEntryKind, ConfigFileError, ConfigFiles,
-    ConfigPath, ConfigStat,
+    ConfigPath, ConfigStat, DATA_FILE_MAX,
 };
+use std::collections::BTreeMap;
+#[cfg(test)]
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
-/// The game's `config/` folder, bound to whichever mod calls.
-struct GameConfigFiles;
+struct GameConfigFiles {
+    bulk: bool,
+}
 
-static CONFIG_FILES: GameConfigFiles = GameConfigFiles;
+static CONFIG_FILES: GameConfigFiles = GameConfigFiles { bulk: false };
+static DATA_FILES: GameConfigFiles = GameConfigFiles { bulk: true };
+
+/// A root selected by the game, never supplied by a mod. Bulk roots bind the
+/// mod's directory implicitly; config keeps its established shared spelling.
+struct FileRoot {
+    path: PathBuf,
+    bulk: bool,
+}
+
+impl FileRoot {
+    fn cap(&self) -> u64 {
+        if self.bulk {
+            DATA_FILE_MAX
+        } else {
+            CONFIG_FILE_MAX
+        }
+    }
+}
 
 impl Game<'_> {
     /// The calling mod's own files in the game's `config/` folder, beside
@@ -27,6 +49,13 @@ impl Game<'_> {
     /// `config_loading`.
     pub(super) fn config_files() -> &'static dyn ConfigFiles {
         &CONFIG_FILES
+    }
+    pub(super) fn data_files() -> &'static dyn ConfigFiles {
+        &DATA_FILES
+    }
+
+    pub(super) fn world_data_files(&self) -> &dyn ConfigFiles {
+        self
     }
     /// Whether a mod with the `horizon-mod.toml` id `id` is installed: a
     /// native, wasm or content package (Fabric's `FabricLoader.isModLoaded`,
@@ -43,33 +72,58 @@ fn io(error: std::io::Error) -> ConfigFileError {
     }
 }
 
-/// `path` in `root` for the calling mod: refused outside a mod's call, for
-/// another mod's path, and where a symbolic link is on the way (`root`
-/// itself may be one, as the player set it up).
-fn resolve(root: &Path, path: &ConfigPath) -> Result<PathBuf, ConfigFileError> {
+/// Open every directory without following links. Keeping the parent handle
+/// makes subsequent opens and atomic replacement safe even if a directory is
+/// renamed or replaced between operations.
+fn resolve(
+    root: &FileRoot,
+    path: &ConfigPath,
+    create: bool,
+) -> Result<(Dir, String), ConfigFileError> {
     let mod_id =
         mod_api::content::crash::current_native_mod().ok_or(ConfigFileError::NoCallingMod)?;
-    if !path.owned_by(mod_id) {
+    if !root.bulk && !path.owned_by(mod_id) {
         return Err(ConfigFileError::NotOwned);
     }
-    let mut at = root.to_path_buf();
-    for part in path.as_str().split('/') {
-        at.push(part);
-        match fs::symlink_metadata(&at) {
+    let mut directory =
+        Dir::open_ambient_dir(&root.path, cap_std::ambient_authority()).map_err(io)?;
+    let mut components = root
+        .bulk
+        .then_some("horizon-mod-data")
+        .into_iter()
+        .chain(root.bulk.then_some(mod_id))
+        .chain(path.as_str().split('/').filter(|part| !part.is_empty()))
+        .peekable();
+    while let Some(part) = components.next() {
+        match directory.symlink_metadata(part) {
             Ok(meta) if meta.file_type().is_symlink() => return Err(ConfigFileError::Symlink),
             Ok(_) => {}
-            Err(e) if e.kind() == ErrorKind::NotFound => break,
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
             Err(e) => return Err(io(e)),
         }
+        if components.peek().is_none() {
+            return Ok((directory, part.to_owned()));
+        }
+        if create {
+            match directory.create_dir(part) {
+                Ok(()) => {}
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(io(e)),
+            }
+        }
+        directory = directory.open_dir_nofollow(part).map_err(io)?;
     }
-    Ok(root.join(path.as_str()))
+    Err(ConfigFileError::NotOwned)
 }
 
-fn stat_of(meta: &fs::Metadata) -> ConfigStat {
+fn stat_of(meta: &Metadata) -> ConfigStat {
     let modified_millis = meta
         .modified()
         .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .and_then(|t| {
+            t.duration_since(cap_std::time::SystemTime::from_std(UNIX_EPOCH))
+                .ok()
+        })
         .map_or(0, |d| d.as_millis() as u64);
     let (kind, len) = if meta.is_dir() {
         (ConfigEntryKind::Folder, 0)
@@ -83,18 +137,28 @@ fn stat_of(meta: &fs::Metadata) -> ConfigStat {
     })
 }
 
-fn read(root: &Path, file: &ConfigPath) -> Result<Vec<u8>, ConfigFileError> {
-    let path = resolve(root, file)?;
-    let meta = fs::metadata(&path).map_err(io)?;
-    if meta.is_dir() {
+fn read(root: &FileRoot, file: &ConfigPath) -> Result<Vec<u8>, ConfigFileError> {
+    let (directory, name) = resolve(root, file, false)?;
+    let meta = directory.symlink_metadata(&name).map_err(io)?;
+    if !meta.is_file() {
+        return Err(ConfigFileError::NotAFile);
+    }
+    if meta.len() > root.cap() {
+        return Err(ConfigFileError::TooLarge);
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let opened = directory.open_with(&name, &options).map_err(io)?;
+    if !opened.metadata().map_err(io)?.is_file() {
         return Err(ConfigFileError::NotAFile);
     }
     let mut bytes = Vec::new();
-    // One byte past the cap tells a file that grew since its length was read.
-    fs::File::open(&path)
-        .and_then(|f| f.take(CONFIG_FILE_MAX + 1).read_to_end(&mut bytes))
+    // One byte past the cap detects growth without an unbounded allocation.
+    opened
+        .take(root.cap() + 1)
+        .read_to_end(&mut bytes)
         .map_err(io)?;
-    if bytes.len() as u64 > CONFIG_FILE_MAX {
+    if bytes.len() as u64 > root.cap() {
         return Err(ConfigFileError::TooLarge);
     }
     Ok(bytes)
@@ -112,92 +176,162 @@ fn is_write_temp(name: &str) -> bool {
 /// Written beside the file, then renamed over it. The temporary name starts
 /// with the file's own, so it stays the mod's own; `list` leaves it out, so a
 /// scan never meets a half-written file, nor one a crash left behind.
-fn write(root: &Path, file: &ConfigPath, bytes: &[u8]) -> Result<(), ConfigFileError> {
+fn write(root: &FileRoot, file: &ConfigPath, bytes: &[u8]) -> Result<(), ConfigFileError> {
     static WRITES: AtomicU64 = AtomicU64::new(0);
-    if bytes.len() as u64 > CONFIG_FILE_MAX {
+    if bytes.len() as u64 > root.cap() {
         return Err(ConfigFileError::TooLarge);
     }
-    let path = resolve(root, file)?;
-    // `config/<mod id>` is the mod's folder, so it can't be a file.
-    if path.is_dir() || Some(file.as_str()) == mod_api::content::crash::current_native_mod() {
+    // Neither the implicit bulk root nor a config mod folder can be a file.
+    if file.as_str().is_empty()
+        || (!root.bulk && Some(file.as_str()) == mod_api::content::crash::current_native_mod())
+    {
         return Err(ConfigFileError::NotAFile);
     }
-    let folder = path.parent().unwrap_or(root);
-    fs::create_dir_all(folder).map_err(io)?;
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let temp = folder.join(format!(
+    let (directory, name) = resolve(root, file, true)?;
+    match directory.symlink_metadata(&name) {
+        Ok(meta) if meta.file_type().is_symlink() => return Err(ConfigFileError::Symlink),
+        Ok(meta) if !meta.is_file() => return Err(ConfigFileError::NotAFile),
+        Ok(_) => {}
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(io(e)),
+    }
+    let temp = format!(
         "{name}.{}-{}.tmp",
         std::process::id(),
         WRITES.fetch_add(1, Ordering::Relaxed)
-    ));
-    let written = fs::File::create(&temp)
+    );
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(FollowSymlinks::No);
+    let written = directory
+        .open_with(&temp, &options)
         .and_then(|mut f| f.write_all(bytes).and_then(|()| f.sync_all()))
-        .and_then(|()| fs::rename(&temp, &path));
+        .and_then(|()| directory.rename(&temp, &directory, &name));
     if written.is_err() {
-        let _ = fs::remove_file(&temp);
+        let _ = directory.remove_file(&temp);
     }
     written.map_err(io)
 }
 
-fn list(root: &Path, folder: &ConfigPath) -> Result<Vec<ConfigEntry>, ConfigFileError> {
-    let path = resolve(root, folder)?;
-    if !fs::metadata(&path).map_err(io)?.is_dir() {
+fn list(
+    root: &FileRoot,
+    folder: &ConfigPath,
+    after: Option<&str>,
+    limit: u32,
+) -> Result<Vec<ConfigEntry>, ConfigFileError> {
+    if limit == 0
+        || limit as usize > CONFIG_LIST_MAX
+        || after.is_some_and(|name| !ConfigPath::is_valid_name(name))
+    {
+        return Err(ConfigFileError::InvalidPage);
+    }
+    let (parent, name) = resolve(root, folder, false)?;
+    if !parent.symlink_metadata(&name).map_err(io)?.is_dir() {
         return Err(ConfigFileError::NotAFolder);
     }
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(&path).map_err(io)? {
+    let directory = parent.open_dir_nofollow(&name).map_err(io)?;
+    // Keep only the next bounded page, not every tile in the directory.
+    let mut entries = BTreeMap::new();
+    for entry in directory.entries().map_err(io)? {
         let entry = entry.map_err(io)?;
-        if entries.len() == CONFIG_LIST_MAX {
-            return Err(ConfigFileError::TooLarge);
-        }
-        // A link is left out, never followed (`DirEntry::metadata` doesn't).
-        let meta = entry.metadata().map_err(io)?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if meta.file_type().is_symlink() || is_write_temp(&name) {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if after.is_some_and(|cursor| name.as_str() <= cursor)
+            || is_write_temp(&name)
+            || !ConfigPath::is_valid_name(&name)
+            || (entries.len() == limit as usize
+                && entries
+                    .last_key_value()
+                    .is_some_and(|(last, _)| &name >= last))
+        {
             continue;
         }
-        entries.push(ConfigEntry::from(mod_api::__private::built::ConfigEntry {
-            name,
-            stat: stat_of(&meta),
-        }));
+        let meta = directory.symlink_metadata(&name).map_err(io)?;
+        if !meta.is_file() && !meta.is_dir() {
+            continue;
+        }
+        entries.insert(name, stat_of(&meta));
+        if entries.len() > limit as usize {
+            entries.pop_last();
+        }
     }
-    entries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(entries)
+    Ok(entries
+        .into_iter()
+        .map(|(name, stat)| {
+            ConfigEntry::from(mod_api::__private::built::ConfigEntry { name, stat })
+        })
+        .collect())
 }
 
-fn stat(root: &Path, path: &ConfigPath) -> Result<Option<ConfigStat>, ConfigFileError> {
-    match fs::metadata(resolve(root, path)?) {
+fn stat(root: &FileRoot, path: &ConfigPath) -> Result<Option<ConfigStat>, ConfigFileError> {
+    match resolve(root, path, false).and_then(|(dir, name)| dir.symlink_metadata(name).map_err(io))
+    {
+        Ok(meta) if meta.file_type().is_symlink() => Err(ConfigFileError::Symlink),
         Ok(meta) => Ok(Some(stat_of(&meta))),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(io(e)),
+        Err(ConfigFileError::NotFound) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 
-fn root() -> Result<PathBuf, ConfigFileError> {
-    Game::native_config_dir().map_err(io)
+impl GameConfigFiles {
+    fn root(&self) -> Result<FileRoot, ConfigFileError> {
+        Ok(FileRoot {
+            path: if self.bulk {
+                Game::game_dir()
+            } else {
+                Game::native_config_dir().map_err(io)?
+            },
+            bulk: self.bulk,
+        })
+    }
 }
 
-impl ConfigFiles for GameConfigFiles {
-    fn read(&self, file: &ConfigPath) -> Result<Vec<u8>, ConfigFileError> {
-        read(&root()?, file)
+fn world_root(game: &Game<'_>) -> Result<FileRoot, ConfigFileError> {
+    if game.world_root.as_os_str().is_empty() {
+        return Err(ConfigFileError::NoWorld);
     }
-    fn write(&self, file: &ConfigPath, bytes: &[u8]) -> Result<(), ConfigFileError> {
-        write(&root()?, file, bytes)
-    }
-    fn list(&self, folder: &ConfigPath) -> Result<Vec<ConfigEntry>, ConfigFileError> {
-        list(&root()?, folder)
-    }
-    fn stat(&self, path: &ConfigPath) -> Result<Option<ConfigStat>, ConfigFileError> {
-        stat(&root()?, path)
-    }
+    Ok(FileRoot {
+        path: game.world_root.clone(),
+        bulk: true,
+    })
 }
+
+macro_rules! files {
+    ($owner:ty, $root:expr) => {
+        impl ConfigFiles for $owner {
+            fn read(&self, file: &ConfigPath) -> Result<Vec<u8>, ConfigFileError> {
+                read(&$root(self)?, file)
+            }
+            fn write(&self, file: &ConfigPath, bytes: &[u8]) -> Result<(), ConfigFileError> {
+                write(&$root(self)?, file, bytes)
+            }
+            fn list(
+                &self,
+                folder: &ConfigPath,
+                after: Option<&str>,
+                limit: u32,
+            ) -> Result<Vec<ConfigEntry>, ConfigFileError> {
+                list(&$root(self)?, folder, after, limit)
+            }
+            fn stat(&self, path: &ConfigPath) -> Result<Option<ConfigStat>, ConfigFileError> {
+                stat(&$root(self)?, path)
+            }
+        }
+    };
+}
+
+files!(GameConfigFiles, GameConfigFiles::root);
+files!(Game<'_>, world_root);
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use horizon_client::crash::{ModCall, enter_native_mod};
 
-    struct Root(PathBuf);
+    struct Root(FileRoot);
     impl Root {
         fn new(name: &str) -> Self {
             let root = std::env::temp_dir().join(format!(
@@ -206,12 +340,15 @@ mod tests {
             ));
             let _ = fs::remove_dir_all(&root);
             fs::create_dir_all(&root).unwrap();
-            Self(root)
+            Self(FileRoot {
+                path: root,
+                bulk: false,
+            })
         }
     }
     impl Drop for Root {
         fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(&self.0.path);
         }
     }
 
@@ -220,6 +357,7 @@ mod tests {
     }
 
     fn as_mod<R>(id: &'static str, f: impl FnOnce() -> R) -> R {
+        mod_platform::__private::initialize().unwrap();
         let _call = enter_native_mod(ModCall {
             id,
             hook: "world_load",
@@ -240,7 +378,7 @@ mod tests {
             assert_eq!(read(root, &path("fd.json")).unwrap(), b"top");
             // A second write replaces the bytes and leaves no temporary file.
             write(root, &path("fd/state.json"), b"{}").unwrap();
-            let entries = list(root, &path("fd")).unwrap();
+            let entries = list(root, &path("fd"), None, 1024).unwrap();
             assert_eq!(
                 entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
                 ["state.json"]
@@ -254,12 +392,12 @@ mod tests {
             );
             assert_eq!(read(root, &path("fd")), Err(ConfigFileError::NotAFile));
             assert_eq!(
-                list(root, &path("fd.json")),
+                list(root, &path("fd.json"), None, 1024),
                 Err(ConfigFileError::NotAFolder)
             );
             assert_eq!(read(root, &path("fd/gone")), Err(ConfigFileError::NotFound));
         });
-        assert_eq!(fs::read(root.join("fd/state.json")).unwrap(), b"{}");
+        assert_eq!(fs::read(root.path.join("fd/state.json")).unwrap(), b"{}");
     }
 
     #[test]
@@ -271,15 +409,15 @@ mod tests {
                 write(root, &path("fd"), b"x"),
                 Err(ConfigFileError::NotAFile)
             );
-            assert!(!root.join("fd").exists());
+            assert!(!root.path.join("fd").exists());
             write(root, &path("fd/state.json"), b"{}").unwrap();
             // What a crash between the temp file and the rename leaves behind.
-            fs::write(root.join("fd.json.1-0.tmp"), b"half").unwrap();
-            fs::write(root.join("fd/state.json.1-0.tmp"), b"half").unwrap();
-            fs::write(root.join("fd/notes.tmp"), b"mine").unwrap();
+            fs::write(root.path.join("fd.json.1-0.tmp"), b"half").unwrap();
+            fs::write(root.path.join("fd/state.json.1-0.tmp"), b"half").unwrap();
+            fs::write(root.path.join("fd/notes.tmp"), b"mine").unwrap();
             assert_eq!(read(root, &path("fd.json.1-0.tmp")).unwrap(), b"half");
             // `list` leaves out a write's temporary file, not a mod's own `.tmp`.
-            let names: Vec<_> = list(root, &path("fd"))
+            let names: Vec<_> = list(root, &path("fd"), None, 1024)
                 .unwrap()
                 .into_iter()
                 .map(|e| e.name)
@@ -300,9 +438,12 @@ mod tests {
                 assert_eq!(write(root, &other, b"a's"), Err(ConfigFileError::NotOwned));
                 assert_eq!(stat(root, &other), Err(ConfigFileError::NotOwned));
             }
-            assert_eq!(list(root, &path("b")), Err(ConfigFileError::NotOwned));
+            assert_eq!(
+                list(root, &path("b"), None, 1024),
+                Err(ConfigFileError::NotOwned)
+            );
         });
-        assert_eq!(fs::read(root.join("b/secret.json")).unwrap(), b"b's");
+        assert_eq!(fs::read(root.path.join("b/secret.json")).unwrap(), b"b's");
         // Outside any mod's call nothing is anyone's.
         assert_eq!(
             read(root, &path("b/secret.json")),
@@ -391,9 +532,10 @@ mod tests {
     fn a_symbolic_link_never_leads_out_of_config() {
         let root = Root::new("link");
         let outside = Root::new("link-outside");
-        fs::write(outside.0.join("passwd"), b"outside").unwrap();
-        std::os::unix::fs::symlink(&outside.0, root.0.join("fd")).unwrap();
-        std::os::unix::fs::symlink(outside.0.join("passwd"), root.0.join("fd.json")).unwrap();
+        fs::write(outside.0.path.join("passwd"), b"outside").unwrap();
+        std::os::unix::fs::symlink(&outside.0.path, root.0.path.join("fd")).unwrap();
+        std::os::unix::fs::symlink(outside.0.path.join("passwd"), root.0.path.join("fd.json"))
+            .unwrap();
         as_mod("fd", || {
             assert_eq!(
                 read(&root.0, &path("fd/passwd")),
@@ -407,9 +549,12 @@ mod tests {
                 read(&root.0, &path("fd.json")),
                 Err(ConfigFileError::Symlink)
             );
-            assert_eq!(list(&root.0, &path("fd")), Err(ConfigFileError::Symlink));
+            assert_eq!(
+                list(&root.0, &path("fd"), None, 1024),
+                Err(ConfigFileError::Symlink)
+            );
         });
-        assert!(!outside.0.join("new").exists());
+        assert!(!outside.0.path.join("new").exists());
     }
 
     #[test]
@@ -425,8 +570,372 @@ mod tests {
                 write(root, &path("fd/over"), &over),
                 Err(ConfigFileError::TooLarge)
             );
-            fs::write(root.join("fd/over"), &over).unwrap();
+            fs::write(root.path.join("fd/over"), &over).unwrap();
             assert_eq!(read(root, &path("fd/over")), Err(ConfigFileError::TooLarge));
+        });
+    }
+    #[test]
+    fn bulk_files_are_mod_bound_paged_and_separate_from_settings() {
+        let mut root = Root::new("bulk");
+        root.0.bulk = true;
+        let root = &root.0;
+        let settings = root.path.join("horizon-mods/.horizon-mod-data");
+        fs::create_dir_all(settings.join("fd")).unwrap();
+        fs::write(settings.join("fd/enabled"), b"true").unwrap();
+        as_mod("fd", || {
+            for name in ["z.bin", "a.bin", "m.bin", "other/secret.bin"] {
+                write(root, &path(name), b"tile:42").unwrap();
+            }
+            assert_eq!(read(root, &path("a.bin")).unwrap(), b"tile:42");
+            let first = list(root, &ConfigPath::root(), None, 2).unwrap();
+            assert_eq!(
+                first.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+                ["a.bin", "m.bin"]
+            );
+            assert_eq!(first[0].stat.len, 7);
+            assert_eq!(first[0].stat.kind, ConfigEntryKind::File);
+            let second = list(root, &ConfigPath::root(), Some("m.bin"), 2).unwrap();
+            assert_eq!(
+                second.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+                ["other", "z.bin"]
+            );
+            assert!(
+                list(root, &ConfigPath::root(), Some("z.bin"), 2)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(stat(root, &path("a.bin")).unwrap().unwrap().len, 7);
+            assert_eq!(
+                list(root, &ConfigPath::root(), None, 0),
+                Err(ConfigFileError::InvalidPage)
+            );
+            assert_eq!(
+                list(root, &ConfigPath::root(), None, 1025),
+                Err(ConfigFileError::InvalidPage)
+            );
+            assert_eq!(
+                list(root, &ConfigPath::root(), Some("../fd"), 2),
+                Err(ConfigFileError::InvalidPage)
+            );
+            let captured = horizon_world::native_load_context::capture_settings(&settings, ["fd"]);
+            assert_eq!(
+                captured["fd"]
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect::<Vec<_>>(),
+                [("enabled", "true")]
+            );
+        });
+        as_mod("other", || {
+            assert_eq!(read(root, &path("a.bin")), Err(ConfigFileError::NotFound));
+            assert_eq!(
+                read(root, &path("fd/a.bin")),
+                Err(ConfigFileError::NotFound)
+            );
+            write(root, &path("a.bin"), b"other's tile").unwrap();
+            assert_eq!(read(root, &path("a.bin")).unwrap(), b"other's tile");
+        });
+        assert_eq!(
+            fs::read(root.path.join("horizon-mod-data/fd/a.bin")).unwrap(),
+            b"tile:42"
+        );
+        assert_eq!(
+            read(root, &path("a.bin")),
+            Err(ConfigFileError::NoCallingMod)
+        );
+    }
+
+    #[test]
+    fn bulk_cap_exceeds_config_and_refuses_without_partial_replacement() {
+        let mut root = Root::new("bulk-cap");
+        root.0.bulk = true;
+        let root = &root.0;
+        as_mod("fd", || {
+            let larger_than_config = vec![3; (CONFIG_FILE_MAX + 1) as usize];
+            write(root, &path("tile"), &larger_than_config).unwrap();
+            assert_eq!(read(root, &path("tile")).unwrap(), larger_than_config);
+            write(root, &path("tile"), b"keep").unwrap();
+            let over = vec![0; DATA_FILE_MAX as usize + 1];
+            assert_eq!(
+                write(root, &path("tile"), &over),
+                Err(ConfigFileError::TooLarge)
+            );
+            assert_eq!(read(root, &path("tile")).unwrap(), b"keep");
+            assert_eq!(
+                write(root, &path("absent"), &over),
+                Err(ConfigFileError::TooLarge)
+            );
+            assert_eq!(stat(root, &path("absent")), Ok(None));
+            assert_eq!(list(root, &ConfigPath::root(), None, 10).unwrap().len(), 1);
+            fs::File::create(root.path.join("horizon-mod-data/fd/oversized"))
+                .unwrap()
+                .set_len(DATA_FILE_MAX + 1)
+                .unwrap();
+            assert_eq!(
+                read(root, &path("oversized")),
+                Err(ConfigFileError::TooLarge)
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bulk_links_cannot_reach_another_mod_or_an_external_folder() {
+        let mut root = Root::new("bulk-links");
+        root.0.bulk = true;
+        let outside = Root::new("bulk-links-outside");
+        fs::write(outside.0.path.join("secret"), b"outside").unwrap();
+        as_mod("other", || {
+            write(&root.0, &path("secret"), b"other").unwrap()
+        });
+        fs::create_dir(root.0.path.join("horizon-mod-data/fd")).unwrap();
+        std::os::unix::fs::symlink("../other", root.0.path.join("horizon-mod-data/fd/other"))
+            .unwrap();
+        std::os::unix::fs::symlink(
+            &outside.0.path,
+            root.0.path.join("horizon-mod-data/fd/outside"),
+        )
+        .unwrap();
+        as_mod("fd", || {
+            for name in ["other/secret", "outside/secret"] {
+                assert_eq!(read(&root.0, &path(name)), Err(ConfigFileError::Symlink));
+                assert_eq!(
+                    write(&root.0, &path(name), b"bad"),
+                    Err(ConfigFileError::Symlink)
+                );
+                assert_eq!(stat(&root.0, &path(name)), Err(ConfigFileError::Symlink));
+            }
+            assert!(
+                list(&root.0, &ConfigPath::root(), None, 10)
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+        assert_eq!(fs::read(outside.0.path.join("secret")).unwrap(), b"outside");
+        assert_eq!(
+            fs::read(root.0.path.join("horizon-mod-data/other/secret")).unwrap(),
+            b"other"
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn world_bulk_files_survive_save_reload_backup_and_world_deletion() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+        use crate::game::world_loading::WorldRequest;
+        if run_fresh_cases(
+            "game::native_config_files::tests::world_bulk_files_survive_save_reload_backup_and_world_deletion",
+            "HORIZON_BULK_FILES_CHILD",
+            &["game"],
+        ) {
+            return;
+        }
+        static WARNINGS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        struct SettingsLog;
+        impl log::Log for SettingsLog {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                if record.level() == log::Level::Warn
+                    && record.target() == "horizon_world::native_load_context"
+                {
+                    WARNINGS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            fn flush(&self) {}
+        }
+        log::set_logger(&SettingsLog).unwrap();
+        log::set_max_level(log::LevelFilter::Warn);
+        let scratch = Root::new("world-lifecycle");
+        let saves = scratch.0.path.join("saves");
+        let world = saves.join("Bulk World");
+        let request = |create: bool| {
+            let rules = std::sync::Arc::new(horizon_client::gamerules::RuleRegistry::vanilla());
+            let options = horizon_client::title::WorldOptions {
+                world_type: horizon_client::save::WorldPreset::Flat,
+                rules: horizon_client::gamerules::GameRules::with_registry(rules.clone(), &[]),
+                ..Default::default()
+            };
+            let mut request = WorldRequest::new(
+                "Bulk World",
+                Some("Bulk World"),
+                Some(1),
+                true,
+                create.then_some(&options),
+                rules,
+            )
+            .unwrap();
+            request.save_root = world.clone();
+            request
+        };
+        with_game(|game| {
+            game.world_root.clear();
+            as_mod("fd", || {
+                assert_eq!(
+                    Game::world_data_files(game).read(&path("tiles/nether/0.bin")),
+                    Err(ConfigFileError::NoWorld)
+                );
+            });
+            game.load_world(request(true)).unwrap();
+            as_mod("fd", || {
+                let host: &dyn mod_api::ServerHost = game;
+                host.data_files()
+                    .write(&path("server-cache"), b"game-cache")
+                    .unwrap();
+                host.world_data_files()
+                    .write(&path("tiles/nether/0.bin"), b"world:42")
+                    .unwrap();
+                assert_eq!(
+                    host.world_data_files()
+                        .read(&path("tiles/nether/0.bin"))
+                        .unwrap(),
+                    b"world:42"
+                );
+                let settings = Game::mod_data_root();
+                fs::create_dir_all(settings.join("fd")).unwrap();
+                fs::write(settings.join("fd/enabled"), b"true").unwrap();
+                WARNINGS.store(0, Ordering::Relaxed);
+                let captured =
+                    horizon_world::native_load_context::capture_settings(&settings, ["fd"]);
+                assert_eq!(captured["fd"].len(), 1);
+                assert_eq!(captured["fd"]["enabled"], "true");
+                assert_eq!(WARNINGS.load(Ordering::Relaxed), 0);
+            });
+            game.save_game().unwrap();
+        });
+        with_game(|game| {
+            game.load_world(request(false)).unwrap();
+            as_mod("fd", || {
+                let host: &dyn mod_api::ServerHost = game;
+                assert_eq!(
+                    host.world_data_files()
+                        .read(&path("tiles/nether/0.bin"))
+                        .unwrap(),
+                    b"world:42"
+                );
+                assert_eq!(
+                    host.world_data_files()
+                        .list(&path("tiles/nether"), None, 10)
+                        .unwrap()[0]
+                        .name,
+                    "0.bin"
+                );
+            });
+        });
+        let (backup, _) =
+            horizon_client::title::world_management::backup(&saves, "Bulk World").unwrap();
+        let mut zip = zip::ZipArchive::new(fs::File::open(backup).unwrap()).unwrap();
+        let mut bytes = Vec::new();
+        zip.by_name("Bulk World/horizon-mod-data/fd/tiles/nether/0.bin")
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .unwrap();
+        assert_eq!(bytes, b"world:42");
+        horizon_client::title::world_management::delete(&saves, "Bulk World").unwrap();
+        assert!(!world.exists());
+        as_mod("fd", || {
+            assert_eq!(
+                Game::data_files().read(&path("server-cache")).unwrap(),
+                b"game-cache"
+            );
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn compiled_wasm_bulk_files_use_actual_game_filesystem_roots() {
+        use crate::game::native_entity_refs::tests::run_fresh_cases;
+        use crate::game::native_guest_turn_tests::with_guests_at;
+        if run_fresh_cases(
+            "game::native_config_files::tests::compiled_wasm_bulk_files_use_actual_game_filesystem_roots",
+            "HORIZON_WASM_BULK_FILES_CHILD",
+            &["game"],
+        ) {
+            return;
+        }
+        horizon_guest_stack::run_on_guest_stack(|| {
+            horizon_mod_wasm::copy_probe::with_load_budget(|| {
+                use horizon_mod_package::manifest::Package;
+                use horizon_mod_wasm::{WasmPackage, load};
+                let package_path = PathBuf::from(std::env::var_os("HORIZON_WASM_FIXTURE").unwrap());
+                let mut manifest = Package::read(&package_path).unwrap().manifest;
+                manifest.inject.clear();
+                let info = mod_api::PackageInfo::new(
+                    manifest.id.clone(),
+                    manifest.version.clone(),
+                    mod_api::PackageKind::Code,
+                    mod_api::Side::Both,
+                    vec![manifest.id.clone()],
+                    vec![],
+                );
+                let loaded = load(
+                    &fs::read(std::env::var_os("HORIZON_WASM_STD").unwrap()).unwrap(),
+                    vec![WasmPackage {
+                        manifest,
+                        module: Package::read_wasm(&package_path).unwrap(),
+                    }],
+                );
+                assert!(loaded.refused.is_empty(), "{:?}", loaded.refused);
+                loaded.initialize(&[info]).unwrap();
+                let mods: mod_api::Mods = loaded.mods.into();
+                mod_platform::testing::with_mods(mods.clone(), || {
+                    crate::game::api_values::install_parts(&mods).unwrap();
+                    let base = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+                    let root =
+                        super::super::mods::content_root(&base, &Default::default()).unwrap();
+                    with_guests_at(root.prepared().to_owned(), |game| {
+                        let world = Root::new("wasm-world");
+                        game.world_root = world.0.path.clone();
+                        game.set_allow_commands(true);
+                        game.build_registries();
+                        game.register_native_commands();
+                        assert!(game.native_run_command("wasmbulkfiles"));
+                        let game_dir = Game::game_dir();
+                        assert_eq!(
+                            fs::read(game_dir.join("config/wasm_fixture/a.bin")).unwrap(),
+                            [0]
+                        );
+                        assert_eq!(
+                            fs::read(
+                                game_dir.join("horizon-mod-data/wasm_fixture/wasm_fixture/a.bin")
+                            )
+                            .unwrap(),
+                            [1, 1]
+                        );
+                        assert_eq!(
+                            fs::read(
+                                world
+                                    .0
+                                    .path
+                                    .join("horizon-mod-data/wasm_fixture/wasm_fixture/a.bin")
+                            )
+                            .unwrap(),
+                            [2, 2, 2]
+                        );
+                        as_mod("wasm_fixture", || {
+                            let host: &dyn mod_api::ServerHost = game;
+                            assert_eq!(
+                                host.data_files().read(&path("wasm_fixture/a.bin")).unwrap(),
+                                [1, 1]
+                            );
+                            assert_eq!(
+                                host.world_data_files()
+                                    .read(&path("wasm_fixture/a.bin"))
+                                    .unwrap(),
+                                [2, 2, 2]
+                            );
+                        });
+                        as_mod("other", || {
+                            assert_eq!(
+                                Game::data_files().read(&path("wasm_fixture/a.bin")),
+                                Err(ConfigFileError::NotFound)
+                            );
+                        });
+                        game.world_root.clear();
+                        assert!(game.native_run_command("wasmbulkfilesnoworld"));
+                    });
+                });
+            });
         });
     }
 }

@@ -364,7 +364,6 @@ impl Game<'_> {
         }
         // Native mods, where ItemStack.useOn and Item.use start: the block aimed at had its turn, and the item is off cooldown. A guest's
         // UseItemOn reaches only useOn, its UseItem only use.
-        let mut claimed = false;
         if let Some(hit) = block_hit
             && let Some(answer) = self.use_item_on_block(
                 hit,
@@ -394,23 +393,18 @@ impl Game<'_> {
             return Ok(false);
         };
         if let Some(hit) = block_hit
-            && mod_api::__private::has_part_hook(mod_api::HookId::UseOn)
-            && let Ok(snapshot) = stack.try_into_api()
+            && let Some(answer) = self.item_on_interaction(hit, self.hand, &stack)
         {
-            let (player, player_entity_id) = self.native_clicker();
-            let (hand, at) = (self.hand, hit.native());
-            self.native_use_on(mod_api::__private::UseOnCall {
-                stack: &snapshot,
-                pos: hit.pos,
-                face: hit.face,
-                hand,
-                hit: at,
-                player,
-                player_entity_id,
-                claimed: &mut claimed,
-            });
+            if self.interaction_consumed(answer) {
+                self.trigger_block("minecraft:item_used_on_block", hit.pos, before);
+                return Ok(true);
+            }
+            if answer == Answer::Fail {
+                self.use_failed = true;
+                return Ok(true);
+            }
         }
-        if let Some(used) = self.use_item_fallthrough(&stack, on_block, claimed) {
+        if let Some(used) = self.use_item_fallthrough(&stack, on_block) {
             return Ok(used);
         }
         // LeadItem.useOn follows the block and the item's override, including

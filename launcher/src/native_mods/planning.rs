@@ -163,7 +163,12 @@ pub fn update_check(home: &Path, to: &str) -> Result<UpdateCheck, Failed> {
         .collect();
     let declared: Vec<Vec<dependencies::Dependency>> = found
         .iter()
-        .map(|bundle| dependencies::from_manifest(&bundle.manifest.dependencies))
+        .map(|bundle| {
+            dependencies::from_manifest(
+                &bundle.manifest.dependencies,
+                horizon_mod_package::manifest::Side::Both,
+            )
+        })
         .collect();
     let pairs: Vec<(&Bundle, &[dependencies::Dependency])> = found
         .iter()

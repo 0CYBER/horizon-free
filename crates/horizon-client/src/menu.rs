@@ -4496,6 +4496,9 @@ pub(crate) mod tests {
                 is_ladder: |context, _, _, _, ladder| {
                     *ladder |= context.setting("rules_mod", "stack").is_some();
                 },
+                makes_open_trapdoor_above_climbable: |context, _, _, _, climbable| {
+                    *climbable |= context.setting("rules_mod", "stack").is_some();
+                },
                 friction: |context, _, kind, _, _, friction| {
                     if context.setting("rules_mod", "stack").is_some() {
                         *friction = match kind {
@@ -4676,6 +4679,20 @@ pub(crate) mod tests {
         };
         assert!(!ladder(&before));
         assert!(ladder(&after));
+        // So does the block under an open trapdoor.
+        let trapdoor_ladder = |context: &LoopContext| {
+            let mut climbable = false;
+            crate::motion::ladder::native_makes_open_trapdoor_above_climbable(
+                context,
+                horizon_world::registry::BlockStateId(0),
+                horizon_core::position::BlockPos::new(0, 0, 0),
+                horizon_world::registry::BlockStateId(0),
+                &mut climbable,
+            );
+            climbable
+        };
+        assert!(!trapdoor_ladder(&before));
+        assert!(trapdoor_ladder(&after));
         // A block's friction reads it too; an answer that is NaN or outside 0..=2 keeps the
         // block's own.
         let friction = |context: &LoopContext, kind: &str| {
