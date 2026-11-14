@@ -1,4 +1,4 @@
-//! Prints the host API as one line per method: `owner<TAB>name<TAB>signature<TAB>doc<TAB>hidden`, for `tools/refactors/api-pr1/gate.py`.
+//! Prints the host API as one line per method: `owner<TAB>name<TAB>signature<TAB>doc<TAB>hidden`.
 //! Usage: `host-manifest FILE...`. A trait of an area file (`ItemsHost`, `ItemsBackend`…) is
 //! reported under the union it is a part of (`Host`, `Backend`…), so the output of the old
 //! generated host and of the area files plus the generated unions compare line for line.
