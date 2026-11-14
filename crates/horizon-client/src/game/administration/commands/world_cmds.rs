@@ -1195,6 +1195,12 @@ impl Game<'_> {
                                 ],
                             ));
                         }
+                        // onAttributeUpdated: a lowered max_health clamps health.
+                        if attribute == "minecraft:max_health"
+                            && let Some(player) = self.player.as_mut()
+                        {
+                            let _ = player.clamp_health_to_max();
+                        }
                         Ok(Some((
                             1,
                             Text::translate(
