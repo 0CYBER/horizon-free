@@ -42,6 +42,7 @@ impl Game<'_> {
     pub(in crate::game) fn open_inventory(&mut self) -> bool {
         if self.player.is_none()
             || self.screen != Screen::Playing
+            || self.sign_edit.is_some()
             || self.spectator()
             || self.in_portal_transition()
         {
@@ -149,7 +150,7 @@ mod client_screen_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn closing_a_chest_sends_its_menu_id_and_closes_the_client_menu() {
         with_client_game(|game| {
             let mut reader = logged_in(game);
@@ -178,7 +179,7 @@ mod client_screen_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn closing_the_inventory_sends_the_close_for_id_zero() {
         with_client_game(|game| {
             let mut reader = logged_in(game);
@@ -196,7 +197,7 @@ mod client_screen_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn closing_with_no_screen_reports_false_and_sends_nothing() {
         with_client_game(|game| {
             let mut reader = logged_in(game);
@@ -207,7 +208,7 @@ mod client_screen_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn opening_the_inventory_is_local_and_needs_no_screen() {
         with_client_game(|game| {
             let mut reader = logged_in(game);
@@ -223,7 +224,7 @@ mod client_screen_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn opening_the_inventory_riding_a_horse_sends_the_player_command() {
         with_client_game(|game| {
             let mut reader = logged_in(game);
@@ -236,6 +237,25 @@ mod client_screen_tests {
             horse.extra.tame = true;
             game.mobs.push(horse);
             game.riding = Some(42);
+            // An overlay counts as an open screen even when a mount would otherwise
+            // make open_inventory report that its command was queued.
+            let at = (3, 64, -2);
+            game.world
+                .block_entities
+                .insert(at, BlockEntity::Sign(SignData::default()));
+            game.remote_open_sign_editor(play::OpenSignEditor {
+                pos: [3, 64, -2],
+                front: true,
+            });
+            assert!(!game.open_inventory(), "the sign editor is already open");
+            assert!(game.sign_editor().is_some());
+            assert_eq!(game.screen, Screen::Playing);
+            assert!(
+                sent(&mut reader).is_empty(),
+                "no vehicle menu command was sent"
+            );
+            assert!(game.close_screen());
+            sent(&mut reader);
             assert!(game.open_inventory());
             // The key's press is replayed at the player's next tick, so the
             // command goes out there, as the key's does.
@@ -252,7 +272,7 @@ mod client_screen_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_sign_editor_reports_its_sign_and_closing_sends_the_update() {
         with_client_game(|game| {
             let mut reader = logged_in(game);
@@ -307,7 +327,7 @@ mod client_screen_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn no_sign_editor_reports_no_sign() {
         with_client_game(|game| {
             logged_in(game);
