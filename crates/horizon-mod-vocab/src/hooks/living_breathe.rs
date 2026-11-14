@@ -8,7 +8,7 @@ pub trait Hooks {
     /// `minecraft:zombie`). `can_breathe`, `consume` and `refill` come in as
     /// Horizon does it (a mod-free game changes nothing); set them to
     /// change this tick. With `can_breathe` the air rises by `refill`, up to its
-    /// species-specific maximum (300 for players, 4800 for dolphins); a dolphin's
+    /// maximum (300 for every entity except dolphins, which have 4800); a dolphin's
     /// vanilla `refill` is its maximum minus its current air. Without breath,
     /// air falls by `consume`, and at -20 it is set to 0
     /// and the entity takes 2 drowning damage. Negative amounts count as 0.
