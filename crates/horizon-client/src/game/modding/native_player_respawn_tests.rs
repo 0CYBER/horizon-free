@@ -50,6 +50,7 @@ fn a_dead_player_is_respawned_once() {
             set_dead(game, 13, true);
             assert_eq!(b.respawn(game), Ok(()));
             assert!(!is_dead(game, 13));
+            assert_eq!(b, game.player(b.uuid()).unwrap());
             assert_eq!(*heard.lock().unwrap(), [(13, "guest13".to_owned())]);
             assert_eq!(b.respawn(game), Err(RespawnRefusal::Alive));
             assert_eq!(heard.lock().unwrap().len(), 1, "not respawned twice");

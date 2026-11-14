@@ -2574,6 +2574,23 @@ mod tests {
     }
 
     #[test]
+    fn a_player_handle_keeps_its_identity_when_respawn_resets_the_body() {
+        use mod_api::{__private::game::player_ref, EntityRef, WorldEpoch};
+        let mut guest = guest_at([0.5, 64.0, 0.5]);
+        guest.death_time = 20;
+        guest.death_canceled = true;
+        let epoch = WorldEpoch::new(7);
+        let before = player_ref(EntityRef::new(epoch, guest.entity_id), guest.uuid);
+
+        // This is the respawn reset, with no motion/resources needed for identity.
+        let _ = guest.new_body(false);
+        let after = player_ref(EntityRef::new(epoch, guest.entity_id), guest.uuid);
+        assert_eq!(before, after);
+        assert_eq!(guest.death_time, 0);
+        assert!(!guest.death_canceled);
+    }
+
+    #[test]
     fn the_client_has_loaded_once_it_says_so_or_after_60_ticks_and_not_while_dead() {
         let mut g = guest_at([0.0; 3]);
         assert!(!g.client_loaded());

@@ -1072,6 +1072,8 @@ pub enum RemovalReason {
 }
 
 /// An online player in one open server world, keyed by UUID.
+/// This is the player's identity, not a particular body: handles for the same
+/// player stay equal across respawn. Respawning does not invalidate a handle.
 /// A nested guest turn cannot re-enter a player active in an outer turn;
 /// operations requiring that player's swapped state report them unavailable.
 #[derive(horizon_mod_api_macros::Wire)]
