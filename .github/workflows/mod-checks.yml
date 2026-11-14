@@ -1,0 +1,146 @@
+name: mod-checks
+# The mod API's own checks, kept out of ci.yml: the test tiers (CONTRIBUTING.md "CI tiers"), the export-list,
+# stand-in and wire_loopback guards (tools/hotspots/README.md), the vocabulary and type boundary, and the mod API
+# surface report. A pull request runs it when it touches crates or these tools; a maintainer can start it by hand.
+# It is advisory: a path-filtered workflow cannot be a required check.
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'tools/ci/**'
+      - 'tools/hotspots/**'
+      - 'tools/layering/**'
+      - 'tools/check_mod_vocabulary_state.py'
+      - '.github/workflows/mod-checks.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mod-checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      mod_api: ${{ steps.scope.outputs.mod_api }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # The Rust jobs below run when the pull request touches the mod API, its generator, the engine's hook bodies
+      # or these checks; a dispatch runs everything.
+      - name: Does this pull request touch the mod API?
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ]; then echo "mod_api=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if git diff --name-only "$BASE_SHA"...HEAD | grep -qE '^(crates/horizon-mod-|crates/cargo-horizon-mod/|crates/horizon-client/src/game/(modding|native_hooks)/|tools/ci/(surface|test_stage_catalog|check_api_boundary)|\.github/workflows/mod-checks\.yml)'; then
+            echo "mod_api=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mod_api=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check the mod API type boundary (including negative control)
+        run: python3 tools/ci/check_api_boundary.py --source-only
+      - name: Vocabulary state has explicit ownership
+        run: python3 tools/check_mod_vocabulary_state.py
+      - name: Test prepared-data tooling
+        run: python3 -m unittest discover -s tools/ci -p 'test_prepared_*.py' -v
+      # One file per topic in tools/ci/ignored-tests/; a test that boots the game, starts a child process or reruns
+      # its own executable is #[ignore = "daily"] with a row there.
+      - name: Ignored-test policy files read cleanly
+        run: python3 tools/ci/check_ignored_test_rows.py
+      - name: Game-boot tests are daily tests
+        run: python3 tools/ci/check_game_boot_tests.py
+      - name: Process-starting tests are daily tests
+        run: python3 tools/ci/check_process_tests.py
+      - name: Test reruns select ignored tests too
+        run: python3 tools/ci/reexec_include_ignored.py --check
+      - name: Export lists stay short
+        run: python3 tools/hotspots/check_lists.py
+      - name: Test stand-ins keep up with the API
+        run: python3 tools/hotspots/check_stand_ins.py
+      - name: wire_loopback root does not grow
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 tools/hotspots/check_wire_loopback.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
+      # The mod-host map's tables (docs/layering/mod-host-map.md), built on request instead of committed.
+      - name: Build the mod-host map tables
+        id: mod_host_map
+        if: github.event_name == 'workflow_dispatch'
+        run: python3 tools/layering/scan_engine_mod_edges.py --map target/layering/mod-host-map-tables.md
+      - name: Upload the mod-host map tables
+        if: steps.mod_host_map.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-host-map
+          path: target/layering/mod-host-map-tables.md
+          if-no-files-found: error
+
+  lint:
+    needs: tree
+    if: needs.tree.outputs.mod_api == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: bash tools/ci/rustup_install.sh --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mod-checks-lint
+      - name: Install the ALSA and udev headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      # cargo fmt does not reach these files: the mod API and vocab roots load their modules through generated
+      # includes, game/ through build-derived declarations, and the fixtures and loopback tests are not modules.
+      - name: Format of the files cargo fmt skips
+        run: |
+          find crates/horizon-mod-api/src crates/horizon-mod-vocab/src -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --check --config skip_children=true
+          find crates/horizon-client/src/game -name '*.rs' -print0 | xargs -0 rustfmt --edition 2024 --config skip_children=true --check
+          rustfmt --edition 2024 --check crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/*.rs crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/*/*.rs
+          rustfmt --edition 2024 --check crates/horizon-mod-wasm/wire-loopback/tests/wire_loopback/*.rs
+      - name: Lint the mod host in the server build
+        run: cargo clippy -p horizon-client -p horizon-game -p horizon-mod-host --all-targets --locked --no-default-features -- -D warnings
+
+  surface:
+    needs: tree
+    if: needs.tree.outputs.mod_api == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Rust toolchain
+        run: bash tools/ci/rustup_install.sh --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mod-checks-surface
+      - name: Check generated mod API signatures
+        run: python3 tools/ci/check_api_boundary.py
+      # The mod API surface gate (docs/modding/src/reference/sdk/02-surface.md): what a pull request changes in what
+      # mods can name, in the job summary. It fails for a stale or unreadable new change note and, with
+      # tools/ci/surface.toml's gate on, for a breaking change no new note declares (tools/ci/surface_report.py).
+      - name: Build the source stage generator
+        run: |
+          cargo build --locked -p horizon-mod-api-gen --bin horizon-stage
+          echo "HORIZON_STAGE_TOOL=$PWD/target/debug/horizon-stage" >> "$GITHUB_ENV"
+      - name: Report the mod API surface change
+        if: github.event_name == 'pull_request'
+        env:
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci/surface_report.py
+      - name: Validate prebuilt source stage and listed slots
+        run: python3 tools/ci/test_stage_catalog.py -v

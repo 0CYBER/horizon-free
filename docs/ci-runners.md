@@ -151,17 +151,3 @@ To move to a new release, in one pull request:
 1. write the new number in `tools/ci/rust-version`;
 2. update `DIST` and each platform's component checksums in `launcher/src/rust_toolchain.rs` for that release;
 3. fix what the new compiler and Clippy report, and anything the release changed (build layout, warnings).
-
-## Cheap checks on contributors' pull requests
-
-A pull request whose head branch is in a contributor's fork gets only the cheap checks: `verify-static` and
-`format` (repository hygiene, the mod API boundary scan and rustfmt; nothing compiles). `lint`, `verify`,
-`launcher`, the Windows launcher tests, the modding book and cargo-horizon-mod's builds are skipped, and a skipped job
-counts as passed for a required check. Everything runs on main's pushes, on dispatches, and on pull requests from
-this repository's own branches (rollups, syncs, fast-path fixes, our sessions' work), which carry contributors'
-changes into one heavy run. The rule is `tools/ci/pr_gate.py`; `tests/test_pr_gate.py` keeps the workflows to it.
-
-A reviewer runs the heavy gate on one contributor's pull request with `gh workflow run dyna-ci.yml -f pr=<number>`.
-Main's workflow checks out that pull request's head commit on GitHub's runners (never ours) with a read-only token,
-and the `pr-status` job, which runs none of its code and alone may write commit statuses, posts `dispatched/lint`,
-`dispatched/verify`, `dispatched/verify-static` and `dispatched/launcher` on that commit.

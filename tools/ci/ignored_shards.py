@@ -30,7 +30,7 @@ from tools.ci import rust_changes  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 
 # One package per shard, balanced on the measured test times of the single-job run this
-# plan replaced (dyna-ci run #952, e8752e146f: horizon-client 380s, horizon-client-render
+# plan replaced (CI run #952, e8752e146f: horizon-client 380s, horizon-client-render
 # 279s, horizon-client-lib 189s, 16m53s wall); horizon-world and horizon-items joined when every library
 # test started running with the data, not only the #[ignore]d ones. Rebalance by editing this tuple only.
 SHARDS = ("horizon-client", "horizon-client-lib", "horizon-client-render", "horizon-world", "horizon-items")
@@ -43,7 +43,7 @@ DAILY_ROWS = "daily-rows"
 # the other packages' groups in one 60-minute leg. Coverage, not spreading a slow job.
 DAILY_ROWS_LEGS = {".": DAILY_ROWS, "launcher": "daily-rows-launcher"}
 # What a package's tests need built that `cargo test` does not build itself, by package: the one command, run
-# before its tests by `verify` (dyna-ci.yml), the launcher job and the daily run (tools/ci/ignored_tests.py), so they
+# before its tests by the daily run (tools/ci/ignored_tests.py), so they
 # cannot drift. horizon-mod-package's holder tests start the `holder_actor` example from beside their test executable
 # (target/debug/examples, the test profile's folder).
 PREPARE = {

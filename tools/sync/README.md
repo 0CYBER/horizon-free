@@ -1,10 +1,5 @@
 # Upstream integration checks
 
-`audit_launcher_restoration.py --upstream <sha> --upstream-base <sha>` inventories
-changed launcher files and fork commits. It marks whole upstream takes without
-judging whether a fork hunk is a permitted Horizon-layer restoration or mod work
-that must remain. Reviewers check the inventory and the resulting corrections.
-
 ## Upstream changes the merge dropped
 
 A conflict resolved to the fork's side drops upstream's change silently: the sync builds, and the fork later looks
@@ -40,7 +35,3 @@ Both checks look this up lazily: only when they have a violation, or when their 
 merge base's, so an ordinary PR or rollup never touches the network. When they look, an unreachable upstream, a
 timeout, a shallow checkout or missing history fails closed, even if a previous fetch left a cached ref.
 `HORIZON_UPSTREAM_URL` overrides the URL for local bare-repo tests; normal CI leaves it unset.
-
-The Dyna verify checkout initially uses the checkout action's shallow default, then its
-`Fetch this commit's history` step fetches `HEAD` with `--unshallow` before running the checks, which retains
-the upstream-parent merge in history.

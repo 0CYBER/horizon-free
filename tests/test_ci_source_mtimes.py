@@ -136,25 +136,5 @@ BUILDS = re.compile(r"\bcargo (build|test|check|clippy|rustc|run|doc)\b|vanilla-
                     r"ignored_tests\.py|run_test_binaries\.py")
 
 
-class PersistentTargetTests(unittest.TestCase):
-    def test_every_dyna_job_that_builds_snapshots_its_sources_first(self):
-        # A Dyna runner keeps its target between jobs of any branch. A job that builds there
-        # without refreshing the snapshot leaves artifacts of its tree that the next snapshotting
-        # job, restoring old timestamps, judges fresh. A job building in its own scratch target is exempt.
-        for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
-            for name, job in (yaml.safe_load(path.read_text()).get("jobs") or {}).items():
-                if "dyna" not in str(job.get("runs-on", "")):
-                    continue
-                runs = [step.get("run") or "" for step in job.get("steps", [])]
-                if any('echo "CARGO_TARGET_DIR=' in run and "mktemp -d" in run for run in runs):
-                    continue
-                builds = [i for i, run in enumerate(runs) if BUILDS.search(run)]
-                if not builds:
-                    continue
-                with self.subTest(workflow=path.name, job=name):
-                    snapshot = [i for i, run in enumerate(runs) if "tools/ci/source_mtimes.py" in run]
-                    self.assertTrue(snapshot and snapshot[0] < builds[0],
-                                    "restore the source snapshot before the first build step")
-
 if __name__ == "__main__":
     unittest.main()

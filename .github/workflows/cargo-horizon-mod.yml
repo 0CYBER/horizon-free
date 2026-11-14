@@ -32,7 +32,7 @@ jobs:
         run: echo "platforms=$(python3 -c 'import json, os, tools.horizon_mod_binstall as m; print(json.dumps([p for p in m.PLATFORMS if os.environ["EVENT_NAME"] != "pull_request" or p["run"]]))')" >> "$GITHUB_OUTPUT"
   build:
     needs: plan
-    # A contributor's pull request (its head in a fork) skips what compiles; a reviewer dispatches it (tools/ci/pr_gate.py).
+    # A contributor's pull request (its head in a fork) skips what compiles; a maintainer dispatches it.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     name: build ${{ matrix.target }}
     strategy:

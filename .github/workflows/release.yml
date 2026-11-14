@@ -3,8 +3,8 @@ name: release
 # - nightly: the daily run (daily.yml) calls this when every leg is green, with that commit, and then publishes
 #   whenever a player-facing pull request merged since the published Nightly (no batch-size or age rule); by hand it
 #   defaults to `daily-green` and keeps the batch rules. It refuses any commit but the one `daily-green` points to.
-# - snapshot: root's dispatch on main, for main's head or an explicit commit of main; it needs only dyna-checks' gate
-#   (lint, verify, verify-static, launcher) passed on that exact commit (pending is not passed). It builds that
+# - snapshot: a maintainer's dispatch on main, for main's head or an explicit commit of main; it needs only the checks
+#   workflow's gate (verify, launcher) passed on that exact commit (pending is not passed). It builds that
 #   commit's SDK (prebuilt-game-build.yml), publishes it as sdk-<sha> (sdk-publish.yml, skipped when it exists),
 #   then starts `nightly build` with kind=snapshot, which builds, signs and publishes the game as the pre-release
 #   snapshot-<date>-<short> on its own tag: never the `nightly` tag or channel, never `daily-green`, no daily tests.
@@ -62,7 +62,7 @@ permissions:
   contents: read
   # The open release-blocker issues (decide).
   issues: read
-  # dyna-checks' gate jobs and the nightly build runs (decide).
+  # The checks workflow's gate jobs and the nightly build runs (decide).
   actions: read
 concurrency:
   # One release at a time. A dry run publishes nothing, so it can't race a real release: it gets a group of its own.

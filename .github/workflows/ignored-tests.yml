@@ -15,42 +15,33 @@ permissions:
 env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
   HORIZON_TELEMETRY_URL: "off"
-  # sccache (shared per Dyna host) cannot cache incremental compiles, so every Rust job builds non-incremental.
+  # sccache cannot cache incremental compiles, so every Rust job builds non-incremental.
   CARGO_INCREMENTAL: 0
 jobs:
   plan:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      self_hosted: ${{ steps.runner.outputs.self_hosted }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           ref: ${{ inputs.commit }}
-      - id: runner
-        env:
-          ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
-          LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
-          # Only dispatches (the daily run's included) run this workflow, from this repository.
-          SAME_REPO: true
-          EVENT: ${{ github.event_name }}
-        run: bash tools/ci/dyna_ci_runner.sh >> "$GITHUB_OUTPUT"
       - name: The ignored-tests shard matrix
         id: matrix
         run: python3 tools/ci/ignored_shards.py --matrix --all >> "$GITHUB_OUTPUT"
-  # Dyna's large runner holds the prepared vanilla data. Every shard runs, with one package per shard (the plan
+  # A self-hosted Linux runner holding the maintainer's own Minecraft files (label horizon-game, as ci.yml's
+  # vanilla-parity) runs them with the prepared vanilla data. Every shard runs, with one package per shard (the plan
   # lives in tools/ci/ignored_shards.py). tools/ci/ignored_tests.py fails on a new failure and on a known one that
   # passes, and prints only test names and results: the data is Mojang's.
   ignored-tests-shards:
     needs: plan
-    if: needs.plan.outputs.self_hosted == 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     # Owner-approved stopgap: #2944 removes this when the legs run under 15 minutes.
-    runs-on: ${{ (matrix.shard == 'horizon-client#1of2' || matrix.shard == 'horizon-client#2of2') && 'dyna-xlarge' || 'dyna-large' }}
+    runs-on: [self-hosted, linux, horizon-game]
     # Temporary: #2944 brings client data legs under 15 minutes and restores the 60-minute cap.
     # Interim: 180 so the client legs finish and report at all (the 2026-11-13 dry run's #1of2 was killed at 90 with
     # 61 tests past 60 s). Cutting the slow client tests (#4022's next change) brings it back down.
@@ -63,14 +54,10 @@ jobs:
           persist-credentials: false
           # The daily run's commit; empty (this event's commit) on a dispatch of this workflow.
           ref: ${{ inputs.commit }}
-      - name: Check Dyna dependencies (install fallback without root)
-        run: bash tools/ci/dyna_ci_deps.sh
       - name: Install Rust toolchain
-        run: |
-          if [ ! -x "$CARGO_HOME/bin/rustup" ]; then
-            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal
-          fi
-          bash tools/ci/rustup_install.sh --profile minimal
+        run: bash tools/ci/rustup_install.sh --profile minimal
+      - name: Tools from the runner
+        run: bash tools/ci/runner-env.sh
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -90,17 +77,7 @@ jobs:
       # Missing data fails the leg.
       - name: Prepare checkout-keyed vanilla data
         id: data
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          for dir in minecraft datagen horizon-client tools; do
-            if [ ! -d "/cache/horizon-local/$dir" ]; then
-              echo "prepared data unavailable on this runner"
-              echo "Prepared data unavailable: $dir ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
-              exit 1
-            fi
-          done
-          HORIZON_DYNA_CACHE=true HORIZON_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" HORIZON_SHARED_SOURCE=/cache/horizon-local bash tools/ci/vanilla-data.sh
+        run: bash tools/ci/vanilla-data.sh
       - name: Retain typed preparation diagnostics only
         if: failure() && steps.data.outcome == 'failure'
         uses: actions/upload-artifact@v4

@@ -1,8 +1,6 @@
-# The apt packages the room's Dyna CI runner image installs, in the order its Containerfile lists them. That image
-# is built outside this repository, so this file is its copy here: GitHub-hosted and boat runners install exactly
-# this list (dyna-ci.yml's lint and verify), so they match the pool and cannot drift from each other. When the
-# image's list changes, run tools/ci/check_runner_packages.py on its new Containerfile and update this file to match;
-# tests/test_ci_boat.py keeps dyna_ci_deps.sh within it.
+# The apt packages a CI runner image installs, in the order its Containerfile lists them. GitHub-hosted runners
+# install exactly this list (machine-sample.yml), so they match the image and cannot drift from it. When the image's
+# list changes, update this file to match.
 xvfb
 xauth
 x11-xkb-utils

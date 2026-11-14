@@ -1,7 +1,7 @@
 name: daily
 run-name: daily ${{ inputs.commit || github.sha }}${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main') && ' (dry run)' || '' }}
 # The daily tier (CI tiers, owner 2026-11-13; docs/release-flow.md "Daily run"): every in-game test, once a day on
-# main's head and by root's dispatch. Its legs are the workflows that used to run on main pushes, called unchanged:
+# main's head and by a maintainer's dispatch. Its legs are the workflows that used to run on main pushes, called unchanged:
 # the ignored-tests data shards, the wasm fixture and guest stacks, fn-replace-check and the native linkage probe,
 # plus the launcher's Windows runtime-lease tests (launcher-windows-check.yml), the machine sample built against this
 # API (machine-sample.yml) and the prebuilt SDK of the commit (prebuilt-game-build.yml), which the nightly needs.
@@ -39,9 +39,9 @@ env:
   # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
   HORIZON_TELEMETRY_URL: "off"
 jobs:
-  # Dyna runners accept dispatches, not scheduled events (as dyna-checks' nightly-dispatch).
+  # The schedule only dispatches the real run, so every run has the dispatch's inputs.
   schedule-dispatch:
-    if: github.repository == 'arismoko/horizon' && github.event_name == 'schedule'
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

@@ -153,23 +153,3 @@ class Visibility(unittest.TestCase):
         self.assertNotIn("PRIVATE_PAYLOAD", result.stdout)
         self.assertEqual(result.stderr, "")
 
-    def test_formatting_failure_does_not_skip_later_builds_but_is_propagated(self):
-        steps = yaml.safe_load((ROOT / '.github/workflows/dyna-ci.yml').read_text())["jobs"]["lint"]["steps"]
-        fmt = next(s for s in steps if s.get("id") == "formatting")
-        native = next(s for s in steps if s.get("id") == "native-lint")
-        final = next(s for s in steps if s.get("name") == "Summarize failed gate steps")
-        self.assertNotIn("continue-on-error", fmt)
-        self.assertNotIn("clippy", fmt["run"])
-        self.assertIn("clippy", native["run"])
-        self.assertNotIn("continue-on-error", native)
-        for name in ("Lint native targets", "Lint the server build without sound or controllers", "The mod API builds for wasm32"):
-            step = next(s for s in steps if s.get("name") == name)
-            self.assertLess(steps.index(fmt), steps.index(step))
-            self.assertLess(steps.index(step), steps.index(final))
-            self.assertNotIn("formatting", step.get("if", ""))
-        self.assertIn("failure()", final["if"])
-        self.assertIn("!cancelled()", final["if"])
-        for name in ("native-lint", "server-lint"):
-            step = next(s for s in steps if s.get("id") == name)
-            self.assertIn("!cancelled()", step["if"])
-            self.assertNotIn("success()", step["if"])

@@ -105,7 +105,6 @@ class NightlyBuildSnapshotTests(unittest.TestCase):
                 if eval(condition.replace("||", "or").replace("&&", "and"), {"__builtins__": {}}):
                     optional.add(row["name"])
             self.assertEqual(optional, {"windows-arm64", "linux-musl"} | ({"macos-x64"} if kind == "snapshot" else set()))
-        self.assertEqual(game["jobs"]["linux-smoke"]["needs"], ["runner-configuration", "build"])
         self.assertEqual(self.workflow["jobs"]["sign"]["needs"], ["pick", "build"])
         self.assertEqual(self.workflow["jobs"]["publish"]["needs"], ["pick", "build", "sign"])
 

@@ -350,7 +350,7 @@ class ReleaseTrainTests(unittest.TestCase):
                         status="completed", conclusion="failure")
         def job(name, status="completed", conclusion="success"):
             return dict(name=name, status=status, conclusion=conclusion)
-        gates = [job(name) for name in ("lint", "verify", "verify-static", "launcher", "pool-watch")]
+        gates = [job(name) for name in ("verify", "launcher")]
         records = [record("pr", 1, "pull_request"), record("topic", 2, branch="topic"),
                    record("new", 3), record("good", 4), record("old", 5)]
         jobs = {3: gates[:-1], 4: gates + [job("client-data", conclusion="failure")]}
@@ -358,12 +358,12 @@ class ReleaseTrainTests(unittest.TestCase):
             self.assertEqual(arguments[:4], ("api", "--paginate", "--slurp", arguments[3]))
             path = arguments[3]
             self.assertNotIn("wasm-mods.yml", path, "the fixture runs in the daily run, not on main pushes")
-            if "dyna-ci.yml/runs?" in path:
+            if "/ci.yml/runs?" in path:
                 self.assertIn("branch=main&event=push", path)
                 return [{"workflow_runs": records[:3]}, {"workflow_runs": records[3:]}]
             ident = int(path.split("/runs/")[1].split("/")[0])
             self.assertIn("filter=latest", path)
-            return [{"jobs": jobs[ident][:2]}, {"jobs": jobs[ident][2:]}]
+            return [{"jobs": jobs[ident][:1]}, {"jobs": jobs[ident][1:]}]
         with mock.patch.object(train, "REPO", "arismoko/horizon"), \
                 mock.patch.object(train, "gh_json", side_effect=api) as requests:
             self.assertEqual(train.green_main_head(parity=True), "good", "missing gate is not success")
@@ -375,7 +375,7 @@ class ReleaseTrainTests(unittest.TestCase):
             paths = [call.args[3] for call in requests.call_args_list]
             self.assertFalse(any("/runs/3/jobs" in path for path in paths))
             self.assertTrue(any("/runs/4/jobs" in path for path in paths))
-            for name in ("verify", "verify-static", "pool-watch"):
+            for name in ("verify", "launcher"):
                 for status, conclusion in [("queued", None), ("in_progress", "success"),
                                            ("completed", "skipped"), ("completed", "cancelled"),
                                            ("completed", "failure"), ("completed", "timed_out")]:
@@ -428,15 +428,15 @@ class ReleaseTrainTests(unittest.TestCase):
                 head = commits[1]
                 green = {"workflow_runs": [dict(head_sha=head, head_branch="main", event="push", id=7)]}
                 done = dict(status="completed", conclusion="success")
-                gates = [{"jobs": [dict(name=name, **done) for name in ("lint", "verify", "verify-static", "launcher")]}]
+                gates = [{"jobs": [dict(name=name, **done) for name in ("verify", "launcher")]}]
                 with mock.patch.object(train, "REPO", "arismoko/horizon"), \
                         mock.patch.object(train, "gh_json", side_effect=[[green], gates]):
                     self.assertEqual(train.channel_head("snapshot", ""), head, "a snapshot needs the gate only")
                 with mock.patch.object(train, "REPO", "arismoko/horizon"), \
-                        mock.patch.object(train, "gh_json", side_effect=[[green], [{"jobs": gates[0]["jobs"][:3]}]]):
+                        mock.patch.object(train, "gh_json", side_effect=[[green], [{"jobs": gates[0]["jobs"][:1]}]]):
                     with self.assertRaisesRegex(SystemExit, "a snapshot needs the gate green"):
                         train.channel_head("snapshot", head)
-                pending = [{"jobs": gates[0]["jobs"][:3] + [dict(name="launcher", status="in_progress", conclusion=None)]}]
+                pending = [{"jobs": gates[0]["jobs"][:1] + [dict(name="launcher", status="in_progress", conclusion=None)]}]
                 with mock.patch.object(train, "REPO", "arismoko/horizon"), \
                         mock.patch.object(train, "gh_json", side_effect=[[green], pending]):
                     with self.assertRaisesRegex(SystemExit, "a snapshot needs the gate green"):

@@ -27,28 +27,10 @@ env:
   CARGO_INCREMENTAL: 0
   HORIZON_TELEMETRY_URL: "off"
 jobs:
-  route:
-    runs-on: ubuntu-latest
-    outputs:
-      self_hosted: ${{ steps.runner.outputs.self_hosted }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: runner
-        env:
-          ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
-          LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
-          # Only the schedule and dispatches run this workflow, both from this repository; the schedule is
-          # routed as a dispatch is.
-          SAME_REPO: true
-          EVENT: workflow_dispatch
-        run: bash tools/ci/dyna_ci_runner.sh >> "$GITHUB_OUTPUT"
-
   measure:
-    needs: route
-    # The workloads need the prepared vanilla data, which only Dyna's runners hold: with the pool off this run
-    # measures nothing and says so, and the trend has a gap.
-    if: needs.route.outputs.self_hosted == 'true'
-    runs-on: dyna-medium
+    # The workloads need the prepared vanilla data: a self-hosted Linux runner holding the maintainer's own
+    # Minecraft files (label horizon-game, as ci.yml's vanilla-parity).
+    runs-on: [self-hosted, linux, horizon-game]
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
@@ -56,8 +38,6 @@ jobs:
           ref: ${{ inputs.commit || github.sha }}
       - name: Choose build parallelism
         run: echo "CARGO_BUILD_JOBS=$(python3 tools/ci/cargo_jobs.py --job-mib 4096)" | tee -a "$GITHUB_ENV"
-      - name: Self-hosted image headers or rootless fallback
-        run: bash tools/ci/dyna_ci_deps.sh
       - name: The pinned Rust (tools/ci/rust-version)
         id: rust
         run: echo "version=$(cat tools/ci/rust-version)" >> "$GITHUB_OUTPUT"
@@ -76,15 +56,10 @@ jobs:
       # Every build and test in this job runs at the runner's size, not the host's (tools/ci/cargo_jobs.py).
       - name: Cap build parallelism to the runner
         run: python3 tools/ci/cargo_jobs.py --job-mib 3072 --cap
+      - name: Tools from the runner
+        run: bash tools/ci/runner-env.sh
       - name: Prepare checkout-keyed vanilla data
-        run: |
-          for dir in minecraft datagen horizon-client tools; do
-            if [ ! -d "/cache/horizon-local/$dir" ]; then
-              echo "::error::prepared data unavailable on this runner: $dir"
-              exit 1
-            fi
-          done
-          HORIZON_DYNA_CACHE=true HORIZON_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" HORIZON_SHARED_SOURCE=/cache/horizon-local bash tools/ci/vanilla-data.sh
+        run: bash tools/ci/vanilla-data.sh
       # The profile players get, on the server build (no audio, no controllers). horizon-hot-paths-game is
       # horizon-game's entry, with one native listener mod it installs only for the hook workload.
       - name: Build the release game
@@ -93,13 +68,13 @@ jobs:
         run: |
           set -euo pipefail
           target="${CARGO_TARGET_DIR:-$PWD/target}"
-          # RUNNER_TEMP is a small tmpfs on a Dyna runner: scratch goes on the build volume, removed at the end.
+          # RUNNER_TEMP may be a small tmpfs on a self-hosted runner: scratch goes on the build volume, removed at the end.
           scratch=$(mktemp -d "$target/hot-paths.XXXXXX")
           trap 'rm -rf "$scratch"' EXIT
           command -v valgrind > /dev/null || echo "::warning::no valgrind on this runner: instructions and allocations are not measured"
           python3 tools/hot_paths.py measure --game "$target/release/horizon-hot-paths-game" \
             --resources "$PWD/.local/horizon-client/26.3" --work "$scratch" \
-            --commit "$(git rev-parse HEAD)" --host dyna-medium --run "$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" \
+            --commit "$(git rev-parse HEAD)" --host "$RUNNER_NAME" --run "$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT" \
             --out "$RUNNER_TEMP/hot-paths.json" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:

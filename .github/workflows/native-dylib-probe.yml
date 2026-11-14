@@ -19,25 +19,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  route:
-    runs-on: ubuntu-latest
-    outputs:
-      self_hosted: ${{ steps.runner.outputs.self_hosted }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - id: runner
-        env:
-          ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
-          LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
-          SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-          EVENT: ${{ github.event_name }}
-        run: bash tools/ci/dyna_ci_runner.sh >> "$GITHUB_OUTPUT"
   linkage:
     permissions:
       contents: read
-    needs: route
     name: linkage ${{ matrix.target }}
     strategy:
       fail-fast: false
@@ -48,7 +32,7 @@ jobs:
           # Match the launcher's actual compiler host, not Windows MSVC.
           - os: windows-latest
             target: x86_64-pc-windows-gnu
-    runs-on: ${{ matrix.os == 'ubuntu-22.04' && needs.route.outputs.self_hosted == 'true' && 'dyna-large' || matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     defaults:
       run:
@@ -57,15 +41,12 @@ jobs:
       CARGO_INCREMENTAL: '0'
       SDK_OUT: prebuilt
       PROBE_OUT: target/native-dylib-probe
-      PROBE_PYTHON: ${{ matrix.os == 'ubuntu-22.04' && needs.route.outputs.self_hosted == 'true' && 'python3' || 'python' }}
+      PROBE_PYTHON: python
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           ref: ${{ inputs.commit || github.sha }}
-      - name: Self-hosted image headers or rootless fallback
-        if: runner.environment == 'self-hosted' && runner.os == 'Linux'
-        run: bash tools/ci/dyna_ci_deps.sh
       - name: Record exact head and select the launcher's pinned compiler
         id: rust
         run: |

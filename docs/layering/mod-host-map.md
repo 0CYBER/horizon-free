@@ -114,5 +114,5 @@ host areas by strand, and the vocabulary split) are built from the current tree,
 
 - locally: `python3 tools/layering/scan_engine_mod_edges.py --map target/layering/mod-host-map-tables.md` (or with
   no argument, to print them);
-- for main: the `mod-host-map` artifact of the `verify-static` job of the latest `dyna-checks` run on main. Only pushes to
+- for main: the `mod-host-map` artifact of the `verify` job of the latest `checks` run on main. Only pushes to
   main build it; pull request runs don't.

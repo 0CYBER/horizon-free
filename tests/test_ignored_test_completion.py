@@ -282,10 +282,6 @@ class IgnoredTests(unittest.TestCase):
             self.assertIsNone(ignored_tests.run("horizon-mod-package", [], only=("lib", ["holder::tests::slow"])))
         self.assertEqual(execute.call_count, 1)
         self.assertEqual(ignored_tests._stopped["reason"], "what the tests need could not be built")
-        # verify and the launcher job build it with the same command.
-        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/dyna-ci.yml").read_text()
-        self.assertEqual(workflow.count("ignored_shards.py --prepare horizon-mod-package"), 2)
-        self.assertNotIn("--example holder_actor", workflow)
 
     def test_a_launcher_daily_row_runs_from_the_launcher_workspace_against_its_lockfile(self):
         output = target(1, "test logs::slow ... ok\n", summary(passed=1))

@@ -11,7 +11,7 @@ The game ships only the Nightly since 2026-10-28 (Ludovic): when `decide --kind 
 `nightly build` on the commit it decided (tools/ci/nightly.py), and "the last release" is the published Nightly.
 On the fork (CI tiers, owner 2026-11-13) `--channel` names the kind of build: `nightly` takes `daily-green` and
 refuses any other --head (an older commit had no daily run of its own, and no SDK); `snapshot` takes main's head (or
-a --head on main) and refuses a commit whose gate jobs (dyna-checks' main-push lint, verify, verify-static, launcher)
+a --head on main) and refuses a commit whose gate jobs (the checks workflow's main-push verify and launcher)
 did not all pass (pending is not passed); otherwise it always builds, as snapshot-<date>-<short> (no batch rules,
 cap, pause or release-blocker: a snapshot is for testing main, never for players).
 
@@ -563,8 +563,8 @@ def gate_jobs_passed(run_id, required):
 
 
 DAILY_GREEN = "daily-green"
-FORK_GATE = {"lint", "verify", "verify-static", "launcher", "pool-watch"}
-SNAPSHOT_GATE = {"lint", "verify", "verify-static", "launcher"}
+FORK_GATE = {"verify", "launcher"}
+SNAPSHOT_GATE = {"verify", "launcher"}
 
 
 def daily_green_commit():
@@ -574,9 +574,9 @@ def daily_green_commit():
 
 
 def fork_gate_passed(sha):
-    """Whether the newest dyna-checks main-push run on sha passed every gate job (the snapshot's check)."""
+    """Whether the newest checks main-push run on sha passed every gate job (the snapshot's check)."""
     pages = gh_json("api", "--paginate", "--slurp",
-                    f"repos/{REPO}/actions/workflows/dyna-ci.yml/runs?branch=main&event=push&head_sha={sha}&per_page=100")
+                    f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha={sha}&per_page=100")
     runs = [entry for page in pages for entry in page["workflow_runs"]
             if entry["head_sha"] == sha and entry["head_branch"] == "main" and entry["event"] == "push"]
     return bool(runs) and gate_jobs_passed(runs[0]["id"], SNAPSHOT_GATE)
@@ -601,7 +601,7 @@ def channel_head(channel, head):
     if subprocess.run(["git", "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"], cwd=ROOT).returncode:
         raise SystemExit(f"::error::refused: {sha} is not on main; a snapshot builds only a commit of main")
     if not fork_gate_passed(sha):
-        raise SystemExit(f"::error::refused: dyna-checks' gate jobs ({', '.join(sorted(SNAPSHOT_GATE))}) "
+        raise SystemExit(f"::error::refused: the checks gate jobs ({', '.join(sorted(SNAPSHOT_GATE))}) "
                          f"did not all pass on a main push of {sha}; a snapshot needs the gate green on its commit")
     return sha
 
@@ -621,7 +621,7 @@ def green_main_head(parity=False, eligible=None):
         # Runs are ordered by creation, not completion: a late old run must not
         # displace a newer push. Paginate beyond bursts of cancelled main runs.
         pages = gh_json("api", "--paginate", "--slurp",
-                        f"repos/{REPO}/actions/workflows/dyna-ci.yml/runs?branch=main&event=push&per_page=100")
+                        f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=100")
         seen = set()
         for page in pages:
             for entry in page["workflow_runs"]:

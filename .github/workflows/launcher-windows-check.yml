@@ -44,28 +44,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
-    outputs:
-      heavy: ${{ steps.gate.outputs.heavy }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Heavy checks for this event
-        id: gate
-        env:
-          EVENT: ${{ github.event_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: python3 tools/ci/pr_gate.py >> "$GITHUB_OUTPUT"
-
   test:
-    # Only same-repository rollups and syncs compile on PR events; main and dispatch stay unchanged. The daily run's
-    # call runs runtime-leases only.
-    needs: gate
-    if: inputs.commit == '' && needs.gate.outputs.heavy == 'true'
+    # A contributor's pull request (its head in a fork) skips what compiles; main and dispatch stay unchanged. The
+    # daily run's call runs runtime-leases only.
+    if: inputs.commit == '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: windows-latest
     timeout-minutes: 40
     defaults:

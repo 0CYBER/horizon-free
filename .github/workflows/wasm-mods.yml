@@ -1,7 +1,7 @@
 name: wasm-mods
 # The daily run and manual dispatch only, never pull requests or main pushes (owner, 2026-11-12; CI tiers 2026-11-13).
 on:
-  # The daily run (daily.yml) calls it with the commit to check; root dispatches it on a branch that changes
+  # The daily run (daily.yml) calls it with the commit to check; a maintainer dispatches it on a branch that changes
   # what it builds.
   workflow_call:
     inputs:
@@ -20,7 +20,9 @@ concurrency:
   cancel-in-progress: ${{ inputs.commit == '' && github.ref != 'refs/heads/main' }}
 jobs:
   fixture:
-    runs-on: dyna-large
+    # The client tests below need the prepared vanilla data: a self-hosted Linux runner holding the maintainer's
+    # own Minecraft files (label horizon-game, as ci.yml's vanilla-parity).
+    runs-on: [self-hosted, linux, horizon-game]
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: 0
@@ -31,7 +33,7 @@ jobs:
       - name: Configure persistent build targets
         shell: bash
         run: |
-          # Dyna supplies a persistent target mount.
+          # A runner may supply a persistent target folder (CARGO_TARGET_DIR).
           target="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/target}"
           mkdir -p "$target"
           if [[ "$target" != "$GITHUB_WORKSPACE/target" ]]; then
@@ -123,15 +125,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
+      - name: Tools from the runner
+        run: bash tools/ci/runner-env.sh
       - name: Prepare checkout-keyed vanilla data
-        run: |
-          for dir in minecraft datagen horizon-client tools; do
-            if [ ! -d "/cache/horizon-local/$dir" ]; then
-              echo "::error::prepared data unavailable on this runner: $dir"
-              exit 1
-            fi
-          done
-          HORIZON_DYNA_CACHE=true HORIZON_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" HORIZON_SHARED_SOURCE=/cache/horizon-local bash tools/ci/vanilla-data.sh
+        run: bash tools/ci/vanilla-data.sh
       - name: Run the client tests that load the compiled fixture
         shell: bash
         env:

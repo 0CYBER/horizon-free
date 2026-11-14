@@ -30,9 +30,7 @@ class NightlyRoutingTests(unittest.TestCase):
         self.assertIn("needs: runner-configuration", workflow_jobs["exporters"])
         self.assertIn("needs: [runner-configuration, exporters]", workflow_jobs["build"])
         expressions = re.findall(r"^\s*runs-on:\s*\$\{\{(.*?)\}\}\s*$", text, re.M)
-        self.assertEqual(len(expressions), 3)
-        smoke = workflow_jobs["linux-smoke"]
-        smoke_if = re.search(r"^\s*if:\s*\$\{\{(.*?)\}\}\s*$", smoke, re.M).group(1)
+        self.assertEqual(len(expressions), 2)
         block = text.split("        include:\n", 1)[1].split("    runs-on:", 1)[0]
         rows = []
         for line in block.splitlines():
@@ -46,10 +44,6 @@ class NightlyRoutingTests(unittest.TestCase):
                 value = value.strip()
                 rows[-1][key] = {"true": True, "false": False}.get(value, value)
         self.assertEqual({row["name"] for row in rows}, {"linux", "linux-musl", "windows", "windows-arm64", "macos", "macos-x64"})
-        linux = next(row for row in rows if row["name"] == "linux")
-        self.assertIn(f"name: {linux['asset']}", smoke, "smoke must download the hosted producer's archive")
-        self.assertIn(f"/hosted-linux/{linux['dir']}", smoke)
-        self.assertIn("needs: [runner-configuration, build]", smoke)
         script = """const fs = require('fs');
 const state = JSON.parse(fs.readFileSync(0, 'utf8'));
 // Actions returns an empty string for absent context properties, not undefined.
@@ -63,33 +57,23 @@ console.log(JSON.stringify(eval(expression)));
             return json.loads(result.stdout)
         default_mac = ["self-hosted", "macOS", "horizon-nightly"]
         bookkeeping = re.search(r"^\s*runs-on:\s*\$\{\{(.*?)\}\}\s*$", NIGHTLY.read_text(), re.M).group(1)
-        for configured, release_runner, disabled, trusted, dyna in itertools.product(
-            [False, True], [False, True], [False, True], [False, True], [None, "false", "true"]
-        ):
+        for release_runner, disabled, trusted in itertools.product([False, True], [False, True], [False, True]):
             variables = {"SELF_HOSTED_CI": "off" if disabled else "all"}
-            if dyna is not None:
-                variables["DYNA_CI_SELF_HOSTED"] = dyna
-            override = configured and dyna == "true"
             if release_runner:
                 variables["MAC_RUNNER"] = "release-mac"
-            if configured:
-                variables.update({"NIGHTLY_LINUX_RUNNER": '"dyna-large"', "NIGHTLY_MAC_RUNNER": '"macos-15"', "NIGHTLY_EXPORTERS_RUNNER": '"dyna-large"', "NIGHTLY_BOOKKEEPING_RUNNER": '"dyna-small"'})
             # An empty runs-on is rejected by Actions; never choose a shared runner instead.
             dedicated = "release-mac" if release_runner else ""
-            expected_exporter = dedicated if trusted else ("dyna-large" if override else ("ubuntu-latest" if disabled else default_mac))
-            with self.subTest(configured=configured, release_runner=release_runner, disabled=disabled, trusted=trusted, dyna=dyna):
+            expected_exporter = dedicated if trusted else ("ubuntu-latest" if disabled else default_mac)
+            with self.subTest(release_runner=release_runner, disabled=disabled, trusted=trusted):
                 self.assertEqual(evaluate(guard_if, {}, trusted), trusted and not release_runner)
                 self.assertEqual(evaluate(expressions[0], {}, trusted), expected_exporter)
-                expected_bookkeeping = "dyna-small" if override else ("ubuntu-latest" if disabled else ["self-hosted", "linux", "horizon-light"])
+                expected_bookkeeping = "ubuntu-latest" if disabled else ["self-hosted", "linux", "horizon-light"]
                 self.assertEqual(evaluate(bookkeeping, {}, trusted), expected_bookkeeping)
-                self.assertEqual(evaluate(smoke_if, {}, trusted), not trusted and override)
-                if not trusted and override:
-                    self.assertEqual(evaluate(expressions[2], {}, trusted), "dyna-large")
                 for row in rows:
                     if row["name"] in {"linux", "linux-musl"}:
                         self.assertEqual(row["os"], "ubuntu-22.04", "shipped Linux binaries keep the documented libc baseline")
                     if row.get("mac"):
-                        expected = dedicated if trusted else ("macos-15" if disabled or override else default_mac)
+                        expected = dedicated if trusted else ("macos-15" if disabled else default_mac)
                     else:
                         expected = row["os"]
                     with self.subTest(entry=row["name"]):

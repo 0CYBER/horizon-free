@@ -302,7 +302,7 @@ def parity_summary(output):
     return text
 
 
-# CI's lint job (.github/workflows/dyna-ci.yml): collect warnings across the whole graph before rejecting them.
+# CI's lint (.github/workflows/ci.yml verify): collect warnings across the whole graph before rejecting them.
 CI_CLIPPY = "python3 tools/ci/check_warnings.py cargo clippy --keep-going --workspace --all-targets --locked"
 CI_CLIPPY_SERVER = "python3 tools/ci/check_warnings.py cargo clippy --keep-going -p horizon-client -p horizon-game -p horizon-mod-host --all-targets --locked --no-default-features"
 

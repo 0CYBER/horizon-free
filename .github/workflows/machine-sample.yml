@@ -3,7 +3,7 @@ name: machine sample
 # The machine sample (arismoko/horizon-machine-sample at tools/ci/check_machine_sample.py's pin) compiled against
 # this commit's mod API. Run by the daily run (daily.yml) and by dispatch, never on pull requests or main pushes: an
 # approved API change never reddens the gate because another repository must follow (owner, 2026-11-13). Its steps
-# are what dyna-checks' lint job ran before it: the same routing, toolchain and command.
+# are what the lint job ran before it: the same toolchain and command.
 on:
   workflow_call:
     inputs:
@@ -25,51 +25,17 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  route:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      self_hosted: ${{ steps.runner.outputs.self_hosted }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - id: runner
-        env:
-          ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
-          LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
-          SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-          EVENT: ${{ github.event_name }}
-        run: bash tools/ci/dyna_ci_runner.sh >> "$GITHUB_OUTPUT"
   build:
-    needs: route
-    # Dyna's large runner, as lint used, when the pool is up; GitHub's otherwise.
-    runs-on: ${{ needs.route.outputs.self_hosted == 'true' && 'dyna-large' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      RUNNER_KIND: ${{ needs.route.outputs.self_hosted == 'true' && 'dyna' || 'github' }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           ref: ${{ inputs.commit || github.sha }}
-      - name: Check Dyna dependencies (install fallback without root)
-        if: env.RUNNER_KIND == 'dyna'
-        run: bash tools/ci/dyna_ci_deps.sh
       - name: Install Rust toolchain and the runner image's packages
-        env:
-          HOSTED: ${{ env.RUNNER_KIND == 'github' }}
         run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends $(grep -v '^#' tools/ci/runner-packages.txt)
-          else
-            if [ ! -x "$CARGO_HOME/bin/rustup" ]; then
-              curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal
-            fi
-            export PATH="$CARGO_HOME/bin:$PATH"
-            # Ordinary rustc invocations through the shared compiler cache, as in lint.
-            echo "RUSTC_WRAPPER=$GITHUB_WORKSPACE/tools/ci/compiler-cache.sh" >> "$GITHUB_ENV"
-          fi
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends $(grep -v '^#' tools/ci/runner-packages.txt)
           bash tools/ci/rustup_install.sh --profile minimal --component rustfmt --component clippy --target wasm32-unknown-unknown
       # The build runs at the runner's size, not the host's (tools/ci/cargo_jobs.py), as lint's did.
       - name: Cap build parallelism to the runner

@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools/ci/vendor/pyyaml-6.0.3.zip"))
 import yaml
 
-WORKFLOWS = [ROOT / ".github/workflows/dyna-ci.yml"]
 # The daily run's legs: called by daily.yml or dispatched by hand, never on pull requests or main pushes (owner,
 # 2026-11-12; CI tiers 2026-11-13).
 DAILY_LEGS = [ROOT / ".github/workflows" / name for name in ("wasm-mods.yml", "fn-replace-check.yml",
@@ -75,38 +74,6 @@ def concurrency_for(path, event, sha, number=None, ref="refs/heads/main", inputs
 
 
 class ConcurrencyTests(unittest.TestCase):
-    def test_main_pushes_run_side_by_side_and_finish(self):
-        for path in WORKFLOWS:
-            with self.subTest(workflow=path.name):
-                first = concurrency_for(path, "push", "a" * 40)
-                next_push = concurrency_for(path, "push", "b" * 40)
-                self.assertNotEqual(first[0], next_push[0], "a main push must not wait behind another")
-                self.assertIs(first[1], False, "a main push must not cancel the running run")
-                self.assertIs(next_push[1], False)
-
-    def test_pr_updates_cancel_only_the_same_pr_group(self):
-        for path in WORKFLOWS:
-            with self.subTest(workflow=path.name):
-                first = concurrency_for(path, "pull_request", "a" * 40, 101)
-                update = concurrency_for(path, "pull_request", "b" * 40, 101)
-                other_pr = concurrency_for(path, "pull_request", "c" * 40, 102)
-                main = concurrency_for(path, "push", "d" * 40)
-                self.assertEqual(first[0], update[0], "updates must replace checks for the same PR")
-                self.assertNotEqual(first[0], other_pr[0], "one PR must not cancel another PR")
-                self.assertNotEqual(first[0], main[0], "a PR must not cancel main")
-                for _, cancel in (first, update, other_pr):
-                    self.assertIs(cancel, True, "PR events must still cancel their previous checks")
-
-    def test_pr_dispatches_on_one_main_head_stay_apart(self):
-        for path in WORKFLOWS:
-            with self.subTest(workflow=path.name):
-                sha = "e" * 40
-                one = concurrency_for(path, "workflow_dispatch", sha, inputs={"pr": "201"})
-                other = concurrency_for(path, "workflow_dispatch", sha, inputs={"pr": "202"})
-                main = concurrency_for(path, "push", sha)
-                self.assertNotEqual(one[0], other[0], "two reviewers' dispatches must not replace each other")
-                self.assertNotEqual(one[0], main[0], "a dispatch must not hold main's run")
-
     def test_daily_legs_never_run_on_pull_requests_or_pushes(self):
         for path in DAILY_LEGS + [ROOT / ".github/workflows" / name
                                   for name in ("ignored-tests.yml", "native-dylib-probe.yml")]:

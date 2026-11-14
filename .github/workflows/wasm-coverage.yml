@@ -1,18 +1,12 @@
 name: wasm-coverage
 # The full internals coverage (#1659): every crossable real internal has a compiling host binding and guest
 # binding, generated from the real catalog and checked in one universal crate each. It alone takes about an
-# hour on the OVH runners, so it runs once a day and on dispatch instead of on every main push (wasm-mods keeps
+# hour on a large runner, so it runs once a day and on dispatch instead of on every main push (wasm-mods keeps
 # the fast checks). A red run is a main break. Same shape as the daily prebuilt game.
 on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
-    inputs:
-      runner:
-        description: Runner for coverage verification
-        type: choice
-        default: auto
-        options: [auto, ubuntu-latest, dyna-large]
 permissions:
   contents: read
   actions: read
@@ -20,50 +14,16 @@ concurrency:
   group: wasm-coverage
   cancel-in-progress: false
 env:
-  # sccache (shared per Dyna host) cannot cache incremental compiles, so every Rust job builds non-incremental.
+  # sccache cannot cache incremental compiles, so every Rust job builds non-incremental.
   CARGO_INCREMENTAL: 0
 jobs:
-  # The same runner choice dyna-checks makes: Dyna's large runner while the pool is up, else GitHub's.
-  runner:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      self_hosted: ${{ steps.runner.outputs.self_hosted }}
-    steps:
-      - uses: actions/checkout@v4
-      # The pool's switch and lease are read live: `vars` is fixed when the run is created, and a main run
-      # that waits in the concurrency group would otherwise see a lease that expired while it waited.
-      # A fork's pull request gets no token to read them and stays on GitHub's runners.
-      - id: runner
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # The run's snapshot, used when the live read is refused (the workflow token may lack Variables access).
-          VARS_ENABLED: ${{ vars.DYNA_CI_SELF_HOSTED }}
-          VARS_LEASE: ${{ vars.DYNA_CI_POOL_UNTIL }}
-          EVENT: ${{ github.event_name }}
-          SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-        run: |
-          if [ "$SAME_REPO" = true ]; then
-            ENABLED=$(gh api "repos/$GITHUB_REPOSITORY/actions/variables/DYNA_CI_SELF_HOSTED" -q .value 2>/dev/null || true)
-            LEASE=$(gh api "repos/$GITHUB_REPOSITORY/actions/variables/DYNA_CI_POOL_UNTIL" -q .value 2>/dev/null || true)
-          fi
-          # A refused read prints GitHub's error JSON: keep only a well-formed answer, else use the snapshot.
-          case "${LEASE:-}" in '' | *[!0-9]*) LEASE= ;; esac
-          case "${ENABLED:-}" in true | false) ;; *) ENABLED= ;; esac
-          echo "pool lease: live=${LEASE:-unreadable} snapshot=${VARS_LEASE:-none}"
-          ENABLED=${ENABLED:-$VARS_ENABLED} LEASE=${LEASE:-$VARS_LEASE} bash tools/ci/dyna_ci_runner.sh >> "$GITHUB_OUTPUT"
-
   wasm-coverage:
-    needs: runner
-    runs-on: ${{ inputs.runner != '' && inputs.runner != 'auto' && inputs.runner || (needs.runner.outputs.self_hosted == 'true' && 'dyna-large' || 'ubuntu-latest') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Check Dyna dependencies (install fallback without root)
-        if: runner.environment != 'github-hosted'
-        run: bash tools/ci/dyna_ci_deps.sh
       - name: Install Rust toolchains and the ALSA and udev headers
         env:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
@@ -89,7 +49,7 @@ jobs:
           workspaces: .
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Unlike rust-cache, retain the staged workspace artifacts and source mtimes.
-      # Dyna's target symlink already persists these directories between jobs.
+      # A self-hosted runner's persistent target already keeps these directories between jobs.
       - uses: actions/cache/restore@v4
         if: runner.environment == 'github-hosted'
         id: coverage-cache

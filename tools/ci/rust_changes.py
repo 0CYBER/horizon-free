@@ -2,8 +2,8 @@
 """Select CI checks from one fail-closed Git diff.
 
 The default answers Rust selection; --launcher uses the launcher's dependency paths.
---all emits the shared Rust, launcher and tooling decisions for dyna-checks (the machine sample is a daily leg,
-machine-sample.yml, so dyna-checks selects nothing for it).
+--all emits the shared Rust, launcher and tooling decisions in one answer (the machine sample is a daily leg,
+machine-sample.yml, so nothing selects it here).
 server_build: whether verify's clippy of the server build has anything new to check (needs_server_build).
 """
 
@@ -19,8 +19,7 @@ from tools import release_train  # noqa: E402
 # The root workspace's manifest and toolchain files: the launcher's path crates inherit from them.
 ROOT_RUST = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "clippy.toml"}
 # The check itself: a change to it runs it.
-LAUNCHER_CHECK = {".github/workflows/ci.yml", ".github/workflows/dyna-ci.yml",
-                  "tools/ci/rust_changes.py", "tools/release_train.py"}
+LAUNCHER_CHECK = {".github/workflows/ci.yml", "tools/ci/rust_changes.py", "tools/release_train.py"}
 
 
 # The Python under tools/ and tests/: verify's Python steps and the parity jobs run it, and no Rust build or test reads
@@ -111,7 +110,7 @@ if __name__ == "__main__":
     parser.add_argument("head")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--launcher", action="store_true", help="answer for the launcher instead")
-    mode.add_argument("--all", action="store_true", help="emit centralized dyna-checks selections")
+    mode.add_argument("--all", action="store_true", help="emit every selection in one answer")
     args = parser.parse_args()
     changes = changed_entries(args.base, args.head)
     paths = [path for _, path in changes]

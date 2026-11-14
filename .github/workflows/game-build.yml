@@ -4,8 +4,7 @@ name: game build
 # Silicon, and Intel cross-built there for x86_64-apple-darwin and checked under Rosetta 2 (#1161). Called by
 # release.yml (the releases) and nightly-build.yml (the opt-in Nightly), always from main's copy of this file: the
 # caller's commit, never the one being built. It holds no secrets: signing the checksums is the callers' own job,
-# which never runs what this one built. Linux artifacts always build on Ubuntu 22.04; optional Dyna runners
-# compile portable Java exporter classes and smoke the downloaded hosted Linux artifact with private data.
+# which never runs what this one built. Linux artifacts always build on Ubuntu 22.04.
 # See docs/release-flow.md.
 on:
   workflow_call:
@@ -57,7 +56,7 @@ jobs:
     # runs pull requests' parity jobs, so a nightly never waits behind their queue), never the release runner
     # (MAC_RUNNER: ludovics-mac-mini-release) nor parity-main's.
     # toJSON keeps an empty trusted runner as an invalid empty label, never a Nightly fallback.
-    runs-on: ${{ fromJSON(inputs.trusted && toJSON(vars.MAC_RUNNER) || (vars.DYNA_CI_SELF_HOSTED == 'true' && vars.NIGHTLY_EXPORTERS_RUNNER) || (vars.SELF_HOSTED_CI != 'off' && '["self-hosted", "macOS", "horizon-nightly"]') || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.trusted && toJSON(vars.MAC_RUNNER) || (vars.SELF_HOSTED_CI != 'off' && '["self-hosted", "macOS", "horizon-nightly"]') || '"ubuntu-latest"') }}
     # Three full preparations (two isolated, one batched) besides the compile.
     timeout-minutes: 60
     steps:
@@ -85,8 +84,7 @@ jobs:
           distribution: temurin
           java-version: '25'
       - if: runner.environment == 'self-hosted'
-        run: |
-          if [[ -z "${DYNA_CI_BUILD:-}" ]]; then bash tools/ci/runner-env.sh; fi
+        run: bash tools/ci/runner-env.sh
         env:
           HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}
       - name: Build the shared wasm standard library
@@ -99,12 +97,7 @@ jobs:
           path: horizon-wasm-std.wasm
           if-no-files-found: error
       - name: Private exporter inputs
-        run: |
-          if [[ -n "${DYNA_CI_BUILD:-}" ]]; then
-            HORIZON_DYNA_CACHE=true HORIZON_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" HORIZON_SHARED_SOURCE=/cache/horizon-local bash tools/ci/vanilla-data.sh
-          else
-            bash tools/ci/vanilla-data.sh
-          fi
+        run: bash tools/ci/vanilla-data.sh
       - name: Compile and validate original exporters against the pinned jars
         shell: bash
         run: |
@@ -183,7 +176,7 @@ jobs:
             target: x86_64-apple-darwin
             dir: horizon-macos-x64
             asset: horizon-macos-x64.zip
-    runs-on: ${{ matrix.mac && fromJSON(inputs.trusted && toJSON(vars.MAC_RUNNER) || (vars.DYNA_CI_SELF_HOSTED == 'true' && vars.NIGHTLY_MAC_RUNNER) || (vars.SELF_HOSTED_CI != 'off' && '["self-hosted", "macOS", "horizon-nightly"]') || '"macos-15"') || matrix.os }}
+    runs-on: ${{ matrix.mac && fromJSON(inputs.trusted && toJSON(vars.MAC_RUNNER) || (vars.SELF_HOSTED_CI != 'off' && '["self-hosted", "macOS", "horizon-nightly"]') || '"macos-15"') || matrix.os }}
     # The fork's cold client + headless builds need both feature variants; keep upstream's limits unchanged.
     timeout-minutes: ${{ github.repository == 'arismoko/horizon' && 60 || (matrix.mac && 60 || 40) }}
     env:
@@ -363,23 +356,16 @@ jobs:
         if: runner.environment == 'self-hosted'
         env:
           HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}
-        run: |
-          if [[ -z "${DYNA_CI_BUILD:-}" ]]; then bash tools/ci/runner-env.sh; fi
+        run: bash tools/ci/runner-env.sh
       - name: Resources prepared from the runner's own Minecraft
         if: runner.environment == 'self-hosted'
-        run: |
-          if [[ -n "${DYNA_CI_BUILD:-}" ]]; then
-            HORIZON_DYNA_CACHE=true HORIZON_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" HORIZON_SHARED_SOURCE=/cache/horizon-local bash tools/ci/vanilla-data.sh
-          else
-            bash tools/ci/vanilla-data.sh
-          fi
+        run: bash tools/ci/vanilla-data.sh
       - name: The game runs (offscreen, a new world, 1500 frames)
         if: runner.environment == 'self-hosted'
         run: bash .workflow-tools/tools/ci/game_smoke.sh
-      # The separate Linux artifact smoke supplies the report when Dyna is enabled;
-      # otherwise Apple Silicon supplies it. Intel still passes its own smoke run.
+      # Apple Silicon supplies the report. Intel still passes its own smoke run.
       - uses: actions/upload-artifact@v7
-        if: runner.environment == 'self-hosted' && matrix.name == 'macos' && (inputs.trusted || vars.DYNA_CI_SELF_HOSTED != 'true' || vars.NIGHTLY_LINUX_RUNNER == '')
+        if: runner.environment == 'self-hosted' && matrix.name == 'macos'
         with:
           name: smoke-test.json
           path: ${{ runner.temp }}/smoke-test.json
@@ -467,65 +453,3 @@ jobs:
       - name: The signing keychain, locked again
         if: always() && runner.os == 'macOS' && vars.MACOS_SIGN_IDENTITY != '' && inputs.developer_id
         run: packaging/macos/keychain.sh lock
-
-  linux-smoke:
-    name: smoke hosted Linux artifact
-    needs: [runner-configuration, build]
-    if: ${{ !inputs.trusted && vars.DYNA_CI_SELF_HOSTED == 'true' && vars.NIGHTLY_LINUX_RUNNER != '' }}
-    # Dyna supplies private resources, never the libc used to compile shipped binaries.
-    runs-on: ${{ fromJSON(vars.NIGHTLY_LINUX_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 20
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.ref }}
-          persist-credentials: false
-          clean: true
-      - name: Workflow-owned smoke tools
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: .workflow-tools
-          persist-credentials: false
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            tools/ci/game_smoke.sh
-            tools/ci/rust-version
-            tools/ci/with_xvfb.py
-      - name: The pinned Rust (tools/ci/rust-version)
-        id: rust
-        shell: bash
-        run: echo "version=$(cat "$GITHUB_WORKSPACE/.workflow-tools/tools/ci/rust-version")" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust.outputs.version }}
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '25'
-      - uses: actions/download-artifact@v8
-        with:
-          name: horizon-linux-x86_64.tar.gz
-          path: ${{ runner.temp }}/hosted-linux
-      - name: Unpack the hosted-built game, unchanged
-        run: |
-          tar xzf "$RUNNER_TEMP/hosted-linux/horizon-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/hosted-linux"
-          echo "BIN=$RUNNER_TEMP/hosted-linux/horizon-linux-x86_64" >> "$GITHUB_ENV"
-      - name: Private resources from the Dyna runner
-        run: |
-          : "${DYNA_CI_BUILD:?Linux smoke requires a Dyna private-data runner}"
-          mkdir -p exporters
-          cp -a "$BIN/exporters/." exporters/
-          HORIZON_DYNA_CACHE=true HORIZON_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" HORIZON_SHARED_SOURCE=/cache/horizon-local bash tools/ci/vanilla-data.sh
-      - name: The hosted artifact draws a world under Xvfb
-        run: bash .workflow-tools/tools/ci/game_smoke.sh
-      - uses: actions/upload-artifact@v7
-        with:
-          name: smoke-test.json
-          path: ${{ runner.temp }}/smoke-test.json
-          if-no-files-found: error
-          retention-days: 3
-

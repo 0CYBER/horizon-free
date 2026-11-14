@@ -38,7 +38,7 @@ class RustChangesTests(unittest.TestCase):
         for path in ["launcher/src/main.rs", "launcher/Cargo.lock", "crates/horizon-port-pack/src/net.rs",
                      "crates/horizon-mcp/src/lib.rs", "crates/horizon-mod-api-gen/src/injection.rs",
                      "crates/horizon-theme/src/lib.rs", "Cargo.toml", "Cargo.lock",
-                     ".github/workflows/ci.yml", ".github/workflows/dyna-ci.yml"]:
+                     ".github/workflows/ci.yml"]:
             with self.subTest(path=path):
                 self.assertTrue(needs_launcher(["README.md", path]))
 
@@ -112,7 +112,7 @@ class RustChangesTests(unittest.TestCase):
         self.assertEqual(selections([("M", "docs/setup.md")]), {
             "rust_required": False, "launcher_required": False, "tooling_required": False,
         })
-        for path in ["Cargo.lock", "tools/ci/rust_changes.py", ".github/workflows/dyna-ci.yml"]:
+        for path in ["Cargo.lock", "tools/ci/rust_changes.py", ".github/workflows/ci.yml"]:
             selected = selections([("M", path)])
             self.assertTrue(selected["rust_required"])
             self.assertTrue(selected["launcher_required"])
