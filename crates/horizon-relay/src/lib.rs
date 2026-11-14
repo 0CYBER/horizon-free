@@ -135,6 +135,14 @@ impl Config {
 
     /// Why the relay must not start with these settings, if it mustn't.
     pub fn check(&self) -> Result<(), String> {
+        for (name, rate) in [
+            ("RELAY_SESSION_KBPS", self.session_rate),
+            ("RELAY_TOTAL_MBPS", self.total_rate),
+        ] {
+            if !rate.is_finite() {
+                return Err(format!("{name} must be finite"));
+            }
+        }
         if self.proxy_protocol && self.proxy_from.is_empty() {
             return Err("RELAY_PROXY_PROTOCOL=1 needs RELAY_PROXY_FROM: the load balancers' addresses or \
                         ranges (e.g. 10.0.0.0/8). Without it any client could send a PROXY line and choose \
@@ -934,6 +942,41 @@ mod tests {
         );
         let v6: SocketAddr = "[2001:db8::1]:5000".parse().unwrap();
         assert_eq!(unmap(v6), v6);
+    }
+
+    #[test]
+    fn bandwidth_settings_reject_nonfinite_values() {
+        for rate in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for (name, config) in [
+                (
+                    "RELAY_SESSION_KBPS",
+                    Config {
+                        session_rate: rate,
+                        ..Config::default()
+                    },
+                ),
+                (
+                    "RELAY_TOTAL_MBPS",
+                    Config {
+                        total_rate: rate,
+                        ..Config::default()
+                    },
+                ),
+            ] {
+                assert_eq!(config.check(), Err(format!("{name} must be finite")));
+            }
+        }
+        for rate in [-1.0, 0.0, 1.0, 1_048_576.0] {
+            assert!(
+                Config {
+                    session_rate: rate,
+                    total_rate: rate,
+                    ..Config::default()
+                }
+                .check()
+                .is_ok()
+            );
+        }
     }
 
     #[test]
