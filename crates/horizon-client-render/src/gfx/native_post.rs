@@ -1053,7 +1053,7 @@ impl NativePost {
             let present = present_constants(&stage.module, constants);
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(&stage.label),
+                label: Some(&super::dx12_compiler::module_label(&stage.label)),
                 source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(stage.module)),
             });
             let options = wgpu::PipelineCompilationOptions {

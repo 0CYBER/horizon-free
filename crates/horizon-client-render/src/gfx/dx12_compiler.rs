@@ -64,6 +64,21 @@ pub(super) fn same_adapter(fxc: &wgpu::AdapterInfo, dxc: &wgpu::AdapterInfo) -> 
         && fxc.device_pci_bus_id == dxc.device_pci_bus_id
 }
 
+/// `text` from a shader pack as a shader module's label DXC can take. wgpu hands
+/// the label to DXC as the source's file name, its first argument: DXC fails to
+/// read a name with a colon, and takes one starting with `-` or `/` for an
+/// option (#16258). Those become `_`; FXC, Vulkan and Metal take any label.
+pub(super) fn module_label(text: &str) -> String {
+    text.chars()
+        .enumerate()
+        .map(|(i, c)| match c {
+            ':' => '_',
+            '-' | '/' if i == 0 => '_',
+            c => c,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +143,27 @@ mod tests {
             ..igpu.clone()
         };
         assert!(!same_adapter(&igpu, &dgpu));
+    }
+
+    #[test]
+    fn module_labels_keep_dxc_from_reading_a_file_or_an_option() {
+        for (text, label) in [
+            ("Bloom: blur", "Bloom_ blur"),
+            ("a:b:c", "a_b_c"),
+            ("C:sky", "C_sky"),
+            ("-sky", "_sky"),
+            ("-", "_"),
+            ("/E", "_E"),
+            // Elsewhere DXC takes them, and the rest of what a pack may write.
+            ("Bloom - blur/fast", "Bloom - blur/fast"),
+            (" -sky", " -sky"),
+            (
+                "Ciel étoilé… \\ * ? \" < > | %",
+                "Ciel étoilé… \\ * ? \" < > | %",
+            ),
+            ("", ""),
+        ] {
+            assert_eq!(module_label(text), label, "{text:?}");
+        }
     }
 }
