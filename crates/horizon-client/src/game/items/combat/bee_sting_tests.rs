@@ -17,7 +17,7 @@ fn spawn(game: &mut Game<'_>, id: u32, kind: &str, position: Vec3) -> u32 {
 
 /// One `Bee.doHurtTarget` from the bee, then the game's event handling.
 fn sting(game: &mut Game<'_>, bee_id: u32, who: Who) {
-    let mut mobs = std::mem::take(&mut game.mobs);
+    let mut mobs = game.mobs.lift();
     let i = mobs.iter().position(|m| m.id == bee_id).unwrap();
     let mut random = LegacyRandom::new(0);
     let mut events = Vec::new();
@@ -30,7 +30,8 @@ fn sting(game: &mut Game<'_>, bee_id: u32, who: Who) {
         };
         do_hurt_target(&mut mobs[i], who, &mut cx);
     }
-    game.mobs = mobs;
+    game.mobs
+        .restore(mobs, horizon_client::join_seq::RestoreOrder::SpawnsFirst);
     game.handle_mob_events(events).unwrap();
 }
 

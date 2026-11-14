@@ -1502,7 +1502,6 @@ fn room(w: &mut W<'_, '_>, p: &Palette, child: &Child, rooms: &[Room]) -> Result
 mod tests {
     use super::*;
     use crate::{
-        nbt::Tag,
         registry::BlockRegistry,
         worldgen::{
             block_feature::FeatureBlockBindings,
@@ -1514,6 +1513,7 @@ mod tests {
         },
     };
     use horizon_core::density::TerrainAdjustment;
+    use horizon_core::nbt::Tag;
     use std::collections::{BTreeMap, BTreeSet};
 
     /// A hand-built save of one monument start, read back: only the top piece's box and

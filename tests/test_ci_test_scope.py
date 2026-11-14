@@ -81,7 +81,7 @@ class RealWorkspaceTests(unittest.TestCase):
     def test_horizon_client_lib_is_built_from_horizon_clients_files(self):
         chosen = self.workspace.scope(["crates/horizon-client/src/game/x.rs"])
         self.assertLessEqual({"horizon-client", "horizon-client-lib", "horizon-client-core"}, chosen)
-        self.assertNotIn("horizon-server", chosen)
+        self.assertNotIn("horizon-release-sign", chosen)
         self.assertIn("horizon-client-lib", self.workspace.scope(["crates/horizon-client/tests/lan_bot.rs"]))
 
     def test_every_reader_names_a_package_and_a_path_in_the_tree(self):

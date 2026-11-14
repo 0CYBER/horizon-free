@@ -18,12 +18,17 @@ impl World<'_> {
             f64::from(pos.y) + 0.5,
             f64::from(pos.z),
         );
+        let state = self.level.block_state(pos);
         self.f.behaviours.use_without_item(
             &mut self.level,
             &mut self.ticks,
-            pos,
-            Direction::North,
-            hit,
+            state,
+            horizon_core::geometry::BlockHit {
+                block: pos,
+                direction: Direction::North,
+                location: hit,
+                inside: false,
+            },
             player,
         )
     }

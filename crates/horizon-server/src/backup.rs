@@ -422,7 +422,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn a_backup_collision_preserves_finished_and_partial_files() {
         let dir = std::env::temp_dir().join(format!(
             "horizon-server-backup-collision-{}",
