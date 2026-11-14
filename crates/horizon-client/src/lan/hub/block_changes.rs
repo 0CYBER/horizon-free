@@ -3,7 +3,10 @@
 //! it (`viewed_levels`).
 use super::{Guest, Hub};
 use crate::{chunk::Chunk, lan::viewed_levels::send::Runs, world::World};
-use horizon_protocol::packets::play::{self, Clientbound as C};
+use horizon_protocol::{
+    packets::play::{self, Clientbound as C},
+    viewed_levels::Level,
+};
 
 impl Hub {
     /// The players sent chunk `key` of the level in place: those in it (None), and those whose
@@ -11,7 +14,11 @@ impl Hub {
     fn chunk_holders(
         &self,
         key: (i32, i32),
-    ) -> Vec<(usize, Option<i32>, &crate::fast_hash::FxHashSet<(i32, i32)>)> {
+    ) -> Vec<(
+        usize,
+        Option<Level>,
+        &crate::fast_hash::FxHashSet<(i32, i32)>,
+    )> {
         let viewed = self.viewed.active();
         (0..self.guests.len())
             .filter_map(|i| {
@@ -32,7 +39,7 @@ impl Hub {
     }
 
     /// `body`, a play clientbound packet, to each of `holders`.
-    fn send_to_holders(&self, holders: &[(usize, Option<i32>)], body: &[u8]) {
+    fn send_to_holders(&self, holders: &[(usize, Option<Level>)], body: &[u8]) {
         for &(i, level) in holders {
             let g = &self.guests[i];
             match level {
@@ -64,7 +71,7 @@ impl Hub {
             if let Some(far) = self.far.as_mut() {
                 far.changed(x, z);
             }
-            let viewers: Vec<(usize, Option<i32>)> = self
+            let viewers: Vec<(usize, Option<Level>)> = self
                 .chunk_holders((x, z))
                 .into_iter()
                 .filter(|(_, _, sent)| {
@@ -255,7 +262,7 @@ impl Hub {
     }
 
     /// [`Self::chunk_holders`] without the chunks they were sent.
-    fn holders(&self, key: (i32, i32)) -> Vec<(usize, Option<i32>)> {
+    fn holders(&self, key: (i32, i32)) -> Vec<(usize, Option<Level>)> {
         self.chunk_holders(key)
             .into_iter()
             .map(|(i, level, _)| (i, level))
@@ -264,7 +271,7 @@ impl Hub {
 }
 
 /// The holders in the level in place: the prediction's replay is of them only.
-fn in_level(holders: &[(usize, Option<i32>)]) -> impl Iterator<Item = usize> + '_ {
+fn in_level(holders: &[(usize, Option<Level>)]) -> impl Iterator<Item = usize> + '_ {
     holders
         .iter()
         .filter(|(_, level)| level.is_none())

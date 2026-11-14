@@ -25,6 +25,7 @@ pub mod view;
 use super::{guest::Guest, hub::Hub};
 use crate::ticket_levels::ViewedTicket;
 use areas::{Areas, ChunkArea, ChunkAreaMode, ChunkAreaRefusal, ViewedCaps};
+use horizon_protocol::viewed_levels::{Answer, Level};
 use std::collections::BTreeMap;
 use std::sync::{
     Arc,
@@ -65,10 +66,13 @@ pub struct Viewed {
     counts: BTreeMap<String, (u32, u32)>,
     /// The viewed levels open on the client, by dimension.
     pub(super) views: BTreeMap<String, View>,
-    /// The levels its client was told at Login, which name a viewed level by its index there: a
-    /// level opened since (a runtime level) is not among them, and one closed since keeps its
-    /// place.
+    /// The levels its client was told at Login: before revision 4 a viewed level is named by its
+    /// index there. A level opened since (a runtime level) is not among them, and one closed
+    /// since keeps its place.
     login_levels: Vec<String>,
+    /// From revision 4, the epochs its `open`s and travel swaps took: the next is this one. Past
+    /// `i32::MAX` they are spent, and nothing more opens (`horizon_protocol::viewed_levels`).
+    epochs: i64,
     counted: Option<Counted>,
 }
 
@@ -93,10 +97,49 @@ impl Viewed {
         self.login_levels = levels;
     }
     /// `dimension`'s index in the levels its client was told at Login: none for a level opened
-    /// since, which its client cannot name, so does not view.
+    /// since.
     fn login_index(&self, dimension: &str) -> Option<i32> {
         let i = self.login_levels.iter().position(|l| l == dimension)?;
         i32::try_from(i).ok()
+    }
+    /// Whether no epoch is left (`horizon_protocol::viewed_levels`).
+    pub fn epochs_spent(&self) -> bool {
+        i32::try_from(self.epochs).is_err()
+    }
+    /// The next epoch, taken; none once they are spent.
+    fn take_epoch(&mut self) -> Option<i32> {
+        let epoch = i32::try_from(self.epochs).ok()?;
+        self.epochs += 1;
+        Some(epoch)
+    }
+    /// What the client of `answer` is to name `dimension` by in a new view
+    /// (`horizon_protocol::viewed_levels`): from revision 4 the first free slot below its cap,
+    /// with the next epoch; before it, its index at Login. None when it cannot be named: a level
+    /// opened since Login on an older client, no free slot, or the epochs spent.
+    fn name_new(&mut self, dimension: &str, answer: Answer) -> Option<Level> {
+        if !answer.bindings() {
+            return self.login_index(dimension).map(Level::Index);
+        }
+        let taken = |slot: i32| {
+            self.views
+                .values()
+                .any(|view| matches!(view.level, Level::Bound { slot: s, .. } if s == slot))
+        };
+        let slot = (0..i32::from(answer.max_levels)).find(|&slot| !taken(slot))?;
+        let epoch = self.take_epoch()?;
+        Some(Level::Bound { slot, epoch })
+    }
+    /// What the level `left` is named by once a travel swaps it with the view of the level
+    /// entered, named `entered` (`switch`): from revision 4 the slot of the level entered, with
+    /// the next epoch; before it, its index at Login. None when the swap cannot name it.
+    fn name_left(&mut self, left: &str, entered: Level, answer: Answer) -> Option<Level> {
+        match entered {
+            Level::Bound { slot, .. } if answer.bindings() => {
+                let epoch = self.take_epoch()?;
+                Some(Level::Bound { slot, epoch })
+            }
+            _ => self.login_index(left).map(Level::Index),
+        }
     }
     /// The client dropped every viewed world (a Respawn that is no travel into one of them,
     /// `switch`): they are forgotten without `close`, and opened again for what the areas still
@@ -148,7 +191,7 @@ impl Hub {
             &areas,
             &g.dimension,
             g.sender.viewed_levels.max_levels,
-            &self.viewed.caps,
+            &self.viewed.caps.for_client(g.sender.viewed_levels),
             others,
         )?;
         let active = self.viewed.active.clone();

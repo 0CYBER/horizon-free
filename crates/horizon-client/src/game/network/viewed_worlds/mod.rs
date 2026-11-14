@@ -82,7 +82,42 @@ pub(in crate::game) mod tests {
             enforces_secure_chat: false,
         }))
         .unwrap();
+        // The dimension types the server synced: 0 the Overworld's (what `spawn` names), 1 the
+        // Nether's, of another shape.
+        let mut registries = horizon_protocol::registry::Dynamic::default();
+        registries.registries.insert(
+            "minecraft:dimension_type".into(),
+            ["minecraft:overworld", "minecraft:the_nether"]
+                .map(|name| (name.to_owned(), None))
+                .to_vec(),
+        );
+        game.remote.as_mut().unwrap().registries = Arc::new(registries);
+        EPOCHS.with(|epochs| *epochs.borrow_mut() = Default::default());
         game
+    }
+
+    thread_local! {
+        /// This test's connection as a server keeps it: the next epoch, and the one each slot was
+        /// last bound with, so that `run` and `close` follow `open` and `swap`.
+        static EPOCHS: std::cell::RefCell<(i32, std::collections::HashMap<i32, i32>)> =
+            Default::default();
+    }
+
+    /// Binds `slot` with the next epoch, as a server's `open` or `swap` does.
+    pub(in crate::game) fn bind(slot: i32) -> viewed_levels::Level {
+        EPOCHS.with(|epochs| {
+            let (next, slots) = &mut *epochs.borrow_mut();
+            let epoch = *next;
+            *next += 1;
+            slots.insert(slot, epoch);
+            viewed_levels::Level::Bound { slot, epoch }
+        })
+    }
+
+    /// `slot` with the epoch it was last bound with.
+    pub(in crate::game) fn bound_slot(slot: i32) -> viewed_levels::Level {
+        let epoch = EPOCHS.with(|epochs| epochs.borrow().1.get(&slot).copied().unwrap_or(0));
+        viewed_levels::Level::Bound { slot, epoch }
     }
 
     /// A column of stone at `x, z`, unlit.
@@ -129,11 +164,19 @@ pub(in crate::game) mod tests {
         C::decode(id, r.rest()).unwrap()
     }
 
-    pub(in crate::game) fn open(level: i32, dimension: &str) -> C {
-        payload(&viewed_levels::open(level, &spawn(dimension)))
+    /// An `open` of the level `dimension` in `slot`, with the next epoch and a cap of 2048
+    /// columns.
+    pub(in crate::game) fn open(slot: i32, dimension: &str) -> C {
+        payload(&viewed_levels::open(bind(slot), 2048, &spawn(dimension)))
     }
 
-    pub(in crate::game) fn run(level: i32, packets: &[C]) -> C {
+    /// A `run` of `slot` at the epoch it was last bound with.
+    pub(in crate::game) fn run(slot: i32, packets: &[C]) -> C {
+        run_at(bound_slot(slot), packets)
+    }
+
+    /// A `run` of `level`, its slot and epoch as given.
+    pub(in crate::game) fn run_at(level: viewed_levels::Level, packets: &[C]) -> C {
         let mut run = viewed_levels::Run::new(level, &packets[0].encode()).unwrap();
         for packet in &packets[1..] {
             run.push(&packet.encode()).unwrap();
@@ -141,7 +184,17 @@ pub(in crate::game) mod tests {
         payload(&run.finish())
     }
 
-    fn data(packet: &C) -> &[u8] {
+    /// A `close` of `slot` at the epoch it was last bound with.
+    pub(in crate::game) fn close(slot: i32) -> C {
+        payload(&viewed_levels::close(bound_slot(slot)))
+    }
+
+    /// The server's `swap` after a travel's Respawn: `slot` with the next epoch.
+    pub(in crate::game) fn swap(slot: i32) -> C {
+        payload(&viewed_levels::swap(bind(slot)))
+    }
+
+    pub(in crate::game) fn data(packet: &C) -> &[u8] {
         let C::CustomPayload(p) = packet else {
             panic!("not a payload")
         };
@@ -175,68 +228,188 @@ pub(in crate::game) mod tests {
         assert_eq!(game.world.block(3, 70, 5), STONE);
     }
 
-    /// An `open` makes a world for the level, a `run` fills it, and a `close` drops it: a `run`
-    /// after it is of a level not open.
+    /// An `open` makes a world for the level, a `run` fills it, and a `close` drops it and
+    /// releases the slot: a late `run` of that binding is dropped, and makes no world.
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn open_makes_a_world_and_close_drops_it() {
         let mut resources = None;
         let mut game = client(&mut resources);
-        game.handle_packet(open(2, "minecraft:the_end")).unwrap();
-        let world = game.remote.as_ref().unwrap().viewed.get(2).unwrap();
+        game.handle_packet(open(0, "minecraft:the_end")).unwrap();
+        let world = game.remote.as_ref().unwrap().viewed.get(0).unwrap();
         assert_eq!(world.level, "minecraft:the_end");
         assert_eq!(world.world.chunks.len(), 0);
-        game.handle_packet(run(2, &[column(4, -2), column(5, -2)]))
+        game.handle_packet(run(0, &[column(4, -2), column(5, -2)]))
             .unwrap();
-        assert_eq!(viewed(&game, 2).unwrap().chunks.len(), 2);
+        assert_eq!(viewed(&game, 0).unwrap().chunks.len(), 2);
         let forget = C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [4, -2] });
-        game.handle_packet(run(2, &[forget])).unwrap();
-        assert_eq!(viewed(&game, 2).unwrap().chunks.len(), 1);
-        game.handle_packet(payload(&viewed_levels::close(2)))
-            .unwrap();
-        assert!(viewed(&game, 2).is_none());
+        game.handle_packet(run(0, &[forget])).unwrap();
+        assert_eq!(viewed(&game, 0).unwrap().chunks.len(), 1);
+        game.handle_packet(close(0)).unwrap();
+        assert!(viewed(&game, 0).is_none());
         assert_eq!(
-            game.route_viewed_levels(data(&run(2, &[column(4, -2)]))),
-            Err(RouteError::NotOpen(2))
+            game.route_viewed_levels(data(&run(0, &[column(4, -2)]))),
+            Ok(())
         );
+        assert!(viewed(&game, 0).is_none());
     }
 
-    /// The client views two levels besides its own: a third `open` closes the connection.
+    /// The client views two levels besides its own, in slots 0 and 1: a slot past them closes the
+    /// connection, and an `open` of a bound slot starts it afresh.
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn an_open_past_the_clients_cap_closes_the_connection() {
         let mut resources = None;
         let mut game = client(&mut resources);
-        game.handle_packet(open(1, "minecraft:the_nether")).unwrap();
-        game.handle_packet(open(2, "minecraft:the_end")).unwrap();
+        game.handle_packet(open(0, "minecraft:the_nether")).unwrap();
+        game.handle_packet(open(1, "minecraft:the_end")).unwrap();
         assert_eq!(
-            game.route_viewed_levels(data(&open(3, "test:void"))),
-            Err(RouteError::OverCap { level: 3, cap: 2 })
+            game.route_viewed_levels(data(&open(2, "test:void"))),
+            Err(RouteError::OverCap { level: 2, cap: 2 })
         );
-        // An open again of a level open already is no third level: it starts afresh.
-        game.handle_packet(open(2, "minecraft:the_end")).unwrap();
+        game.handle_packet(run(1, &[column(0, 0)])).unwrap();
+        game.handle_packet(open(1, "minecraft:the_end")).unwrap();
+        assert_eq!(viewed(&game, 1).unwrap().chunks.len(), 0, "afresh");
         assert!(game.remote.is_some());
-        game.handle_packet(open(3, "test:void")).unwrap();
+        game.handle_packet(open(2, "test:void")).unwrap();
         assert!(game.remote.is_none());
     }
 
-    /// An `open` naming another level than the Login put at its index closes the connection
-    /// with a fixed reason: the server's text is not shown.
+    /// Each `open` refusal has a fixed reason that shows none of the server's text: a dimension
+    /// that is no level id (the codec's), a dimension type the server did not sync (no Overworld
+    /// fallback), a level viewed already in another slot, the player's own level, a cap past the
+    /// client's ceiling, an epoch not newer than the last and a negative slot (the codec's).
     #[test]
     #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn an_open_not_at_its_login_index_shows_no_server_text() {
+    fn each_open_refusal_has_a_fixed_reason() {
+        use viewed_levels::Level;
         let mut resources = None;
         let mut game = client(&mut resources);
         let refused = game
-            .route_viewed_levels(data(&open(1, "evil:click_here")))
+            .route_viewed_levels(data(&open(1, "Evil: Click Here!")))
             .unwrap_err();
-        assert_eq!(refused, RouteError::UnknownLevel);
+        assert_eq!(
+            refused,
+            RouteError::Codec(viewed_levels::ViewedLevelsError::BadOpen)
+        );
         assert_eq!(
             refused.to_string(),
-            "horizon:levels: open does not match the Login level index"
+            "horizon:levels: an open whose level does not read"
         );
-        assert!(!refused.to_string().contains("evil"));
+        assert!(!refused.to_string().contains("Evil"));
         assert!(viewed(&game, 1).is_none());
+        let unsynced = play::SpawnInfo {
+            dimension_type: 7,
+            ..spawn("evil:elsewhere")
+        };
+        let refused = game
+            .route_viewed_levels(data(&payload(&viewed_levels::open(
+                bind(1),
+                2048,
+                &unsynced,
+            ))))
+            .unwrap_err();
+        assert_eq!(refused, RouteError::UnsyncedType);
+        assert!(!refused.to_string().contains("evil"));
+        game.handle_packet(open(0, "test:void")).unwrap();
+        assert_eq!(
+            game.route_viewed_levels(data(&open(1, "test:void"))),
+            Err(RouteError::ViewedTwice(1))
+        );
+        assert_eq!(
+            game.route_viewed_levels(data(&open(1, "minecraft:overworld"))),
+            Err(RouteError::OwnLevel(1))
+        );
+        let past = viewed_levels::open(bind(1), 4490, &spawn("minecraft:the_end"));
+        assert_eq!(
+            game.route_viewed_levels(data(&payload(&past))),
+            Err(RouteError::CapPastCeiling(4490))
+        );
+        let old = Level::Bound { slot: 1, epoch: 0 };
+        let old = viewed_levels::open(old, 2048, &spawn("minecraft:the_end"));
+        assert_eq!(
+            game.route_viewed_levels(data(&payload(&old))),
+            Err(RouteError::OldEpoch(0))
+        );
+        let minus_one = Level::Bound { slot: -1, epoch: 9 };
+        let negative = viewed_levels::open(minus_one, 2048, &spawn("minecraft:the_end"));
+        assert_eq!(
+            game.route_viewed_levels(data(&payload(&negative))),
+            Err(RouteError::Codec(
+                viewed_levels::ViewedLevelsError::Negative
+            ))
+        );
+    }
+
+    /// A level the Login did not name (a runtime level opened since) is viewed in the slot its
+    /// `open` binds: its `run`s fill it.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_level_not_named_at_login_is_viewed_in_its_slot() {
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        game.handle_packet(open(1, "test:instance/1")).unwrap();
+        game.handle_packet(run(1, &[column(2, 3)])).unwrap();
+        let world = game.remote.as_ref().unwrap().viewed.get(1).unwrap();
+        assert_eq!(world.level, "test:instance/1");
+        assert_eq!(viewed(&game, 1).unwrap().chunks.len(), 1);
+    }
+
+    /// A slot closed and bound again to another level: a late chunk or entity of the old binding
+    /// is dropped by its epoch, never reaching the new world, and the new binding's packets go to
+    /// it. A `run` at an epoch no `open` gave closes the connection.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_late_packet_of_a_slot_bound_again_is_dropped() {
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        game.handle_packet(open(0, "minecraft:the_nether")).unwrap();
+        let old = bound_slot(0);
+        game.handle_packet(close(0)).unwrap();
+        game.handle_packet(open(0, "minecraft:the_end")).unwrap();
+        let pig = C::AddEntity(play::AddEntity {
+            id: 40,
+            uuid: 40,
+            kind: 0,
+            position: [0.5, 70.0, 0.5],
+            velocity: [0.0; 3],
+            pitch: 0,
+            yaw: 0,
+            head_yaw: 0,
+            data: 0,
+        });
+        game.handle_packet(run_at(old, &[column(9, 9), pig]))
+            .unwrap();
+        let end = game.remote.as_ref().unwrap().viewed.get(0).unwrap();
+        assert_eq!(end.level, "minecraft:the_end");
+        assert!(end.world.chunks.is_empty(), "the Nether's late column");
+        assert!(end.entities.get(40).is_none(), "the Nether's late entity");
+        game.handle_packet(run(0, &[column(1, 1)])).unwrap();
+        assert!(viewed(&game, 0).unwrap().chunks.contains_key(&(1, 1)));
+        let ahead = viewed_levels::Level::Bound { slot: 0, epoch: 99 };
+        assert_eq!(
+            game.route_viewed_levels(data(&run_at(ahead, &[column(2, 2)]))),
+            Err(RouteError::UnknownEpoch {
+                level: 0,
+                epoch: 99
+            })
+        );
+    }
+
+    /// An `open`'s column cap is the world's: a new column past it closes the connection.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn an_opens_column_cap_bounds_its_world() {
+        let mut resources = None;
+        let mut game = client(&mut resources);
+        let small = viewed_levels::open(bind(0), 2, &spawn("minecraft:the_end"));
+        game.handle_packet(payload(&small)).unwrap();
+        game.handle_packet(run(0, &[column(0, 0), column(1, 0)]))
+            .unwrap();
+        assert_eq!(
+            game.route_viewed_levels(data(&run(0, &[column(2, 0)]))),
+            Err(RouteError::TooManyColumns(2))
+        );
     }
 
     /// A viewed level's chunks, time and weather leave the player's level as it was.

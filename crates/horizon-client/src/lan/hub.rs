@@ -4907,10 +4907,9 @@ impl Hub {
             .set_dimension(self.config.levels.get(dimension));
     }
 
-    /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
-    /// names (`set_dimension`): ClientboundRespawnPacket keeping all data,
-    /// then vanilla's packet order. Nothing tracked in the old level is
-    /// removed one by one: the client drops its whole level.
+    /// ServerPlayer.teleport(TeleportTransition) into the level the hub now names
+    /// (`set_dimension`): ClientboundRespawnPacket keeping all data, then vanilla's packet order.
+    /// Nothing tracked in the old level is removed one by one: the client drops its whole level.
     ///
     /// Through a `portal`, vanilla finds the exit (an End platform, a Nether
     /// portal, a spawn column) before the teleport; here it is found once
@@ -4929,6 +4928,7 @@ impl Hub {
     ) {
         let info = self.spawn_info(i, portal_cooldown, ctx.sea_level);
         self.close_container_for(i);
+        self.before_travel(i);
         let left = self.guests[i].dimension.clone();
         self.guests.update(i, |g| {
             // Out of the old level with its chunks (ChunkMap.removeEntity).
