@@ -338,8 +338,9 @@
     {
       "name": "GameRuleError",
       "path": "crate::world::types::GameRuleError",
-      "hash": "e76f57d2c9f945cb",
-      "canonical_path": "crate::world::types::GameRuleError"
+      "hash": "b0678faa207c25fa",
+      "canonical_path": "crate::world::types::GameRuleError",
+      "contract_change": "arismoko/horizon#3316 appends GameRuleError::InvalidRange; ordinals 0, 1, 2 remain unchanged; the frozen hash was e76f57d2c9f945cb"
     },
     {
       "name": "Hand",
