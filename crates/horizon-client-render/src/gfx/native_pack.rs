@@ -1,6 +1,7 @@
 //! One of Horizon's own shader packs while it runs (docs/shaders.md): the frame its stages
 //! read, its sky, material and post stages, and the timer of their passes.
 
+use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
 
 use super::displace::Displacement;
@@ -40,6 +41,29 @@ fn option_on(constants: &[(String, f64)], id: Option<&String>) -> bool {
             .find(|(k, _)| k == id)
             .is_none_or(|(_, v)| *v != 0.0)
     })
+}
+
+/// Whether a stage of the pack reads the world before translucent terrain (`opaque_depth`,
+/// `opaque_color`): only the material stage has them, for `material` and, under
+/// `[displacement]`, `displacement`, and whatever those call.
+fn reads_opaque(stages: &[CheckedStage]) -> bool {
+    let reads = |s: &CheckedStage, function: naga::Handle<naga::Function>| {
+        s.module
+            .global_variables
+            .iter()
+            .filter(|(_, g)| matches!(g.name.as_deref(), Some("opaque_depth" | "opaque_color")))
+            .any(|(global, _)| !s.info[function][global].is_empty())
+    };
+    stages
+        .iter()
+        .filter(|s| s.kind == StageKind::Material)
+        .any(|s| {
+            s.module
+                .functions
+                .iter()
+                .filter(|(_, f)| matches!(f.name.as_deref(), Some("material" | "displacement")))
+                .any(|(function, _)| reads(s, function))
+        })
 }
 
 /// `[displacement]`'s cells: the value of its `cells_option`, if any.
@@ -191,6 +215,7 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Material)
             .is_some_and(|s| s.reads("reflection"))
             && option_on(constants, option);
+        frame.reads_opaque = reads_opaque(&report.stages);
         let fog = report.material_fog;
         let keeps = |key: fn(&horizon_shader_api::Stage) -> Option<bool>| {
             report.sky.as_ref().and_then(key).unwrap_or(true)
@@ -299,8 +324,55 @@ impl NativePack {
 
 #[cfg(test)]
 mod tests {
-    use super::{NativePack, TerrainShape, chosen_shadow};
+    use super::{NativePack, TerrainShape, chosen_shadow, reads_opaque};
     use horizon_shader_api::manifest::{OptionKind, PackOption, Shadow};
+
+    /// The world before translucent terrain is copied only for a pack whose material, or the
+    /// functions it calls, or its `displacement`, reads `opaque_depth` or `opaque_color` (#16124).
+    #[test]
+    fn the_opaque_copies_are_made_only_for_a_pack_that_reads_them() {
+        use horizon_shader_api::{MANIFEST, Pack, check};
+        let reads = |material: &str, displacement: &str| {
+            let manifest = "schema = 1
+id = \"t\"
+name = \"T\"
+version = \"1\"
+                api = \"0.2\"
+[material]
+file = \"material.wgsl\"
+[displacement]
+";
+            let text = format!(
+                "fn material(input: MaterialInput) -> Surface {{
+    {material}
+}}
+                fn displacement(input: DisplacementInput) -> f32 {{
+    {displacement}
+}}
+                fn behind(t: vec2<i32>) -> vec4<f32> {{ return textureLoad(opaque_color, t, 0); }}
+"
+            );
+            let files = [(MANIFEST, manifest), ("material.wgsl", text.as_str())]
+                .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+                .into();
+            reads_opaque(&check(&Pack::from_files(files).unwrap()).unwrap().stages)
+        };
+        let plain = "return Surface(input.albedo);";
+        let flat = "return 0.0;";
+        assert!(!reads(plain, flat), "a helper nothing calls reads nothing");
+        assert!(reads(
+            "return Surface(input.albedo + behind(vec2<i32>(input.screen)));",
+            flat
+        ));
+        assert!(reads(
+            "return Surface(input.albedo * textureLoad(opaque_depth, vec2<i32>(0), 0));",
+            flat
+        ));
+        assert!(reads(
+            plain,
+            "return textureLoad(opaque_depth, vec2<i32>(input.uv), 0);"
+        ));
+    }
 
     /// A device with OpenGL's minimum 16 sampled textures per stage refuses a pack whose
     /// sky adds the terrain's 10 to the frame's 9: that is the pack's error to report, not

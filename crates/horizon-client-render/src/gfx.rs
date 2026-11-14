@@ -10985,7 +10985,7 @@ impl Renderer {
             // (`opaque_depth`, `opaque_color`): the pass ends, the targets are copied, and a
             // pass that loads both carries on.
             if material.is_some()
-                && let Some(native) = &self.native
+                && let Some(native) = self.native.as_ref().filter(|n| n.frame.reads_opaque)
             {
                 drop(pass);
                 let depth = world_depth.texture();
