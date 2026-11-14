@@ -124,17 +124,16 @@ fn source_less_native_mixed_tags_obey_semantic_depth() {
                 for _ in 1..depth {
                     tag = Tag::List(vec![tag]);
                 }
-                let mut engine = Engine::empty();
-                engine.spans.push(Span {
-                    text: "x".into(),
-                    style: Style {
+                let engine = Engine::from_spans(vec![Span::new(
+                    "x",
+                    Style {
                         click: Some(ClickEvent::Custom {
                             id: "test:x".into(),
                             payload: Some(tag.into()),
                         }),
                         ..Style::default()
                     },
-                });
+                )]);
                 let result = engine.try_into_api();
                 if depth == 513 {
                     assert!(matches!(result, Err(TextFormError::TooDeep)));
@@ -158,10 +157,9 @@ fn source_less_profile_4096_refuses_without_clone() {
         .spawn(|| {
             let mut p = json!({"name":"Test"});
             p["test:deep"] = opaque(4096);
-            let mut engine = Engine::empty();
-            engine.spans.push(Span {
-                text: "x".into(),
-                style: Style {
+            let engine = Engine::from_spans(vec![Span::new(
+                "x",
+                Style {
                     inline_object: Some(InlineObject::Player {
                         profile: p.into(),
                         hat: true,
@@ -169,7 +167,7 @@ fn source_less_profile_4096_refuses_without_clone() {
                     }),
                     ..Style::default()
                 },
-            });
+            )]);
             assert!(matches!(engine.try_into_api(), Err(TextFormError::TooDeep)));
             std::mem::forget(engine);
         })
