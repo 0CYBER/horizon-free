@@ -56,7 +56,7 @@ TripWireBlock.updateShape	port	crates/horizon-world/src/level/shapes.rs::Sim::up
 TripWireBlock.onPlace	port	crates/horizon-world/src/level/hooks.rs::Sim::on_place	TripWire arm: updates the source hooks.
 TripWireBlock.affectNeighborsAfterRemoval	port	crates/horizon-world/src/level/hooks.rs::Sim::affect_neighbors_after_removal	TripWire arm: source update with the wire powered.
 TripWireBlock.playerWillDestroy	port	crates/horizon-client/src/game.rs::Game::break_block_as_player	shears disarm the string first (flags 260), so the hooks stay quiet
-TripWireBlock.entityInside	port	crates/horizon-world/src/level/hooks.rs::Sim::entity_inside	gap: minor: counts every entity in the box; vanilla skips entities that ignore block triggers.
+TripWireBlock.entityInside	port	crates/horizon-world/src/level/hooks.rs::Sim::entity_inside	TripWire arm: tripwire_check_pressed counts the entities in the box (EntityQuery::Everything) and the game's count skips the ones that ignore block triggers (Entity::triggers_blocks: a bat, a marker armor stand), as checkPressed does; Marker, Interaction, Display and OminousItemSpawner, the other vanilla overrides, are not among Horizon's Entity implementations
 TripWireBlock.tick	port	crates/horizon-world/src/level/tick.rs::Sim::tick_block	TripWire arm: tripwire_tick re-checks while powered.
 TripWireBlock.rotate	port	crates/horizon-world/src/worldgen/structure.rs::StateTransforms::rotate	
 TripWireBlock.mirror	port	crates/horizon-world/src/worldgen/structure.rs::StateTransforms::mirror	
