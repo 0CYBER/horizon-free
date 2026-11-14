@@ -24,7 +24,7 @@ impl Game<'_> {
     }
 
     /// `Commands::run_command_with_output`: `native_run_command` with its feedback kept as
-    /// plain text, at most `CommandResult::MAX_LINES` lines of `MAX_LINE_BYTES` bytes each.
+    /// plain text, at most `MAX_FEEDBACK_LINES` lines of `MAX_FEEDBACK_LINE_BYTES` bytes each.
     pub(super) fn native_run_command_with_output(&mut self, line: &str) -> CommandResult {
         let line = line.trim();
         let line = line.strip_prefix('/').unwrap_or(line);
@@ -37,15 +37,20 @@ impl Game<'_> {
     }
 }
 
-/// `lines` as plain text, at most `CommandResult::MAX_LINES` of them, each cut to at most
-/// `CommandResult::MAX_LINE_BYTES` bytes at a character boundary.
+/// The most feedback lines `Commands::run_command_with_output` keeps.
+pub(super) const MAX_FEEDBACK_LINES: usize = 256;
+/// The most bytes it keeps of one feedback line.
+pub(super) const MAX_FEEDBACK_LINE_BYTES: usize = 4096;
+
+/// `lines` as plain text, at most `MAX_FEEDBACK_LINES` of them, each cut to at most
+/// `MAX_FEEDBACK_LINE_BYTES` bytes at a character boundary.
 pub(super) fn capped_lines(lines: &[horizon_client::text::Text]) -> Vec<String> {
     lines
         .iter()
-        .take(CommandResult::MAX_LINES)
+        .take(MAX_FEEDBACK_LINES)
         .map(|text| {
             let mut plain = text.plain();
-            let mut end = plain.len().min(CommandResult::MAX_LINE_BYTES);
+            let mut end = plain.len().min(MAX_FEEDBACK_LINE_BYTES);
             while !plain.is_char_boundary(end) {
                 end -= 1;
             }

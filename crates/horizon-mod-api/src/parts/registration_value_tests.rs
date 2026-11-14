@@ -155,9 +155,9 @@ fn server_services_forward_commands_messages_and_player_identity() {
     assert!(host.commands().run_command("list"));
     assert!(!host.commands().run_command("missing"));
     let result = host.commands().run_command_with_output("list");
-    assert!(result.ran);
-    assert!(result.lines.is_empty());
-    assert!(!host.commands().run_command_with_output("missing").ran);
+    assert!(result.success);
+    assert!(result.feedback.is_empty());
+    assert!(!host.commands().run_command_with_output("missing").success);
     host.commands().feedback(Text::literal("answer")).unwrap();
     host.messages()
         .broadcast(Text::literal("everyone"))

@@ -65,17 +65,17 @@ fn logged_lines_reach_a_listener_but_not_its_own() {
 fn a_captured_command_returns_its_feedback() {
     with_guests(|game| {
         let result = game.native_run_command_with_output("/time query gametime");
-        assert!(result.ran);
-        assert_eq!(result.lines.len(), 1, "{result:?}");
+        assert!(result.success);
+        assert_eq!(result.feedback.len(), 1, "{result:?}");
         assert!(
-            result.lines[0].starts_with("The game time is"),
+            result.feedback[0].starts_with("The game time is"),
             "{result:?}"
         );
         let result = game.native_run_command_with_output(" time query gametime ");
-        assert!(result.ran && result.lines.len() == 1, "{result:?}");
+        assert!(result.success && result.feedback.len() == 1, "{result:?}");
         let result = game.native_run_command_with_output("gamerule nosuchrule");
-        assert!(!result.ran);
-        assert!(!result.lines.is_empty());
+        assert!(!result.success);
+        assert!(!result.feedback.is_empty());
         assert!(game.chat_capture.is_none(), "the outer capture is put back");
         // The same line through `run_command`'s path answers as the captured one does.
         assert!(game.native_run_command("time query gametime"));
@@ -90,8 +90,8 @@ fn the_dedicated_consoles_own_commands_are_not_reached() {
     with_guests(|game| {
         for line in ["stop", "op nobody", "whitelist list", "ban nobody"] {
             let result = game.native_run_command_with_output(line);
-            assert!(!result.ran, "{line}: {result:?}");
-            assert!(!result.lines.is_empty(), "{line}");
+            assert!(!result.success, "{line}: {result:?}");
+            assert!(!result.feedback.is_empty(), "{line}");
         }
     });
 }
@@ -119,7 +119,7 @@ fn a_blank_line_or_no_server_runs_nothing() {
         game.lan = host;
         assert!(
             game.native_run_command_with_output("time query gametime")
-                .ran
+                .success
         );
     });
 }
@@ -131,14 +131,17 @@ fn the_feedback_kept_is_capped() {
     use horizon_client::text::Text;
     let long = Text::literal(format!(
         "ab{}",
-        "\u{20ac}".repeat(CommandResult::MAX_LINE_BYTES)
+        "\u{20ac}".repeat(super::native_console::MAX_FEEDBACK_LINE_BYTES)
     ));
     let many: Vec<Text> = std::iter::once(long)
-        .chain((1..CommandResult::MAX_LINES + 40).map(|n| Text::literal(format!("line {n}"))))
+        .chain(
+            (1..super::native_console::MAX_FEEDBACK_LINES + 40)
+                .map(|n| Text::literal(format!("line {n}"))),
+        )
         .collect();
     let kept = super::native_console::capped_lines(&many);
     assert_eq!(kept.len(), 256);
-    assert_eq!(CommandResult::MAX_LINE_BYTES, 4096);
+    assert_eq!(super::native_console::MAX_FEEDBACK_LINE_BYTES, 4096);
     // "ab" and 1364 whole euro signs (4094 bytes) fit; a 1365th would pass 4096.
     assert_eq!(kept[0].len(), 2 + 1364 * 3);
     assert!(kept[0].starts_with("ab\u{20ac}"));
@@ -156,7 +159,7 @@ fn a_nested_capture_leaves_the_outer_one_as_it_was() {
             .chat_capture
             .replace(vec![horizon_client::text::Text::literal("outer line")]);
         let result = game.native_run_command_with_output("time query gametime");
-        assert!(result.ran && result.lines.len() == 1, "{result:?}");
+        assert!(result.success && result.feedback.len() == 1, "{result:?}");
         let kept: Vec<String> = game
             .chat_capture
             .take()
