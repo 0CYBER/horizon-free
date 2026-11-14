@@ -34,7 +34,7 @@ AbstractHorse.generateMaxHealth	port	crates/horizon-client/src/mobs/finalize.rs:
 AbstractHorse.generateJumpStrength	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::horse_jump	
 AbstractHorse.generateSpeed	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::horse_speed	
 AbstractHorse.getSlot	missing		minor: /item cannot reach the mount slots horse.0 to horse.14
-AbstractHorse.getControllingPassenger	port	crates/horizon-client/src/mobs/equine.rs::controlled	gap: player: a tamed skeleton horse obeys its rider without a saddle
+AbstractHorse.getControllingPassenger	port	crates/horizon-client/src/mobs/equine.rs::controlled	a horse is controlled only while saddled, a tamed skeleton horse included (SkeletonHorse does not override isSaddled)
 AbstractHorse.getDismountLocationInDirection	inline	crates/horizon-client/src/game/mounts.rs::Game::dismount_mount	gap: minor: no climb up to 0.75 above the mount and no pose boxes, only block checks beside the mount
 AbstractHorse.getDismountLocationForPassenger	port	crates/horizon-client/src/game/mounts.rs::Game::dismount_mount	gap: minor: tries both sides by the mount's yaw then on top, not by the rider's main arm
 AbstractHorse.getPassengerAttachmentPoint	inline	crates/horizon-client/src/game/mounts.rs::Game::position_rider	gap: player: the rider does not slide back and up when the horse rears; the seat is a fixed point per species

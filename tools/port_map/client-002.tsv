@@ -120,7 +120,7 @@ ClientSuggestionProvider.getCustomTabSuggestions	port	crates/horizon-client-core
 ClientSuggestionProvider.getSelectedEntities	port	crates/horizon-client/src/game/pick_entity.rs::Game::crosshair_entity_uuid	the UUID of the entity under the crosshair, before any block; the command suggestions add it
 ClientSuggestionProvider.suggestRegistryElements	port	crates/horizon-command/src/args.rs::suggest_resources	registry ids come from Horizon's registry tables
 ClientSuggestionProvider.getRelevantCoordinates	port	crates/horizon-command/src/args.rs::suggest_coordinates	the block under the crosshair for block positions
-ClientSuggestionProvider.getAbsoluteCoordinates	port	crates/horizon-command/src/args.rs::suggest_coordinates	gap: minor: the exact hit point is not offered; Vec3 arguments only get ~
+ClientSuggestionProvider.getAbsoluteCoordinates	port	crates/horizon-command/src/args.rs::suggest_coordinates	a block hit offers the exact hit point for Vec3 and Vec2 arguments (registries.target_point, two decimals); with an entity in front of the block the ~ defaults stay
 ClientSuggestionProvider.modifyCustomCompletions	port	crates/horizon-client-core/src/registries.rs::modify_custom_completions	ADD, REMOVE or SET on the set the connection keeps
 KnownPacksManager.trySelectingPacks	skip:data		Horizon answers SelectKnownPacks with no packs, so the server sends full registries (net.rs configure)
 LegacyServerPinger.channelActive	skip:other		legacy pre-1.7 server-list ping, not used by this client
