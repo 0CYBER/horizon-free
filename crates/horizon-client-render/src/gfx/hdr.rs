@@ -1861,9 +1861,11 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
         );
     }
 
-    /// ITU-R BT.2390's black level lift on grey light, in HDR10 and in scRGB, against values
-    /// worked out apart from the shader, in f64 from SMPTE ST 2084: E3 = E2 + b (1 - E2)^4 on
-    /// the PQ signal, for a source from 0 to the peak and b the black level's share of it.
+    /// ITU-R BT.2390's black level lift, in HDR10 and in scRGB, against values worked out
+    /// apart from the shader, in f64 from SMPTE ST 2084: E3 = E2 + b (1 - E2)^4 on the PQ
+    /// signal of each BT.2020 channel, for a source from 0 to the peak and b the black level's
+    /// share of it. Both outputs show the same light, grey or coloured: scRGB's, decoded to
+    /// BT.2020, is HDR10's.
     #[test]
     fn the_black_level_lift_follows_bt2390_in_pq_and_scrgb() {
         let Some((device, queue)) = gpu() else {
@@ -1878,6 +1880,14 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
         let nits = |e: f64| {
             let p = e.powf(1.0 / m2);
             10_000.0 * ((p - c1).max(0.0) / (c2 - c3 * p)).powf(1.0 / m1)
+        };
+        // Linear BT.709 to BT.2020, ITU-R BT.2087's matrix as hdr.wgsl rounds it.
+        let to_bt2020 = |[r, g, b]: [f64; 3]| {
+            [
+                0.6274 * r + 0.3293 * g + 0.0433 * b,
+                0.0691 * r + 0.9195 * g + 0.0114 * b,
+                0.0164 * r + 0.0880 * g + 0.8956 * b,
+            ]
         };
         let (paper, peak) = (203.0, 1000.0);
         let lifted = |light: f64, black: f64| {
@@ -1904,18 +1914,33 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
             });
             for black in [0.0, 0.005, 0.05, 0.5] {
                 hdr.black = black as f32;
-                // Black, the shadows, paper white and the peak, in units of paper white.
-                for light in [0.0, 0.001, 0.01, 0.1, 1.0, peak / paper] {
-                    let g = half::f16::from_f64(f64::powf(light, 1.0 / 2.2)).to_f64();
-                    let shown = (g.powf(2.2) * paper).min(peak);
-                    let want = if black > 0.0 {
-                        lifted(shown, black)
-                    } else {
-                        shown
-                    };
+                // Black, the shadows, paper white and the peak, in units of paper white, grey
+                // and in BT.709's primaries and orange.
+                for (light, colour) in [0.0, 0.001, 0.01, 0.1, 1.0, peak / paper]
+                    .into_iter()
+                    .flat_map(|light| {
+                        // Black is the same in every colour: once.
+                        let colours = if light == 0.0 { 1 } else { 5 };
+                        [
+                            [1.0, 1.0, 1.0],
+                            [1.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0],
+                            [0.0, 0.0, 1.0],
+                            [1.0, 0.5, 0.1],
+                        ]
+                        .into_iter()
+                        .take(colours)
+                        .map(move |colour| (light, colour))
+                    })
+                {
+                    let [r, g, b] = colour.map(|c: f64| {
+                        half::f16::from_f64(f64::powf(light * c, 1.0 / 2.2)).to_f64()
+                    });
+                    let shown = to_bt2020([r, g, b].map(|g| (g.powf(2.2) * paper).min(peak)));
+                    let want = shown.map(|c| if black > 0.0 { lifted(c, black) } else { c });
                     let frame = hdr.frame(&device, [1, 1]);
                     let mut encoder = device.create_command_encoder(&Default::default());
-                    fill(&mut encoder, &frame, [g, g, g, 1.0]);
+                    fill(&mut encoder, &frame, [r, g, b, 1.0]);
                     hdr.keep_world(&mut encoder, None);
                     super::super::hud_coverage::clear(&mut encoder, &hdr.coverage_view().unwrap());
                     hdr.begin(&queue, true);
@@ -1933,19 +1958,24 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
                         let Some(got) = got else {
                             continue;
                         };
-                        for c in &got[..3] {
-                            let c = f64::from(*c);
-                            let ok = match output {
-                                // 10-bit codes, a step either way for rounding.
-                                Output::Pq => (c - 1023.0 * pq(want)).abs() <= codes,
-                                // 80 nits a unit, in half floats.
-                                Output::ScRgb => (c * 80.0 - want).abs() <= 2e-3 * want + 1e-4,
-                            };
-                            assert!(
-                                ok,
-                                "{output:?} black {black}, light {light}: {got:?}, not {want} nits"
-                            );
-                        }
+                        let got = [got[0], got[1], got[2]].map(f64::from);
+                        let ok = match output {
+                            // 10-bit codes, a step either way for rounding.
+                            Output::Pq => {
+                                (0..3).all(|i| (got[i] - 1023.0 * pq(want[i])).abs() <= codes)
+                            }
+                            // 80 nits a unit, in half floats, which BT.2020 mixes.
+                            Output::ScRgb => {
+                                let top = want.into_iter().fold(0.0, f64::max);
+                                let shown = to_bt2020(got.map(|c| c * 80.0));
+                                (0..3).all(|i| (shown[i] - want[i]).abs() <= 2e-3 * top + 1e-4)
+                            }
+                        };
+                        assert!(
+                            ok,
+                            "{output:?} black {black}, {colour:?} at {light}: {got:?}, \
+                             not {want:?} BT.2020 nits"
+                        );
                     }
                 }
             }

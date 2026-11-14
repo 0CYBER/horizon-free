@@ -84,6 +84,13 @@ const BT709_TO_BT2020 = mat3x3<f32>(
     vec3(0.0433, 0.0114, 0.8956),
 );
 
+// Its inverse, for scRGB's black level lift.
+const BT2020_TO_BT709 = mat3x3<f32>(
+    vec3(1.66051121, -0.12456141, -0.01816769),
+    vec3(-0.58771059, 1.13296051, -0.1005606),
+    vec3(-0.07280062, -0.00839911, 1.11872828),
+);
+
 // SMPTE ST 2084: nits (up to 10000) to the PQ signal.
 fn pq(nits: vec3<f32>) -> vec3<f32> {
     let y = pow(clamp(nits / 10000.0, vec3(0.0), vec3(1.0)), vec3(0.1593017578125));
@@ -100,7 +107,9 @@ fn pq_nits(e: vec3<f32>) -> vec3<f32> {
 // ITU-R BT.2390's black level lift (its EETF without the knee) on the PQ signal
 // `e`: black moves up to the display's black level, the peak stays, and the lift
 // fades out by the fourth power on the way up, so only the shadows move. A display
-// that can't go darker than its black level would crush everything below it.
+// that can't go darker than its black level would crush everything below it. Both
+// outputs lift each of BT.2020's channels, as HDR10 carries them: black rises to the
+// display's neutral floor, and a shadow shows the same light in HDR10 and scRGB.
 fn lift_black(e: vec3<f32>) -> vec3<f32> {
     let top = pq(vec3(params.peak * params.paper * 80.0)).x;
     let n = min(e / top, vec3(1.0));
@@ -226,7 +235,8 @@ fn display(light: vec3<f32>, pos: vec4<f32>) -> vec4<f32> {
         return vec4(lifted, 1.0);
     }
     if params.black > 0.0 {
-        return vec4(pq_nits(lift_black(pq(scrgb * 80.0))) / 80.0, 1.0);
+        let lifted = pq_nits(lift_black(pq(BT709_TO_BT2020 * scrgb * 80.0)));
+        return vec4(BT2020_TO_BT709 * lifted / 80.0, 1.0);
     }
     return vec4(scrgb, 1.0);
 }
