@@ -4732,13 +4732,25 @@ pub(crate) mod tests {
             crate::breathing::drown(&after, 3, "minecraft:player", &mut air, 300, gasp, true)
                 .unwrap();
         assert_eq!((drowned.damage, drowned.bubbles, air), (Some(3.0), 0, 0));
-        // A listener's `consume` of `i32::MAX` saturates instead of overflowing:
-        // a water animal past -20 only loses air, another kind drowns.
+        // A listener's `consume` of `i32::MAX` saturates instead of overflowing;
+        // water animals at or below -20 air drown and reset their air to zero.
+        assert_eq!(
+            crate::breathing::apply(
+                -19,
+                300,
+                crate::breathing::Breath {
+                    can_breathe: false,
+                    consume: i32::MAX,
+                    refill: 0,
+                },
+            ),
+            (0, true)
+        );
         let mut air = -19;
         let hurt = crate::breathing::own_air(&after, 4, "minecraft:salmon", &mut air, false, 300);
-        assert_eq!((hurt, air), (None, i32::MIN));
+        assert_eq!((hurt, air), (Some(3.0), 0));
         let mut air = -19;
-        let hurt = crate::breathing::own_air(&after, 4, "minecraft:salmon", &mut air, false, 6000);
+        let hurt = crate::breathing::own_air(&after, 4, "minecraft:dolphin", &mut air, false, 4800);
         assert_eq!((hurt, air), (Some(3.0), 0));
         // A server's block menu: the game's `stillValid` answer arrives first and
         // the parts on its mod menu type may change it; a vanilla menu type never
