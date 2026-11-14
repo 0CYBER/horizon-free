@@ -422,7 +422,7 @@ layout_fields!("slot" => $width);
         }
     )+};
 }
-slot_keys!(u32; BlockEntityTypeKey, BlockKey, BoolGameRuleKey, DimensionKey, EffectKey, EnchantmentKey, FluidKey, ItemKey, MenuKey, crate::client::particle_keys::ParticleKey, TagKey);
+slot_keys!(u32; crate::GameEventKey, BlockEntityTypeKey, BlockKey, BoolGameRuleKey, DimensionKey, EffectKey, EnchantmentKey, FluidKey, ItemKey, MenuKey, crate::client::particle_keys::ParticleKey, TagKey);
 slot_keys!(u64; UnresolvedFluid);
 
 impl Wire for crate::Identifier {

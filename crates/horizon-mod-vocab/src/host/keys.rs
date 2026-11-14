@@ -5,6 +5,9 @@ use crate::*;
 /// and reached through [`Host`].
 #[horizon_mod_api_macros::host_area]
 pub trait KeysHost {
+    /// Side: both. Exact startup game-event id; None before registry completion or for an unknown id.
+    #[access(Metadata)]
+    fn game_event_key(&self, id: &str) -> Option<GameEventKey>;
     /// Side: both.
     /// The key of the block named `id`, for a name that only arrives at run time (data, config,
     /// a command, a network message). `id` is the full registry name, `minecraft:stone` or
@@ -62,6 +65,9 @@ pub trait KeysHost {
 #[doc(hidden)]
 #[horizon_mod_api_macros::host_area]
 pub trait KeysBackend {
+    /// Side: both. Exact id of an installed game-event slot; invalid keys are refused.
+    #[access(Metadata)]
+    fn game_event_key_id(&self, key: GameEventKey) -> Result<String, GameEventKeyError>;
     /// Side: both.
     /// The canonical block id retained by the load-owned registration slot. An invalid slot
     /// is a boundary error, including when a wasm guest supplies it.

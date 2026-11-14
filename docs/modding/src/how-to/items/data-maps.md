@@ -158,3 +158,12 @@ keep vanilla's own lists. A block the maps don't name keeps vanilla's behaviour.
 
 `generate_block_transform`, `neoforge:transformables` and `block_transform_appenders` are not read
 yet ([#3359](https://github.com/arismoko/horizon/issues/3359)).
+
+Game events use `GameEventKey`, resolved with `host.game_event_key("minecraft:step")`
+after startup registry completion. The key is load-owned and survives world data
+reloads. `key.id(host)` returns the exact namespaced name or `GameEventKeyError`;
+unknown slots return `InvalidKey` rather than panicking. A `DataMap` whose `Entry`
+is `GameEventKey` reads `minecraft:game_event`, including
+`neoforge:vibration_frequencies` (canonical NBT compound with an `Int` `frequency` field). Missing values return
+`Ok(None)`; clients and reads before data installation return
+`DataMapError::Unavailable`. Invalid keys return `DataMapError::InvalidKey`.
