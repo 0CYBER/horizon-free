@@ -16,6 +16,7 @@ use model_reducing::reducible_model_sprites;
 
 mod animate;
 pub mod cit_glint;
+mod clip_corner;
 mod gui_sprite;
 mod menu_pictures;
 mod model_reducing;
@@ -2007,29 +2008,12 @@ impl HudBatch {
                 continue;
             }
             let t = |p: f32, lo: f32, hi: f32| if hi == lo { 0.0 } else { (p - lo) / (hi - lo) };
-            // Every attribute of the cut corner, read across the face: UV, depth (an item
-            // model's or a scene's normalized depth) and glint UV. A face whose corners agree
-            // (a flat sprite, depth 0) re-emits the same values bit for bit.
-            let corner = |x: f32, y: f32| {
-                let (s, r) = (t(x, x_lo, x_hi), t(y, y_lo, y_hi));
-                let mix = |a: f32, b: f32, c: f32, d: f32| {
-                    let top = a + (b - a) * s;
-                    let bottom = d + (c - d) * s;
-                    top + (bottom - top) * r
-                };
-                let mut v = tl;
-                v.pos = [x, y];
-                v.uv = std::array::from_fn(|i| mix(tl.uv[i], tr.uv[i], br.uv[i], bl.uv[i]));
-                v.glint_uv = std::array::from_fn(|i| {
-                    mix(
-                        tl.glint_uv[i],
-                        tr.glint_uv[i],
-                        br.glint_uv[i],
-                        bl.glint_uv[i],
-                    )
-                });
-                v.depth = mix(tl.depth, tr.depth, br.depth, bl.depth);
-                v
+            let corner = |x, y| {
+                clip_corner::clip_corner(
+                    [tl, tr, br, bl],
+                    [x, y],
+                    [t(x, x_lo, x_hi), t(y, y_lo, y_hi)],
+                )
             };
             let c = [
                 corner(cx0, cy0),
