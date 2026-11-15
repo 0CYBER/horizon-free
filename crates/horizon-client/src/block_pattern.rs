@@ -38,6 +38,16 @@ pub const IRON_GOLEM_FULL: BlockPattern = BlockPattern {
 pub const IRON_GOLEM_BASE: BlockPattern = BlockPattern {
     aisles: &[&["~ ~", "###", "~#~"]],
 };
+/// `CarvedPumpkinBlock.getOrCreateCopperGolemFull`: '^' the head, '#' a block
+/// of `#minecraft:copper`.
+pub const COPPER_GOLEM_FULL: BlockPattern = BlockPattern {
+    aisles: &[&["^", "#"]],
+};
+/// `CarvedPumpkinBlock.getOrCreateCopperGolemBase`: the same pair with any
+/// block where the head will go.
+pub const COPPER_GOLEM_BASE: BlockPattern = BlockPattern {
+    aisles: &[&[" ", "#"]],
+};
 /// `BlockPattern.BlockPatternMatch`: where a pattern was found and how it is turned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PatternMatch {

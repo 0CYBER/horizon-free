@@ -85,7 +85,9 @@ impl Game<'_> {
         if let Some(carved) = carved {
             self.set_golem_head(pos, carved)?;
         }
-        self.damage_held(1);
+        // `itemStack.hurtAndBreak(1, player, hand.asEquipmentSlot())`: the
+        // acting hand's stack wears out and reports that hand's break.
+        self.damage_held_in_slot(1, self.acting_hand_slot());
         self.post_block_game_event("minecraft:shear", pos, self.sculk_actor(), None);
         self.award_stat("used", "minecraft:shears", 1);
         // ServerPlayerGameMode.useItemOn: the action was consumed.

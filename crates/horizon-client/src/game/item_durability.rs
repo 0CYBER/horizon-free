@@ -192,6 +192,14 @@ impl Game<'_> {
             horizon_world::player_inventory::EquipmentSlot::MainHand,
         );
     }
+    /// `InteractionHand.asEquipmentSlot`: the slot of the hand that acts, whose
+    /// break (`LivingEntity.onEquippedItemBroken`) the caller reports.
+    pub(super) fn acting_hand_slot(&self) -> horizon_world::player_inventory::EquipmentSlot {
+        match self.hand {
+            Hand::Main => horizon_world::player_inventory::EquipmentSlot::MainHand,
+            Hand::Off => horizon_world::player_inventory::EquipmentSlot::OffHand,
+        }
+    }
     /// Hurt the acting hand's stack through ordinary wear/criterion/break handling,
     /// reporting its break in the caller's explicit equipment slot.
     pub(super) fn damage_held_in_slot(

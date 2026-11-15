@@ -5,8 +5,13 @@
 use super::Game;
 use horizon_client::Result;
 use horizon_client::block_pattern::{
-    IRON_GOLEM_BASE, IRON_GOLEM_FULL, SNOW_GOLEM_BASE, SNOW_GOLEM_FULL,
+    COPPER_GOLEM_BASE, COPPER_GOLEM_FULL, IRON_GOLEM_BASE, IRON_GOLEM_FULL, PatternMatch,
+    SNOW_GOLEM_BASE, SNOW_GOLEM_FULL,
 };
+
+#[cfg(test)]
+#[path = "copper_golem_tests.rs"]
+mod copper_golem_tests;
 
 impl Game<'_> {
     fn golem_block(&self, p: [i32; 3]) -> &str {
@@ -52,20 +57,33 @@ impl Game<'_> {
         let m = iron_pattern.find(head, iron)?;
         Some(("minecraft:iron_golem", m.front_cells(), m.block(1, 2, 0)))
     }
-    /// `CarvedPumpkinBlock.canSpawnGolem`: a snow or iron golem base, or a
-    /// copper block (`#minecraft:copper`) below.
+    /// `CarvedPumpkinBlock.canSpawnGolem`: a snow or iron golem base, or the
+    /// copper golem base (`#minecraft:copper` in its '#' cell).
     pub(super) fn can_spawn_golem(&self, head: [i32; 3]) -> bool {
-        self.find_golem(head, true).is_some() || self.copper_golem_base(head)
+        self.find_golem(head, true).is_some() || self.find_copper_golem(head, true).is_some()
     }
-    /// The copper golem pattern ("^", "#"): a block of `#minecraft:copper` under the head.
-    fn copper_golem_base(&self, head: [i32; 3]) -> bool {
-        let below = [head[0], head[1] - 1, head[2]];
-        let name = self.golem_block(below);
+    /// `BlockInWorld.hasState(block -> block.is(BlockTags.COPPER))`.
+    fn is_copper_block(&self, p: [i32; 3]) -> bool {
+        let name = self.golem_block(p);
         self.res
             .items()
             .block_tags
             .get("minecraft:copper")
             .is_some_and(|t| t.contains(name))
+    }
+    /// The copper golem pattern ("^", "#"): a block of `#minecraft:copper` in
+    /// any of the six directions from the head, as `BlockPattern.find` tries
+    /// every forwards and up pair.
+    fn find_copper_golem(&self, head: [i32; 3], base: bool) -> Option<PatternMatch> {
+        let pattern = if base {
+            COPPER_GOLEM_BASE
+        } else {
+            COPPER_GOLEM_FULL
+        };
+        pattern.find(head, |c, p| match c {
+            '^' => self.is_golem_head(p),
+            _ => self.is_copper_block(p),
+        })
     }
     /// `CarvedPumpkinBlock.trySpawnGolem`, after a pumpkin was placed.
     pub(super) fn check_golem_spawn(&mut self, head: [i32; 3]) -> Result<()> {
@@ -122,7 +140,19 @@ impl Game<'_> {
     }
     /// Whether placing a golem head at `head` completes a golem.
     pub(super) fn completes_golem(&self, head: [i32; 3]) -> bool {
-        self.find_golem(head, true).is_some() || self.copper_golem_base(head)
+        self.find_golem(head, true).is_some() || self.copper_golem_beside(head)
+    }
+    /// The copper golem a head placed at `head` would complete: a block of
+    /// `#minecraft:copper` in one of the six directions. `BlockPattern.find`
+    /// starts its cube at the placed block, so a match with the head as the
+    /// pumpkin's cell is the first corner it tries; the copper golem base
+    /// pattern is wider than that (it accepts a copper block next to any cell
+    /// of the cube) and only `canSpawnGolem` asks that.
+    fn copper_golem_beside(&self, head: [i32; 3]) -> bool {
+        horizon_core::geometry::Direction::ALL.iter().any(|d| {
+            let n = d.normal();
+            self.is_copper_block([head[0] + n[0], head[1] + n[1], head[2] + n[2]])
+        })
     }
     /// `Level.setBlock` of the golem head `state` at `head`, then
     /// `CarvedPumpkinBlock.onPlace`. When the head completes a golem, onPlace
@@ -198,12 +228,18 @@ impl Game<'_> {
     /// the pumpkin's way (`replaceCopperBlockWithChest`, flags 2) and the
     /// golem takes the block's weathering (`CopperGolem.spawn`).
     fn try_spawn_copper_golem(&mut self, head: [i32; 3]) -> Result<()> {
-        if !self.copper_golem_base(head) {
+        let Some(m) = self.find_copper_golem(head, false) else {
             return Ok(());
-        }
-        let below = [head[0], head[1] - 1, head[2]];
-        let copper = self.world.block(below[0], below[1], below[2]);
-        let pumpkin = self.world.block(head[0], head[1], head[2]);
+        };
+        // `replaceCopperBlockWithChest` and `getWeatherStateFromPattern` read
+        // `getBlock(0, 1, 0)`, the copper cell; the golem spawns at
+        // `getBlock(0, 0, 0)`, the pumpkin of the match.
+        let copper_at = m.block(0, 1, 0);
+        let pumpkin_at = m.block(0, 0, 0);
+        let copper = self.world.block(copper_at[0], copper_at[1], copper_at[2]);
+        let pumpkin = self
+            .world
+            .block(pumpkin_at[0], pumpkin_at[1], pumpkin_at[2]);
         let registry = self.pack.assets.registry;
         let facing = registry
             .state(pumpkin)
@@ -211,19 +247,19 @@ impl Game<'_> {
             .unwrap_or_else(|| "north".into());
         // getWeatherStateFromPattern: waxed blocks weather like their unwaxed form.
         let base = self
-            .golem_block(below)
+            .golem_block(copper_at)
             .trim_start_matches("minecraft:")
             .trim_start_matches("waxed_");
         let weather = ["exposed", "weathered", "oxidized"]
             .iter()
             .position(|w| base.starts_with(w))
             .map_or(0, |i| i as u8 + 1);
-        let cells = [head, below];
+        let cells = m.front_cells();
         self.clear_pattern_blocks(&cells)?;
         let at = [
-            f64::from(head[0]) + 0.5,
-            f64::from(head[1]) + 0.05,
-            f64::from(head[2]) + 0.5,
+            f64::from(pumpkin_at[0]) + 0.5,
+            f64::from(pumpkin_at[1]) + 0.05,
+            f64::from(pumpkin_at[2]) + 0.5,
         ];
         let id = self.create_triggered("minecraft:copper_golem", at, 0.0);
         self.trigger_summoned(id, 5.0);
@@ -234,7 +270,7 @@ impl Game<'_> {
             "east" => horizon_core::geometry::Direction::East,
             _ => horizon_core::geometry::Direction::North,
         };
-        let pos = horizon_core::position::BlockPos::new(below[0], below[1], below[2]);
+        let pos = horizon_core::position::BlockPos::new(copper_at[0], copper_at[1], copper_at[2]);
         let chest = self.with_level(|b, level, ticks| {
             b.copper_chest_from_block(level, ticks, copper, direction, pos)
         });
@@ -245,7 +281,7 @@ impl Game<'_> {
             ) {
                 self.world
                     .block_entities
-                    .insert((below[0], below[1], below[2]), entity);
+                    .insert((copper_at[0], copper_at[1], copper_at[2]), entity);
             }
         }
         if let Some(m) = id.and_then(|id| self.mobs.iter_mut().find(|m| m.id == id)) {
