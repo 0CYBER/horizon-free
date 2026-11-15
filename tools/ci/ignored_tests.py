@@ -80,7 +80,9 @@ POLICY_PATH = "tools/ci/ignored-tests"  # as messages name it
 RETIRED = Path(__file__).with_name("ignored-tests-known-failures.txt")
 RESULT = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. (ok|FAILED)$")
 SUMMARY = re.compile(r"^test result: \S+\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured;")
-TARGET = re.compile(r"^\s+Running (?:unittests|tests/)")
+# Cargo's line as a test executable starts: `Running unittests src/lib.rs (…)`, `Running tests/x.rs (…)`, or a
+# target whose source lives in another package's folder (`Running ../horizon-client/tests/lan_bot.rs (…)`).
+TARGET = re.compile(r"^\s+Running (?:unittests )?\S+ \(")
 COUNT = re.compile(r"^running (\d+) tests?$")
 PANIC = re.compile(r"^thread '([^']+)'.* panicked at (\S+):$")
 # The Rust runtime's own words when it aborts a process: fixed text, no payload, safe to show.
