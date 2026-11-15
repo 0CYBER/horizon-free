@@ -63,6 +63,8 @@ pub(super) struct InstanceDialog {
     pub(super) logo: Option<&'static str>,
     /// The sheet was closed with edits not saved: asking whether to drop them.
     pub(super) discarding: bool,
+    /// A Java instance's maximum memory as set in the sheet, kept with Save: None until changed.
+    pub(super) memory: Option<u32>,
 }
 
 /// The instances and their icons as images, kept between frames.
@@ -345,6 +347,7 @@ impl Launcher {
                 .map_or(instances::Channel::Stable, |i| i.channel),
             logo: None,
             discarding: false,
+            memory: None,
             picture: None,
             editing: editing.map(|i| i.id),
             copy: false,
@@ -475,6 +478,7 @@ impl Launcher {
             .map(|p| p.as_ref().map(|c| c.png.clone()));
         let editing = d.editing.clone();
         let edited = editing.is_some();
+        let memory = d.memory;
         let copy = selected.filter(|_| d.copy);
         // The picture choice this save keeps: once kept, it is no longer an unsaved edit.
         let sent_picture = picture.clone();
@@ -540,6 +544,9 @@ impl Launcher {
                 if let Some(game) = m.java.as_mut().filter(|_| edited) {
                     game.jvm_args = jvm_args;
                     game.window = window;
+                    if let Some(memory) = memory {
+                        game.memory_mb = Some(memory);
+                    }
                 }
                 if plays_horizon {
                     m.version = pin;

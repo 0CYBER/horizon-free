@@ -212,6 +212,20 @@ impl Launcher {
     }
 
     fn save_memory(&mut self, id: &str, memory: u32) {
+        // In instance settings it is part of the draft: Save keeps it, Cancel drops it.
+        let saved_mb = self
+            .instances
+            .list
+            .iter()
+            .find(|i| i.id == id)
+            .and_then(Self::saved_memory);
+        if let Some(d) =
+            (self.instances.dialog.as_mut()).filter(|d| d.editing.as_deref() == Some(id))
+        {
+            d.memory = (saved_mb != Some(memory)).then_some(memory);
+            self.memory_slider.saved = None;
+            return;
+        }
         let saved = instances::edit(id, |m| {
             if let Some(java) = &mut m.java {
                 java.memory_mb = Some(memory);
@@ -224,8 +238,16 @@ impl Launcher {
         self.reload_instances();
     }
 
-    /// The instance's saved value, as the row shows it.
-    fn saved_memory(instance: &instances::Instance) -> Option<u32> {
+    /// The value the row shows: the sheet's draft for the instance it edits, else the saved one.
+    fn shown_memory(&self, instance: &instances::Instance) -> Option<u32> {
+        (self.instances.dialog.as_ref())
+            .filter(|d| d.editing.as_deref() == Some(instance.id.as_str()))
+            .and_then(|d| d.memory)
+            .or_else(|| Self::saved_memory(instance))
+    }
+
+    /// The instance's saved value.
+    pub(super) fn saved_memory(instance: &instances::Instance) -> Option<u32> {
         instance
             .java
             .as_ref()
@@ -245,7 +267,7 @@ impl Launcher {
         let same = instances::list()
             .iter()
             .find(|i| i.id == id)
-            .is_some_and(|i| Self::saved_memory(i) == Some(memory));
+            .is_some_and(|i| self.shown_memory(i) == Some(memory));
         if !same {
             self.save_memory(id, memory);
         }
@@ -399,7 +421,7 @@ impl Launcher {
         let instance = self.memory_instance()?;
         let total = self.memory_slider.total();
         let area = self.memory_slider.area.clone();
-        let saved = Self::saved_memory(&instance)?;
+        let saved = self.shown_memory(&instance)?;
         let memory = self.memory_slider.dragging.unwrap_or(saved);
         self.sync_memory_box(&instance.id, memory);
         let typed = launch::parse_memory(self.servers.value(Field::MemoryLimit));

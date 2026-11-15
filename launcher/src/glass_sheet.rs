@@ -123,6 +123,8 @@ struct Draft {
     hooks: Option<[String; 4]>,
     /// The Linux switches, once one was flipped.
     switches: Option<[bool; 3]>,
+    /// A Java instance's maximum memory, once changed.
+    memory: Option<u32>,
 }
 
 impl Draft {
@@ -151,6 +153,9 @@ impl Draft {
                         .map(|(w, h)| (w.to_string(), h.to_string()))
                         .unwrap_or_default(),
                 )
+                || self
+                    .memory
+                    .is_some_and(|mb| mb != j.memory_mb.unwrap_or(instances::DEFAULT_MEMORY_MB))
         });
         let l = &saved.launch;
         let hooks = self.hooks.as_ref().is_some_and(|typed| *typed != hooks)
@@ -207,6 +212,7 @@ impl Launcher {
             ),
             hooks: self.hooks_typed(&saved.id),
             switches: self.switches_typed(&saved.id),
+            memory: d.memory,
         };
         draft.changed(saved)
     }
@@ -989,6 +995,7 @@ mod tests {
             java: (String::new(), (String::new(), String::new())),
             hooks: None,
             switches: None,
+            memory: None,
         }
     }
 
@@ -1012,6 +1019,12 @@ mod tests {
         draft.java.1 = ("1280".into(), "720".into());
         assert!(draft.changed(&saved).is_empty());
         draft.java.1 .0 = "oops".into();
+        assert_eq!(draft.changed(&saved), vec![SheetTab::Launch]);
+        // Memory set in the sheet waits for Save too; set back to what is saved, it is no edit.
+        draft.java.1 = ("1280".into(), "720".into());
+        draft.memory = Some(instances::DEFAULT_MEMORY_MB);
+        assert!(draft.changed(&saved).is_empty());
+        draft.memory = Some(instances::DEFAULT_MEMORY_MB * 2);
         assert_eq!(draft.changed(&saved), vec![SheetTab::Launch]);
     }
 
