@@ -118,8 +118,10 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
             for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
                 for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                    let name = w.block_name(x, y, z);
-                    if name.ends_with("_leaves") {
+                    // `block instanceof LeavesBlock`: the class chain, which a
+                    // content mod's block copies from its template.
+                    let facts = w.facts.get(w.world.block(x, y, z));
+                    if facts.has_class("LeavesBlock") {
                         events.push(MobEvent::BreakBlock {
                             pos: [x, y, z],
                             drop: true,
@@ -144,15 +146,10 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
             for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
                 for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                    if matches!(
-                        w.block_name(x, y, z),
-                        "minecraft:wheat"
-                            | "minecraft:carrots"
-                            | "minecraft:potatoes"
-                            | "minecraft:beetroots"
-                            | "minecraft:torchflower_crop"
-                            | "minecraft:pitcher_crop"
-                    ) {
+                    // `state.getBlock() instanceof CropBlock`: the class chain,
+                    // so a mod crop that copies `wheat` breaks too.
+                    let facts = w.facts.get(w.world.block(x, y, z));
+                    if facts.has_class("CropBlock") || facts.has_class("PitcherCropBlock") {
                         events.push(MobEvent::BreakBlock {
                             pos: [x, y, z],
                             drop: true,
@@ -338,6 +335,9 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     p.xrot("left_front_leg", (pos * 0.6662).mcos() * leg);
 }
 
+#[cfg(test)]
+#[path = "ravager_crush_tests.rs"]
+mod ravager_crush_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
