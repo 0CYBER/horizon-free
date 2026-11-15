@@ -33,6 +33,8 @@ Checks:
 - combat-restart: a player's kicks are kept across a restart (`anticheat-strikes.json`): a bot attacking
          without swinging is kicked once (1 of 2 before a ban), the server stops and starts again on the same
          folder, and the same bot, back and cheating again, is banned.
+- strikes-off: the same with `[anticheat] strikes = ""`: no strikes file is written, and after the restart the
+         bot's kick is a first kick again (1 of 2 before a ban), with no ban.
 - prediction-vanilla (only with --check): the same with the real vanilla 26.3 client (tools/vanilla_client.py, from the owner's
          own files; on macOS from the logged-in screen session, even a locked one), its keys pressed by
          VanillaMover (mods/horizon/src/test/java): it walks, sprint-jumps, strafes and sneaks, with Speed
@@ -876,28 +878,59 @@ def check_combat(bins, scratch, out, seconds):
           f'flagged; health left: {health}')
 
 
-def check_combat_restart(bins, scratch, out, seconds):
-    """docs/anticheat.md: a check's kicks are counted "across sessions and restarts". The first kick of a
-    no-swing bot is saved in `anticheat-strikes.json`; after a restart on the same folder, the next one bans."""
-    folder = scratch / 'combat-restart'
+def cheat_across_a_restart(bins, folder, out, name, anticheat, prefix, seconds):
+    """A survival server in `folder` with `anticheat` (server.toml), run twice: each time a bot attacking a
+    standing target without swinging (`<prefix>NoSwing0`, the same player both times) plays until it is sent away.
+    Returns, for each run, the bot's report and `anticheat-strikes.json` after it (None without the file)."""
     rounds = []
     for run in ('first', 'second'):
-        server, port = start(bins, folder, None, out, f'combat-restart-{run}', gamemode='survival',
+        server, port = start(bins, folder, anticheat, out, f'{name}-{run}', gamemode='survival',
                              difficulty='peaceful')
         try:
             server.console('gamerule respawn_radius 0')
             with ThreadPoolExecutor(2) as pool:
-                target = pool.submit(bots, bins, port, out, 'RTarget', 1, 'stand', seconds + 10)
-                server.wait_for('RTarget0 joined the game', 120)
-                cheater = bots(bins, port, out, 'RNoSwing', 1, 'stand', seconds, '--attack',
-                               'RTarget0', '--no-swing')['per_bot'][0]
+                target = pool.submit(bots, bins, port, out, f'{prefix}Target', 1, 'stand', seconds + 10)
+                server.wait_for(f'{prefix}Target0 joined the game', 120)
+                cheater = bots(bins, port, out, f'{prefix}NoSwing', 1, 'stand', seconds, '--attack',
+                               f'{prefix}Target0', '--no-swing')['per_bot'][0]
                 target.result()
         finally:
             server.stop()
         strikes = folder / 'anticheat-strikes.json'
         rounds.append((cheater, json.loads(strikes.read_text()) if strikes.exists() else None))
+    return rounds
+
+
+def check_strikes_off(bins, scratch, out, seconds):
+    """`strikes = ""` keeps a player's kicks only while the server runs (docs/anticheat.md): the no-swing bot of
+    `combat-restart`, kicked once, comes back after a restart and is kicked again as a first kick, not banned, and
+    no strikes file is written."""
+    folder = scratch / 'strikes-off'
+    (first, after_first), (second, after_second) = cheat_across_a_restart(
+        bins, folder, out, 'strikes-off', '[anticheat]\nstrikes = ""\n', 'S', seconds)
     log = (folder / 'logs/anticheat.log').read_text()
-    (first, after_first), (second, after_second) = rounds
+    for run, bot in (('first', first), ('second', second)):
+        if 'disconnected' not in (bot['error'] or ''):
+            raise Failed(f'strikes-off: the no-swing bot was not kicked the {run} time ({bot["error"]})')
+    if after_first is not None or after_second is not None:
+        raise Failed(f'strikes-off: a strikes file was written: {after_first} then {after_second}')
+    kicks = [l for l in log.splitlines() if 'SNoSwing0 failed combat' in l and 'kicked' in l]
+    if len(kicks) != 2 or not all('kicked (1 of 2 before a ban)' in l for l in kicks):
+        raise Failed(f'strikes-off: after the restart the kick was not a first kick again:\n{log}')
+    bans = folder / 'banned-players.json'
+    if bans.exists() and any(b['name'] == 'SNoSwing0' for b in json.loads(bans.read_text())):
+        raise Failed(f'strikes-off: the bot was banned: {bans.read_text()}')
+    print('strikes-off: no strikes file; after the restart the no-swing bot\'s kick was a first kick again '
+          '(1 of 2 before a ban), and it was not banned')
+
+
+def check_combat_restart(bins, scratch, out, seconds):
+    """docs/anticheat.md: a check's kicks are counted "across sessions and restarts". The first kick of a
+    no-swing bot is saved in `anticheat-strikes.json`; after a restart on the same folder, the next one bans."""
+    folder = scratch / 'combat-restart'
+    (first, after_first), (second, after_second) = cheat_across_a_restart(bins, folder, out, 'combat-restart',
+                                                                          None, 'R', seconds)
+    log = (folder / 'logs/anticheat.log').read_text()
     if 'disconnected' not in (first['error'] or ''):
         raise Failed(f'combat-restart: the no-swing bot was not kicked the first time ({first["error"]})')
     if not after_first or [counts.get('combat') for counts in after_first.values()] != [1]:
@@ -929,9 +962,10 @@ CHECKS = {'off': check_off, 'timer': check_timer, 'ground': check_ground, 'predi
           'prediction-water': check_prediction_water, 'prediction-items': check_prediction_items,
           'log-off': check_log_off,
           'prediction-vanilla': check_prediction_vanilla,
-          'combat': check_combat, 'combat-restart': check_combat_restart}
+          'combat': check_combat, 'combat-restart': check_combat_restart, 'strikes-off': check_strikes_off}
 # Run when no --check is given: the vanilla client needs a screen session, so it runs only when asked.
-DEFAULT = ['combat', 'combat-restart', 'ground', 'log-off', 'off', 'prediction', 'prediction-items', 'prediction-water', 'timer']
+DEFAULT = ['combat', 'combat-restart', 'ground', 'log-off', 'off', 'prediction', 'prediction-items', 'prediction-water',
+           'strikes-off', 'timer']
 
 
 def main():
