@@ -98,7 +98,7 @@ path = "tests/world_view_slots.rs"
 
 [[test]]
 name = "standard_pack_gpu_entities"
-path = "fixtures/standard_pack_gpu_entities.rs"
+path = "tests/standard_pack_gpu_entities.rs"
 
 [[example]]
 name = "standard_pack_gpu_entities"

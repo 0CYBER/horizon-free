@@ -364,9 +364,8 @@ pub(crate) fn main() {
     run(Path::new(&output));
 }
 
-#[test]
-#[ignore = "daily"]
-fn standard_pack_gpu_entities() {
+#[cfg(test)]
+pub(crate) fn run_daily() {
     const OUTPUT: &str = "HORIZON_GPU_ENTITY_FIXTURE_OUTPUT";
     if let Some(output) = std::env::var_os(OUTPUT) {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
