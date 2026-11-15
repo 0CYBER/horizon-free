@@ -285,6 +285,7 @@ pub(super) fn freeze_declarations() -> horizon_client::Result<()> {
     Ok(())
 }
 
+#[derive(Clone)]
 struct NativeDeclared {
     errors: Vec<String>,
     blocks: Vec<horizon_mod_package::content::Block>,
@@ -294,9 +295,8 @@ struct NativeDeclared {
 }
 
 /// The same native declarations serve startup and every pack reload.
-fn native_declared() -> &'static NativeDeclared {
-    static DECLARED: std::sync::OnceLock<NativeDeclared> = std::sync::OnceLock::new();
-    DECLARED.get_or_init(|| {
+fn native_declared() -> std::borrow::Cow<'static, NativeDeclared> {
+    let collect = || {
         let (mut blocks, mut items) = (Vec::new(), Vec::new());
         let context = RegistrationContext::new();
         Game::native_blocks(&context, &mut blocks);
@@ -343,7 +343,19 @@ fn native_declared() -> &'static NativeDeclared {
             types,
             fluids,
         }
-    })
+    };
+    // Production freezes one loaded mod set for startup and reload. Tests replace
+    // that set in thread-local scopes, so a process-wide snapshot would retain
+    // whichever fixture reached content loading first, even on another thread.
+    #[cfg(not(test))]
+    {
+        static DECLARED: std::sync::OnceLock<NativeDeclared> = std::sync::OnceLock::new();
+        std::borrow::Cow::Borrowed(DECLARED.get_or_init(collect))
+    }
+    #[cfg(test)]
+    {
+        std::borrow::Cow::Owned(collect())
+    }
 }
 /// The native mods' standalone models (`native_standalone_models`), set once
 /// before the resources first load.
@@ -816,7 +828,7 @@ pub(super) fn content_overlay(
         items,
         types,
         fluids,
-    } = native_declared();
+    } = &*native_declared();
     if !errors.is_empty() {
         return Err(errors.join("\n").into());
     }
@@ -1957,6 +1969,34 @@ mod tests {
         folder.open(&ruby).unwrap().set_modified(later).unwrap();
         assert_eq!(verdict(&ruby, &manifest, false), switches_on_restart);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn native_declarations_follow_the_scoped_mod_fixture() {
+        struct DeclaresBlock;
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for DeclaresBlock {
+            fn blocks(&self, _: &RegistrationContext, event: &mut mod_api::BlocksEvent<'_>) {
+                event
+                    .blocks
+                    .push(mod_api::Block::new("test:blastproof", "minecraft:stone"));
+            }
+        }
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            assert!(native_declared().blocks.is_empty());
+        });
+        let mods = vec![mod_api::ModEntry::new("test", Box::new(DeclaresBlock))].into();
+        mod_platform::testing::with_mods(mods, || {
+            assert!(
+                native_declared()
+                    .blocks
+                    .iter()
+                    .any(|b| b.id == "test:blastproof")
+            );
+        });
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            assert!(native_declared().blocks.is_empty());
+        });
     }
 
     use super::*;
