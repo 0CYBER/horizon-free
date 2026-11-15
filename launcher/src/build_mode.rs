@@ -386,11 +386,20 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) -> Div {
         let t = self.theme;
+        // Before permission the rows say "Needs permission": the header says the same.
+        let allowed = self.settings.native_mods_allowed_at.is_some();
         let needs = match state {
             State::NoMods | State::UpToDate => None,
+            _ if !allowed => Some(tr("Needs permission")),
             State::NotBuilt => Some(tr("Not built")),
             State::Outdated => Some(tr("Needs build")),
         };
+        // A failure, not the worlds question (which stopped to ask, and failed nothing).
+        let failed = error.is_some() && mine && self.worlds_stop(mine).is_none();
+        // Its card offers its own way on (Switch off, Try again, Change version, Report).
+        let remedy = failed
+            && (!self.native_failed_mods.is_empty()
+                || error.is_some_and(|e| native_mods::sdk_cache::way_on(e).is_some()));
         let can_build = self.pending_consent.is_none()
             && !(self.native_step.is_some() && mine)
             // While worlds are at stake the choice row below is the only decision.
@@ -399,7 +408,7 @@ impl Launcher {
         let mut right = div().flex().items_center().gap(px(8.));
         if self.native_step.is_none() {
             // A failed build says so; its card below holds the way on.
-            if error.is_some() && mine {
+            if failed {
                 right = right.child(blocks::badge(tr("Build failed"), pal.danger, &t));
             } else if let Some(label) = needs {
                 right = right.child(blocks::badge(label, pal.warn, &t));
@@ -414,9 +423,8 @@ impl Launcher {
                 Some(_) => tr("Build"),
                 None => tr("Allow and build"),
             };
-            // Under a failure the card's own action (Switch off, Try again, Change version) is
-            // the main one: Build steps back.
-            let kind = match error.is_some() && mine {
+            // Under a failure with its own way on, that is the main action: Build steps back.
+            let kind = match remedy {
                 true => Kind::Secondary,
                 false => Kind::Primary,
             };
@@ -462,18 +470,28 @@ impl Launcher {
         let mut card = div().flex().flex_col().gap(px(10.));
         // Each message sits in the same card as the update question, its actions inside it.
         if let Some(e) = error {
+            // An icon in the message's colour, the words in body ink, the actions under them.
+            let tone = match self.worlds_stop(mine) {
+                Some(_) => pal.warn,
+                None => pal.danger,
+            };
             let mut message = self.panel().child(
                 div()
                     .flex()
-                    .items_start()
-                    .justify_between()
-                    .gap(px(12.))
-                    .child(text_in(13., pal.danger).flex_1().min_w_0().child(e.clone()))
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .gap(px(10.))
+                            .child(blocks::icon("info-box", 16., tone).mt(px(2.)))
+                            .child(text_in(13., pal.ink).flex_1().min_w_0().child(e.clone())),
+                    )
                     .child(
                         div()
                             .flex()
                             .flex_wrap()
-                            .justify_end()
                             .gap(px(8.))
                             .children(
                                 self.native_failed_mods
@@ -526,7 +544,7 @@ impl Launcher {
                 button(
                     "native-change-version",
                     tr("Change version"),
-                    Kind::Secondary,
+                    Kind::Primary,
                     &t,
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -535,11 +553,11 @@ impl Launcher {
                 }))
             }
             native_mods::sdk_cache::WayOn::Report => {
-                button("native-report", tr("Report"), Kind::Secondary, &t)
+                button("native-report", tr("Report"), Kind::Primary, &t)
                     .on_click(|_, _, cx| cx.open_url(&backend::issues_url()))
             }
             native_mods::sdk_cache::WayOn::Retry => {
-                button("native-retry", tr("Try again"), Kind::Secondary, &t).on_click(cx.listener(
+                button("native-retry", tr("Try again"), Kind::Primary, &t).on_click(cx.listener(
                     |this, _: &ClickEvent, _, cx| {
                         this.build_native();
                         cx.notify();
@@ -555,7 +573,7 @@ impl Launcher {
         button(
             SharedString::from(format!("native-off-{id}")),
             trf("Switch off {mod}", &[("mod", id)]),
-            Kind::Secondary,
+            Kind::Primary,
             &self.theme,
         )
         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
