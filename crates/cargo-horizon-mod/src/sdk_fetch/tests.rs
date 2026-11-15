@@ -241,10 +241,10 @@ fn a_project_inside_a_game_checkout_builds_against_it_and_a_pinned_one_does_not(
     let game = dir.path().join("game");
     write(&game.join("Cargo.toml"), workspace);
     write(&game.join("crates/horizon-mod-api/Cargo.toml"), "");
-    let fixture = game.join("crates/horizon-mod-wasm/tests/fixture");
+    let fixture = game.join("mods/fixture");
     write(
         &fixture.join("Cargo.toml"),
-        &dependency("../../../horizon-mod-api"),
+        &dependency("../../crates/horizon-mod-api"),
     );
     assert_eq!(
         game_tree(&fixture).unwrap(),
