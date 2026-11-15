@@ -2,7 +2,7 @@
 name = "horizon-launcher-scenery"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "LGPL-3.0-or-later"
 description = "The Horizon launcher's scenery: the sunset scene, painted skies, rain and frosted glass"
 publish = false
 
