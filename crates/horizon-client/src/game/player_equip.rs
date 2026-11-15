@@ -102,6 +102,12 @@ impl Game<'_> {
         for (attribute, id) in std::mem::take(&mut self.applied_modifiers) {
             let _ = player.set_modifier_unclamped(&attribute, &id, 0.0, "add_value", false);
         }
+        if self.remote.is_some() {
+            for (attr, id, _, op) in std::mem::take(&mut self.potions.enchant_modifiers) {
+                let _ = player.set_modifier_unclamped(&attr, &id, 0.0, &op, false);
+            }
+            return;
+        }
         let slots = ["head", "chest", "legs", "feet"];
         let mut equipped: Vec<(Option<&ItemStack>, &str)> = self
             .armor
