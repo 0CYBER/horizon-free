@@ -344,7 +344,11 @@ impl Launcher {
                                 .overflow_hidden()
                                 .opacity(label),
                         )
-                        .when(!open, |d| d.tooltip(ui::tip(i.name.clone())))
+                        // Narrow, icons alone; open, a name too long for the row is cut: the full
+                        // name on hover either way.
+                        .when(!open || i.name.chars().count() > 16, |d| {
+                            d.tooltip(ui::tip(i.name.clone()))
+                        })
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             match clicked.kind {
                                 InstanceKind::Default | InstanceKind::Own => {

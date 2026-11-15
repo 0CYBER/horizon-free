@@ -261,6 +261,7 @@ impl Launcher {
             )
             .child(
                 div()
+                    .id("home-title")
                     .min_w_0()
                     .truncate()
                     .font_family(horizon_theme::glass::DISPLAY_FONT)
@@ -268,6 +269,10 @@ impl Launcher {
                     .text_size(px(44.))
                     .line_height(px(48.))
                     .text_color(white(ink::FULL))
+                    // A long name is cut at the header's width: the whole of it on hover.
+                    .when(instance.name.chars().count() > 18, |d| {
+                        d.tooltip(ui::tip(instance.name.clone()))
+                    })
                     .child(instance.name),
             )
             .child(div().flex_1())
