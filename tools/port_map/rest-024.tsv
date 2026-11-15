@@ -52,13 +52,13 @@ Term.Maybe.parse	port	crates/horizon-command/src/packrat.rs::State::term	one arm
 Term.Repeated.parse	port	crates/horizon-command/src/packrat.rs::State::term	one arm of State::term
 Term.RepeatedWithSeparator.parse	port	crates/horizon-command/src/packrat.rs::State::term	one arm of State::term
 Term.Sequence.parse	port	crates/horizon-command/src/packrat.rs::State::term	one arm of State::term
-GreedyPatternParseRule.parse	port	crates/horizon-command/src/snbt.rs::greedy	gap: minor: same character class as UNICODE_NAME; the Character.codePointOf step is missing, so \N{...} names always fail
-GreedyPredicateParseRule.parse	port	crates/horizon-command/src/snbt.rs::greedy
-NumberRunParseRule.parse	port	crates/horizon-command/src/snbt.rs::number_run
+GreedyPatternParseRule.parse	port	crates/horizon-core/src/nbt_snbt.rs::Parser::escape	scans a Unicode character name before Character.codePointOf-equivalent lookup
+GreedyPredicateParseRule.parse	port	crates/horizon-core/src/nbt_snbt.rs::Parser::unquoted	consumes the permitted unquoted character class
+NumberRunParseRule.parse	port	crates/horizon-core/src/nbt_snbt.rs::Parser::digits	scans radix digits and underscores and rejects boundary underscores
 StringReaderTerms.TerminalCharacters.parse	port	crates/horizon-command/src/packrat.rs::State::term	Chars arm
 StringReaderTerms.TerminalWord.parse	port	crates/horizon-command/src/packrat.rs::State::term	Word arm
 TagParseRule.parse	port	crates/horizon-command/src/snbt.rs::parse_tag_argument	gap: minor: the parser error is returned, not stored at the mark in the packrat state
-UnquotedStringParseRule.parse	port	crates/horizon-command/src/snbt.rs::grammar	custom rule 'unquoted_string': non-empty check only, no minimum-size parameter
+UnquotedStringParseRule.parse	port	crates/horizon-core/src/nbt_snbt.rs::Parser::unquoted	nonempty unquoted SNBT token scanning
 net/minecraft/util/random/Weighted#codec	skip:java		codec; WeightedList::decode_inner reads data and weight per entry
 WeightedList.map	port	crates/horizon-assets/src/blockstate/choice.rs::Choice::map	keeps weights and maps values; used for variant model lists
 WeightedList.entryToNonEmptyListCodec	port	crates/horizon-world/src/worldgen/weighted.rs::WeightedList::build	rejects a list whose total weight is zero

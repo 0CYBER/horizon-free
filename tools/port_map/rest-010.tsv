@@ -1,13 +1,16 @@
-SnbtGrammar.cleanAndAppend	inline	crates/horizon-command/src/snbt.rs::grammar	float text: underscores dropped in the float action
-SnbtGrammar.parseUnsignedShort	inline	crates/horizon-command/src/snbt.rs::IntLit::create	unsigned short arm: value must fit 16 bits
-SnbtGrammar.createFloat	port	crates/horizon-command/src/snbt.rs::float_tag	gap: minor: the text is built in the grammar's float action; float_tag types it
-SnbtGrammar.convertFloat	inline	crates/horizon-command/src/snbt.rs::float_tag	float arm; non-finite values rejected
-SnbtGrammar.convertDouble	inline	crates/horizon-command/src/snbt.rs::float_tag	double arm; non-finite values rejected
+SnbtGrammar.cleanAndAppend	inline	crates/horizon-core/src/nbt_snbt.rs::Parser::float	float text: underscores dropped before numeric conversion
+SnbtGrammar.parseUnsignedShort	inline	crates/horizon-core/src/nbt_snbt.rs::Parser::integer	unsigned short arm validates the sixteen-bit magnitude
+SnbtGrammar.createFloat	port	crates/horizon-core/src/nbt_snbt.rs::Parser::float	constructs typed float or double values from the parsed decimal representation
+SnbtGrammar.convertFloat	inline	crates/horizon-core/src/nbt_snbt.rs::Parser::float	float arm; non-finite values rejected
+SnbtGrammar.convertDouble	inline	crates/horizon-core/src/nbt_snbt.rs::Parser::float	double arm; non-finite values rejected
 SnbtGrammar.joinList	skip:java		joins parser parts as a string
-SnbtGrammar.ArrayPrefix.isAllowed	inline	crates/horizon-command/src/snbt.rs::array	allowed element suffixes per array kind
-SnbtGrammar.ArrayPrefix.buildNumber	inline	crates/horizon-command/src/snbt.rs::array	element type check, then the value
-SnbtGrammar.ArrayPrefix.computeType	inline	crates/horizon-command/src/snbt.rs::array	default type when the element has no suffix
-SnbtGrammar.IntegerLiteral.cleanupDigits	port	crates/horizon-command/src/snbt.rs::IntLit::cleaned	sign and underscores
+SnbtGrammar.ArrayPrefix.isAllowed	inline	crates/horizon-core/src/nbt_snbt.rs::Parser::integer	typed-array kind bounds the explicit element suffix
+SnbtGrammar.ArrayPrefix.buildNumber	inline	crates/horizon-core/src/nbt_snbt.rs::Parser::list	constructs typed array elements from validated integer values
+SnbtGrammar.ArrayPrefix.computeType	inline	crates/horizon-core/src/nbt_snbt.rs::Parser::integer	typed-array kind supplies the absent integer suffix
+SnbtGrammar.IntegerLiteral.cleanupDigits	port	crates/horizon-core/src/nbt_snbt.rs::Parser::integer	removes numeric underscores after parsing sign and radix
+SnbtGrammar.IntegerLiteral.create	port	crates/horizon-core/src/nbt_snbt.rs::Parser::integer	validates signed or unsigned bit widths and constructs the typed integer
+SnbtGrammar.IntegerLiteral.signedOrDefault	inline	crates/horizon-core/src/nbt_snbt.rs::Parser::integer	explicit signedness wins; decimal defaults to signed
+SnbtGrammar.createParser	port	crates/horizon-core/src/nbt_snbt.rs::Parser::new	constructs the shared recursive SNBT parser state instead of a packrat grammar graph
 SnbtPrinterTagVisitor.visitByteArray	skip:data		datagen .snbt writer only (NbtUtils.structureToSnbt); Horizon writes no .snbt
 SnbtPrinterTagVisitor.visitIntArray	skip:data		datagen .snbt writer only (NbtUtils.structureToSnbt); Horizon writes no .snbt
 SnbtPrinterTagVisitor.visitLongArray	skip:data		datagen .snbt writer only (NbtUtils.structureToSnbt); Horizon writes no .snbt
