@@ -132,6 +132,16 @@ fn encode(draws: &[GuiDraw]) -> Vec<Value> {
             } => {
                 json!({"type": "fill", "x0": x0, "y0": y0, "x1": x1, "y1": y1, "color": *color as i32})
             }
+            GuiDraw::FillGradient {
+                x0,
+                y0,
+                x1,
+                y1,
+                top,
+                bottom,
+            } => {
+                json!({"type": "gradient", "x0": x0, "y0": y0, "x1": x1, "y1": y1, "top": *top as i32, "bottom": *bottom as i32})
+            }
             GuiDraw::Text {
                 text,
                 x,

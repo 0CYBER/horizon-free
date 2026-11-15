@@ -84,6 +84,18 @@ pub enum GuiDraw {
         y1: i32,
         color: u32,
     },
+    /// `fillGradient(x0, y0, x1, y1, top, bottom)`: ARGB `top` along the top edge (`y0`)
+    /// blending to `bottom` along the bottom edge (`y1`), in the current pose and clip.
+    /// Unlike `Fill` the corners are not sorted: an empty or reversed rectangle
+    /// (`x1 <= x0` or `y1 <= y0`) draws nothing.
+    FillGradient {
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        top: u32,
+        bottom: u32,
+    },
     /// `text(font, text, x, y, argb, dropShadow)`.
     Text {
         text: Text,
