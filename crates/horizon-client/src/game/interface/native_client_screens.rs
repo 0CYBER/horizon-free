@@ -232,6 +232,7 @@ mod client_screen_tests {
             game.streaming
                 .insert_remote(&mut game.world, horizon_client::chunk::Chunk::empty(0, 0));
             game.poll_stationary_client().unwrap();
+            sent(&mut reader); // PlayerLoaded precedes the inventory action.
             let kind = game.res.mob_types().get("minecraft:horse").unwrap().clone();
             let mut horse = Mob::new(42, kind, Vec3::new(0.5, 65.0, 0.5), 0.0);
             horse.extra.tame = true;
