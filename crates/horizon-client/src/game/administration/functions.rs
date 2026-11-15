@@ -1552,7 +1552,7 @@ mod tests {
     /// on, so a plain line and a macro line naming one both load and run; an unknown command is
     /// refused as before, and a command the mods stop registering is refused after a reload.
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn functions_name_mod_commands_from_the_first_world_open() {
         use std::sync::{
             Arc,
