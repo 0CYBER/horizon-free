@@ -138,6 +138,22 @@
   {
     "package": "horizon-client",
     "target": "lib",
+    "test": "game::native_block_entity_item_tests::timing_container_moves_beside_saved_data",
+    "path": "crates/horizon-client/src/game/modding/native_block_entity_item_tests.rs",
+    "reason": "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process",
+    "rationale": "Opt-in wall-clock measurement, not a daily correctness check: returns without measuring unless HORIZON_JOURNAL_TIMING is set. Run by hand with HORIZON_JOURNAL_TIMING=1 and HORIZON_TEST_RESOURCES, using --ignored --exact --nocapture on its full test path; with_mod_parts runs the measurement in an isolated child process. All assertions remain in the test."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::native_block_entity_item_tests::timing_storage_against_items_across_barrel_cells",
+    "path": "crates/horizon-client/src/game/modding/native_block_entity_item_tests.rs",
+    "reason": "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process",
+    "rationale": "Opt-in wall-clock measurement, not a daily correctness check: returns without measuring unless HORIZON_STORAGE_TIMING is set. Run by hand with HORIZON_STORAGE_TIMING=1 and HORIZON_TEST_RESOURCES, using --ignored --exact --nocapture on its full test path; with_mod_parts runs the measurement in an isolated child process. All assertions remain in the test."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
     "test": "game::native_goal_ticks::tests::mod_goal_tick_cost",
     "path": "crates/horizon-client/src/game/modding/native_goal_ticks/native_goal_ticks_tests.rs",
     "reason": "cost probe",

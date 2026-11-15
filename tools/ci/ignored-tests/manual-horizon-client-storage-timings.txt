@@ -1,0 +1,3 @@
+# Opt-in wall-clock measurements; not daily correctness checks. Both need HORIZON_TEST_RESOURCES and run in an isolated scratch process.
+horizon-client game::native_block_entity_item_tests::timing_container_moves_beside_saved_data by-hand manual # HORIZON_JOURNAL_TIMING=1; run with --ignored --exact --nocapture on the full test path
+horizon-client game::native_block_entity_item_tests::timing_storage_against_items_across_barrel_cells by-hand manual # HORIZON_STORAGE_TIMING=1; optional HORIZON_STORAGE_CELLS (default 1024); run with --ignored --exact --nocapture on the full test path

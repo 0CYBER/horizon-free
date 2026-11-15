@@ -675,7 +675,7 @@ fn a_kept_slot_goes_back_only_into_the_block_entity_it_came_from() {
 /// time depends on the machine. `a_container_move_keeps_one_slot_not_the_entity` is the
 /// regression test; this prints the numbers for a pull request.
 #[test]
-#[ignore = "daily"]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
 fn timing_container_moves_beside_saved_data() {
     const NAME: &str =
         "game::native_block_entity_item_tests::timing_container_moves_beside_saved_data";
@@ -967,7 +967,7 @@ fn an_aborted_bulk_transfer_conserves_every_item() {
 /// grid size, 1,024 by default), as wall-clock time depends on the machine; it prints the pipe
 /// code's time per tick, busy and idle, and fails if an item is made or lost.
 #[test]
-#[ignore = "daily"]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
 fn timing_storage_against_items_across_barrel_cells() {
     const NAME: &str =
         "game::native_block_entity_item_tests::timing_storage_against_items_across_barrel_cells";
