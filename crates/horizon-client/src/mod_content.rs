@@ -2457,6 +2457,13 @@ impl Addition {
     }
 }
 
+/// Applies `additions` to the bundle `doc` by priority (lower first); equal priorities keep the
+/// order given, which is mod order, then file order.
+fn apply_additions(doc: &mut J, additions: &mut [Addition]) -> Result<()> {
+    additions.sort_by_key(|a| a.priority);
+    additions.iter().try_for_each(|a| a.apply(doc))
+}
+
 /// The worldgen loader's bundles of biomes and of placed feature tags.
 const BIOMES: &str = "worldgen/biomes.json";
 const FEATURE_TAGS: &str = "worldgen/feature_tags.json";

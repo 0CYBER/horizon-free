@@ -194,6 +194,22 @@ fn traits(traits: Vec<Trait>) -> Surface {
     })
 }
 
+fn behaviours(version: &[(&str, u32)]) -> Surface {
+    functions(vec![]).with_behaviours(
+        version
+            .iter()
+            .map(|(name, version)| {
+                Behaviour::new(
+                    format!("behaviour:{name}"),
+                    "",
+                    vec!["a.rs::t".into()],
+                    BehaviourContract { version: *version },
+                )
+            })
+            .collect(),
+    )
+}
+
 /// The one change, as (id, kind, class, lines, members).
 fn only(diff: &Diff) -> (&str, ChangeKind, Class, Vec<&str>, Vec<&str>) {
     assert_eq!(diff.changes.len(), 1, "{}", diff.to_text());
@@ -345,6 +361,71 @@ fn a_hook_version_is_conditional() {
             vec![]
         )
     );
+}
+
+#[test]
+fn a_new_behaviour_is_additive() {
+    let old = behaviours(&[]);
+    let new = behaviours(&[("pool_merging", 1)]);
+    assert_eq!(
+        only(&diff(&old, &new)),
+        (
+            "behaviour:pool_merging",
+            ChangeKind::Added,
+            Class::Additive,
+            vec!["added"],
+            vec![]
+        )
+    );
+}
+
+#[test]
+fn a_removed_behaviour_breaks() {
+    let old = behaviours(&[("pool_merging", 1), ("kept", 1)]);
+    let new = behaviours(&[("kept", 1)]);
+    assert_eq!(
+        only(&diff(&old, &new)),
+        (
+            "behaviour:pool_merging",
+            ChangeKind::Removed,
+            Class::Breaking,
+            vec!["removed"],
+            vec![]
+        )
+    );
+}
+
+#[test]
+fn a_behaviour_version_is_conditional() {
+    let old = behaviours(&[("pool_merging", 1)]);
+    let new = behaviours(&[("pool_merging", 2)]);
+    assert_eq!(new.behaviours[0].hash, old.behaviours[0].hash);
+    assert_eq!(
+        only(&diff(&old, &new)),
+        (
+            "behaviour:pool_merging",
+            ChangeKind::Changed,
+            Class::Conditional,
+            vec!["version 1 → 2: affects only a mod that relies on this behaviour"],
+            vec![]
+        )
+    );
+}
+
+#[test]
+fn a_removed_behaviour_needs_a_change_note() {
+    let mut d = diff(&behaviours(&[("pool_merging", 1)]), &behaviours(&[]));
+    assert_eq!(d.undeclared().count(), 1);
+    let note = Note {
+        file: "pool-merging.toml".into(),
+        why: "Additions are no longer merged.".into(),
+        migrate: None,
+    };
+    assert!(
+        d.attach(&note, &["behaviour:pool_merging".into()])
+            .is_empty()
+    );
+    assert_eq!(d.undeclared().count(), 0);
 }
 
 #[test]

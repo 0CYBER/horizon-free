@@ -1,0 +1,12 @@
+version = 1
+doc = """\
+A set, pool or processor list file in a mod's own namespace that holds `horizon:add_to` (an id or a list of ids) \
+adds entries to other sets, pools or lists and is not one of its own. Only structure sets (their `structures`), \
+template pools (their `elements`) and processor lists (their `processors`) take additions. The entries are appended \
+to the list of each target the file names, after the target's own entries and every mod's own files, ordered by \
+`horizon:priority` (an integer, lower first, 1000 when the file has none), and files of equal priority in mod order, \
+then file order. A target nobody defines is skipped."""
+tests = [
+  "crates/horizon-client/src/mod_content_tests.rs::additions_append_by_priority_then_order_and_skip_unknown_targets",
+  "crates/horizon-client/src/mod_content_tests.rs::content_root_carries_a_structure_mod",
+]

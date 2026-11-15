@@ -2359,7 +2359,8 @@ impl ItemKind {
 }
 
 /// An id's kind and the name a mod writes for it (`hook:player_logged_in` is the hook
-/// `player_logged_in`); `None` for an id of no kind this crate writes. Programs that show items
+/// `player_logged_in`); `None` for an id of no kind a mod's code can use (a `behaviour:` is never
+/// used, so it never shows in a fit report). Programs that show items
 /// in other languages build their sentence from this; [`Misfit`]'s text is English.
 pub fn item(id: &str) -> Option<(ItemKind, String)> {
     let (kind, rest) = id.split_once(':')?;
