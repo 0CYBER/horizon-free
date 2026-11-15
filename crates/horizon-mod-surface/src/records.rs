@@ -484,3 +484,26 @@ pub struct Capability {
     #[serde(flatten)]
     pub contract: CapabilityContract,
 }
+
+/// A behaviour's contract: only its `version`, which is compared on its own and stays out of the
+/// hash, as a hook's does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BehaviourContract {
+    pub version: u32,
+}
+
+/// `behaviour:<name>`: a promise a mod relies on that is no type or signature, written by hand in
+/// `crates/horizon-mod-vocab/behaviours/<name>.toml`. Its `doc` and the `tests` that pin it are
+/// outside the hash.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Behaviour {
+    pub id: String,
+    pub hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub doc: String,
+    /// The tests that pin it, each `<file path>::<fn name>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests: Vec<String>,
+    #[serde(flatten)]
+    pub contract: BehaviourContract,
+}

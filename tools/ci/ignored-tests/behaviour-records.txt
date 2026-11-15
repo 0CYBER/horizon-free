@@ -1,0 +1,2 @@
+# The behaviour records of the SDK surface (crates/horizon-mod-vocab/behaviours/): the gate test starts horizon-stage as a child.
+horizon-mod-api-gen a_removed_behaviour_fails_the_gate_without_a_note test:surface_diff daily child-process

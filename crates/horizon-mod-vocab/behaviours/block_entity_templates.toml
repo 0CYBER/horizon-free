@@ -1,0 +1,12 @@
+version = 1
+doc = """\
+A mod block with no block entity type of its own (a type that declares the block wins) whose content `template` is a vanilla block with a block entity gets that block entity's class, chosen by \
+the template's block entity class and not by the block's name. A block on a sign or hanging sign template is valid \
+for that block entity as it stands, so a world generation feature that places it gives it that block entity. For any \
+other class (a vault, say) the block is valid for that type once the type's `block_entity_type_add_blocks` event \
+adds it; from then on it creates, ticks and saves as the template's block entity would, and loads back as the same \
+type. Without that event a block with no declared type has no block entity."""
+tests = [
+  "crates/horizon-client/src/game/blocks/block_entity_ticks.rs::vanilla_template_membership_creates_ticks_and_saves",
+  "crates/horizon-client/src/mod_content_tests.rs::a_feature_gives_a_mods_sign_its_block_entity",
+]

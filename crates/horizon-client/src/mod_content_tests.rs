@@ -1998,6 +1998,44 @@ fn content_root_is_reused_until_a_mod_changes() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// `horizon:add_to`: only the set, pool and processor list bundles take additions; each is
+/// appended after the target's own entries, lower `horizon:priority` first and equal priorities
+/// in the order given (mod, then file order); a target nobody defines is skipped.
+#[test]
+fn additions_append_by_priority_then_order_and_skip_unknown_targets() {
+    let pools = "worldgen/template_pools.json";
+    let mut additions: Vec<Addition> = [
+        r#"{"horizon:add_to": ["mod:pool", "mod:missing"], "elements": ["a"]}"#,
+        r#"{"horizon:add_to": "mod:pool", "horizon:priority": 5, "elements": ["b"]}"#,
+        r#"{"horizon:add_to": "mod:pool", "elements": ["c"]}"#,
+        r#"{"horizon:add_to": "mod:pool", "horizon:priority": 5, "elements": ["d"]}"#,
+        r#"{"horizon:add_to": "mod:pool", "horizon:priority": 1000, "elements": ["e"]}"#,
+    ]
+    .iter()
+    .map(|text| Addition::read(pools, text).unwrap().unwrap())
+    .collect();
+    let mut doc: J = serde_json::from_str(
+        &serde_json::json!({"mod:pool": r#"{"elements": ["own"]}"#}).to_string(),
+    )
+    .unwrap();
+    apply_additions(&mut doc, &mut additions).unwrap();
+    let Some(J::Str(text)) = doc.get("mod:pool") else {
+        panic!("the pool is kept");
+    };
+    let pool: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        pool["elements"],
+        serde_json::json!(["own", "b", "d", "a", "c", "e"])
+    );
+    assert!(doc.get("mod:missing").is_none());
+    let feature = r#"{"horizon:add_to": "mod:pool", "elements": ["a"]}"#;
+    assert!(
+        Addition::read("worldgen/features.json", feature)
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// A structure mod's worldgen reaches the worldgen loader: its structure,
 /// set, pool and templates join the bundles, and its biome tag keeps only
 /// what the loader knows.

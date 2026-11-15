@@ -1,6 +1,6 @@
 //! `horizon-stage surface-diff` end to end: exit codes, notes and the gate, on two small
 //! surfaces written here.
-use mod_surface::{Function, FunctionContract, Surface};
+use mod_surface::{Behaviour, BehaviourContract, Function, FunctionContract, Surface};
 use std::path::Path;
 use std::process::Output;
 
@@ -108,6 +108,41 @@ fn the_gate_fails_an_undeclared_break_and_passes_a_declared_one() {
     assert!(
         out.contains("    why (rename.toml): Spawn reads as eggs.\n    migrate: Call `summon`.\n")
     );
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_removed_behaviour_fails_the_gate_without_a_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let behaviour = Behaviour::new(
+        "behaviour:pool_merging",
+        "",
+        vec!["a.rs::t".into()],
+        BehaviourContract { version: 1 },
+    );
+    std::fs::write(
+        dir.path().join("old.json"),
+        surface(&[]).with_behaviours(vec![behaviour]).to_json(),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("new.json"), surface(&[]).to_json()).unwrap();
+    let (code, _, err) = run(dir.path(), &["--gate"]);
+    assert_eq!(code, 1);
+    assert!(
+        err.contains("breaking change without a change note: behaviour:pool_merging"),
+        "{err}"
+    );
+    note(
+        dir.path(),
+        "changes",
+        "pool-merging.toml",
+        "ids = [\"behaviour:pool_merging\"]\nwhy = \"Additions are no longer merged.\"\n",
+    );
+    let (code, _, err) = run(
+        dir.path(),
+        &["--gate", "--notes", "changes", "--base-notes", "base"],
+    );
+    assert_eq!(code, 0, "{err}");
 }
 
 #[test]
