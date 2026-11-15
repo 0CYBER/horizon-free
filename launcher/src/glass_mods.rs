@@ -30,7 +30,12 @@ impl Launcher {
     pub(super) fn mods_placeholder(&self) -> SharedString {
         let m = &self.mods;
         let registry = m.source == SourceId::Horizon && m.java.is_none();
-        if registry && m.kind == PackKind::Mod && m.searched && m.text.text().is_empty() {
+        if registry
+            && m.kind == PackKind::Mod
+            && m.searched
+            && m.error.is_none()
+            && m.text.text().is_empty()
+        {
             // Results come in pages: only a last page gives the real count.
             if m.more {
                 return tr("Search Horizon mods").into();
@@ -358,10 +363,56 @@ impl Launcher {
         let t = self.theme;
         let m = &self.mods;
         if let Some(e) = &m.error {
-            // A failed search stays visible as an amber banner with a way to try again.
+            // A failed search stays as an amber card: what happened in plain words, Try again,
+            // Modrinth while Horizon's own list is down, and the error's own words on request.
+            let details = m.error_details;
+            let horizon = m.source == SourceId::Horizon && m.java_for(m.kind).is_none();
+            let what = if horizon {
+                tr("Couldn't load Horizon's mod list.")
+            } else {
+                tr("The search didn't go through.")
+            };
+            let mut actions = div().flex().flex_wrap().gap(px(8.)).child(
+                button("mods-retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.mods_search(0);
+                        cx.notify();
+                    },
+                )),
+            );
+            if horizon {
+                actions = actions.child(
+                    button(
+                        "mods-to-modrinth",
+                        "Browse Modrinth instead",
+                        Kind::Ghost,
+                        &t,
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.mods.source = SourceId::Modrinth;
+                        this.mods.browse.filters = Default::default();
+                        this.mods.browse.open = None;
+                        this.mods.picked = None;
+                        this.mods_search(0);
+                        cx.notify();
+                    })),
+                );
+            }
+            actions = actions.child(
+                button(
+                    "mods-error-details",
+                    if details { "Hide details" } else { "Details" },
+                    Kind::Ghost,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.mods.error_details = !this.mods.error_details;
+                    cx.notify();
+                })),
+            );
             return div()
                 .flex()
-                .items_center()
+                .items_start()
                 .gap(px(10.))
                 .m(px(8.))
                 .px(px(14.))
@@ -369,12 +420,19 @@ impl Launcher {
                 .rounded(px(radius::ROW))
                 .border_1()
                 .border_color(ui::warn())
-                .child(ui::dot(ui::Tone::Warn))
+                .child(ui::dot(ui::Tone::Warn).mt(px(6.)))
                 .child(
-                    ui::text(14., FontWeight::NORMAL, ink::FULL)
+                    div()
+                        .flex()
+                        .flex_col()
                         .flex_1()
                         .min_w_0()
-                        .child(e.clone()),
+                        .gap(px(8.))
+                        .child(ui::text(14., FontWeight::MEDIUM, ink::FULL).child(what))
+                        .children(details.then(|| {
+                            ui::text(12.5, FontWeight::NORMAL, ink::QUIET).child(e.clone())
+                        }))
+                        .child(actions),
                 );
         }
         if m.results.is_empty() {

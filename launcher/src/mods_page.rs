@@ -84,6 +84,8 @@ pub(super) struct Mods {
     pub(super) report_list: cull::Cull,
     more: bool,
     error: Option<String>,
+    /// The failed search's own words are shown under its plain message.
+    pub(super) error_details: bool,
     pub(super) installed: Vec<installed::Entry>,
     /// The registry native mods' versions the player picked on their Versions tab, by id
     /// (`horizon::chosen`), read with `installed`.
@@ -205,6 +207,7 @@ impl Mods {
             report_list: cull::Cull::default(),
             more: false,
             error: None,
+            error_details: false,
             installed: Vec::new(),
             chosen: Default::default(),
             checked_for: None,
@@ -1263,7 +1266,8 @@ impl Launcher {
         if self.mods.kind == PackKind::DataPack {
             return Some(self.mods_world_picker(&instance.name.clone(), cx));
         }
-        if self.mods.kind == PackKind::Modpack {
+        // The glass page's heading already says where installs go.
+        if self.mods.kind == PackKind::Modpack || self.theme.glass {
             return None;
         }
         let name = [("instance", instance.name.as_str())];
