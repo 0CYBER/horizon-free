@@ -139,33 +139,24 @@ impl Weather {
         pipeline: &wgpu::RenderPipeline,
         entities: &wgpu::BindGroup,
     ) {
-        if self.count == 0 {
-            return;
-        }
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, entities, &[]);
-        pass.set_bind_group(1, &self.group, &[]);
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
-        pass.draw_indexed(0..self.count / 4 * 6, 0, 0..1);
+        self.draw_bound(pass, entities, |pass| pass.set_pipeline(pipeline));
     }
-    /// Draws the streaks, through a native pack's weather stage when `native` is given (its
-    /// pipeline and the pack's frame group).
-    pub fn draw(
+    /// Draws the streaks.
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, entities: &wgpu::BindGroup) {
+        self.draw_bound(pass, entities, |pass| pass.set_pipeline(&self.pipeline));
+    }
+    /// Draws the streaks, if any, through the pipeline `bind` sets with any groups of its own
+    /// beyond 0 and 1.
+    pub fn draw_bound(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         entities: &wgpu::BindGroup,
-        native: Option<(&wgpu::RenderPipeline, &wgpu::BindGroup)>,
+        bind: impl FnOnce(&mut wgpu::RenderPass<'_>),
     ) {
         if self.count == 0 {
             return;
         }
-        match native {
-            Some((pipeline, frame)) => {
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(horizon_shader_api::stages::GROUP, frame, &[]);
-            }
-            None => pass.set_pipeline(&self.pipeline),
-        }
+        bind(pass);
         pass.set_bind_group(0, entities, &[]);
         pass.set_bind_group(1, &self.group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));

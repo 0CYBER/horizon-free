@@ -443,6 +443,24 @@ impl NativePack {
         };
         self.frame.fit_surface(device, size);
     }
+
+    /// The rain and snow through the pack's weather stage, in the world pass after translucent
+    /// terrain and clouds. False when the pack has none, for the renderer's own.
+    pub fn draw_weather(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        weather: &super::weather::Weather,
+        entities: &wgpu::BindGroup,
+    ) -> bool {
+        let Some(pipeline) = &self.weather else {
+            return false;
+        };
+        weather.draw_bound(pass, entities, |pass| {
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(horizon_shader_api::stages::GROUP, &self.frame.group, &[]);
+        });
+        true
+    }
 }
 
 /// What the renderer hands the pack before its world passes (`NativePack::start_frame`).

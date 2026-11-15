@@ -9914,38 +9914,15 @@ impl Renderer {
                 lists,
             });
         }
-        if native_sky_pass
-            && let Some(native) = &mut self.native
-            && let Some(sky) = &native.sky
-        {
-            if let Some(t) = &mut native.timing {
-                let format = self.output.frame.format;
-                t.mark(&self.device, &mut encoder, (world_view, format));
-            }
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&sky.label),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: world_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(clear),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: world_depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: native.timing.as_mut().and_then(|t| t.writes(&sky.label)),
-                ..Default::default()
+        if native_sky_pass && let Some(native) = &mut self.native {
+            native.draw_sky_pass(native_sky::SkyPass {
+                device: &self.device,
+                encoder: &mut encoder,
+                target: (world_view, self.output.frame.format),
+                depth: world_depth,
+                clear,
+                globals: &self.group,
             });
-            pass.set_bind_group(0, &self.group, &[]);
-            sky.draw(&mut pass, &native.frame);
         }
         laps.lap("r_pack_inputs");
         // The water mirror, for one of Horizon's own packs that reads it: the world as a
@@ -10186,41 +10163,42 @@ impl Renderer {
             pack_frame(&mut pass);
             if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
                 pass.stage(self.own_timing.as_mut(), "sky");
-                if !frame.title && frame.skybox && !pack_draws_sky && !native_sky_pass {
-                    match self
-                        .native
-                        .as_ref()
-                        .and_then(|n| Some((n.sky.as_ref()?, &n.frame)))
-                    {
-                        Some((sky, native)) => {
-                            sky.draw(&mut pass, native);
-                            // The sky binds the frame's own group; a material stage that
-                            // traces draws with the scene's.
-                            pack_frame(&mut pass);
+                let native_sky = !frame.title
+                    && frame.skybox
+                    && !pack_draws_sky
+                    && !native_sky_pass
+                    && self.native.as_ref().is_some_and(|n| n.draw_sky(&mut pass));
+                if native_sky {
+                    // The sky binds the frame's own group; a material stage that traces draws
+                    // with the scene's.
+                    pack_frame(&mut pass);
+                }
+                if !frame.title
+                    && frame.skybox
+                    && !pack_draws_sky
+                    && !native_sky_pass
+                    && !native_sky
+                {
+                    match self.core_sky.as_ref().filter(|c| c.draws_disc()) {
+                        Some(core) => {
+                            core.draw_disc(&mut pass);
+                            pass.set_bind_group(0, &self.group, &[]);
                         }
                         None => {
-                            match self.core_sky.as_ref().filter(|c| c.draws_disc()) {
-                                Some(core) => {
-                                    core.draw_disc(&mut pass);
-                                    pass.set_bind_group(0, &self.group, &[]);
-                                }
-                                None => {
-                                    pass.set_pipeline(&self.sky_base);
-                                    pass.draw(0..3, 0..1);
-                                }
-                            }
-                            if frame.sky.sunrise_color[3] > 0.001 {
-                                pass.set_pipeline(&self.sunrise_pipeline);
-                                pass.set_vertex_buffer(0, self.sunrise_buffer.slice(..));
-                                pass.draw(0..sunrise_fan::VERTICES as u32, 0..1);
-                            }
-                            // OptiFine custom sky layers, over the disc and sunrise and under the
-                            // sun, moon and stars.
-                            if self.custom_sky.is_drawing() {
-                                self.custom_sky.draw(&mut pass);
-                                pass.set_bind_group(0, &self.group, &[]);
-                            }
+                            pass.set_pipeline(&self.sky_base);
+                            pass.draw(0..3, 0..1);
                         }
+                    }
+                    if frame.sky.sunrise_color[3] > 0.001 {
+                        pass.set_pipeline(&self.sunrise_pipeline);
+                        pass.set_vertex_buffer(0, self.sunrise_buffer.slice(..));
+                        pass.draw(0..sunrise_fan::VERTICES as u32, 0..1);
+                    }
+                    // OptiFine custom sky layers, over the disc and sunrise and under the
+                    // sun, moon and stars.
+                    if self.custom_sky.is_drawing() {
+                        self.custom_sky.draw(&mut pass);
+                        pass.set_bind_group(0, &self.group, &[]);
                     }
                 }
                 if frame.title {
@@ -10247,7 +10225,7 @@ impl Renderer {
                             && self
                                 .native
                                 .as_ref()
-                                .is_some_and(|n| n.sky.is_some() && !n.vanilla_sun);
+                                .is_some_and(native_pack::NativePack::hides_sun);
                         let first = if own_sun { 6 } else { 0 };
                         // A resource pack's core/sky isn't vanilla's sky times the sky's
                         // lift, which the sun's disc pass assumes: today's add there.
@@ -10263,7 +10241,7 @@ impl Renderer {
                 let own_stars = self
                     .native
                     .as_ref()
-                    .is_some_and(|n| n.sky.is_some() && !n.vanilla_stars);
+                    .is_some_and(native_pack::NativePack::hides_stars);
                 if !frame.title && frame.stars.is_some() && !pack_draws_sky && !own_stars {
                     match self.core_sky.as_ref().filter(|c| c.draws_stars()) {
                         Some(core) => core.draw_stars(&mut pass),
@@ -11211,13 +11189,12 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             if !pack_draws_weather && !oit_on {
                 pass.stage(self.own_timing.as_mut(), "weather");
-                let native_weather = self
-                    .native
-                    .as_ref()
-                    .filter(|_| !frame.title)
-                    .and_then(|n| Some((n.weather.as_ref()?, &n.frame.group)));
-                self.weather
-                    .draw(&mut pass, &self.entity_group, native_weather);
+                let native = self.native.as_ref().filter(|_| !frame.title);
+                if !native
+                    .is_some_and(|n| n.draw_weather(&mut pass, &self.weather, &self.entity_group))
+                {
+                    self.weather.draw(&mut pass, &self.entity_group);
+                }
                 pass.set_bind_group(0, &self.group, &[]);
             }
             // LevelRenderer: the world border after translucent terrain and weather.

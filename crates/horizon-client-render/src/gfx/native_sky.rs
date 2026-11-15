@@ -160,6 +160,84 @@ impl NativeSky {
     }
 }
 
+/// What the renderer hands the pack for its sky's pass of its own (`NativePack::draw_sky_pass`).
+pub struct SkyPass<'a> {
+    pub device: &'a wgpu::Device,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    /// The world's colour and depth, and the colour's format.
+    pub target: super::timing::Target<'a>,
+    pub depth: &'a wgpu::TextureView,
+    /// The world's clear colour.
+    pub clear: wgpu::Color,
+    /// The terrain's group 0.
+    pub globals: &'a wgpu::BindGroup,
+}
+
+impl super::native_pack::NativePack {
+    /// In a timed frame (`start_frame` said so), the pack's sky in a pass of its own, which
+    /// clears the world's colour and depth first so that the world pass loads them.
+    pub fn draw_sky_pass(&mut self, sky_pass: SkyPass<'_>) {
+        let SkyPass {
+            device,
+            encoder,
+            target: (view, format),
+            depth,
+            clear,
+            globals,
+        } = sky_pass;
+        let Some(sky) = &self.sky else {
+            return;
+        };
+        if let Some(t) = &mut self.timing {
+            t.mark(device, encoder, (view, format));
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(&sky.label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: self.timing.as_mut().and_then(|t| t.writes(&sky.label)),
+            ..Default::default()
+        });
+        pass.set_bind_group(0, globals, &[]);
+        sky.draw(&mut pass, &self.frame);
+    }
+
+    /// The pack's sky inside the world pass, whose group 0 is the terrain's. False when the
+    /// pack has no sky stage, for the renderer's own.
+    pub fn draw_sky(&self, pass: &mut wgpu::RenderPass<'_>) -> bool {
+        let Some(sky) = &self.sky else {
+            return false;
+        };
+        sky.draw(pass, &self.frame);
+        true
+    }
+
+    /// The pack's sky stage draws the sun itself, so the renderer leaves out vanilla's.
+    pub fn hides_sun(&self) -> bool {
+        self.sky.is_some() && !self.vanilla_sun
+    }
+
+    /// The pack's sky stage draws the stars itself, so the renderer leaves out vanilla's.
+    pub fn hides_stars(&self) -> bool {
+        self.sky.is_some() && !self.vanilla_stars
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
