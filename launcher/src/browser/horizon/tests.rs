@@ -680,6 +680,17 @@ fn a_project_made_for_the_earlier_mod_system_says_it_cant_be_installed() {
 }
 
 #[test]
+fn a_summary_the_registry_cut_mid_word_ends_on_a_whole_word() {
+    let cut = format!("{} and tools at the crafti", "x".repeat(SUMMARY_CUT - 24));
+    assert_eq!(cut.chars().count(), SUMMARY_CUT);
+    assert!(summary(&cut).ends_with(" at the…"), "{}", summary(&cut));
+    // Whole sentences, and short ones, stay as written.
+    let whole = format!("{}.", "x ".repeat(SUMMARY_CUT / 2));
+    assert_eq!(summary(&whole), whole);
+    assert_eq!(summary("A short one"), "A short one");
+}
+
+#[test]
 fn owner_links_only_take_github_logins() {
     for ok in ["Stink-O", "ludovic111", "a"] {
         assert!(github_login(ok), "{ok}");

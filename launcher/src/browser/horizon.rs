@@ -389,6 +389,20 @@ pub fn trust_and_capabilities(
     lines
 }
 
+/// How long the registry lets a summary be: it cuts a longer one there, mid-word.
+const SUMMARY_CUT: usize = 160;
+
+/// A registry summary as players read it: one the registry cut mid-word ends at its last whole
+/// word, with "…".
+fn summary(text: &str) -> String {
+    let cut = text.chars().count() >= SUMMARY_CUT
+        && text.chars().last().is_some_and(char::is_alphanumeric);
+    match text.rfind(char::is_whitespace).filter(|_| cut) {
+        Some(end) => format!("{}…", text[..end].trim_end_matches([',', ';', ':'])),
+        None => text.to_owned(),
+    }
+}
+
 /// Why a project has versions for this game but none this Horizon may install.
 enum Blocked {
     /// They ask for capabilities this Horizon doesn't have: made for the earlier mod system.
@@ -430,7 +444,7 @@ fn project_of(index: &Index, p: &index::Project) -> Option<Project> {
         id: p.id.clone(),
         slug: p.id.clone(),
         title: p.name.clone(),
-        summary: p.summary.clone(),
+        summary: summary(&p.summary),
         author: p.authors.join(", "),
         downloads: p.downloads,
         page: format!("{SITE}/{}", p.id),
