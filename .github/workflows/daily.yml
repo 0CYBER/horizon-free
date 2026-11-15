@@ -108,8 +108,10 @@ jobs:
     uses: ./.github/workflows/wasm-mods.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
+  # Against this run's own SDK (the sdk job's legs, or sdk-<sha> when that is already released), signed with a
+  # throwaway key that only the debug-assertions launcher it builds trusts. It waits for the sdk job for the legs.
   fn-replace-check:
-    needs: resolve
+    needs: [resolve, sdk]
     if: needs.resolve.outputs.skip == 'false'
     uses: ./.github/workflows/fn-replace-check.yml
     with:
