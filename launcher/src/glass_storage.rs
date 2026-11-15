@@ -200,7 +200,11 @@ impl Launcher {
                 tr("Native mods"),
                 Some(
                     div()
-                        .child(tr("Native mods have access to your computer."))
+                        .child(tr(
+                            "Allowed: they run with access to your computer. Turn off takes the \
+                             permission back and switches every native mod off; Horizon asks \
+                             again before the next build.",
+                        ))
                         .into_any_element(),
                 ),
                 Some(
@@ -228,7 +232,17 @@ impl Launcher {
                 ),
             ));
         } else {
-            card = card.child(tr("Native mods are off."));
+            card = card.child(ui::setting_row(
+                tr("Native mods"),
+                Some(
+                    div()
+                        .child(tr(
+                            "Not allowed: Horizon asks before it builds the first one.",
+                        ))
+                        .into_any_element(),
+                ),
+                None,
+            ));
         }
         div()
             .flex()
