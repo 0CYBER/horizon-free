@@ -1,0 +1,2 @@
+horizon-client game::native_part_tables_tests::a_fluid_face_part_answers_per_state_fluid_and_direction lib daily resources
+horizon-client game::native_part_tables_tests::without_a_part_there_are_no_tables lib daily resources
