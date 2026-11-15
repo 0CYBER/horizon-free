@@ -238,20 +238,21 @@ pub trait EntitiesBackend {
     /// 379.
     #[access(WorldOnly)]
     fn entity_on_ground(&self, entity: EntityRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// The entity's box (`Entity.getBoundingBox`): its lowest and highest
     /// corner. None for the kinds whose box Horizon doesn't keep (displays,
-    /// markers, End crystals, the dragon); a dragon part's is its own. API 379.
+    /// markers, End crystals, the dragon); a dragon part's is its own. On a client, reads
+    /// its own copy of a tracked entity, or the local player's predicted box.
     #[access(WorldOnly)]
     fn entity_bounding_box(&self, entity: EntityRef) -> Option<[[f64; 3]; 2]>;
-    /// Side: server.
+    /// Side: both.
     /// The height of the entity's eyes above its feet (`Entity.getEyeHeight`).
-    /// API 379.
+    /// On a client, the local player's predicted dimensions or a tracked entity's own copy.
     #[access(WorldOnly)]
     fn entity_eye_height(&self, entity: EntityRef) -> Option<f64>;
-    /// Side: server.
-    /// Where the entity's eyes are (`Entity.getEyePosition`). API
-    /// 379.
+    /// Side: both.
+    /// Where the entity's eyes are (`Entity.getEyePosition`). On a client, the local player's
+    /// predicted position and dimensions or a tracked entity's own copy.
     #[access(WorldOnly)]
     fn entity_eye_position(&self, entity: EntityRef) -> Option<[f64; 3]>;
     /// Side: server.

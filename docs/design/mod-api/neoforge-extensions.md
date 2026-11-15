@@ -239,7 +239,7 @@ entity coverage is data, handles and global hooks. On the server a mod can act o
 
 | Method | Verdict | Horizon route |
 | --- | --- | --- |
-| server reach (`Player.canInteractWithEntity`, `isWithinAttackRange`) | **Covered** | `player_within_entity_reach(player, entity, EntityReach)`, server-side: eyes to the closest point of the entity's box (0 inside it, no ray, no fallback). `Interact` strict below (range + 3)², `Container` strict below (range + 4)², `Attack` inclusive within [min − margin − 3, max + margin + 3] from the main hand's `attack_range`, else 0 to the range. None across levels or for an entity whose box Horizon doesn't keep. |
+| server reach (`Player.canInteractWithEntity`, `isWithinAttackRange`) | **Covered** | `player_within_entity_reach(player, entity, EntityReach)`, both sides (local player only on a client, using its predicted eyes and synced range/main hand against the displayed target box): eyes to the closest point of the entity's box (0 inside it, no ray, no fallback). `Interact` strict below (range + 3)², `Container` strict below (range + 4)², `Attack` inclusive within [min − margin − 3, max + margin + 3] from the main hand's `attack_range`, else 0 to the range. None across levels or for an entity whose box Horizon doesn't keep. |
 | `mayFly()` | **Covered** | `player_may_fly(player)`, both sides: the `mayfly` ability. Horizon has no creative-flight attribute yet, so nothing is OR'd in. |
 
 ## `IBlockEntityExtension`
