@@ -3318,8 +3318,9 @@ pub fn throwable_to_nbt(
     }
     // the loaded item stays (blue egg, potion effects) at `setItem`'s count 1.
     if let Tag::Compound(m) = &mut tag {
-        let st = match &p.kind {
-            ProjectileKind::Potion(s, _) => (**s).clone(),
+        let st = match (&p.kind, &p.item) {
+            (ProjectileKind::Potion(s, _), _) => (**s).clone(),
+            (_, Some(thrown)) => thrown.clone(),
             _ => crate::items::ItemStack::new(item, 1),
         };
         if let Tag::Compound(i) = m.entry("Item".into()).or_insert_with(|| item_to_nbt(&st)) {
@@ -3350,6 +3351,13 @@ pub fn throwable_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Project
     p.no_gravity = flag(tag, "NoGravity");
     load_projectile_entity_fields(&mut p, tag);
     p.on_ground = flag(tag, "OnGround");
+    if !matches!(p.kind, ProjectileKind::Potion(..))
+        && let Some(item) = tag.get("Item").and_then(item_from_nbt)
+    {
+        // Kept on the projectile: the tag it was loaded from is found by its
+        // position, so it is gone once the projectile has moved.
+        p.set_thrown_item(&item);
+    }
     Some(p)
 }
 
@@ -8346,9 +8354,13 @@ mod fireball_nbt_tests {
             ),
         ]);
         let egg = throwable_from_nbt(&raw, None).unwrap();
+        // With or without the tag it was loaded from, which is lost once it moves.
+        for raw in [Some(&raw), None] {
+            let tag = throwable_to_nbt(&egg, [1; 4], None, raw).unwrap();
+            let item = tag.get("Item").and_then(item_from_nbt).unwrap();
+            assert_eq!(&*item.item, "minecraft:blue_egg");
+        }
         let tag = throwable_to_nbt(&egg, [1; 4], None, Some(&raw)).unwrap();
-        let item = tag.get("Item").and_then(item_from_nbt).unwrap();
-        assert_eq!(&*item.item, "minecraft:blue_egg");
         assert!(tag.get("LeftOwner").is_none() && tag.get("Owner").is_none());
         assert_eq!(number(tag.get("HasBeenShot")), Some(0));
         let wind = Projectile::new(ProjectileKind::WindCharge, Vec3::ZERO, None);

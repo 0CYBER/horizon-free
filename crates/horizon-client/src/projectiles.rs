@@ -276,8 +276,10 @@ pub struct Projectile {
     /// `Entity.DATA_SHARED_FLAGS_ID`'s fire bit, set by the server's base tick.
     pub synced_fire: bool,
     /// `Fireball.DATA_ITEM_STACK`: the item a fireball is drawn as, a fire
-    /// charge until [`Projectile::set_item`] gives it another. None for the
-    /// kinds that are no `Fireball` (a wither skull, a wind charge).
+    /// charge until [`Projectile::set_item`] gives it another. For a thrown
+    /// item (`ThrowableItemProjectile.DATA_ITEM_STACK`) the stack it was
+    /// thrown or loaded as, None for its kind's own item. None for the other
+    /// kinds (a wither skull, a wind charge).
     pub item: Option<crate::items::ItemStack>,
     /// `ThrownEgg`'s item `CHICKEN_VARIANT` component, as the chicken variant
     /// index its hatchlings get; None when no item was recorded.
@@ -938,7 +940,15 @@ impl Projectile {
     pub fn set_egg_item(&mut self, stack: &crate::items::ItemStack) {
         if self.kind == ProjectileKind::Egg {
             self.egg_variant = Some(egg_chicken_variant(stack));
+            self.set_thrown_item(stack);
         }
+    }
+    /// `ThrowableItemProjectile.setItem`: one of the stack, which the save
+    /// writes back as `Item`.
+    pub fn set_thrown_item(&mut self, stack: &crate::items::ItemStack) {
+        let mut stack = stack.clone();
+        stack.count = 1;
+        self.item = Some(stack);
     }
     pub fn set_item(&mut self, stack: crate::items::ItemStack) {
         if !self.kind.is_item_fireball() {
