@@ -1,7 +1,11 @@
 //! Pieces of vanilla's `Brain` that species implemented as brains share:
-//! memories that expire, behaviour durations, walk targets and
-//! `MoveToTargetSink`.
-use super::{Mob, MobWorld, Who, goals::Cx};
+//! memories that expire, behaviour durations, walk targets,
+//! `MoveToTargetSink`, and the melee cooldown of the behaviour Horizon runs as a
+//! goal (`melee_attack`).
+use super::{
+    Mob, MobWorld, Who,
+    goals::{Cx, MeleeAttack},
+};
 use horizon_core::{
     geometry::Vec3,
     random::{LevelRandom, RandomSource},
@@ -78,6 +82,20 @@ pub fn living_near(m: &Mob, w: &MobWorld) -> Vec<Who> {
     }
     found.sort_by(|a, b| a.1.total_cmp(&b.1));
     found.into_iter().map(|(w, _)| w).collect()
+}
+/// The brain's `MeleeAttack.create(cooldown)` for a mob whose cooldown never
+/// varies, as the goal that stands in for that behaviour has to run it:
+/// `MeleeAttack` arms `ATTACK_COOLING_DOWN` with the cooldown and
+/// `MemorySlot.tick` erases it a tick after it reaches zero, so vanilla's hits
+/// come `cooldown + 1` ticks apart. A goal (`MeleeAttackGoal`) counts its own
+/// cooldown down before it tests it, so it has to wait `cooldown + 1`.
+pub fn melee_attack(cooldown: i32) -> MeleeAttack {
+    MeleeAttack::new(1.0, true).interval(cooldown + 1)
+}
+/// `MeleeAttack.create(adult)` and `create(baby)` (`Hoglin`, `Zoglin`):
+/// [`melee_attack`] for a mob whose cooldown depends on its age.
+pub fn melee_attack_by_age(adult: i32, baby: i32) -> MeleeAttack {
+    MeleeAttack::new(1.0, true).intervals(adult + 1, baby + 1)
 }
 /// A random duration in `min..=max` (`Behavior`'s end time).
 pub fn duration(m: &mut Mob, min: i32, max: i32) -> i32 {
@@ -242,6 +260,10 @@ pub fn write_frog(m: &Mob, map: &mut Compound) {
         memories.remove(&"minecraft:is_pregnant".into());
     }
 }
+
+#[cfg(test)]
+#[path = "melee_cooldown_tests.rs"]
+mod melee_cooldown_tests;
 
 #[cfg(test)]
 mod tests {

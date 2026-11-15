@@ -4,9 +4,9 @@
 use super::{
     Mob, MobEvent, MobWorld, Seen, Species, Who,
     anim::{Poses, State},
-    brain::{Ttl, living_near},
+    brain::{Ttl, living_near, melee_attack, melee_attack_by_age},
     goals::{
-        Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack, NearestTarget, Prey,
+        Cx, Float, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, NearestTarget, Prey,
         RandomLookAround, Stroll, TARGET, TargetState, goal_clone, target_continue,
     },
 };
@@ -1320,12 +1320,10 @@ pub fn register_piglin(m: &mut Mob) {
     // held item itself (it only starts while a crossbow is in the main hand).
     g.add(3, super::illager::crossbow_goal(1.0, 8.0));
     g.add(3, BackUpIfTooClose);
-    // `PiglinAi.initFightActivity`: the spear behaviours come before the melee one.
+    // `PiglinAi.initFightActivity`: the spear behaviours come before the melee
+    // one, which is `create(20)`.
     g.add(3, super::spear_use::PiglinSpear::new());
-    g.add(
-        3,
-        super::spear_use::NoMeleeWithSpear(MeleeAttack::new(1.0, true)),
-    );
+    g.add(3, super::spear_use::NoMeleeWithSpear(melee_attack(20)));
     g.add(4, NotRiding(PiglinAvoidRepellent));
     g.add(4, GoToWantedItem);
     g.add(4, Celebrate);
@@ -1437,7 +1435,8 @@ impl Goal for HuntHoglin {
 pub fn register_brute(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
-    g.add(2, MeleeAttack::new(1.0, true));
+    // `PiglinBruteAi.initFightActivity`: `MeleeAttack.create(20)`.
+    g.add(2, melee_attack(20));
     // `PiglinBruteAi.createIdleMovementBehaviors`: `StrollToPoi(HOME, 0.6, 2,
     // 100)` ahead of the plain stroll, so a brute that drifts off walks back to
     // the spot `PiglinBruteAi.initMemories` remembered for it.
@@ -1519,7 +1518,7 @@ pub fn register_hoglin(m: &mut Mob) {
     // HoglinAi: MeleeAttack.create(40) for adults, 15 for babies, in the
     // fight activity. Its `ATTACK_COOLING_DOWN` lives 40 brain ticks and
     // `MemorySlot.tick` erases it on the 41st, so hits come 41 (16) apart.
-    g.add(2, InFight(MeleeAttack::new(1.0, true).intervals(41, 16)));
+    g.add(2, InFight(melee_attack_by_age(40, 15)));
     g.add(3, NotRetreating(super::goals::Breed::new(1.0)));
     g.add(3, HoglinAvoidRepellent);
     // `HoglinAi.initIdleActivity`: an adult keeps away from the nearest adult
@@ -1542,8 +1541,8 @@ pub fn register_hoglin(m: &mut Mob) {
 pub fn register_zoglin(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
-    // Zoglin.initMemories: MeleeAttack.create(40) for adults, 15 for babies.
-    g.add(2, MeleeAttack::new(1.0, true).intervals(40, 15));
+    // `Zoglin.initFightActivity`: `create(40)` for adults, 15 for babies.
+    g.add(2, melee_attack_by_age(40, 15));
     g.add(5, Stroll::avoiding_water(0.4));
     g.add(6, LookAtPlayer::new(8.0));
     m.ai.targets.add(1, HurtByTarget::new());
