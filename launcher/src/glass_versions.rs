@@ -315,7 +315,14 @@ impl Launcher {
             line.push_str(&part);
         };
         if !players.is_empty() {
-            add(trf("Used by {names}", &[("names", &players.join(", "))]));
+            // Two names read at a glance; more become a count, so the line stays one line.
+            add(match players.as_slice() {
+                [first, _, _, ..] => trf(
+                    "Used by {name} and {count} other instances",
+                    &[("name", first), ("count", &(players.len() - 1).to_string())],
+                ),
+                _ => trf("Used by {names}", &[("names", &players.join(", "))]),
+            });
         } else if installed {
             add(tr("installed").to_string());
         }
@@ -526,7 +533,16 @@ impl Launcher {
         } else {
             disabled(bin).tooltip(ui::tip(trf(
                 "In use by {names}. Pick another version for it first.",
-                &[("names", &users.join(", "))],
+                &[(
+                    "names",
+                    &match users.as_slice() {
+                        [first, _, _, ..] => trf(
+                            "{name} and {count} other instances",
+                            &[("name", first), ("count", &(users.len() - 1).to_string())],
+                        ),
+                        _ => users.join(", "),
+                    },
+                )],
             )))
         })
     }
