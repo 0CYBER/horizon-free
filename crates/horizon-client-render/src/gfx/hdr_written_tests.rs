@@ -52,6 +52,28 @@ override TEST_OVERLAY: u32 = 0u;
 }
 "#;
 
+/// A quad the entity stage lights as an entity (kind 0), unshaded, at full light.
+const ENTITY_STAGE_VERTEX: &str = r#"
+override TEST_TIER: u32 = 0u;
+override TEST_OVERLAY: u32 = 0u;
+override test_layer_alpha: f32 = 1.0;
+@vertex fn test_vertex(@builtin(vertex_index) i: u32) -> horizon_entity_out {
+    let p = vec2(f32((i << 1u) & 2u), f32(i & 2u));
+    var o: horizon_entity_out;
+    o.clip = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+    o.uv = vec2(0.5);
+    o.color = vec4(1.0, 1.0, 1.0, test_layer_alpha);
+    o.back_color = vec4(1.0, 1.0, 0.0, 0.0);
+    o.light_color = vec4(240.0, 240.0, 0.0, 0.0);
+    o.overlay_color = vec4(1.0);
+    o.overlay = TEST_OVERLAY;
+    o.wrap = vec2(0.0, 1.0);
+    o.glint_uv = vec2(0.5);
+    o.flags = (1u << 3u) | (TEST_TIER << 8u);
+    return o;
+}
+"#;
+
 const TERRAIN_EXTRA_VERTICES: &str = r#"
 @vertex fn test_model(@builtin(vertex_index) i: u32) -> NativeModelOut {
     let p = vec2(f32((i << 1u) & 2u), f32(i & 2u));
@@ -527,11 +549,22 @@ impl<'a> Draw<'a> {
     }
 
     fn material(&mut self) {
-        let source = super::super::native_material::coverage_test_shader(false);
+        self.pack_stage(super::super::native_material::coverage_test_shader(false));
+    }
+    /// The entity stage's wrapper around a pack's `entity` that returns alpha `test_alpha`,
+    /// lighting a quad as an entity with the vertex alpha `test_layer_alpha` (the layer's
+    /// opacity).
+    fn entity_stage(&mut self) {
+        let entity = "override test_alpha: f32 = 0.7;\n\
+            fn entity(input: EntityInput) -> Surface { return Surface(vec4(1.4, 0.3, 0.1, test_alpha)); }\n";
+        self.pack_stage(super::super::native_entity::tests::shader(entity) + ENTITY_STAGE_VERTEX);
+    }
+    /// Draws through the pack wrapper `source` with the pack's frame, as the pack runs.
+    fn pack_stage(&mut self, source: String) {
         self.shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("actual assembled material wrappers"),
+                label: Some("actual assembled pack wrappers"),
                 source: wgpu::ShaderSource::Wgsl(source.into()),
             });
         let frame = super::super::native_post::NativeFrame::new(
@@ -568,10 +601,10 @@ impl<'a> Draw<'a> {
     ) -> [f32; 4] {
         let mut constants = vec![
             (
-                if self.material_frame.is_some() {
-                    "horizon_terrain_HDR_WRITE_LIGHT"
-                } else {
-                    "HDR_WRITE_LIGHT"
+                match (self.material_frame.is_some(), self.terrain) {
+                    (true, true) => "horizon_terrain_HDR_WRITE_LIGHT",
+                    (true, false) => "horizon_vanilla_HDR_WRITE_LIGHT",
+                    (false, _) => "HDR_WRITE_LIGHT",
                 },
                 f64::from(u8::from(written)),
             ),
@@ -589,7 +622,7 @@ impl<'a> Draw<'a> {
                 f64::from(u8::from(self.hdr_lighting)),
             ));
         }
-        if self.material_frame.is_some() {
+        if self.material_frame.is_some() && self.terrain {
             constants.push((
                 "horizon_displace_distance",
                 if entry == "horizon_material_fs_displaced" {
@@ -1008,6 +1041,58 @@ fn material_coverage_is_the_texture_s_unless_the_pack_declares_its_own() {
             };
             assert!((got[3] - alpha).abs() < 0.001, "{case} {entry}: {got:?}");
         }
+    }
+}
+
+#[test]
+fn entity_coverage_is_the_texture_s_and_the_layer_s_unless_the_pack_declares_its_own() {
+    let Some((device, queue)) = material_gpu() else {
+        eprintln!("entity coverage GPU unavailable");
+        return;
+    };
+    let hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
+    let globals = super::super::Globals {
+        filtering: [0.0, 1.0, 0.0, 0.0],
+        hdr_windows: hdr.windows(),
+        ..bytemuck::Zeroable::zeroed()
+    };
+    let background = [0.0, 0.0, 0.25, 0.5];
+    // (coverage = "pack", overlay, the texel's alpha, the vertex alpha, the alpha `entity`
+    // returns, the alpha drawn or None): under "engine" the texture's alpha times the layer's
+    // opacity is cut below 0.1 and blends, as Horizon's own entities; a dissolve mask (overlay
+    // 38, the texel's alpha here) cuts where the vertex alpha is below it and draws the rest
+    // at the texture's alpha. Under "pack" the returned alpha does both.
+    let half = 128.0 / 255.0;
+    for (pack, overlay, texel, layer, returned, drawn) in [
+        (false, 0, 255, 1.0, 0.0, Some(1.0)),
+        (false, 0, 255, 0.5, 1.0, Some(0.5)),
+        (false, 0, 0, 1.0, 1.0, None),
+        (false, 0, 255, 0.05, 1.0, None),
+        (false, 38, 128, 0.6, 0.0, Some(half)),
+        (false, 38, 128, 0.4, 1.0, None),
+        (true, 0, 255, 1.0, 0.0, None),
+        (true, 0, 0, 1.0, 0.7, Some(0.7)),
+        (true, 0, 255, 0.5, 0.7, Some(0.7)),
+        (true, 38, 128, 0.4, 1.0, None),
+    ] {
+        let mut draw = Draw::new(&device, &queue, false, &globals, texel);
+        draw.entity_stage();
+        draw.constants = vec![
+            ("horizon_entity_coverage_pack", f64::from(u8::from(pack))),
+            ("test_alpha", returned),
+            ("test_layer_alpha", layer),
+        ];
+        let case = format!(
+            "pack {pack}, overlay {overlay}, texel alpha {texel}, layer {layer}, returned {returned}"
+        );
+        let got = draw.render(true, "horizon_entity_fs", 0, overlay, background);
+        let Some(alpha) = drawn else {
+            assert_eq!(got, background.map(|c| c as f32), "{case}");
+            continue;
+        };
+        assert!(got[0] > 1.0, "{case}: not drawn: {got:?}");
+        // The test pipeline replaces: the alpha written is what the blend would weigh by.
+        assert!((got[3] - alpha).abs() < 0.001, "{case}: {got:?}");
     }
 }
 

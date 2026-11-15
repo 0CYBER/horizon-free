@@ -84,6 +84,16 @@ terrain, below 0.01 on translucent) and the stage may `discard`. Normal and para
 silhouette needs no `"pack"`, and neither do `[vertex]` and `[displacement]`, which move geometry, not coverage.
 The stage writes no depth of its own either way.
 
+## `[entity] coverage`
+
+The same rule for what the entity stage draws, without translucent terrain's exception. Under `coverage = "engine"`
+(the default) Horizon keeps its own coverage of each entity: the texture's alpha times the layer's opacity (the
+vertex alpha: a mob's translucent layer, a fading warden) is cut below 0.1 and is the alpha the layer blends by;
+dissolve masks, back-face culling and the rest of Horizon's cuts stay Horizon's. The alpha `entity` returns is
+ignored, and `entity`, and every function it calls, may not `discard`: the check refuses it. A pack that cuts or
+fades entities itself sets `coverage = "pack"`: the returned alpha is then cut below 0.1 and blends, and the stage
+may `discard`. Horizon's own cuts run under either.
+
 ## Stages
 
 | Stage | In `horizon-shaders.toml` | Your function |
@@ -551,9 +561,10 @@ One point of the surface of an entity, a block entity, an item or a particle, fo
 | `screen` | `vec2<f32>` | Where the point is on the screen, 0..1 from the top left (as `MaterialInput.screen`). |
 
 `entity` lights what is no block terrain: `input.kind` says which. It returns the same `Surface` as `material` (rgb
-linear light, 0 or more and unbounded; alpha its coverage), so a pack writes its lighting once and calls it from both
-stages. Around it Horizon keeps vanilla's order: the alpha test on the returned alpha, then the enchantment glint
-added on top, then fog. A pack without `[entity]` is drawn as before, and sees none of this stage's names; the rule
+linear light, 0 or more and unbounded; its alpha read only under `[entity] coverage = "pack"`), so a pack writes
+its lighting once and calls it from both stages. Around it Horizon keeps vanilla's order: the alpha test (on the
+texture and the layer's opacity, or under `"pack"` on the returned alpha), then the enchantment glint added on top,
+then fog. A pack without `[entity]` is drawn as before, and sees none of this stage's names; the rule
 for new names holds for the stage as for the others.
 
 **What the game draws through the stage so far: entities and block entities** (`kind` 0 and 1). Until a later

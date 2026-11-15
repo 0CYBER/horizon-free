@@ -97,6 +97,8 @@ const PREFIX: &str = "horizon_vanilla_";
 /// and the stage comes between the steps of `entity_color`. Every name here starts with
 /// `horizon_`, which a pack's files may not declare.
 const ENTRIES: &str = "
+// The manifest's `[entity] coverage`: true for `pack`.
+override horizon_entity_coverage_pack: bool = false;
 struct horizon_entity_out {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -234,9 +236,13 @@ fn horizon_entity_own(in: horizon_entity_out) -> horizon_vanilla_Out {
         f32((in.flags >> 1u) & 1u), horizon_entity_normal(position), kind - 1u,
         horizon_decode(colored), (in.flags & 4u) != 0u, min(light / 240.0, vec2(1.0)),
         in.uv, in.clip.xy / frame.resolution)).color;
-    if lit.a < 0.1 { discard; }
+    // `entity_color`'s alpha test and blend weight: the texture's alpha times the layer's
+    // opacity (the vertex alpha, 1 past a dissolve mask), unless the pack's `[entity] coverage`
+    // is `pack` and its returned alpha decides.
+    let alpha = select(albedo.a * tint.a, lit.a, horizon_entity_coverage_pack);
+    if alpha < 0.1 { discard; }
     // Vanilla's order from here: the glint, then fog, both in vanilla's gamma.
-    var color = vec4(horizon_encode(lit.rgb), lit.a);
+    var color = vec4(horizon_encode(lit.rgb), alpha);
     if o == 7u || o == 8u || o == 33u {
         color = horizon_vanilla_glint_over(color, textureSample(horizon_vanilla_glint_tex,
             horizon_vanilla_glint_sampler, in.glint_uv));
@@ -281,6 +287,7 @@ impl NativeEntity {
         frame: &NativeFrame,
         stage: &CheckedStage,
         constants: &[(String, f64)],
+        coverage: horizon_shader_api::Coverage,
     ) -> Result<Self, String> {
         let text = shader_source(&stage.source);
         let module = naga::front::wgsl::parse_str(&text)
@@ -290,6 +297,8 @@ impl NativeEntity {
             super::linear_blend::frame_constants(format, frame.linear);
         constants.push(("horizon_vanilla_HDR_WRITE_LIGHT", write_light));
         constants.push(("horizon_vanilla_FRAME_LINEAR", linear));
+        let pack = coverage == horizon_shader_api::Coverage::Pack;
+        constants.push(("horizon_entity_coverage_pack", f64::from(u8::from(pack))));
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(&stage.label),

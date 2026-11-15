@@ -341,16 +341,28 @@ fn check_entry(
     };
     let (expressions, texture_reads) = cost(scene.as_ref().map_or(&module, |s| &s.0));
     let mut problems = Vec::new();
-    let engine = kind == StageKind::Material && pack.manifest.coverage == crate::Coverage::Engine;
-    if engine && let Some(at) = reachable_discard(&module, kind.function()) {
+    let engine = match kind {
+        StageKind::Material => Some((pack.manifest.material_coverage, "the texture")),
+        StageKind::Entity => Some((
+            pack.manifest.entity_coverage,
+            "the texture and the layer's opacity",
+        )),
+        _ => None,
+    }
+    .and_then(|(coverage, test)| (coverage == crate::Coverage::Engine).then_some(test));
+    if let Some(test) = engine
+        && let Some(at) = reachable_discard(&module, kind.function())
+    {
+        let function = kind.function();
         problems.push(located(
-                &composed,
-                at.to_range().map(|r| r.start),
-                "`discard` reachable from `material`: under `[material] coverage = \"engine\"` (the \
-                 default) Horizon's alpha test on the texture decides what is drawn; a pack that cuts \
-                 its own holes sets `coverage = \"pack\"`"
-                    .into(),
-            ));
+            &composed,
+            at.to_range().map(|r| r.start),
+            format!(
+                "`discard` reachable from `{function}`: under `[{function}] coverage = \"engine\"` \
+                 (the default) Horizon's alpha test on {test} decides what is drawn; a pack that \
+                 cuts its own holes sets `coverage = \"pack\"`"
+            ),
+        ));
     }
     if expressions > MAX_EXPRESSIONS {
         problems.push(problem(

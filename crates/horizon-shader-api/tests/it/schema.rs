@@ -782,16 +782,31 @@ fn the_frame_tonemap_and_entity_keys_are_read() {
     for p in [Primaries::Bt709, Primaries::Bt2020] {
         assert!((p.luminance().iter().sum::<f32>() - 1.0).abs() < 1e-6);
     }
-    // The material keeps the engine's coverage unless it says otherwise.
-    let material = format!("{SMALLEST}[material]\nfile = \"m.wgsl\"\n");
+    // The material and the entity stage keep the engine's coverage unless each says otherwise.
+    let coverage = |text: &str| {
+        let m = Manifest::parse(text).unwrap();
+        (m.material_coverage, m.entity_coverage)
+    };
+    let both = format!("{SMALLEST}[material]\nfile = \"m.wgsl\"\n[entity]\nfile = \"e.wgsl\"\n");
+    assert_eq!(coverage(&both), (Coverage::Engine, Coverage::Engine));
+    let section = |stage: &str, value: &str| {
+        both.replace(
+            &format!("file = \"{stage}.wgsl\"\n"),
+            &format!("file = \"{stage}.wgsl\"\ncoverage = \"{value}\"\n"),
+        )
+    };
     assert_eq!(
-        Manifest::parse(&material).unwrap().coverage,
-        Coverage::Engine
+        coverage(&section("m", "pack")),
+        (Coverage::Pack, Coverage::Engine)
     );
-    let own = format!("{material}coverage = \"pack\"\n");
-    assert_eq!(Manifest::parse(&own).unwrap().coverage, Coverage::Pack);
-    let engine = format!("{material}coverage = \"engine\"\n");
-    assert_eq!(Manifest::parse(&engine).unwrap().coverage, Coverage::Engine);
+    assert_eq!(
+        coverage(&section("e", "pack")),
+        (Coverage::Engine, Coverage::Pack)
+    );
+    assert_eq!(
+        coverage(&section("e", "engine")),
+        (Coverage::Engine, Coverage::Engine)
+    );
     let tonemap = format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\nname = \"Curve\"\n");
     let m = Manifest::parse(&tonemap).unwrap();
     assert_eq!(m.tonemap.as_ref().unwrap().name.as_deref(), Some("Curve"));
@@ -837,8 +852,12 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
             "material.coverage \"texture\": engine or pack",
         ),
         (
-            format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\ncoverage = \"pack\"\n"),
-            "`coverage` is a key of [material] only",
+            format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\ncoverage = \"cutout\"\n"),
+            "entity.coverage \"cutout\": engine or pack",
+        ),
+        (
+            format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\ncoverage = \"pack\"\n"),
+            "`coverage` is a key of [material] and [entity] only",
         ),
         (
             format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nfog = false\n"),

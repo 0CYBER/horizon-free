@@ -408,6 +408,7 @@ fn post_pack_with_material(
 
 const MATERIAL: &str =
     "fn material(input: MaterialInput) -> Surface { return Surface(input.albedo); }\n";
+const ENTITY: &str = "fn entity(input: EntityInput) -> Surface { return Surface(input.albedo); }\n";
 
 fn refused(problems: &[Problem], name: &str) -> Vec<(String, usize)> {
     let needle = format!("constructs `{name}`: it is Horizon's and may gain fields");
@@ -767,20 +768,23 @@ fn post(input: PostInput) -> vec4<f32> {
     assert_eq!(refused(&problems, "RayHit"), [("post.wgsl".to_owned(), 2)]);
 }
 
-/// A material pack: `[material]` with `keys`, its `material.wgsl` and a shared `helpers.wgsl`.
+/// A 0.2 pack with one stage, `[{stage}]` with `keys`: its `{stage}.wgsl` holds `body`, and a
+/// shared `helpers.wgsl`.
 fn coverage_pack(
+    stage: &str,
     keys: &str,
-    material: &str,
+    body: &str,
     helpers: &str,
 ) -> Result<horizon_shader_api::Report, Vec<Problem>> {
     let manifest = format!(
         "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
-         shared = [\"helpers.wgsl\"]\n[material]\nfile = \"material.wgsl\"\n{keys}"
+         shared = [\"helpers.wgsl\"]\n[{stage}]\nfile = \"{stage}.wgsl\"\n{keys}"
     );
+    let file = format!("{stage}.wgsl");
     let files = [
         (MANIFEST, manifest.as_str()),
         ("helpers.wgsl", helpers),
-        ("material.wgsl", material),
+        (&file, body),
     ]
     .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
     .into();
@@ -788,39 +792,52 @@ fn coverage_pack(
 }
 
 #[test]
-fn a_discard_reachable_from_material_needs_pack_coverage() {
-    let direct = "fn material(input: MaterialInput) -> Surface {\n    \
-                  if input.albedo.a < 0.3 {\n        discard;\n    }\n    \
-                  return Surface(input.albedo);\n}\n";
+fn a_discard_reachable_from_material_or_entity_needs_pack_coverage() {
     // Through a shared helper, two calls deep, inside a loop.
     let helpers = "fn cut(a: f32) {\n    for (var i = 0; i < 2; i++) {\n        \
                    if a < 0.3 {\n            discard;\n        }\n    }\n}\n\
                    fn holes(a: f32) -> f32 {\n    cut(a);\n    return a;\n}\n";
-    let through = "fn material(input: MaterialInput) -> Surface {\n    \
-                   return Surface(vec4(input.albedo.rgb, holes(input.albedo.a)));\n}\n";
-    let refused = |keys: &str, material: &str, helpers: &str| {
-        let p = coverage_pack(keys, material, helpers).expect_err("should fail");
-        let p: Vec<_> = p
-            .into_iter()
-            .filter(|p| p.message.contains("`discard` reachable from `material`"))
-            .collect();
-        assert_eq!(p.len(), 1, "{p:#?}");
-        assert!(p[0].message.contains("coverage = \"pack\""), "{p:#?}");
-        (p[0].file.clone(), p[0].line)
-    };
     let none = "fn unused() {}\n";
-    assert_eq!(refused("", direct, none), ("material.wgsl".into(), 3));
-    assert_eq!(refused("", through, helpers), ("helpers.wgsl".into(), 4));
-    let engine = "coverage = \"engine\"\n";
-    assert_eq!(
-        refused(engine, through, helpers),
-        ("helpers.wgsl".into(), 4)
-    );
-    let own = "coverage = \"pack\"\n";
-    coverage_pack(own, direct, none).unwrap();
-    coverage_pack(own, through, helpers).unwrap();
-    // A helper with a discard that `material` never calls cuts no hole.
-    coverage_pack("", MATERIAL, helpers).unwrap();
+    for (stage, input, plain) in [
+        ("material", "MaterialInput", MATERIAL),
+        ("entity", "EntityInput", ENTITY),
+    ] {
+        let direct = format!(
+            "fn {stage}(input: {input}) -> Surface {{\n    \
+             if input.albedo.a < 0.3 {{\n        discard;\n    }}\n    \
+             return Surface(input.albedo);\n}}\n"
+        );
+        let through = format!(
+            "fn {stage}(input: {input}) -> Surface {{\n    \
+             return Surface(vec4(input.albedo.rgb, holes(input.albedo.a)));\n}}\n"
+        );
+        let refused = |keys: &str, body: &str, helpers: &str| {
+            let p = coverage_pack(stage, keys, body, helpers).expect_err("should fail");
+            let p: Vec<_> = p
+                .into_iter()
+                .filter(|p| {
+                    p.message
+                        .contains(&format!("`discard` reachable from `{stage}`"))
+                })
+                .collect();
+            assert_eq!(p.len(), 1, "{p:#?}");
+            assert!(p[0].message.contains("coverage = \"pack\""), "{p:#?}");
+            (p[0].file.clone(), p[0].line)
+        };
+        let own_file = format!("{stage}.wgsl");
+        assert_eq!(refused("", &direct, none), (own_file, 3));
+        assert_eq!(refused("", &through, helpers), ("helpers.wgsl".into(), 4));
+        let engine = "coverage = \"engine\"\n";
+        assert_eq!(
+            refused(engine, &through, helpers),
+            ("helpers.wgsl".into(), 4)
+        );
+        let own = "coverage = \"pack\"\n";
+        coverage_pack(stage, own, &direct, none).unwrap();
+        coverage_pack(stage, own, &through, helpers).unwrap();
+        // A helper with a discard that the stage never calls cuts no hole.
+        coverage_pack(stage, "", plain, helpers).unwrap();
+    }
 }
 
 #[test]
