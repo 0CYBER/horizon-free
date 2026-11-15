@@ -126,6 +126,31 @@ impl Launcher {
                 )
             }
             SelfUpdate::Downloading(..) | SelfUpdate::Stuck(_) => None,
+            // A newer launcher is known: the button gets it, rather than checking again.
+            SelfUpdate::Idle if self.updates.launcher.is_some() => {
+                let release = self.updates.launcher.clone();
+                let version = release
+                    .as_ref()
+                    .and_then(|r| backend::launcher_version(&r.tag))
+                    .unwrap_or_default();
+                let label = trf("Update to {version}", &[("version", version)]);
+                let get = button("update-launcher", label, Kind::Secondary, &t);
+                Some(if backend::self_update_allowed() {
+                    get.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if let Some(release) = release.clone() {
+                            this.update_launcher(release);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element()
+                } else {
+                    // This copy doesn't replace itself (a development build, or updates
+                    // switched off): the download page has the new one.
+                    let url = backend::download_page(&self.links.website);
+                    get.on_click(move |_, _, cx| cx.open_url(&url))
+                        .into_any_element()
+                })
+            }
             _ => Some(
                 // The glass look's Updates tile has the mockup's filled button.
                 button(
