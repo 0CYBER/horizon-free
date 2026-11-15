@@ -1,5 +1,5 @@
 use super::*;
-use horizon_mod_package::manifest::collect_jar_requirements;
+use horizon_platform::mod_package::manifest::collect_jar_requirements;
 use sha2::Digest;
 use std::{cell::Cell, io::Write, path::PathBuf};
 
@@ -359,7 +359,7 @@ fn failed_metadata_lookup_names_every_missing_jar_but_not_cache_hits() {
 
 #[test]
 fn final_launch_combines_only_enabled_content_dev_and_adjacent_native_candidates() {
-    use horizon_mod_package::mod_list::{DIR, FILE, NATIVE_DIR};
+    use horizon_platform::mod_package::mod_list::{DIR, FILE, NATIVE_DIR};
     use std::process::Command;
     let root = Scratch::new();
     let game = root.0.join("game");

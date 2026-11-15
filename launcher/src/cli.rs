@@ -3698,8 +3698,8 @@ mod tests {
             .parse()
             .unwrap();
         if role == "child" {
-            assert!(std::env::var_os(horizon_mod_package::holder::ENV).is_none());
-            assert!(std::env::var_os(horizon_mod_package::holder::ENTRY).is_none());
+            assert!(std::env::var_os(horizon_platform::mod_package::holder::ENV).is_none());
+            assert!(std::env::var_os(horizon_platform::mod_package::holder::ENTRY).is_none());
             use std::io::IsTerminal;
             let shape = format!(
                 "{}:{}:{}",

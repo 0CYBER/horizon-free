@@ -4,7 +4,7 @@
 //! GitHub's public API to an exact **release asset** (a `.hmod`, kept by its SHA-256) or an exact
 //! **commit** (the archive of that commit, whose mod folder is packed into a `.hmod`), never to a
 //! branch that moves. The result passes the checks the registry's `.hmod`s pass
-//! (`horizon_mod_package::index::native::Bundle::read`) before anything is installed, and the origin is
+//! (`horizon_platform::mod_package::index::native::Bundle::read`) before anything is installed, and the origin is
 //! kept beside the file (`horizon-native-mods/<id>.origin.json`) for "check for updates".
 //!
 //! Nothing here runs the mod's code, and nothing here trusts it: the registry has not reviewed it.
@@ -218,7 +218,7 @@ fn commit_of(api: Api, link: &Link, reference: &str) -> Result<String, String> {
     })?;
     found["sha"]
         .as_str()
-        .filter(|s| horizon_mod_package::manifest::revision(s))
+        .filter(|s| horizon_platform::mod_package::manifest::revision(s))
         .map(str::to_owned)
         .ok_or_else(|| format!("GitHub did not name the commit of {reference}."))
 }
@@ -384,11 +384,13 @@ fn checked(bytes: &[u8], dir: &Path) -> Result<Packed, String> {
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let file = dir.join(format!("{}.hmod", &sum[..16]));
     fs::write(&file, bytes).map_err(|e| format!("{}: {e}", file.display()))?;
-    let facts =
-        horizon_mod_package::index::inspect(&horizon_mod_package::index::Kind::NativeMod, &file)
-            .inspect_err(|_| {
-                let _ = fs::remove_file(&file);
-            })?;
+    let facts = horizon_platform::mod_package::index::inspect(
+        &horizon_platform::mod_package::index::Kind::NativeMod,
+        &file,
+    )
+    .inspect_err(|_| {
+        let _ = fs::remove_file(&file);
+    })?;
     Ok(Packed {
         id: facts.id.expect("native bundle has an id"),
         version: facts.version.expect("native bundle has a version"),
@@ -433,7 +435,7 @@ pub fn find_mods(root: &Path) -> Result<Vec<Bundle>, String> {
 
 /// Deterministically package a validated flat mod project.
 pub fn pack(bundle: &Bundle) -> Result<Vec<u8>, String> {
-    horizon_mod_package::Package::pack_directory(&bundle.dir)
+    horizon_platform::mod_package::Package::pack_directory(&bundle.dir)
 }
 
 fn download(url: &str) -> Result<Vec<u8>, String> {

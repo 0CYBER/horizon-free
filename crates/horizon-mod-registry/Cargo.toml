@@ -11,7 +11,7 @@ description = "The registry's submission service: GitHub sign-in, the file's che
 [workspace]
 
 [dependencies]
-horizon-mod-package = { path = "../horizon-mod-package", default-features = false, features = ["index"] }
+horizon-platform = { path = "../horizon-platform", features = ["mod-index"] }
 horizon-release-sign = { path = "../horizon-release-sign" }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs", "io-util"] }

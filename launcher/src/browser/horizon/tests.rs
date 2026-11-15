@@ -1,4 +1,4 @@
-//! The registry source against the sample index of `horizon_mod_package::index`
+//! The registry source against the sample index of `horizon_platform::mod_package::index`
 //! (`crates/horizon-mod-package/tests/index/`), its files served from disk.
 use super::*;
 
@@ -204,7 +204,7 @@ fn installed_kind_comes_from_the_archive_not_its_folder() {
             ];
             fs::write(
                 &path,
-                horizon_mod_package::Package::write_files(&manifest, files).unwrap(),
+                horizon_platform::mod_package::Package::write_files(&manifest, files).unwrap(),
             )
             .unwrap();
             index::native::Bundle::read(&path).unwrap();

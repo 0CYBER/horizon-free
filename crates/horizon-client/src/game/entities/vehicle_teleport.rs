@@ -223,10 +223,14 @@ impl Game<'_> {
         Some(mount.position)
     }
 
-    /// `Entity.teleportCrossDimension` ejects the riders before calculating
-    /// their transitions. Dismounting also seats their own passengers again.
+    /// `Entity.teleportCrossDimension` retains its ordered passenger list before
+    /// ejecting riders. Dismounting also seats their own passengers again.
     fn prepare_vehicle_transition(&mut self, root: u32) {
         let riders = self.mob_passenger_ids(root);
+        if riders.is_empty() {
+            return;
+        }
+        let slots = self.ordered_passenger_slots(root);
         for &rider in riders.iter().rev() {
             self.dismount_mob(rider);
         }
@@ -239,6 +243,9 @@ impl Game<'_> {
                 m.extra.passenger = true;
             }
         }
+        // Dismounting removes live slots. Restoring only mob mounts would append
+        // those riders after every other kind when the transfer tree is captured.
+        self.persist.passenger_slots.insert(root, slots);
     }
 
     /// `Entity.teleportPassengers` on a mob dismounted during a transition.

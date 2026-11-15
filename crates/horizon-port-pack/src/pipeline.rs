@@ -339,14 +339,15 @@ pub fn port(
     work: &Path,
     resources: Option<&Path>,
     from: Option<&Path>,
+    hosts: &[&str],
     log: Log,
 ) -> Result<(fetch::Fetched, Vec<report::Row>), String> {
     let records = match read_json::<Vec<inventory::Record>>(&work.join("inventory.json")) {
         Ok(r) => r,
         Err(_) => inventory(work, false, log)?,
     };
-    crate::resourcepacks::fetch(work, log)?;
-    let fetched = fetch::fetch(work, &records, from, &portable, log)?;
+    crate::resourcepacks::fetch(work, hosts, log)?;
+    let fetched = fetch::fetch(work, &records, from, &portable, hosts, log)?;
     // The jars tell classes and tiers better than metadata alone.
     let records = inventory(work, true, log)?;
     let minecraft = minecraft(work);

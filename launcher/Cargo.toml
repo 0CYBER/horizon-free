@@ -47,17 +47,13 @@ dirs = "5"
 sys-locale = "0.3"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
-horizon-core = { path = "../crates/horizon-core" }
 horizon-server-launch = { path = "../crates/horizon-server-launch" }
-horizon-prepare = { path = "../crates/horizon-prepare" }
-horizon-system = { path = "../crates/horizon-system" }
-horizon-protocol = { path = "../crates/horizon-protocol" }
 horizon-theme = { path = "../crates/horizon-theme" }
 # The sunset scene, painted skies, rain and frosted glass (`scenery/`).
 horizon-launcher-scenery = { path = "scenery" }
 # The engine, through the platform's public API (docs/layers.md): the pinned version, No AI, the preparer,
 # level.dat and servers.dat (the worlds and server lists of instances), and the official server's SRV record.
-horizon-platform = { path = "../crates/horizon-platform", features = ["prepare", "protocol", "world", "mod-build"] }
+horizon-platform = { path = "../crates/horizon-platform", features = ["prepare", "protocol", "world", "mod-build", "mod-index", "mod-prebuilt", "mod-runtime-process"] }
 horizon-cosmetics = { path = "../crates/horizon-cosmetics" }
 glam = "0.30"
 # `horizon-launcher mcp`: the Model Context Protocol, shared with horizon-ctl and horizon-server.
@@ -66,8 +62,6 @@ horizon-mcp = { path = "../crates/horizon-mcp" }
 horizon-friends = { path = "../crates/horizon-friends" }
 # Import modpack: the porting pipeline, run on the player's own files (docs/modpacks.md).
 horizon-port-pack = { path = "../crates/horizon-port-pack" }
-# Horizon's mod registry: its index and the checks a download passes before install.
-horizon-mod-package = { path = "../crates/horizon-mod-package", features = ["index", "prebuilt", "runtime-process"] }
 # Use the game's manifest validation for native shader identities.
 horizon-shader-api = { path = "../crates/horizon-shader-api" }
 # Signed updates: archives are checked against the release's signed checksums (docs/security.md).

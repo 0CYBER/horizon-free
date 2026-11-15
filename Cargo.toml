@@ -68,6 +68,7 @@ members = [
     "crates/horizon-mod-wasm/wire-loopback",
     "crates/cargo-horizon-mod",
     "crates/horizon-port-pack",
+    "crates/horizon-port-pack-cli",
     "crates/horizon-shaders",
     "crates/horizon-optifine",
     "crates/horizon-polytone",

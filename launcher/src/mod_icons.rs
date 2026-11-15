@@ -1,6 +1,6 @@
 //! Package icons prepared during the background mod-list refresh. Rows keep the image's Arc,
 //! so drawing never opens a package or rebuilds an image. Package owns PNG validation.
-use horizon_mod_package::icon::Icon;
+use horizon_platform::mod_package::icon::Icon;
 use std::sync::Arc;
 
 pub(super) struct Loaded {

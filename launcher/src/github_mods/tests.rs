@@ -247,7 +247,7 @@ fn a_mod_folder_packs_into_a_bundle_the_registry_checks_accept() {
         ("zoom", "0.1.0")
     );
     assert_eq!(packed.sha256, sha256(&bytes));
-    let read = horizon_mod_package::index::native::Bundle::read(&packed.file).unwrap();
+    let read = horizon_platform::mod_package::index::native::Bundle::read(&packed.file).unwrap();
     for shipped in [
         "src/zoom.rs",
         "data/zoom/a.json",
@@ -278,7 +278,7 @@ fn a_flat_hmod_keeps_its_pins_and_ships_only_selected_files() {
     let bundle = &find_mods(&root).unwrap()[0];
     assert_eq!(bundle.manifest.native.as_ref().unwrap().mixins, SHA2);
     let packed = checked(&pack(bundle).unwrap(), &tree("unpacked-out")).unwrap();
-    let read = horizon_mod_package::index::native::Bundle::read(&packed.file).unwrap();
+    let read = horizon_platform::mod_package::index::native::Bundle::read(&packed.file).unwrap();
     assert_eq!(read.manifest.id, "zoom");
     assert!(read.files.contains_key("assets/zoom/lang/en_us.json"));
     let native = read.manifest.native.unwrap();

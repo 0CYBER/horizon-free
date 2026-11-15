@@ -47,7 +47,7 @@ pub(super) struct Catalog {
 
 pub(super) fn catalog(path: &Path) -> Result<Catalog, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let (_, catalog) = horizon_mod_package::build_data::read(POINTS, &text)
+    let (_, catalog) = horizon_platform::mod_package::build_data::read(POINTS, &text)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(catalog)
 }

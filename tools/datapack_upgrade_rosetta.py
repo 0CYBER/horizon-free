@@ -94,7 +94,7 @@ def main():
         if not jar.exists():
             sys.exit(f"missing {jar}")
     target = lab.cargo_target()
-    subprocess.run(["cargo", "build", "-q", "-p", "horizon-port-pack", "--target-dir", str(target)],
+    subprocess.run(["cargo", "build", "-q", "-p", "horizon-port-pack-cli", "--target-dir", str(target)],
                    cwd=ROOT, check=True)
     exe = target / "debug" / "horizon-port-pack"
     with tempfile.TemporaryDirectory(prefix="upgrade-rosetta-") as tmp:

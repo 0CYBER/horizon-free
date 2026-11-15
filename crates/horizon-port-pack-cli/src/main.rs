@@ -71,7 +71,15 @@ fn main() -> ExitCode {
                         only.contains(&r.key)
                     }
                 };
-                fetch::fetch(work, &records, from.as_deref(), &want, log).map(drop)
+                fetch::fetch(
+                    work,
+                    &records,
+                    from.as_deref(),
+                    &want,
+                    horizon_addresses::MODPACK_DOWNLOAD_HOSTS,
+                    log,
+                )
+                .map(drop)
             }
             Some("carry") => {
                 pipeline::carry(path(1)?, resources.as_deref(), &rest(), log).map(drop)
@@ -97,7 +105,13 @@ fn main() -> ExitCode {
                 let work = path(2)?;
                 pipeline::import(path(1)?, work, log)?;
                 pipeline::inventory(work, offline, log)?;
-                pipeline::port(work, resources.as_deref(), from.as_deref(), log)?;
+                pipeline::port(
+                    work,
+                    resources.as_deref(),
+                    from.as_deref(),
+                    horizon_addresses::MODPACK_DOWNLOAD_HOSTS,
+                    log,
+                )?;
                 println!("{}", work.join("coverage.md").display());
                 Ok(())
             }

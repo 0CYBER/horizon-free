@@ -1933,7 +1933,6 @@ dependencies = [
  "horizon-client-render",
  "horizon-command",
  "horizon-core",
- "horizon-dualsense",
  "horizon-engine-slots",
  "horizon-game-discovery",
  "horizon-guest-stack",
@@ -2528,6 +2527,7 @@ dependencies = [
 name = "horizon-official"
 version = "0.1.0"
 dependencies = [
+ "horizon-addresses",
  "horizon-discord",
  "horizon-friends",
  "horizon-game",
@@ -2610,6 +2610,7 @@ dependencies = [
  "horizon-hooks",
  "horizon-java-properties",
  "horizon-mod-api-gen",
+ "horizon-mod-package",
  "horizon-mod-point-shape",
  "horizon-perf-format",
  "horizon-prepare",
@@ -2643,6 +2644,14 @@ dependencies = [
  "ureq",
  "url",
  "zip",
+]
+
+[[package]]
+name = "horizon-port-pack-cli"
+version = "0.1.0"
+dependencies = [
+ "horizon-addresses",
+ "horizon-port-pack",
 ]
 
 [[package]]

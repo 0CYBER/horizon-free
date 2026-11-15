@@ -88,8 +88,9 @@ def verified_sync_config(base, config_path):
     merge_base = git("merge-base", base, "HEAD").strip()
     merges = git("rev-list", "--merges", "--parents", f"{merge_base}..HEAD").splitlines()
     parents = [parent for row in merges for parent in row.split()[2:]]
-    outside = [parent for parent in parents if subprocess.run(
-        ["git", "merge-base", "--is-ancestor", parent, merge_base], cwd=ROOT).returncode != 0]
+    # Walk each ancestry once, not once for every parent in an imported history.
+    ancestors = set(git("rev-list", merge_base).splitlines())
+    outside = [parent for parent in parents if parent not in ancestors]
     if not outside:
         return None, []
     if git("rev-parse", "--is-shallow-repository").strip() == "true":
@@ -97,8 +98,8 @@ def verified_sync_config(base, config_path):
     errors = fetch_upstream_main()
     if errors:
         return None, errors
-    marker = next((parent for parent in outside if subprocess.run(
-        ["git", "merge-base", "--is-ancestor", parent, "refs/sync/upstream-main"], cwd=ROOT).returncode == 0), None)
+    upstream_ancestors = set(git("rev-list", "refs/sync/upstream-main").splitlines())
+    marker = next((parent for parent in outside if parent in upstream_ancestors), None)
     if marker is None:
         return None, []
     errors = sync_provenance(marker, merge_base)

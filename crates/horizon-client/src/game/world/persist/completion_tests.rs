@@ -630,6 +630,20 @@ fn mixed_transfer_pairs_runtime_state_with_exact_objects_not_uuid_or_mob_vec_ord
             .collect::<Vec<_>>();
         assert_eq!(children, [991, 993, 993, 994, 995, 997]);
         assert_eq!(
+            game.ordered_passenger_slots(root)
+                .into_iter()
+                .map(|slot| match slot {
+                    PassengerSlot::Live(id) => match game.persist.raw[&id].get("identity") {
+                        Some(Tag::Int(identity)) => *identity,
+                        _ => panic!("restored rider identity"),
+                    },
+                    PassengerSlot::Saved(_) => panic!("every transferred rider is an object"),
+                })
+                .collect::<Vec<_>>(),
+            [991, 9930, 9931, 994, 995, 997],
+            "duplicate-UUID objects retain their distinct positions in the live graph",
+        );
+        assert_eq!(
             child_uuids(&game.vehicle_tree_nbt(root).unwrap()),
             [991, 993, 993, 995, 997],
             "noSave riders transfer but remain excluded from disk saves",

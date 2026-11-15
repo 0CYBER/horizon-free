@@ -159,7 +159,7 @@ pub fn install(checkout: &Path, program: &Path, trusted: bool) -> Result<String,
         )
         .into());
     }
-    if !horizon_prepare::exporters::available(&package) {
+    if !horizon_platform::prepare::exporters::available(&package) {
         return Err(tr("The packaged exporters are missing, changed or do not match the checkout sources. Recompile the exporters before installing.").into());
     }
     fs::write(
@@ -286,7 +286,11 @@ mod tests {
         let program = bin.join(backend::CLIENT);
         fs::write(
             &program,
-            [magic, &horizon_mod_package::game_identity::MARK[..]].concat(),
+            [
+                magic,
+                &horizon_platform::mod_package::game_identity::MARK[..],
+            ]
+            .concat(),
         )
         .unwrap();
         for name in companions {

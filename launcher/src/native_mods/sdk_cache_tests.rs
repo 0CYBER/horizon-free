@@ -1,5 +1,5 @@
 use super::*;
-use horizon_mod_package::sdk::{Build, Mixins, Surface, Toolchain};
+use horizon_platform::mod_package::sdk::{Build, Mixins, Surface, Toolchain};
 use horizon_release_sign::{sha256_hex, sums_file, SigningKey};
 
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -46,7 +46,7 @@ fn index_of(files: &[(&str, &[u8])], rust: &str) -> Index {
         },
         package_format: sdk::PACKAGE_FORMAT,
         toolchain: Toolchain { rust: rust.into() },
-        content_api: horizon_mod_package::manifest::API.into(),
+        content_api: horizon_platform::mod_package::manifest::API.into(),
         surface: Surface {
             hash: "ab".repeat(16),
             previous: None,
@@ -55,8 +55,8 @@ fn index_of(files: &[(&str, &[u8])], rust: &str) -> Index {
             notes: Vec::new(),
         },
         mixins: Mixins {
-            rev: horizon_mod_package::mixins_tool::REV.into(),
-            patch: horizon_mod_package::mixins_tool::patch_hash(),
+            rev: horizon_platform::mod_package::mixins_tool::REV.into(),
+            patch: horizon_platform::mod_package::mixins_tool::patch_hash(),
         },
         assets,
         inputs: sdk::inputs(),

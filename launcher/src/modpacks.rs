@@ -389,7 +389,13 @@ pub fn port(
     from: Option<&Path>,
     log: Log,
 ) -> Result<Imported, String> {
-    pipeline::port(work, resources, from, log)?;
+    pipeline::port(
+        work,
+        resources,
+        from,
+        horizon_addresses::MODPACK_DOWNLOAD_HOSTS,
+        log,
+    )?;
     prepare_resourcepacks(work);
     load(work)
 }

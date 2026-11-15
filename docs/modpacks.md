@@ -320,16 +320,20 @@ them all for what a player's machine can port (content mods of the data tier), a
 launcher's "Import modpack" does:
 
 ```
-cargo run -p horizon-port-pack -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
-cargo run -p horizon-port-pack -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
-cargo run -p horizon-port-pack -- fetch ~/.horizon/ports/pack         # the portable mods' jars, or name them
+cargo run -p horizon-port-pack-cli -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
+cargo run -p horizon-port-pack-cli -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
+cargo run -p horizon-port-pack-cli -- fetch ~/.horizon/ports/pack         # the portable mods' jars, or name them
 #   --from <folder>: copy the player's own jars (an installed instance, a downloads folder)
-cargo run -p horizon-port-pack -- carry ~/.horizon/ports/pack         # content mods with a jar, or name them
+cargo run -p horizon-port-pack-cli -- carry ~/.horizon/ports/pack         # content mods with a jar, or name them
 #   --resources <prepared root>: only templates Horizon's tables have
-cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage.json and coverage.md
-cargo run -p horizon-port-pack -- events ~/.horizon/ports/pack/jars   # NeoForge events the mods listen to, and their hooks
-cargo run -p horizon-port-pack -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
+cargo run -p horizon-port-pack-cli -- report ~/.horizon/ports/pack        # coverage.json and coverage.md
+cargo run -p horizon-port-pack-cli -- events ~/.horizon/ports/pack/jars   # NeoForge events the mods listen to, and their hooks
+cargo run -p horizon-port-pack-cli -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
 ```
+
+The executable is still named `horizon-port-pack`. Its tool-layer package supplies the download
+host policy from `horizon-addresses`; the reusable `horizon-port-pack` library takes that policy
+from its caller, so the launcher and CLI follow the same checked redirect rules.
 
 ### Data packs in mod jars
 
@@ -899,7 +903,7 @@ through the step-4 upgrader and compares only the mod's own ids and effects.
 
 ```
 python3 tools/neoforge_oracle.py export --jars <mods> --deps <their libraries> --out <work>/oracle/facts.json
-cargo run -p horizon-port-pack -- carry <work> --resources .local/horizon-client/26.3
+cargo run -p horizon-port-pack-cli -- carry <work> --resources .local/horizon-client/26.3
 python3 tools/mod_port_harness.py --work <work>      # or --jars/--deps to export first
 ```
 

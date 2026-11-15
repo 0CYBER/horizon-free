@@ -10,7 +10,7 @@
 //! what they are ("the hook `player_logged_in`"), never surface ids or hashes.
 use super::{api, internals, prebuilt, sdk_cache};
 use crate::i18n::{tr, trf};
-use horizon_mod_package::mod_surface;
+use horizon_platform::mod_package::mod_surface;
 use mod_surface::uses::{self, Change, Fit, ItemKind, Misfit, UsesTable};
 use std::io::Read;
 use std::path::Path;

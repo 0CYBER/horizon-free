@@ -148,7 +148,8 @@ fn read(home: &Path, java_instance: bool) -> Vec<ModRow> {
         entries
             .into_iter()
             .map(|e| {
-                let package = horizon_mod_package::manifest::Package::read(&home.join(&e.file));
+                let package =
+                    horizon_platform::mod_package::manifest::Package::read(&home.join(&e.file));
                 let icon = mod_icons::load(package.as_ref().map(|p| p.icon.as_ref()));
                 ModRow {
                     file: e.file.clone(),

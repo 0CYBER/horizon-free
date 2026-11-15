@@ -31,7 +31,7 @@ pub(super) enum ModKind {
 }
 
 impl ModKind {
-    pub(super) fn of(manifest: &horizon_mod_package::manifest::Manifest) -> Self {
+    pub(super) fn of(manifest: &horizon_platform::mod_package::manifest::Manifest) -> Self {
         if manifest.native.is_some() {
             Self::Native
         } else if manifest.wasm.is_some() {

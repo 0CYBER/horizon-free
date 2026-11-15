@@ -13,7 +13,7 @@ const HOSTS: [&str; 5] = [
     "https://cdn.modrinth.com/",
     "https://edge.forgecdn.net/",
     "https://mediafilez.forgecdn.net/",
-    horizon_mod_package::index::FILE_HOST,
+    horizon_platform::mod_package::index::FILE_HOST,
     // The registry's files at their address before the move to horizon-rust (GitHub redirects it).
     "https://github.com/ludovic111/horizon-mods/releases/download/",
 ];

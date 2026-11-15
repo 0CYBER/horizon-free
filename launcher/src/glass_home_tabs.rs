@@ -1,14 +1,12 @@
-//! Home's tabbed panel in the glass look (the mockup's `TabbedPanel` and `Overview`,
-//! `launcher-views.tsx`): one glass plate whose top-left corner is the tab strip, and under it
-//! the open tab. Overview shows the instance's last screenshots beside the newest patch log,
-//! then what Play still needs (the launcher's rows). Dark appearance only.
+//! Home's glass tabbed panel holds per-instance content and logs.
+//! Release notes live on Versions; Home does not render an Overview tab.
 use super::*;
 use crate::glass_ui::{self as ui, white};
 use home_tabs::HomeTab;
 use horizon_launcher::packs::Kind as PackKind;
 use horizon_theme::glass::ink;
 
-/// The tabbed panel's own body is at least this tall (`min-h-[340px]`), and so is the patch log.
+/// The tabbed panel's body is at least this tall (`min-h-[340px]`).
 const BODY: f32 = 340.;
 
 impl Launcher {
@@ -138,84 +136,6 @@ impl Launcher {
 
 /// A release's changes: each section's name and its lines.
 pub(super) type Sections = Vec<(String, Vec<String>)>;
-
-// Glass Home omits Overview. Release-note helpers remain shared with notes_cache;
-// the Versions page, rather than Home, displays patch notes.
-#[allow(dead_code)]
-/// What the patch log shows: the line under its title, then its rows.
-pub(super) struct PatchLog {
-    note: String,
-    rows: Vec<PatchRow>,
-}
-
-/// A section's name (only when there are several; `true` for the first), or one of its lines.
-#[allow(dead_code)]
-enum PatchRow {
-    Section(SharedString, bool),
-    Item(SharedString),
-}
-
-#[allow(dead_code)]
-impl PatchLog {
-    /// From the release list, once it has loaded (see [`patch_source`]).
-    fn new(releases: Option<&[Release]>, played: Option<&str>) -> PatchLog {
-        let (note, sections) = releases
-            .and_then(|list| patch_source(list, played))
-            .unwrap_or_else(|| (tr("No notes yet").to_string(), Vec::new()));
-        let many = sections.len() > 1;
-        let mut rows = Vec::new();
-        for (i, (section, items)) in sections.into_iter().enumerate() {
-            if many {
-                rows.push(PatchRow::Section(section.into(), i == 0));
-            }
-            rows.extend(items.into_iter().map(|item| PatchRow::Item(item.into())));
-        }
-        PatchLog { note, rows }
-    }
-
-    #[cfg(test)]
-    pub(super) fn empty() -> PatchLog {
-        PatchLog {
-            note: String::new(),
-            rows: Vec::new(),
-        }
-    }
-}
-
-/// What the patch log shows from `releases` and its line under the title: the release `played`
-/// installs as when it lists changes, else the newest Nightly that does ("Nightly 2026-11-01 ·
-/// 4aa6854 · Nov 1"); for a Java instance (`played` None) or without one, the newest launcher
-/// release ("Launcher 0.2.37 · Nov 2").
-#[allow(dead_code)]
-fn patch_source(releases: &[Release], played: Option<&str>) -> Option<(String, Sections)> {
-    let day = |r: &Release| glass_versions::published(&r.date, "");
-    if let Some(played) = played {
-        let nightly = releases
-            .iter()
-            .filter(|r| r.tag == played)
-            .chain(releases.iter().filter(|r| r.nightly.is_some()))
-            .map(|r| (r, patch_sections(&r.body)))
-            .find(|(_, sections)| !sections.is_empty());
-        if let Some((r, sections)) = nightly {
-            return Some((format!("{} · {}", r.name, day(r)), sections));
-        }
-    }
-    let r = releases
-        .iter()
-        .find(|r| r.nightly.is_none() && !r.prerelease)?;
-    let version = r
-        .tag
-        .rsplit('@')
-        .next()
-        .unwrap_or(&r.tag)
-        .trim_start_matches('v');
-    let note = format!(
-        "{} · {}",
-        trf("Launcher {version}", &[("version", version)]),
-        day(r)
-    );
-    Some((note, patch_sections(&r.body)))
-}
 
 /// An empty tab's one line.
 fn empty_tab(line: &str) -> AnyElement {

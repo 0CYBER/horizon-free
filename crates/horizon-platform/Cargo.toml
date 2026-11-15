@@ -19,10 +19,17 @@ server-files = ["dep:horizon-server-files", "dep:horizon-java-properties"]
 
 mod-build = ["dep:horizon-mod-api-gen", "dep:horizon-mod-point-shape"]
 
+# Mod files exposed to the launcher and registry without exposing engine dependencies.
+mod-package = ["dep:horizon-mod-package"]
+mod-index = ["mod-package", "horizon-mod-package/index"]
+mod-prebuilt = ["mod-package", "horizon-mod-package/prebuilt"]
+mod-runtime-process = ["mod-package", "horizon-mod-package/runtime-process"]
+
 [dependencies]
 horizon-guest-stack = { path = "../horizon-guest-stack" }
 horizon-mod-api-gen = { path = "../horizon-mod-api-gen", optional = true }
 horizon-mod-point-shape = { path = "../horizon-mod-point-shape", optional = true }
+horizon-mod-package = { path = "../horizon-mod-package", default-features = false, optional = true }
 horizon-core = { path = "../horizon-core" }
 horizon-system = { path = "../horizon-system" }
 horizon-bench = { path = "../horizon-bench" }

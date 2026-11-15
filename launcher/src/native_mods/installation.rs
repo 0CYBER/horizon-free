@@ -31,7 +31,7 @@ pub(super) fn install(
         package::copy(
             bundle,
             &partial
-                .join(horizon_mod_package::mod_list::NATIVE_DIR)
+                .join(horizon_platform::mod_package::mod_list::NATIVE_DIR)
                 .join(&bundle.manifest.id),
         )?;
     }

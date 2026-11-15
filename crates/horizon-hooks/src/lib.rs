@@ -19,6 +19,7 @@
 
 pub mod hud;
 pub mod lang;
+pub mod mod_links;
 pub mod pages;
 pub mod perf;
 pub mod players;

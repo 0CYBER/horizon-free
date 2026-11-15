@@ -166,7 +166,7 @@ pub fn update_check(home: &Path, to: &str) -> Result<UpdateCheck, Failed> {
         .map(|bundle| {
             dependencies::from_manifest(
                 &bundle.manifest.dependencies,
-                horizon_mod_package::manifest::Side::Both,
+                horizon_platform::mod_package::manifest::Side::Both,
             )
         })
         .collect();

@@ -448,9 +448,9 @@ pub fn stage(source: &Path, work: &Path, pack: &import::Pack) -> Result<Report, 
 }
 
 /// Obtain index-listed client resource packs with the same host and checksum rules as mod jars.
-pub fn fetch(work: &Path, log: pipeline::Log) -> Result<Report, String> {
+pub fn fetch(work: &Path, hosts: &[&str], log: pipeline::Log) -> Result<Report, String> {
     fetch_with(work, log, &|url, hash, dest| {
-        crate::fetch::download(url, Some(hash), dest, false)
+        crate::fetch::download(url, Some(hash), dest, false, hosts)
     })
 }
 

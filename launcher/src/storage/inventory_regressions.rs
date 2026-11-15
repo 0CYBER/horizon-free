@@ -124,7 +124,7 @@ fn hard_linked_outputs_across_entries_count_once() {
 
 #[test]
 fn referenced_jar_and_uninstrumented_unused_jar_are_kept() {
-    use horizon_mod_package::{manifest::JarRef, Package};
+    use horizon_platform::mod_package::{manifest::JarRef, Package};
     use sha2::{Digest, Sha512};
     use std::io::Write;
     let home = Home::new();
@@ -183,12 +183,13 @@ fn capable_units_delete_only_after_the_last_game_lease_and_mixed_builds_stay_res
     };
     let root = PathBuf::from(root);
     if std::env::var_os("CLASSIFICATION_GAME").is_some() {
-        horizon_mod_package::holder::enter();
+        horizon_platform::mod_package::holder::enter();
         let mut command = Command::new(std::env::current_exe().unwrap());
         command.args(std::env::args_os().skip(1));
         let selection =
-            horizon_mod_package::selection::LaunchArguments::for_command(&command).unwrap();
-        let _capture = horizon_mod_package::holder::acquire(&selection);
+            horizon_platform::mod_package::selection::LaunchArguments::for_command(&command)
+                .unwrap();
+        let _capture = horizon_platform::mod_package::holder::acquire(&selection);
         fs::write(root.join("ready"), b"").unwrap();
         let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while !root.join("stop").exists() {

@@ -158,7 +158,7 @@ fn capable_image(image: &Path, data: &Path) -> Result<bool, Error> {
     if !image.starts_with(data) {
         return Ok(false);
     }
-    horizon_mod_package::holder::capable(&image).map_err(Into::into)
+    horizon_platform::mod_package::holder::capable(&image).map_err(Into::into)
 }
 
 /// Operational locks are neither disposable outputs nor user reports/jar-cache entries.
@@ -350,7 +350,7 @@ pub(crate) fn delete_game_unit_observed(
     path: &Path,
     after_classification: impl FnOnce(),
 ) -> Result<(), Error> {
-    use horizon_mod_package::{locks::Release, runtime_leases::Registry};
+    use horizon_platform::mod_package::{locks::Release, runtime_leases::Registry};
     let registry = Registry::with_release(&crate::backend::data_dir(), Release::Close)?;
     registry.remove_unit(path, |directory, is_directory| {
         Access::for_unit(path)?.check()?;

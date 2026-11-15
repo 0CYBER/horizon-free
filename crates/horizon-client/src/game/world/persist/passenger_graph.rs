@@ -68,7 +68,7 @@ impl Game<'_> {
 
     /// One ordered relation for saving, transfer and resident tracking. A mob's
     /// mount is authoritative; object-memory-only riders follow the saved slots.
-    pub(super) fn ordered_passenger_slots(&self, vehicle: u32) -> Vec<PassengerSlot> {
+    pub(in crate::game) fn ordered_passenger_slots(&self, vehicle: u32) -> Vec<PassengerSlot> {
         let mut slots = Vec::new();
         let mut seen = std::collections::HashSet::new();
         if let Some(loaded) = self.persist.passenger_slots.get(&vehicle) {

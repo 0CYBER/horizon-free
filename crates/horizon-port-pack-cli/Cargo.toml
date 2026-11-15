@@ -1,0 +1,18 @@
+[package]
+name = "horizon-port-pack-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Modpack porting command with Horizon's built-in download policy"
+
+[[bin]]
+name = "horizon-port-pack"
+path = "src/main.rs"
+
+[dependencies]
+horizon-port-pack = { path = "../horizon-port-pack" }
+horizon-addresses = { path = "../horizon-addresses" }
+
+[lints]
+workspace = true

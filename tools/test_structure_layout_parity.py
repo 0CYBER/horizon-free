@@ -153,7 +153,7 @@ def carry(profile, mods, carried, packs=None):
                          'census': dict.fromkeys(CENSUS, 0)}}
                for key, jar in mods.items()]
     (work / 'inventory.json').write_text(json.dumps(records))
-    subprocess.run(['cargo', 'run', '--release', '-q', '-p', 'horizon-port-pack', '--', 'carry', str(work),
+    subprocess.run(['cargo', 'run', '--release', '-q', '-p', 'horizon-port-pack-cli', '--', 'carry', str(work),
                     '--resources', str(lab.RESOURCES), *carried], check=True, cwd=lab.ROOT, stdout=subprocess.DEVNULL)
     data = [work / 'mods' / key / 'carry' / 'data' for key in carried]
     if not all(d.is_dir() for d in data):

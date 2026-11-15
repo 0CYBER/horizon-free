@@ -62,7 +62,7 @@ pub fn state(enabled: &[Mod], built: Option<&[Mod]>) -> State {
 /// mod tool packs beside the source but the build's own digest of the copied source never holds
 /// (else every mod packed with a uses table read Needs rebuild after each build).
 fn archive_digest<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
-    use horizon_mod_package::mod_surface::uses::USES_FILE;
+    use horizon_platform::mod_package::mod_surface::uses::USES_FILE;
     native_mods::digest(files.filter(|(name, _)| *name != USES_FILE))
 }
 
@@ -139,14 +139,14 @@ pub fn horizon_label(version: &str) -> String {
 }
 
 /// Enabled wasm packages that need the patchable engine, never native compilation.
-pub fn wasm_points(home: &Path) -> Vec<horizon_mod_package::index::native::Bundle> {
+pub fn wasm_points(home: &Path) -> Vec<horizon_platform::mod_package::index::native::Bundle> {
     use std::io::Read;
     wasm_hmods(home)
         .into_iter()
         .filter_map(|path| {
             let file = fs::File::open(&path).ok()?;
             let mut zip = zip::ZipArchive::new(file).ok()?;
-            let package = horizon_mod_package::Package::read_zip(&mut zip).ok()?;
+            let package = horizon_platform::mod_package::Package::read_zip(&mut zip).ok()?;
             if package.manifest.wasm.is_none()
                 || package.manifest.inject.is_empty()
                 || !java::is_enabled(home, &package.manifest.id)
@@ -164,7 +164,7 @@ pub fn wasm_points(home: &Path) -> Vec<horizon_mod_package::index::native::Bundl
                 entry.read_to_end(&mut bytes).ok()?;
                 files.insert(name, bytes);
             }
-            Some(horizon_mod_package::index::native::Bundle {
+            Some(horizon_platform::mod_package::index::native::Bundle {
                 manifest: package.manifest,
                 files,
             })
@@ -178,7 +178,7 @@ pub fn wasm_points(home: &Path) -> Vec<horizon_mod_package::index::native::Bundl
 pub fn enabled(home: &Path) -> Vec<Mod> {
     let mut out = Vec::new();
     for path in hmods(home) {
-        match horizon_mod_package::index::native::Bundle::read(&path) {
+        match horizon_platform::mod_package::index::native::Bundle::read(&path) {
             Ok(b) => {
                 if java::is_enabled(home, &b.manifest.id) {
                     let digest =
@@ -206,16 +206,16 @@ pub fn pinning(home: &Path, revision: &str) -> Vec<String> {
 }
 
 /// The readable native mods turned on in game folder `home`.
-pub fn bundles_on(home: &Path) -> Vec<horizon_mod_package::index::native::Bundle> {
+pub fn bundles_on(home: &Path) -> Vec<horizon_platform::mod_package::index::native::Bundle> {
     hmods(home)
         .into_iter()
-        .filter_map(|path| horizon_mod_package::index::native::Bundle::read(&path).ok())
+        .filter_map(|path| horizon_platform::mod_package::index::native::Bundle::read(&path).ok())
         .filter(|b| java::is_enabled(home, &b.manifest.id))
         .collect()
 }
 
 /// Paths declared by a code package, in manifest order.
-pub fn declared_internals(manifest: &horizon_mod_package::Manifest) -> Vec<String> {
+pub fn declared_internals(manifest: &horizon_platform::mod_package::Manifest) -> Vec<String> {
     manifest
         .internals
         .iter()
@@ -232,7 +232,7 @@ pub struct Installed {
     pub internals: Vec<String>,
     pub origin: Option<crate::github_mods::Origin>,
     /// The validated package icon, or the package error (the file remains removable).
-    pub icon: Result<Option<Arc<horizon_mod_package::icon::Icon>>, String>,
+    pub icon: Result<Option<Arc<horizon_platform::mod_package::icon::Icon>>, String>,
 }
 
 /// Discover the actual files, not just GitHub sidecars. Registry files already have a row.
@@ -245,7 +245,7 @@ pub fn untracked(home: &Path) -> Vec<Installed> {
             if !path.is_file() || tracked.entries.iter().any(|e| e.file == file) {
                 return None;
             }
-            let package = horizon_mod_package::manifest::Package::read(&path);
+            let package = horizon_platform::mod_package::manifest::Package::read(&path);
             let (id, version) = package
                 .as_ref()
                 .map(|p| (p.manifest.id.clone(), p.manifest.version.clone()))
@@ -342,7 +342,7 @@ pub fn fingerprint(home: &Path, version: Option<&str>) -> String {
 }
 
 fn wasm_hmods(home: &Path) -> Vec<std::path::PathBuf> {
-    let mut paths: Vec<_> = fs::read_dir(home.join(horizon_mod_package::mod_list::DIR))
+    let mut paths: Vec<_> = fs::read_dir(home.join(horizon_platform::mod_package::mod_list::DIR))
         .into_iter()
         .flatten()
         .flatten()
@@ -431,7 +431,8 @@ mod tests {
             format!("[wasm]\nsha512='{}'\ntoolchain='1.99.1'\n", "0".repeat(128)),
         ] {
             let manifest =
-                horizon_mod_package::Manifest::parse(&format!("{header}{target}")).unwrap();
+                horizon_platform::mod_package::Manifest::parse(&format!("{header}{target}"))
+                    .unwrap();
             assert_eq!(declared_internals(&manifest), ["Game", "Game::world"]);
         }
     }
@@ -439,9 +440,9 @@ mod tests {
     #[test]
     fn wasm_package_changes_invalidate_the_build_view_cache() {
         let home = std::env::temp_dir().join(format!("wasm-build-view-{}", std::process::id()));
-        fs::create_dir_all(home.join(horizon_mod_package::mod_list::DIR)).unwrap();
+        fs::create_dir_all(home.join(horizon_platform::mod_package::mod_list::DIR)).unwrap();
         let package = home
-            .join(horizon_mod_package::mod_list::DIR)
+            .join(horizon_platform::mod_package::mod_list::DIR)
             .join("example.hmod");
         fs::write(&package, b"a").unwrap();
         let before = fingerprint(&home, None);
@@ -466,7 +467,9 @@ mod tests {
     #[test]
     fn wasm_listeners_select_patchable_build_without_native_compilation() {
         let home = tempfile::tempdir().unwrap();
-        let folder = home.path().join(horizon_mod_package::mod_list::DIR);
+        let folder = home
+            .path()
+            .join(horizon_platform::mod_package::mod_list::DIR);
         fs::create_dir_all(&folder).unwrap();
         // A shared wasm member with the required three exports.
         let mut module = b"\0asm\x01\0\0\0".to_vec();
@@ -491,10 +494,12 @@ mod tests {
             } else {
                 ""
             };
-            let manifest = format!("id='wasm_test'\nname='Wasm test'\nversion='1.0.0'\napi='0.2'\ncapabilities=['registries']\n{rows}[wasm]\nsha512='{}'\ntoolchain='1.99.1'\nbuilt_with='selection fixture'\n", horizon_mod_package::manifest::sha512_of(&module));
-            let bytes =
-                horizon_mod_package::Package::write_files(&manifest, &[("mod.wasm", &module)])
-                    .unwrap();
+            let manifest = format!("id='wasm_test'\nname='Wasm test'\nversion='1.0.0'\napi='0.2'\ncapabilities=['registries']\n{rows}[wasm]\nsha512='{}'\ntoolchain='1.99.1'\nbuilt_with='selection fixture'\n", horizon_platform::mod_package::manifest::sha512_of(&module));
+            let bytes = horizon_platform::mod_package::Package::write_files(
+                &manifest,
+                &[("mod.wasm", &module)],
+            )
+            .unwrap();
             fs::write(folder.join("test.hmod"), bytes).unwrap();
             java::set_enabled(home.path(), "wasm_test", true).unwrap();
             assert_eq!(enabled(home.path()).len(), usize::from(inject));

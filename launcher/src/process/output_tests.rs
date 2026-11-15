@@ -1,5 +1,5 @@
 use cap_std::fs::Dir;
-use horizon_mod_package::output::Capture;
+use horizon_platform::mod_package::output::Capture;
 use std::{
     io::Write,
     path::{Path, PathBuf},

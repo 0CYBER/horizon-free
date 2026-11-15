@@ -1,8 +1,8 @@
 //! Compiler-driven discovery uses an isolated, per-pin source and metadata cache.
 use super::{api, dependencies, internals, rust_toolchain};
 use crate::i18n::trf;
-use horizon_mod_package::build_data;
-use horizon_mod_package::internals::{self as catalog, ListedInternal};
+use horizon_platform::mod_package::build_data;
+use horizon_platform::mod_package::internals::{self as catalog, ListedInternal};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -53,7 +53,7 @@ fn discover_catalog(folder: &Path, game: &Path) -> Result<Vec<ListedInternal>, E
     let projects = [api::Project::read(&bundle).map_err(|e| e.to_string())?];
     let declared = [dependencies::from_manifest(
         &bundle.manifest.dependencies,
-        horizon_mod_package::manifest::Side::Both,
+        horizon_platform::mod_package::manifest::Side::Both,
     )];
     let inputs = [dependencies::Mod {
         id: &bundle.manifest.id,

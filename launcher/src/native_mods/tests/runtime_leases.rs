@@ -29,12 +29,13 @@ fn fresh_native_install_starts_directly_without_a_launcher_launch() {
     let root = PathBuf::from(root);
     fs::create_dir_all(root.join("home")).unwrap();
     if std::env::var_os("DIRECT_INSTALLED_GAME").is_some() {
-        horizon_mod_package::holder::enter();
+        horizon_platform::mod_package::holder::enter();
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command.args(std::env::args_os().skip(1));
         let selection =
-            horizon_mod_package::selection::LaunchArguments::for_command(&command).unwrap();
-        let _capture = horizon_mod_package::holder::acquire(&selection);
+            horizon_platform::mod_package::selection::LaunchArguments::for_command(&command)
+                .unwrap();
+        let _capture = horizon_platform::mod_package::holder::acquire(&selection);
         let registry = crate::run_leases::Registry::open().unwrap();
         let directory = cap_std::fs::Dir::open_ambient_dir(
             backend::version_dir("fresh"),

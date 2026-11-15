@@ -5,9 +5,9 @@ worldgen data pack written for 26.2 (registry errors on load). Horizon
 targets 26.3, so such a pack has to be rewritten first:
 
 ```sh
-cargo run --release -p horizon-port-pack -- upgrade-datapack PACK.zip --world <world folder>
+cargo run --release -p horizon-port-pack-cli -- upgrade-datapack PACK.zip --world <world folder>
 # or into any folder:
-cargo run --release -p horizon-port-pack -- upgrade-datapack PACK.zip OUT/
+cargo run --release -p horizon-port-pack-cli -- upgrade-datapack PACK.zip OUT/
 ```
 
 `--world` writes the upgraded pack to `<world>/datapacks/<pack name>-26.3/`.

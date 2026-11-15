@@ -13598,10 +13598,14 @@ mod h169_glide_travel_tests {
         let mut game = crate::game::native_machines::tests::server_game();
         game.build_registries();
         game.set_allow_commands(true);
+        // The unopened fixture starts in Peaceful, which refuses /summon zombie.
+        assert!(game.run_command("difficulty normal"));
         game.player = Some(
             horizon_client::motion::PlayerMotion::new(game.motion, Vec3::new(0.5, 65.0, 0.5))
                 .unwrap(),
         );
+        game.settings.simulation_distance = 4;
+        game.settings.render_distance = 24;
         let cx = 20;
         let pos_x = (cx * 16 + 8) as f64;
         game.world.chunks.insert(
@@ -13618,6 +13622,10 @@ mod h169_glide_travel_tests {
             .map(|m| m.id)
             .expect("zombie spawned");
 
+        // The unopened server has no ticket levels yet. Establish the player's
+        // real loading/simulation boundary before ticking the distant zombie.
+        game.update_chunk_tickets();
+        assert!(game.entity_ticking_area()(0, 0));
         assert!(game.world.loaded(pos_x as i32, 8));
         assert!(!game.entity_ticking_area()(pos_x as i32, 8));
 

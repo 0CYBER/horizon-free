@@ -6,7 +6,7 @@
 //! packs, a mod's saved settings) are copied in once, when it is installed.
 use super::{fetch, index, install_version, local, newest, Index};
 use crate::browser::{java, FileRef};
-use horizon_mod_package::{index as idx, modpack::Modpack};
+use horizon_platform::mod_package::{index as idx, modpack::Modpack};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};

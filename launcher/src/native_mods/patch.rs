@@ -251,8 +251,11 @@ impl Prepared<'_> {
 /// replaces or redirects a filled loop's entry (anything but `HEAD` and `RETURN`, which compose
 /// around the loop), are refused by name.
 fn loop_slots(game: &Path, bundles: &[&Bundle]) -> Result<Vec<api_gen::patch::LoopSlots>, String> {
-    use horizon_mod_package::manifest::mixin::Kind;
-    let rows: Vec<(&Bundle, &horizon_mod_package::manifest::loops::Loop)> = bundles
+    use horizon_platform::mod_package::manifest::mixin::Kind;
+    let rows: Vec<(
+        &Bundle,
+        &horizon_platform::mod_package::manifest::loops::Loop,
+    )> = bundles
         .iter()
         .flat_map(|bundle| bundle.native().r#loop.iter().map(move |row| (*bundle, row)))
         .collect();
@@ -264,7 +267,7 @@ fn loop_slots(game: &Path, bundles: &[&Bundle]) -> Result<Vec<api_gen::patch::Lo
     }
     let published = match fs::read_to_string(&path) {
         Ok(text) => {
-            horizon_mod_package::build_data::read::<Loops>(api_gen::loops::FILE, &text)
+            horizon_platform::mod_package::build_data::read::<Loops>(api_gen::loops::FILE, &text)
                 .map_err(|e| format!("{}: {e}", path.display()))?
                 .1
                 .loops
@@ -369,7 +372,7 @@ fn function_index(game: &Path, commit: &str) -> Result<api_gen::functions::Funct
         )
     })?;
     let (build, index): (_, api_gen::functions::FunctionIndex) =
-        horizon_mod_package::build_data::read(FILE, &text)
+        horizon_platform::mod_package::build_data::read(FILE, &text)
             .map_err(|e| format!("E_MIXIN_INDEX: {e}"))?;
     if build.commit != commit {
         return Err(format!(

@@ -138,6 +138,8 @@ mod tests {
     #[ignore = "needs prepared resources and scratch homes/cwd"]
     fn deferred_states_match_those_built_in_place() {
         crate::game::native_entity_refs::tests::with_game(|game| {
+            // The fixture stops before world-open command registry initialization.
+            game.build_registries();
             game.set_allow_commands(true);
             for command in [
                 "summon piglin 8.5 80 8.5 {NoAI:1b,PersistenceRequired:1b}",

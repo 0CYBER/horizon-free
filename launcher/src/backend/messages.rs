@@ -36,7 +36,7 @@ pub enum Msg {
     /// file (none = offline) and why it plays offline, if it does.
     Session(Result<Option<crate::account::GameSession>, crate::account::NoOwner>),
     JarConsent {
-        jars: Vec<horizon_mod_package::manifest::JarRef>,
+        jars: Vec<horizon_platform::mod_package::manifest::JarRef>,
         reply: std::sync::mpsc::Sender<bool>,
     },
     JarClient {

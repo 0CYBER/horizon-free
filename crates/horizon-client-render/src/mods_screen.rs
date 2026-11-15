@@ -12,6 +12,7 @@ use crate::{
     screen_draw::{self as d, Draw, Measure, TextField},
     text::{Style, Text},
 };
+use horizon_hooks::mod_links::{self, Links};
 use std::{cell::Cell, collections::HashMap, sync::Arc};
 
 /// `HeaderAndFooterLayout(8, 38)`: the room above and below the content.
@@ -90,8 +91,6 @@ impl Entry {
             authors: "Mojang Studios".into(),
             license: "Minecraft EULA".into(),
             license_url: Some("https://aka.ms/MinecraftEULA".into()),
-            homepage: Some("https://minecraft.net".into()),
-            issues: Some("https://bugs.mojang.com".into()),
             ..Self::default()
         }
     }
@@ -102,9 +101,6 @@ impl Entry {
             version: horizon_core::release::VERSION.into(),
             authors: "Ludovic Marie and the Horizon contributors".into(),
             license: "MIT".into(),
-            license_url: Some("https://github.com/horizon-rust/horizon/blob/main/LICENSE".into()),
-            homepage: Some("https://playhorizon.dev".into()),
-            issues: Some("https://github.com/horizon-rust/horizon/issues".into()),
             description: crate::lang::get("horizon.mods.screen.horizon.description"),
             ..Self::default()
         }
@@ -261,8 +257,27 @@ pub struct ModsScreen {
 impl ModsScreen {
     /// `ModListScreen.init`: Minecraft, Horizon, then the installed mods.
     pub fn new(width: i32, height: i32, in_world: bool, mods: &ModList) -> Self {
+        Self::with_links(width, height, in_world, mods, mod_links::engine::all())
+    }
+
+    fn with_links(
+        width: i32,
+        height: i32,
+        in_world: bool,
+        mods: &ModList,
+        links: &[&Links],
+    ) -> Self {
         let mut icons = HashMap::new();
         let mut entries = vec![Entry::minecraft(), Entry::horizon()];
+        for entry in &mut entries {
+            if let Some(links) = links.iter().find(|links| links.id == entry.id) {
+                if let Some(license) = links.license {
+                    entry.license_url = Some(license.into());
+                }
+                entry.homepage = links.homepage.map(str::to_owned);
+                entry.issues = links.issues.map(str::to_owned);
+            }
+        }
         for (index, installed) in mods.installed.iter().enumerate() {
             let info = mods.info.get(&installed.id);
             let key = format!("mod/{index}/icon");
@@ -1182,6 +1197,37 @@ mod tests {
         assert_eq!(pixels[(7 * 4) + 3], 255, "the cube's top point is drawn");
     }
 
+    #[test]
+    fn built_in_links_come_from_the_product_and_keep_the_first_registration() {
+        let mods = ModList::default();
+        let plain = ModsScreen::with_links(427, 240, false, &mods, &[]);
+        assert!(
+            plain
+                .entries
+                .iter()
+                .all(|entry| { entry.homepage.is_none() && entry.issues.is_none() })
+        );
+        assert_eq!(
+            plain.entries[0].license_url.as_deref(),
+            Some("https://aka.ms/MinecraftEULA")
+        );
+        let first = Links {
+            id: "horizon",
+            license: Some("https://example.org/LICENSE"),
+            homepage: Some("https://example.org"),
+            issues: Some("https://example.org/issues"),
+        };
+        let second = Links {
+            homepage: Some("https://other.example.org"),
+            ..first
+        };
+        let product = ModsScreen::with_links(427, 240, false, &mods, &[&first, &second]);
+        let entry = &product.entries[1];
+        assert_eq!(entry.license_url.as_deref(), first.license);
+        assert_eq!(entry.homepage.as_deref(), first.homepage);
+        assert_eq!(entry.issues.as_deref(), first.issues);
+    }
+
     fn atlas() -> HudAtlas {
         HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
             std::path::PathBuf::from("/nonexistent/horizon-test-assets"),
@@ -1279,7 +1325,13 @@ mod tests {
             installed("zoom", "Zoom", Some(page)),
             installed("plain", "Plain", None),
         ]);
-        let mut screen = ModsScreen::new(427, 240, false, &list);
+        let links = Links {
+            id: "minecraft",
+            license: None,
+            homepage: Some("https://minecraft.net"),
+            issues: Some("https://bugs.mojang.com"),
+        };
+        let mut screen = ModsScreen::with_links(427, 240, false, &list, &[&links]);
         let click_row = |screen: &mut ModsScreen, name: &str| {
             let g = screen.geo();
             let at = screen

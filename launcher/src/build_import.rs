@@ -253,8 +253,8 @@ fn is_game(program: &[u8]) -> bool {
     };
     magic.iter().any(|m| program.starts_with(m))
         && program
-            .windows(horizon_mod_package::game_identity::MARK.len())
-            .any(|w| w == horizon_mod_package::game_identity::MARK)
+            .windows(horizon_platform::mod_package::game_identity::MARK.len())
+            .any(|w| w == horizon_platform::mod_package::game_identity::MARK)
 }
 
 /// Installs `program` in `versions` as a copy of installed version `base` with it in place of
@@ -393,7 +393,12 @@ mod tests {
         } else {
             b"\x7fELF"
         };
-        [magic, body, &horizon_mod_package::game_identity::MARK[..]].concat()
+        [
+            magic,
+            body,
+            &horizon_platform::mod_package::game_identity::MARK[..],
+        ]
+        .concat()
     }
 
     #[test]
@@ -482,25 +487,32 @@ mod tests {
     fn only_a_horizon_game_for_this_computer_is_imported() {
         assert!(is_game(&program(b"")));
         let marked = program(b"");
-        let unmarked = &marked[..marked.len() - horizon_mod_package::game_identity::MARK.len()];
+        let unmarked =
+            &marked[..marked.len() - horizon_platform::mod_package::game_identity::MARK.len()];
         assert!(!is_game(unmarked));
         // Retired WIT levels, partial signatures and mutated signatures aren't game identity.
         for mark in [
             &b"horizon-mod-api-level:0007;"[..],
-            &horizon_mod_package::game_identity::MARK
-                [..horizon_mod_package::game_identity::MARK.len() - 1],
+            &horizon_platform::mod_package::game_identity::MARK
+                [..horizon_platform::mod_package::game_identity::MARK.len() - 1],
             &b"horizon-game-executable:"[..],
         ] {
             assert!(!is_game(&[unmarked, mark].concat()));
         }
-        assert!(!is_game(&horizon_mod_package::game_identity::MARK));
+        assert!(!is_game(
+            &horizon_platform::mod_package::game_identity::MARK
+        ));
         let other = if cfg!(windows) {
             &b"\x7fELF"[..]
         } else {
             &b"MZ"[..]
         };
         assert!(!is_game(
-            &[other, &horizon_mod_package::game_identity::MARK[..]].concat()
+            &[
+                other,
+                &horizon_platform::mod_package::game_identity::MARK[..]
+            ]
+            .concat()
         ));
         let d = dir("zip");
         let zip_path = d.join("horizon-client-windows-x86_64.zip");

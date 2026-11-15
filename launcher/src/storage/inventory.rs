@@ -123,7 +123,7 @@ impl Entry {
             // `.developer`), and the older single-archive caches (`<commit>-horizon-prebuilt-v<n>-
             // <target>`), which native builds no longer read but eviction must still recognize.
             let rest = rest.strip_suffix(".developer").unwrap_or(rest);
-            let current = horizon_mod_package::index::native::prebuilt_prefix();
+            let current = horizon_platform::mod_package::index::native::prebuilt_prefix();
             let target = [
                 "horizon-prebuilt-v3-",
                 "horizon-prebuilt-v4-",
@@ -652,7 +652,9 @@ impl Storage {
         // Also refuse an external Cargo holding a target lock before starting a cleanup.
         self.lease.bytes()?;
         if clear.is_some() || all {
-            use horizon_mod_package::runtime_leases::{cleanup::Cleanup, Error as LeaseError};
+            use horizon_platform::mod_package::runtime_leases::{
+                cleanup::Cleanup, Error as LeaseError,
+            };
             match Cleanup::existing(&backend::data_dir()) {
                 Ok(cleanup) => {
                     cleanup.collect_records()?;
@@ -809,7 +811,7 @@ fn old_logs(entries: &mut Vec<Entry>, home: &Root) -> Result<(), Error> {
 }
 
 fn unused_jars(entries: &mut Vec<Entry>, home: &Root) -> Result<(), Error> {
-    use horizon_mod_package::{
+    use horizon_platform::mod_package::{
         mod_list::{DIR, NATIVE_DIR},
         Package,
     };
@@ -820,7 +822,7 @@ fn unused_jars(entries: &mut Vec<Entry>, home: &Root) -> Result<(), Error> {
     let mut referenced = HashSet::new();
     for directory in [DIR, NATIVE_DIR] {
         let path = Entry::fixed(home, Path::new(directory), Category::OtherCaches)?.path;
-        for package in horizon_mod_package::find(&path) {
+        for package in horizon_platform::mod_package::find(&path) {
             // A malformed package cannot prove a jar is unused. Retain all jars in that case.
             let Ok(package) = Package::read(&package) else {
                 return Ok(());
@@ -1015,16 +1017,17 @@ mod eviction_tests {
         }
         fs::write(
             leased.join(backend::CLIENT),
-            horizon_mod_package::holder::CAPABILITY,
+            horizon_platform::mod_package::holder::CAPABILITY,
         )
         .unwrap();
         fs::write(legacy.join(backend::CLIENT), b"pre-holder game").unwrap();
         crate::run_leases::publish(&leased).unwrap();
-        let registry = horizon_mod_package::runtime_leases::Registry::existing(&home.0).unwrap();
+        let registry =
+            horizon_platform::mod_package::runtime_leases::Registry::existing(&home.0).unwrap();
         let _game = registry
             .lock(
-                &horizon_mod_package::runtime_leases::open_directory(&leased).unwrap(),
-                horizon_mod_package::locks::LockMode::Shared,
+                &horizon_platform::mod_package::runtime_leases::open_directory(&leased).unwrap(),
+                horizon_platform::mod_package::locks::LockMode::Shared,
             )
             .unwrap();
         let storage = Storage::at(&home.0).unwrap();

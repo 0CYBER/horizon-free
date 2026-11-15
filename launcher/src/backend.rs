@@ -4447,7 +4447,11 @@ mod tests {
         let dir = versions.join("v0.2.0");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(COMPLETE), b"").unwrap();
-        fs::write(dir.join(CLIENT), horizon_mod_package::holder::CAPABILITY).unwrap();
+        fs::write(
+            dir.join(CLIENT),
+            horizon_platform::mod_package::holder::CAPABILITY,
+        )
+        .unwrap();
         crate::run_leases::publish(&dir).unwrap();
         let running = fs::File::options()
             .read(true)

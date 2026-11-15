@@ -4,7 +4,7 @@ use crate::{
     i18n::trf,
     launch::{self, Launch},
 };
-use horizon_mod_package::{
+use horizon_platform::mod_package::{
     manifest::{collect_jar_requirements, JarConflict},
     mod_list::ModList,
     packages,

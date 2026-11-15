@@ -1,7 +1,7 @@
 //! Declared internals, shared by both native build routes.
 use super::{api, inject};
 use crate::i18n::trf;
-use horizon_mod_package::internals::{self, ListedInternal};
+use horizon_platform::mod_package::internals::{self, ListedInternal};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -134,8 +134,8 @@ impl Catalog {
     /// [`Self::check`].
     pub(super) fn pinned(
         &self,
-        manifest: &horizon_mod_package::Manifest,
-    ) -> horizon_mod_package::Manifest {
+        manifest: &horizon_platform::mod_package::Manifest,
+    ) -> horizon_platform::mod_package::Manifest {
         let mut pinned = manifest.clone();
         for inject in pinned
             .inject
@@ -161,7 +161,10 @@ impl Catalog {
         pinned
     }
 
-    pub(super) fn check(&self, manifest: &horizon_mod_package::Manifest) -> Result<(), Error> {
+    pub(super) fn check(
+        &self,
+        manifest: &horizon_platform::mod_package::Manifest,
+    ) -> Result<(), Error> {
         super::slots::check(self, manifest).map_err(Error::Inject)?;
         for declared in &manifest.internals {
             internals::check(&self.internals, &manifest.id, declared)?;
@@ -171,7 +174,7 @@ impl Catalog {
 
     pub(super) fn prepare<'a>(
         &self,
-        manifests: impl IntoIterator<Item = &'a horizon_mod_package::Manifest>,
+        manifests: impl IntoIterator<Item = &'a horizon_platform::mod_package::Manifest>,
     ) -> Result<BTreeMap<&'a str, Facade>, Error> {
         manifests
             .into_iter()
@@ -188,7 +191,7 @@ impl Catalog {
 
     pub(super) fn log_mixins(
         &self,
-        manifest: &horizon_mod_package::Manifest,
+        manifest: &horizon_platform::mod_package::Manifest,
     ) -> Result<(), String> {
         if manifest
             .native
@@ -204,7 +207,10 @@ impl Catalog {
     }
 
     /// Discovery opens the staged view, not the production declaration boundary.
-    fn discovery_facade(&self, manifest: &horizon_mod_package::Manifest) -> Result<Facade, Error> {
+    fn discovery_facade(
+        &self,
+        manifest: &horizon_platform::mod_package::Manifest,
+    ) -> Result<Facade, Error> {
         let mut manifest = manifest.clone();
         manifest.internals.clear();
         let mut facade = self.facade(&manifest)?;
@@ -225,7 +231,10 @@ impl Catalog {
     }
 
     /// Re-exports are the compiler's boundary: no module wildcard can widen the declaration.
-    pub(super) fn facade(&self, manifest: &horizon_mod_package::Manifest) -> Result<Facade, Error> {
+    pub(super) fn facade(
+        &self,
+        manifest: &horizon_platform::mod_package::Manifest,
+    ) -> Result<Facade, Error> {
         self.check(manifest)?;
         let mut tree = Module::default();
         let mut crates = BTreeSet::from(["horizon_client".into()]);
@@ -353,7 +362,7 @@ impl Module {
     }
 }
 
-pub(super) fn needed(manifest: &horizon_mod_package::Manifest) -> bool {
+pub(super) fn needed(manifest: &horizon_platform::mod_package::Manifest) -> bool {
     !manifest.internals.is_empty()
 }
 
@@ -392,7 +401,7 @@ mod tests {
         let dir = super::super::tests::dir(&format!("internals-{name}"));
         super::super::tests::write_bundle(&dir, "example", "");
         fs::write(dir.join("Cargo.toml"), "[package]\nname='example'\nversion='1.0.0'\nedition='2024'\n[dependencies]\nhorizon-mod-api={path='.horizon/sdk/api/crates/horizon-mod-api'}\n").unwrap();
-        let path = dir.join(horizon_mod_package::manifest::MANIFEST);
+        let path = dir.join(horizon_platform::mod_package::manifest::MANIFEST);
         let text = fs::read_to_string(&path).unwrap().replace("[native]", "internals = [{ path = 'horizon_client::game::Game', hash = '1234' }, { path = 'horizon_client::game::maps::dimension_id', hash = '5678' }]\n[native]\n");
         fs::write(path, text).unwrap();
         let bundle = super::super::bundle_in(&dir).unwrap().unwrap();
@@ -486,7 +495,7 @@ mod tests {
         field.hash = "field".into();
         field.signature = "u8".into();
         catalog.internals.insert(2, field);
-        bundle.manifest.internals[1] = horizon_mod_package::manifest::Internal {
+        bundle.manifest.internals[1] = horizon_platform::mod_package::manifest::Internal {
             path: method.path.clone(),
             kind: Some("method".into()),
             hash: Some(method.hash),

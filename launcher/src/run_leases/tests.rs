@@ -270,7 +270,7 @@ fn routed_lifetime(stop: bool) {
 #[cfg(unix)]
 #[test]
 fn routing_actor() {
-    horizon_mod_package::holder::enter();
+    horizon_platform::mod_package::holder::enter();
     let Some(root) = std::env::var_os("ROUTING_ROOT") else {
         return;
     };
@@ -312,12 +312,13 @@ fn routing_actor() {
             let _ = child.wait();
         }
     } else {
-        horizon_mod_package::holder::enter();
+        horizon_platform::mod_package::holder::enter();
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         command.args(std::env::args_os().skip(1));
         let selection =
-            horizon_mod_package::selection::LaunchArguments::for_command(&command).unwrap();
-        let _capture = horizon_mod_package::holder::acquire(&selection);
+            horizon_platform::mod_package::selection::LaunchArguments::for_command(&command)
+                .unwrap();
+        let _capture = horizon_platform::mod_package::holder::acquire(&selection);
         assert!(_capture.is_some(), "game did not enter through the holder");
         // The parent may stop the game as soon as the readiness file exists.
         let pending = root.join("routed-ready.tmp");
@@ -340,10 +341,11 @@ fn data_directory_leaf_never_leases_ancestors_outside_data() {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command.current_dir(&data).env("HORIZON_HOME", &data);
         let _claims = shared(&command).unwrap();
-        let registry = horizon_mod_package::runtime_leases::Registry::existing(&data).unwrap();
+        let registry =
+            horizon_platform::mod_package::runtime_leases::Registry::existing(&data).unwrap();
         let parent = directory(data.parent().unwrap());
         assert!(
-            matches!(registry.lock(&parent, LockMode::Exclusive), Err(horizon_mod_package::runtime_leases::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+            matches!(registry.lock(&parent, LockMode::Exclusive), Err(horizon_platform::mod_package::runtime_leases::Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
         );
         return;
     }

@@ -31,15 +31,15 @@ pub(crate) struct Cache {
     _lease: std::sync::Arc<Locked>,
 }
 
-pub(crate) use horizon_mod_package::locks::{LockMode, Locked, Release};
+pub(crate) use horizon_platform::mod_package::locks::{LockMode, Locked, Release};
 
-pub(crate) use horizon_mod_package::runtime_leases::linked;
+pub(crate) use horizon_platform::mod_package::runtime_leases::linked;
 pub(crate) fn checked(path: &Path, directory: bool) -> Result<Option<Metadata>, Error> {
-    horizon_mod_package::runtime_leases::checked(path, directory).map_err(Into::into)
+    horizon_platform::mod_package::runtime_leases::checked(path, directory).map_err(Into::into)
 }
-impl From<horizon_mod_package::runtime_leases::Error> for Error {
-    fn from(error: horizon_mod_package::runtime_leases::Error) -> Self {
-        use horizon_mod_package::runtime_leases::Error as Shared;
+impl From<horizon_platform::mod_package::runtime_leases::Error> for Error {
+    fn from(error: horizon_platform::mod_package::runtime_leases::Error) -> Self {
+        use horizon_platform::mod_package::runtime_leases::Error as Shared;
         match error {
             Shared::Busy => Self::Busy,
             Shared::UnsupportedFilesystem => Self::UnsupportedFilesystem,
@@ -61,7 +61,7 @@ fn lock(path: &Path) -> Result<Locked, Error> {
 }
 
 pub(crate) fn locked(file: File, mode: LockMode) -> Result<Locked, Error> {
-    horizon_mod_package::locks::locked(file, mode).map_err(|error| match error {
+    horizon_platform::mod_package::locks::locked(file, mode).map_err(|error| match error {
         fs::TryLockError::WouldBlock => Error::Busy,
         fs::TryLockError::Error(error) => Error::Io(error),
     })

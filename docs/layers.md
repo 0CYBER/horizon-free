@@ -193,6 +193,10 @@ The mod interface follows that split too: `horizon-mod-vocab` is an engine crate
 `horizon-mod-api` preserves the mod-facing paths through re-exports. The build-time generator,
 procedural macros and point-shape parser are engine dependencies of that interface. Horizon's launcher
 reaches the generator and point-shape parser through `horizon-platform`'s optional `mod-build` feature.
+The launcher and registry also reach the engine's shared mod package formats through
+`horizon_platform::mod_package`. The optional `mod-index`, `mod-prebuilt` and `mod-runtime-process`
+features enable registry validation, SDK archives and native process leases respectively; native
+loading and package validation keep the same implementations as the game.
 The initial extraction also carries dispatch's crash markers, profiling, resource codec, phase access,
 and Parts registration state; it is not yet a stateless or unsafe-free interface ([arismoko/horizon#2587](https://github.com/arismoko/horizon/issues/2587)).
 
@@ -203,7 +207,7 @@ and Parts registration state; it is not yet a stateless or unsafe-free interface
 | A call to a Mojang or Microsoft service vanilla makes | engine | `auth.rs`, `realms/`, `skins.rs`, `horizon-server-files` |
 | A place mods, ports or Horizon can hook into | engine + platform | an extension point in the engine crate, naming no type from above; its public face in the platform |
 | A mod hook or host interface | engine + platform | `horizon-mod-vocab` owns the engine vocabulary and dispatch; `horizon-mod-api` re-exports it for mods and owns guest transport |
-| A mod package format | platform | `horizon-mod-package` |
+| A mod package format | engine + platform | shared engine data in `horizon-mod-package`, exposed to products by `horizon-platform` |
 | A shader or resource pack format vanilla doesn't read | platform | `horizon-shaders`, `horizon-optifine`, `horizon-polytone`, or a new platform crate |
 | A dedicated server option (anticheat, chat filter) | platform | `horizon-anticheat`, `horizon-chat-filter` |
 | Controller support: a device, bindings, glyphs, pad menus | platform | the pad modules, on the engine's input hooks ([Controllers](#controllers-splitscreen-replays-and-ui-pages)) |

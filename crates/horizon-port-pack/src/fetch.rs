@@ -97,6 +97,7 @@ pub fn fetch(
     records: &[Record],
     from: Option<&Path>,
     want: &dyn Fn(&Record) -> bool,
+    hosts: &[&str],
     log: Log,
 ) -> Result<Fetched, String> {
     let pack: Pack = read_json(&work.join("pack.json"))?;
@@ -136,7 +137,7 @@ pub fn fetch(
             }
         } else if let Some(url) = url_of(file, &cache) {
             log(format!("{}/{} {name}", i + 1, wanted.len()));
-            match download(&url, sha1, &dest, true) {
+            match download(&url, sha1, &dest, true, hosts) {
                 Ok(()) => outcome(How::Downloaded, url),
                 Err(e) => outcome(How::Failed, e),
             }
@@ -176,7 +177,7 @@ pub fn fetch(
                     .as_deref()
                     .filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
                     .ok_or_else(|| format!("{checksum}: no SHA-1"))?;
-                download(&url, Some(sha1), &dest, true)
+                download(&url, Some(sha1), &dest, true, hosts)
             }) {
             Ok(()) => log(format!("loader: {}", dest.display())),
             Err(e) => log(format!(
@@ -228,20 +229,10 @@ pub(crate) fn download(
     sha1: Option<&str>,
     dest: &Path,
     overwrite: bool,
+    hosts: &[&str],
 ) -> Result<(), String> {
-    let response = crate::net::get_from_hosts(
-        url,
-        &[
-            "cdn.modrinth.com",
-            "github.com",
-            "raw.githubusercontent.com",
-            "objects.githubusercontent.com",
-            "release-assets.githubusercontent.com",
-            "gitlab.com",
-            "maven.neoforged.net",
-        ],
-    )?
-    .ok_or_else(|| format!("{url}: not found"))?;
+    let response =
+        crate::net::get_from_hosts(url, hosts)?.ok_or_else(|| format!("{url}: not found"))?;
     store_download(response.into_reader(), sha1, dest, overwrite).map_err(|e| format!("{url}: {e}"))
 }
 
@@ -638,6 +629,7 @@ mod tests {
             &records,
             Some(&root.join("instance")),
             &|_| true,
+            &[],
             &|_| {},
         )
         .unwrap();
@@ -649,7 +641,7 @@ mod tests {
             b"jar b"
         );
         // A second run finds them in place.
-        let again = fetch(&work, &records, None, &|_| true, &|_| {}).unwrap();
+        let again = fetch(&work, &records, None, &|_| true, &[], &|_| {}).unwrap();
         assert_eq!(again.count(How::Present), 2);
         assert_eq!(Fetched::load(&work).count(How::Present), 2);
         fs::remove_dir_all(&root).unwrap();

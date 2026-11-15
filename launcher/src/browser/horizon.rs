@@ -1,14 +1,14 @@
 //! Horizon's own registry (docs/modding/src/reference/registry-index.md): mods, modpacks and resource packs made for
 //! Horizon, reviewed as pull requests in horizon-rust/horizon-mods. One file lists them all,
 //! `index.json`; every download is checked against it before it reaches the game folder
-//! (`horizon_mod_package::index::check_file`: size, SHA-256, the author's signature, the file's own
+//! (`horizon_platform::mod_package::index::check_file`: size, SHA-256, the author's signature, the file's own
 //! manifest), and files the index says were taken down are refused and turned off.
 use super::{
     details::{Details, GitHub, Link},
     download, installed, java, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
 };
 use crate::i18n::{tr, trf};
-use horizon_mod_package::index::{self, Index, Trust};
+use horizon_platform::mod_package::index::{self, Index, Trust};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

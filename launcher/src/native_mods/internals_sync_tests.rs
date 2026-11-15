@@ -19,7 +19,7 @@ impl Fixture {
         write_bundle(&folder, "example", "");
         fs::write(folder.join("Cargo.toml"), "[package]\nname='example'\nversion='0.1.0'\n[dependencies]\nmod_api={package='horizon-mod-api',path='.horizon/sdk/api/crates/horizon-mod-api'}\n").unwrap();
         if modules {
-            let manifest = folder.join(horizon_mod_package::manifest::MANIFEST);
+            let manifest = folder.join(horizon_platform::mod_package::manifest::MANIFEST);
             let text = fs::read_to_string(&manifest).unwrap();
             fs::write(manifest, format!("{text}\n[[native.module]]\nid='ported'\nfile='game.rs'\nname='ported_level'\nsource='src/ported.rs'\n")).unwrap();
             fs::write(folder.join("src/ported.rs"), PAYLOAD).unwrap();

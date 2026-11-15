@@ -10,7 +10,7 @@ use horizon_launcher::native_mods::{
     sdk_cache::Refusal as Sdk,
     Route, Step,
 };
-use horizon_mod_package::mod_surface::uses::{Change, Misfit};
+use horizon_platform::mod_package::mod_surface::uses::{Change, Misfit};
 use instance_mods::ModRow;
 
 /// What a preview puts in place of what the launcher reads from disk.

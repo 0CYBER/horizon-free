@@ -13,8 +13,8 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use horizon_mod_package::dependencies;
-use horizon_mod_package::mod_surface;
+use horizon_platform::mod_package::dependencies;
+use horizon_platform::mod_package::mod_surface;
 
 mod api;
 mod api_route;
@@ -57,7 +57,7 @@ const PREFIX: &str = "native-";
 const STAGING: &str = "area-aware-mixins-input-v1";
 /// horizon-mixins, for bundles that don't name the revision they were tested with.
 const MIXINS_GIT: &str = "https://github.com/horizon-rust/horizon-mixins";
-pub const MIXINS_REV: &str = horizon_mod_package::mixins_tool::REV;
+pub const MIXINS_REV: &str = horizon_platform::mod_package::mixins_tool::REV;
 
 /// `native-build --mixins-from-source`: this process builds the horizon-mixins tool from its
 /// pinned source and never looks for the prebuilt one, so CI keeps that path proven.
@@ -390,7 +390,7 @@ pub fn internals_rustc_wrapper() -> Option<i32> {
 
 pub fn sync_internals(
     folder: &Path,
-) -> Result<Vec<horizon_mod_package::internals::ListedInternal>, Failed> {
+) -> Result<Vec<horizon_platform::mod_package::internals::ListedInternal>, Failed> {
     require_consent()?;
     internals_sync::check(folder).map_err(|error| Failed::Other(error.to_string()))
 }
@@ -421,10 +421,10 @@ pub fn cache_error(error: crate::storage::Error) -> String {
 
 const MANIFEST: &str = "horizon-mixin.toml";
 /// A registry download's `horizon-mod.toml` at the `.hmod` package root.
-const NATIVE_MANIFEST: &str = horizon_mod_package::manifest::MANIFEST;
+const NATIVE_MANIFEST: &str = horizon_platform::mod_package::manifest::MANIFEST;
 /// Where an instance keeps the native mods installed from the registry, `<id>.hmod`, each on or
 /// off in `horizon-mods.txt` like any mod.
-pub const INSTALLED: &str = horizon_mod_package::mod_list::NATIVE_DIR;
+pub const INSTALLED: &str = horizon_platform::mod_package::mod_list::NATIVE_DIR;
 
 /// The native mods turned on in the game folder `home`, unpacked into a folder [`build`] takes.
 /// Each flat `.hmod` passes the registry's shared package boundary; no code is run.
@@ -447,7 +447,7 @@ pub(crate) fn stage_installed(home: &Path, out: PathBuf) -> Result<Option<PathBu
     paths.sort();
     let mut count = 0;
     for path in paths {
-        let bundle = horizon_mod_package::index::native::Bundle::read(&path)
+        let bundle = horizon_platform::mod_package::index::native::Bundle::read(&path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         if !crate::browser::java::is_enabled(home, &bundle.manifest.id) {
             continue;
@@ -482,12 +482,12 @@ pub(crate) fn stage_installed(home: &Path, out: PathBuf) -> Result<Option<PathBu
 /// A validated flat mod project. The package manifest owns identity and build pins.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bundle {
-    pub manifest: horizon_mod_package::manifest::Manifest,
+    pub manifest: horizon_platform::mod_package::manifest::Manifest,
     pub dir: PathBuf,
 }
 
 impl Bundle {
-    fn native(&self) -> &horizon_mod_package::manifest::Native {
+    fn native(&self) -> &horizon_platform::mod_package::manifest::Native {
         self.manifest
             .native
             .as_ref()
@@ -917,7 +917,7 @@ fn source_digest(bundle: &Bundle) -> Option<String> {
     let read: Vec<_> = paths
         .ok()?
         .into_iter()
-        .filter(|(name, _)| name != horizon_mod_package::mod_surface::uses::USES_FILE)
+        .filter(|(name, _)| name != horizon_platform::mod_package::mod_surface::uses::USES_FILE)
         .map(|(name, path)| Some((name, fs::read(path).ok()?)))
         .collect::<Option<_>>()?;
     Some(digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice()))))
@@ -1474,7 +1474,7 @@ fn source(revision: &str) -> Result<PathBuf, String> {
     }
     let archive = format!(
         "https://codeload.github.com/{}/tar.gz/{revision}",
-        horizon_mod_package::index::native::PREBUILT_REPO
+        horizon_platform::mod_package::index::native::PREBUILT_REPO
     );
     let partial = root().join("source").join(format!(".{revision}.partial"));
     let top = unpack_archive(&archive, &partial, u64::MAX)?;
@@ -1867,8 +1867,8 @@ fn pipeline(
         .cloned()
         .collect();
     let side = match target {
-        Target::Client => horizon_mod_package::manifest::Side::Client,
-        Target::Server => horizon_mod_package::manifest::Side::Server,
+        Target::Client => horizon_platform::mod_package::manifest::Side::Client,
+        Target::Server => horizon_platform::mod_package::manifest::Side::Server,
     };
     let declared: Vec<Vec<dependencies::Dependency>> = mods
         .iter()
@@ -1903,12 +1903,16 @@ fn pipeline(
     // its policy before compiling, but never use dispatch overrides to stage
     // an incomplete or reversed Cargo library graph.
     let instance = folder.parent().unwrap_or_else(|| Path::new("."));
-    let overrides =
-        dependencies::Overrides::read(&instance.join(horizon_mod_package::mod_list::DIR))?;
-    let settings = horizon_mod_package::mod_list::ModList::load(instance);
-    let content: Vec<_> =
-        horizon_mod_package::selection::content_packages(instance, &settings.enabled, &[])
-            .collect();
+    let overrides = dependencies::Overrides::read(
+        &instance.join(horizon_platform::mod_package::mod_list::DIR),
+    )?;
+    let settings = horizon_platform::mod_package::mod_list::ModList::load(instance);
+    let content: Vec<_> = horizon_platform::mod_package::selection::content_packages(
+        instance,
+        &settings.enabled,
+        &[],
+    )
+    .collect();
     let requested_ids: std::collections::HashSet<_> = requested
         .iter()
         .map(|bundle| bundle.manifest.id.as_str())
@@ -2030,7 +2034,7 @@ fn pipeline(
         }
     }
     if target == Target::Server {
-        let jars = horizon_mod_package::manifest::collect_jar_requirements(
+        let jars = horizon_platform::mod_package::manifest::collect_jar_requirements(
             mods.iter()
                 .map(|bundle| (bundle.manifest.id.as_str(), bundle.manifest.jar.as_slice())),
         )
@@ -2576,7 +2580,7 @@ fn copy_runtime(from: &Path, to: &Path) -> std::io::Result<()> {
         if entry.file_type()?.is_dir() {
             copy_runtime(&entry.path(), &destination)?;
         } else {
-            horizon_prepare::clone_or_copy(&entry.path(), &destination)?;
+            horizon_platform::prepare::clone_or_copy(&entry.path(), &destination)?;
             fs::set_permissions(&destination, entry.metadata()?.permissions())?;
         }
     }
@@ -2607,7 +2611,7 @@ pub(crate) fn copy_base(
             backend::copy_dir(&entry.path(), &to)
         } else {
             // A clone is a new file: horizon-ctl and horizon-server keep their permissions.
-            horizon_prepare::clone_or_copy(&entry.path(), &to)
+            horizon_platform::prepare::clone_or_copy(&entry.path(), &to)
                 .and_then(|()| fs::set_permissions(&to, entry.metadata()?.permissions()))
         };
         copied.map_err(|e| format!("Could not copy {}: {e}", entry.path().display()))?;
@@ -2624,7 +2628,7 @@ fn carried_over(name: &std::ffi::OsStr, target: Target) -> bool {
         "Horizon.app",
         "native-mods.json",
         "native-data",
-        horizon_mod_package::mod_list::NATIVE_DIR,
+        horizon_platform::mod_package::mod_list::NATIVE_DIR,
     ]
     .iter()
     .map(|s| s.to_string())
@@ -3784,7 +3788,7 @@ mod tests {
         )
         .unwrap();
         fs::write(source.join(Target::Server.binary()), b"unmodded").unwrap();
-        let native_dir = horizon_mod_package::mod_list::NATIVE_DIR;
+        let native_dir = horizon_platform::mod_package::mod_list::NATIVE_DIR;
         fs::create_dir_all(source.join(native_dir).join("stale")).unwrap();
         eprintln!("NATIVE_SERVER_EXPORT_STEP=prepare_package");
         let project = dir("server-runtime-project");
@@ -3866,7 +3870,7 @@ mod tests {
         assert!(!package.join("jars").exists());
         assert!(!output.join(native_dir).join("stale").exists());
         eprintln!("NATIVE_SERVER_EXPORT_STEP=load_runtime");
-        let runtime = horizon_mod_package::runtime::Runtime::load(
+        let runtime = horizon_platform::mod_package::runtime::Runtime::load(
             &output.join(Target::Server.binary()),
             &[mod_vocab::__private::native::BuiltMod {
                 id: "exported",
@@ -4437,12 +4441,12 @@ mod tests {
 mod registry_binary_tests {
     #[test]
     fn source_preparation_lookup_requires_exact_build_and_target() {
-        let index = horizon_mod_package::index::Index::parse(include_str!(
+        let index = horizon_platform::mod_package::index::Index::parse(include_str!(
             "../../crates/horizon-mod-package/tests/index/index-v1.json"
         ))
         .unwrap();
         let mut version = index.project("coords_hud").unwrap().versions[0].clone();
-        version.native_binaries = vec![horizon_mod_package::index::NativeBinary {
+        version.native_binaries = vec![horizon_platform::mod_package::index::NativeBinary {
             build: "exact-build".into(),
             target: "aarch64-apple-darwin".into(),
             file: version.file.clone(),

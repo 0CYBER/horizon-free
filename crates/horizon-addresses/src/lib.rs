@@ -27,6 +27,26 @@ pub const OFFICIAL_SERVER_STATUS: &str = "play.playhorizon.dev:24454";
 /// files sends the player there.
 pub const WEBSITE: &str = "https://playhorizon.dev";
 
+/// Minecraft's product links, offered by the official build's Mods screen.
+pub const MINECRAFT_WEBSITE: &str = "https://minecraft.net";
+pub const MINECRAFT_ISSUES: &str = "https://bugs.mojang.com";
+
+/// Horizon's license and issue tracker, offered by the official build's Mods screen.
+pub const LICENSE: &str = "https://github.com/horizon-rust/horizon/blob/main/LICENSE";
+pub const ISSUES: &str = "https://github.com/horizon-rust/horizon/issues";
+
+/// Modpack file hosts, including GitHub's release redirects and the loader's Maven repository.
+/// The launcher and porting CLI pass this policy to the platform's checked downloader.
+pub const MODPACK_DOWNLOAD_HOSTS: &[&str] = &[
+    "cdn.modrinth.com",
+    "github.com",
+    "raw.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "gitlab.com",
+    "maven.neoforged.net",
+];
+
 /// The cosmetics service: cosmetics, emotes, "Show me as a Horizon player"
 /// (`HORIZON_COSMETICS_API` overrides it).
 pub const COSMETICS_API: &str = "https://cosmetics.playhorizon.dev";

@@ -43,7 +43,7 @@ pub(super) fn template(path: &Path) -> Result<String, String> {
 
 pub(super) fn main_rs(
     template: &str,
-    mods: &[&horizon_mod_package::Manifest],
+    mods: &[&horizon_platform::mod_package::Manifest],
     catalog: &internals::Catalog,
 ) -> String {
     // Own the bytes even when the staged SDK template references a static in a dylib.
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn generates_only_tool_contract_tables_without_mutating_package() {
         let dir = fixture();
-        let path = dir.join(horizon_mod_package::manifest::MANIFEST);
+        let path = dir.join(horizon_platform::mod_package::manifest::MANIFEST);
         let text = fs::read_to_string(&path).unwrap()
             + "[[native.module]]\nid='test'\nfile='crates/horizon-client/src/game.rs'\nname='support'\nsource='src/lib.rs'\n";
         fs::write(&path, &text).unwrap();
@@ -784,7 +784,9 @@ mod tests {
         let template =
             include_str!("../../../crates/horizon-client/src/native_mod_entry.rs.template");
         let dir = fixture();
-        let mut base = horizon_mod_package::Package::read(&dir).unwrap().manifest;
+        let mut base = horizon_platform::mod_package::Package::read(&dir)
+            .unwrap()
+            .manifest;
         base.id = "base".into();
         base.version = "1.2.3".into();
         base.side = mod_vocab::Side::Both;

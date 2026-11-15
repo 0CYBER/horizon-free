@@ -144,10 +144,10 @@ pub(super) fn expected_sum(listing: &str, name: &str) -> Option<String> {
     })
 }
 
-fn side(target: Target) -> horizon_mod_package::sdk::Side {
+fn side(target: Target) -> horizon_platform::mod_package::sdk::Side {
     match target {
-        Target::Client => horizon_mod_package::sdk::Side::Client,
-        Target::Server => horizon_mod_package::sdk::Side::Server,
+        Target::Client => horizon_platform::mod_package::sdk::Side::Client,
+        Target::Server => horizon_platform::mod_package::sdk::Side::Server,
     }
 }
 
@@ -349,7 +349,7 @@ pub(super) fn identity(dir: &Path) -> Result<Identity, String> {
     let format: Format =
         serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let found = format.package_format.or(format.format_version).unwrap_or(0);
-    let supported = horizon_mod_package::sdk::PACKAGE_FORMAT;
+    let supported = horizon_platform::mod_package::sdk::PACKAGE_FORMAT;
     let (version, supported_text) = (found.to_string(), supported.to_string());
     let args = [
         ("version", version.as_str()),
@@ -590,7 +590,7 @@ pub(super) fn changes_game(project: &api::Project<'_>) -> Option<&'static str> {
     let manifest = &project.bundle.manifest;
     // Every row kind by name: a new one does not compile until it is routed here.
     if let Some(native) = &manifest.native {
-        let horizon_mod_package::manifest::Native {
+        let horizon_platform::mod_package::manifest::Native {
             game: _,
             horizon: _,
             mixins: _,
@@ -879,7 +879,7 @@ pub(super) fn dylib_name(krate: &str) -> String {
 
 pub(super) fn library_entry(
     template: &str,
-    mods: &[&horizon_mod_package::Manifest],
+    mods: &[&horizon_platform::mod_package::Manifest],
     catalog: &internals::Catalog,
     build: &str,
     id: &str,
@@ -1246,7 +1246,7 @@ mod tests {
 
     #[test]
     fn the_route_is_chosen_once_from_the_whole_set() {
-        use horizon_mod_package::manifest::{loops, mixin, Internal, Module};
+        use horizon_platform::mod_package::manifest::{loops, mixin, Internal, Module};
         let folder = super::super::tests::dir("prebuilt-route");
         let write = |name: &str, dependencies: &str| {
             let dir = folder.join(name);
@@ -1269,12 +1269,12 @@ mod tests {
             "registry",
             "horizon-mod-api={path='.horizon/sdk/api/crates/horizon-mod-api'}\nserde='1'",
         );
-        let with = |change: &dyn Fn(&mut horizon_mod_package::manifest::Manifest)| {
+        let with = |change: &dyn Fn(&mut horizon_platform::mod_package::manifest::Manifest)| {
             let mut bundle = api_only.clone();
             change(&mut bundle.manifest);
             bundle
         };
-        let native = |change: &dyn Fn(&mut horizon_mod_package::manifest::Native)| {
+        let native = |change: &dyn Fn(&mut horizon_platform::mod_package::manifest::Native)| {
             with(&|manifest| change(manifest.native.as_mut().unwrap()))
         };
         let forwarded = || mixin::Forwarded {
@@ -1474,7 +1474,7 @@ mod tests {
         let dir = super::super::tests::dir("prebuilt-exact-build");
         let check = |commit: &str, rustc: &str, target: &str, side: &str| {
             let identity = serde_json::json!({
-                "package_format": horizon_mod_package::sdk::PACKAGE_FORMAT,
+                "package_format": horizon_platform::mod_package::sdk::PACKAGE_FORMAT,
                 "commit": commit, "rustc": rustc, "target": target, "side": side, "link_args": [],
             });
             fs::write(dir.join(IDENTITY), identity.to_string()).unwrap();
@@ -1509,7 +1509,7 @@ mod tests {
         let whole = dir.join("whole");
         let write = |slices: serde_json::Value| {
             let identity = serde_json::json!({
-                "package_format": horizon_mod_package::sdk::PACKAGE_FORMAT,
+                "package_format": horizon_platform::mod_package::sdk::PACKAGE_FORMAT,
                 "commit": "abc123", "rustc": "", "target": "", "side": "client", "link_args": [],
                 "slices": slices,
             });
@@ -1637,7 +1637,7 @@ mod tests {
         assert!(error.contains("SDK format 5 is too old"), "{error}");
         let error = refusal("{}");
         assert!(error.contains("SDK format 0 is too old"), "{error}");
-        let newer = horizon_mod_package::sdk::PACKAGE_FORMAT + 1;
+        let newer = horizon_platform::mod_package::sdk::PACKAGE_FORMAT + 1;
         let error = refusal(&format!(r#"{{"package_format": {newer}}}"#));
         assert!(error.contains("update the launcher"), "{error}");
     }

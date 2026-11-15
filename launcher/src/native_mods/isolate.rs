@@ -4,7 +4,7 @@
 //! which mods were left out and why.
 use super::Bundle;
 use crate::i18n::trf;
-use horizon_mod_package::dependencies::Dependency;
+use horizon_platform::mod_package::dependencies::Dependency;
 use std::collections::BTreeSet;
 
 /// Why a mod was left out of a build.
@@ -143,7 +143,7 @@ mod tests {
             id: id.into(),
             requirement: semver::VersionReq::STAR,
             optional,
-            side: horizon_mod_package::manifest::Side::Both,
+            side: horizon_platform::mod_package::manifest::Side::Both,
             reason: None,
             url: None,
             order: mod_vocab::DependencyOrder::After,
