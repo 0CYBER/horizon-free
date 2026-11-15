@@ -549,56 +549,69 @@ impl Launcher {
         let rows = self.instances.list.len() + servers.len();
         let overflows = 52. * rows as f32 > f32::from(window.viewport_size().height) - 420.;
         let scroll = self.rail.list.clone();
-        let below = scroll.max_offset().y + scroll.offset().y > px(2.);
+        // Before the list's first layout the handle knows no height: the estimate stands in.
+        let below = match scroll.max_offset().y {
+            max if max == px(0.) => overflows,
+            max => max + scroll.offset().y > px(2.),
+        };
+        let more = div()
+            .id("rail-more")
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .gap(px(4.))
+            .h(px(24.))
+            .px(px(10.))
+            .rounded_full()
+            .border_1()
+            .border_color(white(ui::edge::STRONG))
+            .bg(white(fill::ACTIVE))
+            .cursor_pointer()
+            .child(ui::icon("arrow-down-01", 14., white(ink::STRONG)))
+            .when(open, |d| {
+                d.child(
+                    fade(ui::text(12., FontWeight::MEDIUM, ink::STRONG))
+                        .whitespace_nowrap()
+                        .child(tr("More")),
+                )
+            })
+            .when(!open, |d| d.tooltip(ui::tip(tr("More instances below"))))
+            .on_click(move |_, _, _| scroll.scroll_to_bottom());
+        // The fade sits over the list's last rows; the pill gets its own line under them, so it
+        // never covers a tile.
         let list = div()
-            .relative()
             .flex()
             .flex_col()
             .flex_1()
             .min_h_0()
-            .child(list)
-            .when(below, |d| {
-                d.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .h(px(56.))
-                        .flex()
-                        .items_end()
-                        .justify_center()
-                        .pb(px(4.))
-                        .bg(gpui::linear_gradient(
-                            180.,
-                            gpui::linear_color_stop(gpui::black().opacity(0.), 0.),
-                            gpui::linear_color_stop(gpui::black().opacity(0.35), 0.8),
-                        ))
-                        .child(
+            .gap(px(6.))
+            .child(
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h_0()
+                    .child(list)
+                    .when(below, |d| {
+                        d.child(
                             div()
-                                .id("rail-more")
-                                .flex()
-                                .items_center()
-                                .gap(px(4.))
-                                .h(px(24.))
-                                .px(px(if open { 10. } else { 6. }))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(white(ui::edge::STRONG))
-                                .bg(white(fill::ACTIVE))
-                                .cursor_pointer()
-                                .child(ui::icon("chevron-down", 14., white(ink::STRONG)))
-                                .when(open, |d| {
-                                    d.child(
-                                        ui::text(12., FontWeight::MEDIUM, ink::STRONG)
-                                            .whitespace_nowrap()
-                                            .child(tr("More")),
-                                    )
-                                })
-                                .when(!open, |d| d.tooltip(ui::tip(tr("More instances below"))))
-                                .on_click(move |_, _, _| scroll.scroll_to_bottom()),
-                        ),
-                )
+                                .absolute()
+                                .left_0()
+                                .right_0()
+                                .bottom_0()
+                                .h(px(28.))
+                                .bg(gpui::linear_gradient(
+                                    180.,
+                                    gpui::linear_color_stop(gpui::black().opacity(0.), 0.),
+                                    gpui::linear_color_stop(gpui::black().opacity(0.3), 1.),
+                                )),
+                        )
+                    }),
+            )
+            .when(below, |d| {
+                d.child(div().flex().flex_none().justify_center().child(more))
             });
 
         // A hairline set in from the rail's sides: between the instances and the buttons, and
