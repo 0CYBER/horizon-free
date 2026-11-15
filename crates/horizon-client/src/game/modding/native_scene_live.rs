@@ -80,6 +80,7 @@ impl LiveScenes {
         self.animating.clear();
     }
     /// How many scenes are kept.
+    #[cfg(test)]
     pub(in crate::game) fn len(&self) -> usize {
         self.live.len()
     }
