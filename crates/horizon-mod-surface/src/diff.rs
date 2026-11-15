@@ -924,7 +924,7 @@ impl Diff {
             (Class::Breaking, "Breaking", breaking),
             (
                 Class::Conditional,
-                "Conditional: breaks only the mods the fit test names",
+                "Conditional: breaks only some mods (the fit test names them; a behaviour's version is for the mods that rely on it)",
                 conditional,
             ),
             (Class::Additive, "Additive", additive),
