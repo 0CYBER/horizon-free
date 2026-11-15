@@ -228,31 +228,42 @@ impl Launcher {
                 cx,
             ));
         }
+        // The list's own states sit in a card, readable on any sky; a failure says it plainly.
+        let state_card = |text_: String, retry: bool, cx: &mut Context<Self>| {
+            crate::glass::plate(radius::PANEL)
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(12.))
+                .p(px(20.))
+                .child(ui::text(14., FontWeight::NORMAL, ink::NOTE).child(text_))
+                .when(retry, |d| {
+                    d.child(button("retry", "Try again", Kind::Secondary, &t).on_click(
+                        cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.fetch_releases();
+                            cx.notify();
+                        }),
+                    ))
+                })
+        };
         let releases = match &self.releases {
-            Load::Loading => return page.child(centered(tr("Loading releases…"), &t)),
+            Load::Loading => {
+                return page.child(state_card(tr("Loading versions…").into(), false, cx))
+            }
             Load::Failed(e) => {
-                return page.child(
-                    centered(&trf("Couldn't load releases. {error}", &[("error", e)]), &t).child(
-                        button("retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.fetch_releases();
-                                cx.notify();
-                            },
-                        )),
-                    ),
-                )
+                // A lost connection in plain words; anything else after what failed.
+                let said = match e.starts_with("No connection") {
+                    true => download_error(e),
+                    false => trf("Couldn't load Horizon's versions. {error}", &[("error", e)]),
+                };
+                return page.child(state_card(said, true, cx));
             }
             Load::Ready(r) if r.is_empty() => {
-                return page.child(
-                    centered(tr("Horizon's version list came back empty."), &t).child(
-                        button("retry", "Try again", Kind::Secondary, &t).on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.fetch_releases();
-                                cx.notify();
-                            },
-                        )),
-                    ),
-                );
+                return page.child(state_card(
+                    tr("Horizon's version list came back empty.").into(),
+                    true,
+                    cx,
+                ));
             }
             Load::Ready(r) => r,
         };
@@ -535,8 +546,19 @@ impl Launcher {
             d = d.child(
                 ui::quiet(SharedString::from(format!("use-{tag}")), tr("Use"), 36., &t).on_click(
                     cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.settings.selected = Some(t1.clone());
-                        this.save_settings();
+                        // "In use" is what the selected instance plays: Use changes that. An
+                        // instance that follows the launcher's version follows this one; one
+                        // with its own version (or on Stable) keeps this one as its own.
+                        let follows = this.selected_instance().is_none_or(|i| {
+                            i.java.is_some()
+                                || (i.version.is_none() && i.channel == instances::Channel::Nightly)
+                        });
+                        if follows {
+                            this.settings.selected = Some(t1.clone());
+                            this.save_settings();
+                        } else {
+                            this.pin_version(Some(t1.clone()));
+                        }
                         cx.notify();
                     }),
                 ),
@@ -687,7 +709,7 @@ impl Launcher {
                 .child(if release.body.trim().is_empty() {
                     text(theme::UI)
                         .text_color(t.muted)
-                        .child(tr("No notes for this release."))
+                        .child(tr("No notes for this version."))
                         .into_any_element()
                 } else {
                     markdown::render(&release.body, &t)
