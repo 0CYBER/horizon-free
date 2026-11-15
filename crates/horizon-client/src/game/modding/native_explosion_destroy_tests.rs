@@ -314,7 +314,9 @@ fn drops_of_one_item_merge_at_the_first_blocks_position() {
             blast(ExplosionInteraction::Block),
             Ok(2),
         );
-        assert_eq!(game.world.random.next_int(), -1_552_468_968, "{via:?}");
+        // The merged stack still uses Block.popResource: three nextDouble offsets
+        // after the shuffle, but its constructor motion uses its own random.
+        assert_eq!(game.world.random.next_int(), -1_105_573_998, "{via:?}");
         let drops: Vec<_> = game
             .dropped
             .iter()
