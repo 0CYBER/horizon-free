@@ -2105,7 +2105,7 @@ fn data(action: DataCmd, as_json: bool) -> Result<(), String> {
             if consent.needs_asking() {
                 println!("Not answered yet: nothing is collected.");
             }
-            for (kind, name, _) in telemetry::SWITCHES {
+            for (kind, name, _, _) in telemetry::SWITCHES {
                 let on = consent.allows(kind);
                 println!("{name}: {}", if on { "on" } else { "off" });
             }

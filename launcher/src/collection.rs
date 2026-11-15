@@ -19,6 +19,8 @@ pub(crate) struct Collection {
     /// What "Delete my data" did, or why it could not.
     pub note: Option<String>,
     pub confirm_delete: bool,
+    /// The switches (by name) whose "What's sent?" is open, on the question and in Settings.
+    sent_open: Vec<&'static str>,
 }
 
 impl Collection {
@@ -33,6 +35,7 @@ impl Collection {
             view: None,
             note: None,
             confirm_delete: false,
+            sent_open: Vec::new(),
         }
     }
 }
@@ -48,37 +51,6 @@ fn kind_id(prefix: &str, kind: DataKind) -> &'static str {
         (_, DataKind::Bug) => "data-bug",
         (_, DataKind::Benchmark) => "data-benchmark",
     }
-}
-
-/// The "I'm playing" ping on the first-run question, laid out as the switches' rows, with its
-/// switch.
-fn ping_row(toggle: Stateful<Div>, t: &Theme) -> Div {
-    div()
-        .flex()
-        .items_start()
-        .gap(px(16.))
-        .py(px(10.))
-        .border_b_1()
-        .border_color(t.rule)
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .gap(px(2.))
-                .child(
-                    text(theme::UI)
-                        .text_color(t.ink)
-                        .child(tr(telemetry::PING_NAME)),
-                )
-                .child(
-                    text(theme::CAPTION)
-                        .text_color(t.muted)
-                        .child(tr(telemetry::PING)),
-                ),
-        )
-        .child(toggle)
 }
 
 /// The exact JSON, in mono, scrolling inside a plate.
@@ -112,6 +84,44 @@ fn json_view(view: &(String, String), t: &Theme, scroll: &Scrollbar) -> Div {
 }
 
 impl Launcher {
+    /// A switch's one plain sentence, with "What's sent?" opening the full list of what it sends.
+    fn sent_detail(
+        &self,
+        name: &'static str,
+        summary: &'static str,
+        full: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let t = self.theme;
+        let open = self.collection.sent_open.contains(&name);
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(div().child(tr(summary)))
+            .child(
+                div()
+                    .id(name)
+                    .text_color(t.accent)
+                    .cursor_pointer()
+                    .hover(|s| s.opacity(0.8))
+                    .child(tr(if open {
+                        "Hide what's sent"
+                    } else {
+                        "What's sent?"
+                    }))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        let list = &mut this.collection.sent_open;
+                        match list.iter().position(|n| *n == name) {
+                            Some(i) => drop(list.remove(i)),
+                            None => list.push(name),
+                        }
+                        cx.notify();
+                    })),
+            )
+            .children(open.then(|| div().child(tr(full))))
+    }
+
     /// The "I'm playing" ping's switch (`Settings::ping_off`), on by default.
     pub(crate) fn ping_switch(&self, id: &'static str, cx: &mut Context<Self>) -> Stateful<Div> {
         switch(id, !self.settings.ping_off, &self.theme).on_click(cx.listener(
@@ -167,32 +177,52 @@ impl Launcher {
     pub(crate) fn consent_screen(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         let draft = self.collection.draft;
-        let rows = telemetry::SWITCHES.iter().map(|&(kind, name, what)| {
-            let on = draft.allows(kind);
-            div()
-                .flex()
-                .items_start()
-                .gap(px(16.))
-                .py(px(10.))
-                .border_b_1()
-                .border_color(t.rule)
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(px(2.))
-                        .child(text(theme::UI).text_color(t.ink).child(tr(name)))
-                        .child(text(theme::CAPTION).text_color(t.muted).child(tr(what))),
-                )
-                .child(switch(kind_id("ask", kind), on, &t).on_click(cx.listener(
+        let mut entries: Vec<_> = telemetry::SWITCHES
+            .iter()
+            .map(|&(kind, name, summary, what)| {
+                let on = draft.allows(kind);
+                let toggle = switch(kind_id("ask", kind), on, &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
                         this.collection.draft.set(kind, !on);
                         cx.notify();
                     },
-                )))
-        });
+                ));
+                (name, summary, what, toggle)
+            })
+            .collect();
+        entries.push((
+            telemetry::PING_NAME,
+            telemetry::PING_SUMMARY,
+            telemetry::PING,
+            self.ping_switch("ask-ping", cx),
+        ));
+        let rows: Vec<Div> = entries
+            .into_iter()
+            .map(|(name, summary, what, toggle)| {
+                div()
+                    .flex()
+                    .items_start()
+                    .gap(px(16.))
+                    .py(px(10.))
+                    .border_b_1()
+                    .border_color(t.rule)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.))
+                            .child(text(theme::UI).text_color(t.ink).child(tr(name)))
+                            .child(
+                                self.sent_detail(name, summary, what, cx)
+                                    .text_size(px(theme::CAPTION.px))
+                                    .text_color(t.muted),
+                            ),
+                    )
+                    .child(toggle)
+            })
+            .collect();
         let viewing = self.collection.view.is_some();
         // The body scrolls inside the card, so the answers stay at its foot however short the
         // window and however long what would be sent.
@@ -222,8 +252,7 @@ impl Launcher {
                     .flex_col()
                     .border_t_1()
                     .border_color(t.rule)
-                    .children(rows)
-                    .child(ping_row(self.ping_switch("ask-ping", cx), &t)),
+                    .children(rows),
             )
             .child(text(theme::CAPTION).text_color(t.muted).child(tr(telemetry::NEVER)))
             .child(
@@ -298,7 +327,7 @@ impl Launcher {
         let t = self.theme;
         let consent = self.collection.consent.clone();
         let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
-        for (i, &(kind, name, what)) in telemetry::SWITCHES.iter().enumerate() {
+        for (i, &(kind, name, summary, what)) in telemetry::SWITCHES.iter().enumerate() {
             let on = !consent.needs_asking() && consent.choices.allows(kind);
             let toggle = switch(kind_id("data", kind), on, &t).on_click(cx.listener(
                 move |this, _: &ClickEvent, _, cx| {
@@ -315,7 +344,7 @@ impl Launcher {
             list = list.child(index_row(
                 i + 1,
                 tr(name),
-                Some(div().child(tr(what)).into_any_element()),
+                Some(self.sent_detail(name, summary, what, cx).into_any_element()),
                 Some(toggle.into_any_element()),
                 &t,
             ));
@@ -323,7 +352,15 @@ impl Launcher {
         list = list.child(index_row(
             telemetry::SWITCHES.len() + 1,
             tr(telemetry::PING_NAME),
-            Some(div().child(tr(telemetry::PING)).into_any_element()),
+            Some(
+                self.sent_detail(
+                    telemetry::PING_NAME,
+                    telemetry::PING_SUMMARY,
+                    telemetry::PING,
+                    cx,
+                )
+                .into_any_element(),
+            ),
             Some(self.ping_switch("data-ping", cx).into_any_element()),
             &t,
         ));
