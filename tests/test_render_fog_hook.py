@@ -61,3 +61,51 @@ fn changed_unchanged_and_invalid() {
             src.write_text(fixture, encoding="utf-8")
             subprocess.run(["rustc", "--edition=2024", "--test", str(src), "-o", str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
+
+    @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
+    def test_camera_submersion_override(self):
+        source = (ROOT / "crates/horizon-client/src/game/render_tick.rs").read_text(encoding="utf-8")
+        actual = method(source, "camera_submersion")
+        fixture = r"""
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FogType { Atmospheric, Water, Lava, PowderSnow }
+struct World;
+struct BlockFacts;
+struct NearPlane;
+fn fog_type(_world: &World, _facts: &BlockFacts, _camera: [f64; 3], _near: &NearPlane) -> FogType {
+    FogType::Water
+}
+struct Res;
+impl Res {
+    fn facts(&self) -> &BlockFacts { &BlockFacts }
+}
+struct Game {
+    world: World,
+    res: Res,
+    override_fog: Option<FogType>,
+}
+impl Game {
+    fn near_plane(&self) -> NearPlane { NearPlane }
+    fn native_camera_submersion(&self, camera: [f64; 3], fog_type: &mut FogType) {
+        assert_eq!(camera, [10.0, 60.0, 10.0]);
+        if let Some(over) = self.override_fog {
+            *fog_type = over;
+        }
+    }
+    METHOD
+}
+#[test]
+fn default_and_overridden() {
+    let unmodified = Game { world: World, res: Res, override_fog: None };
+    assert_eq!(unmodified.camera_submersion([10.0, 60.0, 10.0]), FogType::Water);
+
+    let cleared = Game { world: World, res: Res, override_fog: Some(FogType::Atmospheric) };
+    assert_eq!(cleared.camera_submersion([10.0, 60.0, 10.0]), FogType::Atmospheric);
+}
+""".replace("METHOD", actual)
+        with tempfile.TemporaryDirectory() as folder:
+            src, exe = Path(folder) / "submersion.rs", Path(folder) / "submersion.exe"
+            src.write_text(fixture, encoding="utf-8")
+            subprocess.run(["rustc", "--edition=2024", "--test", str(src), "-o", str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
+

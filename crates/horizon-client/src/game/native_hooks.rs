@@ -6,6 +6,7 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 646 adds camera submersion fog type override (`native_camera_submersion`).<br>
 //! API 645 adds the terrain at columns nobody has loaded (`native_terrain_surface`).<br>
 //! API 644 adds the entities an explosion is about to hurt and push, to spare some (`native_explosion_entities`).<br>
 //! API 643 adds line of sight between two entities (`native_has_line_of_sight`, `LivingEntity.hasLineOfSight`) and a COLLIDER block ray with no entity (`native_clear_between`, `Level.clip` missing) in the level being ticked.<br>
@@ -2677,6 +2678,16 @@ impl Game<'_> {
     }
     /// Computed world fog RGB, after ordinary effects and before upload. Title panoramas skip it.
     /// Only finite RGB components in 0..=1 are accepted; alpha and distances stay unchanged.
+    /// Camera submersion fog type (`Camera.getFluidInCamera`), checked before fog and camera
+    /// fluid effects are set up. Allows native mods (such as Freecam) to clear underwater,
+    /// lava or powder snow submersion by setting `fog_type` to `FogType::Atmospheric`. API 646.
+    pub(super) fn native_camera_submersion(
+        &self,
+        camera: [f64; 3],
+        fog_type: &mut horizon_client::fog::FogType,
+    ) {
+        mod_api::dispatch_camera_submersion(self, mod_api::mods(), camera, fog_type);
+    }
     pub(super) fn native_compute_fog_color(
         &self,
         partial: f32,

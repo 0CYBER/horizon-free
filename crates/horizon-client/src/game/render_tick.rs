@@ -135,6 +135,12 @@ impl Game<'_> {
             height.max(1) as f32,
         )
     }
+    /// Camera submersion fog type (`Camera.getFluidInCamera`), checked with native mods.
+    pub(super) fn camera_submersion(&self, camera: [f64; 3]) -> FogType {
+        let mut fog_type = fog_type(&self.world, self.res.facts(), camera, &self.near_plane());
+        self.native_camera_submersion(camera, &mut fog_type);
+        fog_type
+    }
     /// `FogRenderer.setupFog` for the frame's camera, and Horizon's Fog option.
     pub(super) fn frame_fog(
         &self,
@@ -145,7 +151,7 @@ impl Game<'_> {
     ) -> FogData {
         let forward = self.forward();
         let at = [camera.x, camera.y, camera.z];
-        let fog_type = fog_type(&self.world, self.res.facts(), at, &self.near_plane());
+        let fog_type = self.camera_submersion(at);
         let (rain, thunder) = self.view_weather(self.clock.fraction() as f32);
         let title_fog = horizon_client::fog::FogTables::default();
         let tables = if self.title.is_some() {
@@ -285,12 +291,7 @@ impl Game<'_> {
         };
         self.overworld_skybox()
             && camera.y < horizon
-            && fog_type(
-                &self.world,
-                self.res.facts(),
-                [camera.x, camera.y, camera.z],
-                &self.near_plane(),
-            ) != FogType::Water
+            && self.camera_submersion([camera.x, camera.y, camera.z]) != FogType::Water
     }
     /// `ScreenEffectRenderer` + `Hud` camera overlays for this frame.
     /// `scale` is the player's `LivingEntity.getScale`.
@@ -361,8 +362,7 @@ impl Game<'_> {
                 }
             }
         }
-        let in_water =
-            fog_type(&self.world, self.res.facts(), eye, &self.near_plane()) == FogType::Water;
+        let in_water = self.camera_submersion(eye) == FogType::Water;
         let water =
             (in_water && !spectator).then(|| (self.eye_brightness(eye), self.yaw, self.pitch));
         // Hud.extractCameraOverlays; the spyglass scope (and its easing) is

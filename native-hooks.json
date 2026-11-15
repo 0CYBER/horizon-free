@@ -3150,6 +3150,15 @@
       }
     },
     {
+      "name": "camera_submersion",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_camera_submersion",
+      "side": "client",
+      "mod_api": {
+        "contract": "listen"
+      }
+    },
+    {
       "name": "compute_fog_color",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_compute_fog_color",

@@ -17,7 +17,7 @@ use horizon_client::{
         BobState, CameraFluid, FovPlayer, HurtBob, UseItem, bob_matrix, field_of_view_modifier,
         spinning_effect_matrix,
     },
-    fog::{FogType, fog_type},
+    fog::FogType,
     hud::HudBatch,
     hud_layout, hud_overlays,
 };
@@ -123,7 +123,7 @@ impl Game<'_> {
     }
     /// The fluid at the camera, as `Camera.getFluidInCamera` reports it.
     pub(super) fn camera_fluid(&self, camera: [f64; 3]) -> CameraFluid {
-        match fog_type(&self.world, self.res.facts(), camera, &self.near_plane()) {
+        match self.camera_submersion(camera) {
             FogType::Water => CameraFluid::Water,
             FogType::Lava => CameraFluid::Lava,
             FogType::PowderSnow => CameraFluid::PowderSnow,

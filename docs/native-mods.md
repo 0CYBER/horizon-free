@@ -2306,6 +2306,8 @@ API 644 adds `native_explosion_entities(dimension, center, entities)` (server) r
 
 API 645 adds `native_terrain_surface(dimension, columns)` returns the generator's surface height, top block, water surface and biome at up to 4,096 columns, loaded or not, without creating a chunk. Bundles need "hooks": 645.
 
+API 646 adds `native_camera_submersion(camera, fog_type)` runs when the camera's fluid submersion type is evaluated (`Camera.getFluidInCamera`), before fog and underwater screen overlays are prepared. Setting `fog_type` to `FogType::Atmospheric` clears underwater, lava and powder-snow fog and overlays (used e.g. by Freecam). Bundles need "hooks": 646.
+
 ## What the launcher does
 
 **Developing a mod?** Run `horizon-launcher settings native-profile dev` once, or pick "Dev build" in the Mods page's
