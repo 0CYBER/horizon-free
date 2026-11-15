@@ -38,7 +38,7 @@ fn draw_json(d: &ScreenDraw) -> Value {
         } => {
             let layers: Vec<Value> = layers
                 .iter()
-                .map(|l| json!([&*l.pattern, &*l.color]))
+                .map(|l| json!([l.pattern.id().unwrap_or_default(), &*l.color]))
                 .collect();
             json!({"t": "banner", "base": base, "layers": layers, "x0": x0, "y0": y0, "x1": x1, "y1": y1})
         }

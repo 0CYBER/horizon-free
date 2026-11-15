@@ -571,8 +571,14 @@ mod tests {
             panic!("a banner block makes a banner block entity");
         };
         assert_eq!(banner.layers.len(), 2);
-        assert_eq!(&*banner.layers[0].pattern, "minecraft:triangle_top");
-        assert_eq!(&*banner.layers[1].pattern, "minecraft:triangle_bottom");
+        assert_eq!(
+            banner.layers[0].pattern.id(),
+            Some("minecraft:triangle_top")
+        );
+        assert_eq!(
+            banner.layers[1].pattern.id(),
+            Some("minecraft:triangle_bottom")
+        );
         assert_eq!(&*banner.layers[0].color, "black");
         // A banner the template saved without patterns stays bare.
         let Some(BlockEntity::Banner(bare)) =

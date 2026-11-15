@@ -6,6 +6,11 @@ use horizon_client::{
     banner::{self, BannerLayer},
     containers::BlockEntity,
 };
+use horizon_world::nbt::Tag;
+
+#[cfg(test)]
+#[path = "banner_nbt_tests.rs"]
+mod banner_nbt_tests;
 
 impl Game<'_> {
     /// The pattern textures and tints of the banner at `pos`, bottom first.
@@ -46,7 +51,11 @@ pub(super) fn map_banner(
     Some(MapBanner {
         pos,
         color: color.to_owned(),
-        name: banner.name.clone(),
+        // `MapBanner.fromWorld` keeps the component; the marker shows its text.
+        name: banner.name.as_ref().map(|name| match name {
+            Tag::String(text) => text.to_string_lossy(),
+            component => horizon_client::component::name_text(component).plain(),
+        }),
     })
 }
 
@@ -57,11 +66,6 @@ pub(super) fn layer_textures(
 ) -> Vec<(String, u32)> {
     layers
         .iter()
-        .map(|l| {
-            (
-                banners.banner_texture(&l.pattern),
-                banner::dye_rgb(&l.color),
-            )
-        })
+        .map(|l| (banners.layer_texture(l), banner::dye_rgb(&l.color)))
         .collect()
 }

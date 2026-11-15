@@ -1314,7 +1314,7 @@ pub fn entity_tag(entity: &BlockEntity, trial_active: bool) -> Option<Tag> {
                 entries.push(("patterns", crate::banner::layers_to_nbt(&b.layers)));
             }
             if let Some(name) = &b.name {
-                entries.push(("CustomName", Tag::String(name.as_str().into())));
+                entries.push(("CustomName", name.clone()));
             }
             entries.push(("components", Tag::Compound(b.components.clone())));
             Some(Tag::compound(entries))

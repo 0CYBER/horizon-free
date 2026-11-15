@@ -124,6 +124,7 @@ pub fn chunks_with_block_entities<'a, N: std::hash::BuildHasher>(
         .collect()
 }
 
+use crate::block_entity_nbt::component as nbt_component;
 use horizon_client_core::nbt_value::string;
 pub use horizon_client_core::nbt_value::{float, number, text};
 /// Insert or replace a key of a compound tag.
@@ -765,7 +766,7 @@ pub fn encode_block_entity(
                 entries.push(("patterns", crate::banner::layers_to_nbt(&b.layers)));
             }
             if let Some(name) = &b.name {
-                entries.push(("CustomName", string(name)));
+                entries.push(("CustomName", name.clone()));
             }
         }
         BlockEntity::CreakingHeart(h) => {
@@ -868,7 +869,8 @@ pub fn block_entity_data(
 pub fn decode_banner(tag: &Tag) -> crate::containers::Banner {
     crate::containers::Banner {
         layers: crate::banner::layers_from_nbt(tag.get("patterns")),
-        name: text(tag.get("CustomName")),
+        // `parseCustomNameSafe`: the component codec keeps a name's style.
+        name: tag.get("CustomName").and_then(nbt_component),
         components: match tag.get("components") {
             Some(Tag::Compound(c)) => c.clone(),
             _ => Compound::new(),
@@ -1867,16 +1869,14 @@ fn decode_column(
                             horizon_world::attachments::Attachments::from_nbt(data.clone()),
                         ));
                     }
-                    let name = if matches!(
-                        be.1,
-                        crate::containers::BlockEntity::Banner(_)
-                            | crate::containers::BlockEntity::Sign(_)
-                            | crate::containers::BlockEntity::Mod(_)
-                    ) {
-                        text(e.get("CustomName")).map(|name| string(&name))
-                    } else {
-                        e.get("CustomName")
-                            .and_then(crate::block_entity_nbt::component)
+                    // A banner keeps its name in its model (`decode_banner`).
+                    let name = match &be.1 {
+                        crate::containers::BlockEntity::Banner(_) => None,
+                        crate::containers::BlockEntity::Sign(_)
+                        | crate::containers::BlockEntity::Mod(_) => {
+                            text(e.get("CustomName")).map(|name| string(&name))
+                        }
+                        _ => e.get("CustomName").and_then(nbt_component),
                     };
                     if let Some(name) = name {
                         chunk.block_names.push((be.0, name));
@@ -7148,7 +7148,7 @@ mod tests {
     fn banner_block_entity_round_trips() {
         let banner = crate::containers::Banner {
             layers: vec![crate::banner::BannerLayer::new("minecraft:creeper", "lime")],
-            name: Some("Flag".into()),
+            name: Some(string("Flag")),
             components: [("minecraft:rarity".into(), string("uncommon"))].into(),
         };
         let tag = encode_block_entity(

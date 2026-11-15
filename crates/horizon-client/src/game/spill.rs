@@ -179,10 +179,7 @@ impl Pending {
                 horizon_client::banner::layers_to_nbt(&layers),
             );
             if let Some(name) = name {
-                patch.insert(
-                    "minecraft:custom_name".into(),
-                    Tag::String(name.as_str().into()),
-                );
+                patch.insert("minecraft:custom_name".into(), name);
             }
             (stack.damage, stack.extra) = item_data::decode_components(Some(&Tag::Compound(patch)));
         }

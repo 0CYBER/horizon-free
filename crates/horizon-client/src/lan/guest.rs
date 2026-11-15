@@ -1632,15 +1632,19 @@ fn network_stack(
         // a layer that has none leaves the stack without the component. An
         // ominous banner made by the raid keeps only its flag, so its layers
         // are the ones the NBT encoder synthesises from it.
-        let patterns: Vec<(&str, &str)> = if d.ominous_banner && d.banner_patterns.is_empty() {
-            crate::item_data::OMINOUS_LAYERS.to_vec()
-        } else {
-            d.banner_patterns
-                .iter()
-                .map(|layer| (&*layer.pattern, &*layer.color))
-                .collect()
-        };
+        let patterns: Option<Vec<(&str, &str)>> =
+            if d.ominous_banner && d.banner_patterns.is_empty() {
+                Some(crate::item_data::OMINOUS_LAYERS.to_vec())
+            } else {
+                // A direct holder is not in the synced registry: one in the list
+                // leaves the stack without the component, as an unknown id does.
+                d.banner_patterns
+                    .iter()
+                    .map(|layer| Some((layer.pattern.id()?, &*layer.color)))
+                    .collect()
+            };
         let layers: Option<Vec<(i32, i32)>> = patterns
+            .unwrap_or_default()
             .iter()
             .map(|(pattern, color)| {
                 let name = if pattern.contains(':') {

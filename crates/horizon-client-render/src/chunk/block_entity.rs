@@ -430,7 +430,9 @@ impl Crafter {
 #[derive(Clone, Debug, Default)]
 pub struct Banner {
     pub layers: Vec<BannerLayer>,
-    pub name: Option<String>,
+    /// `CustomName` as `ComponentSerialization.CODEC` read it (a plain string or
+    /// a component object), which `MapBanner.fromWorld` keeps as its name.
+    pub name: Option<horizon_world::nbt::Tag>,
     /// Components not consumed by BannerBlockEntity's implicit fields.
     pub components: horizon_world::nbt::Compound,
 }

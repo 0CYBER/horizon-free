@@ -197,7 +197,7 @@ impl Game<'_> {
         let banners = &self.stations().banners;
         let layers: Vec<(String, String)> = layers
             .iter()
-            .map(|l| (banners.banner_texture(&l.pattern), l.color.to_string()))
+            .map(|l| (banners.layer_texture(l), l.color.to_string()))
             .collect();
         horizon_client::item_render::gui::draw_banner_result(
             &self.pack.item_renderer,

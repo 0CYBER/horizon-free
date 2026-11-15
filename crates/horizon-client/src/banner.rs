@@ -7,7 +7,7 @@ use horizon_world::nbt::Tag;
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path, sync::Arc};
 
-pub use horizon_items::banner_layer::{BannerLayer, layers_from_nbt, layers_to_nbt};
+pub use horizon_items::banner_layer::{BannerLayer, PatternRef, layers_from_nbt, layers_to_nbt};
 
 /// Layers a loom may stack on a banner (`LoomMenu`'s `hasMaxPatterns`).
 pub const MAX_LAYERS: usize = 6;
@@ -172,17 +172,32 @@ impl Banners {
             None => format!("entity/shield/{}", id.trim_start_matches("minecraft:")),
         }
     }
+    /// `Sheets.getBannerSprite` texture name of a layer: a direct holder names
+    /// its own `asset_id`.
+    pub fn layer_texture(&self, layer: &BannerLayer) -> String {
+        match &layer.pattern {
+            PatternRef::Id(id) => self.banner_texture(id),
+            PatternRef::Inline { asset, .. } => {
+                format!("entity/banner/{}", asset.trim_start_matches("minecraft:"))
+            }
+        }
+    }
     /// `BannerPatternLayers.Layer.description` translation key.
     pub fn layer_key(&self, layer: &BannerLayer) -> String {
-        let base = self.pattern(&layer.pattern).map_or_else(
-            || {
-                format!(
-                    "block.minecraft.banner.{}",
-                    layer.pattern.trim_start_matches("minecraft:")
-                )
-            },
-            |p| p.translation_key.clone(),
-        );
+        let base = match &layer.pattern {
+            PatternRef::Inline {
+                translation_key, ..
+            } => translation_key.to_string(),
+            PatternRef::Id(id) => self.pattern(id).map_or_else(
+                || {
+                    format!(
+                        "block.minecraft.banner.{}",
+                        id.trim_start_matches("minecraft:")
+                    )
+                },
+                |p| p.translation_key.clone(),
+            ),
+        };
         format!("{base}.{}", layer.color)
     }
     /// `LoomMenu.isDyeItem`: the dye colour of a loom dye.
