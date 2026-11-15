@@ -281,10 +281,16 @@ pub(crate) fn install_client_hooks() {
             }
             let reader = horizon_client_render::api_context::LoopReader(context);
             let context = reader.context();
-            let username = username.try_into_api().unwrap();
-            let mut converted = displayname.try_into_api().unwrap();
+            let (Ok(username), Ok(mut converted)) =
+                (username.try_into_api(), displayname.try_into_api())
+            else {
+                return;
+            };
             mod_api::dispatch_player_name_format(&context, &username, &mut converted);
-            *displayname = converted.try_into_engine(&()).unwrap();
+            // A listener result that cannot be an engine component keeps the name.
+            if let Ok(engine) = converted.try_into_engine(&()) {
+                *displayname = engine;
+            }
         },
         player_tab_list_name_format: |context, player, name, display_name| {
             use game::api_values::{TryIntoApi, TryIntoEngine};
@@ -293,9 +299,13 @@ pub(crate) fn install_client_hooks() {
             }
             let reader = horizon_client_render::api_context::LoopReader(context);
             let context = reader.context();
-            let mut converted = display_name.try_into_api().unwrap();
+            let Ok(mut converted) = display_name.try_into_api() else {
+                return;
+            };
             mod_api::dispatch_player_tab_list_name_format(&context, player, name, &mut converted);
-            *display_name = converted.try_into_engine(&()).unwrap();
+            if let Ok(engine) = converted.try_into_engine(&()) {
+                *display_name = engine;
+            }
         },
         living_drown: |context, entity, kind, is_drowning, damage_amount, bubble_count, cancel| {
             if !mod_api::__private::listened(mod_api::HookId::LivingDrown) {

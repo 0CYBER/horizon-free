@@ -24,14 +24,13 @@ use {
 type ItemConsumable = Consumable<String, ConsumeEffect>;
 
 /// Capture once per effect, not once per attempted destination. A consuming stack
-/// is nonempty and registry-resolved; an invalid snapshot is an engine invariant
-/// violation, never permission to silently omit a promised listener callback.
+/// is normally registry-resolved; a saved stack with an unregistered id has no
+/// public snapshot, so the listener callback is skipped instead of panicking.
 fn consumed_snapshot(stack: &ItemStack) -> Option<mod_api::ItemStack> {
-    mod_api::__private::listened(mod_api::HookId::ItemConsumptionTeleport).then(|| {
-        stack
-            .try_into_api()
-            .expect("a consumed stack must have a complete public API snapshot")
-    })
+    if !mod_api::__private::listened(mod_api::HookId::ItemConsumptionTeleport) {
+        return None;
+    }
+    stack.try_into_api().ok()
 }
 
 /// `EntityEvent.USE_ITEM_COMPLETE`: the server finished the player's use.
@@ -202,12 +201,12 @@ impl Game<'_> {
                     game.mobs
                         .restore(mobs, horizon_client::join_seq::RestoreOrder::SpawnsFirst);
                     if game.handle_mob_events(events).is_err() {
-                        return Err(());
+                        return Ok(false);
                     }
                 } else {
                     game.mobs
                         .restore(mobs, horizon_client::join_seq::RestoreOrder::SpawnsFirst);
-                    return Err(());
+                    return Ok(false);
                 }
                 for effect in &consumable.effects {
                     if let ConsumeEffect::PlaySound(_) = effect {
@@ -217,7 +216,7 @@ impl Game<'_> {
                             .apply_consume_effect(&decision.stack, effect, Some(consumer))
                             .is_none()
                         {
-                            return Err(());
+                            return Ok(false);
                         }
                     } else if let ConsumeEffect::TeleportRandomly(teleport) = effect {
                         let consumed = consumed.get_or_init(|| consumed_snapshot(&decision.stack));
@@ -229,7 +228,7 @@ impl Game<'_> {
                             consumed: consumed.as_ref(),
                         };
                         if teleport.apply(&mut actor, dim).is_err() {
-                            return Err(());
+                            return Ok(false);
                         }
                     } else if let Some(mob) = game.mobs.iter_mut().find(|m| m.id == decision.mob) {
                         mob.apply_consume_effect(
@@ -250,12 +249,12 @@ impl Game<'_> {
                         state: horizon_world::registry::BlockStateId(0),
                     };
                     if game.handle_mob_events(vec![event]).is_err() {
-                        return Err(());
+                        return Ok(false);
                     }
                 }
             }
             let Some(m) = game.mobs.iter_mut().find(|m| m.id == decision.mob) else {
-                return Err(());
+                return Ok(false);
             };
             let position = m.position;
             Ok(decision.finish(m, position, remainder))

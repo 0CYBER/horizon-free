@@ -130,7 +130,7 @@ impl Game<'_> {
                 if !self.can_be_affected_resolved(Some(id as i32), &kind, name, Some(effect.id)) {
                     return false;
                 }
-                let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
+                let Some(m) = self.mobs.iter_mut().find(|m| m.id == id && !m.removed) else {
                     return false;
                 };
                 let changed = m.add_effect_instance(name, instance);
@@ -295,7 +295,7 @@ impl Game<'_> {
                 }
                 self.mobs
                     .iter_mut()
-                    .find(|m| m.id == id)
+                    .find(|m| m.id == id && !m.removed)
                     .is_some_and(|m| m.retain_effects(|e| e.registry_index != Some(def.index)))
             }
             _ => false,
@@ -338,7 +338,7 @@ impl Game<'_> {
                     .map(|(name, _)| *name)
                     .collect();
                 // The refused removals keep their effects; the rest go.
-                self.mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
+                self.mobs.iter_mut().find(|m| m.id == id && !m.removed).is_some_and(|m| {
                     m.retain_effects(|e| {
                         e.registry_index.is_some_and(|index| keep.contains(&index))
                     })

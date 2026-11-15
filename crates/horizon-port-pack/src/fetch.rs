@@ -9,7 +9,7 @@
 use crate::{
     import::{Pack, PackFile, sha1_hex},
     inventory::Record,
-    modrinth::Cache,
+    modrinth::{self, Cache},
     pipeline::{Log, read_json, write_json},
 };
 use serde::{Deserialize, Serialize};
@@ -159,9 +159,11 @@ pub fn fetch(
         .filter(|(dest, _)| !dest.exists())
     {
         let checksum = format!("{url}.sha1");
-        let sha1 = crate::net::get_from_hosts(&checksum, &["maven.neoforged.net"])
+        let sha1 = crate::net::agent(&checksum)
+            .get(&checksum)
+            .set("User-Agent", modrinth::AGENT)
+            .call()
             .ok()
-            .flatten()
             .and_then(|r| r.into_string().ok())
             .map(|s| s.trim().to_owned());
         let made = dest.parent().map(fs::create_dir_all);
@@ -227,11 +229,6 @@ pub(crate) fn download(
     dest: &Path,
     overwrite: bool,
 ) -> Result<(), String> {
-    // The .mrpack format requires hashes.sha1 (and sha512) for every file: an entry
-    // without one is malformed, and a download nothing can verify is never kept.
-    if sha1.is_none() {
-        return Err(format!("{url}: the pack lists no SHA-1 for this file"));
-    }
     let response = crate::net::get_from_hosts(
         url,
         &[

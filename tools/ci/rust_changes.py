@@ -22,7 +22,7 @@ LAUNCHER_CHECK = {".github/workflows/ci.yml", "tools/ci/rust_changes.py", "tools
 
 
 # The Python under tools/ and tests/: verify's Python steps and the parity jobs run it, and no Rust build or test reads
-# it (Rust does read tools/native-hook-fragments/*.json and tools/ci/*.sh, so those still count). This script and the
+# it (Rust does read tools/ci/*.sh, so those still count). This script and the
 # module it imports decide whether Rust runs at all, so a change to them runs it.
 RUST_DECIDES = {"tools/ci/rust_changes.py", "tools/release_train.py"}
 

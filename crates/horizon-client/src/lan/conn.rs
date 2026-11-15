@@ -907,13 +907,14 @@ fn log_disconnect(
 /// sends no cookie request there, so an answer is unexpected (DISCONNECT_UNEXPECTED_QUERY) and
 /// ends the connection with a configuration disconnect.
 fn refuse_cookie_in_configuration(
-    c: &mut Connection,
+    c: &mut ConfigIo<'_>,
     shared: &Shared,
     user: &str,
 ) -> Result<Option<Parts>, String> {
     let reason = translatable("multiplayer.disconnect.unexpected_query_response", &[]);
     let text = log_disconnect(shared, "Server thread", user, &reason);
-    let _ = c.send(&cfg::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
+    // Through ConfigIo: with a payload manifest the queued writer owns the socket.
+    c.disconnect(reason);
     lost(shared, user, &text);
     Ok(None)
 }

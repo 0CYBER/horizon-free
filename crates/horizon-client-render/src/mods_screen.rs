@@ -841,6 +841,11 @@ impl ModsScreen {
         crate::widgets::widget_cursor(sort_hover, true);
         let sort = if self.descending { "z_to_a" } else { "a_to_z" };
         let name = format!("horizon.mods.screen.sort.{sort}");
+        crate::widgets::record(
+            &tr(&name).plain(),
+            [sx as f32, sy as f32, sw as f32, sh as f32],
+            true,
+        );
         d::button(
             &mut out,
             m,
@@ -989,6 +994,11 @@ impl ModsScreen {
             let hover = d::inside(mouse, r[0], r[1], r[2], r[3]);
             crate::widgets::widget_cursor(hover, active);
             let text = tr(&format!("horizon.mods.screen.{label}"));
+            crate::widgets::record(
+                &text.plain(),
+                [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32],
+                active,
+            );
             d::button(
                 &mut out,
                 m,
@@ -1015,6 +1025,11 @@ impl ModsScreen {
                     true,
                 );
             }
+            crate::widgets::record(
+                &label.plain(),
+                [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32],
+                true,
+            );
             d::button(
                 &mut out, m, label, r[0], r[1], r[2], r[3], true, hover, now_ms,
             );
