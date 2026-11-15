@@ -478,6 +478,9 @@ impl Book {
     /// Numbers the entries as `RecipeManager.unpackRecipeInfo` numbers the
     /// displays: every recipe in id order, each with its displays.
     pub fn set_display_ids(&mut self, index: &RecipeIndex) {
+        // New numbers: no number the server sent is known to match any more.
+        self.confirmed.clear();
+        self.confirmed_by_recipe = Default::default();
         let mut previous: Option<(String, i32)> = None;
         for e in &mut self.entries {
             let next = match &previous {
@@ -908,7 +911,9 @@ impl Book {
             }
             ids.into_iter().map(|(id, ids)| (id, ids.into())).collect()
         });
-        by_recipe.get(recipe_id).cloned().unwrap_or_default()
+        static NONE: std::sync::LazyLock<std::sync::Arc<[i32]>> =
+            std::sync::LazyLock::new(|| std::sync::Arc::from([]));
+        by_recipe.get(recipe_id).unwrap_or(&NONE).clone()
     }
     /// The server removed `display`: it no longer vouches for that number.
     pub fn unconfirm(&mut self, display: i32) {
@@ -939,6 +944,8 @@ impl Book {
         let mut acts = Vec::new();
         self.confirmed_by_recipe = Default::default();
         for e in entries {
+            // Each entry is judged afresh: a number stays confirmed only if this one matches.
+            self.confirmed.remove(&e.id);
             let at = self.entry_of_display(e.id);
             let act = match entry_from_packet(e, names) {
                 FromPacket::Unknown => Act::Keep,
@@ -963,10 +970,13 @@ impl Book {
                                 }
                             }
                         }
+                        // A synthetic `server:` entry is the server's own and names no recipe.
                         if !self.entries[i].id.starts_with("server:") {
                             self.server_requirements.remove(&e.id);
+                            if e.id >= 0 {
+                                self.confirmed.insert(e.id);
+                            }
                         }
-                        self.confirmed.insert(e.id);
                         Act::Keep
                     }
                     _ => Act::Take(entry, requirements),
@@ -978,14 +988,12 @@ impl Book {
             match act {
                 Act::Keep => {}
                 Act::Hide => {
-                    self.confirmed.remove(&e.id);
                     if let Some(i) = at {
                         self.entries[i].display_id = -1;
                     }
                     self.server_requirements.remove(&e.id);
                 }
                 Act::Take(mut entry, requirements) => {
-                    self.confirmed.remove(&e.id);
                     if e.group > 0 {
                         entry.group = Some(
                             self.server_groups
@@ -2037,6 +2045,38 @@ mod tests {
         for recipe in ["minecraft:tnt", "minecraft:piston", "minecraft:stick"] {
             assert_eq!(ids(&book, recipe), Vec::<i32>::new(), "{recipe}");
         }
+    }
+    #[test]
+    fn a_colliding_packet_applied_twice_confirms_no_server_entry() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        // The first packet replaces this book's stick at 12 with a `server:` entry, the second
+        // matches that entry: neither ties a name to 12.
+        book.use_server_entries(&colliding_packet().entries, &names(&tags));
+        book.use_server_entries(&colliding_packet().entries, &names(&tags));
+        let at = book.entry_of_display(12).unwrap();
+        assert!(book.entries[at].id.starts_with("server:"));
+        assert_eq!(ids(&book, &book.entries[at].id), Vec::<i32>::new());
+        assert_eq!(ids(&book, "minecraft:stick"), Vec::<i32>::new());
+    }
+    #[test]
+    fn an_entry_of_an_unknown_category_withdraws_that_numbers_confirmation() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        book.use_server_entries(&[packet_entry(10, 0, 1)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:tnt"), [10]);
+        // The server's new entry at 10 is of a category this client doesn't know: unverified.
+        book.use_server_entries(&[packet_entry(10, 0, 9999)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:tnt"), Vec::<i32>::new());
+    }
+    #[test]
+    fn renumbering_the_book_drops_its_confirmations() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        book.use_server_entries(&[packet_entry(10, 0, 1)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:tnt"), [10]);
+        book.set_display_ids(&RecipeIndex::default());
+        assert_eq!(ids(&book, "minecraft:tnt"), Vec::<i32>::new());
     }
     #[test]
     fn unknown_empty_and_very_long_names_have_no_ids() {

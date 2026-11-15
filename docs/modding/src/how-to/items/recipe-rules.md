@@ -35,13 +35,15 @@ order.
 A server numbers its recipe book entries itself and names none of them, so the
 ids are given only where the server sent the entry with that number and this
 client's own numbering of the recipe agrees with it (the entry has the same
-result, category and ingredients). The answer is empty for a recipe the server
+result, category and ingredients). Two different recipes with identical
+displays cannot be told apart this way. The answer is empty for a recipe the server
 sent no entry for (the player's book does not hold it, or it was removed), for
 one the server numbers differently, for one the book does not show (campfire,
 stonecutting, smithing, a mod's own type), for an unknown id, and outside a
 world.
 
 The answer changes when the server adds, replaces or removes recipe book
-entries and when recipes reload or arrive (`recipes_received`), so ask again
-after those rather than keeping it. For a viewer's "+" by recipe id alone, use
+entries and when recipes reload or arrive, and no hook announces a recipe book
+change: query it when you use it, rather than keeping an answer from
+`recipes_received`. For a viewer's "+" by recipe id alone, use
 `transfer_recipe_id`.

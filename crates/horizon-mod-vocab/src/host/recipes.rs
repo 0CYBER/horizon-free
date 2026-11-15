@@ -130,14 +130,15 @@ pub trait RecipesClientHost {
     /// recipes itself and names none of them, so an id is given only when the
     /// server sent the recipe book entry with that number and this client's
     /// own numbering of the recipe agrees with it: the entry is the same
-    /// recipe (the same result, category and ingredients). Empty otherwise: a
+    /// recipe (the same result, category and ingredients), so two different
+    /// recipes with identical displays cannot be told apart. Empty otherwise: a
     /// recipe the server sent no entry for (the player's book does not hold
     /// it, or it was removed), one the server numbers differently, one the
     /// book doesn't show (campfire, stonecutting, smithing, a mod's own
     /// type), an unknown id, and outside a world. The answer changes when
     /// the server adds, replaces or removes entries and when recipes reload
-    /// or arrive (`recipes_received`): ask again after those rather than
-    /// keeping it.
+    /// or arrive, and no hook announces a recipe book change: query it when
+    /// you use it, rather than keeping an answer from `recipes_received`.
     #[access(WorldOnly)]
     fn recipe_book_ids(&mut self, recipe_id: &str) -> Arc<[i32]>;
 }
