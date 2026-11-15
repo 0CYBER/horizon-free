@@ -1305,3 +1305,33 @@ fn a_level_the_player_left_in_single_player_still_unloads_and_deletes() {
         assert!(!game.world_root.join("dimensions/solo/a").exists());
     });
 }
+
+/// Opening and unloading one id again and again leaks its names, facts and level table once:
+/// every later open hands the game the same copies (#4019).
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn reopening_one_id_reuses_the_metadata_its_first_open_leaked() {
+    with_opener("cycle", "cycle:a", flat(), |game, seen| {
+        let key = horizon_core::LevelKey::parse("cycle:a").unwrap();
+        let mut first = None;
+        for _ in 0..20 {
+            seen.answers.lock().unwrap().clear();
+            tick_post(game);
+            game.apply_runtime_levels();
+            assert!(game.runtime_level_is_open("cycle:a"));
+            let table = game.level_shapes.extra;
+            let level = table.iter().find(|level| level.id == "cycle:a").unwrap();
+            let facts = horizon_world::dimension_type::DimensionFacts::of_level(key);
+            let leaked = (
+                table.as_ptr(),
+                level.id.as_ptr(),
+                level.dimension_type.as_ptr(),
+                std::ptr::from_ref(facts),
+            );
+            assert_eq!(*first.get_or_insert(leaked), leaked);
+            unload_as(game, "cycle", "cycle:a").unwrap();
+            game.apply_runtime_levels();
+            assert!(!game.runtime_level_is_open("cycle:a"));
+        }
+    });
+}

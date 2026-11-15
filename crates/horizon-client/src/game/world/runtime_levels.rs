@@ -18,8 +18,9 @@ use horizon_world::{
     },
 };
 use mod_api::{LevelRef, RuntimeGenerator, RuntimeLevel, RuntimeLevelError};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::{LazyLock, Mutex};
 
 /// How many runtime levels a server keeps open unless `horizon-max-runtime-levels` says otherwise.
 pub(in crate::game) const DEFAULT_CAP: usize = 64;
@@ -263,9 +264,56 @@ fn mod_stem(dimension_type: &str, name: &str) -> serde_json::Value {
     serde_json::json!({"type": dimension_type, "generator": generator})
 }
 
+/// What runtime levels' opens leaked into the game's `&'static` tables, kept so that every later
+/// open reuses it: opening and unloading one id over and over leaks once (#4019).
+#[derive(Default)]
+struct Leaked {
+    /// A level's names and dimension type, by its id and the dimension type it was opened with.
+    /// `resolve_type` reads only startup data, so the same pair always gives the same facts.
+    levels: HashMap<(String, String), (&'static str, &'static str, &'static DimensionFacts)>,
+    /// Every table of extra levels an open or unload made, reused when the same set comes back.
+    tables: Vec<&'static [ExtraLevel]>,
+}
+
+static LEAKED: LazyLock<Mutex<Leaked>> = LazyLock::new(Mutex::default);
+
+/// The names and facts of the level `id` of the dimension type `dimension_type`, leaked on its
+/// first open only.
+fn leaked_level(
+    id: &str,
+    dimension_type: &str,
+    facts: DimensionFacts,
+) -> (&'static str, &'static str, &'static DimensionFacts) {
+    let mut leaked = LEAKED.lock().unwrap_or_else(|e| e.into_inner());
+    *leaked
+        .levels
+        .entry((id.to_owned(), dimension_type.to_owned()))
+        .or_insert_with(|| {
+            (
+                id.to_owned().leak(),
+                dimension_type.to_owned().leak(),
+                Box::leak(Box::new(facts)),
+            )
+        })
+}
+
+/// `levels` as a `&'static` table: one leaked before with the same levels, or a new one.
+fn leaked_table(levels: Vec<ExtraLevel>) -> &'static [ExtraLevel] {
+    if levels.is_empty() {
+        return &[];
+    }
+    let mut leaked = LEAKED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(table) = leaked.tables.iter().find(|table| ***table == levels[..]) {
+        return table;
+    }
+    let table: &'static [ExtraLevel] = levels.leak();
+    leaked.tables.push(table);
+    table
+}
+
 /// The shape and facts of the dimension type `level` names, for the level `id`: a vanilla type,
 /// or the type of a level a mod registered at startup. None for any other. Nothing is kept: the
-/// level's names are leaked into the game's tables only when it opens.
+/// level's names are leaked into the game's tables only when it first opens (`leaked_level`).
 fn resolve_type(id: &str, level: &RuntimeLevel) -> Option<(LevelShape, DimensionFacts)> {
     let mut overrides = WorldgenOverrides::default();
     if let Some(registered) = mod_dimensions()
@@ -750,14 +798,15 @@ impl Game<'_> {
             resolve_type(id, &level).ok_or("its dimension type is no longer known")?;
         // The tables the game reads a level's shape, type and place from learn it first; a failure
         // below takes it out of them again (`unpublish_runtime_level`).
+        let (id_name, dimension_type, facts) = leaked_level(id, &level.dimension_type, facts);
         let mut extras = self.level_shapes.extra.to_vec();
         extras.push(ExtraLevel {
-            id: id.to_owned().leak(),
-            dimension_type: level.dimension_type.clone().leak(),
+            id: id_name,
+            dimension_type,
             shape,
             seed: Some(level.seed),
         });
-        self.level_shapes.extra = extras.leak();
+        self.level_shapes.extra = leaked_table(extras);
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.levels = self.level_shapes;
         }
@@ -864,7 +913,7 @@ impl Game<'_> {
             .copied()
             .filter(|level| level.id != id)
             .collect();
-        self.level_shapes.extra = extras.leak();
+        self.level_shapes.extra = leaked_table(extras);
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.levels = self.level_shapes;
             host.hub.close_views_of(id);
