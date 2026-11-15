@@ -7280,6 +7280,33 @@ def end_crystal_saved_motion():
 
 TAG_CRYSTAL = 15995  # UUIDs of end_crystal_saved_motion's crystals
 
+def armor_stand_air_refills():
+    """#16823: an armor stand is a `LivingEntity`, so `LivingEntity.baseTick` refills its air by 4 a
+    tick up to 300 (`increaseAirSupply`), a marker's too, and in water as well: `armor_stand` is in
+    the `can_breathe_under_water` tag. Read after summoning and after 1, 2 and 22 ticks."""
+    x0, y0, z0 = 3456, 260, 3648
+    chunk = [[x0 >> 4, z0 >> 4]]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},
+           cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', False),
+           cmd(f'/fill {x0 + 13} {y0} {z0 + 8} {x0 + 13} {y0 + 1} {z0 + 8} water', False)]
+    uuids = []
+    subjects = (('-1s', ''), ('100s', ''), ('298s', ''), ('-1s', ',Marker:1b'), ('-1s', ',NoGravity:1b'),
+                ('100s', None))
+    for n, (air, extra) in enumerate(subjects, 1):
+        uuids.append(f'000041b7-0000-0000-0000-{n:04x}00000001')
+        x = x0 + 13 if extra is None else x0 + 2 * n
+        ops.append(cmd(f'/summon armor_stand {x}.5 {y0} {z0 + 8}.5 '
+                       f'{{UUID:[I;16823,0,{n},1],Air:{air}{extra or ""}}}', expect_result=1))
+    for wait in (0, 1, 1, 20):
+        if wait:
+            ops.append({'op': 'tick', 'n': wait})
+        for uuid in uuids:
+            ops.append(cmd(f'/data get entity {uuid} Air'))
+    return ops + setup(*[f'/kill {uuid}' for uuid in uuids],
+                       f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 + 1} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
+
+
 def end_crystal_saved_fall():
     """#14671: `Entity.load` reads `OnGround` (`getBooleanOr`) and `fall_distance`, and `saveWithoutId` writes them
     back; `EndCrystal.tick` never moves the crystal nor runs `baseTick`, so both keep what was loaded, through a save
@@ -8765,6 +8792,7 @@ def groups():
         ('animal signed InLove', animal_signed_in_love()),
         ('mob fire resistance damage', mob_fire_resistance_damage()),
         ('armor stand climbing', armor_stand_climbing()),
+        ('armor stand air refills', armor_stand_air_refills()),
         ('painting saved ground', painting_saved_ground()),
         ('mob armor damage', mob_armor_damage()),
         ('mob max health bounds', mob_max_health_bounds()),

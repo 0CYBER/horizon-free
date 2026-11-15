@@ -924,6 +924,19 @@ impl Game<'_> {
             if travels && obstacles.is_none() {
                 obstacles = Some(self.stand_entity_collisions());
             }
+            // LivingEntity.baseTick: air below the max refills by 4 a tick
+            // (increaseAirSupply), in water too, as armor_stand is in the
+            // can_breathe_under_water tag. A stand's air is its loaded tag's.
+            let id = self.armor_stands[i].id;
+            if let Some(horizon_world::nbt::Tag::Compound(map)) = self.persist.raw.get_mut(&id)
+                && let Some(air) = map
+                    .get(&"Air".into())
+                    .and_then(horizon_client::nbt_path::int_value)
+                && air < 300
+            {
+                let air = (air + 4).min(300) as i16;
+                map.insert("Air".into(), horizon_world::nbt::Tag::Short(air));
+            }
             let a = &mut self.armor_stands[i];
             a.previous = a.position;
             a.previous_yaw = a.yaw;
