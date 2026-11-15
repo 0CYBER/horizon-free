@@ -603,8 +603,9 @@ macro_rules! stored_motion {
 }
 
 impl Game<'_> {
-    /// Tick an item owned by the caller. The two results are ordinary survival
-    /// and explicit consumption by a block-contact handler. `escape_speed`:
+    /// Tick an item owned by the caller. The results are ordinary survival,
+    /// explicit consumption by a block-contact handler, and the fall it landed
+    /// with on a server (its block's `fallOn` is the caller's). `escape_speed`:
     /// the item is inside a block and moves without physics this tick, pushed
     /// out at this speed.
     pub(super) fn tick_item_with_block_contacts(
@@ -614,11 +615,12 @@ impl Game<'_> {
         entity_boxes: &[Aabb],
         client: bool,
         splash: &mut impl FnMut(horizon_client::entities::ItemSplash),
-    ) -> (bool, bool) {
+    ) -> (bool, bool, super::item_entities::ahead::Landed) {
         let no_physics = escape_speed.is_some();
-        let step = self
+        let (step, landed) = self
             .item_tables()
             .move_item(item, escape_speed, entity_boxes, splash);
+        let landed = landed.filter(|_| !client);
         if let Some(pos) = step.vertical_contact {
             let state = self.world.block(pos.x, pos.y, pos.z);
             let position = item.position;
@@ -634,13 +636,13 @@ impl Game<'_> {
                 &mut discarded,
             );
             if discarded || item.stack.count == 0 {
-                return (false, true);
+                return (false, true, landed);
             }
         }
         let alive = self
             .item_tables()
             .settle_item(item, no_physics, step, splash);
-        (alive, false)
+        (alive, false, landed)
     }
 
     /// Keep new joins after the active batch, so they tick next time.

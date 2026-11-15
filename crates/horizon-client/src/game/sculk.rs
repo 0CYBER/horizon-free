@@ -1906,14 +1906,19 @@ impl Game<'_> {
     /// `position` (`Entity.checkFallDamage`): its supporting block's
     /// (`mainSupportingBlockPos`), else the block at `getOnPosLegacy`.
     pub(super) fn landing_state(&self, position: Vec3, bounds: Aabb) -> BlockStateId {
-        let p = self.supporting_block(position, bounds).unwrap_or_else(|| {
+        let p = self.landing_pos(position, bounds);
+        self.world.block(p.x, p.y, p.z)
+    }
+    /// Where [`Self::landing_state`] reads its block: the supporting block,
+    /// else `getOnPosLegacy`.
+    pub(super) fn landing_pos(&self, position: Vec3, bounds: Aabb) -> BlockPos {
+        self.supporting_block(position, bounds).unwrap_or_else(|| {
             BlockPos::new(
                 position.x.floor() as i32,
                 (position.y - 0.2).floor() as i32,
                 position.z.floor() as i32,
             )
-        });
-        self.world.block(p.x, p.y, p.z)
+        })
     }
     /// The player shot or threw something.
     pub(super) fn player_projectile_shot(&mut self) {

@@ -2,7 +2,7 @@
 //! `tick_experience`), the stacks a destroyed container lets fall, and spawning and merging orbs.
 use super::*;
 
-mod ahead;
+pub(super) mod ahead;
 
 /// A dropped item's `bobOffs` (its bob and spin phase) from its random's draw `drawn`, or under
 /// `HORIZON_STILL` from a random seeded by its position alone: a client seeds an item's random
@@ -108,21 +108,32 @@ impl Game<'_> {
                 // `moveTowardsClosestSpace` draws the speed from the item's own random.
                 let escape_speed = no_physics.then(|| item.random.next_float() * 0.2 + 0.1);
                 let mut entered = Vec::new();
-                let (alive, discarded) = self.tick_item_with_block_contacts(
+                let (alive, discarded, landed) = self.tick_item_with_block_contacts(
                     item,
                     escape_speed,
                     &nearby,
                     false,
                     &mut |splash| entered.push(splash),
                 );
-                (no_physics, alive, discarded, entered)
+                (no_physics, alive, discarded, entered, landed)
             };
-            let (no_physics, alive, discarded, entered) = match moves.take(i, item, &mut at_turn) {
-                Some(moved) => moved,
-                None => at_turn(item),
-            };
+            let (no_physics, alive, discarded, entered, landed) =
+                match moves.take(i, item, &mut at_turn) {
+                    Some(moved) => moved,
+                    None => at_turn(item),
+                };
             // Entity.doWaterSplashEffect: the server plays the sound (broadcast
-            // to clients). Its addParticle is empty.
+            // to clients). Its addParticle is empty. Entity.checkFallDamage
+            // runs the landing block's fallOn during the move: after baseTick's
+            // splash, before the water entry after the move.
+            let before_landing = landed.map_or(entered.len(), |l| l.3);
+            let mut entered = entered.into_iter();
+            for splash in entered.by_ref().take(before_landing) {
+                self.apply_item_splash(splash);
+            }
+            if let Some((fall, at, bounds, _)) = landed {
+                self.non_living_fall_on(item.id, at, bounds, fall);
+            }
             for splash in entered {
                 self.apply_item_splash(splash);
             }

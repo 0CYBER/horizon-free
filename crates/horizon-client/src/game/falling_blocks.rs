@@ -85,14 +85,25 @@ impl Game<'_> {
             f.fall_distance -= f64::from(moved.y as f32);
         }
         if f.on_ground {
-            self.falling_block_impact(&mut f);
-            if f.fall_distance > 0.0 {
-                let bounds = horizon_client::falling_block::bounds(f.position);
-                self.post_landing_event(f.position, bounds, false);
-            }
-            f.fall_distance = 0.0;
+            self.falling_block_landed(&mut f);
         }
         self.falling[i] = f;
+    }
+    /// `Entity.checkFallDamage` on the ground: after a fall, the block it lands
+    /// on runs `fallOn`, whose `causeFallDamage` distance the falling block
+    /// hurts by (`FallingBlockEntity.causeFallDamage`), then HIT_GROUND; the
+    /// fall is forgotten.
+    fn falling_block_landed(&mut self, f: &mut FallingBlock) {
+        if f.fall_distance > 0.0 {
+            let bounds = horizon_client::falling_block::bounds(f.position);
+            if let Some(distance) =
+                self.non_living_fall_on(f.id, f.position, bounds, f.fall_distance)
+            {
+                self.falling_block_impact(f, distance);
+            }
+            self.post_landing_event(f.position, bounds, false);
+        }
+        f.fall_distance = 0.0;
     }
     pub(super) fn tick_one_falling(&mut self, i: usize, entities: &[Aabb]) -> Result<()> {
         let entity_drops = self.ui.rules.bool("entity_drops");
@@ -214,13 +225,7 @@ impl Game<'_> {
             f.velocity.z = 0.0;
         }
         if on_ground {
-            // fallOn (causeFallDamage), then HIT_GROUND after a fall.
-            self.falling_block_impact(f);
-            if f.fall_distance > 0.0 {
-                let bounds = horizon_client::falling_block::bounds(f.position);
-                self.post_landing_event(f.position, bounds, false);
-            }
-            f.fall_distance = 0.0;
+            self.falling_block_landed(f);
         }
         // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
         // (Entity.makeStuckInBlock), BubbleColumnBlock.entityInside lifts or

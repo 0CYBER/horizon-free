@@ -46,19 +46,23 @@ impl<'w> Game<'w> {
 
 impl ItemTables<'_> {
     /// `ItemEntity.tick` up to its move's vertical contact: the fluids, the water splash, the move
-    /// (pushed out at `escape_speed` when inside a block) and its fall.
+    /// (pushed out at `escape_speed` when inside a block) and its fall, with where it landed.
     pub(in crate::game) fn move_item(
         &self,
         item: &mut ItemEntity,
         escape_speed: Option<f32>,
         entity_boxes: &[Aabb],
         splash: &mut impl FnMut(ItemSplash),
-    ) -> ItemStep {
+    ) -> (ItemStep, Landed) {
         // Entity.baseTick splashes before moving, except on the first tick, at
         // the motion before the currents push it.
         let before = item.velocity;
         let heights = item.push_by_fluid(self.world, &self.motion.fluids);
-        item.water_entry(heights.0 > 0.0, item.ticks == 0, before, splash);
+        let mut splashed = 0;
+        item.water_entry(heights.0 > 0.0, item.ticks == 0, before, &mut |s| {
+            splashed += 1;
+            splash(s);
+        });
         item.lava_fall(heights.1 > 0.0);
         let step = item.tick_move_before_block_effects(
             self.world,
@@ -71,10 +75,12 @@ impl ItemTables<'_> {
             Some(self.border),
             Some(&self.motion.blocks),
         );
-        item.check_fall(&step, |fall, from, moved| {
-            fall_reset(self.world, self.motion, self.facts, fall, from, moved)
-        });
-        step
+        let landed = item
+            .check_fall(&step, |fall, from, moved| {
+                fall_reset(self.world, self.motion, self.facts, fall, from, moved)
+            })
+            .map(|fall| (fall, item.position, item.bounds(), splashed));
+        (step, landed)
     }
     /// The rest of the move after its vertical contact: block effects, bubble columns, settling
     /// and the water entry. Whether the item lives on.
@@ -110,9 +116,15 @@ pub(super) fn reach(item: &ItemEntity) -> Aabb {
         .inflate(Vec3::new(v.x.abs() + 1.0, v.y.abs() + 1.0, v.z.abs() + 1.0))
 }
 
-/// An item's move as its turn makes it: without physics (inside a block), alive, discarded, and
-/// its splashes.
-pub(super) type Moved = (bool, bool, bool, Vec<ItemSplash>);
+/// An item's move as its turn makes it: without physics (inside a block), alive, discarded, its
+/// splashes, and where it landed.
+pub(super) type Moved = (bool, bool, bool, Vec<ItemSplash>, Landed);
+
+/// `Entity.checkFallDamage`'s landing: the fall, the item's position and box, and how many of the
+/// tick's splashes came before it (`Entity.baseTick`'s; the water entry after the move comes
+/// after). The block it lands on runs `fallOn` at the item's turn, as it can change the level
+/// (its random, sounds): a move worked out ahead leaves the level alone.
+pub(in crate::game) type Landed = Option<(f64, Vec3, Aabb, usize)>;
 
 /// One item's move, worked out on a copy.
 pub(super) struct Ahead {
@@ -139,12 +151,12 @@ fn move_alone(
     // `moveTowardsClosestSpace` draws the speed from the item's own random.
     let escape_speed = no_physics.then(|| item.random.next_float() * 0.2 + 0.1);
     let mut splashes = Vec::new();
-    let step = tables.move_item(item, escape_speed, near, &mut |s| splashes.push(s));
+    let (step, landed) = tables.move_item(item, escape_speed, near, &mut |s| splashes.push(s));
     if step.vertical_contact.is_some() && item.stack.count == 0 {
-        return (no_physics, false, true, splashes);
+        return (no_physics, false, true, splashes, landed);
     }
     let alive = tables.settle_item(item, no_physics, step, &mut |s| splashes.push(s));
-    (no_physics, alive, false, splashes)
+    (no_physics, alive, false, splashes, landed)
 }
 
 #[cfg(test)]
@@ -451,5 +463,71 @@ mod tests {
             items.len(),
             escaping.len()
         );
+    }
+
+    /// `Entity.checkFallDamage` at each item's turn: items landing on farmland draw one level float
+    /// each (`FarmlandBlock.fallOn`), whether their moves were worked out ahead or at their turn.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn items_landing_ahead_run_the_blocks_fall_on_at_their_turn() {
+        let mut game = server_game();
+        let feet = horizon_core::geometry::Vec3::new(8.5, 70.0, 8.5);
+        game.player = Some(horizon_client::motion::PlayerMotion::new(game.motion, feet).unwrap());
+        for x in -2..=2 {
+            for z in -2..=2 {
+                game.world
+                    .chunks
+                    .insert((x, z), Arc::new(Chunk::empty(x, z)));
+            }
+        }
+        game.update_chunk_tickets();
+        let farmland = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:farmland")
+            .unwrap();
+        for x in 0..16 {
+            for z in 0..16 {
+                game.world.set(x, 65, z, farmland).unwrap();
+                let at = [f64::from(x) + 0.5, 66.0, f64::from(z) + 0.5];
+                game.spawn_item(
+                    ItemStack::new("minecraft:stone", 1),
+                    at,
+                    [0.0, -0.5, 0.0],
+                    10,
+                );
+            }
+        }
+        // Off the merge ticks (every 2 or 40), so every item lands alone.
+        for item in game.dropped.iter_mut() {
+            item.ticks = 1;
+        }
+        game.ticked_entities_through = u32::MAX;
+        let (items, random) = (game.dropped.clone(), game.world.random.clone());
+        let mut expected = random.clone();
+        for _ in 0..items.len() {
+            expected.next_float();
+        }
+        for ahead in [false, true] {
+            game.dropped = items.clone();
+            game.world.random = random.clone();
+            AHEAD.with(|a| a.set(Some(ahead)));
+            TAKEN.with(|t| t.set((0, 0)));
+            game.tick_items();
+            assert!(
+                game.dropped
+                    .iter()
+                    .all(|i| i.on_ground && i.fall_distance == 0.0)
+            );
+            assert_eq!(
+                format!("{:?}", game.world.random),
+                format!("{expected:?}"),
+                "ahead {ahead}: one draw per landing"
+            );
+            let (taken, _) = TAKEN.with(|t| t.get());
+            assert_eq!(taken, if ahead { items.len() } else { 0 });
+        }
+        AHEAD.with(|a| a.set(None));
     }
 }

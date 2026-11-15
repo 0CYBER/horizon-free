@@ -8305,6 +8305,43 @@ def rocket_fall_distance():
                        f'/forceload remove {x0} {z0}')
 
 
+def falling_block_fall_on():
+    """A falling block lands through `Entity.checkFallDamage`: the block under it runs `Block.fallOn`,
+    whose `causeFallDamage` distance `FallingBlockEntity.causeFallDamage` hurts by. Anvils fall 10 blocks
+    onto stone, a bed (half the fall), hay (its multiplier changes nothing for a falling block), powder
+    snow (no causeFallDamage) and a stalagmite's tip (the fall plus 2.5), each through a husk standing
+    there (no sunburn); its health is read once they have landed.
+    """
+    x0, y0, z0 = 4928, 250, 4928
+    # Entities tick once every chunk within 2 columns is loaded (ChunkMap.prepareEntityTickingChunk).
+    chunk = [[(x0 >> 4) + dx, (z0 >> 4) + dz] for dx in range(-2, 3) for dz in range(-2, 3)]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},
+           cmd('/tick freeze', False),
+           cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', expect_result=256)]
+    cases = [('stone', None), ('bed', 'red_bed[part=foot,facing=south]'), ('hay', 'hay_block'),
+             ('snow', 'powder_snow'), ('tip', 'pointed_dripstone[vertical_direction=up,thickness=tip]')]
+    for n, (name, block) in enumerate(cases, 1):
+        x = x0 + 1 + (n - 1) * 3
+        top = y0
+        if block:
+            ops.append(cmd(f'/setblock {x} {y0} {z0 + 8} {block}', expect_result=1))
+            top = y0 + 1
+        # Leather boots keep the husk on powder snow; it stands still and lives through the blow.
+        ops.append(cmd(f'/summon husk {x}.5 {top} {z0 + 8}.5 {{UUID:[I;19000,0,{n},1],NoAI:1b,Silent:1b,'
+                       'PersistenceRequired:1b,attributes:[{id:"minecraft:max_health",base:100d}],Health:100f,'
+                       'equipment:{feet:{id:"minecraft:leather_boots",count:1}}}', expect_result=1))
+        ops.append(cmd(f'/summon falling_block {x}.5 {y0 + 10} {z0 + 8}.5 {{BlockState:{{id:"minecraft:anvil"}},'
+                       'Time:1,HurtEntities:1b,FallHurtAmount:2f,FallHurtMax:40}', expect_result=1))
+    ops.append(cmd('/tick unfreeze', False))
+    ops.append({'op': 'tick', 'n': 40})
+    ops.append(cmd('/tick freeze', False))
+    for n, _ in enumerate(cases, 1):
+        ops.append(cmd(f'/data get entity 00004a38-0000-0000-0000-{n:04x}00000001 Health'))
+    return ops + setup('/tick unfreeze', f'/kill @e[x={x0},y={y0 - 8},z={z0},dx=16,dy=48,dz=16,type=!player]',
+                       f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 + 20} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
+
+
 
 def boat_float_height():
     """#13022: `AbstractBoat.checkInWater` and `isUnderwater` sum a block's y and its water height
@@ -8777,6 +8814,7 @@ def groups():
         ('rocket data merge', rocket_data_merge()),
         ('mob fall clip', mob_fall_clip()),
         ('armadillo scute time', armadillo_scute_time()),
+        ('falling block fall on', falling_block_fall_on()),
         ('orb fall distance', orb_fall_distance()),
         ('rocket fall distance', rocket_fall_distance()),
         ('vehicle ground and fall', vehicle_ground_and_fall()),

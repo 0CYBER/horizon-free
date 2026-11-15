@@ -308,10 +308,9 @@ impl Game<'_> {
 impl Game<'_> {
     /// `Entity.move`'s fall bookkeeping after orb `i`'s move: a move of a
     /// block or more casts for a reset block or water, `checkFallDamage` adds
-    /// the drop outside water and, on the ground after a fall, posts
-    /// HIT_GROUND, then forgets it. `Block.fallOn` (farmland's random draw,
-    /// honey's slide) is not run for an orb yet, nor for the other entities
-    /// that are not living.
+    /// the drop outside water and, on the ground after a fall, runs the
+    /// block's `fallOn` (farmland's random draw, honey's slide), posts
+    /// HIT_GROUND, then forgets it.
     pub(super) fn orb_moved(&mut self, i: usize, step: horizon_client::entities::OrbMove) {
         let o = &self.orbs[i];
         let mut fall = self.vehicle_fall_reset(o.fall_distance, step.from, step.moved);
@@ -320,7 +319,9 @@ impl Game<'_> {
         }
         if o.on_ground {
             if fall > 0.0 {
-                let (position, bounds) = (o.position, o.bounds());
+                // Entity.checkFallDamage: the block's fallOn, then HIT_GROUND.
+                let (id, position, bounds) = (o.id, o.position, o.bounds());
+                self.non_living_fall_on(id, position, bounds, fall);
                 self.post_landing_event(position, bounds, false);
             }
             fall = 0.0;

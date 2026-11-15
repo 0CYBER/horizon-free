@@ -177,6 +177,86 @@ fn a_landing_orb_posts_hit_ground_after_a_fall() {
         assert_eq!(game.orbs[i].fall_distance, 0.0);
     });
 }
+/// `Entity.checkFallDamage`: an orb landing after a fall runs the block's
+/// `fallOn` before HIT_GROUND: honey slides (its sound), farmland draws one
+/// level float (before its LivingEntity check); stone does neither.
+#[test]
+#[ignore = "prepared resources; actual registered load, Game tick and posted events"]
+fn a_landing_orb_runs_the_blocks_fall_on() {
+    use horizon_client::entities::OrbMove;
+    with_game(|game| {
+        let slide = "minecraft:block.honey_block.slide";
+        for (block, slides, draws) in [("stone", 0, 0), ("honey_block", 1, 0), ("farmland", 0, 1)] {
+            assert!(game.run_command(&format!("setblock 6 200 10 {block}")));
+            game.orbs.clear();
+            assert!(
+                game.run_command("summon experience_orb 6.5 201 10.5 {Value:1,fall_distance:2d}")
+            );
+            game.orbs[0].on_ground = true;
+            game.audio.heard.clear();
+            let mut expected = game.world.random.clone();
+            for _ in 0..draws {
+                expected.next_float();
+            }
+            game.orb_moved(
+                0,
+                OrbMove {
+                    from: Vec3::new(6.5, 201.5, 10.5),
+                    moved: Vec3::new(0.0, -0.5, 0.0),
+                    in_water: false,
+                },
+            );
+            assert_eq!(game.orbs[0].fall_distance, 0.0);
+            assert_eq!(
+                game.audio.heard.get(slide).copied().unwrap_or(0),
+                slides,
+                "{block}"
+            );
+            assert_eq!(
+                game.world.random.clone().next_long(),
+                expected.next_long(),
+                "{block}: one draw per farmland landing"
+            );
+        }
+    });
+}
+/// `ItemEntity.tick`: an item that drops through water onto honey in one tick
+/// slides (`HoneyBlock.fallOn`, during `Entity.move`) before it splashes
+/// (`updateFluidInteraction`'s water entry, after the move).
+#[test]
+#[ignore = "prepared resources; actual registered load, Game tick and posted events"]
+fn an_item_dropping_through_water_onto_honey_slides_before_it_splashes() {
+    with_game(|game| {
+        assert!(game.run_command("setblock 6 200 10 honey_block"));
+        assert!(game.run_command("setblock 6 201 10 water"));
+        game.dropped.clear();
+        game.spawn_item(
+            crate::items::ItemStack::new("minecraft:stone", 1),
+            [6.5, 202.05, 10.5],
+            [0.0, -1.2, 0.0],
+            10,
+        );
+        game.dropped[0].ticks = 1;
+        game.ticked_entities_through = u32::MAX;
+        game.audio.capture = Some(Vec::new());
+        game.tick_items();
+        let sounds = game.audio.capture.take().unwrap();
+        let order: Vec<&str> = sounds
+            .iter()
+            .map(|s| &*s.event)
+            .filter(|e| *e == "minecraft:block.honey_block.slide" || e.ends_with(".splash"))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "minecraft:block.honey_block.slide",
+                "minecraft:entity.generic.splash"
+            ],
+            "{sounds:?} at {:?}",
+            game.dropped.first().map(|i| i.position)
+        );
+    });
+}
 /// #14318: an angled rocket falling onto stone builds up its fall and posts
 /// HIT_GROUND when it lands (`Entity.checkFallDamage`); one falling into water
 /// splashes once (`Entity.doWaterSplashEffect`: the sound and SPLASH) and lands
@@ -217,6 +297,84 @@ fn a_falling_rocket_hits_the_ground_and_one_in_water_splashes() {
             game.audio.heard.get("minecraft:entity.generic.splash"),
             Some(&1)
         );
+    });
+}
+/// Primed TNT that falls onto a block runs its `Block.fallOn`, though it isn't
+/// living: honey plays its slide sound (`HoneyBlock.fallOn`), and farmland
+/// draws one float from the level random (`FarmlandBlock.fallOn`, before its
+/// LivingEntity check); stone does neither.
+#[test]
+#[ignore = "prepared resources; actual registered load, Game tick and posted events"]
+fn primed_tnt_landing_runs_the_blocks_fall_on() {
+    with_game(|game| {
+        let slide = "minecraft:block.honey_block.slide";
+        for (block, slides, draws) in [("stone", 0, 0), ("honey_block", 1, 0), ("farmland", 0, 1)] {
+            assert!(game.run_command(&format!("setblock 6 200 10 {block}")));
+            game.tnts.clear();
+            game.add_primed_tnt(
+                horizon_core::position::BlockPos::new(6, 203, 10),
+                0.0,
+                80,
+                None,
+                None,
+            );
+            game.tnts[0].velocity = Vec3::ZERO;
+            game.audio.heard.clear();
+            let mut expected = game.world.random.clone();
+            for _ in 0..draws {
+                expected.next_float();
+            }
+            let mut landed = false;
+            for _ in 0..40 {
+                game.tick_one_tnt(0, &[]).unwrap();
+                if game.tnts[0].on_ground {
+                    landed = true;
+                    break;
+                }
+            }
+            assert!(landed, "the TNT lands on {block}");
+            assert_eq!(
+                game.audio.heard.get(slide).copied().unwrap_or(0),
+                slides,
+                "{block}"
+            );
+            let (mut after, mut want) = (game.world.random.clone(), expected);
+            assert_eq!(
+                after.next_long(),
+                want.next_long(),
+                "{block}: one draw per farmland landing"
+            );
+        }
+    });
+}
+/// `FallingBlockEntity.causeFallDamage`: an anvil that hurts something wears
+/// by `this.random`, its own random; the level random is left alone (the
+/// farmland it may land on draws from that one).
+#[test]
+#[ignore = "prepared resources; actual registered load, Game tick and posted events"]
+fn an_anvils_wear_leaves_the_level_random_alone() {
+    with_game(|game| {
+        assert!(game.run_command(
+            "summon husk 6.5 200 10.5 {NoAI:1b,Silent:1b,attributes:[{id:\"minecraft:max_health\",base:100d}],Health:100f}"
+        ));
+        assert!(game.run_command(
+            "summon falling_block 6.5 200 10.5 {BlockState:{id:\"minecraft:anvil\"},Time:1,HurtEntities:1b,FallHurtAmount:2f,FallHurtMax:40}"
+        ));
+        let registry = game.pack.assets.registry;
+        let mut anvil = game.falling.last().unwrap().clone();
+        anvil.state = registry.default_state("minecraft:anvil").unwrap();
+        let mut level = game.world.random.clone();
+        game.falling_block_impact(&mut anvil, 30.0);
+        // A fall of 30 wears it for sure (0.05 + 29 * 0.05 > 1).
+        let chipped = registry.default_state("minecraft:chipped_anvil");
+        assert_eq!(Some(anvil.state), chipped, "the anvil wore");
+        let husk = game
+            .mobs
+            .iter()
+            .find(|m| m.species() == horizon_client::mobs::Species::Husk)
+            .unwrap();
+        assert!(husk.health < 100.0, "the anvil hit the husk");
+        assert_eq!(game.world.random.clone().next_long(), level.next_long());
     });
 }
 #[test]
