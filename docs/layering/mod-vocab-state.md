@@ -44,7 +44,7 @@ OUT_DIR file checked by the generator before writing it.
 | `@generated/wire_generated.rs::WIRE_LAYOUT` | `::std::sync::LazyLock<u64>` | immutable ABI layout fingerprint | Hash of the build-fixed Wire layouts; the generator validates its sole declaration and type before writing output. |
 | `__private/points.rs::OPEN` | `Mutex<Open>` | dispatch table | Temporary points exception pending #2697: open injection-listener routing and seal state remain in the unchanged points module. |
 | `block/fluid_capability.rs::BUCKET_IDS` | `std::sync::LazyLock<[crate::Identifier;3]>` | immutable lookup cache | Three vanilla bucket identifiers resolved once; no live registration or world state. |
-| `block/part_state.rs::EDITING` | `RefCell<Vec<(BlockEntityRef,&'staticstr,&'staticstr)>>` | reentrancy guard | Per-thread stack of the block entity Part-state edits open on this thread, so an edit of the same block entity and key from inside its own edit is refused. |
+| `block/part_state.rs::EDITING` | `RefCell<Vec<(AttachmentHolder,&'staticstr,&'staticstr)>>` | reentrancy guard | Per-thread stack of the Part-state edits open on this thread, by holder, so an edit of the same holder and key from inside its own edit is refused. |
 | `client/arm_pose.rs::TEST_POSES` | `std::cell::Cell<Option<&'static[PoseInfo]>>` | Parts lookup table | Thread-local test lookup of installed Parts metadata by engine-issued slot. |
 | `client/client_reload.rs::first::ID` | `LazyLock<Identifier>` | immutable cache | Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations. |
 | `client/client_reload.rs::last::ID` | `LazyLock<Identifier>` | immutable cache | Immutable vanilla reload-boundary identifier, allocated once and shared by anchor declarations. |

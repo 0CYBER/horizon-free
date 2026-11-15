@@ -285,16 +285,39 @@ impl PartStateDeclaration {
     }
 }
 
-/// Checks `entity` against this host's level and its current block entity, and gives the
-/// level-relative holder its value is stored under.
-fn holder(host: &dyn Host, entity: BlockEntityRef) -> Result<Holder, PartStateError> {
-    if host.level(host.dimension()) != Some(entity.level) {
-        return Err(PartStateError::OtherLevel);
+/// A holder Part state is kept on: a scoped handle that a call checks against the host before
+/// it reaches the holder's attachment map. Sealed: the game decides which holders keep it.
+pub trait PartStateHolder: Copy + PartialEq + private::Sealed + 'static {
+    /// Checks the handle against this host's level and the holder it names now, and gives the
+    /// level-relative holder its value is stored under.
+    // hidden: the Part state core's own step; mods call `state` and `edit_state`
+    #[doc(hidden)]
+    fn part_state_holder(self, host: &dyn Host) -> Result<Holder, PartStateError>;
+    /// The handle as the attachment index names it.
+    // hidden: the Part state core's own step; mods call `state` and `edit_state`
+    #[doc(hidden)]
+    fn attachment_holder(self) -> AttachmentHolder;
+}
+
+mod private {
+    pub trait Sealed {}
+    impl Sealed for crate::BlockEntityRef {}
+}
+
+impl PartStateHolder for BlockEntityRef {
+    fn part_state_holder(self, host: &dyn Host) -> Result<Holder, PartStateError> {
+        if host.level(host.dimension()) != Some(self.level) {
+            return Err(PartStateError::OtherLevel);
+        }
+        if host.block_entity_identity(self.level, self.position) != Some(self) {
+            return Err(PartStateError::Stale);
+        }
+        Ok(Holder::BlockEntity(self.position))
     }
-    if host.block_entity_identity(entity.level, entity.position) != Some(entity) {
-        return Err(PartStateError::Stale);
+
+    fn attachment_holder(self) -> AttachmentHolder {
+        AttachmentHolder::BlockEntity(self)
     }
-    Ok(Holder::BlockEntity(entity.position))
 }
 
 fn attachment<T>(key: &AttachmentType<T>, error: AttachmentError) -> PartStateError {
@@ -309,15 +332,15 @@ fn attachment<T>(key: &AttachmentType<T>, error: AttachmentError) -> PartStateEr
 }
 
 /// [`BlockEntityPartState::state_existing`] for any key.
-pub fn read_state<T: Clone + Send + Sync + 'static>(
+pub fn read_state<H: PartStateHolder, T: Clone + Send + Sync + 'static>(
     host: &dyn Host,
-    entity: BlockEntityRef,
+    entity: H,
     key: &AttachmentType<T>,
 ) -> Result<Option<T>, PartStateError> {
-    holder(host, entity)?;
+    entity.part_state_holder(host)?;
     host.query(key)
         .map_err(|error| attachment(key, error))?
-        .get(AttachmentHolder::BlockEntity(entity))
+        .get(entity.attachment_holder())
         .map_err(|error| match error {
             AttachmentRowError::Value(error) => attachment(key, error),
             _ => PartStateError::Stale,
@@ -326,7 +349,7 @@ pub fn read_state<T: Clone + Send + Sync + 'static>(
 
 thread_local! {
     /// The edits running on this thread, innermost last.
-    static EDITING: RefCell<Vec<(BlockEntityRef, &'static str, &'static str)>> =
+    static EDITING: RefCell<Vec<(AttachmentHolder, &'static str, &'static str)>> =
         const { RefCell::new(Vec::new()) };
 }
 
@@ -335,7 +358,7 @@ struct Editing;
 
 impl Editing {
     fn enter<T>(
-        entity: BlockEntityRef,
+        entity: AttachmentHolder,
         key: &'static AttachmentType<T>,
     ) -> Result<Self, PartStateError> {
         EDITING.with_borrow_mut(|editing| {
@@ -365,15 +388,15 @@ impl Drop for Editing {
 /// `edit` wrote and the old value stays, with its saved bytes. A panic in `edit` aborts it
 /// too. An undecodable saved value refuses before `edit` runs and is kept as it was.
 /// An edit of the same block entity and key from inside `edit` is refused.
-pub fn edit_part_state<T: Clone + Send + Sync + 'static, R>(
+pub fn edit_part_state<H: PartStateHolder, T: Clone + Send + Sync + 'static, R>(
     host: &mut dyn ServerHost,
-    entity: BlockEntityRef,
+    entity: H,
     key: &'static AttachmentType<T>,
     edit: impl FnOnce(&mut dyn ServerHost, &mut T) -> R,
 ) -> Result<R, PartStateError> {
-    let _editing = Editing::enter(entity, key)?;
+    let _editing = Editing::enter(entity.attachment_holder(), key)?;
     host.transaction(|host, _| {
-        let at = holder(host, entity)?;
+        let at = entity.part_state_holder(host)?;
         let store = host.attachments();
         let current = key
             .get_existing(store, at)
@@ -386,7 +409,7 @@ pub fn edit_part_state<T: Clone + Send + Sync + 'static, R>(
             .map_err(|error| attachment(key, error))?;
         let mut value = current.unwrap_or_else(key.default);
         let answer = edit(host, &mut value);
-        holder(host, entity)?;
+        entity.part_state_holder(host)?;
         let store = host.attachments();
         let now = store
             .decoded(at, key.namespace, key.name)

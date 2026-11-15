@@ -5,9 +5,9 @@
     "reason": "Temporary points exception pending #2697: open injection-listener routing and seal state remain in the unchanged points module."
   },
   "block/part_state.rs::EDITING": {
-    "type": "RefCell<Vec<(BlockEntityRef,&'staticstr,&'staticstr)>>",
+    "type": "RefCell<Vec<(AttachmentHolder,&'staticstr,&'staticstr)>>",
     "category": "reentrancy guard",
-    "reason": "Per-thread stack of the block entity Part-state edits open on this thread, so an edit of the same block entity and key from inside its own edit is refused."
+    "reason": "Per-thread stack of the Part-state edits open on this thread, by holder, so an edit of the same holder and key from inside its own edit is refused."
   },
   "client/arm_pose.rs::TEST_POSES": {
     "type": "std::cell::Cell<Option<&'static[PoseInfo]>>",
