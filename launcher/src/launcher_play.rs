@@ -77,7 +77,13 @@ impl Launcher {
     pub(crate) fn remove(&mut self, tag: &str) {
         self.confirm_remove = None;
         let installing = self.installing.as_ref().map(|(t, _)| t.as_str());
-        if !removable(&self.installed, installing, &self.removing, tag) {
+        if !removable(
+            &self.installed,
+            installing,
+            &self.removing,
+            &self.instances_using(tag),
+            tag,
+        ) {
             return;
         }
         self.install_error = None;

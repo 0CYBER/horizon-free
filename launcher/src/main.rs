@@ -681,15 +681,41 @@ mod tests {
     fn a_second_version_can_be_removed_while_another_deletes() {
         let installed = ["v0.2.97".to_string(), "v0.2.76".to_string()];
         let removing = ["v0.2.97".to_string()];
-        assert!(super::removable(&installed, None, &removing, "v0.2.76"));
-        assert!(!super::removable(&installed, None, &removing, "v0.2.97"));
+        assert!(super::removable(
+            &installed,
+            None,
+            &removing,
+            &[],
+            "v0.2.76"
+        ));
+        assert!(!super::removable(
+            &installed,
+            None,
+            &removing,
+            &[],
+            "v0.2.97"
+        ));
         assert!(!super::removable(
             &installed,
             Some("v0.2.76"),
             &[],
+            &[],
             "v0.2.76"
         ));
-        assert!(!super::removable(&installed, None, &[], "v0.2.85"));
+        assert!(!super::removable(&installed, None, &[], &[], "v0.2.85"));
+    }
+
+    #[test]
+    fn a_version_an_instance_plays_cannot_be_removed() {
+        let installed = ["v0.2.97".to_string(), "v0.2.76".to_string()];
+        assert!(!super::removable(
+            &installed,
+            None,
+            &[],
+            &["Horizon"],
+            "v0.2.97"
+        ));
+        assert!(super::removable(&installed, None, &[], &[], "v0.2.97"));
     }
 
     #[test]

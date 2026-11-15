@@ -557,15 +557,18 @@ pub(crate) fn starts_now(prepared: bool, preparing: bool, running: bool) -> bool
     play_press(prepared, None, preparing || running) == PlayPress::Play
 }
 
-/// Whether `tag` can start being deleted now: it is installed, no install is writing it, and it
-/// is not already going. Another version deleting at the same time does not stop it.
+/// Whether `tag` can start being deleted now: it is installed, no instance plays it (`used_by`),
+/// no install is writing it, and it is not already going. Another version deleting at the same
+/// time does not stop it.
 pub(crate) fn removable(
     installed: &[String],
     installing: Option<&str>,
     removing: &[String],
+    used_by: &[&str],
     tag: &str,
 ) -> bool {
-    installing != Some(tag)
+    used_by.is_empty()
+        && installing != Some(tag)
         && installed.iter().any(|t| t == tag)
         && !removing.iter().any(|t| t == tag)
 }

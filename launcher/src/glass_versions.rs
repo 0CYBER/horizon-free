@@ -7,8 +7,8 @@
 //! install progress and errors, the confirmation before a removal.
 
 use super::*;
-use crate::glass_ui::{self as ui, Tone};
 use crate::glass_home_tabs::PatchNotes;
+use crate::glass_ui::{self as ui, Tone};
 use horizon_theme::glass::{ink, radius};
 
 /// A release's day as the mockup writes it ("Nov 1"), with its time in UTC when known.
@@ -53,25 +53,37 @@ fn badge(tone: Tone, label: &str) -> Div {
 
 /// The compact title and commit line for a published Nightly.
 ///
-/// The release title from GitHub is an implementation-facing ISO date and commit. Players need
-/// the date first, with the short commit kept as the secondary detail so the newest build is easy
-/// to recognize at a glance.
-fn nightly_card_text(release: &Release) -> Option<(String, String)> {
-    release.nightly.as_ref()?;
-    let date = published(&release.date, "");
-    // Named as everywhere else ("Nov 7 update"); the commit stays the detail under it.
-    let title = trf("{date} update", &[("date", &date)]);
-    let commit = horizon_launcher::nightly::label(&release.tag)
+/// A nightly's short commit, which only a tooltip shows; empty for any other version.
+fn commit_of(tag: &str) -> String {
+    horizon_launcher::nightly::label(tag)
         .and_then(|label| {
             label
                 .split_once(" · ")
                 .map(|(_, commit)| commit.chars().take(7).collect())
         })
-        .unwrap_or_default();
-    Some((title, commit))
+        .unwrap_or_default()
+}
+
+/// The release title from GitHub is an implementation-facing ISO date and commit. Players get
+/// "Nov 7 update" and the day it came out; the commit is in a tooltip on that line.
+fn nightly_card_text(release: &Release) -> Option<(String, String)> {
+    release.nightly.as_ref()?;
+    let date = published(&release.date, "");
+    let title = trf("{date} update", &[("date", &date)]);
+    Some((title, published(&release.date, &release.time)))
 }
 
 impl Launcher {
+    /// The names of the Horizon instances that play `tag`.
+    pub(crate) fn instances_using(&self, tag: &str) -> Vec<&str> {
+        self.instances
+            .list
+            .iter()
+            .filter(|i| i.java.is_none() && self.version_of(i).map(String::as_str) == Some(tag))
+            .map(|i| i.name.as_str())
+            .collect()
+    }
+
     /// The glass Versions page; `on_disk` and `used` as `versions_page` measured them.
     pub(super) fn glass_versions(
         &self,
@@ -295,13 +307,7 @@ impl Launcher {
         let look = ui::look();
         let installed = self.installed.iter().any(|v| v == tag);
         let in_use = self.selected().map(String::as_str) == Some(tag);
-        let players: Vec<&str> = self
-            .instances
-            .list
-            .iter()
-            .filter(|i| i.java.is_none() && self.version_of(i).map(String::as_str) == Some(tag))
-            .map(|i| i.name.as_str())
-            .collect();
+        let players = self.instances_using(tag);
         let mut add = |part: String| {
             if !line.is_empty() {
                 line.push_str(" · ");
@@ -309,7 +315,7 @@ impl Launcher {
             line.push_str(&part);
         };
         if !players.is_empty() {
-            add(trf("played by {names}", &[("names", &players.join(", "))]));
+            add(trf("Used by {names}", &[("names", &players.join(", "))]));
         } else if installed {
             add(tr("installed").to_string());
         }
@@ -358,12 +364,20 @@ impl Launcher {
                                         d.child(badge(Tone::Off, "Installed"))
                                     }),
                             )
-                            .child(
+                            .child({
+                                let commit = commit_of(tag);
                                 ui::text(13., FontWeight::NORMAL, 0.6)
+                                    .id(SharedString::from(format!("version-line-{tag}")))
                                     .line_height(px(19.5))
                                     .truncate()
-                                    .child(line.clone()),
-                            ),
+                                    .when(!commit.is_empty(), |d| {
+                                        d.tooltip(ui::tip(trf(
+                                            "Build {commit}",
+                                            &[("commit", &commit)],
+                                        )))
+                                    })
+                                    .child(line.clone())
+                            }),
                     )
                     .child(div().relative().flex().flex_none().child(right)),
             )
@@ -494,21 +508,27 @@ impl Launcher {
                 ),
             );
         }
-        d.child(
-            ui::icon_button(
-                SharedString::from(format!("bin-{tag}")),
-                "delete-02",
-                36.,
-                17.,
-                radius::CONTROL,
-                false,
-                &t,
-            )
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        let bin = ui::icon_button(
+            SharedString::from(format!("bin-{tag}")),
+            "delete-02",
+            36.,
+            17.,
+            radius::CONTROL,
+            false,
+            &t,
+        );
+        let users = self.instances_using(tag);
+        d.child(if users.is_empty() {
+            bin.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 this.confirm_remove = Some(t3.clone());
                 cx.notify();
-            })),
-        )
+            }))
+        } else {
+            disabled(bin).tooltip(ui::tip(trf(
+                "In use by {names}. Pick another version for it first.",
+                &[("names", &users.join(", "))],
+            )))
+        })
     }
 
     /// The installed builds of one kind made here, as cards under a small heading; None when
@@ -799,7 +819,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nightly_cards_put_plain_date_before_commit() {
+    fn nightly_cards_show_the_date_and_keep_the_commit_for_a_tooltip() {
         let release = Release {
             tag: "nightly-2026-11-07-4aa6854".into(),
             name: "Nightly 2026-11-07 · 4aa6854".into(),
@@ -811,8 +831,9 @@ mod tests {
             nightly: Some("nightly".into()),
         };
 
-        let (title, commit) = nightly_card_text(&release).expect("nightlies have card text");
+        let (title, line) = nightly_card_text(&release).expect("nightlies have card text");
         assert_eq!(title, "Nov 7 update");
-        assert_eq!(commit, "4aa6854");
+        assert_eq!(line, "Nov 7, 14:32 UTC");
+        assert_eq!(commit_of(&release.tag), "4aa6854");
     }
 }
