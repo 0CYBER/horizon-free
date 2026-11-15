@@ -439,12 +439,24 @@ impl Launcher {
                     .gap(px(12.))
                     .child(text_in(13., pal.danger).flex_1().min_w_0().child(e.clone()))
                     .child(
-                        button("native-show-log", "Show log", Kind::Ghost, &t).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.native_log_open();
-                                cx.notify();
-                            }),
-                        ),
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .justify_end()
+                            .gap(px(8.))
+                            .children(
+                                self.native_failed_mods
+                                    .iter()
+                                    .filter(|id| mine && !self.stop_names(id))
+                                    .map(|id| self.switch_off_button(id, cx)),
+                            )
+                            .child(
+                                button("native-show-log", tr("Show log"), Kind::Ghost, &t)
+                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.native_log_open();
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             );
         }
@@ -466,6 +478,27 @@ impl Launcher {
             )));
         }
         card
+    }
+
+    /// The button that switches a mod that stopped the build off, as its row's menu does.
+    fn switch_off_button(&self, id: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+        let mod_id = id.to_owned();
+        button(
+            SharedString::from(format!("native-off-{id}")),
+            trf("Switch off {mod}", &[("mod", id)]),
+            Kind::Secondary,
+            &self.theme,
+        )
+        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            this.mods.message =
+                horizon_launcher::browser::java::set_enabled(&this.mods.home(), &mod_id, false)
+                    .err()
+                    .map(Err);
+            this.native_error = None;
+            this.native_failed_mods.clear();
+            this.instance_mods_changed();
+            cx.notify();
+        }))
     }
 
     /// The choice when the build would switch off mods that worlds were saved with (the error

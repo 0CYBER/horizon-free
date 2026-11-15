@@ -259,7 +259,11 @@ impl Launcher {
                         if let native_mods::Failed::Mods { left, .. } = &e {
                             self.native_failed_mods = left.iter().map(|l| l.id.clone()).collect();
                         }
-                        self.native_error = Some(String::from(e));
+                        let enabled: Vec<String> = native_status::enabled(&self.mods.home())
+                            .into_iter()
+                            .map(|(id, ..)| id)
+                            .collect();
+                        self.native_failed(String::from(e), &enabled);
                     }
                     if play_now {
                         self.play();

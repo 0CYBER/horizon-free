@@ -356,6 +356,14 @@ pub fn did_not_build(name: &str) -> String {
     )
 }
 
+/// What the card says when a mod's own compile failed: no compiler text, the way on.
+pub fn compile_failed(name: &str) -> String {
+    trf(
+        "{mod} couldn't be built. The problem is in the mod, not in your game. Switch it off to play, or send the log to its author.",
+        &[("mod", name)],
+    )
+}
+
 /// The mod's menu while the stop for worlds saved with it is on screen: nothing is switched off
 /// until the player chooses.
 pub fn did_not_build_pending(name: &str) -> String {

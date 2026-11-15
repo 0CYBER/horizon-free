@@ -45,7 +45,7 @@ pub mod sdk_cache;
 
 pub use isolate::{LeftOut, Why};
 pub use picker::{Route, Routes};
-pub use prebuilt::Refusal;
+pub use prebuilt::{compiling as compiling_mod, Refusal};
 pub use registry_inventory::Inventory as RegistryInventory;
 
 // Settings and logs are shared by native-build and diagnostics tests.
@@ -1290,6 +1290,12 @@ pub fn failure(what: &str, status: &str, errors: &[String], tail: &[String]) -> 
     )
 }
 
+/// The mod among `ids` whose own compile `error` reports ([`failure`] led by `prebuilt::compiling`).
+pub fn compile_failed_mod<'a>(error: &str, ids: &'a [String]) -> Option<&'a String> {
+    ids.iter()
+        .find(|id| error.contains(&format!("{} failed (", compiling_mod(id))))
+}
+
 /// Extracts the mod id from a mixin manifest or mod file path (e.g. `.../mixins.incoming/<mod_id>/...`
 /// or `.../mods.incoming/<mod_id>/...`).
 fn mod_id_from_file(file: &str) -> Option<&str> {
@@ -1991,7 +1997,7 @@ fn pipeline(
     let blame = |e: String| -> Failed {
         let failed = fitted.iter().find_map(|id| {
             let bundle = mods.iter().find(|b| &b.manifest.id == id)?;
-            e.contains(&format!("{} failed", prebuilt::compiling(id)))
+            e.contains(&format!("{} failed", compiling_mod(id)))
                 .then(|| LeftOut::new(bundle, isolate::Why::DidNotBuild))
         });
         let Some(left) = failed else {
@@ -4245,6 +4251,20 @@ mod tests {
             line_mods.starts_with("worldedit: E_MODULE_CONFLICT: conflict in module worldedit"),
             "{line_mods}"
         );
+    }
+
+    #[test]
+    fn a_mods_own_compile_failure_is_traced_to_that_mod() {
+        let ids = ["greeter".to_owned(), "fast-ore".to_owned()];
+        let error = failure(
+            &compiling_mod("fast-ore"),
+            "exit status: 101",
+            &["error[E0425]: cannot find value `speed`".into()],
+            &[],
+        );
+        assert_eq!(compile_failed_mod(&error, &ids), Some(&ids[1]));
+        let game = failure("Compiling the game", "exit status: 101", &[], &[]);
+        assert_eq!(compile_failed_mod(&game, &ids), None);
     }
 
     #[test]

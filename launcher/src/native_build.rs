@@ -1,6 +1,18 @@
 use super::*;
 
 impl Launcher {
+    /// Records why a build failed. A mod's own compile failure reads as plain words with a way
+    /// on; the compiler's text stays in the build log. `enabled` are the mods that were built.
+    pub(super) fn native_failed(&mut self, error: String, enabled: &[String]) {
+        match native_mods::compile_failed_mod(&error, enabled) {
+            Some(id) => {
+                self.native_error = Some(native_mods::fit::compile_failed(id));
+                self.native_failed_mods = vec![id.clone()];
+            }
+            None => self.native_error = Some(error),
+        }
+    }
+
     /// Builds the selected instance's native mods, once the player accepted the warning. The
     /// build stays on the Horizon the instance plays (`native_mods::base_for`), unless the
     /// warning was Update's: then it moves to that newer Horizon.

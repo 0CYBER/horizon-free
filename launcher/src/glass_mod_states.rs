@@ -142,7 +142,7 @@ fn error(key: &str) -> Option<String> {
             &[("mod", "fast-ore"), ("state", "counter")],
         ),
         "compile" => nm::failure(
-            "Compiling fast-ore",
+            &nm::compiling_mod("fast-ore"),
             "exit status: 101",
             &["error[E0425]: cannot find value `speed` in this scope".into()],
             &["error: could not compile `fast-ore` (lib) due to 1 previous error".into()],
@@ -259,11 +259,9 @@ impl Launcher {
             ("error", key) => {
                 if key == "cancelled" {
                     self.native_done = error(key);
-                } else {
-                    self.native_error = error(key);
-                }
-                if key == "compile" {
-                    self.native_failed_mods = vec!["fast-ore".into()];
+                } else if let Some(text) = error(key) {
+                    // The same step a real failure takes.
+                    self.native_failed(text, &["fast-ore".into(), "greeter".into()]);
                 }
             }
             ("worlds", key) => {

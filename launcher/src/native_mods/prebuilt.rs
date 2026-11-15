@@ -1032,7 +1032,7 @@ fn forbids_unsafe(meta: &syn::Meta) -> bool {
 
 /// What the build log and a failure call compiling mod `id`: a failure starts
 /// "Compiling <id> failed".
-pub(super) fn compiling(id: &str) -> String {
+pub fn compiling(id: &str) -> String {
     trf("Compiling {mod}", &[("mod", id)])
 }
 
