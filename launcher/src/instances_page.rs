@@ -63,6 +63,8 @@ pub(super) struct InstanceDialog {
     pub(super) logo: Option<&'static str>,
     /// The sheet was closed with edits not saved: asking whether to drop them.
     pub(super) discarding: bool,
+    /// Duplicate is copying this instance.
+    pub(super) copying: bool,
     /// A Java instance's maximum memory as set in the sheet, kept with Save: None until changed.
     pub(super) memory: Option<u32>,
 }
@@ -349,6 +351,7 @@ impl Launcher {
                 .map_or(instances::Channel::Stable, |i| i.channel),
             logo: None,
             discarding: false,
+            copying: false,
             memory: None,
             picture: None,
             editing: editing.map(|i| i.id),

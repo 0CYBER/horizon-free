@@ -704,9 +704,10 @@ impl Launcher {
             // it, so they are settled first.
             let unsaved = self.sheet_changed();
             let busy = self.instances.dialog.as_ref().is_some_and(|d| d.busy);
+            let copying = self.instances.dialog.as_ref().is_some_and(|d| d.copying);
             let duplicate = button(
                 "sheet-duplicate",
-                if busy { "Copying…" } else { "Duplicate" },
+                if copying { "Copying…" } else { "Duplicate" },
                 Kind::Secondary,
                 &t,
             );
@@ -714,8 +715,8 @@ impl Launcher {
                 tr("Duplicate"),
                 Some(
                     div()
-                        .child(match (busy, unsaved) {
-                            (true, _) => tr("Making the copy: this closes onto it when it's done."),
+                        .child(match (copying, unsaved) {
+                            (true, _) => tr("Making the copy. When it's ready, this window closes and the copy is selected."),
                             (false, true) => tr(
                                 "Save your edits first: the copy is made from the saved instance.",
                             ),
@@ -920,6 +921,7 @@ impl Launcher {
     fn duplicate_instance(&mut self, from: String, name: String, cx: &mut Context<Self>) {
         if let Some(d) = &mut self.instances.dialog {
             d.busy = true;
+            d.copying = true;
         }
         let source = from.clone();
         let task = cx.background_spawn(async move {
@@ -948,6 +950,7 @@ impl Launcher {
                             (true, Some(d)) => {
                                 if d.editing.as_deref() == Some(source.as_str()) {
                                     d.busy = false;
+                                    d.copying = false;
                                 }
                             }
                             _ => {
@@ -964,6 +967,7 @@ impl Launcher {
                             .filter(|d| d.editing.as_deref() == Some(source.as_str()))
                         {
                             d.busy = false;
+                            d.copying = false;
                         }
                         crate::glass_toast::say(e)
                     }
