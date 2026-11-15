@@ -671,7 +671,7 @@ impl Launcher {
             .child(text_in(13., pal.muted).truncate().child(step.to_owned()))
             .children(self.first_build.map(|bytes| {
                 text_in(13., pal.muted).child(trf(
-                    "First time only: Horizon downloads its mod tools and a compiler ({size}). Later builds take seconds.",
+                    "First time only: Horizon downloads a compiler ({size}) and the mod tools for this game. Later builds take seconds.",
                     &[("size", &storage::format_bytes(bytes))],
                 ))
             }))

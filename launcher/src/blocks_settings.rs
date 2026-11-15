@@ -333,7 +333,7 @@ impl Launcher {
         let build = matches!(self.pending_consent, Some(PendingConsent::Build(_)));
         let bytes = horizon_launcher::rust_toolchain::host().map(|host| host.download_bytes());
         let size = bytes
-            .map(megabytes)
+            .map(storage::format_bytes)
             .unwrap_or_else(|| tr("Unavailable on this platform").into());
         div().absolute().inset_0().occlude().flex().items_center().justify_center().bg(crate::glass_ui::scrim())
             .child(plate(&t).w(px(520.)).p(px(28.)).bg(t.surface).rounded(px(16.)).border_1().border_color(t.rule).shadow_lg().flex().flex_col().gap(px(18.))
@@ -341,7 +341,8 @@ impl Launcher {
                 .child(div().text_size(px(24.)).font_weight(FontWeight::BOLD).child(tr("Allow native mods?")))
                 .children(name.map(|name| div().font_weight(FontWeight::BOLD).child(name)))
                 .child(tr("These mods are programs that run inside your game. Like any program you install, they can read and change your files. Allow them only if you trust who made them."))
-                .child(trf("Horizon will download the Rust compiler ({size}) to build them. You can take this permission back in Settings > Storage.", &[("size", &size)]))
+                .children(horizon_launcher::rust_toolchain::installed().is_none().then(|| trf("Horizon will first download a compiler ({size}) to build them.", &[("size", &size)])))
+                .child(tr("You can take this permission back in Settings > Storage."))
                 .children(self.consent_error.clone().map(|error| div().text_color(t.danger).child(error)))
                 .children(bytes.is_none().then(|| div().text_color(t.danger).child(tr("Native mods can't be built on this computer, so they can't be allowed here."))))
                 .child(div().flex().justify_end().gap(px(12.))

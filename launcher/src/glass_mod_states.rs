@@ -29,6 +29,11 @@ pub(super) struct Preview {
 const BUILD: &str = "nightly-2026-11-13 (afe471c)";
 const MADE_FOR: &str = "nightly-2026-11-10 (b0c1d2e)";
 
+/// The compiler's download, as the build card and the trust question say it.
+fn compiler_bytes() -> u64 {
+    horizon_launcher::rust_toolchain::host().map_or(0, |host| host.download_bytes())
+}
+
 fn misfits(count: usize) -> Vec<Misfit> {
     let ids = [
         ("hook:player_logged_in", Change::Changed),
@@ -247,14 +252,14 @@ impl Launcher {
             }
             ("step", "start") => {
                 self.native_step = Some(tr("Starting the build").into());
-                self.first_build = Some(180_000_000);
+                self.first_build = Some(compiler_bytes());
             }
             ("step", key) => {
                 if let Some(step) = step(key) {
                     self.native_step = Some(step.label());
                     self.native_progress = Some(step.progress());
                     if matches!(step, Step::Rust(_) | Step::Tools { .. }) {
-                        self.first_build = Some(180_000_000);
+                        self.first_build = Some(compiler_bytes());
                     }
                 }
             }
