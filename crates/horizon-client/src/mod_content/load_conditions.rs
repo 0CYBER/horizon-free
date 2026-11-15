@@ -366,9 +366,6 @@ pub fn build_with_conditions(
     // Structures and the pools, sets, processors and features they use, then
     // what mods add to sets, pools and lists, by priority, then in mod and
     // file order.
-    for list in additions.values_mut() {
-        list.sort_by_key(|a| a.priority);
-    }
     let mut placed_doc = None;
     for (bundle, entries) in &worldgen {
         if !base.join(bundle).exists() {
@@ -378,10 +375,8 @@ pub fn build_with_conditions(
         for (id, text) in entries {
             doc.set(id, J::Str(text.clone()));
         }
-        for addition in additions.get(bundle).into_iter().flatten() {
-            addition
-                .apply(&mut doc)
-                .map_err(|e| format!("{bundle}: {e}"))?;
+        if let Some(list) = additions.get_mut(bundle) {
+            apply_additions(&mut doc, list).map_err(|e| format!("{bundle}: {e}"))?;
         }
         overlay.write(bundle, &serde_json::to_vec(&doc)?)?;
         if *bundle == PLACED_FEATURES {

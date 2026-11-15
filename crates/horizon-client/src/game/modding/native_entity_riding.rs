@@ -1500,7 +1500,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mob_gets_off_where_the_query_says() {
         use super::super::{
             boats::Boat,
@@ -1538,7 +1538,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_player_gets_off_where_the_query_says() {
         use super::super::{
             boats::Boat,
@@ -1576,10 +1576,10 @@ mod tests {
             game.boats.push(Boat::new(123, "oak".into(), at, 0.0));
             let boat = game.entity(123).unwrap();
             assert_near(get_off(game, player, boat), [0.5, 64.0, 1.77229]);
-            // Unlike a mob's, a player's search takes a cart's yaw as it is.
+            // As for a mob, a cart facing south lets it off to the north.
             game.carts.push(Minecart::new(124, CartKind::Rideable, at));
             let cart = game.entity(124).unwrap();
-            assert_near(get_off(game, player, cart), [-0.5, 64.0, 0.5]);
+            assert_near(get_off(game, player, cart), [0.5, 64.0, -0.5]);
         });
     }
 

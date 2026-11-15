@@ -111,6 +111,14 @@ impl Navigation {
     pub fn stop(&mut self) {
         self.path = None;
     }
+    /// A mob whose AI step a mod paused (`mobs::ai_pause`) keeps its path,
+    /// and `doStuckDetection`'s timeout clock does not count the pause: on
+    /// resume it adds one tick, not the paused game time.
+    pub(super) fn hold_timeout_clock(&mut self, game_time: i64) {
+        if self.path.as_ref().is_some_and(|p| !p.is_done()) {
+            self.last_timeout_check = game_time;
+        }
+    }
     fn reset_stuck_timeout(&mut self) {
         self.timeout_node = [0; 3];
         self.timeout_timer = 0;

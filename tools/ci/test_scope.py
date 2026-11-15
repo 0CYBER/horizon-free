@@ -39,8 +39,9 @@ MOD_API_GEN = [
     "Cargo.lock", "crates/horizon-assets/src", "crates/horizon-client", "crates/horizon-client-core/src",
     "crates/horizon-client-render", "crates/horizon-core/src", "crates/horizon-engine-slots", "crates/horizon-items",
     "crates/horizon-mod-api", "crates/horizon-mod-api-macros/src/lib.rs", "crates/horizon-mod-package/src",
-    "crates/horizon-mod-render", "crates/horizon-mod-runtime/src", "crates/horizon-mod-vocab/src",
-    "crates/horizon-world", "packaging/executable_link.rs", "tools/layering/mod_vocab_state.json", "tools/refactors",
+    "crates/horizon-mod-render", "crates/horizon-mod-runtime/src", "crates/horizon-mod-vocab/behaviours",
+    "crates/horizon-mod-vocab/src", "crates/horizon-world", "packaging/executable_link.rs",
+    "tools/layering/mod_vocab_state.json",
 ]
 READERS = {
     "cargo-horizon-mod": [

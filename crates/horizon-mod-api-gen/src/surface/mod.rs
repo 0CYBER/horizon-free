@@ -2,6 +2,7 @@
 //! come from the catalog, with their arguments from the generated event types; trait roles,
 //! sides and "Not on wasm" from the wire index; everything else from a walk of the public items
 //! of `horizon-mod-api` and the vocabulary it re-exports.
+pub mod behaviours;
 mod expand;
 pub mod notes;
 mod rust;
@@ -192,6 +193,7 @@ impl Export {
             ("variants", s.types.iter().map(|t| t.variants.len()).sum()),
             ("parts", s.parts.len()),
             ("capabilities", s.capabilities.len()),
+            ("behaviours", s.behaviours.len()),
             ("wire", s.types.iter().filter(|t| t.contract.wire).count()),
             ("wire_derive", form("derive")),
             ("wire_fields", form("fields")),
@@ -814,6 +816,8 @@ pub(crate) fn build(
     let hooks = hook_records(hooks, &types, &mut notes);
     let parts = part_records(&hooks, &traits, &mut notes);
     capabilities.extend(manifest_capabilities(root, &mut notes));
+    let behaviours = behaviours::read(root, &root.join("crates/horizon-mod-vocab/behaviours"))
+        .map_err(|e| e.to_string())?;
     notes.sort();
     notes.dedup();
     Ok(Export {
@@ -826,7 +830,8 @@ pub(crate) fn build(
             types,
             parts,
             capabilities,
-        ),
+        )
+        .with_behaviours(behaviours),
         notes,
     })
 }

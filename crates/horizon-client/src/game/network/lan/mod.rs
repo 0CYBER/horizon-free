@@ -2279,6 +2279,7 @@ impl Game<'_> {
                         let mut host = self.lan.take()?;
                         self.cleanup_fake_player(&mut host, &guest);
                         self.lan = Some(host);
+                        self.native_guest_left(&guest);
                         continue;
                     }
                     // The menu they had open closes, in the level they were in
@@ -2313,54 +2314,7 @@ impl Game<'_> {
                     host.play.remove(&guest.conn);
                     host.forget_menus(guest.conn);
                     self.clear_guest_book_connection(guest.conn);
-                    // A held player was recorded as joined at its login: it leaves too.
-                    if self.is_dedicated_server() && (guest.placed || guest.held) {
-                        super::dedicated::events::record(
-                            "leave",
-                            &guest.name,
-                            guest.uuid,
-                            serde_json::json!({ "reason": guest.left_reason }),
-                        );
-                        if guest.held && !guest.placed {
-                            // Never announced, so no "left the game" either.
-                            super::dedicated::log(
-                                "INFO",
-                                &horizon_client::lan::arrivals::dropped_line(
-                                    &guest.name,
-                                    &guest.left_reason,
-                                ),
-                            );
-                        } else {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("{} lost connection: {}", guest.name, guest.left_reason),
-                            );
-                        }
-                        // A player moved to another server without `announce` was not
-                        // announced as leaving, so the line is not logged either; a held
-                        // player was never announced at all.
-                        if guest.placed && !guest.quiet_leave {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("System chat: {} left the game", guest.name),
-                            );
-                        }
-                    } else if self.player.is_some() && guest.placed && !guest.quiet_leave {
-                        // ServerGamePacketListenerImpl.removePlayerFromWorld.
-                        let who = self.player_text(&guest.name, guest.uuid);
-                        self.system_message(
-                            Text::translate("multiplayer.player.left", &[who])
-                                .with_color(horizon_client::text::YELLOW),
-                        );
-                    }
-                    if guest.placed
-                        && self
-                            .lan
-                            .as_ref()
-                            .is_some_and(|host| !host.players_told_left)
-                    {
-                        self.native_player_logged_out(guest.uuid, &guest.name);
-                    }
+                    self.native_guest_left(&guest);
                 }
                 HostEvent::Flight { conn, flying } => {
                     self.lan_flight_toggled(conn, flying);

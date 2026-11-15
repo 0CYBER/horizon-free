@@ -913,6 +913,8 @@ impl Game<'_> {
         }
         self.write_leash(&mut tag, id);
         write_attachments(&mut tag, id, &self.entity_attachments);
+        // A mod's AI pause beside the mods' attachments, whose map would drop it.
+        entity_nbt::write_ai_paused(self.mob_at(object).ai.ai_paused, &mut tag);
         tag
     }
 

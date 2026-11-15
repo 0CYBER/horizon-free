@@ -21,6 +21,8 @@ mod boat_load;
 pub use boat_load::boat_from_nbt;
 mod projectile_fields;
 use projectile_fields::{load_projectile_entity_fields, put_projectile_entity_fields};
+mod ai_pause;
+pub use ai_pause::write_ai_paused;
 mod mob_death;
 mod refs;
 mod saved_attributes;
@@ -595,6 +597,7 @@ pub fn mob_to_nbt(
         put(&mut tag, key, value);
     }
     mob_death::write(m, &mut tag);
+    ai_pause::write_ai_paused(m.ai.ai_paused, &mut tag);
     // Mob.addAdditionalSaveData: hasHome means radius != -1, including -2.
     // Species writers below retain their own home_pos override.
     let Tag::Compound(map) = &mut tag else {
@@ -1904,6 +1907,7 @@ fn mob_from_nbt_at(
         m.extra.set_main_hand(None);
     }
     mob_death::read(&mut m, tag);
+    m.ai.ai_paused = ai_pause::read(tag);
     m.impulse_grace_time =
         number(tag.get("current_impulse_context_reset_grace_time")).unwrap_or(0) as i32;
     // Mob.readAdditionalSaveData overrides what the constructor set (copper

@@ -47,12 +47,14 @@ one of three classes:
 - **Breaking**: it can stop any mod that uses the item from compiling or meaning the same. A record removed; a
   contract changed (a hook's side or kind, a retyped field or argument, a signature, a method no longer on wasm); a
   variant added to an exhaustive enum; a required item added to a trait mods implement; an impl a type no longer
-  has.
-- **Conditional**: it breaks only some mods, which the [fit test](04-fit.md) finds from each mod's source. A field
+  has; a behaviour removed.
+- **Conditional**: it breaks only some mods, which the [fit test](04-fit.md) finds from each mod's source (except a
+  behaviour's `version`, which no fit report shows: a mod relies on a behaviour without naming it). A field
   added to a struct mods can build, or an argument added to a hook (only a mod that writes it out in full); a struct
   no longer constructible; a public path that goes (only a mod that writes that path); a hook's `version` (only a mod
-  whose manifest names it); a type's wire form or layout (wasm mods only).
-- **Additive**: a new record, and changes that only widen an item: now on wasm, an impl gained, a new public path, an
+  whose manifest names it) or a behaviour's `version` (only a mod that relies on it); a type's wire form or layout
+  (wasm mods only).
+- **Additive**: a new record (a behaviour too), and changes that only widen an item: now on wasm, an impl gained, a new public path, an
   item no longer required, an enum no longer `#[non_exhaustive]`.
 
 Each change says what changed in words a mod author can act on, for example
@@ -93,6 +95,27 @@ migrate = "Take `ServerPlayerRef` instead of `PlayerRef`."   # optional
 A note with an unknown key, a missing `ids` or `why`, an empty `ids`, or an id that did not change is refused. The SDK's `sdk.json`
 carries the notes of the changes since the SDK before it (`surface.notes`), and `cargo horizon-mod update` prints a
 changed item's `migrate` line beside it.
+
+## Behaviours
+
+A few promises are neither a type nor a signature, so no other record can pin them: how `horizon:add_to` files merge,
+or what block entity a block with a vanilla template gets. Each is a `behaviour:<name>` record, generated from one
+file in `crates/horizon-mod-vocab/behaviours/<name>.toml` (the file name is the name; there is no list to keep):
+
+```toml
+version = 1
+doc = "What the engine promises, stated so that a test could check it."
+tests = ["crates/horizon-client/src/some_tests.rs::the_test_that_pins_it"]
+```
+
+`version` starts at 1 and goes up when a mod that relies on the behaviour can see a different meaning. `tests` lists
+the tests that pin the promise, each as `<file path from the repository root>::<fn name>`; the export refuses a behaviour whose
+test has no `fn` of that name, and a malformed file, naming it. `doc` and `tests` are outside the record's hash.
+
+The diff treats a behaviour like any record: a new one is additive, a removed one is breaking (so it needs a change
+note that names `behaviour:<name>`), and a `version` change is conditional, for the mods that rely on it. Nothing in a
+mod's code uses a behaviour, so it never appears in a fit report. Only promises kept across builds belong here, not
+diagnostics or behaviour that vanilla fixes.
 
 ## Hook versions
 
