@@ -23,6 +23,7 @@ pub(crate) mod fluid_draw;
 #[doc(hidden)]
 pub mod fog;
 pub(crate) mod gui_clip;
+pub(crate) mod gui_entity;
 pub(crate) mod gui_layers;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]

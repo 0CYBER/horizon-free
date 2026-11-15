@@ -56,6 +56,52 @@ fn custom_ingredient_tags_reach_hook_and_matching_record() {
     );
 }
 
+struct WidthIngredient;
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for WidthIngredient {
+    fn ingredient(
+        &self,
+        _: &dyn mod_api::DataLoadContext,
+        event: &mut mod_api::IngredientEvent<'_>,
+    ) {
+        use horizon_core::nbt::Tag;
+        let want = [
+            ("flag", Tag::Byte(1)),
+            ("one", Tag::Byte(1)),
+            ("small", Tag::Short(300)),
+            ("big", Tag::Int(100000)),
+            ("half", Tag::Float(0.5f32.to_bits())),
+            ("tenth", Tag::Double(0.1f64.to_bits())),
+            ("whole", Tag::Byte(1)),
+            ("exp", Tag::Short(1000)),
+        ];
+        for (key, tag) in want {
+            assert_eq!(event.data.get(&key.into()), Some(&tag), "{key}");
+        }
+        event.items.push("minecraft:emerald".into());
+    }
+}
+
+#[test]
+fn custom_ingredient_scalars_reach_hook_with_narrowest_width() {
+    let items = super::Items::for_tests(Default::default());
+    mod_platform::testing::with_mods(
+        vec![mod_api::ModEntry::new("width", Box::new(WidthIngredient))].into(),
+        || {
+            let context = LoadContext::new(
+                DataLoadOrigin::ServerDataLoad,
+                std::sync::Arc::new(LoadInputs::new(Default::default(), Default::default())),
+                [],
+            );
+            let mut source = json!({"type": "width:ingredient", "flag": true, "one": 1,
+            "small": 300, "big": 100000, "half": 0.5, "tenth": 0.1, "whole": 1.0, "exp": 1e3});
+            super::Ingredient::resolve(&mut source, &context);
+            let parsed = super::Ingredient::parse(&source, &items).unwrap();
+            assert_eq!(parsed.order, ["minecraft:emerald"]);
+        },
+    );
+}
+
 #[test]
 fn ingredient_depth_128_matches_clones_and_drops_on_two_mib_stack() {
     std::thread::Builder::new()

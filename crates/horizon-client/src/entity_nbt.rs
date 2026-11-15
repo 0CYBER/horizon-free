@@ -1760,7 +1760,7 @@ fn home_block_pos(tag: Option<&Tag>) -> Option<[i32; 3]> {
     }
 }
 mod mob_load;
-pub use mob_load::{mob_from_nbt, mob_from_nbt_with_random};
+pub use mob_load::{mob_from_nbt, mob_from_nbt_remote, mob_from_nbt_with_random};
 
 fn mob_from_nbt_at(
     tag: &Tag,
@@ -1769,10 +1769,15 @@ fn mob_from_nbt_at(
     registry: Option<&BlockRegistry>,
     random: horizon_core::random::LegacyRandom,
     position: Vec3,
+    authoritative: bool,
 ) -> Option<Mob> {
     let kind = types.get(&self::kind(tag)?)?.clone();
     let [yaw, pitch] = rotation(tag);
-    let mut m = Mob::with_random(id, kind, position, yaw, random);
+    let mut m = if authoritative {
+        Mob::with_random(id, kind, position, yaw, random)
+    } else {
+        Mob::remote_with_random(id, kind, position, yaw, random)
+    };
     m.velocity = motion(tag);
     m.head_pitch = pitch;
     // LivingEntity.readAdditionalSaveData: `setSharedFlag(7, getBooleanOr(FallFlying, false))`.

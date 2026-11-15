@@ -2228,6 +2228,10 @@ mod tests {
             let pos = [event.pos.x, event.pos.y, event.pos.z];
             self.seen.lock().unwrap().push(pos);
             assert!(event.breaker.is_none() && event.tool.is_none());
+            assert!(
+                event.breaker_entity.is_none() && event.block_entity.is_none(),
+                "a blast and an untagged break give no breaker entity or block entity"
+            );
             assert_eq!(event.drops.len(), 1);
             assert_eq!(
                 event.drops[0].stack.count(),

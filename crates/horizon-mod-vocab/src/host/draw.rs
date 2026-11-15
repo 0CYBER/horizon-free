@@ -104,10 +104,24 @@ pub trait DrawContext {
     /// outside the box is cut off, and the scene has a depth of its own, so
     /// it never covers the screen's other drawing or is covered by it but in
     /// the order drawn. Draw it from a screen's drawing hook
-    /// (`screen_draw`). A client's call; nothing is drawn on a server.
+    /// (`screen_draw`). A client's call; on a server it is refused.
+    ///
+    /// The scene may live too: entities standing in it (`scene.entities`, the
+    /// descriptions [`entity`](Self::entity) takes, prepared and drawn by the same
+    /// path, sorted with the blocks) and particles (the blocks' own animate ticks,
+    /// `SCENE_ANIMATE_PICKS` picks a tick among its blocks, and the mod's), ticked by
+    /// a clock the scene owns, kept per calling mod and clock id. A scene of blocks
+    /// alone keeps no state. Refused by name ([`SceneError`]): over a cap (16
+    /// entities, 512 live particles, 4 animating scenes a frame), an entity
+    /// `entity` would refuse, or input that isn't drawable.
     /// API @API:scenes_in_screens@.
-    fn draw_scene(&mut self, rect: [f32; 4], blocks: &[SceneBlock], view: SceneView) {
-        unimplemented!("DrawContext::draw_scene")
+    fn draw_scene(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+    ) -> Result<(), SceneError> {
+        Err(SceneError::Unavailable)
     }
     /// `GuiGraphics.enableScissor`: what this hook call draws from now on, until the matching
     /// [`pop_clip`](Self::pop_clip), is cut to `rect` (`[x, y, w, h]` in GUI pixels, as
@@ -127,6 +141,19 @@ pub trait DrawContext {
     /// [`GuiClipRefusal::NoneOpen`] when this hook call has none open.
     fn pop_clip(&mut self) -> Result<(), GuiClipRefusal> {
         unimplemented!("DrawContext::pop_clip")
+    }
+    /// Draws living entity `entity` standing in `view.rect`, `view.size` GUI
+    /// pixels a block, turned as `view.look` says: vanilla's
+    /// `InventoryScreen.renderEntityInInventoryFollowsMouse` (`GuiEntityLook::At`
+    /// the cursor) and `renderEntityInInventory` (`GuiEntityLook::Turned`), as
+    /// a mob page, an entity icon or a data model's mob shows it. It is drawn by
+    /// its type's renderer as in the world (a mod's `register_entity_renderers`
+    /// renderer and `register_entity_layers` layers included, else the vanilla
+    /// model), full bright, lit by `Lighting.ENTITY_IN_UI`'s two lights, with a
+    /// depth of its own and cut off at the box. A client's call from a drawing
+    /// hook (`screen_draw`, `gui_render_post`); on a server it is refused.
+    fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
+        Err(GuiEntityError::Unavailable)
     }
     /// `Screen.renderMenuBackground`: draws the tiled menu background (32x32) across `rect`
     /// (`[x, y, w, h]` in GUI pixels). If `in_world` is true, uses the dark translucent

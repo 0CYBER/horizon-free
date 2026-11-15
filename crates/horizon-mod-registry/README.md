@@ -80,8 +80,10 @@ REGISTRY_PUBLIC_URL=http://localhost:4173 REGISTRY_SESSION_KEY=... GITHUB_CLIENT
 | `PORT` | Default 8080 |
 
 On Railway it is the service `horizon-mod-registry` of the project `horizon-site`, next to the website: built from
-`main` with this `Dockerfile` from the repository root, health check `/healthz`, no public domain, and the volume
-`registry-data` at `/data` for the ratings. The
+`main` with this `Dockerfile` from the repository root (it copies all of `crates/`, `tools/layering/mod_vocab_state.json` and
+`tools/mixins/narrow-reference-rule.patch`: `horizon-mod-vocab`'s build script reads the game's hook sources and that
+inventory, and `horizon-mod-package` includes that patch; the `mod-registry` workflow builds the image), health check `/healthz`, no public
+domain, and the volume `registry-data` at `/data` for the ratings. The
 website's Caddy sends `/api/mods/*` to it over Railway's private network (`REGISTRY_UPSTREAM` on the website service:
 `http://horizon-mod-registry.railway.internal:8080`). `railway.json` lists the same settings; Railway reads them from
 the service, not from the file.
