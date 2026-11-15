@@ -7,6 +7,7 @@ use super::{
     details::{Details, GitHub, Link},
     download, installed, java, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
 };
+use crate::i18n::trf;
 use horizon_mod_package::index::{self, Index, Trust};
 use std::collections::HashMap;
 use std::fs;
@@ -355,11 +356,7 @@ pub fn trust_and_capabilities(
                 .iter()
                 .map(|c| format!("May {}", c.describe())),
         );
-        lines.extend(
-            v.capabilities
-                .unsupported()
-                .map(|why| format!("Can't install: {why}")),
-        );
+        lines.extend(unsupported_capabilities(&v.capabilities));
         if v.capabilities.is_empty() {
             lines.push("Asks for nothing beyond its own log".into());
         }
@@ -408,8 +405,18 @@ fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version 
         blocked: index
             .revoked(&p.id, &v.file.sha256)
             .map(|r| format!("taken down: {}", r.reason))
-            .or_else(|| v.capabilities.unsupported()),
+            .or_else(|| unsupported_capabilities(&v.capabilities)),
     }
+}
+
+fn unsupported_capabilities(capabilities: &index::Capabilities) -> Option<String> {
+    let unknown = capabilities.unknown();
+    (!unknown.is_empty()).then(|| {
+        trf(
+            "Can't install: it asks for {names}, which this Horizon doesn't have",
+            &[("names", &unknown.join(", "))],
+        )
+    })
 }
 
 /// A GitHub login as GitHub allows it (letters, digits, single dashes, at most 39), so an index
