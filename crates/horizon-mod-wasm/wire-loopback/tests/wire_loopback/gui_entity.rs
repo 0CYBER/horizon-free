@@ -1,7 +1,7 @@
 use super::*;
 use mod_api::{
-    Compound, DrawContext, EntityRef, GuiEntity, GuiEntityError, GuiEntityLook, GuiEntityView,
-    Tag, WorldEpoch,
+    Compound, DrawContext, EntityRef, GuiEntity, GuiEntityError, GuiEntityLook, GuiEntityView, Tag,
+    WorldEpoch,
 };
 
 /// A screen's drawing that keeps each entity it is asked to draw, refusing a handle of id 0.
@@ -107,7 +107,10 @@ fn a_wasm_mods_gui_entity_crosses_whole_and_its_refusal_comes_back() {
     })));
     let mut sent = Vec::new();
     for (entity, view, answer) in asks() {
-        assert_eq!(DrawContext::entity(&mut guest::Guest, &entity, view), answer);
+        assert_eq!(
+            DrawContext::entity(&mut guest::Guest, &entity, view),
+            answer
+        );
         sent.push((entity, view));
     }
     guest::set_transport(None);
