@@ -678,14 +678,14 @@ impl Game<'_> {
             &mut self.applied_modifiers,
             std::mem::take(&mut play.modifiers),
         );
-        // Its worn armour on its attributes, when it changed.
+        // Its equipment on its attributes, when it changed (once its tick saw a new hand item).
         let selected_item = self.inventory.get(self.selected).and_then(Option::as_ref);
         let unchanged = play.equipped.as_deref().is_some_and(|eq| {
             eq.len() == self.armor.len() + 1
                 && eq[..self.armor.len()] == self.armor[..]
                 && eq[self.armor.len()].as_ref() == selected_item
         });
-        if !unchanged {
+        if !unchanged && (play.equipped.is_none() || self.held_item_ticked()) {
             let mut equipped: Vec<Option<ItemStack>> = self.armor.to_vec();
             equipped.push(selected_item.cloned());
             self.apply_equipment();
