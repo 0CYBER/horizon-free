@@ -17,4 +17,4 @@ pub use manifest::{
     PackOption, PackTexture, PageItem, Primaries, SCHEMA, SpriteTag, Stage,
 };
 pub use package::{EXTENSION, Pack};
-pub use stages::{Composed, StageKind, compose};
+pub use stages::{Composed, StageKind, compose, compose_scene};

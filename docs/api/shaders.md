@@ -90,7 +90,7 @@ min = 0.0
 max = 2.0
 step = 0.05
 
-[[materials]]              # 1024 at most: MaterialInput.material, the first entry that matches
+[[materials]]              # 1024 at most: MaterialInput.material (and RayHit.material), the first entry that matches
 id = 10                    # 1 to 65535; 0 is a sprite no entry names
 sprites = ["block/*_leaves"]   # sprite names, any number of * each
 blocks = ["oak_log", "grass_block:snowy=true"]   # optional: the sprites these blocks' models draw with, where no entry's sprites name them
@@ -123,7 +123,7 @@ particles = ["firefly"]    # names, `firefly` or `minecraft:firefly`; the first 
 color = [0.8, 0.9, 0.4]    # each channel 0 to 1; the particle's alpha is its intensity
 reach = 4.0                # blocks, 0.25 to 16; the 16 nearest lights shine, read by MaterialInput.colored_light
 
-[[tags]]                   # 32 at most: bit i of MaterialInput.tags is the i-th tag
+[[tags]]                   # 32 at most: bit i of MaterialInput.tags (and RayHit.tags) is the i-th tag
 id = "glass"
 sprites = ["block/glass", "block/*_stained_glass"]   # sprite names, at most one * each
 
@@ -222,12 +222,14 @@ file = "entity.wgsl"
 blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 
+[ray_tracing]              # optional, needs [[post]], no keys: the post stage gets `trace` and `trace_any`
 [motion]                   # optional, needs [[post]]: the post stage's motion guide (not drawn yet)
 ```
 
 0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]`, `[entity]`,
-`[frame]` or `[motion]` is refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a test
-pack of the SDK.
+`[frame]`, `[ray_tracing]` or `[motion]` is refused. The example's port is
+`crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK, and `packs/traced_shadows` beside it is the
+smallest pack that traces rays ([the guide](../shaders.md#ray-tracing)).
 
 ## Testing a pack frame by frame
 
@@ -276,6 +278,13 @@ draws them itself (the material stage covers terrain only). The first-person han
   reference says; it pointed the other way, so a normal map turned into world axes by the reference's rule had both
   in-plane components negated. `w` is unchanged. A 0.2 pack that negated the tangent to make up for it must stop.
   API 0.1 keeps the old direction: its WGSL is frozen.
+- 2026-11-12: API 0.2 (additions, experimental): `[ray_tracing]`: the post stage of a pack that sets it gets
+  `fn trace(origin, direction, max_distance) -> RayHit` and `fn trace_any(...) -> bool`, which read the terrain around
+  the camera where the game traces rays (`HORIZON_RAY_TRACING=1` on a GPU with ray queries) and miss where it doesn't,
+  and its `Frame` gets `has_ray_tracing` and `ray_distance`, in what was a gap before `luminance`. `horizon-shader
+  check` builds such a post stage both ways and refuses a pack that names a ray query itself. `[[tags]]` and
+  `[[materials]]` need no `[material]` stage in such a pack: `RayHit.tags` and `RayHit.material` read them. A pack
+  without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
 - 2026-11-10: API 0.2 (additions, experimental): the `[entity]` stage, `fn entity(input: EntityInput) -> Surface`,
   for entities, block entities, items and particles, with the material stage's shadow maps and coloured lights. The
   reference gives vanilla's own as the stage's function. `horizon-shader check` takes it; the game refuses a pack

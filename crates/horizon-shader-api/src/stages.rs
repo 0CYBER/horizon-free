@@ -3,8 +3,8 @@
 //! pack's files to build a stage: the prelude before (the inputs and the
 //! resources), the entry points after.
 use crate::inputs::{
-    DISPLACEMENT_INPUT, ENTITY_INPUT, Frame, MATERIAL_INPUT, POST_INPUT, SKY_INPUT, SURFACE,
-    Struct, TONEMAP_INPUT, VERTEX_INPUT, WEATHER_INPUT,
+    DISPLACEMENT_INPUT, ENTITY_INPUT, Frame, MATERIAL_INPUT, POST_INPUT, RAY_HIT, SKY_INPUT,
+    SURFACE, Struct, TONEMAP_INPUT, VERTEX_INPUT, WEATHER_INPUT,
 };
 use crate::manifest::Api;
 use crate::package::Pack;
@@ -483,6 +483,198 @@ fn surface_at(texel: vec2<i32>) -> SurfaceData {
 }
 ";
 
+/// What a pack's prelude holds of the scene rays are traced through (`[ray_tracing]`, 0.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tracing {
+    /// The pack didn't ask: none of it.
+    None,
+    /// The pack asked and the scene isn't there (a GPU without ray queries, ray tracing off):
+    /// `trace` and `trace_any` that miss, and nothing a device without ray queries refuses.
+    Stub,
+    /// The pack asked and the renderer binds the scene.
+    Scene,
+}
+
+/// The scene in the post stage's group 3, for a pack with `[ray_tracing]` while the renderer
+/// has it: the acceleration structure first.
+pub const RAY_SCENE_BINDING: u32 = 48;
+/// Every traced section's quads as the mesher's vertices (six words each, four a quad).
+pub const RAY_STORE_BINDING: u32 = 49;
+/// `horizon_RaySpace`, 16 bytes: the camera in the scene's space (three floats), then how many
+/// layers a sprite array holds (a `u32`).
+pub const RAY_SPACE_BINDING: u32 = 50;
+/// Two words per sprite layer: the pack's `[[materials]]` id, then its `[[tags]]` bits.
+pub const RAY_LAYERS_BINDING: u32 = 51;
+/// The first of the `RAY_SPRITE_ARRAYS` block sprite arrays, the others after.
+pub const RAY_SPRITES_BINDING: u32 = 52;
+pub const RAY_SPRITE_ARRAYS: u32 = 8;
+
+/// The directive the scene's prelude starts with: WGSL takes it before any declaration.
+const RAY_ENABLE: &str = "enable wgpu_ray_query;\n";
+
+/// `trace` and `trace_any` without the scene: every ray misses.
+const RAY_STUB: &str = "\
+// The nearest surface from the camera-relative `origin` along the unit vector `direction`,
+// within `max_distance` blocks. The scene isn't there (`frame.has_ray_tracing` is 0): a miss.
+fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
+    return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
+        vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u);
+}
+// Whether anything lies within `max_distance` blocks of `origin` along `direction`.
+fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
+    return false;
+}
+";
+
+/// `trace` and `trace_any` through the scene the renderer binds (gfx/ray_scene.rs): a hit is a
+/// triangle of a quad in the store, read as terrain.wgsl reads the mesher's vertices.
+const RAY_SCENE: &str = "\
+struct horizon_RaySpace {
+    // The camera in the scene's space: from the corner of the scene's anchor column, in blocks.
+    camera: vec3<f32>,
+    // The layers one sprite array holds (terrain.wgsl's `SPRITE_SPLIT`).
+    sprite_split: u32,
+}
+@group(3) @binding(48) var horizon_ray_scene: acceleration_structure;
+// Every traced section's quads as `TerrainVertex` (six words: the position, the uv's two u16,
+// the layer and the light, the RGBA8 colour), four to a quad; an instance's custom data is
+// its section's first quad.
+@group(3) @binding(49) var<storage, read> horizon_ray_store: array<u32>;
+@group(3) @binding(50) var<uniform> horizon_ray_space: horizon_RaySpace;
+// Two words a sprite layer: the pack's material id, then its tags.
+@group(3) @binding(51) var<storage, read> horizon_ray_layers: array<u32>;
+@group(3) @binding(52) var horizon_ray_sprites_0: texture_2d_array<f32>;
+@group(3) @binding(53) var horizon_ray_sprites_1: texture_2d_array<f32>;
+@group(3) @binding(54) var horizon_ray_sprites_2: texture_2d_array<f32>;
+@group(3) @binding(55) var horizon_ray_sprites_3: texture_2d_array<f32>;
+@group(3) @binding(56) var horizon_ray_sprites_4: texture_2d_array<f32>;
+@group(3) @binding(57) var horizon_ray_sprites_5: texture_2d_array<f32>;
+@group(3) @binding(58) var horizon_ray_sprites_6: texture_2d_array<f32>;
+@group(3) @binding(59) var horizon_ray_sprites_7: texture_2d_array<f32>;
+// A sprite's texel at full size (mip level 0), from whichever array holds `layer`, as stored.
+fn horizon_ray_texel(layer: u32, uv: vec2<f32>) -> vec4<f32> {
+    let l = i32(layer % horizon_ray_space.sprite_split);
+    let array = layer / horizon_ray_space.sprite_split;
+    var size: vec2<u32>;
+    switch array {
+        case 0u: { size = textureDimensions(horizon_ray_sprites_0); }
+        case 1u: { size = textureDimensions(horizon_ray_sprites_1); }
+        case 2u: { size = textureDimensions(horizon_ray_sprites_2); }
+        case 3u: { size = textureDimensions(horizon_ray_sprites_3); }
+        case 4u: { size = textureDimensions(horizon_ray_sprites_4); }
+        case 5u: { size = textureDimensions(horizon_ray_sprites_5); }
+        case 6u: { size = textureDimensions(horizon_ray_sprites_6); }
+        default: { size = textureDimensions(horizon_ray_sprites_7); }
+    }
+    // terrain.wgsl's `tile_uv`: a sprite's own uv, 1 included, stays inside it.
+    let inside = uv - max(ceil(uv) - 1.0, vec2<f32>(0.0));
+    let t = clamp(vec2<i32>(inside * vec2<f32>(size)), vec2<i32>(0), vec2<i32>(size) - 1);
+    switch array {
+        case 0u: { return textureLoad(horizon_ray_sprites_0, t, l, 0); }
+        case 1u: { return textureLoad(horizon_ray_sprites_1, t, l, 0); }
+        case 2u: { return textureLoad(horizon_ray_sprites_2, t, l, 0); }
+        case 3u: { return textureLoad(horizon_ray_sprites_3, t, l, 0); }
+        case 4u: { return textureLoad(horizon_ray_sprites_4, t, l, 0); }
+        case 5u: { return textureLoad(horizon_ray_sprites_5, t, l, 0); }
+        case 6u: { return textureLoad(horizon_ray_sprites_6, t, l, 0); }
+        default: { return textureLoad(horizon_ray_sprites_7, t, l, 0); }
+    }
+}
+fn horizon_ray_word(vertex: u32, i: u32) -> u32 {
+    return horizon_ray_store[vertex * 6u + i];
+}
+// A corner's position, relative to its section.
+fn horizon_ray_corner(vertex: u32) -> vec3<f32> {
+    return vec3<f32>(bitcast<f32>(horizon_ray_word(vertex, 0u)),
+        bitcast<f32>(horizon_ray_word(vertex, 1u)), bitcast<f32>(horizon_ray_word(vertex, 2u)));
+}
+// A corner's uv in its sprite: 32768 steps a unit (terrain.wgsl's `terrain_uv`).
+fn horizon_ray_corner_uv(vertex: u32) -> vec2<f32> {
+    let w = horizon_ray_word(vertex, 3u);
+    return vec2<f32>(f32(w & 0xffffu), f32(w >> 16u)) / 32768.0;
+}
+// A triangle's three corners in the store and the point's weight on each. A quad's
+// triangles are its corners (0, 1, 2) and (0, 2, 3).
+struct horizon_RayTriangle {
+    corners: vec3<u32>,
+    weights: vec3<f32>,
+}
+fn horizon_ray_triangle(quad: u32, primitive: u32, barycentrics: vec2<f32>) -> horizon_RayTriangle {
+    let first = (quad + primitive / 2u) * 4u;
+    let second = (primitive & 1u) == 1u;
+    return horizon_RayTriangle(
+        vec3<u32>(first, first + select(1u, 2u, second), first + select(2u, 3u, second)),
+        vec3<f32>(1.0 - barycentrics.x - barycentrics.y, barycentrics.x, barycentrics.y));
+}
+fn horizon_ray_uv(t: horizon_RayTriangle) -> vec2<f32> {
+    return horizon_ray_corner_uv(t.corners.x) * t.weights.x
+        + horizon_ray_corner_uv(t.corners.y) * t.weights.y
+        + horizon_ray_corner_uv(t.corners.z) * t.weights.z;
+}
+// Whether a triangle stops the ray where it crosses it: terrain's cutout test. Bit 15 of the
+// layer marks a quad over opaque texels; another stops it where its texel's alpha is 0.5 or more.
+fn horizon_ray_stops(c: RayIntersection) -> bool {
+    let t = horizon_ray_triangle(c.instance_custom_data, c.primitive_index, c.barycentrics);
+    let layer = horizon_ray_word(t.corners.x, 4u) & 0xffffu;
+    if (layer & 0x8000u) != 0u {
+        return true;
+    }
+    return horizon_ray_texel(layer, horizon_ray_uv(t)).a >= 0.5;
+}
+// The nearest triangle that stops the ray, or with `first` any of them.
+fn horizon_ray_cast(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, first: bool) -> RayIntersection {
+    var query: ray_query;
+    let flags = select(RAY_FLAG_NONE, RAY_FLAG_TERMINATE_ON_FIRST_HIT, first);
+    rayQueryInitialize(&query, horizon_ray_scene, RayDesc(flags, 0xffu, 0.0,
+        max(max_distance, 0.0), origin + horizon_ray_space.camera, direction));
+    while rayQueryProceed(&query) {
+        if horizon_ray_stops(rayQueryGetCandidateIntersection(&query)) {
+            rayQueryConfirmIntersection(&query);
+        }
+    }
+    return rayQueryGetCommittedIntersection(&query);
+}
+// The nearest surface from the camera-relative `origin` along the unit vector `direction`,
+// within `max_distance` blocks; `distance` is negative where there is none.
+fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
+    let hit = horizon_ray_cast(origin, direction, max_distance, false);
+    if hit.kind == RAY_QUERY_INTERSECTION_NONE {
+        return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
+            vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u);
+    }
+    let t = horizon_ray_triangle(hit.instance_custom_data, hit.primitive_index, hit.barycentrics);
+    let a = horizon_ray_corner(t.corners.x);
+    var normal = normalize(cross(horizon_ray_corner(t.corners.y) - a, horizon_ray_corner(t.corners.z) - a));
+    if dot(normal, direction) > 0.0 {
+        normal = -normal;
+    }
+    let words = vec3<u32>(horizon_ray_word(t.corners.x, 4u), horizon_ray_word(t.corners.y, 4u),
+        horizon_ray_word(t.corners.z, 4u));
+    let layer = words.x & 0x7fffu;
+    let uv = horizon_ray_uv(t);
+    let color = unpack4x8unorm(horizon_ray_word(t.corners.x, 5u)) * t.weights.x
+        + unpack4x8unorm(horizon_ray_word(t.corners.y, 5u)) * t.weights.y
+        + unpack4x8unorm(horizon_ray_word(t.corners.z, 5u)) * t.weights.z;
+    // The light's 16 steps a level: sky in the low byte, block in the high one.
+    let sky = dot(vec3<f32>((words >> vec3<u32>(16u)) & vec3<u32>(0xffu)), t.weights);
+    let block = dot(vec3<f32>(words >> vec3<u32>(24u)), t.weights);
+    var material = 0u;
+    var tags = 0u;
+    if layer * 2u + 1u < arrayLength(&horizon_ray_layers) {
+        material = horizon_ray_layers[layer * 2u];
+        tags = horizon_ray_layers[layer * 2u + 1u];
+    }
+    return RayHit(hit.t, origin + direction * hit.t, normal, uv,
+        horizon_decode_rgba(horizon_ray_texel(layer, uv)), vec4<f32>(horizon_decode(color.rgb), 1.0),
+        min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)), material, tags);
+}
+// Whether anything lies within `max_distance` blocks of `origin` along `direction`: a shadow
+// ray, which stops at the first surface it finds.
+fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
+    return horizon_ray_cast(origin, direction, max_distance, true).kind != RAY_QUERY_INTERSECTION_NONE;
+}
+";
+
 /// The post stage's entry points, as the renderer builds them: a full-screen
 /// triangle, and a fragment that calls the pack's `post` for each pixel.
 const POST_ENTRIES: &str = "\
@@ -818,17 +1010,24 @@ impl StageKind {
         }
     }
 
-    /// Everything the pack's files may use under the line `api`, declared before them.
+    /// Everything the pack's files may use under the line `api`, declared before them, for a
+    /// pack without `[ray_tracing]`.
     pub fn prelude(self, api: Api) -> String {
-        let mut out = match api {
-            Api::V0_1 => {
-                String::from("// Horizon shader API prelude (docs/api/shaders-reference.md)\n")
-            }
-            Api::V0_2 => String::from(
-                "// Horizon shader API 0.2 prelude (docs/api/shaders-reference-0.2.md)\n",
-            ),
+        self.prelude_traced(api, Tracing::None)
+    }
+
+    /// `prelude` with what `tracing` holds of the scene: in every stage the frame's two fields
+    /// for it, and in the post stage `RayHit`, `trace` and `trace_any`.
+    pub fn prelude_traced(self, api: Api, tracing: Tracing) -> String {
+        let mut out = match tracing {
+            Tracing::Scene if self == StageKind::Post => String::from(RAY_ENABLE),
+            _ => String::new(),
         };
-        out += &Frame::line(api).wgsl();
+        out += match api {
+            Api::V0_1 => "// Horizon shader API prelude (docs/api/shaders-reference.md)\n",
+            Api::V0_2 => "// Horizon shader API 0.2 prelude (docs/api/shaders-reference-0.2.md)\n",
+        };
+        out += &Frame::declared(api, tracing != Tracing::None).wgsl();
         out += &self.input().wgsl();
         if matches!(self, StageKind::Material | StageKind::Entity) {
             out += &SURFACE.wgsl();
@@ -849,6 +1048,13 @@ impl StageKind {
                 out += POST_HELPERS;
                 out += POST_SURFACE;
                 out += SHADOW_HELPERS;
+                if tracing != Tracing::None {
+                    out += &RAY_HIT.wgsl();
+                    out += match tracing {
+                        Tracing::Scene => RAY_SCENE,
+                        _ => RAY_STUB,
+                    };
+                }
             }
             StageKind::Material => {
                 out += match api {
@@ -1009,9 +1215,26 @@ fn motion_at(texel: vec2<i32>) -> MotionData {
 ";
 
 /// The WGSL of the stage `kind` whose own file is `file`: the prelude, the
-/// pack's shared files in order, the file, then the entry points, all of the pack's line.
+/// pack's shared files in order, the file, then the entry points, all of the pack's line. A
+/// pack with `[ray_tracing]` gets `trace` without the scene (`Tracing::Stub`), which every
+/// device takes.
 pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
+    compose_traced(pack, kind, file, false)
+}
+
+/// `compose` for a pack with `[ray_tracing]` where the renderer binds the scene: its post
+/// stage traces it. The module needs a device with ray queries.
+pub fn compose_scene(pack: &Pack, kind: StageKind, file: &str) -> Composed {
+    compose_traced(pack, kind, file, true)
+}
+
+fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Composed {
     let api = pack.manifest.api;
+    let tracing = match (&pack.manifest.ray_tracing, scene) {
+        (None, _) => Tracing::None,
+        (Some(_), false) => Tracing::Stub,
+        (Some(_), true) => Tracing::Scene,
+    };
     let mut composed = Composed {
         text: String::new(),
         parts: Vec::new(),
@@ -1026,7 +1249,8 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
             .parts
             .push((name.to_owned(), start..composed.text.len()));
     };
-    let mut prelude = kind.prelude(api) + &texture_declarations(&pack.manifest.textures);
+    let mut prelude =
+        kind.prelude_traced(api, tracing) + &texture_declarations(&pack.manifest.textures);
     if kind == StageKind::Post {
         prelude += &post_target_declarations(&pack.manifest);
         if api == Api::V0_2 && pack.manifest.motion.is_some() {

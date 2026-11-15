@@ -1,0 +1,14 @@
+schema = 1
+id = "traced_shadows"
+name = "Traced Shadows"
+version = "1.0.0"
+api = "0.2"
+description = "The sun's shadows from a ray per pixel: the smallest pack that traces. A test pack of the SDK, not offered to players."
+authors = ["Horizon"]
+license = "MIT"
+
+[ray_tracing]
+
+[[post]]
+file = "post.wgsl"
+name = "Sun shadows"

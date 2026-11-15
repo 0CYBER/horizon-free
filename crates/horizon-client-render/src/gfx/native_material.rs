@@ -321,6 +321,9 @@ pub struct TerrainShape<'a> {
     pub flat: Option<&'a wgpu::BindGroupLayout>,
     /// terrain.wgsl's `SPRITE_ARRAYS` and `SPRITE_SPLIT`.
     pub sprites: [f64; 2],
+    /// terrain.wgsl's sprite arrays, the unused ones a stand-in: what a `[ray_tracing]` pack's
+    /// `trace` reads a hit's texture from.
+    pub sprite_views: &'a [wgpu::TextureView],
     /// The world target's colour format, and whether it holds linear light (`linear_blend`).
     pub format: wgpu::TextureFormat,
     pub linear: bool,

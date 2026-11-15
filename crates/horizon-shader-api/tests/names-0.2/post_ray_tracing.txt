@@ -1,0 +1,5 @@
+# The ray tracing names: every 0.2 post pass of a pack with [ray_tracing] gets them, on top of
+# post.txt's, and a pack without the key none (tests/it/names.rs).
+RayHit
+trace
+trace_any

@@ -912,6 +912,63 @@ fn the_0_2_keys_are_refused_under_0_1_and_checked_under_0_2() {
     }
 }
 
+#[test]
+fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass() {
+    assert!(Manifest::parse(SMALLEST_0_2).unwrap().ray_tracing.is_none());
+    let asked = Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n")).unwrap();
+    assert!(asked.ray_tracing.is_some());
+    // A traced ray's hit reads the tags and material ids: no material stage is needed.
+    let tags = "[[tags]]\nid = \"glass\"\nsprites = [\"block/glass\"]\n";
+    let materials = "[[materials]]\nid = 7\nsprites = [\"block/stone\"]\n";
+    let traced =
+        Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n{tags}{materials}")).unwrap();
+    assert!(traced.material.is_none());
+    let sprites = [("minecraft:block/glass", 3), ("minecraft:block/stone", 5)];
+    assert_eq!(traced.sprite_tags(sprites), [(3, 1)]);
+    assert_eq!(traced.sprite_materials(sprites), [(5, 7)]);
+    for (list, message) in [
+        (tags, "tags are read by the material stage and by `trace`"),
+        (
+            materials,
+            "materials are read by the material stage, `trace`",
+        ),
+    ] {
+        let e = Manifest::parse(&format!("{SMALLEST_0_2}{list}")).unwrap_err();
+        assert!(e.to_string().contains(message), "{e}");
+    }
+    // `trace` is a name like any other for a pack that doesn't ask.
+    let named = SMALLEST_0_2.replace(
+        "[[post]]\n",
+        "[[post]]\nfile = \"t.wgsl\"\noutput = \"trace\"\n[[post]]\n",
+    );
+    assert_eq!(
+        Manifest::parse(&named).unwrap().post_targets()[0].0,
+        "trace"
+    );
+    let cases = [
+        (
+            SMALLEST_0_2.replace("0.2", "0.1") + "[ray_tracing]\n",
+            "[ray_tracing] is shader API 0.2",
+        ),
+        (
+            SMALLEST_0_2.replace("[[post]]", "[sky]") + "[ray_tracing]\n",
+            "[ray_tracing] needs a [[post]] pass",
+        ),
+        (
+            format!("{SMALLEST_0_2}[ray_tracing]\nbounces = 2\n"),
+            "unknown field",
+        ),
+        (
+            format!("{named}[ray_tracing]\n"),
+            "output \"trace\" is not a free WGSL name",
+        ),
+    ];
+    for (text, needle) in cases {
+        let e = refused(&text);
+        assert!(e.contains(needle), "{needle:?} not in {e:?}");
+    }
+}
+
 fn float_option_manifest(fields: &str) -> String {
     format!(
         "schema = 1\nid = \"finite_options\"\nname = \"Finite options\"\nversion = \"1.0\"\napi = \"0.1\"\n[sky]\nfile = \"sky.wgsl\"\n[[options]]\nid = \"gain\"\nname = \"Gain\"\ntype = \"float\"\n{fields}"

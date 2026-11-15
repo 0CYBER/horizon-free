@@ -135,8 +135,9 @@ with `horizon_`. Code shared by several stages goes in files listed in `shared`,
 
 ## Sprite tags
 
-The material stage can tell block sprites apart through tags the manifest declares. Each `[[tags]]` is a bit of
-`input.tags`, in the order they appear (32 at most); its `sprites` are sprite names, the namespace `minecraft` by
+The material stage can tell block sprites apart through tags the manifest declares, and so can a traced ray's hit
+(`RayHit.tags`, [ray tracing](#ray-tracing)): a pack with tags has a `[material]` stage or `[ray_tracing]`. Each
+`[[tags]]` is a bit of `input.tags`, in the order they appear (32 at most); its `sprites` are sprite names, the namespace `minecraft` by
 default, each with at most one `*`:
 
 ```toml
@@ -151,7 +152,7 @@ Terrain carries its sprite, not its block, so a sprite drawn by several blocks g
 
 Tags answer "is it one of these"; a pack that treats hundreds of kinds of surface differently numbers them
 instead. Each sprite takes the `id` of the first `[[materials]]` entry that names it, 0 without one, as
-`input.material`. Patterns may hold any number of `*`:
+`input.material` (and a traced ray's `RayHit.material`). Patterns may hold any number of `*`:
 
 ```toml
 [[materials]]
@@ -198,6 +199,48 @@ let block = mix(vec3(1.0), tint.rgb, min(tint.a, 1.0)) * input.light.x;
 
 It covers 128 blocks around the camera, moved in steps of 16, and is rebuilt on the CPU when the camera steps or a source
 changes, from at most 2048 sources, the nearest first.
+
+## Ray tracing
+
+A pack of API 0.2 can trace rays through the world from its post passes. It asks with an empty `[ray_tracing]` table,
+and its post stage gets two functions ([the reference](api/shaders-reference-0.2.md#ray-tracing) has `RayHit`'s
+fields):
+
+```toml
+api = "0.2"
+
+[ray_tracing]
+
+[[post]]
+file = "post.wgsl"
+```
+
+```wgsl
+let position = view_position(input.uv, input.depth);
+// A little toward the camera, off the surface the point is on.
+if frame.has_ray_tracing == 1u && trace_any(position * 0.99, frame.sun_direction, 512.0) {
+    // Terrain stands between the point and the sun.
+}
+let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: nothing there
+```
+
+`trace` returns the nearest surface along a ray, with what the material stage would get for that point (`albedo`,
+`tint`, `light`, `uv`, `material`, `tags`) and its `position`, `normal` and `distance`; `trace_any` only says whether
+something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
+rays pass through the clear texels of leaves and plants. Horizon keeps the scene; the look is the pack's: Horizon
+adds no shadows, bounce light or denoising of its own. The pack never sees the acceleration structure or a ray query,
+and the check refuses a pack that names one itself.
+
+| | |
+| --- | --- |
+| In the scene today | Solid terrain (cut-outs included) within 8 chunks of the camera; `frame.ray_distance` is how far it surely reaches |
+| Not in it yet | Water, glass and other translucent terrain, entities, block entities, the hand, distant terrain tiles |
+| Turning it on | Start the game with `HORIZON_RAY_TRACING=1` on a GPU with hardware ray queries (the device needs them from its creation, so there is no setting yet) |
+| Without it | The pack loads and runs as it is: `frame.has_ray_tracing` is 0, `trace` misses and `trace_any` is false. Branch on `has_ray_tracing` and keep a look that works without rays |
+
+The scene trails the world by a frame or two where chunks load or blocks change, and is empty for the first frames in
+a world. The smallest working pack is `crates/horizon-shader-api/packs/traced_shadows`: the sun's shadows, one ray a
+pixel.
 
 ## Options
 

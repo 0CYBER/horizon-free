@@ -6,11 +6,12 @@
 //! naga, checked against its signature and the API's rules (no bindings, no
 //! entry points, no `horizon_` names; in 0.2 none of the structs Horizon hands it
 //! constructed), then translated to SPIR-V, Metal and HLSL with its options at their
-//! defaults, minimums and maximums.
-use crate::inputs::{DISPLACEMENT_INPUT, Frame};
+//! defaults, minimums and maximums. A post stage of a pack with `[ray_tracing]` is checked
+//! twice: as every device runs it, where `trace` misses, and against the scene.
+use crate::inputs::{DISPLACEMENT_INPUT, Frame, RAY_HIT};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
-use crate::stages::{Composed, StageKind, compose};
+use crate::stages::{Composed, StageKind, compose, compose_scene};
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::collections::HashSet;
 use std::fmt;
@@ -62,10 +63,15 @@ pub struct CheckedStage {
     pub label: String,
     pub module: naga::Module,
     pub info: ModuleInfo,
+    /// A post stage of a pack with `[ray_tracing]`, built against the scene (`compose_scene`):
+    /// what the renderer runs while it binds the scene, on a device with ray queries. `module`
+    /// is the same stage with a `trace` that misses, which every device takes.
+    pub scene: Option<naga::Module>,
     /// The stage's WGSL without the entry points (the prelude, the shared
     /// files, the file), for a renderer that calls the stage function from
     /// its own shader (the sky).
     pub source: String,
+    /// What the budgets hold: with `scene`, its counts, the larger ones.
     pub expressions: usize,
     pub texture_reads: usize,
 }
@@ -235,6 +241,12 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
     let mut own = compose(pack, kind, file);
     let entries = own.parts.pop().expect("entries are the last part");
     own.text.truncate(entries.1.start);
+    if pack.manifest.ray_tracing.is_some() {
+        let problems = ray_queries(&own);
+        if !problems.is_empty() {
+            return Err(problems);
+        }
+    }
     // The material prelude's LabPBR functions call into the renderer: a stand-in here.
     if kind == StageKind::Material {
         own.text += crate::stages::PBR_STUB;
@@ -275,19 +287,17 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
     }
     let composed = compose(pack, kind, file);
     let module = parse(&composed)?;
-    let info = Validator::new(ValidationFlags::all(), Capabilities::default())
-        .validate(&module)
-        .map_err(|e| {
-            let at = e.spans().next().and_then(|(span, _)| span.to_range());
-            let mut message = e.as_inner().to_string();
-            let mut source = std::error::Error::source(e.as_inner());
-            while let Some(s) = source {
-                message += &format!(": {s}");
-                source = s.source();
-            }
-            vec![located(&composed, at.map(|r| r.start), message)]
-        })?;
-    let (expressions, texture_reads) = cost(&module);
+    let info = validate(&module, &composed, Capabilities::default())?;
+    let scene = if kind == StageKind::Post && pack.manifest.ray_tracing.is_some() {
+        let composed = compose_scene(pack, kind, file);
+        let module = parse(&composed)?;
+        let capabilities = Capabilities::default() | Capabilities::RAY_QUERY;
+        let info = validate(&module, &composed, capabilities)?;
+        Some((module, info))
+    } else {
+        None
+    };
+    let (expressions, texture_reads) = cost(scene.as_ref().map_or(&module, |s| &s.0));
     let mut problems = Vec::new();
     let engine = kind == StageKind::Material && pack.manifest.coverage == crate::Coverage::Engine;
     if engine && let Some(at) = reachable_discard(&module, kind.function()) {
@@ -312,7 +322,12 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
             format!("{texture_reads} texture reads; a stage may write {MAX_TEXTURE_READS}"),
         ));
     }
-    problems.extend(translate(&module, &info, &pack.manifest.options, file));
+    let options = &pack.manifest.options;
+    problems.extend(translate(&module, &info, options, file, (2, 2)));
+    if let (Some((module, info)), true) = (&scene, problems.is_empty()) {
+        // Metal has ray queries from 2.4.
+        problems.extend(translate(module, info, options, file, (2, 4)));
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -322,10 +337,94 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
         label: file.to_owned(),
         module,
         info,
+        scene: scene.map(|s| s.0),
         source: own.text,
         expressions,
         texture_reads,
     })
+}
+
+/// naga's validation of a composed stage, for a device with `capabilities`.
+fn validate(
+    module: &naga::Module,
+    composed: &Composed,
+    capabilities: Capabilities,
+) -> Result<ModuleInfo, Vec<Problem>> {
+    Validator::new(ValidationFlags::all(), capabilities)
+        .validate(module)
+        .map_err(|e| {
+            let at = e.spans().next().and_then(|(span, _)| span.to_range());
+            let mut message = e.as_inner().to_string();
+            let mut source = std::error::Error::source(e.as_inner());
+            while let Some(s) = source {
+                message += &format!(": {s}");
+                source = s.source();
+            }
+            vec![located(composed, at.map(|r| r.start), message)]
+        })
+}
+
+/// The names of naga's ray queries: with `[ray_tracing]` the scene's prelude enables them for
+/// itself, and a pack's files that used them would depend on the scene's layout and on wgpu.
+const RAY_QUERY_NAMES: [&str; 5] = [
+    "ray_query",
+    "acceleration_structure",
+    "RayDesc",
+    "RayIntersection",
+    "wgpu_ray_query",
+];
+
+/// Where the files of a pack with `[ray_tracing]` name a ray query themselves (a type, a
+/// `rayQuery` function or the `enable` directive), each name once a file; comments don't count
+/// (WGSL's block comments nest).
+fn ray_queries(own: &Composed) -> Vec<Problem> {
+    let mut problems = Vec::new();
+    for (_, range) in &own.parts[1..] {
+        let text = &own.text[range.clone()];
+        let bytes = text.as_bytes();
+        let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        let mut seen: Vec<&str> = Vec::new();
+        let mut at = 0;
+        while at < bytes.len() {
+            if text[at..].starts_with("//") {
+                at += text[at..].find('\n').unwrap_or(text.len() - at);
+            } else if text[at..].starts_with("/*") {
+                let mut depth = 0;
+                while at < bytes.len() {
+                    let (opens, closes) =
+                        (text[at..].starts_with("/*"), text[at..].starts_with("*/"));
+                    depth += i32::from(opens) - i32::from(closes);
+                    // A character of any width: `at` stays on a boundary.
+                    at += match opens || closes {
+                        true => 2,
+                        false => text[at..].chars().next().map_or(1, char::len_utf8),
+                    };
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            } else if word(bytes[at]) {
+                let end = at + bytes[at..].iter().take_while(|b| word(**b)).count();
+                let name = &text[at..end];
+                let query = RAY_QUERY_NAMES.contains(&name) || name.starts_with("rayQuery");
+                if query && !seen.contains(&name) {
+                    seen.push(name);
+                    problems.push(located(
+                        own,
+                        Some(range.start + at),
+                        format!(
+                            "`{name}`: a pack traces rays with `trace` and `trace_any`; ray queries and the scene are Horizon's"
+                        ),
+                    ));
+                }
+                at = end;
+            } else {
+                // A character of any width: `at` stays on a boundary.
+                at += text[at..].chars().next().map_or(1, char::len_utf8);
+            }
+        }
+    }
+    problems
 }
 
 fn located(composed: &Composed, offset: Option<usize>, message: String) -> Problem {
@@ -509,7 +608,7 @@ fn api_rules(module: &naga::Module, kind: StageKind, own: &Composed) -> Vec<Prob
 }
 
 /// 0.2: the pack's files construct none of the structs Horizon hands a stage (`Frame`, the
-/// stage inputs and the post helpers' `SurfaceData`). They may gain fields, which would break a
+/// stage inputs, the post helpers' `SurfaceData` and `RayHit`). They may gain fields, which would break a
 /// positional `PostInput(...)`; reading them and passing them along stay as they are. `Surface`,
 /// which `material` returns, is built.
 fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
@@ -520,6 +619,7 @@ fn constructions(module: &naga::Module, own: &Composed) -> Vec<Problem> {
             Frame::WGSL.name,
             DISPLACEMENT_INPUT.name,
             "SurfaceData",
+            RAY_HIT.name,
             "MotionData",
         ])
         .collect();
@@ -693,12 +793,14 @@ fn option_sets(options: &[PackOption]) -> [(&'static str, Vec<(String, f64)>); 3
 }
 
 /// Translates every entry point for Vulkan (SPIR-V), Metal and DirectX 12
-/// (HLSL) with each option set, as wgpu does when it builds the pipelines.
+/// (HLSL) with each option set, as wgpu does when it builds the pipelines; Metal's shading
+/// language at the version `metal`.
 fn translate(
     module: &naga::Module,
     info: &ModuleInfo,
     options: &[PackOption],
     file: &str,
+    metal: (u8, u8),
 ) -> Vec<Problem> {
     let present: HashSet<&str> = module
         .overrides
@@ -747,7 +849,7 @@ fn translate(
                 &m,
                 &i,
                 &naga::back::msl::Options {
-                    lang_version: (2, 2),
+                    lang_version: metal,
                     ..Default::default()
                 },
                 &naga::back::msl::PipelineOptions {

@@ -609,6 +609,126 @@ fn a_0_1_pack_doesn_t_see_0_2_s_names() {
     assert_eq!(p.file, GRADE, "{p}");
 }
 
+/// A 0.2 pack with `[ray_tracing]` whose post pass is `post`.
+fn traced(post: &str) -> Result<horizon_shader_api::Report, Vec<Problem>> {
+    pack_0_2(post, TONEMAP, "[ray_tracing]\n")
+}
+
+/// Every name `[ray_tracing]` brings, used.
+const SHADOWED: &str = "fn post(input: PostInput) -> vec4<f32> {
+    let p = view_position(input.uv, input.depth);
+    let hit = trace(p, frame.sun_direction, frame.ray_distance);
+    let open = f32(frame.has_ray_tracing) * f32(!trace_any(p, frame.sun_direction, 64.0));
+    let lit = hit.albedo.rgb * hit.tint.rgb * hit.light.y * max(dot(hit.normal, frame.sun_direction), 0.0);
+    return vec4<f32>(lit * open + hit.position * hit.uv.x * hit.distance, f32(hit.material + hit.tags));
+}
+";
+
+fn ray_queries(module: &naga::Module) -> bool {
+    module.types.iter().any(|(_, t)| {
+        matches!(
+            t.inner,
+            naga::TypeInner::RayQuery { .. } | naga::TypeInner::AccelerationStructure { .. }
+        )
+    })
+}
+
+fn valid(module: &naga::Module, capabilities: naga::valid::Capabilities) -> bool {
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities)
+        .validate(module)
+        .is_ok()
+}
+
+#[test]
+fn a_traced_post_stage_is_checked_without_the_scene_and_with_it() {
+    let report = traced(SHADOWED).unwrap();
+    let post = &report.stages[0];
+    // What every device takes: no ray query in it.
+    assert!(!ray_queries(&post.module));
+    let plain = naga::valid::Capabilities::default();
+    assert!(valid(&post.module, plain));
+    // What a device that traces takes, and only it.
+    let scene = post.scene.as_ref().expect("the stage against the scene");
+    assert!(ray_queries(scene));
+    assert!(valid(scene, plain | naga::valid::Capabilities::RAY_QUERY));
+    assert!(!valid(scene, plain));
+    assert!(report.stages[1].scene.is_none(), "the tonemap stage");
+    // The budgets count the scene's sprite reads.
+    let untraced = pack_0_2(POST, TONEMAP, "").unwrap();
+    assert!(untraced.stages[0].scene.is_none());
+    let reads = traced(POST).unwrap().stages[0].texture_reads;
+    assert!(reads > untraced.stages[0].texture_reads, "{reads}");
+    // A pack that didn't ask has none of the names.
+    let problems = pack_0_2(SHADOWED, TONEMAP, "").unwrap_err();
+    assert_eq!(
+        (problems[0].file.as_str(), problems[0].line),
+        ("post.wgsl", 3)
+    );
+}
+
+#[test]
+fn a_traced_pack_names_no_ray_query_of_its_own() {
+    let own = "// A ray_query in a comment is no use of one.
+fn post(input: PostInput) -> vec4<f32> {
+    var q: ray_query;
+    rayQueryInitialize(&q, horizon_ray_scene, RayDesc(0u, 0xffu, 0.0, 1.0, input.color.rgb, input.color.rgb));
+    return input.color;
+}
+";
+    let problems = traced(own).unwrap_err();
+    let found: Vec<_> = problems
+        .iter()
+        .map(|p| {
+            assert!(p.message.contains("traces rays with `trace`"), "{p}");
+            let name = p.message.split('`').nth(1).unwrap();
+            (p.file.as_str(), p.line, p.column, name)
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("post.wgsl", 3, 12, "ray_query"),
+            ("post.wgsl", 4, 5, "rayQueryInitialize"),
+            ("post.wgsl", 4, 47, "RayDesc"),
+        ]
+    );
+    // Block comments nest: the outer one ends at its own `*/`, and what follows it counts.
+    let nested = format!("/* outer /* inner */ ray_query é */\n{POST}");
+    traced(&nested).unwrap();
+    let after = format!("/* outer /* inner */ */ alias Q = ray_query;\n{POST}");
+    let problems = traced(&after).unwrap_err();
+    assert!(
+        problems[0]
+            .to_string()
+            .starts_with("post.wgsl:1:35: `ray_query`"),
+        "{}",
+        problems[0]
+    );
+    let enabled = format!("enable wgpu_ray_query;\n{POST}");
+    let problems = traced(&enabled).unwrap_err();
+    assert!(
+        problems[0]
+            .to_string()
+            .starts_with("post.wgsl:1:8: `wgpu_ray_query`")
+    );
+    // The tonemap stage's files are the pack's too.
+    let tonemap = "alias Scene = acceleration_structure;\n\
+                   fn tonemap(input: TonemapInput) -> vec3<f32> { return input.color; }\n";
+    let problems = pack_0_2(POST, tonemap, "[ray_tracing]\n").unwrap_err();
+    assert!(
+        problems[0]
+            .to_string()
+            .starts_with("tonemap.wgsl:1:15: `acceleration_structure`")
+    );
+    // `RayHit` may gain fields, like the stage inputs.
+    let built = "fn post(input: PostInput) -> vec4<f32> {
+    return RayHit(1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), input.color, input.color, vec2<f32>(0.0), 0u, 0u).albedo;
+}
+";
+    let problems = traced(built).unwrap_err();
+    assert_eq!(refused(&problems, "RayHit"), [("post.wgsl".to_owned(), 2)]);
+}
+
 /// A 0.2 material pack: `[material]` with `keys`, its `material.wgsl` and a shared `helpers.wgsl`.
 fn coverage_pack(
     keys: &str,

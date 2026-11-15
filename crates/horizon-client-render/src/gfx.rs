@@ -7265,6 +7265,7 @@ impl Renderer {
             globals: &self.terrain_layout,
             flat: self.flat.as_ref().map(|f| &f.draw_layout),
             sprites: self.terrain_sprites,
+            sprite_views: &self.sprite_views,
             format: self.output.frame.format,
             linear: self.output.frame.linear_light,
             sprite_tags: &sprite_tags,
@@ -9931,9 +9932,8 @@ impl Renderer {
                 .size()
                 .filter(|_| scaled.is_some())
                 .unwrap_or([self.config.width, self.config.height]);
-            native
-                .frame
-                .write(&self.queue, frame, size, output.display());
+            let scene = self.ray_scene.as_ref();
+            native.write(&self.queue, frame, size, output.display(), scene);
             native.frame.block_light.update(
                 &self.queue,
                 frame.camera,
@@ -11466,16 +11466,16 @@ impl Renderer {
             && let Some(native) = &mut self.native
             && let Some(post) = &mut native.post
         {
-            let size = self.world_post.size().unwrap_or([1, 1]);
             let history_reset = native.frame.take_history_reset();
             post.run(
                 &self.device,
                 &mut encoder,
                 (color, depth, &native.frame.surface_view),
                 &view_target,
-                size,
+                self.world_post.size().unwrap_or([1, 1]),
                 history_reset,
                 native.timing.as_mut(),
+                self.ray_scene.as_ref().map(|s| (s, frame.camera)),
             );
         } else if let (Some((_, generated)), Some((_, depth))) = (&fg_frames, &scaled) {
             let camera = frame_gen::Camera {

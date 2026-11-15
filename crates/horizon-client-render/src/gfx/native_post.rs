@@ -15,6 +15,10 @@ use super::Frame;
 
 pub(super) const INTERMEDIATE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// The scene the post passes of a pack with `[ray_tracing]` trace.
+#[path = "native_trace.rs"]
+pub(super) mod trace;
+
 /// What the renderer's own entries call where a stage's colours cross into and out of it: as
 /// they are under 0.1; under 0.2 vanilla's 2.2 power in, as the prelude's `horizon_decode`, and
 /// out as the frame stores them: encoded, as `horizon_encode`, or where the frame holds linear
@@ -287,6 +291,12 @@ fn scaled(size: [u32; 2], scale: f32) -> [u32; 2] {
 pub struct NativePost {
     passes: Vec<(String, wgpu::RenderPipeline)>,
     layout: wgpu::BindGroupLayout,
+    /// `layout`'s entries, which the scene's join (`trace`), the passes built against the
+    /// scene where the device traces rays, and the scene's generation `groups` hold (none
+    /// while they hold no scene).
+    entries: Vec<wgpu::BindGroupLayoutEntry>,
+    trace: Option<trace::NativeTrace>,
+    traced: Option<u64>,
     /// The pack's textures.
     textures: Vec<(wgpu::TextureView, wgpu::Sampler)>,
     frame: wgpu::Buffer,
@@ -367,6 +377,9 @@ pub struct NativeFrame {
     eye: [f32; 4],
     /// A post stage must use black history after a long gap until it has rendered a frame.
     history_reset: bool,
+    /// `frame.ray_distance` while the post passes trace this frame's scene (`NativePost::trace`),
+    /// set before `write`: `frame.has_ray_tracing` is 1 then.
+    pub(super) ray_distance: Option<f32>,
     start: std::time::Instant,
     frames: u32,
     /// `frame.wetness`, and when it was last written.
@@ -593,6 +606,7 @@ impl NativeFrame {
             last: None,
             eye: [f32::NAN; 4],
             history_reset: true,
+            ray_distance: None,
             start: std::time::Instant::now(),
             frames: 0,
             wetness: (0.0, None),
@@ -843,6 +857,9 @@ impl NativeFrame {
         self.wetness = (wetness(self.wetness.0, frame.pack.rain, since), Some(now));
         let mut inputs = frame_inputs(frame, size, seconds, index, self.shadow_camera.as_ref());
         inputs.wetness = self.wetness.0;
+        if let Some(distance) = self.ray_distance {
+            (inputs.has_ray_tracing, inputs.ray_distance) = (1, distance);
+        }
         if self.api == Api::V0_2 {
             inputs.sky_color = decoded(inputs.sky_color);
             inputs.fog_color = decoded(inputs.fog_color);
@@ -1002,6 +1019,53 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
+/// A post pass's pipeline from its checked `module`, with the option values `constants`, drawing
+/// a target of `format`.
+fn post_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    module: naga::Module,
+    constants: &[(String, f64)],
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let present = present_constants(&module, constants);
+    let present: Vec<(&str, f64)> = present.iter().map(|(id, v)| (*id, *v)).collect();
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(&super::dx12_compiler::module_label(label)),
+        source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+    });
+    let options = wgpu::PipelineCompilationOptions {
+        constants: &present,
+        ..Default::default()
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("horizon_vs_post"),
+            compilation_options: options.clone(),
+            buffers: &[],
+        },
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("horizon_fs_post"),
+            compilation_options: options,
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl NativePost {
     /// Pipelines for `stages` (the pack's post passes, in order) with the option values
     /// `constants`, drawing onto a screen of `format`; under 0.2 the last onto `picture`, and
@@ -1059,45 +1123,14 @@ impl NativePost {
         let count = stages.len();
         let mut passes = Vec::with_capacity(count);
         for (i, stage) in stages.into_iter().enumerate() {
-            let present = present_constants(&stage.module, constants);
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(&super::dx12_compiler::module_label(&stage.label)),
-                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(stage.module)),
-            });
-            let options = wgpu::PipelineCompilationOptions {
-                constants: &present,
-                ..Default::default()
+            let target = if plan[i].writes == Writes::Screen && frame.decoder.is_none() {
+                format
+            } else {
+                INTERMEDIATE
             };
-            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(&stage.label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some("horizon_vs_post"),
-                    compilation_options: options.clone(),
-                    buffers: &[],
-                },
-                primitive: Default::default(),
-                depth_stencil: None,
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some("horizon_fs_post"),
-                    compilation_options: options,
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: if plan[i].writes == Writes::Screen && frame.decoder.is_none() {
-                            format
-                        } else {
-                            INTERMEDIATE
-                        },
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            });
+            let (label, layout) = (&stage.label, &pipeline_layout);
+            let pipeline = post_pipeline(device, label, layout, stage.module, constants, target);
             if let Some(e) = pollster::block_on(scope.pop()) {
                 return Err(format!("{}: {e}", stage.file));
             }
@@ -1149,6 +1182,9 @@ impl NativePost {
         Ok(Self {
             passes,
             layout,
+            entries,
+            trace: None,
+            traced: None,
             textures: frame.textures.clone(),
             frame: frame.buffer.clone(),
             shadow: (
@@ -1201,6 +1237,7 @@ impl NativePost {
         size: [u32; 2],
         window: [u32; 2],
         history_reset: bool,
+        scene: Option<&trace::Traced<'_>>,
     ) {
         if let Some(d) = &mut self.display {
             if d.scene.as_ref().is_none_or(|s| s.0 != size) {
@@ -1285,6 +1322,9 @@ impl NativePost {
             self.groups = None;
         }
         let blank_history = history_reset || !self.history_valid;
+        // The scene's TLAS and store are replaced as they grow: groups holding old ones go.
+        let traced = self.trace.as_ref().zip(scene);
+        let generation = traced.map(|(_, scene)| scene.generation);
         if self
             .groups
             .as_ref()
@@ -1293,6 +1333,7 @@ impl NativePost {
                     && depth == world.1
                     && surface == world.2
                     && *blank == blank_history
+                    && self.traced == generation
             })
         {
             return;
@@ -1378,9 +1419,17 @@ impl NativePost {
                     }
                 }));
             }
+            // The passes built against the scene read it too; the tonemap has no `trace`.
+            let layout = match traced.filter(|_| writes.is_some()) {
+                Some((trace, scene)) => {
+                    entries.extend(trace.entries(scene));
+                    &trace.layout
+                }
+                None => &self.layout,
+            };
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Native shader pack post"),
-                layout: &self.layout,
+                layout,
                 entries: &entries,
             })
         };
@@ -1403,11 +1452,15 @@ impl NativePost {
             blank_history,
             groups,
         ));
+        self.traced = generation;
     }
 
     /// Runs the passes over the world target `world` (colour, depth) of `size`, the last onto
-    /// `screen`, timed by `timing` when it times this frame.
-    pub fn run(
+    /// `screen`, timed by `timing` when it times this frame. With `scene`, the terrain's scene
+    /// and the camera (`trace` said this frame's `frame` has it), the passes built against
+    /// it draw.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn run(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -1416,9 +1469,12 @@ impl NativePost {
         size: [u32; 2],
         history_reset: bool,
         mut timing: Option<&mut super::pack_timing::PassTiming>,
+        scene: Option<(&trace::RayScene, glam::DVec3)>,
     ) {
         let window = [screen.texture().width(), screen.texture().height()];
-        self.prepare(device, world, size, window, history_reset);
+        let scene = scene.and_then(|(scene, camera)| scene.traced(camera));
+        let scene = scene.as_ref();
+        self.prepare(device, world, size, window, history_reset, scene);
         if let Some(t) = timing.as_deref_mut() {
             t.mark(device, encoder, (world.0, self.format));
         }
@@ -1461,7 +1517,10 @@ impl NativePost {
                 timestamp_writes: timing.as_deref_mut().and_then(|t| t.writes(label)),
                 ..Default::default()
             });
-            pass.set_pipeline(pipeline);
+            pass.set_pipeline(match (&self.trace, self.traced) {
+                (Some(trace), Some(_)) => &trace.pipelines[i],
+                _ => pipeline,
+            });
             pass.set_bind_group(GROUP, group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -1625,7 +1684,9 @@ pub fn frame_inputs(
         black_level: 0.0,
         // No pack is served another space yet (`[frame] primaries`).
         primaries: Primaries::Bt709 as u32,
-        luminance_gap: [0; 2],
+        // `NativeFrame::write` sets them while the pack's post passes trace the scene.
+        has_ray_tracing: 0,
+        ray_distance: 0.0,
         luminance: Primaries::Bt709.luminance(),
         padding: 0,
     }
@@ -1933,7 +1994,16 @@ file = \"c.wgsl\"
         let red = |post: &mut NativePost| {
             let mut encoder = device.create_command_encoder(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(&device, &mut encoder, world, &view, [4, 4], false, None);
+            post.run(
+                &device,
+                &mut encoder,
+                world,
+                &view,
+                [4, 4],
+                false,
+                None,
+                None,
+            );
             encoder.copy_texture_to_buffer(
                 screen.as_image_copy(),
                 wgpu::TexelCopyBufferInfo {
@@ -2079,6 +2149,7 @@ file = \"c.wgsl\"
             [4, 4],
             true,
             None,
+            None,
         );
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -2193,6 +2264,7 @@ file = \"b.wgsl\"
                 &view,
                 [4, 4],
                 history_reset,
+                None,
                 None,
             );
             encoder.copy_texture_to_buffer(
@@ -2378,6 +2450,7 @@ file = \"b.wgsl\"
                 &view,
                 [4, 4],
                 true,
+                None,
                 None,
             );
             encoder.copy_texture_to_buffer(
@@ -2648,7 +2721,16 @@ file = \"b.wgsl\"
             }));
             let view = screen.create_view(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(&device, &mut encoder, world, &view, [4, 4], true, None);
+            post.run(
+                &device,
+                &mut encoder,
+                world,
+                &view,
+                [4, 4],
+                true,
+                None,
+                None,
+            );
             let buffer = crate::gfx::copy_frame(&device, &mut encoder, &screen, [4, 4]);
             queue.submit([encoder.finish()]);
             buffer
@@ -2813,7 +2895,16 @@ file = \"b.wgsl\"
             }));
             let view = screen.create_view(&Default::default());
             let world = (&color, &depth, &frame.surface_view);
-            post.run(&device, &mut encoder, world, &view, [4, 4], true, None);
+            post.run(
+                &device,
+                &mut encoder,
+                world,
+                &view,
+                [4, 4],
+                true,
+                None,
+                None,
+            );
             // The renderer's rule, then its curve, as it runs them after the pack's chain.
             if crate::gfx::horizon_tone_curve(hdr, true, post.tonemaps()) {
                 display.begin(&queue, true);

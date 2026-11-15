@@ -1,8 +1,9 @@
 //! The terrain as acceleration structures, with ray tracing on (#13780 step 2, after the #1180
 //! spike; `ray_query`): one BLAS per section's solid quads within `reach` chunks of the camera,
 //! compacted once built, and one TLAS of them, built again only when a BLAS changes or the camera
-//! enters another chunk column (its instances sit relative to that column). Nothing traces them
-//! yet. Without ray queries on the device there is no scene and nothing here runs.
+//! enters another chunk column (its instances sit relative to that column). A shader pack's
+//! `trace` reads them (`traced`, gfx/native_trace.rs). Without ray queries on the device there
+//! is no scene and nothing here runs.
 //!
 //! The scene keeps every such section's solid quads as vertices (`TerrainVertex`) in one store
 //! that lasts from frame to frame (spec #15624): the BLAS are built from it, and a ray that hits
@@ -93,9 +94,25 @@ pub(in crate::gfx) struct RayScene {
     slots: Slots,
     /// Whether the log said the store is at its largest.
     full_logged: bool,
+    /// How many TLAS and stores were made: a bind group made at another count holds an old one.
+    generation: u64,
     /// `Resident::removals` when the scene last dropped the sections no longer resident:
     /// gfx.rs releases sections (unloaded columns, far terrain's fade-out) without `ray_mark`.
     removals: u64,
+}
+
+/// What a trace reads this frame (spec #15624).
+pub(in crate::gfx) struct Traced<'a> {
+    pub tlas: &'a wgpu::Tlas,
+    /// The sections' vertices: an instance's custom data is its section's first quad here.
+    pub store: &'a wgpu::Buffer,
+    /// Changes when `tlas` or `store` is another object than last frame's.
+    pub generation: u64,
+    /// The camera in the TLAS's space: from the anchor column's corner along x and z, the
+    /// world's y.
+    pub camera: [f32; 3],
+    /// Blocks from the camera, along x and along z, the TLAS spans whichever way one goes.
+    pub distance: f32,
 }
 
 impl RayScene {
@@ -126,16 +143,22 @@ impl RayScene {
             unpacker: Unpacker::new(device, slots.capacity),
             slots,
             full_logged: false,
+            generation: 0,
             removals: 0,
         })
     }
 
-    /// What a trace reads (spec #15624): the TLAS, the store of its sections' vertices (an
-    /// instance's custom data is its section's first quad there), and the chunk column its
-    /// instances sit relative to (none before the first TLAS) with the chunks around it.
-    #[expect(dead_code, reason = "spec #15624: shader packs' `trace` reads it next")]
-    pub(in crate::gfx) fn traced(&self) -> (&wgpu::Tlas, &wgpu::Buffer, Option<(i32, i32)>, i32) {
-        (&self.tlas, &self.unpacker.store, self.anchor, self.reach)
+    /// What a trace from `camera` reads, once this world's first TLAS is built: before that
+    /// the TLAS is unbuilt, or still holds the world left.
+    pub(in crate::gfx) fn traced(&self, camera: DVec3) -> Option<Traced<'_>> {
+        let (camera, distance) = scene_space(camera, self.anchor?, self.reach);
+        Some(Traced {
+            tlas: &self.tlas,
+            store: &self.unpacker.store,
+            generation: self.generation,
+            camera,
+            distance,
+        })
     }
 
     fn mark(&mut self, key: SectionKey) {
@@ -264,7 +287,9 @@ impl RayScene {
         }
         self.dirty.extend(deferred);
         // Before the unpack pass writes into the store.
-        self.unpacker.fit(device, encoder, self.slots.capacity);
+        if self.unpacker.fit(device, encoder, self.slots.capacity) {
+            self.generation += 1;
+        }
         if builds.is_empty() && !changed && self.anchor == Some(column) {
             return;
         }
@@ -277,6 +302,7 @@ impl RayScene {
         let count = self.blas.keys().filter(|k| near(k)).count();
         if count > self.tlas.get().len() {
             self.tlas = create_tlas(device, (count as u32).next_power_of_two());
+            self.generation += 1;
         }
         let min_y = sections.min_y();
         let mut n = 0;
@@ -366,14 +392,20 @@ impl Unpacker {
 
     /// A store of `vertices` when it holds fewer: the larger one gets the old contents first
     /// (recorded before this frame's unpack pass), so every slot keeps its place. The old one
-    /// lives on in `encoder` until it is submitted.
-    fn fit(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, vertices: u64) {
+    /// lives on in `encoder` until it is submitted. Whether the store is a new one.
+    fn fit(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        vertices: u64,
+    ) -> bool {
         if vertices * STRIDE <= self.store.size() {
-            return;
+            return false;
         }
         let store = store_buffer(device, vertices);
         encoder.copy_buffer_to_buffer(&self.store, 0, &store, 0, self.store.size());
         self.store = store;
+        true
     }
 
     /// Writes the builds' sections into their slots, one dispatch per arena page.
@@ -660,6 +692,21 @@ impl Slots {
     }
 }
 
+/// `camera` in the space of a TLAS anchored at chunk column `anchor` (worked out in doubles:
+/// far from the world's origin a float holds a position to centimetres), and how far from it
+/// along x and along z a TLAS of `reach` chunks around that column spans at least.
+fn scene_space(camera: DVec3, anchor: (i32, i32), reach: i32) -> ([f32; 3], f32) {
+    let x = camera.x - f64::from(anchor.0) * 16.0;
+    let z = camera.z - f64::from(anchor.1) * 16.0;
+    // The columns span from `reach` chunks before the anchor's corner to `reach + 1` after it.
+    let (low, high) = (f64::from(reach) * 16.0, f64::from(reach + 1) * 16.0);
+    let distance = (x + low).min(high - x).min(z + low).min(high - z);
+    (
+        [x as f32, camera.y as f32, z as f32],
+        distance.max(0.0) as f32,
+    )
+}
+
 /// Where section `key` sits relative to the corner of chunk column `anchor`.
 fn instance_origin(key: SectionKey, min_y: i32, anchor: (i32, i32)) -> [f32; 3] {
     [
@@ -678,6 +725,18 @@ mod tests {
         // Section 5 of column (3, -2), the world starting at y = -64, seen from column (2, -2).
         assert_eq!(instance_origin((3, 5, -2), -64, (2, -2)), [16.0, 16.0, 0.0]);
         assert_eq!(instance_origin((2, 0, -2), -64, (2, -2)), [0.0, -64.0, 0.0]);
+    }
+
+    #[test]
+    fn the_camera_sits_in_the_anchor_column_s_space_far_from_the_origin() {
+        // 30 million blocks out, 3.25 and 12.5 blocks into column (1_875_000, -1_875_000).
+        let camera = DVec3::new(30_000_003.25, 70.5, -29_999_987.5);
+        let (at, distance) = scene_space(camera, (1_875_000, -1_875_000), 8);
+        assert_eq!(at, [3.25, 70.5, 12.5]);
+        // Nearest edge: 8 chunks and 3.25 blocks west; east it is 9 chunks less 3.25.
+        assert_eq!(distance, 131.25);
+        // A reach of no chunks is the anchor column alone.
+        assert_eq!(scene_space(camera, (1_875_000, -1_875_000), 0).1, 3.25);
     }
 
     const A: SectionKey = (0, 0, 0);
