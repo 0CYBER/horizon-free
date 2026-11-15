@@ -58,7 +58,7 @@ fn biome_ambient_particle_is_emitted_by_the_animate_tick() {
         thundering: false,
         ultrawarm: false,
     };
-    do_animate_tick(&tables, &mut engine, &ctx, [0, 64, 0], 1);
+    do_animate_tick(&tables, &mut engine, &ctx, [0, 64, 0], 1, true);
     let requests = engine.created_requests.take().unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].0.ty, T::Ash);
