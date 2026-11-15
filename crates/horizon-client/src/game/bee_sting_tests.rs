@@ -6,7 +6,7 @@ use horizon_client::items::ItemStack;
 use horizon_client::mobs::{Mob, Who, ai::do_hurt_target, bee, goals::Cx};
 use horizon_client::motion::PlayerMotion;
 use horizon_core::geometry::Vec3;
-use horizon_core::random::LegacyRandom;
+use horizon_core::random::{LegacyRandom, LevelRandom};
 use horizon_world::food::Difficulty;
 
 fn spawn(game: &mut Game<'_>, id: u32, kind: &str, position: Vec3) -> u32 {
@@ -19,7 +19,7 @@ fn spawn(game: &mut Game<'_>, id: u32, kind: &str, position: Vec3) -> u32 {
 fn sting(game: &mut Game<'_>, bee_id: u32, who: Who) {
     let mut mobs = std::mem::take(&mut game.mobs);
     let i = mobs.iter().position(|m| m.id == bee_id).unwrap();
-    let mut random = LegacyRandom::new(0);
+    let mut random = LevelRandom::for_level(LegacyRandom::new(0));
     let mut events = Vec::new();
     {
         let w = game.mob_world_base(&[]);

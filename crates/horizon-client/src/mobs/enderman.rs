@@ -869,7 +869,7 @@ mod tests {
                         teleport: 0,
                     },
                 );
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,

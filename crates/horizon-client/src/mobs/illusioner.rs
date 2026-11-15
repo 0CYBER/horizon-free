@@ -339,7 +339,7 @@ mod tests {
                 m.ai.target = Some(target);
                 let mut spell = Spell::new(BLINDNESS_SPELL);
                 spell.warmup = 1;
-                let (mut lr, mut events) = (horizon_core::random::LegacyRandom::new(0), Vec::new());
+                let (mut lr, mut events) = (crate::mobs::world::level_random(0), Vec::new());
                 spell.tick(
                     &mut m,
                     &mut Cx {

@@ -895,7 +895,7 @@ mod tests {
                     wanted: [0.0; 3],
                 };
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w: &w,
                     lr: &mut lr,
@@ -943,7 +943,7 @@ mod tests {
                 golem.ai.last_hurt_by_time = 10;
                 let mut goal = ResetUniversalAnger::default();
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w: &w,
                     lr: &mut lr,
@@ -994,7 +994,7 @@ mod tests {
             let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
             let mut goal = HurtByTarget::new();
             let mut events = Vec::new();
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut cx = Cx {
                 w,
                 lr: &mut lr,
@@ -1025,7 +1025,7 @@ mod tests {
             golem.extra.anger = 100;
             golem.extra.angry_at = Some(Who::Player);
             let mut events = Vec::new();
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut cx = Cx {
                 w: &w,
                 lr: &mut lr,
@@ -1066,7 +1066,7 @@ mod tests {
                 };
                 let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
                 golem.ai.targets.add(1, DefendVillage);
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
@@ -1098,7 +1098,7 @@ mod created_golem_tests {
     /// The target `m`'s target goals pick over `ticks` ticks in `w`.
     fn target(m: &mut Mob, w: &MobWorld<'_>, ticks: u32) -> Option<Who> {
         let mut events = Vec::new();
-        let mut lr = horizon_core::random::LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let mut goals = std::mem::take(&mut m.ai.targets);
         {
             let mut cx = Cx {

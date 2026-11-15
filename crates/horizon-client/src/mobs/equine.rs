@@ -1224,7 +1224,7 @@ mod tests {
                     let mut expected = m.random.clone();
                     assert_eq!(expected.next_int_bound(50).unwrap(), 0);
                     expected.next_int_bound(max).unwrap();
-                    let (mut lr, mut events) = (LegacyRandom::new(1), Vec::new());
+                    let (mut lr, mut events) = (crate::mobs::world::level_random(1), Vec::new());
                     RunAroundLikeCrazy::new().tick(
                         &mut m,
                         &mut Cx {
@@ -1496,7 +1496,7 @@ mod tests {
                 }
             },
             |w, _| {
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,

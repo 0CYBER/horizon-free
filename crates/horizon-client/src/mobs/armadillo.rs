@@ -719,7 +719,7 @@ mod tests {
     fn run_goals(m: &mut Mob, w: &MobWorld, ticks: u32) -> Vec<MobEvent> {
         let mut events = Vec::new();
         let mut goals = std::mem::take(&mut m.ai.goals);
-        let mut lr = horizon_core::random::LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let mut cx = Cx {
             w,
             lr: &mut lr,
@@ -859,7 +859,7 @@ mod tests {
         baby.extra.age = -24000;
         crate::mobs::world::with_test_world(&[], |w, _| {
             let mut events = Vec::new();
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut cx = Cx {
                 w,
                 lr: &mut lr,

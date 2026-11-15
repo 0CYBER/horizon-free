@@ -47,7 +47,7 @@ fn target(difficulty: u8, wall: bool) -> Option<(bool, bool)> {
             0.0,
         );
         let mut goal = AvoidEntity::new(Avoid::Player, 20.0, 1.0, 1.0);
-        let (mut lr, mut events) = (horizon_core::random::LegacyRandom::new(0), Vec::new());
+        let (mut lr, mut events) = (crate::mobs::world::level_random(0), Vec::new());
         let mut cx = Cx {
             w: &world,
             lr: &mut lr,
@@ -108,7 +108,7 @@ fn an_invisible_player_tempts_only_within_two_blocks() {
                 3,
                 Tempt::new(1.25, Arc::from(vec!["minecraft:wheat".to_string()]), false),
             );
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w: &world,
@@ -149,7 +149,7 @@ fn a_spectator_does_not_tempt_an_animal() {
                 3,
                 Tempt::new(1.25, Arc::from(vec!["minecraft:wheat".to_string()]), false),
             );
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w: &world,

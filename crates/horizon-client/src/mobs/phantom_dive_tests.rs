@@ -84,7 +84,7 @@ fn a_bite_is_level_event_1039_at_the_phantoms_block_unless_it_is_silent() {
             register(&mut m);
             m.ai.target = Some(Who::Player);
             m.extra.flag = true;
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut sweep = SweepAttack {
                 scared: false,
                 cat_search: 0,

@@ -4,7 +4,7 @@
 use super::{Mob, MobWorld, Who, goals::Cx};
 use horizon_core::{
     geometry::Vec3,
-    random::{LegacyRandom, RandomSource},
+    random::{LevelRandom, RandomSource},
 };
 
 /// A memory with an expiry (`Brain.setMemoryWithExpiry`): present for the
@@ -48,7 +48,7 @@ impl Timed {
     }
     /// `Behavior.tryStart`'s duration draw from the level random, in Java's
     /// int arithmetic (made even when it cannot vary).
-    pub fn begin(&mut self, lr: &mut LegacyRandom, now: i64) {
+    pub fn begin(&mut self, lr: &mut LevelRandom, now: i64) {
         self.running = true;
         let bound = self.max.wrapping_add(1).wrapping_sub(self.min);
         let d = self.min.wrapping_add(lr.next_int_bound(bound).unwrap_or(0));

@@ -76,7 +76,7 @@ fn blows(cases: &[Case]) -> Vec<(i32, f32)> {
             g.mobs.push(m);
             // The mob out of the level while its own blow runs, as in its tick.
             let mut mobs = std::mem::take(&mut g.mobs);
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(0));
             let mut events = Vec::new();
             {
                 let w = g.mob_world_base(&[]);

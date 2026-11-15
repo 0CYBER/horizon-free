@@ -431,7 +431,7 @@ mod tests {
             // rule is about roofs and full walls, not foot walls).
             let mut target = AttackPlayerTarget { next_scan: 0 };
             let mut events = Vec::new();
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut cx = Cx {
                 w: &w,
                 lr: &mut lr,
@@ -478,7 +478,7 @@ mod tests {
             register(&mut m);
             let mut target = AttackPlayerTarget { next_scan: 0 };
             let mut events = Vec::new();
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut cx = Cx {
                 w: &w,
                 lr: &mut lr,
@@ -530,7 +530,7 @@ mod tests {
                     let mut m = Mob::new(1, kind, Vec3::new(0.5, 80.0, 0.5), 0.0);
                     let mut target = AttackPlayerTarget { next_scan: 0 };
                     let mut events = Vec::new();
-                    let mut lr = horizon_core::random::LegacyRandom::new(0);
+                    let mut lr = crate::mobs::world::level_random(0);
                     let mut cx = Cx {
                         w: &w,
                         lr: &mut lr,

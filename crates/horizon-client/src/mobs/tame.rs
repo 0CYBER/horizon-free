@@ -1951,7 +1951,7 @@ mod tests {
     #[test]
     fn sitting_down_keeps_a_wolfs_begging_tilt() {
         let ran = crate::mobs::world::with_test_world(&[], |w, _| {
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,
@@ -2208,7 +2208,7 @@ mod tests {
             let seen = [partner.seen(None)];
             with_test_world(&seen, |w, _| {
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w,
                     lr: &mut lr,
@@ -2230,7 +2230,6 @@ mod tests {
     fn a_spectator_holding_a_bone_does_not_make_a_wolf_beg() {
         use crate::mobs::goals::Cx;
         use crate::mobs::world::{test_player, with_test_world};
-        use horizon_core::random::LegacyRandom;
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, _| {
             for spectator in [false, true] {
@@ -2249,7 +2248,7 @@ mod tests {
                         ticks: 0,
                     },
                 );
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
@@ -2277,7 +2276,6 @@ mod tests {
     fn a_pet_does_not_avenge_its_owner_on_a_dead_attacker() {
         use crate::mobs::goals::Cx;
         use crate::mobs::world::{test_player, with_test_world};
-        use horizon_core::random::LegacyRandom;
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, _| {
             for alive in [true, false] {
@@ -2308,7 +2306,7 @@ mod tests {
                     ..world
                 };
                 wolf.ai.targets.add(1, OwnerHurtBy { timestamp: 0 });
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
@@ -2336,7 +2334,6 @@ mod tests {
         use crate::mobs::goals::Cx;
         use crate::mobs::path::{Path, PathNode, PathType};
         use crate::mobs::world::with_test_world;
-        use horizon_core::random::LegacyRandom;
         use std::sync::Arc;
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, _| {
@@ -2371,7 +2368,7 @@ mod tests {
                     0.8,
                     1.33,
                 ));
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,
@@ -2424,7 +2421,7 @@ mod universal_anger_tests {
                 m.extra.angry_at = None;
                 let mut goals = std::mem::take(&mut m.ai.targets);
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w: &w,
                     lr: &mut lr,
@@ -2448,7 +2445,7 @@ mod universal_anger_tests {
 mod cat_tempt_tests {
     use super::*;
     use crate::mobs::world::{test_player, with_test_world};
-    use horizon_core::{geometry::Vec3, random::LegacyRandom};
+    use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
     /// `CatTemptGoal` overrides `canUse` with `!cat.isTame()`, and inherits
@@ -2470,7 +2467,7 @@ mod cat_tempt_tests {
                 4,
                 CatTempt(super::super::goals::Tempt::new(0.6, food, true), None),
             );
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w: &world,
@@ -2532,7 +2529,7 @@ mod tamable_panic_tests {
                 m.on_ground = true;
                 m.last_damage = Some((Damage::of(damage), i64::from(m.age)));
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w,
                     lr: &mut lr,
@@ -2573,7 +2570,6 @@ mod non_tame_tests {
     use super::*;
     use crate::mobs::world::with_test_world;
     use horizon_core::geometry::Vec3;
-    use horizon_core::random::LegacyRandom;
     use std::sync::Arc;
 
     /// `NonTameRandomTargetGoal.canContinueToUse` re-tests the subclass
@@ -2601,7 +2597,7 @@ mod non_tame_tests {
             ),
         );
         let tick = |m: &mut Mob, w: &MobWorld| {
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,

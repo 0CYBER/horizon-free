@@ -726,7 +726,7 @@ mod ram_tests {
         partner.extra.in_love = 600;
         let others = [partner.seen(None)];
         let ran = with_test_world(&others, |w, _| {
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut goat = Mob::new(7, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
             let mut due = |goat: &mut Mob, w: &MobWorld| {
@@ -772,7 +772,7 @@ mod ram_tests {
             goat.attrs.attack_damage = 2.0;
             goat.ai.speed = 3.0;
             goat.extra.goat.ram_direction = Vec3::new(0.0, 0.0, 1.0);
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             ram_tick(
                 &mut goat,

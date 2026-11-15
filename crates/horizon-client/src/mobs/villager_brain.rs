@@ -20,7 +20,7 @@ use super::{
 };
 use horizon_core::{
     geometry::Vec3,
-    random::{LegacyRandom, RandomSource},
+    random::{LegacyRandom, LevelRandom, RandomSource},
 };
 
 /// `MemorySlot.NEVER_EXPIRE`.
@@ -456,7 +456,7 @@ pub fn init(m: &mut Mob, game_time: i64, day_time: i64, shuffle_seed: i64) {
 /// What behaviours read and emit during a brain tick.
 pub struct Bx<'a, 'w> {
     pub w: &'a MobWorld<'w>,
-    pub lr: &'a mut LegacyRandom,
+    pub lr: &'a mut LevelRandom,
     pub events: &'a mut Vec<MobEvent>,
     pub now: i64,
     /// `Villager.refreshBrain` was asked for.
@@ -464,7 +464,7 @@ pub struct Bx<'a, 'w> {
 }
 
 /// `Brain.tick`, called from the villager's server AI phase.
-pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
+pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LevelRandom, events: &mut Vec<MobEvent>) {
     if brain(m).is_none() {
         let seed = i64::from(m.id);
         init(m, w.game_time, w.day_time, seed);
@@ -515,7 +515,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<M
 pub fn age_boundary_reached(
     m: &mut Mob,
     w: &MobWorld,
-    lr: &mut LegacyRandom,
+    lr: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     if brain(m).is_none() {
@@ -573,7 +573,7 @@ fn sync(m: &mut Mob, now: i64) {
 
 // ---- Sensors ------------------------------------------------------------
 
-fn tick_sensors(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
+fn tick_sensors(m: &mut Mob, w: &MobWorld, lr: &mut LevelRandom) {
     for i in 0..9 {
         let fire = {
             let b = brain_mut(m);
@@ -672,7 +672,7 @@ fn sense_players(m: &mut Mob, w: &MobWorld) {
 }
 /// `NearestBedSensor`: babies remember the nearest reachable bed, trying
 /// at most four beds a scan and skipping the ones tried lately.
-fn sense_bed(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
+fn sense_bed(m: &mut Mob, w: &MobWorld, lr: &mut LevelRandom) {
     if !m.is_baby() {
         return;
     }

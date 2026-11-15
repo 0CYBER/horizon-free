@@ -1675,7 +1675,7 @@ mod pufferfish_sting_tests {
                 let mut fish = Mob::new(1, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
                 fish.no_gravity = true;
                 fish.ai.goals.add(1, PufferfishPuff);
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,

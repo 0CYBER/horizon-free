@@ -1341,7 +1341,7 @@ mod conversion_tests {
             dress(&mut m);
             m.fluids.eye_in_water = true;
             m.extra.counter2 = 1;
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,
@@ -1495,7 +1495,7 @@ mod go_to_water_tests {
                 assert!(w.fluid(3, 64, 3) == crate::blocks::Fluid::Water, "{block}");
                 let mut goal = DrownedGoToWater::default();
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w,
                     lr: &mut lr,
@@ -1536,7 +1536,7 @@ mod turtle_egg_tests {
             goal.base.reached = true;
             // Past `RemoveBlockGoal`'s sixty ticks: the egg goes this tick.
             goal.since_reached = 61;
-            let mut lr = horizon_core::random::LegacyRandom::new(level_seed);
+            let mut lr = crate::mobs::world::level_random(level_seed);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,
@@ -1639,7 +1639,7 @@ mod wither_arrow_tests {
                 let kind = Arc::new(types.types[name].clone());
                 let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w: &w,
                     lr: &mut lr,
@@ -1698,7 +1698,6 @@ mod wither_arrow_tests {
 mod trident_continue_tests {
     use super::*;
     use crate::mobs::world::{test_player, with_test_world};
-    use horizon_core::random::LegacyRandom;
     use std::sync::Arc;
 
     /// `DrownedTridentAttackGoal` overrides `canUse` with the trident test and
@@ -1725,7 +1724,7 @@ mod trident_continue_tests {
                     drowned_throw,
                 )),
             );
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w: &world,
@@ -1760,7 +1759,7 @@ mod trident_continue_tests {
             m.fluids.eye_in_water = true;
             m.extra.counter = 599;
 
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,

@@ -1,7 +1,6 @@
 //! `FollowMobGoal` skips an invisible mob: the flag or the invisibility effect.
 use super::goals::{Cx, FollowMob};
 use super::{Mob, Species};
-use crate::mobs::LegacyRandom;
 use crate::mobs::world::with_test_world;
 use horizon_core::geometry::Vec3;
 use std::sync::Arc;
@@ -27,7 +26,7 @@ fn a_follow_mob_goal_ignores_an_invisible_mob() {
                 ..w.clone()
             };
             m.ai.goals.add(1, FollowMob::new(1.0, 3.0, 7.0));
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w: &world,

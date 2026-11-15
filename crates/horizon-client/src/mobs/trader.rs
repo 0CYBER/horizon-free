@@ -366,7 +366,6 @@ mod tests {
     fn a_trader_does_not_drink_in_the_end() {
         use crate::mobs::world::with_test_world;
         use horizon_core::geometry::Vec3;
-        use horizon_core::random::LegacyRandom;
         use std::sync::Arc;
         let _ = with_test_world(&[], |w, types| {
             let kind = Arc::new(types.types["minecraft:wandering_trader"].clone());
@@ -383,7 +382,7 @@ mod tests {
             };
             let decide =
                 |world: &MobWorld, m: &mut Mob, potion: &mut DrinkItem, milk: &mut DrinkItem| {
-                    let mut lr = LegacyRandom::new(1);
+                    let mut lr = crate::mobs::world::level_random(1);
                     let mut events = Vec::new();
                     let mut cx = Cx {
                         w: world,
@@ -426,7 +425,7 @@ mod tests {
 mod trade_start_tests {
     use super::*;
     use crate::mobs::world::{test_player, with_test_world};
-    use horizon_core::{geometry::Vec3, random::LegacyRandom};
+    use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
     /// `TradeWithPlayerGoal.canUse`: alive, dry, on the ground, not hurt
@@ -449,7 +448,7 @@ mod trade_start_tests {
                 m.ai.goals.add(1, TradeWithPlayer);
                 let mut world = w.clone();
                 world.player = Some(test_player(Vec3::new(0.5 + distance, 64.0, 0.5)));
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,

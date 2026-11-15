@@ -11,7 +11,7 @@
 use super::super::villager_brain;
 use super::super::{Mob, MobWorld};
 use horizon_core::geometry::Vec3;
-use horizon_core::random::LegacyRandom;
+use horizon_core::random::LevelRandom;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -119,7 +119,7 @@ fn room_exceeds(m: &Mob, w: &MobWorld, cap: usize) -> bool {
 pub fn brain_tick(
     m: &mut Mob,
     w: &MobWorld,
-    lr: &mut LegacyRandom,
+    lr: &mut LevelRandom,
     events: &mut Vec<super::super::MobEvent>,
 ) {
     if !skips_brain(m, w) {

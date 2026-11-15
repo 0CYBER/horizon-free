@@ -20,7 +20,7 @@ use horizon_core::{
         trig::{DEG_TO_RAD, Mth},
     },
     jmath,
-    random::{LegacyRandom, RandomSource},
+    random::{EntityRandom, RandomSource},
 };
 
 /// `Panda.Gene` ids (the order of `Gene.values()`).
@@ -138,7 +138,7 @@ pub fn set_attributes(m: &mut Mob) {
 /// a baby the game made (its attributes go back to the type's first).
 pub fn inherit(child: &mut Mob, parent: &Mob, partner: &Mob) {
     let r = &mut child.random;
-    let one_of = |p: &Mob, r: &mut LegacyRandom| {
+    let one_of = |p: &Mob, r: &mut EntityRandom| {
         if r.next_boolean() {
             p.extra.variant
         } else {

@@ -24,7 +24,7 @@ fn pet(id: &str, species: Species, at: Vec3) -> Mob {
 #[test]
 fn ordering_a_pet_to_sit_in_water_leaves_the_pose_alone() {
     let ran = crate::mobs::world::with_test_world(&[], |w, _| {
-        let mut lr = horizon_core::random::LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let mut events = Vec::new();
         let mut cx = Cx {
             w,
@@ -90,7 +90,7 @@ fn a_cat_on_a_chest_is_in_the_sitting_pose() {
             world.set(0, 64, 0, chest).unwrap();
         },
         |w, _| {
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,

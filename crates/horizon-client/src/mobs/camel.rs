@@ -607,7 +607,7 @@ mod tests {
             m.on_ground = true;
             let mut started = false;
             with_test_world(&seen, |w, _| {
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,
@@ -803,7 +803,7 @@ mod tests {
         };
         let partner = b.seen(None);
         let mut events = Vec::new();
-        let mut lr = horizon_core::random::LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let ran = with_test_world(&[partner], |w, _| {
             let mut cx = Cx {
                 w,
@@ -875,7 +875,7 @@ mod tests {
                 let mut blocked = sitting_camel(1, 0.5);
                 let mut open = sitting_camel(2, 5.5);
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w,
                     lr: &mut lr,

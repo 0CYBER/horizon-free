@@ -779,7 +779,7 @@ mod still_float_tests {
         m.fluids.water = 1.0;
         let mut stopped = None;
         let ran = with_test_world(&[], |w, _| {
-            let mut lr = horizon_core::random::LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,

@@ -5,7 +5,6 @@ use super::super::world::{test_player, with_built_test_world};
 use super::*;
 use crate::mobs::MobWorld;
 use crate::projectiles::ProjectileKind;
-use horizon_core::random::LegacyRandom;
 use horizon_world::nbt::Tag;
 use std::sync::Arc;
 
@@ -30,7 +29,7 @@ fn ghast_tag(power: Option<Tag>) -> Tag {
 /// The power of the one large fireball `goal` shot over 20 ticks, as
 /// `Ghast.GhastShootFireballGoal` counts its charge to 20.
 fn shot_power(m: &mut Mob, goal: &mut GhastShoot, world: &MobWorld<'_>) -> i32 {
-    let (mut lr, mut events) = (LegacyRandom::new(0), Vec::new());
+    let (mut lr, mut events) = (crate::mobs::world::level_random(0), Vec::new());
     for _ in 0..20 {
         let mut cx = Cx {
             w: world,

@@ -76,7 +76,7 @@ fn a_bucking_horse_bolts_only_where_the_filters_allow() {
                 let _ = expected.next_int_bound(9);
                 let _ = expected.next_int_bound(11);
             }
-            let mut lr = LegacyRandom::new(seed);
+            let mut lr = crate::mobs::world::level_random(seed);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,

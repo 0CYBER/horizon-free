@@ -22,7 +22,7 @@ use super::{
 };
 use horizon_core::{
     geometry::Vec3,
-    random::{LegacyRandom, RandomSource},
+    random::{EntityRandom, LegacyRandom, LevelRandom, RandomSource},
 };
 
 /// `WardenAi` timings.
@@ -267,7 +267,7 @@ impl Brain {
         }
     }
     /// `Sensor.randomlyDelayStart` for both sensors, from the warden's random.
-    pub fn delay_sensors(&mut self, random: &mut LegacyRandom) {
+    pub fn delay_sensors(&mut self, random: &mut EntityRandom) {
         for s in &mut self.sensors {
             *s = i64::from(random.next_int_bound(20).unwrap_or(0));
         }
@@ -348,7 +348,7 @@ fn activities(seed: i64) -> Vec<Entry> {
 /// What behaviours read and emit during a brain tick.
 pub struct Bx<'a, 'w> {
     pub w: &'a MobWorld<'w>,
-    pub lr: &'a mut LegacyRandom,
+    pub lr: &'a mut LevelRandom,
     pub events: &'a mut Vec<MobEvent>,
     pub now: i64,
 }
@@ -368,7 +368,7 @@ pub(super) fn mem_ref(m: &Mob) -> Option<&Memories> {
 }
 
 /// `Brain.tick` (from `Warden.customServerAiStep`).
-pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
+pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LevelRandom, events: &mut Vec<MobEvent>) {
     if m.extra.warden.is_none() {
         return;
     }
@@ -1207,7 +1207,7 @@ fn swim_condition(m: &Mob) -> bool {
 /// The `Cx` the mob library's attacks take.
 pub(super) fn cx<'a, 'w>(
     w: &'a MobWorld<'w>,
-    lr: &'a mut LegacyRandom,
+    lr: &'a mut LevelRandom,
     events: &'a mut Vec<MobEvent>,
 ) -> Cx<'a, 'w> {
     Cx { w, lr, events }
@@ -1571,7 +1571,7 @@ mod tests {
             let at = horizon_core::geometry::Vec3::new(0.5, 64.0, 0.5);
             let mut m = Mob::new(1, crate::mobs::sensor_scan_tests::kind(), at, 0.0);
             warden::register(&mut m);
-            let (mut lr, mut events) = (LegacyRandom::new(0), Vec::new());
+            let (mut lr, mut events) = (crate::mobs::world::level_random(0), Vec::new());
             let mut b = B::ForceUnmount(Timed::new(60, 60));
             {
                 let mut cx = Bx {

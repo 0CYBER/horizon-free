@@ -17,7 +17,7 @@ use super::{
 use crate::blocks::Fluid;
 use horizon_core::{
     geometry::Vec3,
-    random::{LegacyRandom, RandomSource},
+    random::{LevelRandom, RandomSource},
 };
 use std::fmt::Debug;
 
@@ -648,7 +648,7 @@ pub(crate) fn set_jump_cooldown(m: &mut Mob, ticks: Option<i64>) {
 }
 /// `TIME_BETWEEN_LONG_JUMPS.sample` from the level's random, divided as the
 /// caller asks.
-fn sample_cooldown(m: &mut Mob, lr: &mut LegacyRandom, div: i32) {
+fn sample_cooldown(m: &mut Mob, lr: &mut LevelRandom, div: i32) {
     let (lo, hi) = if m.species() == Species::Goat {
         GOAT_TIME_BETWEEN_LONG_JUMPS
     } else {
@@ -741,7 +741,7 @@ pub(super) struct LongJump {
 impl LongJump {
     /// `WeightedRandom.getRandomItem` with the level's random over the
     /// candidates, removed once drawn.
-    fn draw(&mut self, lr: &mut LegacyRandom) -> Option<Candidate> {
+    fn draw(&mut self, lr: &mut LevelRandom) -> Option<Candidate> {
         let total: i32 = self.candidates.iter().map(|c| c.1).sum();
         if total == 0 {
             return None;
@@ -755,7 +755,7 @@ impl LongJump {
     }
     /// `LongJumpToPreferredBlock.getJumpCandidate`: while it wants them, the
     /// first drawn spot over a preferred block, else the first one passed over.
-    fn candidate(&mut self, w: &MobWorld, lr: &mut LegacyRandom) -> Option<Candidate> {
+    fn candidate(&mut self, w: &MobWorld, lr: &mut LevelRandom) -> Option<Candidate> {
         if !self.wanting_preferred {
             return self.draw(lr);
         }
@@ -772,7 +772,7 @@ impl LongJump {
     }
     /// `LongJumpToRandomPos.pickCandidate`: the first acceptable spot it can
     /// reach in an arc but not by an 8 block path.
-    fn pick(&mut self, m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom) {
+    fn pick(&mut self, m: &mut Mob, w: &MobWorld, lr: &mut LevelRandom) {
         while !self.candidates.is_empty() {
             let Some((target, _)) = self.candidate(w, lr) else {
                 continue;
@@ -1086,7 +1086,7 @@ mod tests {
             ..LongJump::default()
         };
         let mut r = LegacyRandom::new(7);
-        let mut lr = r.clone();
+        let mut lr = LevelRandom::for_level(r.clone());
         let pick = r.next_int_bound(14).unwrap();
         let want = if pick < 1 {
             0
@@ -1141,7 +1141,7 @@ mod tests {
     fn the_long_jump_cooldown_counts_down_and_is_erased() {
         let mut m = frog();
         let own = m.random.state();
-        sample_cooldown(&mut m, &mut LegacyRandom::new(3), 2);
+        sample_cooldown(&mut m, &mut crate::mobs::world::level_random(3), 2);
         let t = jump_cooldown(&m).unwrap();
         assert!((50..=70).contains(&t));
         assert_eq!(m.random.state(), own);
@@ -1191,7 +1191,7 @@ mod tests {
                     i64::from(m.age),
                 ));
                 let mut events = Vec::new();
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w,
                     lr: &mut lr,
@@ -1267,7 +1267,7 @@ mod tests {
                 m.position = Vec3::new(8.5, 64.0, 8.5);
                 m.on_ground = true;
                 set_pregnant(&mut m, true);
-                let mut lr = LegacyRandom::new(3);
+                let mut lr = crate::mobs::world::level_random(3);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,

@@ -39,7 +39,7 @@ fn a_camel_husk_never_breeds() {
     };
     let seen = [husk_partner.seen(None), camel_partner.seen(None)];
     let ran = with_test_world(&seen, |w, _| {
-        let mut lr = LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let mut events = Vec::new();
         let husk_breeds = {
             let mut cx = Cx {
@@ -94,7 +94,7 @@ fn an_unsaddled_camel_sits_down_under_its_rider() {
         m.on_ground = true;
         let mut started = false;
         with_test_world(&[], |w, _| {
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,

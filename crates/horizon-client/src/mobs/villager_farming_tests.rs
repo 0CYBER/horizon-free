@@ -100,7 +100,7 @@ fn mod_farmland_is_a_secondary_site_and_farming_target() {
                 mem(&mut m).secondary_job_site.value(),
                 Some(vec![[0, 0, 0]])
             );
-            let mut lr = LegacyRandom::new(11);
+            let mut lr = crate::mobs::world::level_random(11);
             let mut events = Vec::new();
             let mut cx = Bx {
                 w,
@@ -152,7 +152,7 @@ fn mod_crops_are_harvested_only_at_their_vanilla_templates_max_age() {
         },
         |w, types| {
             let mut m = farmer(types);
-            let mut lr = LegacyRandom::new(12);
+            let mut lr = crate::mobs::world::level_random(12);
             let mut events = Vec::new();
             for (x, ripe) in [
                 (0, false),
@@ -205,7 +205,7 @@ fn farming_uses_the_first_tagged_block_item_and_consumes_one_seed() {
                 ItemStack::new("fieldtest:roots", 1),
                 ItemStack::new("fieldtest:grain", 2),
             ];
-            let mut lr = LegacyRandom::new(13);
+            let mut lr = crate::mobs::world::level_random(13);
             let mut events = Vec::new();
             harvest_tick(
                 &mut m,
@@ -340,7 +340,7 @@ fn planting_posts_block_place_with_villager_and_crop_state() {
             let mut m = farmer(types);
             super::super::villager::ext_mut(&mut m).inventory =
                 vec![ItemStack::new("minecraft:wheat_seeds", 1)];
-            let mut lr = LegacyRandom::new(13);
+            let mut lr = crate::mobs::world::level_random(13);
             let mut events = Vec::new();
             harvest_tick(
                 &mut m,

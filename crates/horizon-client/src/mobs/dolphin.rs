@@ -619,7 +619,7 @@ mod treasure_play_tests {
                 let mut m = dolphin();
                 // A treasure far enough that `canContinueToUse` holds.
                 m.extra.home = Some([40, 64, 40]);
-                let mut lr = horizon_core::random::LegacyRandom::new(seed);
+                let mut lr = crate::mobs::world::level_random(seed);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,
@@ -660,7 +660,7 @@ mod treasure_play_tests {
                 let mut m = dolphin();
                 m.extra.point = Some([8.5, 64.0, 0.5]);
                 m.silent = silent;
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,

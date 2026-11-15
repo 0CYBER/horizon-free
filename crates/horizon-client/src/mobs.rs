@@ -2995,7 +2995,7 @@ impl<'a> Teams<'a> {
 /// (`mob.getRandom()`): a 10% chance of one or two silverfish, each thrown
 /// along `look` (`spawnSilverfish`). Their velocities; none when the chance
 /// fails.
-pub fn infested_silverfish(random: &mut LegacyRandom, look: [f64; 3]) -> Vec<Vec3> {
+pub fn infested_silverfish(random: &mut impl RandomSource, look: [f64; 3]) -> Vec<Vec3> {
     if random.next_float() > 0.1 {
         return Vec::new();
     }
@@ -3290,7 +3290,7 @@ impl Mob {
         &mut self,
         amount: f32,
         from: Option<[f64; 3]>,
-        _random: &mut LegacyRandom,
+        _random: &mut impl RandomSource,
     ) -> bool {
         let source = match from {
             Some(f) => Damage::player(f),

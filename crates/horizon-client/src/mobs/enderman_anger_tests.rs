@@ -34,7 +34,7 @@ fn world_with_player<'a>(w: &MobWorld<'a>, m: &Mob, at: Vec3) -> MobWorld<'a> {
 /// Whether the look goal starts this tick.
 fn look_goal_starts(m: &mut Mob, world: &MobWorld) -> bool {
     m.ai.goals.add(1, look_goal());
-    let mut lr = horizon_core::random::LegacyRandom::new(0);
+    let mut lr = crate::mobs::world::level_random(0);
     let mut events = Vec::new();
     let mut cx = Cx {
         w: world,
@@ -118,7 +118,7 @@ fn an_enderman_keeps_a_target_beyond_its_follow_range() {
         let mut m = enderman();
         let world = world_with_player(w, &m, Vec3::new(80.5, 64.0, 0.5));
         m.ai.target = Some(Who::Player);
-        let mut lr = horizon_core::random::LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let mut events = Vec::new();
         let mut cx = Cx {
             w: &world,

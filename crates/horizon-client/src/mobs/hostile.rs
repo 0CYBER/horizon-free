@@ -461,7 +461,6 @@ mod spider_vehicle_tests {
     use super::*;
     use crate::mobs::world::{test_player, with_test_world};
     use horizon_core::geometry::Vec3;
-    use horizon_core::random::LegacyRandom;
     use std::sync::Arc;
 
     /// `SpiderAttackGoal.canUse` is `super.canUse() && !isVehicle()`: a spider
@@ -481,7 +480,7 @@ mod spider_vehicle_tests {
                     m.rider = Some(super::super::equine::Rider::default());
                 }
                 m.ai.goals.add(4, SpiderAttack(MeleeAttack::new(1.0, true)));
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,

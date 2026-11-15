@@ -782,7 +782,7 @@ mod tests {
             );
             m.ai.target = Some(Who::Player);
             let mut goal = Charge::new(0.5);
-            let mut lr = horizon_core::random::LegacyRandom::new(1);
+            let mut lr = crate::mobs::world::level_random(1);
             let mut cx = Cx {
                 w: &w,
                 lr: &mut lr,

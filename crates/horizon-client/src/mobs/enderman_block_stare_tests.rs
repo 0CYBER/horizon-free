@@ -33,7 +33,7 @@ fn tick_at(
         .expect("a seed picks the cube");
     m.random = EntityRandom::own(LegacyRandom::new(seed));
     let mut events = Vec::new();
-    let mut lr = LegacyRandom::new(0);
+    let mut lr = crate::mobs::world::level_random(0);
     goal.tick(
         m,
         &mut Cx {
@@ -150,7 +150,7 @@ fn step(
 ) -> Vec<MobEvent> {
     m.age = age;
     let mut events = Vec::new();
-    let mut lr = LegacyRandom::new(0);
+    let mut lr = crate::mobs::world::level_random(0);
     let mut cx = Cx {
         w,
         lr: &mut lr,

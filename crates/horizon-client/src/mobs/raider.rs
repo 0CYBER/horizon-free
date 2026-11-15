@@ -863,7 +863,6 @@ mod tests {
     #[test]
     fn a_celebrating_raider_does_not_jump_while_riding() {
         use crate::mobs::world::with_test_world;
-        use horizon_core::random::LegacyRandom;
         use std::sync::Arc;
         let _ = with_test_world(&[], |w, _| {
             let jumped = |seed: i64, riding: bool| {
@@ -877,7 +876,7 @@ mod tests {
                     m.extra.mount = Some(9);
                 }
                 let mut goal = Celebration;
-                let mut lr = LegacyRandom::new(1);
+                let mut lr = crate::mobs::world::level_random(1);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,
@@ -946,7 +945,7 @@ mod tests {
                         path_to_banner: None,
                     },
                 );
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,

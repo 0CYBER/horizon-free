@@ -280,7 +280,6 @@ mod defend_trader_tests {
     use crate::mobs::world::{test_player, with_test_world};
     use crate::mobs::{Mob, Species, sensor_scan_tests::kind};
     use horizon_core::geometry::Vec3;
-    use horizon_core::random::LegacyRandom;
     use std::sync::Arc;
 
     /// `TraderLlamaDefendWanderingTraderGoal` runs the trader's attacker
@@ -310,7 +309,7 @@ mod defend_trader_tests {
                 let mut llama = Mob::new(1, Arc::new(llama_kind), Vec3::new(0.5, 64.0, 0.5), 0.0);
                 llama.extra.leash = Some(super::super::leash::Holder::Mob(2));
                 llama.ai.goals.add(1, DefendTrader::default());
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,

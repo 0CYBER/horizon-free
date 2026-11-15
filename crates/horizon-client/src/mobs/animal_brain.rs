@@ -17,7 +17,7 @@ use super::{
 };
 use horizon_core::{
     geometry::Vec3,
-    random::{LegacyRandom, RandomSource},
+    random::{LegacyRandom, LevelRandom, RandomSource},
 };
 
 /// `MemorySlot.NEVER_EXPIRE`.
@@ -490,13 +490,13 @@ pub fn lock_gaze(m: &mut Mob, partner: u32) {
 /// What behaviours read and emit during a brain tick.
 pub struct Bx<'a, 'w> {
     pub w: &'a MobWorld<'w>,
-    pub lr: &'a mut LegacyRandom,
+    pub lr: &'a mut LevelRandom,
     pub events: &'a mut Vec<MobEvent>,
     pub now: i64,
 }
 
 /// `Brain.tick` then `updateActivity` (from `customServerAiStep`).
-pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LegacyRandom, events: &mut Vec<MobEvent>) {
+pub fn tick(m: &mut Mob, w: &MobWorld, lr: &mut LevelRandom, events: &mut Vec<MobEvent>) {
     if brain(m).is_none() {
         let seed = i64::from(m.id);
         init(m, seed);

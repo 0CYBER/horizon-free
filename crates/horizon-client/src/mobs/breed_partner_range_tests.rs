@@ -25,7 +25,7 @@ fn courtship(mates: &[[f64; 3]]) -> Option<(bool, Option<[i32; 3]>)> {
         let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
         m.extra.in_love = 600;
         m.on_ground = true;
-        let mut lr = LegacyRandom::new(0);
+        let mut lr = crate::mobs::world::level_random(0);
         let mut events = Vec::new();
         let mut cx = Cx {
             w,

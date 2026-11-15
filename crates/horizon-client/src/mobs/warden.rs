@@ -12,7 +12,7 @@ use super::{
 use crate::sculk::{self, Context, Info};
 use horizon_core::{
     geometry::{Vec3, trig::Mth},
-    random::{LegacyRandom, LevelRandom, RandomSource},
+    random::{LevelRandom, RandomSource},
 };
 use horizon_protocol::entity_data::PositionSource;
 use std::{
@@ -563,7 +563,7 @@ pub(super) fn do_hurt_target(
     m: &mut Mob,
     target: Who,
     w: &MobWorld,
-    lr: &mut LegacyRandom,
+    lr: &mut LevelRandom,
     events: &mut Vec<MobEvent>,
 ) {
     m.anim.states[ROAR].stop();

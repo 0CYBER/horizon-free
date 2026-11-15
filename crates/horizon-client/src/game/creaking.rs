@@ -15,7 +15,7 @@ use horizon_client::{
 use horizon_core::{
     geometry::Vec3,
     position::BlockPos,
-    random::{LegacyRandom, RandomSource},
+    random::{LevelRandom, RandomSource},
 };
 use horizon_world::registry::BlockStateId;
 use std::{collections::HashMap, sync::Arc};
@@ -118,7 +118,7 @@ impl Game<'_> {
         f: impl FnOnce(
             &mut CreakingHeart,
             Option<&horizon_client::mobs::MobWorld>,
-            &mut LegacyRandom,
+            &mut LevelRandom,
             &mut Host,
             &mut Vec<HeartEvent>,
         ),

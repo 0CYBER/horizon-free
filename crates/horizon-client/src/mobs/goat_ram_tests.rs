@@ -8,7 +8,6 @@ use crate::mobs::goals::Cx;
 use crate::mobs::world::with_test_world;
 use crate::mobs::{Damage, DamageKind, Mob, MobEvent, MobTypes, MobWorld, Who};
 use horizon_core::geometry::Vec3;
-use horizon_core::random::LegacyRandom;
 use std::sync::Arc;
 
 fn summon(types: &MobTypes, id: &str, mob_id: u32) -> Mob {
@@ -38,7 +37,7 @@ fn hit(victim: &mut Mob, w: &MobWorld, amount: f32, source: Damage) -> Hurt {
     victim.age = 100;
     let before = victim.health;
     assert!(victim.damage(amount, source), "the hit lands");
-    let mut lr = LegacyRandom::new(0);
+    let mut lr = crate::mobs::world::level_random(0);
     let mut events = Vec::new();
     let mut cx = Cx {
         w,
@@ -73,7 +72,7 @@ fn a_ram_angers_no_mob_but_a_plain_mob_attack_does() {
             let seen = [goat.seen(None), victim.seen(None), zombie.seen(None)];
             let mut scene = w.clone();
             scene.others = &seen;
-            let mut lr = LegacyRandom::new(0);
+            let mut lr = crate::mobs::world::level_random(0);
             let mut events = Vec::new();
             ram_tick(
                 &mut goat,

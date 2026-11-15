@@ -4,7 +4,7 @@
 use super::super::animal_brain::{Bx, transition};
 use super::super::world::with_test_world;
 use super::*;
-use horizon_core::{geometry::Vec3, random::LegacyRandom};
+use horizon_core::geometry::Vec3;
 use std::sync::Arc;
 
 fn sniffer(types: &super::super::MobTypes) -> Mob {
@@ -29,7 +29,7 @@ fn silent_sniffer_mutes_the_state_and_seed_sounds() {
             for silent in [true, false] {
                 let mut m = sniffer(types);
                 m.silent = silent;
-                let mut lr = LegacyRandom::new(1);
+                let mut lr = crate::mobs::world::level_random(1);
                 let mut events = Vec::new();
                 {
                     let mut cx = Bx {

@@ -955,7 +955,7 @@ mod tests {
                 let mut mob = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
                 let mut goals = std::mem::take(&mut mob.ai.targets);
                 let mut events = Vec::new();
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut cx = Cx {
                     w: &w,
                     lr: &mut lr,
@@ -1140,7 +1140,6 @@ mod tests {
     #[test]
     fn an_invisible_blue_sheep_is_not_wololoed_from_five_blocks() {
         use crate::mobs::world::with_test_world;
-        use horizon_core::random::LegacyRandom;
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, _| {
             for invisible in [false, true] {
@@ -1161,7 +1160,7 @@ mod tests {
                 let mut m = evoker(0);
                 m.position = Vec3::new(0.5, 64.0, 0.5);
                 m.ai.goals.add(6, UseSpell::new(Spell::Wololo));
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
@@ -1189,7 +1188,6 @@ mod tests {
     #[test]
     fn a_flagged_invisible_blue_sheep_is_not_wololoed_from_fourteen_blocks() {
         use crate::mobs::world::with_test_world;
-        use horizon_core::random::LegacyRandom;
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, _| {
             for invisible in [false, true] {
@@ -1208,7 +1206,7 @@ mod tests {
                 let mut m = evoker(0);
                 m.position = Vec3::new(0.5, 64.0, 0.5);
                 m.ai.goals.add(6, UseSpell::new(Spell::Wololo));
-                let mut lr = LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,

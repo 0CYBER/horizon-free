@@ -467,7 +467,7 @@ mod owner_save_tests {
                 vex.position = Vec3::new(0.5, 64.0, 0.5);
                 vex.extra.counter2 = 2;
                 vex.ai.targets.add(2, CopyOwnerTarget);
-                let mut lr = horizon_core::random::LegacyRandom::new(0);
+                let mut lr = crate::mobs::world::level_random(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &world,
