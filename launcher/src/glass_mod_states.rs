@@ -389,6 +389,8 @@ impl Launcher {
                 self.instance_mods.list = rows;
             }
             ("left", _) => {
+                // Left out by a build, which ran after the player allowed native mods.
+                self.settings.native_mods_allowed_at = Some(1);
                 self.mod_preview.left_out = left_out();
             }
             ("trust", "registry") => {

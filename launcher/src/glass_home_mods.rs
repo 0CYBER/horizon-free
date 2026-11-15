@@ -97,13 +97,53 @@ impl Launcher {
         } else {
             Vec::new()
         };
-        body = body.children((!left_out.is_empty()).then(|| {
-            self.panel().children(left_out.iter().map(|left| {
-                ui::text(13., FontWeight::NORMAL, 1.)
-                    .text_color(ui::warn())
-                    .child(left.label())
-            }))
-        }));
+        // Each with Switch off, which stops the build trying it until its author updates it.
+        let t = self.theme;
+        let lines: Vec<Div> = left_out
+            .iter()
+            .map(|left| {
+                let row = self
+                    .instance_mods
+                    .list
+                    .iter()
+                    .find(|r| {
+                        r.on && (r.native.as_ref().is_some_and(|n| n.id == left.id)
+                            || r.kind.as_ref().is_some_and(|(kind, id)| {
+                                *kind == ModKind::Native && *id == left.id
+                            }))
+                    })
+                    .cloned();
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        ui::text(13., FontWeight::NORMAL, 1.)
+                            .text_color(ui::warn())
+                            .flex_1()
+                            .min_w_0()
+                            .child(left.label()),
+                    )
+                    .children(row.map(|row| {
+                        ui::quiet(
+                            SharedString::from(format!("left-off-{}", left.id)),
+                            tr("Switch off"),
+                            32.,
+                            &t,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
+                                match &row.native {
+                                    Some(native) => this.switch_native_mod(native, true),
+                                    None => this.switch_mod(&row),
+                                }
+                                cx.notify();
+                            },
+                        ))
+                    }))
+            })
+            .collect();
+        body = body.children((!lines.is_empty()).then(|| self.panel().gap(px(8.)).children(lines)));
         let rows: Vec<ModRow> = self
             .instance_mods
             .list
@@ -130,14 +170,20 @@ impl Launcher {
             0.,
             |_| false,
             |i| {
-                self.glass_mod_row(rows[i].clone(), busy, cx)
+                self.glass_mod_row(rows[i].clone(), &left_out, busy, cx)
                     .into_any_element()
             },
         );
         body.child(list)
     }
 
-    fn glass_mod_row(&mut self, row: ModRow, busy: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn glass_mod_row(
+        &mut self,
+        row: ModRow,
+        left_out: &[native_mods::LeftOut],
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let t = self.theme;
         let key = SharedString::from(format!("mod-{}", row.file));
         let hovered = self.list_hover.as_ref() == Some(&key);
@@ -196,7 +242,7 @@ impl Launcher {
                 })),
             })
         });
-        let status = self.mod_status(&row, cx);
+        let status = self.mod_status(&row, left_out, cx);
         // A GitHub mod keeps its Update (or Check for updates) and Source on the row.
         let github = row
             .native
@@ -247,7 +293,12 @@ impl Launcher {
     /// The row's one status: a dot and a short word, in the colour of what it says. Each native
     /// mod has its own: only the mods that changed need a build, and a failed build marks only
     /// the mods that stopped it.
-    fn mod_status(&self, row: &ModRow, cx: &mut Context<Self>) -> Div {
+    fn mod_status(
+        &self,
+        row: &ModRow,
+        left_out: &[native_mods::LeftOut],
+        cx: &mut Context<Self>,
+    ) -> Div {
         let id = row
             .kind
             .as_ref()
@@ -258,10 +309,15 @@ impl Launcher {
             .selected_instance()
             .is_some_and(|i| self.native_for.as_deref() == Some(i.id.as_str()));
         let unbuilt = id.as_deref().is_some_and(|id| self.native_mod_unbuilt(id));
+        let left = id
+            .as_deref()
+            .and_then(|id| left_out.iter().find(|l| l.id == id));
         let (word, color) = match id.as_deref() {
             _ if !row.on => (tr("Off"), white(ink::QUIET)),
             _ if row.error.is_some() => (tr("Failed"), ui::danger()),
             None => (tr("Ready"), ui::live()),
+            // The last build left it out: the card above says why, with Switch off.
+            Some(_) if left.is_some() => (tr("Left out"), ui::warn()),
             Some(id) if mine && self.native_failed_mods.iter().any(|f| f == id) => {
                 (tr("Failed"), ui::danger())
             }
@@ -295,13 +351,13 @@ impl Launcher {
             )
             .id(SharedString::from(format!("mod-status-{}", row.file)));
         // Nothing here grants the permission: say where it is asked for.
-        let shown = if word == tr("Needs permission") {
-            self.with_reason(
+        let shown = match left {
+            Some(left) => self.with_reason(shown, &left.label()),
+            None if word == tr("Needs permission") => self.with_reason(
                 shown,
                 tr("Native mods need your permission before they build. Build asks you first."),
-            )
-        } else {
-            shown
+            ),
+            None => shown,
         };
         // A native mod's word opens what its chip says on the old look: how it reaches the game
         // (fits, exact build only, does not fit, did not build) and what can be done.
