@@ -26,12 +26,15 @@ impl mod_api::prelude::LevelsHost for World {
 }
 impl mod_api::prelude::KeysHost for World {
     fn registry_entry(&self, registry: &str, id: &str) -> Option<RegistryEntry> {
-        self.0.contains_entry(registry, id).then(|| {
-            RegistryEntry::new(
-                Identifier::parse(registry).unwrap(),
-                Identifier::parse(id).unwrap(),
-            )
-        })
+        // The game's built-in block registry, which the datapack set does not hold.
+        (self.0.contains_entry(registry, id)
+            || (registry, id) == ("minecraft:block", "minecraft:stone"))
+            .then(|| {
+                RegistryEntry::new(
+                    Identifier::parse(registry).unwrap(),
+                    Identifier::parse(id).unwrap(),
+                )
+            })
     }
     fn registry_entries(&self, registry: &str) -> Option<Vec<Identifier>> {
         self.0
@@ -40,6 +43,11 @@ impl mod_api::prelude::KeysHost for World {
             .into_iter()
             .map(|id| Identifier::parse(id).ok())
             .collect()
+    }
+    fn registry_entry_key_slot(&self, entry: &RegistryEntry) -> Option<u32> {
+        (entry.registry.to_string() == "minecraft:block"
+            && entry.id.to_string() == "minecraft:stone")
+            .then_some(5)
     }
     fn registry_entry_in_tag(&self, entry: &RegistryEntry, tag: &str) -> Option<bool> {
         self.0

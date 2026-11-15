@@ -50,5 +50,10 @@ pub fn read(host: &dyn mod_api::Host) {
     );
     assert_eq!(host.registry_entries("wasm_fixture:missing"), None);
     assert_eq!(entry.as_block_key(host), None);
+    let stone = host
+        .registry_entry("minecraft:block", "minecraft:stone")
+        .unwrap();
+    assert!(stone.as_block_key(host).is_some());
+    assert_eq!(stone.as_item_key(host), None);
     assert!(host.is_loaded("datapack_fixture_completed"));
 }
