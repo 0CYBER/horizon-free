@@ -1,5 +1,5 @@
 name: checks
-# verify: every pull request and every push to main, its three parts side by side (below). It is the check main
+# verify: every pull request and every push to main, its two parts side by side (below). It is the check main
 # requires, so it runs in every run of this workflow, even a cancelled one: a skipped job counts as passed, and every
 # run must report a real verify (a pull request that changes no Rust finishes its Rust parts in seconds instead).
 # parity: the vanilla harnesses a pull request's changes can affect, on the Mac mini's runner, which holds the
@@ -32,11 +32,16 @@ env:
   HORIZON_TELEMETRY_URL: "off"
 
 jobs:
-  # verify runs as three jobs side by side, so a run takes as long as its slowest part (the Rust tests), not the sum:
-  # one job doing them in turn took 14-21 minutes on GitHub's runners (main's run 43595807302: 859 s), and every merge
-  # wave waits for main's. `verify` itself is the check main requires: it waits for the three and passes only when
-  # each passed or had nothing to do. It runs even in a cancelled run (`always()`), so it fails there instead of being
-  # skipped, which GitHub would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the others.
+  # verify runs as two jobs side by side, so a run takes as long as its slowest part (the Rust tests), not the sum:
+  # one job doing everything in turn took 14-21 minutes on GitHub's runners (main's run 43595807302: 859 s), and every
+  # merge wave waits for main's. Two, not more: GitHub gives the organisation 20 concurrent jobs and a burst of pull
+  # requests drains through them, each job costing about a minute of setup (checkout, toolchain, cache) before it works.
+  # Measured 2026-11-13..15 (medians): the Rust tests 8.8 min, format and lint 4.0, the tree checks 2.0, the launcher
+  # under 1.5 min in 92% of runs (median 0.5). The three short parts were once three jobs (four with the tests, so
+  # four slots per pull request); they are one now, which is no slower than the tests and halves the slots.
+  # `verify` itself is the check main requires: it waits for the two and passes only when each passed or had nothing
+  # to do. It runs even in a cancelled run (`always()`), so it fails there instead of being skipped, which GitHub
+  # would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the other.
   #
   # Where (docs/ci-runners.md): our checks runners (label horizon-checks) take pull requests whose number ends in 0 or 1,
   # this repository's own and approved forks' alike, and the merge queue's groups whose pull request number ends in 0-4
@@ -48,8 +53,8 @@ jobs:
   # GitHub's. A fork's pull request sees no repository variable, so no switch can move it off a machine that is off:
   # it waits there until the machine is back (runner-watch.yml opens an issue). On ours the build folder persists
   # (CARGO_TARGET_DIR, outside the checkout), so the apt packages, Python and the Rust cache steps are GitHub's only.
-  verify-tree:
-    name: verify (tree and tools)
+  verify-static:
+    name: verify (tree, lint and launcher)
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
       github.event_name == 'pull_request' &&
@@ -130,45 +135,10 @@ jobs:
       - name: Test offline research tooling
         if: steps.queued.outputs.tested != 'true'
         run: python -m unittest discover -s tests -v
-  # Not in the merge queue: GitHub's 20 concurrent jobs are what the queue waits for, every pull request passed this
-  # job on its own head, and main's push after the merge still runs clippy (a combination that breaks a lint shows
-  # there). The required `verify` counts a skipped job as passed.
-  verify-lint:
-    name: verify (format and lint)
-    if: github.event_name != 'merge_group'
-    runs-on: >-
-      ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' &&
-      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1')) ||
-      github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
-      contains(github.event.merge_group.head_ref, '1-') || contains(github.event.merge_group.head_ref, '2-') ||
-      contains(github.event.merge_group.head_ref, '3-') || contains(github.event.merge_group.head_ref, '4-'))) &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          filter: blob:none
-      # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
-      # that commit's push run would repeat a finished, green verify (~25 runner-minutes, in a queue that builds six
-      # groups at once). Only a green merge_group run of this very commit counts; an admin merge never had one, and an
-      # API error counts as not tested, so the push then verifies in full. The push run still builds what main's
-      # caches hold (the steps below say which).
-      - name: Did the merge queue already verify this commit?
-        id: queued
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        run: |
-          tested=false
-          if n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$SHA&status=success&per_page=1" --jq .total_count 2>/dev/null) && [ "${n:-0}" -ge 1 ]; then
-            tested=true
-          fi
-          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+      # Format, lint and the launcher are not in the merge queue: GitHub's 20 concurrent jobs are what the queue waits
+      # for, every pull request passed them on its own head, and main's push after the merge still runs clippy (a
+      # combination that breaks a lint shows there). The steps below carry the merge_group guard themselves, so the
+      # queue's run of this job is the tree checks only. A failed step skips the later ones: fix it and re-run.
       - name: Does this pull request need Rust checks?
         if: github.event_name == 'pull_request'
         id: rust
@@ -176,15 +146,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      # As in verify-tree: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
-      - name: Our runners as GitHub's (a default Rust toolchain, no GPU)
-        if: runner.environment != 'github-hosted'
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
-          echo "WGPU_BACKEND=dx12" >> "$GITHUB_ENV"
+      # As in verify-static: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
       - name: Install Rust toolchain and the ALSA and udev headers the client links against
-        if: steps.rust.outputs.required != 'false'
+        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false'
         env:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
         run: |
@@ -197,11 +161,11 @@ jobs:
       # cache-workspace-crates keeps them, and a new key each UTC day makes main save a fresh copy once a day (the
       # restore falls back to the newest older one). .ci-built holds the commit that copy was checked at.
       - name: Which day's lint cache
-        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         id: lint-day
         run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
+        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           shared-key: verify-lint
           key: ${{ steps.lint-day.outputs.day }}
@@ -214,12 +178,12 @@ jobs:
       # .ci-built/sha the script does nothing and clippy checks everything, as before.
       - name: Date unchanged files as the cache saw them
         if: >-
-          github.event_name == 'pull_request' && steps.rust.outputs.required != 'false' &&
+          github.event_name == 'pull_request' && github.event_name != 'merge_group' && steps.rust.outputs.required != 'false' &&
           runner.environment == 'github-hosted'
         run: tools/ci/pin_mtimes.sh .ci-built
       - name: Check formatting and lint
-        if: steps.rust.outputs.required != 'false'
-        # A commit the queue verified skips the format check but still runs clippy: its build is what verify-lint's
+        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false'
+        # A commit the queue verified skips the format check but still runs clippy: its build is what verify-static's
         # rust-cache saves from main, and a run that saved nothing would leave pull requests an emptier cache.
         env:
           TESTED: ${{ steps.queued.outputs.tested }}
@@ -231,7 +195,7 @@ jobs:
       # queue no longer runs this job, so a change that breaks only the server build must stop on its own pull request
       # (a crate below the client can break it without touching one).
       - name: Lint the server build
-        if: steps.rust.outputs.required != 'false'
+        if: github.event_name != 'merge_group' && steps.rust.outputs.required != 'false'
         run: cargo +stable clippy -p horizon-client --lib --bins --locked --no-default-features -- -D warnings
       # Only main's passing run records its commit; pull requests restore it and never save it.
       - name: Record the commit this lint cache was checked at
@@ -240,6 +204,54 @@ jobs:
         run: |
           mkdir -p .ci-built
           git rev-parse HEAD > .ci-built/sha
+      # The launcher is its own workspace (launcher/Cargo.toml), so verify's cargo runs never build it. A pull request that
+      # changes it or a crate it builds is checked here, and so are main's pushes when their range changes it: two pull
+      # requests can each pass alone and break it together (#2059 and the registry ratings did, 2026-10-26), and the push
+      # after their merge shows it. A push's range is the commits it added to main; a range the job cannot read (a push
+      # with no earlier commit, or one a force push removed) runs everything.
+      - name: Does this change the launcher or a crate it builds?
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'merge_group'
+        id: launcher
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ] ||
+            ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "No earlier commit to compare with: the launcher is checked"
+          else
+            python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install Rust and the headers GPUI links against
+        if: github.event_name != 'merge_group' && steps.launcher.outputs.required != 'false'
+        env:
+          HOSTED: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          if [ "$HOSTED" = true ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libwayland-dev \
+              libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
+          fi
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: github.event_name != 'merge_group' && steps.launcher.outputs.required != 'false' && runner.environment == 'github-hosted'
+        with:
+          workspaces: launcher
+          shared-key: launcher
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check the launcher's formatting, lint and tests
+        if: github.event_name != 'merge_group' && steps.launcher.outputs.required != 'false'
+        working-directory: launcher
+        env:
+          TESTED: ${{ steps.queued.outputs.tested }}
+        # A commit the queue verified is only built (clippy, test binaries) for the cache main saves, not run.
+        run: |
+          [ "$TESTED" = true ] || cargo +stable fmt --check
+          cargo +stable clippy --all-targets --locked -- -D warnings
+          if [ "$TESTED" = true ]; then
+            cargo +stable test --locked --lib --bins --no-run
+          else
+            cargo +stable test --locked --lib --bins
+          fi
   verify-test:
     name: verify (Rust tests)
     runs-on: >-
@@ -282,7 +294,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 tools/ci/rust_changes.py "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-      # As in verify-tree: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
+      # As in verify-static: a default toolchain and no GPU, so a part doesn't depend on which pool took it.
       - name: Our runners as GitHub's (a default Rust toolchain, no GPU)
         if: runner.environment != 'github-hosted'
         run: |
@@ -346,7 +358,7 @@ jobs:
       - name: Link with mold
         if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C linker-features=-lld -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"
-      # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-lint's clippy
+      # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-static's clippy
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
       # cargo test --locked, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
       # these 4-core runners it was no faster (#4978).
@@ -388,105 +400,20 @@ jobs:
         run: |
           "$SCCACHE_PATH" --show-stats
   verify:
-    needs: [verify-tree, verify-lint, verify-test]
+    needs: [verify-static, verify-test]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every part of verify passed or had nothing to do
         env:
-          TREE: ${{ needs.verify-tree.result }}
-          LINT: ${{ needs.verify-lint.result }}
+          STATIC: ${{ needs.verify-static.result }}
           TEST: ${{ needs.verify-test.result }}
         run: |
-          echo "tree and tools: $TREE, format and lint: $LINT, Rust tests: $TEST"
-          for result in "$TREE" "$LINT" "$TEST"; do
+          echo "tree, lint and launcher: $STATIC, Rust tests: $TEST"
+          for result in "$STATIC" "$TEST"; do
             [ "$result" = success ] || [ "$result" = skipped ] || exit 1
           done
-  # The launcher is its own workspace (launcher/Cargo.toml), so verify's cargo runs never build it. A pull request that
-  # changes it or a crate it builds is checked here, and so are main's pushes when their range changes it: two pull
-  # requests can each pass alone and break it together (#2059 and the registry ratings did, 2026-10-26), and the push
-  # after their merge shows it. Not in the merge queue, which waits on GitHub's 20 concurrent jobs and does not need
-  # this one (only `verify` is required). A push's range is the commits it added to main; a range the job cannot read
-  # (a push with no earlier commit, or one a force push removed) runs everything.
-  launcher:
-    if: github.event_name != 'merge_group'
-    runs-on: >-
-      ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' &&
-      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
-      endsWith(format('{0}', github.event.pull_request.number), '1')) ||
-      github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
-      contains(github.event.merge_group.head_ref, '1-') || contains(github.event.merge_group.head_ref, '2-') ||
-      contains(github.event.merge_group.head_ref, '3-') || contains(github.event.merge_group.head_ref, '4-'))) &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          filter: blob:none
-      # The merge queue merges with merge commits and main moves to the exact commit its merge_group run verified, so
-      # that commit's push run would repeat a finished, green verify (~25 runner-minutes, in a queue that builds six
-      # groups at once). Only a green merge_group run of this very commit counts; an admin merge never had one, and an
-      # API error counts as not tested, so the push then verifies in full. The push run still builds what main's
-      # caches hold (the steps below say which).
-      - name: Did the merge queue already verify this commit?
-        id: queued
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
-        run: |
-          tested=false
-          if n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$SHA&status=success&per_page=1" --jq .total_count 2>/dev/null) && [ "${n:-0}" -ge 1 ]; then
-            tested=true
-          fi
-          echo "tested=$tested" >> "$GITHUB_OUTPUT"
-      - name: Does this change the launcher or a crate it builds?
-        if: github.event_name != 'workflow_dispatch'
-        id: launcher
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-        run: |
-          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = 0000000000000000000000000000000000000000 ] ||
-            ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-            echo "No earlier commit to compare with: the launcher is checked"
-          else
-            python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Install Rust and the headers GPUI links against
-        if: steps.launcher.outputs.required != 'false'
-        env:
-          HOSTED: ${{ runner.environment == 'github-hosted' }}
-        run: |
-          if [ "$HOSTED" = true ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libwayland-dev \
-              libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
-          fi
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: steps.launcher.outputs.required != 'false' && runner.environment == 'github-hosted'
-        with:
-          workspaces: launcher
-          shared-key: launcher
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Check the launcher's formatting, lint and tests
-        if: steps.launcher.outputs.required != 'false'
-        working-directory: launcher
-        env:
-          TESTED: ${{ steps.queued.outputs.tested }}
-        # A commit the queue verified is only built (clippy, test binaries) for the cache main saves, not run.
-        run: |
-          [ "$TESTED" = true ] || cargo +stable fmt --check
-          cargo +stable clippy --all-targets --locked -- -D warnings
-          if [ "$TESTED" = true ]; then
-            cargo +stable test --locked --lib --bins --no-run
-          else
-            cargo +stable test --locked --lib --bins
-          fi
   # Compile and test Windows ARM64 on an actual ARM64 host, and inspect the resulting PE headers. By hand only
   # (`gh workflow run checks --ref <branch>`): GitHub's runner queue is the bottleneck, and main's runs gate the
   # releases (tools/release_train.py waits for them), so neither pull requests nor main's pushes start this

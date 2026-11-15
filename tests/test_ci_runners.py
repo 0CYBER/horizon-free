@@ -107,28 +107,28 @@ class OwnRunnerTests(unittest.TestCase):
 
     def test_checks_split_between_both_pools(self):
         ci = dict(jobs((WORKFLOWS / "ci.yml").read_text()))
-        value = runs_on(ci["launcher"])
+        value = runs_on(ci["verify-static"])
         # A pull request by the last digit of its number unless SELF_HOSTED_CI=all; main's pushes keep GitHub's cache.
         self.assertIn("github.event_name == 'pull_request' && ", value)
         self.assertIn("vars.SELF_HOSTED_CI == 'all'", value)
         self.assertIn("endsWith(format('{0}', github.event.pull_request.number), '0')", value)
         # Half of the merge queue's groups, by the last digit of the pull request number in the queue's branch name.
         self.assertIn("github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-')", value)
-        # verify's parts go where the launcher goes; verify itself only waits for them.
-        for part in ("verify-tree", "verify-lint", "verify-test"):
+        # verify's parts all go where the first goes; verify itself only waits for them.
+        for part in ("verify-static", "verify-test"):
             with self.subTest(part=part):
                 self.assertEqual(runs_on(ci[part]), value)
-        self.assertIn("needs: [verify-tree, verify-lint, verify-test]", ci["verify"])
+        self.assertIn("needs: [verify-static, verify-test]", ci["verify"])
         # Never skipped: GitHub counts a skipped required check as passed.
         self.assertIn("if: always()", ci["verify"])
 
     def test_forks_reach_only_the_checks_runners(self):
         # An approved fork's pull request ending in 0 or 1 runs on horizon-checks like this repository's own (GitHub's
         # 20-job pool is not the only place it may wait). Never the light runners: every light job that a pull request
-        # can start carries the fork guard (test_light_runners_take_main_code_only), and ci.yml's four runs-on
+        # can start carries the fork guard (test_light_runners_take_main_code_only), and ci.yml's two runs-on
         # expressions (the other workflows keep their own guards) no longer test the head repository.
         ci = dict(jobs((WORKFLOWS / "ci.yml").read_text()))
-        for name in ("verify-tree", "verify-lint", "verify-test", "launcher"):
+        for name in ("verify-static", "verify-test"):
             self.assertNotIn("head.repo", runs_on(ci[name]), name)
         for where, on, _, block, _, pools in routed():
             if "light" in pools and "pull_request" in on:

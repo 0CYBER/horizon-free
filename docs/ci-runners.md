@@ -7,7 +7,7 @@ we have to the max") every job that can runs on our own machines, and GitHub's p
 
 | Runner | Machine | Labels | Takes |
 | --- | --- | --- | --- |
-| `vps-checks-1`, `vps-checks-2` (and `ludodesktop-checks-1`…`-3`, offline) | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha`; ludodesktop (the maintainer's desktop) | `horizon-checks` | `checks`' `verify` and `launcher` for pull requests whose number ends in 0 or 1 (this repository's own and approved forks'), `verify` of the merge queue's groups whose pull request number ends in 0-4, `mod-registry`, `telemetry-server`, `pack load bench` |
+| `vps-checks-1`, `vps-checks-2` (and `ludodesktop-checks-1`…`-3`, offline) | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha`; ludodesktop (the maintainer's desktop) | `horizon-checks` | `checks`' `verify` for pull requests whose number ends in 0 or 1 (this repository's own and approved forks'), `verify` of the merge queue's groups whose pull request number ends in 0-4, `mod-registry`, `telemetry-server`, `pack load bench` |
 | `vps-light-1`…`-8` | the CI VPS | `horizon-light` | The bots, as playhorizon's light runners below |
 | `playhorizon-light-1`…`-12` | playhorizon (partner's server, 8 vCPU) | `horizon-light`, `playhorizon-light` | The bots that run main's own scripts: `pr labels`, `overlap note`, `cancel-on-close`, `claim command`, `triage command`, `mojang republish`, `nightly build`'s `answer`, and `checks`' `parity-scope` |
 | `playhorizon-ci-1`, `playhorizon-ci-2` | playhorizon | `playhorizon-ci` | Nothing routed since 2026-11-03 (they took `checks` of this repository's own pull requests with the old `SELF_HOSTED_CI=all`) |
@@ -31,12 +31,22 @@ from a `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook in the NixOS configuration.
 - **Release builds**: Linux on `ubuntu-22.04` (players' binaries must link against its older glibc; our Linux
   machines have newer ones), Windows on `windows-latest` (no Windows machine). macOS builds already run on the Mac
   mini.
-- **Main's pushes, eight of ten pull requests' `verify` and `launcher`** (number ending in 2–9) **and half of the merge
+- **Main's pushes, eight of ten pull requests' `verify`** (number ending in 2–9) **and half of the merge
   queue** (pull request number ending in 5–9): `checks` runs
   ~100 times an hour (2026-11-03: 21 pushes to main and 76 pull request runs an hour), each with `verify` (10–18
-  minutes of work on GitHub, 11–13 on a desktop runner with a cold build folder) and `launcher` (1–11). Three
+  minutes of work on GitHub, 11–13 on a desktop runner with a cold build folder; the launcher's checks are one of its steps). Three
   runners give ~180 runner-minutes an hour: about the fifth of the pull requests they take. Main's pushes also save
   the Rust cache GitHub's runs of pull requests read. `SELF_HOSTED_CI=all` sends them all to ours.
+
+## Two jobs per pull request
+
+`verify` is two jobs, not four, because GitHub's 20-job pool is what a burst of pull requests waits for and every job
+spends about a minute on setup before it works. Measured 2026-11-13..15 (medians): Rust tests 8.8 min, format and
+lint 4.0, public tree and Python tests 2.0, launcher checks under 1.5 min in 92% of runs (median 0.5). `verify (tree,
+lint and launcher)` (`verify-static`) runs the three short parts as steps, each with its own condition (the merge queue
+runs only the tree steps; the launcher steps only when `tools/ci/rust_changes.py --launcher` says the change reaches
+it); `verify (Rust tests)` (`verify-test`) stays alone. Both use the same `runs-on` expression, which
+`tests/test_ci_runners.py` pins. Only `verify`, which waits for both, is a required check.
 
 ## Which jobs, and when
 
@@ -45,7 +55,7 @@ for):
 
 | `SELF_HOSTED_CI` | Bots (`horizon-light`) | `checks`, `mod-registry`, `telemetry-server`, `pack load bench` (`horizon-checks`) |
 | --- | --- | --- |
-| unset (default) | ours | `verify`, `launcher`: ours for pull requests ending in 0 or 1 (forks' included, see Forks), GitHub's for the others and main's pushes; the rest ours, forks' pull requests excepted |
+| unset (default) | ours | `verify`: ours for pull requests ending in 0 or 1 (forks' included, see Forks), GitHub's for the others and main's pushes; the rest ours, forks' pull requests excepted |
 | `all` | ours | ours, every pull request |
 | `light` | ours | GitHub's: the desktop is paused |
 | `off` | GitHub's | GitHub's: everything back, in one switch |
@@ -60,7 +70,7 @@ would wait for it. Back to the default when they return.
 
 ## Forks
 
-An approved fork's pull request whose number ends in 0 or 1 runs `verify` and `launcher` on our checks runners (the CI
+An approved fork's pull request whose number ends in 0 or 1 runs `verify` on our checks runners (the CI
 VPS, and the desktop when it is on), like this repository's own; the others run on GitHub's. Why: GitHub's pool of 20
 jobs was the only place fork pull requests waited (2026-11-15: 544 runs queued, fork pull requests waiting 7+ hours
 while the VPS's two checks runners sat idle). The jobs no longer check the head repository before they pick our runners.
