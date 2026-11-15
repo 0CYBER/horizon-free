@@ -46,6 +46,7 @@ fn held_identity(stack: &ItemStack) -> ItemStack {
         data.container.clear();
         data.bundle_contents.clear();
     }
+    stack.tidy();
     stack
 }
 
