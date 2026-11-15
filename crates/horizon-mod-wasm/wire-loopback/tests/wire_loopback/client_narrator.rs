@@ -67,4 +67,3 @@ fn a_wasm_mods_line_reaches_the_narrator_and_gets_each_refusal_by_name() {
     }
     assert_eq!(*client.calls.borrow(), reached);
 }
-
