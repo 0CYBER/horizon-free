@@ -1117,20 +1117,23 @@ impl Launcher {
                 });
             },
         );
-        let note = ui::text(13., FontWeight::NORMAL, ink::QUIET).child(match channel {
-            Channel::Stable => tr("One build a week, fewer surprises"),
-            Channel::Nightly => tr("Every day's build: newest, may break"),
-        });
-        // Latest on Nightly plays the launcher's version: an older one Use picked is named.
+        // Latest on Nightly plays the version picked on Versions: an older one Use picked is
+        // named, never called the latest.
         let held = self
             .held_version()
             .filter(|_| channel == Channel::Nightly)
             .map(|tag| self.version_name(tag));
+        let note = ui::text(13., FontWeight::NORMAL, ink::QUIET).child(match (channel, &held) {
+            (Channel::Stable, _) => tr("One build a week, fewer surprises").to_string(),
+            (Channel::Nightly, None) => tr("Every day's build: newest, may break").to_string(),
+            (Channel::Nightly, Some(_)) => tr(
+                "Every day's build. An older one was picked on Versions: press Use on the newest \
+                 there to follow new ones again.",
+            )
+            .to_string(),
+        });
         let current = match (&pin, &held) {
-            (None, Some(held)) => trf(
-                "Latest ({version}, picked on Versions)",
-                &[("version", held)],
-            ),
+            (None, Some(held)) => trf("{version} (picked on Versions)", &[("version", held)]),
             (None, None) => tr("Latest").to_string(),
             (Some(p), _) => name(p),
         };
@@ -1184,7 +1187,7 @@ impl Launcher {
             tr("Latest").into(),
             match &held {
                 Some(held) => trf(
-                    "Plays the launcher's version, {version}, picked on Versions",
+                    "Playing the {version}, picked on Versions",
                     &[("version", held)],
                 ),
                 None => tr("Moves to each new one").into(),
