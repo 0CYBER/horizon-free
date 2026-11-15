@@ -212,7 +212,7 @@ replaces all of that text by default, so `suggest` names the token it completes 
 
 ```rust,ignore
 // `//replace 50%stone,50%dirt st` completes only the block being typed.
-fn suggest(&self, prefix: &str) -> Vec<CommandSuggestion> {
+fn suggest(&self, _: Option<&CommandSender>, prefix: &str) -> Vec<CommandSuggestion> {
     let start = prefix.rfind(' ').map_or(0, |space| space + 1);
     ["stone", "dirt"]
         .into_iter()
