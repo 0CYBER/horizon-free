@@ -837,6 +837,21 @@ impl Game<'_> {
     }
     /// `EntityType.spawn(.., pos, reason, tryMoveDown, false)` for a mob.
     pub(super) fn spawn_mob_at(&mut self, kind: &str, p: Pos, try_move_down: bool) -> Option<u32> {
+        self.spawn_mob_finalized_at(kind, p, try_move_down, true)
+    }
+    /// `MobBucketItem.spawn`: `EntityType.create(.., EntitySpawnReason.BUCKET, true, false)`.
+    /// `Axolotl.finalizeSpawn` returns first for that reason, without a draw.
+    pub(super) fn spawn_bucket_mob(&mut self, kind: &str, p: Pos) -> Option<u32> {
+        let axolotl = matches!(kind, "axolotl" | "minecraft:axolotl");
+        self.spawn_mob_finalized_at(kind, p, true, !axolotl)
+    }
+    fn spawn_mob_finalized_at(
+        &mut self,
+        kind: &str,
+        p: Pos,
+        try_move_down: bool,
+        finalize: bool,
+    ) -> Option<u32> {
         let name = if kind.contains(':') {
             kind.to_owned()
         } else {
@@ -871,17 +886,20 @@ impl Game<'_> {
             f64::from(p.2) + 0.5,
         ];
         // EntityType.create: `snapTo(.., Mth.wrapDegrees(level.random.nextFloat() * 360), 0)`.
-        let id = self.spawn_mob_reason_yaw(
+        let id = self.spawn_mob_internal(
             &name,
             at,
             true,
             false,
             false,
+            finalize,
             super::creatures::SpawnYaw::Created,
         )?;
         // finalizeSpawn's riders (chicken jockeys, spider jockeys...) come
         // with a dispensed mob as with any spawn that is not natural.
-        self.spawn_jockeys(id, false);
+        if finalize {
+            self.spawn_jockeys(id, false);
+        }
         Some(id)
     }
     /// `Player.setItemSlot` of a dispensed piece for the player in place:
@@ -1439,7 +1457,7 @@ impl Game<'_> {
         if let Some(kind) = mob {
             // MobBucketItem.checkExtraContent: the mob from the bucket calls
             // out, then ENTITY_PLACE.
-            if let Some(id) = self.spawn_mob_at(kind, target, true) {
+            if let Some(id) = self.spawn_bucket_mob(kind, target) {
                 self.mob_placed(id, &stack)?;
             }
             self.post_block_game_event(

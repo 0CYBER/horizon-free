@@ -87,6 +87,7 @@ pub(super) fn propose(
             pending_ids: Default::default(),
             boxes: Default::default(),
             box_queries: Default::default(),
+            group: Default::default(),
             costed: costed.clone(),
         };
         let mut lane = Lane::new(state);

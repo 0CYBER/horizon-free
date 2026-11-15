@@ -187,16 +187,37 @@ pub fn finalize(
     difficulty: &LocalDifficulty,
     random: &mut impl RandomSource,
 ) {
-    finalize_with(m, biome, difficulty, random, |_, _| {});
+    // A lone spawn: `finalizeSpawn(.., null)`.
+    finalize_with(m, biome, difficulty, random, &mut None, |_, _| {});
 }
 /// [`finalize`] with every roll on the mob's own random, in one stream.
 pub fn finalize_on_own_random(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
+    finalize_on_own_random_in(m, biome, difficulty, &mut None);
+}
+/// [`finalize_on_own_random`] for a member of a pack: `group` is the
+/// `SpawnGroupData` the pack's previous member returned (`None` for the
+/// first), and holds what this one returns.
+pub fn finalize_on_own_random_in(
+    m: &mut Mob,
+    biome: &BiomeFacts,
+    difficulty: &LocalDifficulty,
+    group: &mut Option<SpawnGroup>,
+) {
     let mut random = m.random.clone();
     // The stream changes hands around the draws `finalize` makes on the mob's own.
-    finalize_with(m, biome, difficulty, &mut random, |m, r| {
+    finalize_with(m, biome, difficulty, &mut random, group, |m, r| {
         std::mem::swap(&mut m.random, r)
     });
     m.random = random;
+}
+/// The `SpawnGroupData` whose content the live finalizer reads back: the
+/// variant a pack shares, and `AgeableMobGroupData.groupSize`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpawnGroup {
+    /// `Rabbit.RabbitGroupData`.
+    Rabbit { variant: u8, size: u32 },
+    /// `Axolotl.AxolotlGroupData`: two common variants.
+    Axolotl { types: [u8; 2], size: u32 },
 }
 /// `own` runs before and after each group of draws on the mob's own random.
 fn finalize_with<R: RandomSource>(
@@ -204,6 +225,7 @@ fn finalize_with<R: RandomSource>(
     biome: &BiomeFacts,
     difficulty: &LocalDifficulty,
     random: &mut R,
+    group: &mut Option<SpawnGroup>,
     own: impl Fn(&mut Mob, &mut R),
 ) {
     use Species as S;
@@ -239,6 +261,50 @@ fn finalize_with<R: RandomSource>(
             super::nautilus::finalize(m, biome.coral_nautilus, random)
         }
         S::Goat => super::finalize::goat_spawn(m, random),
+        // Rabbit.finalizeSpawn: getRandomRabbitVariant's nextInt(100) always,
+        // the group's variant over it; then AgeableMob.finalizeSpawn, where
+        // RabbitGroupData's baby chance is 1 (one nextFloat from the second on).
+        S::Rabbit => {
+            let rolled =
+                super::rabbit::random_variant(biome.white_rabbit, biome.gold_rabbit, random);
+            let (variant, size) = match *group {
+                Some(SpawnGroup::Rabbit { variant, size }) => (variant, size),
+                _ => (rolled, 0),
+            };
+            m.extra.variant = variant;
+            if size > 0 && random.next_float() <= 1.0 {
+                super::finalize::set_age(m, super::finalize::baby_start_age(S::Rabbit));
+            }
+            *group = Some(SpawnGroup::Rabbit {
+                variant,
+                size: size + 1,
+            });
+        }
+        // Parrot.finalizeSpawn: `Util.getRandom(Variant.values())`; its
+        // AgeableMobGroupData(false) never makes a baby.
+        S::Parrot => m.extra.variant = random.next_int_bound(5).unwrap_or(0) as u8,
+        // Axolotl.finalizeSpawn: a new group draws two common variants
+        // (`getCommonSpawnVariant`, ids 0 to 3), each member picks one, and
+        // the third member on is a baby. A bucket's axolotl skips it all
+        // (EntitySpawnReason.BUCKET returns first): its caller doesn't finalize.
+        S::Axolotl => {
+            let (types, size) = match *group {
+                Some(SpawnGroup::Axolotl { types, size }) => (types, size),
+                _ => {
+                    let a = random.next_int_bound(4).unwrap_or(0) as u8;
+                    let b = random.next_int_bound(4).unwrap_or(0) as u8;
+                    ([a, b], 0)
+                }
+            };
+            m.extra.variant = types[random.next_int_bound(2).unwrap_or(0) as usize];
+            if size >= 2 {
+                super::finalize::set_age(m, super::finalize::baby_start_age(S::Axolotl));
+            }
+            *group = Some(SpawnGroup::Axolotl {
+                types,
+                size: size + 1,
+            });
+        }
         // Fox.finalizeSpawn: the variant by biome, then the mouth's item.
         S::Fox => {
             m.extra.variant = u8::from(biome.snow_fox);
@@ -450,6 +516,9 @@ pub fn villager_type(b: &BiomeFacts) -> u8 {
         0
     }
 }
+#[cfg(test)]
+#[path = "spawn_group_variant_tests.rs"]
+mod spawn_group_variant_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

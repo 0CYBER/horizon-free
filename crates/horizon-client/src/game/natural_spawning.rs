@@ -390,6 +390,8 @@ pub(super) struct Level<'g, H> {
     /// holds the game); the first ones scan, as the build costs a few scans.
     pub(super) boxes: std::cell::OnceCell<MobBoxes>,
     pub(super) box_queries: std::cell::Cell<u32>,
+    /// The `SpawnGroupData` the pack being spawned has so far.
+    pub(super) group: std::cell::Cell<Option<horizon_client::mobs::spawning::SpawnGroup>>,
     /// The entity types some biome of the level gives a spawn cost (the
     /// nether's few): for any other the cost is none wherever it stands, and
     /// spawning asks for one for every loaded mob each tick.
@@ -443,8 +445,21 @@ impl<H: LevelHost> Level<'_, H> {
         let (bx, by, bz) = (x.floor() as i32, y.floor() as i32, z.floor() as i32);
         let facts = biome_facts_in(self.w.world, self.w.biomes, self.w.data, bx, by, bz);
         let difficulty = difficulty_reader(self.w.world)(r.position);
+        // NaturalSpawner.spawnCategoryForPosition passes each member the group
+        // data the previous one returned, starting from null.
+        let mut group = if r.group_index == 0 {
+            None
+        } else {
+            self.group.get()
+        };
         // Natural packs still finalize on the mob's own random until #11574 ports them.
-        horizon_client::mobs::spawning::finalize_on_own_random(&mut mob, &facts, &difficulty);
+        horizon_client::mobs::spawning::finalize_on_own_random_in(
+            &mut mob,
+            &facts,
+            &difficulty,
+            &mut group,
+        );
+        self.group.set(group);
         horizon_client::mobs::raider::finalize(
             &mut mob,
             horizon_client::mobs::raider::Reason::Natural,
@@ -754,6 +769,7 @@ impl<'a> Game<'a> {
             pending_ids: Default::default(),
             boxes: Default::default(),
             box_queries: Default::default(),
+            group: Default::default(),
             costed: spawn_cost_types(world_biomes!(self)),
         }
     }

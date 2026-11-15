@@ -8096,7 +8096,7 @@ impl Game<'_> {
                 *capture = keep;
             }
             if let Some(kind) = mob {
-                if let Some(id) = self.spawn_mob_at(kind, (target[0], target[1], target[2]), true) {
+                if let Some(id) = self.spawn_bucket_mob(kind, (target[0], target[1], target[2])) {
                     self.mob_placed(id, stack)?;
                 }
                 self.post_block_game_event(

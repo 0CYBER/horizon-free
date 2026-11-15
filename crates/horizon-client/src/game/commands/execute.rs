@@ -695,10 +695,7 @@ impl Game<'_> {
                 let Some(Arg::Resource(kind)) = c.get("entity").cloned() else {
                     return Ok(vec![s]);
                 };
-                let target = self.summon_with_nbt(&kind, s.pos, "{}")?;
-                let Some(t) = target else {
-                    return Err(err("commands.summon.failed", &[]));
-                };
+                let t = self.summon_for_execute(&kind, s.pos)?;
                 vec![Source {
                     entity: Some(t),
                     ..s

@@ -19,6 +19,7 @@ pub(super) mod pregen;
 mod profiles;
 mod raid;
 mod selector_bounds;
+mod summon;
 mod terrain_cmds;
 mod test_locate;
 mod test_runs;
@@ -2399,26 +2400,11 @@ impl Game<'_> {
         let Some(Arg::Resource(kind)) = ctx.get("entity").cloned() else {
             return Ok(0);
         };
-        // ResourceArgument.getSummonableEntityType.
-        if matches!(
-            kind.as_str(),
-            "minecraft:player" | "minecraft:fishing_bobber"
-        ) {
-            return Err(err("entity.not_summonable", &[&kind]));
-        }
+        summon::summonable(&kind)?;
         let pos = self
             .position_arg(ctx, "pos")
             .unwrap_or(self.source_position());
-        let block_y = pos[1].floor() as i32;
-        if !(-30_000_000.0..30_000_000.0).contains(&pos[0])
-            || !(-20_000_000..20_000_000).contains(&block_y)
-            || !(-30_000_000.0..30_000_000.0).contains(&pos[2])
-        {
-            return Err(err("commands.summon.invalidPosition", &[]));
-        }
-        if self.ui.difficulty == 0 && !horizon_client::mobs::finalize::allowed_in_peaceful(&kind) {
-            return Err(err("commands.summon.failed.peaceful", &[]));
-        }
+        self.summon_checks(&kind, pos)?;
         let short = kind.trim_start_matches("minecraft:").to_owned();
         if let Some(Arg::Str(nbt)) = ctx.get("nbt").cloned() {
             // With an NBT argument the entity is built from it, unfinalized.
