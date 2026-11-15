@@ -238,11 +238,10 @@ impl Launcher {
                     self.native_progress = None;
                     self.first_build = None;
                     // Build and play: the game starts once the build worked, and only for the
-                    // instance it was pressed for (another may have been picked meanwhile).
+                    // instance it was pressed for, still on the build just made (another may
+                    // have been picked, or its version changed, meanwhile).
                     let wanted = self.play_after_build.take();
-                    let play_now = result.is_ok()
-                        && wanted.is_some()
-                        && wanted.as_deref() == self.selected_instance().map(|i| i.id.as_str());
+                    let built = result.as_ref().ok().cloned();
                     let cancelled = matches!(&result, Err(native_mods::Failed::Other(error)) if error == native_mods::CANCELLED);
                     self.native_done = match (&result, cancelled) {
                         (Ok(_), _) => last,
@@ -269,6 +268,11 @@ impl Launcher {
                             .collect();
                         self.native_failed(String::from(e), &enabled);
                     }
+                    let play_now = wanted.is_some()
+                        && built.is_some()
+                        && self
+                            .selected_instance()
+                            .is_some_and(|i| Some(&i.id) == wanted.as_ref() && i.version == built);
                     if play_now {
                         self.play();
                     }

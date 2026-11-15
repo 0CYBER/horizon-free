@@ -2350,8 +2350,14 @@ pub fn build(
             other => other,
         })?;
         check_cancelled()?;
+        // A version or channel the player saved while this built wins: the build stays
+        // available, the instance keeps their choice.
         instances::edit(&instance.id, |meta| {
-            meta.version = Some(built.version.clone())
+            let unchanged = meta.version == instance.version
+                && meta.channel.unwrap_or_default() == instance.channel;
+            if unchanged {
+                meta.version = Some(built.version.clone());
+            }
         })?;
         // logged() runs central eviction under the retained build lease.
         if built.plan != Plan::UpToDate {
