@@ -556,9 +556,10 @@ impl Game<'_> {
             // push is for its next tick; here its kind ticks after the
             // projectiles, so the push waits for that tick to run.
             // Joined before the charge and not ticked yet: the push is for its next tick.
-            let waiting = entity.ticks_after_projectiles()
-                && done.is_none_or(|d| entity.join_seq() > d);
-            if push_waits_for_tick(waiting, entity.join_seq(), source) {
+            // Where it ticks: where it joined, or where it started ticking again.
+            let key = self.ordered.tick_key(entity.join_seq());
+            let waiting = entity.ticks_after_projectiles() && done.is_none_or(|d| key > d);
+            if push_waits_for_tick(waiting, key, source) {
                 late.push((entity.id(), push));
             } else {
                 entity.push_from_explosion(push);

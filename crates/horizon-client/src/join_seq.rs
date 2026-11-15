@@ -28,6 +28,12 @@ impl JoinSeq {
     fn next() -> Self {
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
+    /// A number above every join so far, for an entity that goes to the end of
+    /// the tick order without joining again (`EntityTickList.add` when it
+    /// starts ticking).
+    pub fn restart() -> Self {
+        Self::next()
+    }
     /// Above every number a join can get.
     pub const MAX: Self = Self(u64::MAX);
     /// The number the next join will get or a later one: every entity that has

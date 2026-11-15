@@ -71,6 +71,9 @@ pub(super) struct Parked {
     rockets: horizon_client::join_seq::JoinList<fireworks::Rocket>,
     ominous_spawners: Vec<ominous_item_spawner::OminousItemSpawner>,
     tnts: horizon_client::join_seq::JoinList<tnt::PrimedTnt>,
+    /// Its orbs', TNT's and falling blocks' place in the tick order beyond
+    /// their joins (`ordered_tick::TickRestarts`).
+    tick_restarts: super::ordered_tick::TickRestarts,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
     pub(super) mobs: horizon_client::join_seq::JoinList<Mob>,
     /// The entity ids of the level's fence knots (`knot_ids`).
@@ -310,6 +313,7 @@ impl Game<'_> {
             rockets: Default::default(),
             ominous_spawners: Vec::new(),
             tnts: Default::default(),
+            tick_restarts: Default::default(),
             hoppers: HashMap::new(),
             mobs: Default::default(),
             knot_ids: HashMap::new(),
@@ -460,6 +464,7 @@ impl Game<'_> {
         swap(&mut self.rockets, &mut p.rockets);
         swap(&mut self.ominous_spawners, &mut p.ominous_spawners);
         swap(&mut self.tnts, &mut p.tnts);
+        swap(&mut self.ordered.restarts, &mut p.tick_restarts);
         swap(&mut self.hoppers, &mut p.hoppers);
         swap(&mut self.mobs, &mut p.mobs);
         swap(&mut self.knot_ids, &mut p.knot_ids);

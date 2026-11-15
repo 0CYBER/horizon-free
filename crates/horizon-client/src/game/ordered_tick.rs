@@ -32,8 +32,36 @@ pub(super) struct OrderedTicks {
     lava_random: Option<horizon_core::random::LegacyRandom>,
     /// Scratch schedule reused by each ordered pass in a level tick. The
     /// entity lists can change between passes, so this only retains capacity;
-    /// entries are rebuilt from the live lists every time.
-    pending_buf: Vec<(JoinSeq, Pending)>,
+    /// entries are rebuilt from the live lists every time: the place in the
+    /// tick order, the kind and the join number.
+    pending_buf: Vec<(JoinSeq, Pending, JoinSeq)>,
+    /// The level's entities out of the tick order or back in it at its end:
+    /// each level keeps its own (`levels.rs` swaps it in with the lists).
+    pub(super) restarts: TickRestarts,
+}
+
+/// `EntityTickList` beyond the join order, for one level's orbs, primed TNT
+/// and falling blocks.
+#[derive(Default, Clone)]
+pub(super) struct TickRestarts {
+    /// The entities (by join number) in chunks that do not tick entities,
+    /// with when they were first found there: they are out of the tick list
+    /// until their chunk ticks (`onTickingEnd`).
+    idle: horizon_client::fast_hash::FxHashMap<JoinSeq, u64>,
+    /// Counts the entities found idle, in the order they were.
+    idle_clock: u64,
+    /// The entities that started ticking again since they joined, by join
+    /// number: `EntityTickList.add` put them at the end of the tick order,
+    /// at this number.
+    restarted: horizon_client::fast_hash::FxHashMap<JoinSeq, JoinSeq>,
+}
+
+impl OrderedTicks {
+    /// Where the entity that joined as `join` is in the tick order: where it
+    /// joined, or where it last started ticking again.
+    pub(super) fn tick_key(&self, join: JoinSeq) -> JoinSeq {
+        self.restarts.restarted.get(&join).copied().unwrap_or(join)
+    }
 }
 
 /// The batches of the other kinds, in the order they tick.
@@ -77,9 +105,71 @@ fn find_join<T: Joined>(list: &[T], join: JoinSeq) -> Option<usize> {
 }
 
 impl Game<'_> {
+    /// `PersistentEntitySectionManager.startTicking`: an idle orb, primed TNT
+    /// or falling block whose chunk now ticks entities (a piston pushed it into
+    /// one, or the chunk's tickets changed) goes to the end of the tick order
+    /// (`EntityTickList.add`), behind everything that ticked meanwhile. Those
+    /// that start together keep the order they went idle in: the order they
+    /// came into their section, which `getEntities` (the piston's push, the
+    /// chunk's status change) walks.
+    fn restart_woken_entities(&mut self) {
+        if self.ordered.restarts.idle.is_empty() && self.ordered.restarts.restarted.is_empty() {
+            return;
+        }
+        let entity_ticking = self.entity_ticking_area();
+        let position = |game: &Self, join: JoinSeq| {
+            find_join(&game.tnts, join)
+                .map(|i| game.tnts[i].position)
+                .or_else(|| find_join(&game.falling, join).map(|i| game.falling[i].position))
+                .or_else(|| find_join(&game.orbs, join).map(|i| game.orbs[i].position))
+        };
+        let idle = std::mem::take(&mut self.ordered.restarts.idle);
+        let mut woken = Vec::new();
+        for (join, since) in idle {
+            match position(self, join) {
+                Some(at) if entity_ticking(at.x.floor() as i32, at.z.floor() as i32) => {
+                    woken.push((since, join));
+                }
+                Some(_) => {
+                    self.ordered.restarts.idle.insert(join, since);
+                }
+                None => {}
+            }
+        }
+        woken.sort_unstable();
+        for (_, join) in woken {
+            self.ordered
+                .restarts
+                .restarted
+                .insert(join, JoinSeq::restart());
+        }
+        let gone: Vec<JoinSeq> = self
+            .ordered
+            .restarts
+            .restarted
+            .keys()
+            .copied()
+            .filter(|&join| position(self, join).is_none())
+            .collect();
+        for join in gone {
+            self.ordered.restarts.restarted.remove(&join);
+        }
+    }
+
+    /// `onTickingEnd`: the entity that joined as `join` is in a chunk that
+    /// does not tick entities, out of the tick order until it ticks again.
+    fn went_idle(&mut self, join: JoinSeq) {
+        let restarts = &mut self.ordered.restarts;
+        if !restarts.idle.contains_key(&join) {
+            restarts.idle_clock += 1;
+            restarts.idle.insert(join, restarts.idle_clock);
+        }
+    }
+
     /// A level tick starts: what has joined so far ticks this tick.
     pub(super) fn begin_ordered_ticks(&mut self) {
         let _span = horizon_client::spans::guard("ordered_ticks");
+        self.restart_woken_entities();
         let pending_buf = std::mem::take(&mut self.ordered.pending_buf);
         let firsts = [
             first_join(&self.armor_stands),
@@ -106,6 +196,7 @@ impl Game<'_> {
             suffix_min,
             lava_random: None,
             pending_buf,
+            restarts: std::mem::take(&mut self.ordered.restarts),
         };
     }
 
@@ -124,7 +215,9 @@ impl Game<'_> {
         let wanted = |j: JoinSeq| done.is_none_or(|d| j > d) && j < cut && j < born;
         let mut pending = std::mem::take(&mut self.ordered.pending_buf);
         pending.clear();
-        let mut offer = |j: JoinSeq, kind: Pending| {
+        let ordered = &self.ordered;
+        let mut offer = |join: JoinSeq, kind: Pending| {
+            let j = ordered.tick_key(join);
             // Orbs are announced after their tick, always; TNT and falling
             // blocks that joined since the last packets wait for them.
             let right_pass = match kind {
@@ -132,7 +225,7 @@ impl Game<'_> {
                 _ => late == (j >= announced),
             };
             if right_pass && wanted(j) {
-                pending.push((j, kind));
+                pending.push((j, kind, join));
             }
         };
         self.orbs.iter().for_each(|e| offer(e.join, Pending::Orb));
@@ -140,14 +233,14 @@ impl Game<'_> {
         self.falling
             .iter()
             .for_each(|e| offer(e.join, Pending::Falling));
-        pending.sort_unstable_by_key(|&(j, _)| j);
+        pending.sort_unstable_by_key(|&(j, _, _)| j);
         // EntityGetter.getEntityCollisions: the boxes that stop these moves (a
         // boat, a shulker, a happy ghast held still), gathered once for the
         // run and again after an explosion, which can move or remove them.
         let mut obstacles: Option<horizon_client::entities::ObstacleGrid> = None;
         let mut nearby = Vec::new();
-        for (join, kind) in pending.drain(..) {
-            self.ordered.done = Some(join);
+        for (key, kind, join) in pending.drain(..) {
+            self.ordered.done = Some(key);
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
             match kind {
                 Pending::Tnt => {
@@ -172,6 +265,8 @@ impl Game<'_> {
                         if self.tnts.len() < count {
                             obstacles = None;
                         }
+                    } else {
+                        self.went_idle(join);
                     }
                 }
                 Pending::Falling => {
@@ -194,6 +289,8 @@ impl Game<'_> {
                         if let Err(e) = self.tick_one_falling(i, &nearby) {
                             first_error.get_or_insert(e);
                         }
+                    } else {
+                        self.went_idle(join);
                     }
                 }
                 Pending::Orb => {
@@ -202,6 +299,7 @@ impl Game<'_> {
                     };
                     let at = self.orbs[i].position;
                     if !entity_ticking(at.x.floor() as i32, at.z.floor() as i32) {
+                        self.went_idle(join);
                         continue;
                     }
                     // ExperienceOrb.tick runs scanForMerges before it moves.
