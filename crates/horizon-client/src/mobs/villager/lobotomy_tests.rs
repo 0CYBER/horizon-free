@@ -170,11 +170,9 @@ fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
                 &[],
                 |world, registry| {
                     build(world, registry, true, None, None);
-                    if block != "minecraft:air" {
-                        world
-                            .set(x, 64, 0, registry.default_state(block).unwrap())
-                            .unwrap();
-                    }
+                    world
+                        .set(x, 64, 0, registry.default_state(block).unwrap())
+                        .unwrap();
                 },
                 |w, types| {
                     let mut w = w.clone();
