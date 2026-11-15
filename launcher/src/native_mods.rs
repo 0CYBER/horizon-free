@@ -1327,6 +1327,20 @@ pub fn compile_failed_mod<'a>(error: &str, ids: &'a [String]) -> Option<&'a Stri
         .find(|id| error.contains(&format!("{} failed (", compiling_mod(id))))
 }
 
+/// The mod among `ids` whose build script or features stopped the build `error` describes, and
+/// why: `error` holds that refusal word for word (the build log keeps it).
+pub fn refused_mod<'a>(error: &str, ids: &'a [String]) -> Option<(&'a String, Refusal)> {
+    ids.iter().find_map(|id| {
+        [
+            Refusal::BuildScript { mod_id: id.clone() },
+            Refusal::Features { mod_id: id.clone() },
+        ]
+        .into_iter()
+        .find(|refusal| error.contains(&refusal.to_string()))
+        .map(|refusal| (id, refusal))
+    })
+}
+
 /// Extracts the mod id from a mixin manifest or mod file path (e.g. `.../mixins.incoming/<mod_id>/...`
 /// or `.../mods.incoming/<mod_id>/...`).
 fn mod_id_from_file(file: &str) -> Option<&str> {
