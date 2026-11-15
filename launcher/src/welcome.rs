@@ -96,12 +96,28 @@ impl Launcher {
             .px(px(16.))
             .overflow_y_scroll()
             .children(rows);
+        // A fade at the foot says the list goes on under it.
+        let fade = div()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .h(px(36.))
+            .bg(gpui::linear_gradient(
+                180.,
+                gpui::linear_color_stop(ui::scrim().opacity(0.), 0.),
+                gpui::linear_color_stop(
+                    ui::scrim().opacity(if ui::light() { 0.2 } else { 0.5 }),
+                    1.,
+                ),
+            ));
         let body = self
             .collection
             .welcome_scroll
             .wrap(body, &t)
             .flex_1()
-            .min_h_0();
+            .min_h_0()
+            .child(fade);
         // Pinned between the scrolling list and the buttons, so it is seen before Continue.
         let ping = div()
             .flex()
@@ -124,13 +140,35 @@ impl Launcher {
             .border_t_1()
             .border_color(white(0.1))
             .child(
-                button("welcome-calm", "Fewer effects", Kind::Secondary, &t).on_click(cx.listener(
-                    |this, _: &ClickEvent, _, cx| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .justify_center()
+                    .gap(px(2.))
+                    .children(self.installing.as_ref().map(|(_, p)| {
+                        ui::text(13., FontWeight::NORMAL, ink::BODY).child(trf(
+                            "Installing Horizon… {percent}%",
+                            &[(
+                                "percent",
+                                &((p.clamp(0., 1.) * 100.).round() as u32).to_string(),
+                            )],
+                        ))
+                    }))
+                    .child(
+                        ui::text(12., FontWeight::NORMAL, ink::BODY)
+                            .child(tr("Fewer effects turns off glow, gradients and shine.")),
+                    ),
+            )
+            .child(
+                button("welcome-calm", "Fewer effects", Kind::Secondary, &t)
+                    .tooltip(ui::tip(tr("Turns off glow, gradients and shine")))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.settings.effects = horizon_launcher::effects::Effects::CALM;
                         this.save_settings();
                         cx.notify();
-                    },
-                )),
+                    })),
             )
             .child(
                 button("welcome-done", "Continue", Kind::Primary, &t).on_click(cx.listener(
