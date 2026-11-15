@@ -32,7 +32,7 @@ impl Properties {
         self.map.remove(key)
     }
 
-    /// Properties.load(Reader) over already decoded characters.
+    /// Java's properties loader over already decoded characters.
     pub fn load(text: &[char]) -> Result<Self, Malformed> {
         let mut out = Self::default();
         let mut reader = LineReader {
@@ -88,12 +88,12 @@ impl Properties {
         }
     }
 
-    /// Properties.load(InputStream): ISO-8859-1.
+    /// Java's properties loader for an input stream: ISO-8859-1.
     pub fn load_latin1(bytes: &[u8]) -> Result<Self, Malformed> {
         Self::load(&bytes.iter().map(|&b| char::from(b)).collect::<Vec<_>>())
     }
 
-    /// Properties.store(Writer, comments): comment, date, then the entries
+    /// Java's properties store with comments: comment, date, then the entries
     /// sorted by key, with `escUnicode` off (the Writer variant) or on (the
     /// OutputStream variant, whose bytes are ISO-8859-1).
     pub fn store(&self, comment: Option<&str>, date: &str, esc_unicode: bool) -> String {
@@ -117,7 +117,7 @@ impl Properties {
     }
 }
 
-/// System.lineSeparator().
+/// The platform line separator.
 pub fn line_separator() -> &'static str {
     if cfg!(windows) { "\r\n" } else { "\n" }
 }
@@ -127,7 +127,7 @@ struct LineReader<'a> {
     pos: usize,
 }
 impl LineReader<'_> {
-    /// LineReader.readLine: one logical line, leading whitespace skipped,
+    /// Java's logical-line reader: one logical line, leading whitespace skipped,
     /// comments and blank lines dropped, backslash-newline continuations joined.
     fn read_line(&mut self) -> Option<Vec<char>> {
         let mut line: Vec<char> = Vec::new();
@@ -290,7 +290,7 @@ fn save_convert(s: &str, escape_space: bool, esc_unicode: bool) -> String {
     out
 }
 
-/// Properties.writeComments.
+/// Java's comments writer.
 fn write_comments(out: &mut String, comments: &str, nl: &str) {
     out.push('#');
     let units: Vec<u16> = comments.encode_utf16().collect();
@@ -361,7 +361,7 @@ pub fn now_millis() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
-/// java.util.Date.toString in UTC: "EEE MMM dd HH:mm:ss zzz yyyy".
+/// The JDK date string in UTC: "EEE MMM dd HH:mm:ss zzz yyyy".
 pub fn date_string(millis: i64) -> String {
     const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
     const MONTHS: [&str; 12] = [
@@ -412,7 +412,7 @@ mod tests {
         p.put("motd", " A=B#".into());
         p.put("b key", "é".into());
         let s = p.store(Some("Minecraft server properties"), "DATE", false);
-        // Each line ends in System.lineSeparator(), as BufferedWriter.newLine writes it.
+        // Each line ends in the platform line separator, as Java's buffered writer newLine writes it.
         assert_eq!(
             s,
             "#Minecraft server properties\n#DATE\nb\\ key=é\nlevel-type=minecraft\\:normal\nmotd=\\ A\\=B\\#\n"

@@ -22,7 +22,7 @@ impl Json {
             _ => None,
         }
     }
-    /// JsonElement.getAsString for primitives.
+    /// Gson's string view for primitives.
     pub fn as_string(&self) -> Option<String> {
         match self {
             Json::String(s) | Json::Number(s) => Some(s.clone()),
@@ -30,7 +30,7 @@ impl Json {
             _ => None,
         }
     }
-    /// JsonObject.addProperty: a null value is JsonNull, which the writers skip.
+    /// Gson's property add: a null value is JsonNull, which the writers skip.
     pub fn add(&mut self, key: &str, value: Json) {
         if let Json::Object(m) = self {
             if let Some(slot) = m.iter_mut().find(|(k, _)| k == key) {
@@ -41,7 +41,7 @@ impl Json {
         }
     }
 
-    /// JsonElement.toString: compact, not HTML-safe, nulls in objects written.
+    /// Gson's compact element text: not HTML-safe, nulls in objects written.
     pub fn compact(&self) -> String {
         let mut out = String::new();
         self.write_compact(&mut out);
@@ -171,7 +171,7 @@ impl Json {
     }
 }
 
-/// JsonWriter.string.
+/// Gson's string escaping.
 fn quote(out: &mut String, s: &str, html_safe: bool) {
     out.push('"');
     for c in s.chars() {
@@ -375,7 +375,7 @@ impl Parser<'_> {
     }
 }
 
-/// JSON number syntax (JsonReader.peekNumber in strict mode).
+/// JSON number syntax (Gson's strict reader).
 fn is_number(w: &str) -> bool {
     let b = w.as_bytes();
     let mut i = 0;

@@ -110,7 +110,7 @@ pub const GAME_MODES: [&str; 4] = ["survival", "creative", "adventure", "spectat
 pub trait Entropy {
     /// RandomSource.create().nextLong() (WorldOptions.randomSeed).
     fn next_long(&mut self) -> i64;
-    /// SecureRandom.nextInt(bound).
+    /// The JDK's bounded random int.
     fn next_int(&mut self, bound: u32) -> u32;
 }
 /// RandomSource.create(): a fast stream seeded once from the operating system (the clock only

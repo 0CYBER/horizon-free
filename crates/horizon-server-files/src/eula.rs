@@ -7,7 +7,7 @@ use std::path::Path;
 /// CommonLinks.EULA.
 pub const EULA_LINK: &str = "https://aka.ms/MinecraftEULA";
 
-/// The default file, as Properties.store(OutputStream) writes it.
+/// The default file, as Java's properties writer stores it.
 pub fn default_file(millis: i64) -> String {
     file(millis, false)
 }
