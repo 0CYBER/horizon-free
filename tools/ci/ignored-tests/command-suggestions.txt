@@ -1,0 +1,1 @@
+horizon-client game::native_command_completion_tests::an_identifier_listener_replies_on_the_wire_and_leaves_room_for_the_next_argument lib daily resources

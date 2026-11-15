@@ -3220,7 +3220,11 @@ mod tests {
             Ok(input.trim().to_owned())
         }
 
-        fn suggest(&self, prefix: &str) -> Vec<mod_api::CommandSuggestion> {
+        fn suggest(
+            &self,
+            _: Option<&mod_api::CommandSender>,
+            prefix: &str,
+        ) -> Vec<mod_api::CommandSuggestion> {
             let start = prefix.rfind(' ').map_or(0, |space| space + 1);
             ["stone", "dirt"]
                 .into_iter()
@@ -3280,7 +3284,11 @@ mod tests {
             Ok(input.to_owned())
         }
 
-        fn suggest(&self, prefix: &str) -> Vec<mod_api::CommandSuggestion> {
+        fn suggest(
+            &self,
+            _: Option<&mod_api::CommandSender>,
+            prefix: &str,
+        ) -> Vec<mod_api::CommandSuggestion> {
             vec![
                 mod_api::CommandSuggestion::new("stone").replacing_from(0),
                 mod_api::CommandSuggestion::new("dirt").replacing_from(prefix.len() + 1),

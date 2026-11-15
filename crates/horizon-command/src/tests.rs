@@ -1632,7 +1632,7 @@ fn a_custom_suggestion_replaces_only_the_token_it_names() {
         "example:pattern",
         CustomArgumentKind::Greedy,
         |input| Ok(input.to_owned()),
-        |prefix| {
+        |_, prefix| {
             let start = prefix.rfind(' ').map_or(0, |space| space + 1);
             let mut out: Vec<CustomSuggestion> = ["stone", "dirt"]
                 .into_iter()
@@ -1670,6 +1670,80 @@ fn a_custom_suggestion_replaces_only_the_token_it_names() {
         ["stone"]
     );
     assert_eq!(suggestions[0].apply(typed), "replace stone stone");
+}
+
+#[test]
+fn a_split_character_completion_does_not_displace_a_valid_neighbor() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:unicode",
+        CustomArgumentKind::Greedy,
+        |input| Ok(input.to_owned()),
+        |_, _| {
+            vec![
+                CustomSuggestion {
+                    text: "emerald".into(),
+                    tooltip: None,
+                    replace_start: Some(0),
+                },
+                CustomSuggestion {
+                    text: "broken".into(),
+                    tooltip: None,
+                    replace_start: Some(1),
+                },
+            ]
+        },
+    ));
+    let mut dispatcher = Dispatcher::new();
+    let probe = dispatcher.literal(0, "probe");
+    let value = dispatcher.argument(probe, "value", argument);
+    dispatcher.executes(value, "test");
+    let registries = reg();
+    let typed = "probe é";
+    let (range, suggestions) = dispatcher.suggestions(
+        &dispatcher.parse(typed, &registries),
+        typed.len(),
+        &registries,
+    );
+    assert_eq!(range, (6, 8));
+    assert_eq!(
+        suggestions
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>(),
+        ["emerald"]
+    );
+    assert_eq!(suggestions[0].apply(typed), "probe emerald");
+}
+
+#[test]
+fn a_free_identifier_keeps_vanillas_empty_paths_and_rejects_invalid_namespaces() {
+    let mut dispatcher = Dispatcher::new();
+    let probe = dispatcher.literal(0, "probe");
+    let value = dispatcher.argument(probe, "value", ArgType::Identifier);
+    dispatcher.executes(value, "test");
+    let registries = reg();
+    for (raw, expected) in [
+        ("//path", "minecraft://path"),
+        (":", "minecraft:"),
+        ("namespace:", "namespace:"),
+        ("namespace:lower/path", "namespace:lower/path"),
+    ] {
+        let typed = format!("probe {raw}");
+        let parsed = dispatcher.parse(&typed, &registries);
+        let (context, _) = parsed.executable().unwrap();
+        assert_eq!(
+            context.get("value"),
+            Some(&Arg::Str(expected.into())),
+            "{raw}"
+        );
+    }
+    for raw in ["name/space:path", "namespace:Upper"] {
+        let typed = format!("probe {raw}");
+        assert!(
+            dispatcher.parse(&typed, &registries).executable().is_err(),
+            "{raw}"
+        );
+    }
 }
 
 #[test]

@@ -200,6 +200,89 @@ fn suggestions(game: &mut Game<'_>, rx: &mpsc::Receiver<Out>, command: &str) -> 
     panic!("no command suggestions packet for `{command}`");
 }
 
+struct IdentifierCompletion;
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for IdentifierCompletion {
+    fn tab_complete(
+        &self,
+        _: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::TabCompleteEvent<'_>,
+    ) {
+        if event.command == "probe ex" {
+            assert_eq!(event.range, [6, 8]);
+            event
+                .suggestions
+                .push(mod_api::Suggestion::new((6, 8), "example:stone"));
+        }
+    }
+}
+
+#[test]
+#[ignore = "daily"]
+fn an_identifier_listener_replies_on_the_wire_and_leaves_room_for_the_next_argument() {
+    let mods = vec![mod_api::ModEntry::new(
+        "identifier_completion",
+        Box::new(IdentifierCompletion),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        let mut resources = None;
+        let (mut game, rx) = game_with_guest(&mut resources, "Alex");
+        let arguments = CommandArguments::new();
+        let (tree, _, problems) = command_tree(
+            &[mod_api::Command::new("probe <value:id> <count:integer>")],
+            |_| false,
+            &arguments,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let mut dispatcher = (*game.ui.dispatcher.0).clone();
+        register_dispatcher(&mut dispatcher, &tree, MOD_COMMAND, &arguments);
+        game.ui.dispatcher.0 = Arc::new(dispatcher);
+        game.lan.as_mut().unwrap().hub.set_mod_commands(0, tree);
+        last_tree(&rx);
+
+        let typed = "probe ex";
+        let mut request = Writer::new();
+        request.varint(7);
+        request.string(typed);
+        game.guest_suggestions(2, &request.data);
+        let mut answer = None;
+        for out in rx.try_iter() {
+            let bodies = match out {
+                Out::Packet(body) => vec![body],
+                Out::Packets(bodies) => bodies,
+                Out::Disconnect(_) => panic!("unexpected disconnect"),
+            };
+            for body in bodies {
+                let mut reader = Reader::new(&body);
+                if reader.varint().unwrap() != ids::play::clientbound::COMMAND_SUGGESTIONS {
+                    continue;
+                }
+                assert_eq!(reader.varint().unwrap(), 7);
+                let start = reader.varint().unwrap();
+                let length = reader.varint().unwrap();
+                assert_eq!(reader.varint().unwrap(), 1);
+                let text = reader.string(32767).unwrap();
+                assert!(!reader.bool().unwrap());
+                assert!(answer.replace((start, length, text)).is_none());
+            }
+        }
+        let (start, length, text) = answer.expect("no suggestion packet");
+        assert_eq!((start, length, text.as_str()), (6, 2, "example:stone"));
+        let mut applied = typed.to_owned();
+        applied.replace_range(start as usize..(start + length) as usize, &text);
+        assert_eq!(applied, "probe example:stone");
+        let completed = format!("{applied} 3");
+        let parsed = game.ui.dispatcher.0.parse(&completed, &game.ui.registries);
+        let (context, _) = parsed.executable().unwrap();
+        assert_eq!(
+            context.get("value"),
+            Some(&horizon_client::command::Arg::Str("example:stone".into()))
+        );
+    });
+}
+
 /// The `warp` tree and completions an operator gets, and a plain player does not: the admin child
 /// literal and the private warp are absent until the level arrives, and running `warp admin` is
 /// refused for the same reason in both states.
