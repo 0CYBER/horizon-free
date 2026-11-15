@@ -1147,8 +1147,8 @@ pub struct LookAtPlayer {
     pub only_horizontal: bool,
     /// `LookAtPlayerGoal(Mob.class, ...)`: the nearest mob, not the player.
     pub mobs: bool,
-    /// `LookAtPlayerGoal(Strider.class, ...)`: only mobs of this species.
-    pub only: Option<Species>,
+    /// `LookAtPlayerGoal(<species class>, ...)`: only these species, subclasses too.
+    pub only: &'static [Species],
     /// InteractGoal: LOOK and MOVE.
     pub interact: bool,
     look_at: Option<Who>,
@@ -1161,7 +1161,7 @@ impl LookAtPlayer {
             probability: 0.02,
             only_horizontal: false,
             mobs: false,
-            only: None,
+            only: &[],
             interact: false,
             look_at: None,
             look_time: 0,
@@ -1175,9 +1175,9 @@ impl LookAtPlayer {
         }
     }
     /// `LookAtPlayerGoal(this, <species class>, range)`.
-    pub fn species(species: Species, range: f32) -> Self {
+    pub fn species(list: &'static [Species], range: f32) -> Self {
         Self {
-            only: Some(species),
+            only: list,
             ..Self::mobs(range)
         }
     }
@@ -1226,8 +1226,8 @@ impl Goal for LookAtPlayer {
         self.look_at = None;
         let range = f64::from(self.range);
         if !self.mobs {
-            // level.getNearestPlayer(forNonCombat().range(lookDistance)).
-            if m.can_see_player(cx.w, range) {
+            // `EntitySelector.notRiding(mob)`: never the player riding it.
+            if !super::riders::player_rides(m, cx.w) && m.can_see_player(cx.w, range) {
                 self.look_at = Some(Who::Player);
             }
             return self.look_at.is_some();
@@ -1239,7 +1239,7 @@ impl Goal for LookAtPlayer {
         let candidates: Vec<(u32, Vec3)> =
             cx.w.others_near(area)
                 .filter(|s| s.id != id && s.alive && s.bounds.intersects(area))
-                .filter(|s| only.is_none_or(|o| s.species == o))
+                .filter(|s| only.is_empty() || only.contains(&s.species))
                 .map(|s| (s.id, s.position))
                 .collect();
         let mut best: Option<(u32, f64)> = None;

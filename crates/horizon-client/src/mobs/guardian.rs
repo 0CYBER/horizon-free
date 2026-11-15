@@ -29,6 +29,8 @@ const EYE_Y: usize = 4;
 pub fn is_elder(m: &Mob) -> bool {
     m.species() == Species::ElderGuardian
 }
+/// `Guardian.class` for `LookAtPlayerGoal`: an elder guardian is a guardian.
+const GUARDIAN_CLASS: &[Species] = &[Species::Guardian, Species::ElderGuardian];
 fn attack_duration(m: &Mob) -> i32 {
     if is_elder(m) { 60 } else { 80 }
 }
@@ -48,6 +50,12 @@ pub fn register(m: &mut Mob) {
     g.add(5, MoveTowardsRestriction::new(1.0).looking());
     g.add(7, Stroll::new(1.0).interval(if elder { 400 } else { 80 }));
     g.add(8, LookAtPlayer::new(8.0));
+    // `LookAtPlayerGoal(this, Guardian.class, 12.0F, 0.01F)`: the elder
+    // guardians inherit the goal, so its class matches them too.
+    g.add(
+        8,
+        LookAtPlayer::species(GUARDIAN_CLASS, 12.0).probability(0.01),
+    );
     g.add(9, RandomLookAround::default());
     // GuardianAttackSelector: players, squid and axolotls beyond 3 blocks.
     m.ai.targets.add(

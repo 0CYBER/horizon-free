@@ -200,6 +200,19 @@ pub fn seat(attachment: [f64; 3], rider_offset: f64, at: Vec3, yaw: f32) -> Vec3
     Vec3::new(at.x + x, at.y + y - rider_offset, at.z + z)
 }
 
+/// `EntitySelector.notRiding(mob)`: whether the player the mobs see is the
+/// mob's rider, through any chain of vehicles (`isPassenger`).
+pub fn player_rides(m: &Mob, w: &MobWorld) -> bool {
+    let mut up = w.player.as_ref().and_then(|p| p.riding_vehicle);
+    while let Some(id) = up {
+        if id == m.id {
+            return true;
+        }
+        up = w.seen(id).and_then(|s| s.vehicle);
+    }
+    false
+}
+
 /// `Entity.startRiding`: the link it makes, `rider` on `vehicle` as its first
 /// passenger (`addPassenger`).
 pub fn link<M: super::MobSlot>(mobs: &mut [M], rider: u32, vehicle: u32) {

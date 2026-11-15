@@ -3,7 +3,7 @@
 //! thing that hit it at the instant of the hit, and a guardian taken out of
 //! its home swims back into it.
 use super::*;
-use crate::mobs::goals::Cx;
+use crate::mobs::goals::{Cx, JUMP, MOVE};
 use crate::mobs::guardian::{elder_server_ai_step, register};
 use crate::mobs::world::{with_built_test_world, with_test_world};
 use horizon_core::geometry::Vec3;
@@ -197,4 +197,73 @@ fn a_displaced_elder_guardian_swims_back_toward_its_home() {
         !out[1].0,
         "inside its home the guardian has no goal to go home"
     );
+}
+
+/// Whether a `me` guardian at (0.5, 62, 0.5) turns its look to a `other` one
+/// ten blocks east within 1000 goal ticks, with only its LOOK goals free to
+/// run (so only a look-at goal can aim it): the eye position it aimed at.
+fn looks_at_guardian(types: &super::MobTypes, w: &MobWorld<'_>, me: &str, other: &str) -> bool {
+    let mut m = Mob::new(
+        1,
+        Arc::new(types.types[me].clone()),
+        Vec3::new(0.5, 62.0, 0.5),
+        0.0,
+    );
+    register(&mut m);
+    let seen = [Mob::new(
+        2,
+        Arc::new(types.types[other].clone()),
+        Vec3::new(10.5, 62.0, 0.5),
+        0.0,
+    )
+    .seen(None)];
+    let world = MobWorld {
+        others: &seen,
+        ..w.clone()
+    };
+    let eye = [seen[0].position.x, seen[0].eye_y, seen[0].position.z];
+    m.ai.goals.disabled = MOVE | JUMP;
+    let (mut lr, mut events) = (
+        horizon_core::random::LevelRandom::for_level(LegacyRandom::new(0)),
+        Vec::new(),
+    );
+    let mut goals = std::mem::take(&mut m.ai.goals);
+    let mut looked = false;
+    for _ in 0..1000 {
+        let mut cx = Cx {
+            w: &world,
+            lr: &mut lr,
+            events: &mut events,
+        };
+        goals.tick(&mut m, &mut cx);
+        if goals.is_running("LookAtPlayer") && m.ai.look.wanted == eye {
+            looked = true;
+            break;
+        }
+    }
+    m.ai.goals = goals;
+    looked
+}
+
+/// `Guardian.registerGoals`' `addGoal(8, new LookAtPlayerGoal(this,
+/// Guardian.class, 12.0F, 0.01F))`: a guardian looks at another guardian ten
+/// blocks away, and `Guardian.class` takes the elder guardians, which inherit
+/// the goal.
+#[test]
+fn a_guardian_looks_at_another_guardian_elder_included() {
+    let mut out = Vec::new();
+    let ran = with_test_world(&[], |w, types| {
+        for (me, other) in [
+            ("minecraft:guardian", "minecraft:elder_guardian"),
+            ("minecraft:elder_guardian", "minecraft:guardian"),
+        ] {
+            out.push((me, other, looks_at_guardian(types, w, me, other)));
+        }
+    });
+    if !ran {
+        return;
+    }
+    for (me, other, looked) in out {
+        assert!(looked, "a {me} never looked at the {other} 10 blocks off");
+    }
 }

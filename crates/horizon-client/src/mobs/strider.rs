@@ -32,7 +32,7 @@ pub fn register(m: &mut Mob) {
     g.add(7, Stroll::new(1.0).interval(60));
     g.add(8, LookAtPlayer::new(8.0));
     g.add(8, RandomLookAround::default());
-    g.add(9, LookAtPlayer::species(Species::Strider, 8.0));
+    g.add(9, LookAtPlayer::species(&[Species::Strider], 8.0));
 }
 pub fn suffocating(m: &Mob) -> bool {
     m.species() == Species::Strider && m.extra.flag

@@ -1,4 +1,5 @@
-//! `AvoidEntityGoal`/`TemptGoal` targeting predicates (test module of `goals.rs`).
+//! `AvoidEntityGoal`/`TemptGoal`/`LookAtPlayerGoal` targeting predicates (test
+//! module of `goals.rs`).
 use super::*;
 use crate::mobs::world::test_player;
 use crate::mobs::world::{with_built_test_world, with_test_world};
@@ -168,5 +169,54 @@ fn a_spectator_does_not_tempt_an_animal() {
         outcomes,
         vec![true, false],
         "a survival player tempts; a spectator does not"
+    );
+}
+
+/// `LookAtPlayerGoal`'s player targeting runs over `EntitySelector.notRiding(mob)`:
+/// a pig does not look at the player riding it, while the same player standing
+/// a block off is its look target.
+#[test]
+fn a_mob_does_not_look_at_the_player_riding_it() {
+    let mut out = Vec::new();
+    let ran = with_test_world(&[], |w, types| {
+        for riding in [false, true] {
+            let mut m = Mob::new(
+                1,
+                Arc::new(types.types["minecraft:pig"].clone()),
+                Vec3::new(0.5, 64.0, 0.5),
+                0.0,
+            );
+            let mut player = test_player(Vec3::new(0.5, 64.0, 1.5));
+            player.passenger = riding;
+            player.riding_vehicle = riding.then_some(m.id);
+            let world = crate::mobs::MobWorld {
+                player: Some(player),
+                ..w.clone()
+            };
+            m.ai.goals.add(1, LookAtPlayer::new(6.0).probability(1.0));
+            let (mut lr, mut events) = (
+                horizon_core::random::LevelRandom::for_level(
+                    horizon_core::random::LegacyRandom::new(0),
+                ),
+                Vec::new(),
+            );
+            let mut cx = Cx {
+                w: &world,
+                lr: &mut lr,
+                events: &mut events,
+            };
+            let mut goals = std::mem::take(&mut m.ai.goals);
+            goals.tick(&mut m, &mut cx);
+            out.push(goals.is_running("LookAtPlayer"));
+            m.ai.goals = goals;
+        }
+    });
+    if !ran {
+        return;
+    }
+    assert_eq!(
+        out,
+        vec![true, false],
+        "a player beside the pig is looked at; the one riding it is not"
     );
 }

@@ -963,7 +963,9 @@ impl Goal for PandaLook {
             return false;
         }
         if st(m).look_at.is_none() {
-            let seen = m.can_see_player(cx.w, 6.0);
+            // `LookAtPlayerGoal`'s `EntitySelector.notRiding(mob)`, inherited
+            // by `PandaLookAtPlayerGoal`: never the player riding it.
+            let seen = !super::riders::player_rides(m, cx.w) && m.can_see_player(cx.w, 6.0);
             st(m).look_at = seen.then_some(Who::Player);
         }
         acts(m, cx.w) && st(m).look_at.is_some()
@@ -1086,6 +1088,68 @@ pub fn register(m: &mut Mob) {
                 .alert_if(|s| s.species == Species::Panda && s.variant == AGGRESSIVE),
         ),
     );
+}
+
+#[cfg(test)]
+mod look_at_tests {
+    use super::*;
+    use crate::mobs::world::{test_player, with_test_world};
+
+    /// `PandaLookAtPlayerGoal` inherits `LookAtPlayerGoal`'s player targeting,
+    /// `EntitySelector.notRiding(mob)`: a panda does not look at the player
+    /// riding it, while the same player standing a block off is its target.
+    #[test]
+    fn a_panda_does_not_look_at_the_player_riding_it() {
+        let mut out = Vec::new();
+        let ran = with_test_world(&[], |w, types| {
+            for riding in [false, true] {
+                let mut m = Mob::new(
+                    1,
+                    std::sync::Arc::new(types.types["minecraft:panda"].clone()),
+                    Vec3::new(0.5, 64.0, 0.5),
+                    0.0,
+                );
+                let mut player = test_player(Vec3::new(0.5, 64.0, 1.5));
+                player.passenger = riding;
+                player.riding_vehicle = riding.then_some(m.id);
+                let world = MobWorld {
+                    player: Some(player),
+                    ..w.clone()
+                };
+                m.ai.goals.add(9, PandaLook::default());
+                let (mut lr, mut events) = (
+                    horizon_core::random::LevelRandom::for_level(
+                        horizon_core::random::LegacyRandom::new(0),
+                    ),
+                    Vec::new(),
+                );
+                let mut cx = Cx {
+                    w: &world,
+                    lr: &mut lr,
+                    events: &mut events,
+                };
+                let mut goals = std::mem::take(&mut m.ai.goals);
+                let mut looked = false;
+                for _ in 0..1000 {
+                    goals.tick(&mut m, &mut cx);
+                    if goals.is_running("LookAtPlayer") {
+                        looked = true;
+                        break;
+                    }
+                }
+                m.ai.goals = goals;
+                out.push(looked);
+            }
+        });
+        if !ran {
+            return;
+        }
+        assert_eq!(
+            out,
+            vec![true, false],
+            "a player beside the panda is looked at; the one riding it is not"
+        );
+    }
 }
 
 #[cfg(test)]
