@@ -33,7 +33,11 @@ const CREDIT_URL: &str = horizon_addresses::LAUNCHER_LOOK_CREDIT;
 /// What the search finds in each section, in [`SECTIONS`]' order: its rows' names and words a
 /// player may look for them by. English; a query matches them and their translation.
 const INDEX: [&[&str]; 10] = [
-    &["Language", "While playing", "Show the Horizon logo at startup"],
+    &[
+        "Language",
+        "While playing",
+        "Show the Horizon logo at startup",
+    ],
     &[
         "Theme",
         "Accent",
@@ -598,7 +602,19 @@ impl Launcher {
             .child(tile(
                 self.horizon_mark(42.),
                 "Horizon".into(),
-                installed.unwrap_or_else(|| tr("Nightly").to_string()),
+                // Named as the Versions page names it; the exact build is on About.
+                installed
+                    .map(|tag| {
+                        horizon_launcher::nightly::date_of(&tag)
+                            .map(|date| {
+                                trf(
+                                    "{day} update",
+                                    &[("day", &horizon_launcher::nightly::day(date))],
+                                )
+                            })
+                            .unwrap_or(tag)
+                    })
+                    .unwrap_or_else(|| tr("Nightly").to_string()),
                 div()
                     .flex()
                     .flex_col()

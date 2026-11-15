@@ -249,7 +249,7 @@ pub fn headline(name: &str, verdict: &Verdict) -> String {
     match verdict {
         Verdict::MadeFor | Verdict::Fits { .. } => trf("{mod} fits this game.", &[("mod", name)]),
         Verdict::Exact { .. } | Verdict::NoList { .. } => {
-            trf("{mod} works on another game build only.", &[("mod", name)])
+            trf("{mod} works on another version only.", &[("mod", name)])
         }
         Verdict::DoesNotFit { .. } | Verdict::Points { .. } => {
             trf("{mod} doesn't fit this game.", &[("mod", name)])
@@ -287,18 +287,18 @@ pub fn update_summary(build: &str, total: usize, off: &[(String, String)]) -> St
     if off.is_empty() {
         return if total == 1 {
             trf(
-                "Update to {build}? Your native mod fits it.",
+                "Move to {build}? Your native mod fits it.",
                 &[("build", build)],
             )
         } else {
             trf(
-                "Update to {build}? All {count} of your native mods fit it.",
+                "Move to {build}? All {count} of your native mods fit it.",
                 &[("build", build), ("count", &total.to_string())],
             )
         };
     }
     let head = trf(
-        "Update to {build}? {fit} of your {count} native mods fit it.",
+        "Move to {build}? {fit} of your {count} native mods fit it.",
         &[
             ("build", build),
             ("fit", &total.saturating_sub(off.len()).to_string()),

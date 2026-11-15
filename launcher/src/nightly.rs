@@ -37,6 +37,38 @@ pub fn date_of(version: &str) -> Option<&str> {
     is_date(date).then_some(date)
 }
 
+/// A day as players read it, "Nov 1", from `2026-11-01`; anything else as it is.
+pub fn day(date: &str) -> String {
+    use crate::i18n::trf;
+    let day = date
+        .get(8..10)
+        .map(|d| d.trim_start_matches('0').to_string())
+        .unwrap_or_default();
+    let args = [("day", day.as_str())];
+    match date.get(5..7) {
+        Some("01") => trf("Jan {day}", &args),
+        Some("02") => trf("Feb {day}", &args),
+        Some("03") => trf("Mar {day}", &args),
+        Some("04") => trf("Apr {day}", &args),
+        Some("05") => trf("May {day}", &args),
+        Some("06") => trf("Jun {day}", &args),
+        Some("07") => trf("Jul {day}", &args),
+        Some("08") => trf("Aug {day}", &args),
+        Some("09") => trf("Sep {day}", &args),
+        Some("10") => trf("Oct {day}", &args),
+        Some("11") => trf("Nov {day}", &args),
+        Some("12") => trf("Dec {day}", &args),
+        _ => date.to_string(),
+    }
+}
+
+/// A Nightly as the Versions page names it, "the Nov 13 update", for `nightly-2026-11-13`
+/// (with or without its commit); None for anything that is not one.
+pub fn update_name(version: &str) -> Option<String> {
+    let date = date_of(version)?;
+    Some(crate::i18n::trf("the {day} update", &[("day", &day(date))]))
+}
+
 /// A full 40-character commit as a player reads it, `b1ff51d9e…`; anything else as it is.
 pub fn short_commit(version: &str) -> String {
     if version.len() == 40 && version.bytes().all(|b| b.is_ascii_hexdigit()) {

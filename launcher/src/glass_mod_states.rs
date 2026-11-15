@@ -26,9 +26,9 @@ pub(super) struct Preview {
 // Values: `mod-step-<key>`, `mod-error-<key>`, `mod-worlds[-many|-unbuilt]`, `mod-update-<all-fit|some|world|worlds>`,
 // `mod-fit`, `mod-left-out`, `mod-trust[-generic|-registry]`, `mod-log[-failed]` (keys: see `step` and `error`).
 
-/// Builds as `sdk_cache::shown` names them to players: their Nightly name, no commit.
-const BUILD: &str = "nightly-2026-11-13";
-const MADE_FOR: &str = "nightly-2026-11-10";
+/// Builds as `sdk_cache::shown` names them to players: as the Versions page does, no commit.
+const BUILD: &str = "the Nov 13 update";
+const MADE_FOR: &str = "the Nov 10 update";
 
 /// The compiler's download, as the build card and the trust question say it.
 fn compiler_bytes() -> u64 {

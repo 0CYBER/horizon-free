@@ -244,11 +244,11 @@ fn an_update_says_how_many_mods_fit_and_which_will_be_switched_off() {
     let build = "nightly-2026-11-20 (9a8b7c6)";
     assert_eq!(
         update_summary(build, 1, &[]),
-        "Update to nightly-2026-11-20 (9a8b7c6)? Your native mod fits it."
+        "Move to nightly-2026-11-20 (9a8b7c6)? Your native mod fits it."
     );
     assert_eq!(
         update_summary(build, 4, &[]),
-        "Update to nightly-2026-11-20 (9a8b7c6)? All 4 of your native mods fit it."
+        "Move to nightly-2026-11-20 (9a8b7c6)? All 4 of your native mods fit it."
     );
     let misfit = Verdict::DoesNotFit {
         made_for: OTHER_BUILD.into(),
@@ -260,7 +260,7 @@ fn an_update_says_how_many_mods_fit_and_which_will_be_switched_off() {
     let off = [("Greeter".to_owned(), short(&misfit))];
     assert_eq!(
         update_summary(build, 4, &off),
-        "Update to nightly-2026-11-20 (9a8b7c6)? 3 of your 4 native mods fit it.\nGreeter does \
+        "Move to nightly-2026-11-20 (9a8b7c6)? 3 of your 4 native mods fit it.\nGreeter does \
          not: the hook player_logged_in (changed). It will be switched off until its author makes a version that fits."
     );
     let exact = Verdict::Exact {

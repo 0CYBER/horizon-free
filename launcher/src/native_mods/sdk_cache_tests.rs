@@ -154,7 +154,7 @@ fn a_signed_index_is_read_kept_and_used_offline() {
     let fixture = Fixture::new();
     let sdk = fixture.sdk(&[]).unwrap();
     assert_eq!(sdk.commit(), COMMIT);
-    assert_eq!(sdk.shown(), "nightly-2026-11-13");
+    assert_eq!(sdk.shown(), "the Nov 13 update");
     assert!(fixture.kept().join(COMMIT).join(INDEX).is_file());
     // With nothing at the base any more, the kept index serves.
     fs::remove_dir_all(fixture.scratch.path().join("base")).unwrap();
@@ -223,7 +223,7 @@ fn an_index_is_refused_by_name_when_its_signature_or_contents_do_not_hold() {
     assert_eq!(
         read().unwrap_err(),
         Refusal::OlderRust {
-            build: "nightly-2026-11-13".into(),
+            build: "the Nov 13 update".into(),
             rust: "1.0.0".into()
         }
     );

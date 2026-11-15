@@ -117,7 +117,7 @@ impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             Self::NoSdk { build } => trf(
-                "The mod tools for {build} aren't ready yet. Pick another game build, or try again later.",
+                "The mod tools for {build} aren't ready yet. Pick another version, or try again later.",
                 &[("build", build)],
             ),
             Self::Offline { build, bytes: Some(bytes) } => trf(
@@ -137,7 +137,7 @@ impl std::fmt::Display for Refusal {
                 &[("build", build), ("what", what)],
             ),
             Self::OlderRust { build, rust } => trf(
-                "The mod tools for {build} are older than this launcher can build with. Pick a newer game build.\n(Rust {rust}; this launcher builds with {ours})",
+                "The mod tools for {build} are older than this launcher can build with. Pick a newer version.\n(Rust {rust}; this launcher builds with {ours})",
                 &[("build", build), ("rust", rust), ("ours", rust_toolchain::VERSION)],
             ),
             Self::Refused { build, why } => trf(
@@ -164,12 +164,15 @@ fn megabytes(bytes: u64) -> String {
     )
 }
 
-/// A build as people read it: its Nightly name (`nightly-2026-11-13`), or its short commit when
-/// it has none.
+/// A build as people read it: as the Versions page names its Nightly ("the Nov 13 update"),
+/// or its short commit when it has none.
 pub fn shown(commit: &str, nightly: Option<&str>) -> String {
     // A commit may come from a mod's manifest: cut only where a character ends.
     let short = commit.get(..7).unwrap_or(commit);
-    nightly.unwrap_or(short).to_owned()
+    match nightly {
+        Some(name) => crate::nightly::update_name(name).unwrap_or_else(|| name.to_owned()),
+        None => short.to_owned(),
+    }
 }
 
 /// Build `commit` as people read it, with its Nightly name when its index is kept. `commit` may
