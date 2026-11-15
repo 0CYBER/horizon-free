@@ -20,14 +20,22 @@ impl GeneratorData {
         let data = self;
         let registry = data.registry;
         let noise = &settings_json["noise"];
-        let min_y = noise["min_y"]
-            .as_i64()
-            .ok_or_else(|| resource("noise min_y"))? as i32;
-        let height = noise["height"]
-            .as_i64()
-            .ok_or_else(|| resource("noise height"))? as i32;
+        let int = |value: &Value, what: &str| {
+            value
+                .as_i64()
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(|| resource(what))
+        };
+        let min_y = int(&noise["min_y"], "noise min_y")?;
+        let height = int(&noise["height"], "noise height")?;
         let (level_min_y, level_height) = level.unwrap_or((min_y, height));
-        if min_y < level_min_y || min_y + height > level_min_y + level_height {
+        let (Some(end), Some(level_end)) = (
+            min_y.checked_add(height),
+            level_min_y.checked_add(level_height),
+        ) else {
+            return Err(resource("noise range beyond 32-bit heights"));
+        };
+        if height < 0 || min_y < level_min_y || end > level_end {
             return Err(resource("noise range outside the dimension's build height"));
         }
         let codec = crate::registry::BlockStateJsonCodec::new(registry, data.integers.clone())
@@ -37,9 +45,7 @@ impl GeneratorData {
             noise_height: height,
             level_min_y,
             level_height,
-            sea_level: settings_json["sea_level"]
-                .as_i64()
-                .ok_or_else(|| resource("sea_level"))? as i32,
+            sea_level: int(&settings_json["sea_level"], "sea_level")?,
             default_block: state(&codec, &settings_json["default_block"])?,
             default_fluid: state(&codec, &settings_json["default_fluid"])?,
             legacy: settings_json["legacy_random_source"]

@@ -85,6 +85,11 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
         &pack.join("data/registry_entry_test/worldgen/noise_settings/broken.json"),
         "{}",
     );
+    // Listing the registry decodes every unused file: a range past 32-bit heights is refused.
+    write(
+        &pack.join("data/registry_entry_test/worldgen/noise_settings/overflow.json"),
+        r#"{"noise":{"min_y":2147483647,"height":1}}"#,
+    );
     write(
         &pack.join("data/registry_entry_test/tags/worldgen/structure/towns.json"),
         r#"{"values":["minecraft:village_plains"]}"#,
@@ -129,6 +134,8 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                 );
                 assert!(!host(game).registry_entries("minecraft:worldgen/noise_settings")
                     .unwrap().contains(&id("registry_entry_test:broken")));
+                assert!(!host(game).registry_entries("minecraft:worldgen/noise_settings")
+                    .unwrap().contains(&id("registry_entry_test:overflow")));
                 let village = host(game)
                     .registry_entry("minecraft:worldgen/structure", "minecraft:village_plains")
                     .unwrap();
