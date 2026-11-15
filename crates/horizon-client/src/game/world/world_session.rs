@@ -277,6 +277,8 @@ impl Game<'_> {
         self.clear_waypoints();
         self.post_effects.clear();
         self.spectated_post_effect = None;
+        // Mod screens' living scenes go with the world their entities were copied from.
+        self.live_scenes.get_mut().clear();
         if self.external_server() {
             return self.leave_server(None);
         }
