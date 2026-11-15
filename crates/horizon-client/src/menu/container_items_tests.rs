@@ -59,7 +59,10 @@ fn every_stack_but_a_shulker_box_fits_and_each_ask_starts_from_vanilla() {
     assert!(!shulker_slot_takes(vanilla, &shulker));
     asked();
     // An empty stack is never in a bundle, and isn't asked.
-    assert!(!can_be_in_bundle(vanilla, &ItemStack::new("minecraft:diamond", 0)));
+    assert!(!can_be_in_bundle(
+        vanilla,
+        &ItemStack::new("minecraft:diamond", 0)
+    ));
     assert!(asked().is_empty());
 }
 

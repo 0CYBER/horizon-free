@@ -63,7 +63,11 @@ fn generated_item_loop_dispatch_starts_from_vanilla_and_writes_back_the_answers(
         assert!(!fits);
         assert_eq!(
             HEARD.with_borrow_mut(std::mem::take),
-            [("grindstone", vanilla), ("combine", vanilla), ("fits", vanilla)]
+            [
+                ("grindstone", vanilla),
+                ("combine", vanilla),
+                ("fits", vanilla)
+            ]
         );
     }
 }

@@ -9,8 +9,10 @@ const HOOK: &str = "can_grindstone_repair";
 fn worn(item: &str, max: i32, damage: u32) -> ItemStack {
     let mut s = ItemStack::new(item, 1);
     s.damage = damage;
-    s.data_mut()
-        .set_other("minecraft:max_damage", Some(horizon_core::nbt::Tag::Int(max)));
+    s.data_mut().set_other(
+        "minecraft:max_damage",
+        Some(horizon_core::nbt::Tag::Int(max)),
+    );
     s
 }
 

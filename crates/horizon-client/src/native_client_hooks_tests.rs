@@ -73,9 +73,7 @@ pub(crate) fn install() {
             },
             // A part answers on the vanilla chest menu too: the game must
             // still never ask it, because it is not a mod menu type.
-            menu_still_valid_listens: |menu| {
-                matches!(menu, "test:rules" | "minecraft:generic_9x3")
-            },
+            menu_still_valid_listens: |menu| matches!(menu, "test:rules" | "minecraft:generic_9x3"),
             item_stacked_on_other: |context, _, canceled| {
                 *canceled = context.setting("rules_mod", "stack").is_some();
             },
@@ -189,6 +187,9 @@ pub(crate) fn install() {
                 item_part(context, "can_fit_inside_container_items", stack, fits);
             },
         });
-        assert!(installed, "the library's callbacks are installed only here in its tests");
+        assert!(
+            installed,
+            "the library's callbacks are installed only here in its tests"
+        );
     });
 }

@@ -30,18 +30,10 @@ impl Part {
 
 #[mod_api::horizon_part]
 impl ItemPart for Part {
-    fn can_grindstone_repair(
-        &self,
-        _: &dyn LoopContext,
-        event: &mut CanGrindstoneRepairEvent<'_>,
-    ) {
+    fn can_grindstone_repair(&self, _: &dyn LoopContext, event: &mut CanGrindstoneRepairEvent<'_>) {
         self.ask("grindstone", &mut event.can_repair);
     }
-    fn is_combine_repairable(
-        &self,
-        _: &dyn LoopContext,
-        event: &mut IsCombineRepairableEvent<'_>,
-    ) {
+    fn is_combine_repairable(&self, _: &dyn LoopContext, event: &mut IsCombineRepairableEvent<'_>) {
         self.ask("combine", &mut event.repairable);
     }
     fn can_fit_inside_container_items(
@@ -68,7 +60,10 @@ impl Hooks for Mod {
 fn worn(game: &Game<'_>, item: &str, damage: u32) -> ItemStack {
     let mut stack = ItemStack::new(item, 1);
     stack.damage = damage;
-    assert!(horizon_client::stations::is_damageable(game.items(), &stack));
+    assert!(horizon_client::stations::is_damageable(
+        game.items(),
+        &stack
+    ));
     stack
 }
 
@@ -130,16 +125,15 @@ fn item_loop_parts_start_from_vanilla_and_decide_the_menus_answers() {
             let stick = ItemStack::new("minecraft:stick", 1);
             let mut repairable = false;
             crate::game::native_item_menu_parts::is_combine_repairable(
-                context, &stick, &mut repairable,
+                context,
+                &stick,
+                &mut repairable,
             );
             assert!(repairable);
             assert_eq!(take(), [("minecraft:stick", "combine", false)]);
             // Container items: the diamond is kept out, a shulker box is let in.
             let fits = |item: &str| {
-                horizon_client::menu::fits_inside_container_items(
-                    context,
-                    &ItemStack::new(item, 1),
-                )
+                horizon_client::menu::fits_inside_container_items(context, &ItemStack::new(item, 1))
             };
             assert!(!fits("minecraft:diamond"));
             assert!(fits("minecraft:shulker_box"));
