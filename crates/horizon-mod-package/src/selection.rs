@@ -25,12 +25,23 @@ pub fn content_packages<'a>(
     enabled: &'a BTreeSet<String>,
     dev: &'a [PathBuf],
 ) -> impl Iterator<Item = SelectedPackage> + 'a {
+    content_packages_read(game_dir, enabled, dev, |path| Package::read(path).ok())
+}
+
+/// [`content_packages`] from packages the caller has read: `read` answers once for each candidate
+/// path, with its valid package.
+pub fn content_packages_read<'a>(
+    game_dir: &Path,
+    enabled: &'a BTreeSet<String>,
+    dev: &'a [PathBuf],
+    mut read: impl FnMut(&Path) -> Option<Package> + 'a,
+) -> impl Iterator<Item = SelectedPackage> + 'a {
     let mut paths = find(&game_dir.join(DIR));
     paths.extend(find(&game_dir.join(NATIVE_DIR)));
     paths.retain(|path| !dev.contains(path));
     paths.extend(dev.iter().cloned());
     paths.into_iter().filter_map(move |path| {
-        let package = Package::read(&path).ok()?;
+        let package = read(&path)?;
         let selected =
             !package.is_native() && (enabled.contains(&package.manifest.id) || dev.contains(&path));
         selected.then_some(SelectedPackage { path, package })
