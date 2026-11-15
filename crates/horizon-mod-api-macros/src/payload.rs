@@ -158,12 +158,14 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         }
     }
     let name = &input.ident;
-    let (encode, decode) = match &input.data {
+    let (encode, decode, shape) = match &input.data {
         Data::Struct(data) => {
             let (pattern, encodes, build) = fields(&data.fields, quote!(Self), &c);
+            let shape = shape(&data.fields, &c);
             (
                 quote!(let Self #pattern = self; #encodes),
                 quote!(::core::result::Result::Ok(#build)),
+                quote!(let hash = #c::payload_schema_leaf("struct"); #shape hash),
             )
         }
         Data::Enum(data) => {
@@ -175,6 +177,7 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
             }
             let mut encodes = Vec::new();
             let mut decodes = Vec::new();
+            let mut shapes = Vec::new();
             for (tag, variant) in data.variants.iter().enumerate() {
                 let tag = i32::try_from(tag)
                     .map_err(|_| syn::Error::new_spanned(variant, "too many variants"))?;
@@ -182,7 +185,9 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                 let (pattern, writes, build) = fields(&variant.fields, quote!(Self::#case), &c);
                 encodes.push(quote!(Self::#case #pattern => { out.var_int(#tag); #writes }));
                 decodes.push(quote!(#tag => ::core::result::Result::Ok(#build),));
+                shapes.push(shape(&variant.fields, &c));
             }
+            let count = data.variants.len() as u64;
             (
                 quote!(match self { #(#encodes)* }),
                 quote! {
@@ -190,6 +195,11 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
                         #(#decodes)*
                         value => ::core::result::Result::Err(#c::PayloadDecodeError::InvalidDiscriminant { value }),
                     }
+                },
+                quote! {
+                    let hash = #c::payload_schema_mix(#c::payload_schema_leaf("enum"), #count);
+                    #(#shapes)*
+                    hash
                 },
             )
         }
@@ -208,8 +218,22 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
             ) -> ::core::result::Result<Self, #c::PayloadDecodeError> {
                 #decode
             }
+            fn schema(visiting: &mut ::std::vec::Vec<&'static str>) -> u64 {
+                #c::payload_schema_named::<Self>(visiting, |visiting| { #shape })
+            }
         }
     })
+}
+
+/// The statements that add `fields` to `hash`: their count, then each field's schema in
+/// declaration order. Names are not part of the schema.
+fn shape(fields: &Fields, c: &syn::Path) -> TokenStream {
+    let count = fields.len() as u64;
+    let types = fields.iter().map(|field| &field.ty);
+    quote! {
+        let hash = #c::payload_schema_mix(hash, #count);
+        #(let hash = #c::payload_schema_mix(hash, <#types as #c::PayloadCodec>::schema(visiting));)*
+    }
 }
 
 /// The pattern that binds `fields`, the statements that encode the bindings

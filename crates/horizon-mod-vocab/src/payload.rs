@@ -4,6 +4,9 @@ mod registrar;
 pub use registrar::{
     PayloadRegistrar, RegisterClientPayloadHandlersEvent, RegisterPayloadHandlersEvent,
 };
+#[path = "payload/typed.rs"]
+mod typed;
+pub use typed::{PayloadToken, ToClient, ToServer};
 
 use crate::wire::{Reader, Wire, WireError, Writer};
 use crate::{ClientHost, PlayerRef, ServerHost, Text};
@@ -155,6 +158,10 @@ pub enum PayloadSendError {
         /// Inclusive vanilla limit.
         limit: u64,
     },
+    /// A typed payload's token is not one this load's registrar handed out for the
+    /// declaration, direction and value type it claims: forged, from another load, of another
+    /// type, or its owner is off. Nothing is sent.
+    StaleToken(PayloadId),
 }
 
 impl crate::NoBackend for PayloadSendError {
@@ -230,6 +237,9 @@ pub trait IPayloadContext {
         id: &PayloadId,
         bytes: PayloadBytes,
     ) -> Result<PayloadAccepted, PayloadSendError>;
+    /// Check a typed payload's token against this load's frozen declarations before a typed
+    /// reply: `StaleToken` for one the registrar did not hand out as it claims.
+    fn check_payload_token(&self, token: &PayloadToken) -> Result<(), PayloadSendError>;
     /// Disconnect this session with the supplied component.
     fn disconnect(&mut self, reason: Text);
     /// Run now on the main thread or schedule there from the network executor.

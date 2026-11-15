@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     HandlerThread, IPayloadHandler, PayloadDeclaration, PayloadDirection, PayloadId,
-    PayloadProtocol,
+    PayloadProtocol, PayloadSendError, PayloadToken,
 };
 
 #[derive(Clone)]
@@ -25,6 +25,21 @@ pub struct Payloads {
     pub(crate) phases: [HashMap<String, Registered>; 2],
     /// Raw play channels by exact id, each with its declaring mods in load order.
     pub(crate) raw: HashMap<String, Vec<RawRegistered>>,
+    /// Typed declarations by the slot their tokens carry, in registration order.
+    pub(crate) typed: Vec<TypedSlot>,
+    /// The load these declarations belong to, never 0 (a refused registration's); tokens of
+    /// another load are stale.
+    pub(crate) load: u64,
+}
+
+/// What a typed token must match: its declaration as registered, before protocol splitting.
+#[derive(Clone)]
+pub(crate) struct TypedSlot {
+    pub(crate) id: PayloadId,
+    pub(crate) protocol: PayloadProtocol,
+    pub(crate) direction: PayloadDirection,
+    pub(crate) schema: u64,
+    pub(crate) owner_index: usize,
 }
 
 #[derive(Clone)]
@@ -129,6 +144,28 @@ impl Payloads {
             PayloadDirection::Bidirectional => None,
         }
     }
+    /// Whether `token` is one this load's registrar handed out: the declaration at its slot
+    /// has its id, protocol, schema and a direction it sends in, and its owner is on.
+    pub fn check_token(&self, token: &PayloadToken) -> Result<(), PayloadSendError> {
+        let matches = token.load == self.load
+            && token.direction != PayloadDirection::Bidirectional
+            && usize::try_from(token.slot)
+                .ok()
+                .and_then(|slot| self.typed.get(slot))
+                .is_some_and(|slot| {
+                    slot.id == token.id
+                        && slot.protocol == token.protocol
+                        && slot.schema == token.schema
+                        && (slot.direction == token.direction
+                            || slot.direction == PayloadDirection::Bidirectional)
+                        && crate::mod_index_on(slot.owner_index)
+                });
+        if matches {
+            Ok(())
+        } else {
+            Err(PayloadSendError::StaleToken(token.id.clone()))
+        }
+    }
     /// The raw play channels an enabled mod declared, by exact id.
     pub fn raw_channels(&self) -> impl Iterator<Item = &str> {
         self.raw
@@ -192,6 +229,17 @@ pub fn installed_payloads() -> Option<Arc<Payloads>> {
     installed().and_then(|installed| installed.keys.payloads.clone())
 }
 
+/// Check `token` against the installed load: what the host runs before every typed send.
+/// With no payloads installed, every token is stale.
+// hidden: engine send check exported only through __private::game.
+#[doc(hidden)]
+pub fn check_payload_token(token: &PayloadToken) -> Result<(), PayloadSendError> {
+    installed_payloads().map_or_else(
+        || Err(PayloadSendError::StaleToken(token.id.clone())),
+        |payloads| payloads.check_token(token),
+    )
+}
+
 /// Load-only operations backing the public payload registration views.
 pub trait PayloadsRegistrar {
     /// Register a declaration and its receiving callbacks. Invalid declarations
@@ -210,6 +258,20 @@ pub trait PayloadsRegistrar {
         thread: HandlerThread,
         handler: Arc<dyn IPayloadHandler>,
     );
+    /// Register a typed declaration: `declaration` carries the mod's own version, to which
+    /// the registrar appends `schema`. Refused like [`add_payload`](Self::add_payload), and
+    /// also when `portable` is false (the value type `value`'s Wire form holds a resource
+    /// handle). The token names the declaration's slot and this load; a refused one names
+    /// load 0, so every send with it is stale.
+    fn add_typed_payload(
+        &mut self,
+        declaration: PayloadDeclaration,
+        schema: u64,
+        value: &str,
+        portable: bool,
+        server: Option<Arc<dyn IPayloadHandler>>,
+        client: Option<Arc<dyn IPayloadHandler>>,
+    ) -> PayloadToken;
     /// Declare a raw play channel by exact id, with an optional server receiver.
     /// Reserved namespaces, a second declaration by the same mod and an id a
     /// typed payload uses refuse startup, naming the mods involved.

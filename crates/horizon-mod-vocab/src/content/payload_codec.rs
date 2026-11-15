@@ -6,6 +6,8 @@
 //! checked before anything is reserved or copied, and nothing here panics on
 //! any input. The codec touches no `Host` and no world, so it runs the same
 //! in a native mod and in a wasm guest. Registration and delivery are separate from encoding.
+// The helpers a derived codec's schema calls, beside the codec it names as its crate.
+pub use super::payload_schema::{payload_schema_leaf, payload_schema_mix, payload_schema_named};
 
 /// The deepest a payload value nests: each box, each list, each present option and
 /// each [`PayloadReader::nested`] level counts one.
@@ -96,6 +98,11 @@ pub trait PayloadCodec: Sized {
     fn encode(&self, out: &mut PayloadWriter);
     /// Reads one value, leaving any following bytes to the caller.
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError>;
+    /// The type's schema fingerprint: the shape of what `encode` writes (see
+    /// [`payload_schema`](crate::payload_schema)). `visiting` holds the named types the walk is
+    /// inside; a hand-written codec returns a leaf of its own name and version,
+    /// `payload_schema_leaf("example:position/1")`.
+    fn schema(visiting: &mut Vec<&'static str>) -> u64;
 }
 
 /// Encodes `value` as a whole payload body of at most `limit` bytes.
@@ -538,6 +545,9 @@ macro_rules! number_codecs {
             fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
                 input.$name()
             }
+            fn schema(_: &mut Vec<&'static str>) -> u64 {
+                payload_schema_leaf(stringify!($name))
+            }
         }
     )*};
 }
@@ -560,6 +570,9 @@ impl PayloadCodec for VarInt {
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.var_int().map(Self)
     }
+    fn schema(_: &mut Vec<&'static str>) -> u64 {
+        payload_schema_leaf("var_int")
+    }
 }
 
 impl PayloadCodec for VarLong {
@@ -568,6 +581,9 @@ impl PayloadCodec for VarLong {
     }
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.var_long().map(Self)
+    }
+    fn schema(_: &mut Vec<&'static str>) -> u64 {
+        payload_schema_leaf("var_long")
     }
 }
 
@@ -578,6 +594,12 @@ impl PayloadCodec for String {
     }
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.string()
+    }
+    fn schema(_: &mut Vec<&'static str>) -> u64 {
+        payload_schema_mix(
+            payload_schema_leaf("string"),
+            PAYLOAD_MAX_STRING_BYTES as u64,
+        )
     }
 }
 
@@ -590,6 +612,10 @@ impl<T: PayloadCodec> PayloadCodec for Vec<T> {
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.list(PAYLOAD_MAX_LIST_ENTRIES, T::decode)
     }
+    fn schema(visiting: &mut Vec<&'static str>) -> u64 {
+        let list = payload_schema_mix(payload_schema_leaf("list"), PAYLOAD_MAX_LIST_ENTRIES as u64);
+        payload_schema_mix(list, T::schema(visiting))
+    }
 }
 
 impl<T: PayloadCodec> PayloadCodec for Option<T> {
@@ -598,6 +624,9 @@ impl<T: PayloadCodec> PayloadCodec for Option<T> {
     }
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.option(T::decode)
+    }
+    fn schema(visiting: &mut Vec<&'static str>) -> u64 {
+        payload_schema_mix(payload_schema_leaf("option"), T::schema(visiting))
     }
 }
 
@@ -611,6 +640,9 @@ impl<T: PayloadCodec> PayloadCodec for Box<T> {
             input.charge(Some(std::mem::size_of::<T>()))?;
             T::decode(input).map(Box::new)
         })
+    }
+    fn schema(visiting: &mut Vec<&'static str>) -> u64 {
+        payload_schema_mix(payload_schema_leaf("box"), T::schema(visiting))
     }
 }
 

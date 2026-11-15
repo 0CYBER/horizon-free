@@ -19,6 +19,8 @@ mod raw_channel_tests;
 #[cfg(any(test, feature = "test-payload-probe"))]
 pub mod staging_probe;
 #[cfg(test)]
+mod typed_schema_tests;
+#[cfg(test)]
 mod wasm_tests;
 pub use executor::{dispatch, mod_of};
 mod main_queue;

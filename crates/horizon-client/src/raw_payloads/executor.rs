@@ -184,6 +184,9 @@ impl IPayloadContext for NetworkContext<'_> {
         super::staging_probe::prepared(&self.incoming.id.0, false);
         Ok(PayloadAccepted::Queued)
     }
+    fn check_payload_token(&self, token: &mod_api::PayloadToken) -> Result<(), PayloadSendError> {
+        mod_api::__private::game::check_payload_token(token)
+    }
     fn disconnect(&mut self, reason: Text) {
         self.disconnect = Some(reason);
     }

@@ -286,6 +286,7 @@ impl Hooks for Mod {
         runtime_environment::register(cx);
         capability_registration::register(registrar, cx);
         game_payload::register(registrar);
+        typed_payload::register(registrar);
         interaction::register(registrar);
         predicted_use::register(registrar);
         cauldron::register(registrar);

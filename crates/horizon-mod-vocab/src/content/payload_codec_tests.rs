@@ -18,6 +18,9 @@ struct MacroField<T> {
 struct Opaque<T>(u8, std::marker::PhantomData<T>);
 
 impl<T> PayloadCodec for Opaque<T> {
+    fn schema(_: &mut Vec<&'static str>) -> u64 {
+        crate::content::payload_schema::payload_schema_leaf("test:Opaque")
+    }
     fn encode(&self, out: &mut PayloadWriter) {
         self.0.encode(out);
     }
@@ -40,6 +43,9 @@ struct Counter {
 }
 
 impl PayloadCodec for Counter {
+    fn schema(_: &mut Vec<&'static str>) -> u64 {
+        crate::content::payload_schema::payload_schema_leaf("test:Counter")
+    }
     fn encode(&self, out: &mut PayloadWriter) {
         out.var_int(self.counter);
         self.labels.encode(out);
@@ -57,6 +63,9 @@ impl PayloadCodec for Counter {
 struct Chain(Option<Box<Chain>>);
 
 impl PayloadCodec for Chain {
+    fn schema(_: &mut Vec<&'static str>) -> u64 {
+        crate::content::payload_schema::payload_schema_leaf("test:Chain")
+    }
     fn encode(&self, out: &mut PayloadWriter) {
         self.0.encode(out);
     }
@@ -85,6 +94,9 @@ thread_local! {
 }
 
 impl PayloadCodec for Counted {
+    fn schema(_: &mut Vec<&'static str>) -> u64 {
+        crate::content::payload_schema::payload_schema_leaf("test:Counted")
+    }
     fn encode(&self, _: &mut PayloadWriter) {}
     fn decode(_: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         DECODED.set(DECODED.get() + 1);
@@ -289,6 +301,9 @@ fn an_encode_past_a_bound_writes_nothing() {
 #[derive(Debug, PartialEq)]
 struct Recursive(Box<Recursive>);
 impl PayloadCodec for Recursive {
+    fn schema(_: &mut Vec<&'static str>) -> u64 {
+        crate::content::payload_schema::payload_schema_leaf("test:Recursive")
+    }
     fn encode(&self, out: &mut PayloadWriter) {
         self.0.encode(out);
     }

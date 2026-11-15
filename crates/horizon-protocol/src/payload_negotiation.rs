@@ -58,6 +58,23 @@ pub enum Mismatch {
     Missing,
     Version,
     Direction,
+    /// Typed declarations of one version whose value types have other schemas.
+    Schema,
+}
+
+/// What a typed declaration's version holds after the application version, before its
+/// schema fingerprint (mod_api's `PAYLOAD_SCHEMA_MARKER`).
+pub const SCHEMA_MARKER: &str = "+payload-schema.";
+
+/// Whether two versions are typed declarations of one application version with other schemas.
+fn schema_differs(local: &str, peer: &str) -> bool {
+    match (
+        local.rsplit_once(SCHEMA_MARKER),
+        peer.rsplit_once(SCHEMA_MARKER),
+    ) {
+        (Some((local, a)), Some((peer, b))) => local == peer && a != b,
+        _ => false,
+    }
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -402,13 +419,19 @@ fn intersect(local: &Manifest, peer: &Manifest) -> Result<Vec<Entry>, Error> {
         let b = p.get(key);
         let mismatch = match b {
             None => Some(Mismatch::Missing),
+            Some(b) if schema_differs(&a.version, &b.version) => Some(Mismatch::Schema),
             Some(b) if a.version != b.version => Some(Mismatch::Version),
             Some(b) if a.flow != b.flow => Some(Mismatch::Direction),
             _ => None,
         };
         if let Some(reason) = mismatch {
-            // Optional permits absence, not contradictory declarations at both ends.
-            if b.is_some() || !a.optional {
+            // Optional permits absence, not contradictory declarations at both ends. Another
+            // value schema on both optional ends is absence: neither end can read the other.
+            let absent = match b {
+                None => a.optional,
+                Some(b) => reason == Mismatch::Schema && a.optional && b.optional,
+            };
+            if !absent {
                 return Err(Error::Incompatible {
                     phase: a.phase,
                     id: a.id.clone(),
