@@ -105,7 +105,10 @@ fn the_current_pose_moves_and_scales_the_gradient_and_pop_restores_it() {
         &mut batch,
         &atlas,
         &[
-            GuiDraw::Push(vec![PoseOp::Translate(100.0, 50.0), PoseOp::Scale(2.0, 3.0)]),
+            GuiDraw::Push(vec![
+                PoseOp::Translate(100.0, 50.0),
+                PoseOp::Scale(2.0, 3.0),
+            ]),
             gradient(1, 2, 4, 6, top, bottom),
             GuiDraw::Pop,
             gradient(1, 2, 4, 6, top, bottom),

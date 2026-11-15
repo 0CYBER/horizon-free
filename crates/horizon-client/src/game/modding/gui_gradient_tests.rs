@@ -86,7 +86,10 @@ fn a_mods_gradients_draw_top_to_bottom_in_the_clip_and_pose_and_empty_ones_draw_
             10.0 => assert_eq!(color, abgr(TOP)),
             14.0 => {
                 let (got, want) = (color.to_le_bytes(), mid.to_le_bytes());
-                assert!(got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1), "{got:?}");
+                assert!(
+                    got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 1),
+                    "{got:?}"
+                );
             }
             y => panic!("clipped vertex at y {y}"),
         }
