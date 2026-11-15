@@ -1,7 +1,8 @@
 //! Bundle-backed ITEM_ITEMS operations; the place handler owns transactional writes.
 use super::Game;
 use horizon_client::items::ItemStack;
-use horizon_items::bundle::{Contents as Bundle, can_be_in_bundle};
+use horizon_client::menu::container_items::{can_be_in_bundle, fits_inside_container_items};
+use horizon_items::bundle::Contents as Bundle;
 
 impl Game<'_> {
     pub(in crate::game) fn item_bundle_slots(
@@ -33,7 +34,7 @@ impl Game<'_> {
         slot: usize,
         item: &ItemStack,
     ) -> u32 {
-        if slot != 0 || !can_be_in_bundle(item) {
+        if slot != 0 || !can_be_in_bundle(&self.loop_context, item) {
             return 0;
         }
         Bundle::room_in_stack(self.res.items(), stack, item).unwrap_or(0)
@@ -51,7 +52,8 @@ impl Game<'_> {
         if slot != 0 {
             return Some((0, stack.clone()));
         }
-        let moved = bundle.try_insert(self.res.items(), &mut item.clone());
+        let fits = fits_inside_container_items(&self.loop_context, item);
+        let moved = bundle.try_insert(self.res.items(), &mut item.clone(), fits);
         let mut changed = stack.clone();
         changed.count = 1;
         bundle.store(&mut changed);

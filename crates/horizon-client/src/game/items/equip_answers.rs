@@ -446,7 +446,7 @@ mod tests {
                 let mut bundle = ItemStack::new("minecraft:bundle", 1);
                 let mut contents = Contents::of(game.items(), &bundle).unwrap();
                 let mut helmet = ItemStack::new("minecraft:iron_helmet", 1);
-                assert_eq!(contents.try_insert(game.items(), &mut helmet), 1);
+                assert_eq!(contents.try_insert(game.items(), &mut helmet, true), 1);
                 contents.store(&mut bundle);
                 let held = |game: &Game<'_>| {
                     let guest = &game.lan.as_ref().unwrap().hub.guests[0];

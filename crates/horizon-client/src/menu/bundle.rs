@@ -1,7 +1,8 @@
 //! `BundleItem`'s click overrides in a PICKUP click
 //! (`tryItemClickBehaviourOverride`).
-use super::{Env, ItemStack, Menu, tidy};
-use crate::bundle::{Contents, INSERT, INSERT_FAIL, REMOVE_ONE, can_be_in_bundle, toggle_selected};
+use super::container_items::{can_be_in_bundle, fits_inside_container_items};
+use super::{Env, Menu, tidy};
+use crate::bundle::{Contents, INSERT, INSERT_FAIL, REMOVE_ONE, toggle_selected};
 
 impl Menu {
     /// The carried stack's `overrideStackedOnOther`, then the clicked
@@ -32,10 +33,11 @@ impl Menu {
             (Some(other), true) => {
                 // tryTransfer: what fits, taken by the slot's rules.
                 let mut moved = 0;
-                if can_be_in_bundle(&other) {
+                if can_be_in_bundle(env.loop_context, &other) {
                     let room = contents.room_for(env.items, &other);
                     if let Some(mut taken) = self.safe_take(env, s, other.count, room) {
-                        moved = contents.try_insert(env.items, &mut taken);
+                        // `tryInsert` asks `canItemBeInBundle` again: the answer above.
+                        moved = contents.try_insert(env.items, &mut taken, true);
                     }
                 }
                 self.state
@@ -49,7 +51,8 @@ impl Menu {
                     self.safe_insert(env, s, &mut remainder, count);
                     match remainder {
                         Some(mut rest) => {
-                            contents.try_insert(env.items, &mut rest);
+                            let fits = fits_inside_container_items(env.loop_context, &rest);
+                            contents.try_insert(env.items, &mut rest, fits);
                         }
                         None => self.state.player_sounds.push(REMOVE_ONE),
                     }
@@ -76,7 +79,8 @@ impl Menu {
         match (self.state.carried.take(), primary) {
             (Some(mut other), true) => {
                 let moved = if allowed {
-                    contents.try_insert(env.items, &mut other)
+                    let fits = fits_inside_container_items(env.loop_context, &other);
+                    contents.try_insert(env.items, &mut other, fits)
                 } else {
                     0
                 };
@@ -107,10 +111,4 @@ impl Menu {
         self.state.containers[slot.container][slot.index] = Some(bundle);
         true
     }
-}
-
-/// `Item.canFitInsideContainerItems` (`ShulkerBoxSlot.mayPlace`): shulker
-/// boxes cannot nest.
-pub fn fits_inside_container_items(stack: &ItemStack) -> bool {
-    !stack.item.ends_with("shulker_box")
 }
