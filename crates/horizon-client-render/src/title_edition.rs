@@ -2,13 +2,13 @@
 //!
 //! Vanilla's `textures/gui/title/edition.png` reads "JAVA EDITION". Horizon
 //! never ships Mojang's art, so the banner is rebuilt at load time from the
-//! player's own texture: "EDITION" is kept column for column, the "T" is lifted
-//! out of it, and R, U and S are Horizon's own glyphs (MIT, the rectangles
-//! below), drawn the way the texture's letters are built (a face with darker
-//! sides and a light bottom edge, a dark extrusion under it, a black outline
-//! and a soft rim) in the shades sampled from the texture itself. Only
-//! vanilla 26.3's exact texture is rebuilt: a resource pack's edition.png
-//! stays as its author drew it.
+//! player's own texture: "EDITION" is kept column for column, and R, U, S and T
+//! are Horizon's own glyphs (MIT, the rectangles below), drawn the way the
+//! texture's letters are built (a face with darker sides and a light bottom
+//! edge, a dark extrusion under it that leans toward the banner's vanishing
+//! point, a black outline and a soft rim) in the shades sampled from the
+//! texture itself. Only vanilla 26.3's exact texture is rebuilt: a resource
+//! pack's edition.png stays as its author drew it.
 
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
@@ -21,12 +21,16 @@ const HEIGHT: usize = 64;
 const VANILLA: u64 = 0x4249_0538_6dfb_181f;
 /// "EDITION", outline included, starts at this column; left of it is "JAVA".
 const EDITION_START: usize = 204;
-/// The columns of the "T"'s body (face and extrusion) inside "EDITION".
-const T_BODY: (usize, usize) = (335, 376);
 /// Where the texture's letters put their faces, and how deep they are drawn.
 const FACE_TOP: usize = 4;
 const EXTRUSION: usize = 8;
 const OUTLINE: usize = 3;
+/// The texture's letters are drawn in perspective: the extrusion's bottom row
+/// sits `LEAN * (VANISH_X - x)` texels to the side of the face column `x` it
+/// comes from, growing evenly with depth. Measured on 26.3's texture: "J"'s
+/// extrusion leans 3 to 4 texels right, "D" and "I" not at all, "N" 2 to 3 left.
+const VANISH_X: f64 = 280.0;
+const LEAN: f64 = 0.013;
 /// The face-to-face spacing between letters.
 const LETTER_GAP: usize = 6;
 /// The new glyphs' face width: "RUST" then spans "JAVA"'s columns to within
@@ -34,6 +38,9 @@ const LETTER_GAP: usize = 6;
 const GLYPH_WIDTH: usize = 42;
 /// The first face column, as "JAVA"'s.
 const FIRST_FACE: usize = 4;
+/// Where the "T" starts: one letter gap after the S, as "EDITION"'s "T" sat
+/// there before Horizon drew its own.
+const T_LEFT: usize = FIRST_FACE + 3 * (GLYPH_WIDTH + LETTER_GAP) + 1;
 
 /// Horizon's R, U and S: face rectangles `[x0, y0, x1, y1)` in texels from the
 /// face's top-left, 42 wide and 39 tall, with 11-texel stems, 10-texel bars and
@@ -53,6 +60,8 @@ const S: &[[usize; 4]] = &[
     [31, 21, 42, 32],
     [0, 29, 35, 39],
 ];
+/// "EDITION"'s "T" measured: a 39-texel bar 10 deep over an 11-texel stem.
+const T: &[[usize; 4]] = &[[0, 0, 39, 10], [16, 0, 27, 39]];
 
 /// The banner rebuilt to read "RUST EDITION", or `None` when the texture is
 /// not vanilla's (a resource pack's own).
@@ -129,8 +138,9 @@ impl Palette {
 /// Faces of the new glyphs, positioned in the texture.
 fn glyph_faces() -> Vec<bool> {
     let mut face = vec![false; WIDTH * HEIGHT];
-    for (i, glyph) in [R, U, S].into_iter().enumerate() {
-        let left = FIRST_FACE + i * (GLYPH_WIDTH + LETTER_GAP);
+    let glyphs = [R, U, S].into_iter().enumerate();
+    let lefts = glyphs.map(|(i, g)| (FIRST_FACE + i * (GLYPH_WIDTH + LETTER_GAP), g));
+    for (left, glyph) in lefts.chain([(T_LEFT, T)]) {
         for &[x0, y0, x1, y1] in glyph {
             for y in FACE_TOP + y0..FACE_TOP + y1 {
                 for x in left + x0..left + x1 {
@@ -142,9 +152,9 @@ fn glyph_faces() -> Vec<bool> {
     face
 }
 
-/// Where the "T" lifted from "EDITION" goes: one letter gap after the S.
-fn t_left() -> usize {
-    FIRST_FACE + 3 * (GLYPH_WIDTH + LETTER_GAP)
+/// How far the extrusion `depth` texels under face column `x` leans sideways.
+fn lean(x: usize, depth: usize) -> isize {
+    ((VANISH_X - x as f64) * LEAN * depth as f64 / EXTRUSION as f64).round() as isize
 }
 
 /// Draw faces within `columns` the way the texture's letters are drawn.
@@ -157,8 +167,16 @@ fn draw_glyphs(out: &mut [u8], face: &[bool], palette: &Palette, columns: Range<
     let mut body = face.to_vec();
     for y in 0..HEIGHT {
         for x in columns.clone() {
-            let (xi, yi) = (x as isize, y as isize);
-            body[y * WIDTH + x] |= (1..=EXTRUSION as isize).any(|k| at(face, xi, yi - k));
+            if !face[y * WIDTH + x] {
+                continue;
+            }
+            for depth in 1..=EXTRUSION {
+                let bx = x as isize + lean(x, depth);
+                let by = y + depth;
+                if by < HEIGHT && (columns.start as isize..columns.end as isize).contains(&bx) {
+                    body[by * WIDTH + bx as usize] = true;
+                }
+            }
         }
     }
     let reach = OUTLINE as isize + 1;
@@ -208,58 +226,6 @@ fn put(out: &mut [u8], x: usize, y: usize, p: Rgba) {
     }
 }
 
-/// Every pixel of "EDITION"'s "T": its body, and the outline pixels nearer to
-/// it than to its neighbours.
-fn t_pixels(pixels: &[u8]) -> Vec<(usize, usize)> {
-    const NONE: u8 = 0;
-    const T: u8 = 1;
-    const OTHER: u8 = 2;
-    let mut owner = vec![NONE; WIDTH * HEIGHT];
-    let mut queue = VecDeque::new();
-    for y in 0..HEIGHT {
-        for x in EDITION_START..WIDTH {
-            let p = pixel(pixels, x, y);
-            if p[3] == 255 && lum(p) >= 30 {
-                owner[y * WIDTH + x] = if (T_BODY.0..=T_BODY.1).contains(&x) {
-                    T
-                } else {
-                    OTHER
-                };
-                queue.push_back((x, y));
-            }
-        }
-    }
-    while let Some((x, y)) = queue.pop_front() {
-        let label = owner[y * WIDTH + x];
-        for (dx, dy) in [
-            (-1, -1),
-            (0, -1),
-            (1, -1),
-            (-1, 0),
-            (1, 0),
-            (-1, 1),
-            (0, 1),
-            (1, 1),
-        ] {
-            let (nx, ny) = (x as isize + dx, y as isize + dy);
-            if !(EDITION_START as isize..WIDTH as isize).contains(&nx)
-                || !(0..HEIGHT as isize).contains(&ny)
-            {
-                continue;
-            }
-            let (nx, ny) = (nx as usize, ny as usize);
-            if owner[ny * WIDTH + nx] == NONE && pixel(pixels, nx, ny)[3] > 0 {
-                owner[ny * WIDTH + nx] = label;
-                queue.push_back((nx, ny));
-            }
-        }
-    }
-    (0..HEIGHT)
-        .flat_map(|y| (EDITION_START..WIDTH).map(move |x| (x, y)))
-        .filter(|&(x, y)| owner[y * WIDTH + x] == T)
-        .collect()
-}
-
 /// Close the pockets left of "EDITION" that no gap reaches from outside, as
 /// the texture's letters fill their counters with the outline.
 fn fill_counters(out: &mut [u8], outline: Rgba) {
@@ -297,8 +263,7 @@ fn fill_counters(out: &mut [u8], outline: Rgba) {
     }
 }
 
-/// Give every edge left of "EDITION" the soft rim the texture's outlines have
-/// (the "T"'s right side shared its outline with the next letter).
+/// Give every edge left of "EDITION" the soft rim the texture's outlines have.
 fn soften_edges(out: &mut [u8], soft: Rgba) {
     let opaque = |out: &[u8], x: isize, y: isize| {
         (0..EDITION_START as isize).contains(&x)
@@ -329,10 +294,6 @@ fn compose(pixels: &[u8]) -> Vec<u8> {
         row[..EDITION_START * 4].fill(0);
     }
     draw_glyphs(&mut out, &glyph_faces(), &palette, 0..EDITION_START);
-    let left = t_left();
-    for (x, y) in t_pixels(pixels) {
-        put(&mut out, x + left - T_BODY.0, y, pixel(pixels, x, y));
-    }
     fill_counters(&mut out, palette.outline);
     soften_edges(&mut out, palette.soft);
     out
@@ -436,16 +397,10 @@ mod tests {
         assert!(!glyph(1, 2, 36), "U's rounded corner");
         assert!(!glyph(2, 2, 22), "S's lower-left notch");
         assert!(!glyph(2, 38, 17), "S's upper-right notch");
-        // The T is EDITION's, moved.
-        let shift = T_BODY.0 - t_left();
-        for y in 0..HEIGHT {
-            for x in T_BODY.0..=T_BODY.1 {
-                let p = pixel(&source, x, y);
-                if p[3] == 255 && lum(p) >= 30 {
-                    assert_eq!(pixel(&out, x - shift, y), p, "T at {x},{y}");
-                }
-            }
-        }
+        // The T: its bar and stem lit, either side of the stem under the bar not.
+        let t = |x: usize, y: usize| lit(T_LEFT + x, FACE_TOP + y);
+        assert!(t(2, 5) && t(36, 5) && t(21, 30), "T's bar and stem");
+        assert!(!t(5, 30) && !t(33, 30), "T's open sides");
         assert_soft_rim(&out);
         // Nothing below the 14 GUI rows vanilla draws, and the word gap stays open.
         assert!(out[WIDTH * 55 * 4..].iter().all(|&b| b == 0));
@@ -455,9 +410,43 @@ mod tests {
         let used = |x: usize| (0..HEIGHT).any(|y| pixel(&out, x, y)[3] > 0);
         let last = (0..EDITION_START).rev().find(|&x| used(x)).unwrap();
         assert!(
-            used(0) && (193..=195).contains(&last),
+            used(0) && (192..=194).contains(&last),
             "RUST ends at {last}"
         );
+    }
+
+    /// The first opaque, non-outline column of row `y` within `range`.
+    fn body_left(out: &[u8], y: usize, mut range: Range<usize>) -> usize {
+        range
+            .find(|&x| {
+                let p = pixel(out, x, y);
+                p[3] == 255 && lum(p) >= 20
+            })
+            .expect("a body in the range")
+    }
+
+    /// The extrusion leans toward the vanishing point as the texture's letters'
+    /// do: a face's left edge far left of it drops its last extrusion row 4
+    /// texels right (26.3's "J"), one near it straight down, one far right 2
+    /// texels left (its "N").
+    #[test]
+    fn extrusions_lean_toward_the_vanishing_point() {
+        let mut face = vec![false; WIDTH * HEIGHT];
+        for (x0, x1) in [(10, 37), (270, 290), (466, 478)] {
+            for y in FACE_TOP..FACE_TOP + 39 {
+                for x in x0..x1 {
+                    face[y * WIDTH + x] = true;
+                }
+            }
+        }
+        let palette = Palette::sample(&stand_in());
+        let mut out = vec![0; WIDTH * HEIGHT * 4];
+        draw_glyphs(&mut out, &face, &palette, 0..WIDTH);
+        let last = FACE_TOP + 38 + EXTRUSION;
+        for (range, left, shift) in [(0..60, 10, 4), (240..320, 270, 0), (440..512, 466, -2)] {
+            let edge = body_left(&out, last, range.clone()) as isize;
+            assert_eq!(edge - left, shift, "{range:?}");
+        }
     }
 
     #[test]
