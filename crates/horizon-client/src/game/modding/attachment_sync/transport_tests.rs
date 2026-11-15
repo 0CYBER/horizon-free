@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 const NAME: &str =
     "game::attachment_sync::transport_tests::attachment_sync_follows_the_negotiated_route";
 
-static VALUE: AttachmentType<i32> = AttachmentType {
+pub(super) static VALUE: AttachmentType<i32> = AttachmentType {
     namespace: "sync_route",
     name: "value",
     default: || 0,
@@ -48,18 +48,18 @@ static BLOB: AttachmentType<Vec<u8>> = AttachmentType {
 };
 
 /// A mod with no hooks: with a mod loaded, the server sends joining players snapshots.
-struct Route;
+pub(super) struct Route;
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Route {}
 
 /// The server's own attachment store.
-fn store<'a>(server: &'a mut Game<'_>) -> &'a mut dyn AttachmentStore {
+pub(super) fn store<'a>(server: &'a mut Game<'_>) -> &'a mut dyn AttachmentStore {
     let host: &mut dyn Host = server;
     host.attachments()
 }
 
 /// The server sets the level's value, committed or rolled back.
-fn set_level(game: &Game<'_>, value: i32, commit: bool) {
+pub(super) fn set_level(game: &Game<'_>, value: i32, commit: bool) {
     game.integrated
         .as_ref()
         .unwrap()
@@ -82,7 +82,7 @@ fn window_value(game: &mut Game<'_>) -> Option<i32> {
 }
 
 /// Let the server's hub tick `n` times, so later edits land in a later pass.
-fn wait_server_ticks(game: &Game<'_>, n: u64) {
+pub(super) fn wait_server_ticks(game: &Game<'_>, n: u64) {
     let ticks = |game: &Game<'_>| {
         game.integrated
             .as_ref()
@@ -109,7 +109,7 @@ fn wait_window(game: &mut Game<'_>, value: i32) {
 
 /// A TCP peer that offers the engine's declarations (`horizon`) or offers nothing, as a
 /// vanilla client does, logged in and in play.
-fn peer(port: u16, name: &str, horizon: bool) -> Connection {
+pub(super) fn peer(port: u16, name: &str, horizon: bool) -> Connection {
     let mut c = Connection::connect("127.0.0.1", port, Duration::from_secs(10)).unwrap();
     c.reader
         .set_read_timeout(Some(Duration::from_secs(30)))
@@ -205,18 +205,23 @@ fn peer(port: u16, name: &str, horizon: bool) -> Connection {
     }
 }
 
-/// The level values a peer is sent until it is sent `last`, in order. A disconnect fails.
-fn level_values_until(c: &mut Connection, last: i32) -> Vec<i32> {
+/// The values of `holder` a peer is sent until it is sent `last`, in order. A disconnect
+/// fails.
+pub(super) fn values_until(c: &mut Connection, holder: Holder, last: i32) -> Vec<i32> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut seen = Vec::new();
     while seen.last() != Some(&last) {
         assert!(Instant::now() < deadline, "never sent {last}: {seen:?}");
-        let (id, body) = c.recv().unwrap();
+        let (id, body) = match c.recv() {
+            Ok(packet) => packet,
+            Err(error) if error.is_timed_out() => continue,
+            Err(error) => panic!("peer receive failed: {error}"),
+        };
         if id == horizon_protocol::ids::play::clientbound::CUSTOM_PAYLOAD {
             let mut reader = Reader::new(&body);
             if Ident::read(&mut reader).unwrap() == attachment_sync::CHANNEL {
                 let message = attachment_sync::decode(reader.rest()).unwrap();
-                if message.holder == Holder::Level {
+                if message.holder == holder {
                     seen.extend(message.changes.iter().filter_map(|change| {
                         match change.value.as_ref()?.get(&"n".into())? {
                             Tag::Int(n) if change.name.to_string().ok()? == "value" => Some(*n),
@@ -239,14 +244,18 @@ fn level_values_until(c: &mut Connection, last: i32) -> Vec<i32> {
 }
 
 /// How many attachment sync payloads a peer is sent in `window`; a disconnect fails.
-fn sync_packets_within(c: &mut Connection, window: Duration) -> usize {
+pub(super) fn sync_packets_within(c: &mut Connection, window: Duration) -> usize {
     c.reader
         .set_read_timeout(Some(Duration::from_millis(200)))
         .unwrap();
     let deadline = Instant::now() + window;
     let mut count = 0;
     while Instant::now() < deadline {
-        let Ok((id, body)) = c.recv() else { continue };
+        let (id, body) = match c.recv() {
+            Ok(packet) => packet,
+            Err(error) if error.is_timed_out() => continue,
+            Err(error) => panic!("peer receive failed: {error}"),
+        };
         if id == horizon_protocol::ids::play::clientbound::CUSTOM_PAYLOAD {
             let mut reader = Reader::new(&body);
             if Ident::read(&mut reader).unwrap() == attachment_sync::CHANNEL {
@@ -328,10 +337,10 @@ fn attachment_sync_follows_the_negotiated_route() {
             let mut vanilla = peer(port, "SyncVanilla", false);
             // A joining Horizon peer is sent the level's whole value, then each commit in
             // order; a rolled-back edit sends nothing, and the authority keeps the old value.
-            assert_eq!(level_values_until(&mut horizon, 10), [10]);
+            assert_eq!(values_until(&mut horizon, Holder::Level, 10), [10]);
             set_level(game, 11, false);
             set_level(game, 12, true);
-            assert_eq!(level_values_until(&mut horizon, 12), [12]);
+            assert_eq!(values_until(&mut horizon, Holder::Level, 12), [12]);
             let authority = game
                 .integrated
                 .as_ref()
@@ -388,7 +397,7 @@ fn attachment_sync_follows_the_negotiated_route() {
             );
             wait_server_ticks(game, 2);
             set_level(game, 13, true);
-            assert_eq!(level_values_until(&mut horizon, 13), [13]);
+            assert_eq!(values_until(&mut horizon, Holder::Level, 13), [13]);
 
             // A message prepared against an epoch that ended before the root commit publishes
             // nothing, on the TCP and the memory connection alike.

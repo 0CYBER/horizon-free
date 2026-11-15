@@ -28,6 +28,15 @@ pub const VERSION: &str = "1";
 /// Characters in a namespace or a name at most.
 pub const MAX_NAME: usize = 256;
 
+/// The bounds of one value, the same when the server writes it and the client reads it,
+/// so a value the server sends is never one the client discards: the engine's NBT defaults
+/// (64 MiB, 1,000,000 nodes, depth 512, the depth vanilla's `NbtAccounter` keeps). They are
+/// looser than the connection's frame limits, which bound the whole message; the network
+/// quota of `Reader::nbt` (2 MiB), meant for vanilla's untrusted packets, does not apply.
+pub fn value_limits() -> nbt::Limits {
+    nbt::Limits::default()
+}
+
 /// A holder's changes as they travel.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Message {
@@ -80,7 +89,7 @@ pub fn encode(message: &Message) -> Result<Vec<u8>> {
         match &change.value {
             Some(value) => {
                 let tag = Tag::Compound(value.clone());
-                let bytes = nbt::write_network(&tag, nbt::Limits::default())
+                let bytes = nbt::write_network(&tag, value_limits())
                     .map_err(|e| Error::new(format!("attachment sync: value: {e}")))?;
                 w.bytes(&bytes);
             }
@@ -107,7 +116,7 @@ pub fn decode(data: &[u8]) -> Result<Message> {
         .map(|_| {
             let namespace = r.string(MAX_NAME)?;
             let name = r.string(MAX_NAME)?;
-            let value = match r.nbt()? {
+            let value = match r.nbt_within(value_limits())? {
                 Tag::Compound(value) => Some(value),
                 Tag::End => None,
                 _ => return Err(Error::new("attachment sync: value is not a compound")),
@@ -225,11 +234,40 @@ mod tests {
             encode(&set).unwrap(),
             [4, 0, 1, 1, b'a', 1, b'b', 10, 3, 0, 1, b'v', 0, 0, 0, 7, 0]
         );
-        // Past the old 1,048,576-byte cap: the connection's frame limits bound it.
-        let big = Tag::ByteArray(vec![1; 1_048_576]);
+        // Past the old 1,048,576-byte cap and the 2 MiB network NBT quota: what encodes,
+        // decodes; the connection's frame limits bound the message.
+        let big = Tag::ByteArray(vec![1; 3 << 20]);
         set.changes[0].value = Some([("big".into(), big)].into());
         let payload = encode(&set).unwrap();
-        assert!(payload.len() > 1_048_576);
+        assert!(payload.len() > 3 << 20);
         assert_eq!(decode(&payload).unwrap(), set);
+    }
+
+    #[test]
+    fn a_value_past_the_node_limit_is_refused_by_both_ends_alike() {
+        // More entries than the 1,000,000 nodes of `value_limits`.
+        let list = Tag::Compound([("l".into(), Tag::List(vec![Tag::Int(0); 1_000_001]))].into());
+        let Tag::Compound(value) = list.clone() else {
+            unreachable!()
+        };
+        let past = Message {
+            holder: Holder::Level,
+            replace: false,
+            changes: vec![AttachmentSync {
+                namespace: "a".into(),
+                name: "b".into(),
+                value: Some(value),
+            }],
+        };
+        assert!(encode(&past).is_err(), "the writer refuses it");
+        // A peer that wrote it anyway is refused by the reader, not truncated: Level
+        // holder, not replaced, one change of a:b, then the value.
+        let mut forged = vec![4, 0, 1, 1, b'a', 1, b'b'];
+        let unbounded = nbt::Limits {
+            max_nodes: usize::MAX,
+            ..nbt::Limits::default()
+        };
+        forged.extend(nbt::write_network(&list, unbounded).unwrap());
+        assert!(decode(&forged).is_err(), "the reader refuses it");
     }
 }
