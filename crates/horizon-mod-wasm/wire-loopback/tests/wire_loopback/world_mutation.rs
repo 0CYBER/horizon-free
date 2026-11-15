@@ -13,6 +13,7 @@ struct World {
 }
 impl mod_api::Backend for World {}
 mod_api::impl_backend_areas!(World, except(players));
+impl PlayersClientBackend for World {}
 impl PlayersBackend for World {
     fn player_sees(
         &self,
