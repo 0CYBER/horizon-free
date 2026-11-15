@@ -11448,7 +11448,7 @@ pub(crate) fn run_with(
         &early_settings,
         started,
         false,
-        options.execution_role,
+        mods::LoadRole::startup(options.execution_role),
         &Progress::new(),
         &mut |_, _| {},
     )?;
