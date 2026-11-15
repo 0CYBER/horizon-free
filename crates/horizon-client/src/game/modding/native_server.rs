@@ -3484,6 +3484,7 @@ mod tests {
                     mod_api::Command::new("typed give <who:player> <amount:integer> [message:text]"),
                     mod_api::Command::new("typed data <word:word> <number:number> <enabled:boolean> <item:item> <pos:block_pos>"),
                     mod_api::Command::new("typed opt [value:integer]"),
+                    mod_api::Command::new("/set <x:word>"),
                     mod_api::Command::new("typed repeat <value:player> <value:integer>"),
                     mod_api::Command::new("typed at <pos:vec3>"),
                     mod_api::Command::op("protected <who:player>", 4),
@@ -3584,6 +3585,7 @@ mod tests {
                         assert!(game.native_run_command("execute as guest13 run typed opt 13"))
                     })
                     .unwrap();
+                    let observations = heard.clone();
                     let heard = heard.lock().unwrap();
                     assert_eq!(heard.len(), 12);
                     let first = &heard[0].1;
@@ -3637,6 +3639,39 @@ mod tests {
                     assert_eq!(
                         heard[10].1.argument("pos"),
                         Some(&Value::Vec3([1.5, 64.25, -2.0]))
+                    );
+                    drop(heard);
+                    game.lan
+                        .as_mut()
+                        .unwrap()
+                        .hub
+                        .update_guest(12, |g| g.permission = 4)
+                        .unwrap();
+                    let inventory = game
+                        .lan
+                        .as_ref()
+                        .unwrap()
+                        .hub
+                        .guest(12)
+                        .unwrap()
+                        .inventory
+                        .clone();
+                    game.guest_command(12, "/set stone", None);
+                    game.guest_command(12, "typed opt 17", None);
+                    game.guest_command(12, "/give guest12 minecraft:stone 1", None);
+                    game.run_guest_commands();
+                    let heard = observations.lock().unwrap();
+                    assert_eq!(heard.len(), 14);
+                    assert_eq!(heard[12].1.literals, ["/set"]);
+                    assert_eq!(
+                        heard[12].1.argument("x"),
+                        Some(&Value::String("stone".into()))
+                    );
+                    assert_eq!(heard[13].1.literals, ["typed", "opt"]);
+                    assert_eq!(heard[13].1.argument("value"), Some(&Value::Integer(17)));
+                    assert_eq!(
+                        game.lan.as_ref().unwrap().hub.guest(12).unwrap().inventory,
+                        inventory
                     );
                 });
             },
