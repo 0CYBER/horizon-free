@@ -372,7 +372,15 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
         let [x, y, z] = fields.position;
         let key = (x, y, z);
         if self.world.block_entities.generation(&key) != Some(fields.generation) {
-            return None;
+            // The block entity of the break whose `block_drops` event is running: the removal
+            // took it out of the world, a read-only view of it is held until the event ends.
+            return Some(
+                self.world
+                    .block_entities
+                    .broken(&key, fields.generation)?
+                    .data
+                    .clone(),
+            );
         }
         let entity = self.world.block_entities.get(&key)?;
         let name = &self.facts.get(self.world.block(x, y, z)).name;

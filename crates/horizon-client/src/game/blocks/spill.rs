@@ -799,6 +799,7 @@ impl GameLevel<'_> {
             && mod_api::__private::listened(mod_api::HookId::BlockDrops)
             && let Ok(mut snapshots) = items.try_into_api()
         {
+            let (block_entity, breaker_entity) = self.drop_event_refs(pos, breaker);
             let mut next_experience = experience;
             let mut next_canceled = canceled;
             self.native_block_drops(crate::game::native_hooks::BlockDropsCall {
@@ -806,6 +807,8 @@ impl GameLevel<'_> {
                 pos,
                 state,
                 breaker,
+                breaker_entity,
+                block_entity,
                 tool,
                 drops: &mut snapshots,
                 experience: &mut next_experience,

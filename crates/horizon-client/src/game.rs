@@ -4051,9 +4051,10 @@ impl Game<'_> {
         } else {
             self.loot_block_entity(pos, &facts.name)
         };
-        if let Some(entity) = self.world.block_entities.get(&key).cloned() {
+        let live = self.live_block_entity(key, &facts.name);
+        if let Some((entity, _)) = &live {
             self.pending
-                .record_from(&self.world, pos, &entity, &facts.name);
+                .record_from(&self.world, pos, entity, &facts.name);
         } else if let Some(tag) = spill::saved_entity(&self.world, pos) {
             self.pending.record_saved(pos, &tag);
         }
@@ -4087,16 +4088,11 @@ impl Game<'_> {
                 // Block.dropResources: the item entities, then spawnAfterBreak's
                 // experience, with the mods' say between the two.
                 let breaker = Some(self.native_acting_id());
-                let dropped = self.with_level(|_, level, _| {
-                    level.block_dropped(
-                        BlockPos::new(pos[0], pos[1], pos[2]),
-                        state,
-                        breaker,
-                        held.as_ref(),
-                        stacks,
-                        exp_to_drop,
-                    )
-                });
+                let dropped = self.player_block_dropped(
+                    (pos, state),
+                    (breaker, held.as_ref(), live),
+                    (stacks, exp_to_drop),
+                );
                 let canceled = dropped.canceled;
                 if let Some(kept) = self.break_collect.as_mut() {
                     kept.extend(dropped.items.into_iter().map(|item| item.stack));

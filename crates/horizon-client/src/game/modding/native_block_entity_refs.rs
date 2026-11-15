@@ -78,6 +78,17 @@ impl Game<'_> {
         save_without_metadata(&self.world, (pos[0], pos[1], pos[2]), entity, block)
     }
 
+    /// The saved data of `entity` at `key` without identity or position metadata, with its
+    /// `CustomName`, for a block `block`: what a handle to it reads.
+    pub(in crate::game) fn saved_block_entity_data(
+        &self,
+        key: (i32, i32, i32),
+        entity: &BlockEntity,
+        block: &str,
+    ) -> Option<Compound> {
+        save_without_metadata(&self.world, key, entity, block)
+    }
+
     /// Opens a block entity's menu for a connected player (`ServerPlayer.openMenu`).
     /// Returns Stale for an invalidated entity; Ok(false) for a wrong-level player,
     /// non-provider, cancelled open, or an unconnected player such as a fake player.

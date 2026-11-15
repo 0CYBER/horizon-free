@@ -440,3 +440,252 @@ fn a_target_break_block_replaced_is_told_with_its_own_block_entity() {
         )
     );
 }
+
+/// What `block_drops` named of the breaker and the block entity, and the chest's saved
+/// `Items` count read through the block entity handle while the event ran.
+type DropsSeen = (
+    Option<u128>,
+    Option<mod_api::EntityRef>,
+    Option<usize>,
+    bool,
+);
+
+/// Listens to `block_drops` and keeps the block entity handle it was given.
+struct DropsProbe {
+    seen: Arc<Mutex<Vec<DropsSeen>>>,
+    handle: Arc<Mutex<Option<mod_api::BlockEntityRef>>>,
+    /// Panics after reading, so the break unwinds through the event.
+    panic: bool,
+}
+
+#[mod_api::__subscriptions]
+impl Hooks for DropsProbe {
+    fn block_drops(
+        &self,
+        level: &dyn mod_api::LevelHost,
+        event: &mut mod_api::BlockDropsEvent<'_>,
+    ) -> Flow {
+        let items = event
+            .block_entity
+            .and_then(|entity| level.block_entity_data(entity))
+            .and_then(|data| match data.get(&"Items".into()) {
+                Some(mod_api::Tag::List(items)) => Some(items.len()),
+                _ => None,
+            });
+        *self.handle.lock().unwrap() = event.block_entity;
+        // The named-chest use: copy the chest's custom name onto the chest item it drops.
+        let name = event
+            .block_entity
+            .and_then(|entity| level.block_entity_data(entity))
+            .and_then(|data| data.get(&"CustomName".into()).cloned());
+        if let Some(name) = name {
+            for drop in event.drops.iter_mut().filter(|drop| {
+                mod_api::__private::item_key_id(drop.stack.item()).unwrap() == "minecraft:chest"
+            }) {
+                let mut patch = mod_api::Compound::default();
+                patch.insert("minecraft:custom_name".into(), name.clone());
+                drop.stack.set_components(patch).unwrap();
+            }
+        }
+        self.seen.lock().unwrap().push((
+            event.breaker,
+            event.breaker_entity,
+            items,
+            event.block_entity.is_some(),
+        ));
+        if self.panic {
+            panic!("a listener fails after reading the broken block entity");
+        }
+        Flow::Continue
+    }
+}
+
+fn put_chest(game: &mut super::Game<'_>, pos: [i32; 3]) {
+    place(game, pos, "minecraft:chest");
+    let mut contents = vec![None; 27];
+    contents[0] = Some(ItemStack::new("minecraft:diamond", 3));
+    game.world.block_entities.insert(
+        (pos[0], pos[1], pos[2]),
+        horizon_client::containers::BlockEntity::Chest(contents),
+    );
+}
+
+/// A player's survival break names the player as `breaker` and `breaker_entity`, and its
+/// `block_entity` reads the chest the removal took out of the world; the handle is stale once
+/// the break completes.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let handle = Arc::new(Mutex::new(None));
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "drops-probe",
+        Box::new(DropsProbe {
+            seen: seen.clone(),
+            handle: handle.clone(),
+            panic: false,
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            let uuid = with_player(
+                game,
+                GameMode::Survival,
+                Some(ItemStack::new("minecraft:diamond_axe", 1)),
+            );
+            let chest = [7, 64, 4];
+            put_chest(game, chest);
+            game.world.block_names.insert(
+                (chest[0], chest[1], chest[2]),
+                mod_api::Tag::String("Loot Chest".into()),
+            );
+            game.dropped.clear();
+            assert!(game.native_player_break_block(uuid, chest, false));
+            assert_eq!(block(game, chest), "minecraft:air");
+            // The listener read the name the removal clears from the level and put it on the
+            // chest item the break dropped.
+            let named = game
+                .dropped
+                .iter()
+                .filter(|item| &*item.stack.item == "minecraft:chest")
+                .map(|item| {
+                    item.stack
+                        .extra
+                        .as_ref()
+                        .and_then(|extra| extra.custom_name_plain())
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(named, [Some("Loot Chest".to_owned())]);
+            let heard = std::mem::take(&mut *seen.lock().unwrap());
+            assert_eq!(heard.len(), 1);
+            let (breaker, breaker_entity, items, has_block_entity) = &heard[0];
+            assert_eq!(*breaker, Some(uuid));
+            assert_eq!(
+                breaker_entity.map(|entity| entity.id()),
+                Some(20),
+                "the player's own entity"
+            );
+            assert!(*has_block_entity);
+            assert_eq!(
+                *items,
+                Some(1),
+                "the chest's one stack, read during the event"
+            );
+            // After the break completes the handle is stale and nothing stays held.
+            let stale = handle.lock().unwrap().expect("the event's handle");
+            game.with_level(|_, level, _| {
+                assert!(mod_api::LevelHost::block_entity_data(level, stale).is_none());
+            });
+            assert!(
+                game.world
+                    .block_entities
+                    .broken_generation(&(chest[0], chest[1], chest[2]))
+                    .is_none()
+            );
+
+            // A block with no block entity gives none.
+            let dirt = [8, 64, 4];
+            place(game, dirt, "minecraft:dirt");
+            assert!(game.native_player_break_block(uuid, dirt, false));
+            let heard = std::mem::take(&mut *seen.lock().unwrap());
+            assert_eq!(heard.len(), 1);
+            assert!(!heard[0].3);
+        });
+    });
+}
+
+/// A ravager's break (a mob's, not a player's) names the ravager as `breaker_entity` and no
+/// `breaker` UUID; a break the level makes (no entity) names neither.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn block_drops_names_the_mob_that_broke_the_block() {
+    use horizon_client::mobs::Mob;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "drops-probe",
+        Box::new(DropsProbe {
+            seen: seen.clone(),
+            handle: Arc::default(),
+            panic: false,
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            with_player(game, GameMode::Survival, None);
+            let kind = game
+                .res
+                .mob_types()
+                .get("minecraft:ravager")
+                .unwrap()
+                .clone();
+            game.mobs
+                .push(Mob::new(51, kind, Vec3::new(5.5, 64.0, 5.5), 0.0));
+            let ravager = game.entity(51).expect("the ravager's handle");
+            let leaves = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:oak_leaves")
+                .unwrap();
+            game.world.set(9, 64, 4, leaves).unwrap();
+            game.entity_block_dropped([9, 64, 4], leaves, Some(51), Vec::new());
+            game.world.set(10, 64, 4, leaves).unwrap();
+            game.entity_block_dropped([10, 64, 4], leaves, None, Vec::new());
+            let heard = std::mem::take(&mut *seen.lock().unwrap());
+            assert_eq!(heard.len(), 2);
+            assert_eq!((heard[0].0, heard[0].1), (None, Some(ravager)));
+            assert_eq!((heard[1].0, heard[1].1), (None, None));
+        });
+    });
+}
+
+/// A listener that panics inside the event leaves nothing held: the handle it was given is stale
+/// after the break unwinds.
+#[test]
+#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+fn block_drops_holds_nothing_after_a_listener_panics() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let handle = Arc::new(Mutex::new(None));
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "drops-probe",
+        Box::new(DropsProbe {
+            seen: seen.clone(),
+            handle: handle.clone(),
+            panic: true,
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            let uuid = with_player(
+                game,
+                GameMode::Survival,
+                Some(ItemStack::new("minecraft:diamond_axe", 1)),
+            );
+            let chest = [7, 64, 4];
+            put_chest(game, chest);
+            // The platform may contain the panic or let it unwind through the break: either way.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                game.native_player_break_block(uuid, chest, false)
+            }));
+            assert_eq!(
+                seen.lock().unwrap().len(),
+                1,
+                "the listener ran and read the chest"
+            );
+            assert_eq!(seen.lock().unwrap()[0].2, Some(1));
+            let stale = handle.lock().unwrap().expect("the event's handle");
+            game.with_level(|_, level, _| {
+                assert!(mod_api::LevelHost::block_entity_data(level, stale).is_none());
+            });
+            assert!(
+                game.world
+                    .block_entities
+                    .broken_generation(&(chest[0], chest[1], chest[2]))
+                    .is_none()
+            );
+        });
+    });
+}
