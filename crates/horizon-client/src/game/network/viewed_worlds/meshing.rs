@@ -98,7 +98,13 @@ mod tests {
                 world.chunks.insert((x, z), Arc::new(Chunk::empty(x, z)));
             }
         }
-        ViewedWorld::new("minecraft:the_nether".into(), format, None, world, horizon_protocol::viewed_levels::MAX_COLUMNS)
+        ViewedWorld::new(
+            "minecraft:the_nether".into(),
+            format,
+            None,
+            world,
+            horizon_protocol::viewed_levels::MAX_COLUMNS,
+        )
     }
 
     /// A drawn mesh for every section.

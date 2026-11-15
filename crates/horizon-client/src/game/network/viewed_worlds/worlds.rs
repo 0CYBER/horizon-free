@@ -338,7 +338,9 @@ impl ViewedWorlds {
     }
     /// Drops `slot`'s world (`close`), releasing the slot; false when it held none.
     pub(in crate::game) fn remove(&mut self, slot: i32) -> bool {
-        let Some((_, world)) = self.worlds.remove(&slot) else { return false; };
+        let Some((_, world)) = self.worlds.remove(&slot) else {
+            return false;
+        };
         self.forget_sections(&world);
         free(world);
         true
