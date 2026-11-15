@@ -246,7 +246,7 @@ fn the_design_s_example_reads_as_declared() {
     assert_eq!(m.post[0].dispatch, Some(Dispatch::Pixels));
     assert_eq!(k.resets, [("bounces".to_owned(), Keep::World)]);
     assert!(m.computes());
-    // The kept output is no post target of its own: the two R-relative textures take all four.
+    // The kept output is no post target of its own.
     assert!(m.post_targets().is_empty());
     assert!(m.files().contains(&"cache_update.wgsl"));
     assert!(!parse("").unwrap().computes());

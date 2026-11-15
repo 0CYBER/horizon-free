@@ -435,8 +435,11 @@ pub struct Stage {
 
 /// The scales a post pass may draw at.
 pub const POST_SCALES: [f32; 3] = [1.0, 0.5, 0.25];
-/// The most targets a pack's post passes may write.
-pub const MAX_POST_TARGETS: usize = 4;
+/// The most `[[post]] output`s a pack may write: bindings 32 to 47, below the scene's.
+pub const MAX_POST_TARGETS: usize = 16;
+/// The memory a pack's post targets may take, in render-size `rgba16float` textures: an
+/// `output` takes its `scale`², an R-relative kept texture 2 (its two versions, any format).
+pub const POST_TARGET_BUDGET: u32 = 6;
 
 /// An option the player can change: a WGSL `override` constant of the
 /// same name, set when the pipelines are built.
@@ -633,8 +636,9 @@ pub(crate) fn target_name(name: &str) -> bool {
 /// `[[post]] scale` and `output`: scales from `POST_SCALES`, below 1 only with an output,
 /// the last pass drawing the picture itself, outputs named as WGSL names no other resource
 /// takes (under `[ray_tracing]`, `ray_tracing`, nor its functions'; under `[motion]`, nor the
-/// guide's `scene_motion` and `motion_at`), each at one scale, `MAX_POST_TARGETS` at most with the R-relative kept textures, two each. An output naming a
-/// kept texture writes it (`kept::kept_targets`).
+/// guide's `scene_motion` and `motion_at`), each at one scale, `MAX_POST_TARGETS` at most, and
+/// with the R-relative kept textures within `POST_TARGET_BUDGET`. An output naming a kept
+/// texture writes it (`kept::kept_targets`).
 fn check_post_targets(
     post: &[Stage],
     ray_tracing: bool,
@@ -683,14 +687,32 @@ fn check_post_targets(
             None => targets.push((name, scale)),
         }
     }
-    if targets.len() + kept_targets > MAX_POST_TARGETS {
-        let kept = match kept_targets {
-            0 => String::new(),
-            n => format!(" and {n} for R-relative [[resource]] textures, two each"),
-        };
+    if targets.len() > MAX_POST_TARGETS {
         return Err(format!(
-            "{} [[post]] outputs{kept}; a pack may write {MAX_POST_TARGETS}",
+            "{} [[post]] outputs; a pack may write {MAX_POST_TARGETS}",
             targets.len()
+        ));
+    }
+    // In sixteenths of a render-size texture, exact: a scale's square is 16, 4 or 1 of them.
+    let sixteenths = |scale: f32| {
+        [16, 4, 1][POST_SCALES
+            .iter()
+            .position(|&s| s == scale)
+            .expect("a checked scale")]
+    };
+    let mut costs: Vec<(&str, u32)> = targets.iter().map(|&(n, s)| (n, sixteenths(s))).collect();
+    costs.extend(kept_targets.into_iter().map(|n| (n, 32)));
+    let used: u32 = costs.iter().map(|c| c.1).sum();
+    if used > 16 * POST_TARGET_BUDGET {
+        costs.sort_by_key(|c| std::cmp::Reverse(c.1));
+        let largest: Vec<String> = (costs.iter().take(3))
+            .map(|&(n, c)| format!("{n} {}", f64::from(c) / 16.0))
+            .collect();
+        return Err(format!(
+            "post targets take {} render-size rgba16float textures (an `output` its scale², an \
+             R-relative [[resource]] texture 2); a pack may use {POST_TARGET_BUDGET}; largest: {}",
+            f64::from(used) / 16.0,
+            largest.join(", ")
         ));
     }
     Ok(())

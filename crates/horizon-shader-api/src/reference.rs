@@ -7,7 +7,9 @@ use crate::kept::{
     MAX_DISPATCH_INVOCATIONS, MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES,
     MAX_WORKGROUP, MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS, REASONS,
 };
-use crate::manifest::{API, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
+use crate::manifest::{
+    API, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES, MAX_POST_TARGETS, POST_TARGET_BUDGET,
+};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{
     GROUP, KEPT_BINDING, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING,
@@ -240,7 +242,7 @@ fn kept() -> String {
     out + &format!(
         "\nLimits: {MAX_RESOURCES} resources, {MAX_BEFORE_WORLD} `[[before_world]]` entries, {MAX_COMPUTE_POST} compute\n\
          `[[post]]` entries; {} MiB of buffers and {} KiB of fixed-size textures, both versions counted; each R-relative\n\
-         kept texture takes two of the post targets `output`s share; a workgroup of up to {MAX_WORKGROUP:?} and\n\
+         kept texture takes 2 of the post targets' budget (Limits); a workgroup of up to {MAX_WORKGROUP:?} and\n\
          {MAX_WORKGROUP_INVOCATIONS} invocations; {MAX_DISPATCH_INVOCATIONS} invocations a dispatch and {MAX_FRAME_INVOCATIONS} a frame over every\n\
          compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
         MAX_BUFFER_BYTES >> 20,
@@ -476,6 +478,9 @@ pub fn markdown() -> String {
          | `choice` | `values`, `default` (one of them) | `override <id>: u32`, the value's index |\n\n\
          ## Limits\n\n\
          - {MAX_POST_PASSES} post passes, {MAX_OPTIONS} options, `budget.gpu_ms` up to {MAX_GPU_MS}.\n\
+         - Post targets: {MAX_POST_TARGETS} `output`s, and {POST_TARGET_BUDGET} render-size `rgba16float` textures of memory with the\n  \
+         R-relative kept textures: an `output` takes its `scale`² (1, 0.25 or 0.0625), an R-relative kept texture 2 (its\n  \
+         two versions, at any format and scale).\n\
          - {} KiB per WGSL file, {} MiB per pack.\n\
          - Per stage: {MAX_EXPRESSIONS} naga expressions over all its functions, {MAX_TEXTURE_READS} texture reads (samples,\n  \
          gathers and loads, the prelude's included).\n\n\

@@ -597,10 +597,13 @@ pub(crate) fn check(
     })
 }
 
-/// The 4 post targets: an `output` naming a kept texture writes it, at its own size (no
-/// `scale`), never its `_previous` nor an `rgba32uint` one, which only a compute pass writes;
-/// each R-relative kept texture takes two.
-pub(crate) fn kept_targets(post: &[Stage], resources: &[Resource]) -> Result<usize, String> {
+/// The kept textures of the post target budget, by name: an `output` naming a kept texture
+/// writes it, at its own size (no `scale`), never its `_previous` nor an `rgba32uint` one, which
+/// only a compute pass writes; each R-relative kept texture counts.
+pub(crate) fn kept_targets<'a>(
+    post: &[Stage],
+    resources: &'a [Resource],
+) -> Result<Vec<&'a str>, String> {
     for p in post {
         let Some(output) = &p.output else { continue };
         if let Some(r) = resources.iter().find(|r| r.name == *output)
@@ -632,9 +635,9 @@ pub(crate) fn kept_targets(post: &[Stage], resources: &[Resource]) -> Result<usi
             ));
         }
     }
-    let scaled = resources
+    Ok(resources
         .iter()
         .filter(|r| matches!(r.shape, Shape::Scaled { .. }))
-        .count();
-    Ok(2 * scaled)
+        .map(|r| r.name.as_str())
+        .collect())
 }
