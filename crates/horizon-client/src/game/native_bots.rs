@@ -145,7 +145,7 @@ impl Game<'_> {
     }
 
     /// The block collision boxes in `aabb` (`[min_x, min_y, min_z, max_x, max_y, max_z]`) of the
-    /// level `dimension`, as `Level.getBlockCollisions(null, aabb)` gives them: each block's
+    /// level `dimension`, as `CollisionGetter.getBlockCollisions(null, aabb)` gives them: each block's
     /// collision shape that shares volume with the box, as world-space boxes (a stair gives two,
     /// a fence its post), under the empty collision context (no entity: scaffolding and powder
     /// snow as for nothing standing on them). Entities and the world border are not in it. For a

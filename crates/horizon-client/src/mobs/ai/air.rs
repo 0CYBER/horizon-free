@@ -5,7 +5,7 @@ use super::{Mob, MobWorld, axolotl_air_supply, hurt, nautilus_air_supply};
 use crate::breathing::{Breath, breathe, drown};
 use crate::mobs::{Damage, DamageKind, MobEvent, Species};
 
-/// `LivingEntity.canBreatheUnderWater`: the `can_breathe_under_water` tag, which
+/// `LivingEntity.canBreatheUnderwater`: the `can_breathe_under_water` tag, which
 /// `MobType.flags.breathes_water` holds, and the two overrides — a baby happy ghast
 /// and a sulfur cube with a block in its body breathe under water too.
 fn can_breathe_under_water(m: &Mob) -> bool {
@@ -88,7 +88,7 @@ mod tests {
     use horizon_core::geometry::Vec3;
     use std::sync::Arc;
 
-    /// `LivingEntity.canBreatheUnderWater` on the drown path: the
+    /// `LivingEntity.canBreatheUnderwater` on the drown path: the
     /// `can_breathe_under_water` tag (a guardian and a copper golem are in it, an
     /// iron golem is not), with the baby happy ghast and the sulfur cube holding a
     /// block on top of it and the golem's own `decreaseAirSupply` holding its air.

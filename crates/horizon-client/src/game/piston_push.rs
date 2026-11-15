@@ -630,7 +630,7 @@ impl Game<'_> {
         }
     }
 
-    /// `Entity.getStepHeight` for each body, read once: the attribute lookup
+    /// `Entity.maxUpStep` for each body, read once: the attribute lookup
     /// needs the mutable body, and the push only needs the number.
     fn push_step_heights(&mut self) -> StepHeights {
         let player = self

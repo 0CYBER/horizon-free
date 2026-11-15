@@ -10519,7 +10519,7 @@ impl Game<'_> {
     }
     /// The item entities of the server level `dimension` whose box meets
     /// the box `min`..`max`, in the level's order: vanilla's
-    /// `Level.getEntitiesOfClass(ItemEntity.class, box, ENTITY_STILL_ALIVE)`, as a
+    /// `EntityGetter.getEntitiesOfClass(ItemEntity.class, box, ENTITY_STILL_ALIVE)`, as a
     /// hopper's `getItemsAtAndAbove` asks for its block and the one above
     /// (`[x, y, z]`..`[x + 1, y + 2, z + 1]`). Empty for a level not in place
     /// (as `native_set_block`) and on a client of a server. API 42.

@@ -111,7 +111,7 @@ pub trait FinalizeLevel {
     fn moon_phase(&self, pos: [i32; 3]) -> usize;
     /// `ServerLevel.isSpawningMonsters`.
     fn spawning_monsters(&self) -> bool;
-    /// `Level.noCollision(AABB)`.
+    /// `CollisionGetter.noCollision(AABB)`.
     fn no_collision(&self, bounds: Aabb) -> bool;
     /// The first chicken (in entity order) whose box meets `bounds` and
     /// that is not being ridden (`Zombie.finalizeSpawn`'s chicken jockeys).

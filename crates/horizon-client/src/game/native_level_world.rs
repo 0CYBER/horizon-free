@@ -93,7 +93,7 @@ impl Game<'_> {
         self.set_game_rule(rule, value);
         true
     }
-    /// Sets the weather as `/weather` does (`ServerLevel.setWeatherParameters`): `clear_time`
+    /// Sets the weather as `/weather` does (`MinecraftServer.setWeatherParameters`): `clear_time`
     /// ticks of clear weather, then `weather_time` ticks of the new state (rain, thunder or
     /// neither) as `raining` and `thundering` say. Mods hear `weather_change` and
     /// `thunder_change` first and can keep the old state. False for a negative time, a level that
@@ -133,7 +133,7 @@ impl Game<'_> {
         }
         !cancel
     }
-    /// `ServerLevel.setWeatherParameters`, as `/weather` and the mods' weather setter call it: the
+    /// `MinecraftServer.setWeatherParameters`, as `/weather` and the mods' weather setter call it: the
     /// mods hear `weather_change` and `thunder_change` first and can keep the old state. False when
     /// they did.
     pub(super) fn apply_weather(
@@ -166,7 +166,7 @@ impl Game<'_> {
                 w.thundering,
             ) = previous;
         } else {
-            // ServerLevel.setWeatherParameters.
+            // MinecraftServer.setWeatherParameters.
             let w = &mut self.world.weather;
             w.clear_time = clear;
             w.rain_time = time;

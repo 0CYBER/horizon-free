@@ -268,7 +268,7 @@ impl Game<'_> {
         self.sync_rules();
     }
 
-    /// `Weather.Type.apply`: `ServerLevel.setWeatherParameters`.
+    /// `Weather.Type.apply`: `MinecraftServer.setWeatherParameters`.
     fn set_weather_type(&mut self, kind: WeatherType) {
         let (clear, rain, raining, thundering) = kind.parameters();
         let w = &mut self.world.weather;

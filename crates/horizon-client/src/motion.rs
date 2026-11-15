@@ -971,7 +971,7 @@ impl MotionWorld<'_, '_, '_> {
             border: self.player.border.as_ref().map(|b| (b, at)),
         }
     }
-    /// `Level.noCollision(player, bounds)`: blocks and the host's entity boxes.
+    /// `CollisionGetter.noCollision(player, bounds)`: blocks and the host's entity boxes.
     pub fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
         let context = self.context();
         Ok(world_movement::no_world_collision(
