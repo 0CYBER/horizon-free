@@ -25,6 +25,8 @@ impl DatapackRegistrySet {
                     .map(|entry| ((*entry).to_owned(), DatapackEntry { values: Vec::new() }))
                     .collect(),
             )]),
+            tags: std::collections::BTreeMap::new(),
+            received_registries: None,
         }
     }
 }
