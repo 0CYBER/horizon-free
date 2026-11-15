@@ -1,6 +1,6 @@
 //! Read-only client session and local-player status.
 
-use crate::BlockPos;
+use crate::{BlockPos, GameMode, Text};
 
 /// The connected server, not the reconnect target of an earlier session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,4 +79,66 @@ pub enum BlockBreakingState {
         /// The visible crack stage, 0 through 9; absent while progress is zero.
         stage: Option<u8>,
     },
+}
+
+/// The player list as the Tab overlay draws it (`PlayerTabOverlay`), read with
+/// `ClientSession::client_tab_list`: what this client has been sent, changing as the server
+/// updates the list.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct ClientTabList {
+    /// The listed players in drawn order (`getPlayerInfos`: higher list order first, spectators
+    /// last, then team name and profile name), at most the 80 the overlay draws.
+    pub entries: Vec<ClientTabListEntry>,
+    /// The header the server set; `None` when it is empty or was cleared.
+    pub header: Option<Text>,
+    /// The footer the server set; `None` when it is empty or was cleared.
+    pub footer: Option<Text>,
+}
+
+impl ClientTabList {
+    /// A list from its entries, header and footer.
+    pub fn new(
+        entries: Vec<ClientTabListEntry>,
+        header: Option<Text>,
+        footer: Option<Text>,
+    ) -> Self {
+        Self {
+            entries,
+            header,
+            footer,
+        }
+    }
+}
+
+/// One listed player (`PlayerInfo`) as the Tab overlay shows it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct ClientTabListEntry {
+    /// The profile name (`GameProfile.name`).
+    pub name: String,
+    /// The profile UUID.
+    pub uuid: u128,
+    /// The game mode the server reported.
+    pub game_mode: GameMode,
+    /// The latency in milliseconds the ping icon shows; negative when unknown.
+    pub latency: i32,
+    /// The name as drawn (`getNameForDisplay`): the display name the server set, else the
+    /// profile name with its team's prefix, suffix and colour; italic for a spectator.
+    pub display: Text,
+}
+
+impl ClientTabListEntry {
+    /// An entry from its parts.
+    pub fn new(name: String, uuid: u128, game_mode: GameMode, latency: i32, display: Text) -> Self {
+        Self {
+            name,
+            uuid,
+            game_mode,
+            latency,
+            display,
+        }
+    }
 }
