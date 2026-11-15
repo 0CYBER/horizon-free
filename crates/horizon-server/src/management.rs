@@ -49,7 +49,7 @@ pub struct Clients {
     heartbeat_cancelled: Mutex<bool>,
 }
 
-/// `DedicatedServer.getStatusHeartbeatInterval`: the seconds between the status notifications, 0 or less for
+/// `DedicatedServer.statusHeartbeatInterval`: the seconds between the status notifications, 0 or less for
 /// none.
 pub fn heartbeat_seconds(shared: &Shared) -> i32 {
     shared.management.heartbeat_seconds.load(Ordering::Relaxed)
