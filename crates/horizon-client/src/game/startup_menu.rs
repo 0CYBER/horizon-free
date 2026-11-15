@@ -56,16 +56,27 @@ pub(super) struct StartupMenu {
     pub perf: horizon_client::telemetry::Session,
 }
 
+/// `QuickPlay.joinMultiplayerWorld`: an address the server list lacks is saved
+/// first, as a hidden entry, so the server's resource pack answer is kept.
+fn quick_play_server(saves: &std::path::Path, address: &str, name: String) -> PendingWorldEntry {
+    horizon_client::multiplayer::remember_direct_join(saves, address);
+    PendingWorldEntry::Server {
+        address: address.to_owned(),
+        name,
+        cookies: None,
+        lan: false,
+        realm: false,
+    }
+}
+
 impl StartupMenu {
     pub fn new(options: &Options, pack_error: Option<&str>) -> Result<Self> {
         let pending = if let Some(address) = &options.server {
-            Some(PendingWorldEntry::Server {
-                address: address.clone(),
-                name: options.player_name(),
-                cookies: None,
-                lan: false,
-                realm: false,
-            })
+            Some(quick_play_server(
+                &super::server_packs::saves(),
+                address,
+                options.player_name(),
+            ))
         } else {
             options
                 .world
@@ -1376,6 +1387,26 @@ impl Loading {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_server_joined_at_start_is_kept_in_the_server_list() {
+        let root = std::env::temp_dir().join(format!("horizon-quick-play-{}", std::process::id()));
+        let saves = root.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let entry = quick_play_server(&saves, "play.example.org:25570", "Player".into());
+        assert!(
+            matches!(&entry, PendingWorldEntry::Server { address, .. } if address == "play.example.org:25570")
+        );
+        quick_play_server(&saves, "play.example.org:25570", "Player".into());
+        let file = horizon_client::multiplayer::servers_file(&saves);
+        let (shown, hidden) = horizon_protocol::servers::load_all(&file);
+        let _ = std::fs::remove_dir_all(&root);
+        // One hidden entry, which the pack prompt's answer is saved to.
+        assert!(shown.is_empty());
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0].ip, "play.example.org:25570");
+        assert_eq!(hidden[0].accept_textures, None);
+    }
 
     fn gui(root: &std::path::Path) -> UiResources {
         UiResources {
