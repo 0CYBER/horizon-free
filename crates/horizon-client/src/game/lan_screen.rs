@@ -1942,7 +1942,10 @@ mod tests {
     fn the_port_box_explains_itself_on_hover() {
         let mut port = EditBox::new(158.0, 100.0, 40.0, 20.0);
         let tip = |port: &EditBox| {
-            WorldOptions::port_tooltip(port, (159.0, 101.0), false).map(|t| t.plain())
+            // The key, not `plain()`: that reads the language another test
+            // of the same run may have loaded.
+            WorldOptions::port_tooltip(port, (159.0, 101.0), false)
+                .and_then(|t| t.translation_key().map(str::to_owned))
         };
         assert_eq!(tip(&port).as_deref(), Some("lanServer.port"));
         // Empty takes the suggestion, a number in range is fine.
