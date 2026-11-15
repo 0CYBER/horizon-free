@@ -13,8 +13,9 @@ use std::path::{Component, Path, PathBuf};
 const LAUNCHER_HINT: &str =
     "Horizon does not download the game: play {version} once in the launcher you play \
 Minecraft Java Edition with so it downloads the game's files, then rerun. Horizon reads the \
-official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher, MultiMC, \
-the Modrinth App or GDLauncher, prepare from the Horizon launcher, which finds their files. If your launcher keeps \
+official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher or MultiMC, \
+pass --prism-dir with its folder; for the Modrinth App or GDLauncher, prepare from the Horizon \
+launcher, which finds their files. If your launcher keeps \
 them in another folder, pass --minecraft-dir or set HORIZON_MINECRAFT_DIR, or name the files with \
 --version-json, --client-jar, --libraries-dir and --assets-dir.";
 const SERVER_HINT: &str = "Horizon does not download the game: download the {version} server jar yourself (minecraft.net/download/server \
