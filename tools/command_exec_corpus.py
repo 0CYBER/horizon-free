@@ -7269,6 +7269,62 @@ def item_fall_distance():
 
 
 
+def loaded_health_above_max():
+    """#16654: `LivingEntity.readAdditionalSaveData` reads `Health` through `setHealth`, which clamps it
+    to the max health the saved `attributes` leave. A saved Health Boost doesn't raise that bound: its
+    modifier comes back after the read. A slime's saved attributes replace its size's
+    (`AbstractCubeMob.readAdditionalSaveData` sets the size first). Read after summoning, after a tick,
+    after an unload and reload (frozen, so only the save and the load count), and two ticks later."""
+    x0, y0, z0 = 3840, 260, 3776
+    chunk = [[x0 >> 4, z0 >> 4]]
+    leader = '{id:"minecraft:leader_zombie_bonus",amount:50.0d,operation:"add_value"}'
+    boost = 'active_effects:[{id:"minecraft:health_boost",amplifier:4b,duration:100000}]'
+    # Husks, not zombies: a zombie burns in daylight, and takes its first damage at a varying tick.
+    subjects = [('cow', 'Health:100.0f'),
+                ('husk', 'Health:100.0f'),
+                ('husk', 'Health:15.5f'),
+                ('husk', 'Health:100.0f,attributes:[{id:"minecraft:max_health",base:100.0d}]'),
+                ('husk', f'Health:100.0f,attributes:[{{id:"minecraft:max_health",base:20.0d,modifiers:[{leader}]}}]'),
+                ('husk', f'Health:40.0f,{boost}'),
+                ('iron_golem', 'Health:500.0f'),
+                ('slime', 'Size:3,Health:100.0f'),
+                ('magma_cube', 'Health:2.5f'),
+                ('sulfur_cube', 'Health:100.0f'),
+                ('slime', 'Size:1,Health:20.0f,attributes:[{id:"minecraft:max_health",base:20.0d},'
+                          '{id:"minecraft:movement_speed",base:0.9d},{id:"minecraft:attack_damage",base:9.0d}]')]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk},
+           cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} stone', False)]
+    uuids = []
+    for n, (kind, fields) in enumerate(subjects, 1):
+        uuids.append(f'0000410e-0000-0000-0000-{n:04x}00000001')
+        x, z = x0 + 1 + 5 * ((n - 1) % 3), z0 + 2 + 4 * ((n - 1) // 3)
+        ops.append(cmd(f'/summon {kind} {x}.5 {y0} {z}.5 '
+                       f'{{UUID:[I;16654,0,{n},1],NoAI:1b,PersistenceRequired:1b,{fields}}}', expect_result=1))
+
+    def reads():
+        for uuid in uuids:
+            ops.append(cmd(f'/data get entity {uuid} Health'))
+        for name in ('max_health', 'movement_speed', 'attack_damage'):
+            ops.append(cmd(f'/data get entity {uuids[-1]} attributes[{{id:"minecraft:{name}"}}].base'))
+
+    reads()
+    ops.append({'op': 'tick', 'n': 1})
+    reads()
+    ops += [cmd('/tick freeze', False), cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 60},
+            cmd(f'/execute unless loaded {x0} {y0} {z0}', expect_result=1),
+            cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': chunk}]
+    reads()
+    ops += [cmd('/tick unfreeze', False), {'op': 'tick', 'n': 2}]
+    reads()
+    box = f'x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16'
+    # A big cube mob killed here would split 20 ticks later, inside the next group.
+    shrink = [f'/execute as @e[type={kind},{box}] run data merge entity @s {{Size:0}}'
+              for kind in ('slime', 'magma_cube', 'sulfur_cube')]
+    return ops + setup(*shrink, f'/kill @e[type=!player,{box}]',
+                       f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} air',
+                       f'/forceload remove {x0} {z0}')
+
+
 def loaded_dead_mob():
     """#13199: `LivingEntity.readAdditionalSaveData` reads `Health` through `setHealth`, which
     clamps a negative value to 0 and keeps the body: a mob summoned dead is there, `/data` reads
@@ -8496,6 +8552,7 @@ def groups():
         ('beacon levels load', beacon_levels_load()),
         ('zombie villager summoned data', zombie_villager_summoned_data()),
         ('loaded dead mob', loaded_dead_mob()),
+        ('loaded health above max', loaded_health_above_max()),
         ('falling block fall float', falling_block_fall_float()),
         ('explosion infested blocks', explosion_infested_blocks()),
         ('jigsaw default joint', jigsaw_default_joint()),

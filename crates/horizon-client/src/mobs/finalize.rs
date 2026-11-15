@@ -809,6 +809,19 @@ pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
 pub fn max_health(m: &Mob) -> f32 {
     value(m, Attr::MaxHealth) as f32
 }
+/// The max health `LivingEntity.readAdditionalSaveData` clamps the saved
+/// Health to: the attribute as the save left it. Vanilla reads Health before
+/// a saved Health Boost adds its modifier back, so the boost doesn't count.
+/// The cached maximum counts too when no boost is in it, for the mobs that
+/// write theirs outside the attribute model.
+pub fn loaded_max_health(m: &Mob) -> f32 {
+    let saved = base_with_modifiers(m, Attr::MaxHealth) as f32;
+    if effect_modifiers(m, Attr::MaxHealth).next().is_some() {
+        saved
+    } else {
+        saved.max(m.attrs.max_health)
+    }
+}
 /// `LivingEntity.onAttributeUpdated(MAX_HEALTH)` after a Health Boost
 /// change: the cached maximum follows the attribute model again, and Health
 /// above it is lowered (nothing is healed). Wolves write their maximum

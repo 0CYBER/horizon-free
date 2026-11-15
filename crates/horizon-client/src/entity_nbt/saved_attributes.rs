@@ -128,6 +128,28 @@ mod saved_attribute_modifier_tests {
         assert_eq!(float(modifiers[0].get("amount")), Some(2.0));
     }
     #[test]
+    fn a_saved_health_above_the_max_health_is_clamped_to_it() {
+        let boost = r#"active_effects:[{id:"minecraft:health_boost",amplifier:4b,duration:1000}],"#;
+        let leader = r#"[{id:"minecraft:max_health",base:20d,modifiers:[
+            {id:"minecraft:leader_zombie_bonus",amount:50d,operation:"add_value"}]}]"#;
+        for (attributes, extra, health) in [
+            ("[]", "Health:100f,".to_owned(), 20.0),
+            ("[]", "Health:15.5f,".to_owned(), 15.5),
+            // The saved base and the saved modifiers are the bound.
+            (
+                r#"[{id:"minecraft:max_health",base:100d}]"#,
+                "Health:100f,".to_owned(),
+                100.0,
+            ),
+            (leader, "Health:100f,".to_owned(), 70.0),
+            // A saved Health Boost is not: vanilla reads Health before its
+            // modifier is back.
+            ("[]", format!("Health:40f,{boost}"), 20.0),
+        ] {
+            assert_eq!(load(attributes, &extra).health, health, "{extra}");
+        }
+    }
+    #[test]
     fn a_modifier_replaces_its_id_and_an_unreadable_one_is_skipped() {
         let m = load(
             r#"[{id:"minecraft:movement_speed",base:0.23d,modifiers:[
