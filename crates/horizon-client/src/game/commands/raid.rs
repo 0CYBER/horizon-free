@@ -128,7 +128,7 @@ impl Game<'_> {
 mod tests {
     use super::Game;
     use crate::game::native_machines::tests::server_game;
-    use horizon_client::{command::vanilla, motion::PlayerMotion};
+    use horizon_client::{command::vanilla, effects::EffectInstance, motion::PlayerMotion};
     use horizon_core::geometry::Vec3;
 
     /// Runs a line of the dev tree (`/raid` is registered only there).
@@ -187,5 +187,33 @@ mod tests {
                 2.0
             )]
         );
+    }
+
+    /// `RaidCommand.start` goes through `Raids.createOrExtendRaid`, which
+    /// absorbs the player's Raid Omen (`Raid.absorbRaidOmen`: the
+    /// `raid_trigger` statistic) before it sets the level from the command.
+    /// The omen stays: nothing in vanilla removes it there.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn raid_start_absorbs_the_players_raid_omen() {
+        let mut game = server_game();
+        game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+        game.ui.registries.permission = 4;
+        game.chat_capture = Some(Vec::new());
+        let stat = |g: &Game<'_>| g.stats.get("custom", "minecraft:raid_trigger");
+
+        // No Raid Omen: absorbRaidOmen finds no effect and awards nothing.
+        assert_eq!(run_dev(&mut game, "raid start 2"), 1);
+        assert_eq!(stat(&game), 0);
+        run_dev(&mut game, "raid stop");
+
+        game.add_player_effect(EffectInstance::new("raid_omen", 600, 1));
+        assert_eq!(run_dev(&mut game, "raid start 3"), 1);
+        // The omen's amplifier + 1 is absorbed, then the command's level wins
+        // (`Raid.setRaidOmenLevel`).
+        let (_, raid) = game.raiding.raids.nearby([0, 64, 0]).expect("raid here");
+        assert_eq!(raid.omen_level, 3);
+        assert_eq!(stat(&game), 1);
+        assert!(game.potions.effects.get("raid_omen").is_some());
     }
 }

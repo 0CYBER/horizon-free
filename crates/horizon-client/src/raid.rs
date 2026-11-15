@@ -369,7 +369,8 @@ impl Raid {
     }
     /// `Raid.absorbRaidOmen` for a player with Raid Omen at `amplifier`.
     /// True when this omen triggers the raid (no wave spawned yet: the
-    /// `raid_trigger` stat and the `voluntary_exile` advancement).
+    /// `raid_trigger` stat and the `voluntary_exile` player trigger, which no
+    /// vanilla advancement listens to).
     pub fn absorb_omen(&mut self, amplifier: i32) -> bool {
         self.omen_level = (self.omen_level + amplifier + 1).clamp(0, MAX_OMEN_LEVEL);
         !self.has_first_wave_spawned()

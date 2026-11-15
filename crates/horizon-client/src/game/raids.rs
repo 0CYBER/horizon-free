@@ -465,9 +465,13 @@ impl Game<'_> {
         self.raiding.raids.nearby(at).map(|(id, _)| id)
     }
     /// `/raid start`: a raid in the local village at the given omen level.
+    /// `RaidCommand.start` reaches it through `Raids.createOrExtendRaid`, so
+    /// the player's Raid Omen is absorbed (`Raid.absorbRaidOmen`) before the
+    /// command sets the level.
     pub(super) fn raid_command_create(&mut self, at: [i32; 3], omen_level: i32) -> bool {
         self.load_raids();
-        let Some(id) = self.create_or_extend_raid(at, None) else {
+        let amplifier = self.potions.effects.amplifier("raid_omen");
+        let Some(id) = self.create_or_extend_raid(at, amplifier) else {
             return false;
         };
         if let Some(r) = self.raiding.raids.get_mut(id) {
