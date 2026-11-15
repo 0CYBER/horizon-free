@@ -436,17 +436,23 @@ impl Launcher {
             Some(actions.into_any_element()),
             &t,
         ));
+        // In the glass look the section is already titled Data & privacy, and its text lines up
+        // with the rows' (14 px inside a 1 px edge).
+        let inset = if t.glass { 15. } else { 0. };
         div()
             .flex()
             .flex_col()
             .gap(px(16.))
-            .child(
-                text(theme::HEADING)
-                    .text_color(t.ink)
-                    .child(tr("Data collection")),
-            )
+            .when(!t.glass, |d| {
+                d.child(
+                    text(theme::HEADING)
+                        .text_color(t.ink)
+                        .child(tr("Data collection")),
+                )
+            })
             .child(
                 text(theme::UI)
+                    .px(px(inset))
                     .max_w(px(600.))
                     .text_color(t.muted)
                     .child(trf(
@@ -457,6 +463,7 @@ impl Launcher {
             .child(list)
             .child(
                 text(theme::CAPTION)
+                    .px(px(inset))
                     .max_w(px(600.))
                     .text_color(t.muted)
                     .child(tr(telemetry::NEVER)),
