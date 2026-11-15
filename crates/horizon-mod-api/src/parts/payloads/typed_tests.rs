@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
     IPayloadContext, PayloadAccepted, PayloadBytes, PayloadCodec, PayloadContextError,
-    PayloadSendError, PayloadToken, PayloadWork, PayloadWorkStatus, PlayerRef, Text, VarInt,
-    payload_schema, typed_payload_version,
+    PayloadHandleError, PayloadSendError, PayloadToken, PayloadWork, PayloadWorkStatus, PlayerRef,
+    Text, VarInt, payload_schema, typed_payload_version,
 };
 use std::sync::Mutex;
 
@@ -130,7 +130,11 @@ fn a_second_owner_of_an_id_is_refused_naming_the_first() {
 
 struct Ignore;
 impl IPayloadHandler for Ignore {
-    fn handle(&self, _: PayloadBytes, _: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        _: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         Ok(())
     }
 }
@@ -223,6 +227,9 @@ fn a_malformed_body_is_refused_by_name_before_the_handler_runs() {
         let refused = receiver
             .handle(PayloadBytes(body), &mut Unreached)
             .unwrap_err();
+        let PayloadHandleError::Failed(refused) = refused else {
+            panic!("expected a failed decode, got {refused:?}");
+        };
         assert!(refused.contains("test:labelled"), "{refused}");
         assert!(refused.contains(error), "{refused}");
     }
@@ -304,13 +311,18 @@ fn a_callback_that_panicked_is_never_invoked_again() {
     let error = first
         .handle(PayloadBytes(vec![7]), &mut Unreached)
         .unwrap_err();
+    let PayloadHandleError::Failed(error) = error else {
+        panic!("expected a failed callback, got {error:?}");
+    };
     assert!(error.contains("panicked"), "{error}");
     // Disabled for this connection and for one that resolves the callback later.
     for receiver in [first, receiver()] {
         assert!(!receiver.enabled());
         assert_eq!(
             receiver.handle(PayloadBytes(vec![7]), &mut Unreached),
-            Err("payload owner is disabled".into())
+            Err(PayloadHandleError::Failed(
+                "payload owner is disabled".into()
+            ))
         );
     }
     assert_eq!(*CALLS.lock().unwrap(), 1);
