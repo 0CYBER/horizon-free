@@ -295,6 +295,12 @@ impl Launcher {
                         ("when", &last_played(when)),
                     ],
                 ),
+                // Signed out, the button says "Sign in to play": the line says the same.
+                None if self.owner == Some(false)
+                    && !horizon_launcher::developer_offline::selected() =>
+                {
+                    tr("You haven't played this one yet. Sign in to start.").into()
+                }
                 None => tr("You haven't played this one yet. Press Play to start.").into(),
             },
             (None, None) => String::new(),

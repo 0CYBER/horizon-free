@@ -509,7 +509,7 @@ impl Launcher {
         let note = match self.client {
             _ if from_file && count == 0 => tr("Game log").to_string(),
             _ if from_file => trf(
-                "latest.log, {count} lines from the last run",
+                "{count} lines from the last run",
                 &[("count", &count.to_string())],
             )
             .to_string(),
