@@ -233,6 +233,38 @@ class PrReadyTests(unittest.TestCase):
             self.assertEqual(step.status, "fail")
             self.assertIn("launcher binary test ran", step.output)
 
+    @unittest.skipUnless(shutil.which("cargo"), "needs cargo")
+    def test_windows_launcher_tests_run_in_a_scratch_home_that_goes_afterwards(self):
+        """#16877: the launcher's tests write where the launcher keeps its data, so never in the player's."""
+        names = [name for name, _ in pr_ready.LAUNCHER_TEST_HOME]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            launcher = root / "launcher"
+            (launcher / "src").mkdir(parents=True)
+            (launcher / "Cargo.toml").write_text(
+                '[package]\nname = "launcher-home-fixture"\nversion = "0.1.0"\nedition = "2021"\n[workspace]\n')
+            # It prints where the launcher would keep its data, and fails so that cargo shows what it printed.
+            (launcher / "src/lib.rs").write_text(
+                f"#[test]\nfn where_the_data_goes() {{\n    for name in {json.dumps(names)} {{\n"
+                '        println!("{name}={}", std::env::var(name).unwrap_or_default());\n'
+                '    }\n    panic!("printed");\n}\n')
+            with mock.patch.object(pr_ready, "ROOT", root), \
+                    mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}):
+                subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=launcher, check=True,
+                               capture_output=True)
+                step = pr_ready.Step("launcher tests", "cargo test --locked --lib --bins")
+                pr_ready.run_windows([step], verbose=False)
+        printed = {}
+        for line in step.output.splitlines():
+            name, said, value = line.partition("=")
+            if said and name in names:
+                printed[name] = value.strip()
+        homes = {Path(printed.get(name, "")).parent for name in names}
+        self.assertEqual(len(homes), 1, step.output)
+        home = homes.pop()
+        self.assertTrue(home.name.startswith("horizon-launcher-tests-"), printed)
+        self.assertFalse(home.exists(), "the scratch home is removed afterwards")
+
     @unittest.skipUnless(POSIX_BASH, "needs a bash that is not WSL's")
     def test_the_launcher_fallback_asks_for_a_feature_the_launcher_has(self):
         """The macOS fallback must name gpui_platform/runtime_shaders: gpui_platform is launcher/Cargo.toml's
@@ -248,7 +280,47 @@ class PrReadyTests(unittest.TestCase):
                 self.assertEqual(self.launcher_step_arguments(command, uname, metal),
                                  ["clippy", "--all-targets", "--locked", *features, "--", "-D", "warnings"])
 
-    def launcher_step_arguments(self, command, uname, metal):
+    @unittest.skipUnless(POSIX_BASH, "needs a bash that is not WSL's")
+    def test_the_launcher_tests_step_runs_them_in_a_scratch_home_that_goes_afterwards(self):
+        """#16877: on Linux and macOS (and over rbuild), the step's shell makes the home and removes it."""
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(quick=True), "origin/main", {"launcher/src/main.rs"},
+                                  PACKAGES, LIBRARIES, DEPENDENCIES)
+        command = {step.name: step for step in steps}["launcher tests"].command
+        names = [name for name, _ in pr_ready.LAUNCHER_TEST_HOME]
+        cargo = "#!/bin/sh\n" + "".join(f'echo "{name}=${name}"\n' for name in names)
+        printed = dict(line.split("=", 1) for line in self.launcher_step_arguments(command, "Linux", False, cargo))
+        homes = {printed.get(name, "").rsplit("/", 1)[0] for name in names}
+        self.assertEqual(len(homes), 1, printed)
+        home = homes.pop()
+        self.assertTrue(home, printed)
+        self.assertNotEqual(subprocess.run([BASH, "-c", 'test -e "$1"', "bash", home]).returncode, 0,
+                            "the scratch home is removed afterwards")
+
+    @unittest.skipUnless(POSIX_BASH, "needs a bash that is not WSL's")
+    def test_the_launcher_tests_step_stops_when_it_has_no_scratch_home(self):
+        """Without one, the tests would run in the player's launcher data again."""
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(quick=True), "origin/main", {"launcher/src/main.rs"},
+                                  PACKAGES, LIBRARIES, DEPENDENCIES)
+        command = {step.name: step for step in steps}["launcher tests"].command
+        with self.assertRaises(subprocess.CalledProcessError) as stopped:
+            self.launcher_step_arguments(command, "Linux", False, "#!/bin/sh\necho cargo ran\n",
+                                         fakes={"mktemp": "#!/bin/sh\nexit 1\n"})
+        self.assertNotIn("cargo ran", stopped.exception.stdout)
+
+    def test_a_windows_scratch_home_goes_where_the_launcher_builds_in_place(self):
+        """A temp folder whose real path has a space or a letter outside ASCII makes the launcher build in
+        %ProgramData% instead (backend::build_dir), outside the scratch home: the home goes there then."""
+        public = os.path.abspath(os.sep + "pr-ready-public-fixture")
+        for temp, base in ((os.path.abspath(os.sep + "pr-ready-temp-fixture"), None),
+                           (os.path.abspath(os.sep + "pr-ready John Doe"), public),
+                           (os.path.abspath(os.sep + "pr-ready-Кирилл"), public)):
+            with self.subTest(temp=temp), mock.patch.object(pr_ready.tempfile, "gettempdir", return_value=temp), \
+                    mock.patch.dict(os.environ, {"ProgramData": public}):
+                self.assertEqual(pr_ready.launcher_test_base(), base or temp)
+
+    def launcher_step_arguments(self, command, uname, metal, cargo="#!/bin/sh\nprintf '%s\\n' \"$@\"\n", fakes=None):
         """Run a launcher step's shell snippet with fake uname, xcrun, pkg-config and cargo; what the fake
         cargo receives is the snippet's observable behaviour."""
         with tempfile.TemporaryDirectory() as fake_bin:
@@ -256,7 +328,7 @@ class PrReadyTests(unittest.TestCase):
                        "xcrun": f"#!/bin/sh\nexit {0 if metal else 1}\n",
                        # xkbcommon found: Linux never looks for nix-shell (a NixOS host would have it).
                        "pkg-config": "#!/bin/sh\nexit 0\n",
-                       "cargo": "#!/bin/sh\nprintf '%s\\n' \"$@\"\n"}
+                       "cargo": cargo, **(fakes or {})}
             for name, script in scripts.items():
                 path = os.path.join(fake_bin, name)
                 # LF on every host: text mode makes the shebang "#!/bin/sh\r" on
