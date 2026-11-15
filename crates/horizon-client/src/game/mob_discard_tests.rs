@@ -153,3 +153,64 @@ fn discarded_mob_leaves_selectors_and_saves_while_frozen() {
     assert_eq!(saved[&(0, 0)].len(), 1);
     assert!(saved[&(0, 0)][0].get("Passengers").is_none());
 }
+
+/// `/kill` runs `LivingEntity.die` before it returns: the mob's DeathTime is
+/// still 0 (`tickDeath` counts from the next tick), yet `@e` already skips it
+/// (`EntitySelectorParser`'s `Entity::isAlive`), frozen or not (#15158,
+/// kill_die_vibration).
+#[test]
+#[ignore = "requires private prepared resources and fresh Horizon homes"]
+fn a_killed_mob_leaves_at_e_at_once_with_death_time_zero() {
+    let root = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    let settings = Settings::default();
+    let loaded = load_resources(
+        root.clone(),
+        None,
+        &root,
+        &settings,
+        Instant::now(),
+        false,
+        true,
+        &Progress::new(),
+        &mut |_, _| unreachable!(),
+    )
+    .unwrap();
+    let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+    options.resources = root.clone();
+    options.execution_role = execution_role::ExecutionRole::IntegratedServer;
+    let mut game = Game::new(
+        &loaded.resources,
+        loaded.pack,
+        loaded.gui.unwrap(),
+        options,
+        settings,
+        Audio::silent(&root),
+        None,
+    )
+    .unwrap();
+    game.world = World::new(game.res.facts().air, 1);
+    game.world
+        .chunks
+        .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+    game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)).unwrap());
+    game.build_registries();
+    game.set_allow_commands(true);
+    assert!(game.run_command("tick freeze"));
+    let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+    game.mobs
+        .push(Mob::new(42, kind, Vec3::new(0.5, 64.0, 2.5), 0.0));
+    let all = horizon_client::command::selector::parse(
+        &mut horizon_client::command::Reader::new("@e[type=minecraft:pig]"),
+        &game.ui.registries,
+        true,
+    )
+    .unwrap();
+    assert_eq!(game.select(&all), [commands::Target::Mob(42)]);
+    game.kill_target(commands::Target::Mob(42));
+    assert_eq!(
+        game.mobs[0].death_time, 0,
+        "LivingEntity.die keeps DeathTime 0"
+    );
+    assert!(!game.mobs[0].alive());
+    assert!(game.select(&all).is_empty(), "@e skips a dying mob");
+}

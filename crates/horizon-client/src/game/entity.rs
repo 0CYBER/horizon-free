@@ -1097,9 +1097,10 @@ impl Entity for Mob {
         game.mob_can_use_portal(self)
     }
     /// `PersistentEntitySectionManager.Callback.onRemove`: discard stops
-    /// section enumeration immediately, before the entity list is swept.
+    /// section enumeration immediately, before the entity list is swept; and
+    /// `EntitySelectorParser`'s `Entity::isAlive` drops a dying mob at once.
     fn selector_target(&self) -> Option<Target> {
-        (!self.removed && self.death_time == 0).then_some(Target::Mob(self.id))
+        (!self.removed && self.alive()).then_some(Target::Mob(self.id))
     }
     fn bounds(&self) -> Aabb {
         Mob::bounds(self)
