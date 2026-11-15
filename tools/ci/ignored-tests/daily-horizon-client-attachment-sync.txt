@@ -1,0 +1,2 @@
+# Attachment sync on the negotiated payload route (#813 step 4a): a real integrated server, LAN TCP peers.
+horizon-client game::attachment_sync::transport_tests::attachment_sync_follows_the_negotiated_route lib daily network

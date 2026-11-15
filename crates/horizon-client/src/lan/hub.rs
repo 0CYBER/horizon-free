@@ -2860,7 +2860,7 @@ impl Hub {
                 g.far_cursor -= far.iter().filter(|&&idx| idx < g.far_cursor).count();
                 seen.extend(far.into_iter().rev().map(|idx| {
                     let key = g.far_queue.remove(idx);
-                    if self.sync_attachments && g.brand == "horizon" {
+                    if self.sync_attachments && g.negotiated_attachment_sync() {
                         g.far_sent_chunks.insert(key);
                     }
                     key
