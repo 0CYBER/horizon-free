@@ -721,12 +721,7 @@ impl GeneratorData {
                     &raw.structures,
                     &raw.sets,
                     raw.pools.clone(),
-                    &|value| {
-                        super::super::generator_structures::biome_set(
-                            &super::super::generator_structures::StructureBiomes(self),
-                            value,
-                        )
-                    },
+                    &|value| self.structure_biome_set(value),
                     super::super::structure::mod_types::mod_structure_types(),
                 )
                 .ok()

@@ -242,7 +242,7 @@ impl StartCache {
 /// A structure's biome holder set in any form `crate::holder_set` reads. An
 /// absent field, an unknown biome or tag names nothing, and a list may also
 /// hold tags, as this reader always allowed.
-pub(super) fn biome_set(
+fn biome_set(
     lookup: &impl crate::holder_set::HolderLookup<Id = BiomeId>,
     value: &Value,
 ) -> Result<BTreeSet<BiomeId>, super::DecodeError> {
@@ -263,7 +263,7 @@ pub(super) fn biome_set(
         _ => Ok(BTreeSet::new()),
     }
 }
-pub(super) struct StructureBiomes<'a>(&'a GeneratorData);
+struct StructureBiomes<'a>(&'a GeneratorData);
 impl crate::holder_set::HolderLookup for StructureBiomes<'_> {
     type Id = BiomeId;
     fn what(&self) -> &str {
@@ -283,6 +283,12 @@ impl crate::holder_set::HolderLookup for StructureBiomes<'_> {
     }
 }
 impl GeneratorData {
+    pub(super) fn structure_biome_set(
+        &self,
+        value: &Value,
+    ) -> Result<BTreeSet<BiomeId>, super::DecodeError> {
+        biome_set(&StructureBiomes(self), value)
+    }
     pub(in crate::worldgen) fn structure_block_bindings(
         &self,
     ) -> Result<FeatureBlockBindings<'static>, super::DecodeError> {
