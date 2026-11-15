@@ -45,6 +45,30 @@ struct Requests {
     current: FxHashSet<(i32, i32)>,
     finished: FxHashSet<(i32, i32)>,
 }
+impl Requests {
+    /// What the far terrain wants built now (`Builder::request`): the chunks
+    /// it draws without their detail, nearest `center` first, as
+    /// `Lod::request_detail` asks for them, without those being built or
+    /// built already. They replace the ones asked for before: what an earlier
+    /// request had and this one leaves out is behind the player, out of view,
+    /// or under the near chunks. Kept, it was built first, being the nearest,
+    /// while the columns ahead waited: flying at 40 blocks a second, two thirds
+    /// of the far columns built had been left behind by the time they were.
+    fn ask(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
+        self.center = center;
+        self.chunks.clear();
+        for &key in chunks {
+            if !self.current.contains(&batch_origin(key)) && !self.finished.contains(&key) {
+                self.chunks.insert(key);
+            }
+        }
+        if self.chunks.len() > REQUESTS {
+            let mut sorted: Vec<_> = self.chunks.iter().copied().collect();
+            sorted.sort_unstable_by_key(|&key| (distance(key, center), key));
+            self.chunks = sorted.into_iter().take(REQUESTS).collect();
+        }
+    }
+}
 struct Shared {
     requests: Mutex<Requests>,
     wake: Condvar,
@@ -165,18 +189,7 @@ impl Builder {
         if self.shared.stop.load(Ordering::Relaxed) {
             return;
         }
-        let mut requests = self.shared.requests.lock().unwrap();
-        requests.center = center;
-        for &key in chunks {
-            if !requests.current.contains(&batch_origin(key)) && !requests.finished.contains(&key) {
-                requests.chunks.insert(key);
-            }
-        }
-        if requests.chunks.len() > REQUESTS {
-            let mut sorted: Vec<_> = requests.chunks.iter().copied().collect();
-            sorted.sort_unstable_by_key(|&key| (distance(key, center), key));
-            requests.chunks = sorted.into_iter().take(REQUESTS).collect();
-        }
+        self.shared.requests.lock().unwrap().ask(chunks, center);
         self.shared.wake.notify_all();
     }
 }
@@ -818,6 +831,22 @@ mod tests {
     }
 
     use super::*;
+    /// The far decoration threads build what the latest request asks for:
+    /// the columns an earlier one asked for, left behind since, are not built.
+    #[test]
+    fn far_detail_follows_the_latest_request() {
+        let mut requests = Requests::default();
+        requests.ask(&[(0, 0), (1, 0), (40, 0)], [0, 0]);
+        // Flown on east: the columns at the start are behind, out of the request.
+        requests.current.insert(batch_origin((48, 0)));
+        requests.finished.insert((41, 0));
+        requests.ask(&[(40, 0), (41, 0), (48, 1), (60, 3)], [640, 0]);
+        let mut pending: Vec<_> = requests.chunks.iter().copied().collect();
+        pending.sort_unstable();
+        // Neither what is being built nor what is done is asked for again.
+        assert_eq!(pending, [(40, 0), (60, 3)]);
+        assert_eq!(requests.center, [640, 0]);
+    }
     #[test]
     #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
     fn decorated_lod_refines_real_seed_canopies_and_all_dimensions() -> crate::Result<()> {
