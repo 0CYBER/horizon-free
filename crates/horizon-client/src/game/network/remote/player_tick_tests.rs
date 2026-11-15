@@ -147,7 +147,7 @@ fn guest_ticks_before_player_loaded_and_after_its_timeout() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn guest_tick_brackets_sleep_cooldowns_pickups_and_death() {
     let heard = Arc::new(Mutex::new(Vec::new()));
     let mods = vec![mod_api::ModEntry::new(
