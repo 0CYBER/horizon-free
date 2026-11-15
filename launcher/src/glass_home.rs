@@ -58,20 +58,23 @@ impl Launcher {
         // that it takes what is left, and the puzzle (the Mods tab below does the same) gives
         // way to it.
         let wide = self.window_width >= WIDE;
-        let mods = ui::big_icon("home-mods", "puzzle", &self.theme).on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
+        let mods = ui::big_icon("home-mods", "puzzle", &self.theme)
+            .tooltip(ui::tip(tr("Mods in this instance")))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.home_tab = home_tabs::HomeTab::Mods;
                 cx.notify();
-            },
-        ));
+            }));
         // Instance settings: the sheet down the right side.
         let settings = |this: &mut Self, cx: &mut Context<Self>| {
             let instance = this.selected_instance().cloned()?;
+            // Memory is set only for Java instances.
+            let tip = match instance.java {
+                Some(_) => "Edit this instance: its name, version, memory and more",
+                None => "Edit this instance: its name, icon, version and more",
+            };
             Some(
                 ui::big_icon("home-settings", "pencil-edit-02", &this.theme)
-                    .tooltip(ui::tip(tr(
-                        "Edit this instance: its name, version, memory and more",
-                    )))
+                    .tooltip(ui::tip(tr(tip)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.open_instance_sheet(instance.clone(), glass_sheet::SheetTab::General);
                         cx.notify();
