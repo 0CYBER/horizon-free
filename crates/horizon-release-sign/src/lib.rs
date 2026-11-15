@@ -47,6 +47,35 @@ pub fn trusted_keys_for(repository: &str) -> Vec<PublicKey> {
     parse_keys(repository_keys(repository, KEYS, FORK_KEYS)).unwrap_or_default()
 }
 
+/// The environment variable that adds one more trusted SDK key (one base64 Ed25519 public key, what
+/// `tools/ci/sign_release.sh` writes to `ephemeral.pub` under `EPHEMERAL=yes`).
+pub const SDK_KEY_VAR: &str = "HORIZON_SDK_TRUSTED_KEY";
+
+/// The keys an SDK release (`sdk-<build>`) may be signed with: [`trusted_keys_for`] and, in a build with
+/// `debug_assertions` only, the key in [`SDK_KEY_VAR`]. The daily run signs its own SDK with a throwaway key per
+/// run and hands the public half to a debug-assertions launcher through that variable, so its SDK is checked end
+/// to end without a release key. A release build does not compile the variable's lookup at all, so no environment
+/// can add trust to a shipped launcher or `cargo horizon-mod`. SDK trust only: game and launcher releases are
+/// checked with [`trusted_keys_for`].
+pub fn sdk_keys_for(repository: &str) -> Vec<PublicKey> {
+    let mut keys = trusted_keys_for(repository);
+    keys.extend(extra_sdk_keys());
+    keys
+}
+
+#[cfg(debug_assertions)]
+fn extra_sdk_keys() -> Vec<PublicKey> {
+    std::env::var(SDK_KEY_VAR)
+        .ok()
+        .and_then(|text| parse_keys(&text).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(not(debug_assertions))]
+fn extra_sdk_keys() -> Vec<PublicKey> {
+    Vec::new()
+}
+
 fn repository_keys<'a>(repository: &str, upstream: &'a str, fork: &'a str) -> &'a str {
     match repository {
         "horizon-rust/horizon" => upstream,
@@ -569,6 +598,39 @@ mod tests {
             trusted_keys_for("arismoko/horizon"),
             parse_keys(FORK_KEYS).unwrap()
         );
+    }
+
+    /// Runs in both profiles (CI runs it with `--release` too): the variable's key is trusted for an SDK
+    /// exactly when `debug_assertions` is on, and never for a game or launcher release.
+    #[test]
+    fn sdk_key_variable_is_honoured_only_with_debug_assertions() {
+        let (signer, _) = SigningKey::generate().unwrap();
+        let public = parse_keys(&signer.public_base64()).unwrap()[0];
+        // SAFETY: this is the only test that touches the variable, and nothing else here reads it.
+        unsafe { std::env::set_var(SDK_KEY_VAR, signer.public_base64()) };
+        let repository = "arismoko/horizon";
+        let trusted = sdk_keys_for(repository).contains(&public);
+        assert_eq!(trusted, cfg!(debug_assertions));
+        assert_eq!(
+            sdk_keys_for(repository).len(),
+            trusted_keys_for(repository).len() + usize::from(cfg!(debug_assertions))
+        );
+        assert!(!trusted_keys_for(repository).contains(&public));
+        let sums = sums_file(&[("sdk.json".into(), "ab".repeat(32))]);
+        let signature = signer.sign("sdk-abc", sums.as_bytes());
+        assert_eq!(
+            verify(
+                "sdk-abc",
+                sums.as_bytes(),
+                &signature,
+                &sdk_keys_for(repository)
+            )
+            .is_ok(),
+            cfg!(debug_assertions)
+        );
+        unsafe { std::env::set_var(SDK_KEY_VAR, "not a key") };
+        assert_eq!(sdk_keys_for(repository), trusted_keys_for(repository));
+        unsafe { std::env::remove_var(SDK_KEY_VAR) };
     }
 
     use super::*;
