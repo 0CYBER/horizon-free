@@ -5,7 +5,7 @@
 //! a server: nothing of them goes over the network.
 use super::Game;
 use horizon_client::blocks::RenderShape;
-use horizon_client::mobs::{MobEvent, ambient};
+use horizon_client::mobs::{MobEvent, Species, ambient};
 use horizon_client::motion::{LAVA, WATER};
 use horizon_client::particles::{ParticleEngine, ParticleOptions, ParticleType};
 use horizon_client::pose::Pose;
@@ -69,15 +69,18 @@ impl Game<'_> {
     }
 
     /// `Entity.baseTick`'s `spawnSprintParticle` on a client: dust of the
-    /// block under a sprinting player's feet streams back from them every
-    /// tick, for the window's own player and for the other players it sees.
+    /// block under a sprinting runner's feet streams back from them every
+    /// tick, for the window's own player and for every other client entity
+    /// whose synced sprint flag is set.
     fn sprint_dust(&mut self) {
         // Each runner's feet, movement, supporting block, box width and index
         // in `mobs` (none for the window's own player).
         let mut runners: Vec<(Vec3, Vec3, Option<[i32; 3]>, f64, Option<usize>)> = Vec::new();
-        // Entity.canSpawnSprintParticle.
+        // Entity.canSpawnSprintParticle, with LocalPlayer's own override: a
+        // player who is flying leaves no dust.
         if let Some(p) = self.player.as_ref()
             && p.sprinting
+            && !p.flying
             && !p.spectator
             && p.pose != Pose::Crouching
             && !p.health.dead_or_dying()
@@ -103,39 +106,45 @@ impl Game<'_> {
                 runners.push((m.position, movement, None, f64::from(m.width()), Some(i)));
             }
         }
+        // Entity.canSpawnSprintParticle on any client copy: a mob's synced
+        // sprint flag draws the crumb as a player's does, and a spectator's
+        // never does (`!isSpectator()`). `Rabbit` overrides it to false (its
+        // hop event draws its own), and the iron golem's own branch is above.
         for (i, m) in self.mobs.iter().enumerate() {
-            // Another player's fluids aren't known here: none where they stand.
+            if &*m.kind.id == "minecraft:iron_golem" || m.species() == Species::Rabbit {
+                continue;
+            }
+            // A client copy's fluids aren't known here: none where it stands.
             let feet = [
                 m.position.x.floor() as i32,
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             ];
-            if &*m.kind.id == "minecraft:iron_golem" {
-                continue;
-            }
-            let movement = m.position.subtract(m.previous);
+            let dry = self
+                .res
+                .facts()
+                .get(self.world.block(feet[0], feet[1], feet[2]))
+                .fluid_level
+                == 0;
             if m.extra.sprinting
                 && !m.extra.crouching
+                && !m.extra.spectator
                 && m.alive()
-                && &*m.kind.id == "minecraft:player"
-                && self
-                    .res
-                    .facts()
-                    .get(self.world.block(feet[0], feet[1], feet[2]))
-                    .fluid_level
-                    == 0
+                && !m.removed
+                && dry
             {
-                runners.push((m.position, movement, None, f64::from(0.6f32), Some(i)));
+                let movement = m.position.subtract(m.previous);
+                runners.push((m.position, movement, None, f64::from(m.width()), Some(i)));
             }
         }
         for (position, movement, support, width, mob) in runners {
             self.sprint_particle(position, movement, support, width, |game| {
-                // this.random: a mob's own, so one walking out of sight leaves
-                // the particles' random alone. The window's player has none of
-                // its own here; the particles' random stands in for it.
+                // this.random: the runner's own, so one walking out of sight
+                // leaves the level's and the particles' random alone. The
+                // window's player has its own body's random too.
                 let r = match mob {
                     Some(i) => &mut game.mobs.get_mut(i)?.random,
-                    None => game.particles.random(),
+                    None => &mut game.player.as_mut()?.random,
                 };
                 Some((r.next_double(), r.next_double()))
             });
@@ -175,10 +184,10 @@ impl Game<'_> {
         if self.res.facts().get(state).render_shape == RenderShape::Invisible {
             return;
         }
-        let Some((sprite, tint)) = self.particle_sprite(state, at) else {
+        let Some((rx, rz)) = offsets(self) else {
             return;
         };
-        let Some((rx, rz)) = offsets(self) else {
+        let Some((sprite, tint)) = self.particle_sprite(state, at) else {
             return;
         };
         let mut x = position.x + (rx - 0.5) * width;
@@ -329,3 +338,7 @@ fn swirl(
 #[cfg(test)]
 #[path = "effect_particle_tests.rs"]
 mod effect_particle_tests;
+
+#[cfg(test)]
+#[path = "sprint_dust_tests.rs"]
+mod sprint_dust_tests;
