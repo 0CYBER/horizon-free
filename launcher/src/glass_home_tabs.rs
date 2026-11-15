@@ -322,49 +322,45 @@ impl Launcher {
     fn patch_log(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let horizon = self.selected_instance().is_some_and(|i| i.java.is_none());
         let played = horizon.then(|| self.selected().cloned()).flatten();
-        let (note, sections) = match &self.releases {
-            Load::Ready(list) => patch_source(list, played.as_deref()),
-            _ => None,
-        }
-        .unwrap_or_else(|| (tr("No notes yet").to_string(), Vec::new()));
-        let many = sections.len() > 1;
-        let list =
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(16.))
-                .mt(px(16.))
-                .children(sections.into_iter().map(|(section, items)| {
-                    div()
+        let (log, rows) = self.notes.patch_log(played.as_deref(), || {
+            let releases = match &self.releases {
+                Load::Ready(list) => Some(list.as_slice()),
+                _ => None,
+            };
+            PatchLog::new(releases, played.as_deref())
+        });
+        let note = log.note.clone();
+        let list = div().mt(px(16.)).child(rows.column(
+            &self.patch_scroll.handle,
+            log.rows.len(),
+            0.,
+            |_| false,
+            |i| {
+                match &log.rows[i] {
+                    PatchRow::Section(name, first) => ui::text(13., FontWeight::MEDIUM, ink::QUIET)
+                        .when(!first, |d| d.pt(px(16.)))
+                        .child(name.clone()),
+                    PatchRow::Item(item) => div()
                         .flex()
-                        .flex_col()
-                        .children(
-                            many.then(|| {
-                                ui::text(13., FontWeight::MEDIUM, ink::QUIET).child(section)
-                            }),
+                        .gap(px(10.))
+                        .pt(px(6.))
+                        .child(
+                            div()
+                                .flex_none()
+                                .mt(px(9.))
+                                .size(px(5.))
+                                .rounded_full()
+                                .bg(white(0.4)),
                         )
-                        .child(div().mt(px(6.)).flex().flex_col().gap(px(6.)).children(
-                            items.into_iter().map(|item| {
-                                div()
-                                    .flex()
-                                    .gap(px(10.))
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .mt(px(9.))
-                                            .size(px(5.))
-                                            .rounded_full()
-                                            .bg(white(0.4)),
-                                    )
-                                    .child(
-                                        ui::text(14., FontWeight::NORMAL, ink::STRONG)
-                                            .line_height(px(21.))
-                                            .min_w_0()
-                                            .child(item),
-                                    )
-                            }),
-                        ))
-                }));
+                        .child(
+                            ui::text(14., FontWeight::NORMAL, ink::STRONG)
+                                .line_height(px(21.))
+                                .min_w_0()
+                                .child(item.clone()),
+                        ),
+                }
+            },
+        ));
         div()
             .id("patch-log")
             .absolute()
@@ -411,6 +407,44 @@ impl Launcher {
 
 /// A release's changes: each section's name and its lines.
 type Sections = Vec<(String, Vec<String>)>;
+
+/// What the patch log shows: the line under its title, then its rows.
+pub(super) struct PatchLog {
+    note: String,
+    rows: Vec<PatchRow>,
+}
+
+/// A section's name (only when there are several; `true` for the first), or one of its lines.
+enum PatchRow {
+    Section(SharedString, bool),
+    Item(SharedString),
+}
+
+impl PatchLog {
+    /// From the release list, once it has loaded (see [`patch_source`]).
+    fn new(releases: Option<&[Release]>, played: Option<&str>) -> PatchLog {
+        let (note, sections) = releases
+            .and_then(|list| patch_source(list, played))
+            .unwrap_or_else(|| (tr("No notes yet").to_string(), Vec::new()));
+        let many = sections.len() > 1;
+        let mut rows = Vec::new();
+        for (i, (section, items)) in sections.into_iter().enumerate() {
+            if many {
+                rows.push(PatchRow::Section(section.into(), i == 0));
+            }
+            rows.extend(items.into_iter().map(|item| PatchRow::Item(item.into())));
+        }
+        PatchLog { note, rows }
+    }
+
+    #[cfg(test)]
+    pub(super) fn empty() -> PatchLog {
+        PatchLog {
+            note: String::new(),
+            rows: Vec::new(),
+        }
+    }
+}
 
 /// What the patch log shows from `releases` and its line under the title: the release `played`
 /// installs as when it lists changes, else the newest Nightly that does ("Nightly 2026-11-01 ·

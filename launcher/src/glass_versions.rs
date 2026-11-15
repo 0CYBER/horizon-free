@@ -609,7 +609,10 @@ impl Launcher {
                         .child(tr("No notes for this release."))
                         .into_any_element()
                 } else {
-                    markdown::render(&release.body, &t)
+                    let (notes, rows) = self.notes.notes(release);
+                    notes
+                        .column(&t, &rows, &self.content_scroll.handle)
+                        .into_any_element()
                 })
         });
         div()
