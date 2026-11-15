@@ -175,15 +175,33 @@ pub fn shown(commit: &str, nightly: Option<&str>) -> String {
     }
 }
 
-/// Build `commit` as people read it, with its Nightly name when its index is kept. `commit` may
-/// come from a mod's manifest: anything but a build id is shown as it is, never looked up.
-pub fn known_name(commit: &str) -> String {
-    let nightly = super::is_revision(commit)
-        .then(|| fs::read(root().join(commit).join(INDEX)).ok())
-        .flatten()
+/// Build `commit`'s Nightly name, from its kept index or an installed version made from it.
+fn nightly_of(commit: &str) -> Option<String> {
+    if !super::is_revision(commit) {
+        return None;
+    }
+    fs::read(root().join(commit).join(INDEX))
+        .ok()
         .and_then(|bytes| Index::build_of(&bytes).ok())
-        .and_then(|build| build.nightly);
-    shown(commit, nightly.as_deref())
+        .and_then(|build| build.nightly)
+        .or_else(|| {
+            crate::backend::installed()
+                .into_iter()
+                .find(|tag| tag.starts_with("nightly-") && tag.ends_with(&commit[..7]))
+        })
+}
+
+/// Build `commit` as players read it, for a mod's fit: as the Versions page names it when it is
+/// known here (a kept index, or an installed version), else "another Horizon version", never a
+/// commit. `commit` may come from a mod's manifest: anything but a build id is never looked up.
+pub fn known_name(commit: &str) -> String {
+    match nightly_of(commit) {
+        Some(name) => shown(commit, Some(&name)),
+        None if super::is_revision(commit) => {
+            crate::i18n::tr("another Horizon version").to_string()
+        }
+        None => commit.to_owned(),
+    }
 }
 
 /// Where SDK releases are read from.
