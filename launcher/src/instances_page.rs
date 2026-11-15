@@ -476,6 +476,8 @@ impl Launcher {
         let editing = d.editing.clone();
         let edited = editing.is_some();
         let copy = selected.filter(|_| d.copy);
+        // The picture choice this save keeps: once kept, it is no longer an unsaved edit.
+        let sent_picture = picture.clone();
         // The Horizon version is Horizon's instances' alone: a Java one plays its own game.
         let plays_horizon = d.java.kind == new_instance::NewKind::Horizon;
         // A new Java instance: what it plays, and its name when none is typed.
@@ -559,6 +561,12 @@ impl Launcher {
                         });
                         this.select_instance(&instance);
                         this.reload_instances();
+                        if let Some(d) = &mut this.instances.dialog {
+                            let now = d.picture.as_ref().map(|p| p.as_ref().map(|c| &c.png));
+                            if now == sent_picture.as_ref().map(Option::as_ref) {
+                                d.picture = None;
+                            }
+                        }
                         // Edits typed while it saved are still open: the sheet stays for them.
                         let typed_meanwhile = edited && this.sheet_changed();
                         match (typed_meanwhile, &mut this.instances.dialog) {
