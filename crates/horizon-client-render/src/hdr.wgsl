@@ -366,30 +366,28 @@ fn layered(at: vec2<i32>) -> vec3<f32> {
     return vec4(layered(vec2<i32>(pos.xy)), 1.0);
 }
 
-// Screenshots keep midtones at their drawn brightness, with a shoulder starting at 0.6
-// paper white in linear light. Unlike the display curve (which ends at the display's peak),
-// this has an unbounded source range: k + (1-k)*(top-k)/(top+1-2*k) approaches SDR
-// white smoothly, with slope 1 at k. One scale keeps the world's linear RGB ratios.
+// The world's light in SDR: exactly as stored up to paper white, where surfaces and the sky
+// end and SDR's white is, so the screenshot is the SDR game's picture there. Light above it
+// (light sources, the sun) is scaled down to white by its brightest channel, which keeps its
+// hue. A shoulder would keep more of that light's steps, but white is SDR's top: it would
+// have to start below white and darken what isn't lifted.
 fn screenshot_world(w: vec3<f32>) -> vec3<f32> {
-    let top = pow(max(w.r, max(w.g, w.b)), 2.2);
-    if top <= 0.6 {
-        return w;
-    }
-    let mapped = 0.6 + 0.4 * (top - 0.6) / (top - 0.2);
-    return w * pow(mapped / top, 1.0 / 2.2);
+    let top = max(w.r, max(w.g, w.b));
+    // Not `w / max(top, 1.0)`: a GPU's division needn't be exact, even by 1.
+    return select(w, w / top, top > 1.0);
 }
 
 override screenshot_world_only: bool = false;
-// Off where Horizon lifts nothing (HDR Lighting off, or a shader pack's picture): the world is
-// clipped at white as SDR draws it.
-override screenshot_shoulder: bool = true;
+// Off where Horizon lifts nothing (HDR Lighting off, or a shader pack's picture): each channel
+// is clipped at white as SDR draws it.
+override screenshot_keeps_hue: bool = true;
 
 // The ordinary PNG, or the world's icon before the HUD: H as drawn, at 100%, over
 // the SDR world's light. This never changes the targets used by HDR output or its copy.
 @fragment fn fs_sdr_screenshot(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let at = vec2<i32>(pos.xy);
     let w = max(textureLoad(frame, at, 0).rgb, vec3(0.0));
-    let mapped = select(min(w, vec3(1.0)), screenshot_world(w), screenshot_shoulder);
+    let mapped = select(min(w, vec3(1.0)), screenshot_world(w), screenshot_keeps_hue);
     if screenshot_world_only {
         return vec4(mapped, 1.0);
     }

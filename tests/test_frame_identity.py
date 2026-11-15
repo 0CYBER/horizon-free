@@ -259,11 +259,74 @@ class HdrGateTests(unittest.TestCase):
         for nits, signal in ((0, 0.0), (100, 0.5081), (203, 0.5807), (1000, 0.7518), (10000, 1.0)):
             self.assertAlmostEqual(identity.pq(nits), signal, places=4)
 
-    def test_unshoulder_inverts_the_screenshot_shoulder(self):
-        # 🤖 Agent: hdr.rs sdr_screenshots_roll_off_the_world_and_keep_the_hud_as_drawn's checkpoints, light to shot.
-        for light, shot in ((0.5, 0.5), (1.0, 0.8), (2.0, 0.9111111), (4.0, 0.9578947), (8.0, 0.9794872)):
-            for got, want in zip(identity.unshoulder([shot, shot / 2, 0.0]), (light, light / 2, 0.0)):
-                self.assertAlmostEqual(got, want, places=4)
+    def test_light_above_white_keeps_its_hue_in_a_lit_screenshot(self):
+        # 🤖 Agent: float_hdr: paper white 203, peak 1000. hdr.wgsl screenshot_world divides light from white up by
+        # its brightest channel: the HDR shot is the screenshot's light times one factor, up to the peak. A 64x64
+        # world shot, its corner pixel `sdr` over HDR light `light`, the rest black.
+        peak = 1000 / 203
+
+        def problems(sdr, light):
+            sdr_rows = [bytes(sdr) + bytes(3 * 63)] + [bytes(3 * 64)] * 63
+            word = b''.join((round(c) << 6).to_bytes(2, 'big') for c in identity.hdr10(light, 203, peak))
+            hdr_rows = [word + bytes(6 * 63)] + [bytes(6 * 64)] * 63
+            encode(self.dir / 'float_hdr.day_water.png', 64, 64, 8, sdr_rows, 0)
+            encode(self.dir / 'float_hdr.day_water-hdr.png', 64, 64, 16, hdr_rows, 0)
+            return identity.hdr_gates(self.dir, ['float_hdr'])
+        orange = [1.0, (128 / 255) ** 2.2, 0.0]
+        # 🤖 Agent: White, red and orange at white, scaled up, and neutral white at the peak and past it.
+        for sdr, light in (((255, 0, 0), [1.0, 0, 0]), ((255, 0, 0), [3.0, 0, 0]), ((255, 0, 0), [peak, 0, 0]),
+                           ((255, 128, 0), orange), ((255, 128, 0), [3 * c for c in orange]),
+                           ((255, 255, 255), [1.0] * 3), ((255, 255, 255), [peak] * 3), ((255, 255, 255), [6.0] * 3)):
+            self.assertEqual(problems(sdr, light), [], (sdr, light))
+        # 🤖 Agent: Red shot as white at the peak, orange with its green raised, each channel alone in range; and
+        # orange darker than white, or past the peak's factor.
+        for sdr, light in (((255, 0, 0), [peak] * 3), ((255, 0, 0), [3.0, 1.0, 1.0]),
+                           ((255, 128, 0), [3.0, 1.15 * 3 * orange[1], 0.0]), ((255, 128, 0), [0.9 * c for c in orange]),
+                           ((255, 128, 0), [6.0, 6 * orange[1], 0.0])):
+            self.assertIn('1 pixels', '\n'.join(problems(sdr, light)), (sdr, light))
+
+    def test_white_in_a_lit_screenshot_is_the_huds_white_or_the_worlds_light_from_white_up(self):
+        # 🤖 Agent: float_visbuffer: paper white 200, peak 300, the HUD at half of paper white. A 64x64 shot's corner
+        # is the world, and its middle is under the crosshair.
+        def problems(world, hud):
+            codes = {(0, 0): identity.hdr10([world] * 3, 200), (32, 32): identity.hdr10([hud] * 3, 200)}
+            sdr = [b''.join(b'\xff' * 3 if (x, y) in codes else bytes(3) for x in range(64)) for y in range(64)]
+            hdr = [b''.join(b''.join((round(c) << 6).to_bytes(2, 'big') for c in codes.get((x, y), (0, 0, 0)))
+                            for x in range(64)) for y in range(64)]
+            encode(self.dir / 'float_visbuffer.day_water.png', 64, 64, 8, sdr, 0)
+            encode(self.dir / 'float_visbuffer.day_water-hdr.png', 64, 64, 16, hdr, 0)
+            return identity.hdr_gates(self.dir, ['float_visbuffer'])
+        # 🤖 Agent: The world's white and its light above it both shoot as white; so does the HUD's white, and light
+        # behind it.
+        for world, hud in ((1.0, 0.5), (1.5, 0.5), (1.5, 1.5), (1.0, 0.7)):
+            self.assertEqual(problems(world, hud), [], (world, hud))
+        # 🤖 Agent: Not light below white in the world, nor white under the HUD below both.
+        for world, hud in ((0.5, 0.5), (0.9, 0.5), (1.0, 0.3)):
+            self.assertIn('1 pixels', '\n'.join(problems(world, hud)), (world, hud))
+
+    def test_a_hud_scenes_white_is_at_ui_brightness_and_blends_with_the_world_lie_between(self):
+        # 🤖 Agent: float_visbuffer again: the HUD's white is 100 nits, half of paper white. A 64x64 HUD scene with
+        # a block of opaque white HUD `count` pixels large at `hud` of paper white, and one more white pixel at `one`.
+        def problems(hud, one, count=identity.HUD_WHITE):
+            def light(x, y):
+                return one if (x, y) == (63, 63) else hud if y * 64 + x < count else None
+            sdr = [b''.join(bytes(3) if light(x, y) is None else b'\xff' * 3 for x in range(64)) for y in range(64)]
+            hdr = [b''.join(b''.join((round(c) << 6).to_bytes(2, 'big') for c in (
+                (0, 0, 0) if light(x, y) is None else identity.hdr10([light(x, y)] * 3, 200)))
+                for x in range(64)) for y in range(64)]
+            encode(self.dir / 'float_visbuffer.hud_lava.png', 64, 64, 8, sdr, 0)
+            encode(self.dir / 'float_visbuffer.hud_lava-hdr.png', 64, 64, 16, hdr, 0)
+            return identity.hdr_gates(self.dir, ['float_visbuffer'])
+        # 🤖 Agent: The HUD's white, with translucent white HUD over a white world (between the two), and white HUD
+        # over light above white.
+        for one in (0.5, 0.75, 1.0, 1.4):
+            self.assertEqual(problems(0.5, one), [], one)
+        # 🤖 Agent: Opaque white HUD at paper white, not at UI Brightness: every pixel passes for light behind the
+        # HUD, so the count catches it. So it does a HUD too dim, and too little HUD.
+        self.assertEqual(problems(1.0, 0.75), ['float_visbuffer.hud_lava: white HUD isn\'t at UI Brightness: 0 white '
+                                               f'pixels there, of at least {identity.HUD_WHITE}'])
+        self.assertIn('white HUD isn\'t at UI Brightness: 0 white', '\n'.join(problems(0.4, 0.75)))
+        self.assertIn(f'{identity.HUD_WHITE - 1} white pixels', '\n'.join(problems(0.5, 0.75, identity.HUD_WHITE - 1)))
 
     def unlit(self, sdr, hdr):
         """Every float_unlit scene shot as `sdr` with its HDR shot `hdr`, and HDR off's as `self.vanilla`."""

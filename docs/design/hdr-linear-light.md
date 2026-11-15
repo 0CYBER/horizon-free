@@ -328,9 +328,13 @@ Behind `HORIZON_HDR_FRAME=float` until the last step, each a small pull request:
      background, the moon over a bright sky) is held at the disc's peak there too. Where T is at most S the disc's
      peak is S and every pass computes what it did. Light Horizon doesn't lift (HDR Lighting off, the title, a 0.2 pack's own) has
      no known peak, so there the curve's source still follows the display, as the 0.2 rule above describes. HDR off,
-     the HUD, the black lift, the SDR screenshot's shoulder and the compatibility frame (HDR's default until step 5,
-     whose look then changes once) don't change.
-   - 6b: the SDR screenshot from the same scene light.
+     the HUD, the black lift and the compatibility frame (HDR's default until step 5, whose look then changes once)
+     don't change.
+   - 6b: the SDR screenshot from the same scene light. With surfaces and the sky at paper white at most, it keeps
+     the light exactly up to paper white, where it is the SDR game's picture, and scales light above it (light
+     sources, the sun) down to white by its brightest channel, hue kept. Its shoulder from 0.6 of paper white was
+     made for a world lifted up to 3 times and now only darkened: white came out at 230 of 255. A knee just below
+     white (0.9) keeps no more of a light source's shape in captures, and still darkens a noon sky.
 
 The HUD's layer and the tone curve come before light is written: once a shader writes light above white into the
 frame, nothing at the end can take it back out from under the HUD (`shows_world` only skips lifting a mark), and

@@ -41,8 +41,8 @@ Shader packs are read from the change's tree for both builds (tools/fixtures/sha
 crates/horizon-shader-api/packs), so a base from before a fixture was added draws it too.
 
 The float frame's HDR shots are also held to their SDR ones in each build (hdr_gates, Tests 3 and 4): with HDR
-Lighting off the picture is HDR off's, and with it on the SDR screenshot is the HDR shot through its shoulder, white
-HUD shows at UI Brightness and nothing passes the peak.
+Lighting off the picture is HDR off's, and with it on the SDR screenshot is the HDR shot with light above white
+scaled down to it, its hue kept, white HUD shows at UI Brightness and nothing passes the peak.
 
 Both builds draw on the same adapter: Mesa's lavapipe where its Vulkan driver is installed (Linux), else the machine's
 default. When the base and the change differ only in files no game binary is built from (tools/, tests/, .github/,
@@ -735,22 +735,39 @@ def hud_boxes(width, height):
             (x - 92 * scale, height - 24 * scale, x + 92 * scale, height))
 
 
-def unshoulder(light):
-    """The light the SDR screenshot's shoulder (hdr.wgsl screenshot_world) maps to `light`: k + (1 - k)(t - k) /
-    (t + 1 - 2k) on the brightest channel t, k = 0.6, the channels scaled together. It never reaches white."""
-    top = max(light)
-    if top <= 0.6:
-        return light
-    if top >= 1:
-        return [float('inf')] * 3
-    return [c * (0.36 - 0.2 * top) / (1 - top) / top for c in light]
-
-
-def shows(sdr, paper, cap=float('inf'), mapped=lambda light: light):
-    """The HDR10 codes an 8-bit SDR pixel allows: half a step either way (its rounding), its light through `mapped`
-    first, and a code either way (the HDR shot's own rounding)."""
+def shows(sdr, paper, cap=float('inf')):
+    """The HDR10 codes an 8-bit SDR pixel allows: half a step either way (its rounding), and a code either way (the
+    HDR shot's own rounding)."""
     low, high = ([(max(v + step, 0) / 255) ** 2.2 for v in sdr] for step in (-0.5, 0.5))
-    return [c - 1 for c in hdr10(mapped(low), paper, cap)], [c + 1 for c in hdr10(mapped(high), paper, cap)]
+    return [c - 1 for c in hdr10(low, paper, cap)], [c + 1 for c in hdr10(high, paper, cap)]
+
+
+def scaled(sdr, hdr, paper, cap):
+    """Whether HDR10 codes `hdr` can be the light of an 8-bit SDR pixel with a channel at white: the SDR screenshot
+    (hdr.wgsl screenshot_world) divides light from white up by its brightest channel, in gamma, which divides the
+    light by one factor k, so the HDR shot holds the SDR pixel's light times one k from 1 to `cap`, each channel at
+    most `cap` (as hdr10), within the rounding `shows` allows.
+    🤖 Agent: BT.2020's matrix has no negative entry, so each code only grows with k and allows k in an interval;
+    one k must lie in all three, so a hue the screenshot doesn't keep fails even where each code alone fits."""
+    low, high = ([(max(v + step, 0) / 255) ** 2.2 for v in sdr] for step in (-0.5, 0.5))
+
+    def code(light, row, k):
+        return 1023 * pq(paper * sum(m * min(c * k, cap) for m, c in zip(row, light)))
+
+    def edge(turns):
+        """Where `turns`, false then true as k grows from 1 to `cap`, turns true."""
+        a, b = 1.0, cap
+        for _ in range(40):
+            a, b = (a, (a + b) / 2) if turns((a + b) / 2) else ((a + b) / 2, b)
+        return b
+
+    least, most = 1.0, cap
+    for row, h in zip(BT2020, hdr):
+        if code(low, row, 1) - 1 > h or code(high, row, cap) + 1 < h:
+            return False
+        least = max(least, edge(lambda k: code(high, row, k) + 1 >= h))
+        most = min(most, edge(lambda k: code(low, row, k) - 1 > h))
+    return least <= most
 
 
 def unpq(code):
@@ -780,6 +797,11 @@ def setting(name, key, default=None):
     return int(graphics.rsplit(f'{key}:', 1)[1].split()[0]) if f'{key}:' in graphics else default
 
 
+# 🤖 Agent: The white pixels each HUD scene shows at the HUD's white at least: its text is 3776 or more of them at
+# the shots' size.
+HUD_WHITE = 200
+
+
 def hdr_gates(shots, sessions):
     """With HDR Lighting off (float_unlit), the picture is SDR's: its SDR screenshot is HDR off's within a step of
     rounding (two in at most 1 pixel in 10 000, where the float frame blends several times), and its HDR shot is
@@ -787,9 +809,10 @@ def hdr_gates(shots, sessions):
     and HDR off clips it too, the screenshot clips it and the HDR shot keeps it, so there the HDR shot is only never darker; and the later
     blends over that light come out brighter than vanilla's over its clipped sky (Why gamma storage), so there the
     screenshot isn't held to HDR off.
-    With HDR Lighting on, the SDR screenshot is the HDR shot through its shoulder (in the world scenes, outside the
-    HUD), white HUD shows at UI Brightness times paper white, nothing passes the peak, and the night's lights pass
-    paper white."""
+    With HDR Lighting on, the SDR screenshot is the HDR shot with light above white scaled down to it, its hue kept
+    (`scaled`; in the world scenes, outside the HUD), nothing passes the peak, and the night's lights pass paper white. White in the screenshot under the HUD is
+    the HUD's white at UI Brightness times paper white, the world's light from paper white up, or one over the other,
+    which lies between them; each HUD scene shows HUD_WHITE pixels of it at the HUD's white itself."""
     problems = []
 
     def each(name, scene, test, what):
@@ -842,20 +865,30 @@ def hdr_gates(shots, sessions):
                     return all(lo <= c and ((x, y) in hot or c <= hi) for c, lo, hi in zip(h, low, high))
                 each(name, scene, test, 'the HDR shot isn\'t its SDR screenshot\'s picture')
                 continue
-            top, white = 1023 * pq(peak) + 1, 1023 * pq(paper * ui / 100)
+            top, white, world = 1023 * pq(peak) + 1, 1023 * pq(paper * ui / 100), 1023 * pq(paper)
 
             def test(s, h, x, y, boxes):
-                if max(h) > top or (s == (255, 255, 255) and any(abs(c - white) > 1 for c in h)):
+                if max(h) > top:
                     return False
                 if scene in HUD or any(x0 <= x < x1 and y0 <= y < y1 for x0, y0, x1, y1 in boxes):
-                    return True
+                    # 🤖 Agent: White is the HUD's white, the world's light from white up, or one over the other.
+                    return s != (255, 255, 255) or min(h) >= min(white, world) - 1
+                if 255 in s:
+                    if (s, h) not in ranges:
+                        ranges[s, h] = scaled(s, h, paper, peak / paper)
+                    return ranges[s, h]
                 if s not in ranges:
-                    ranges[s] = shows(s, paper, peak / paper, unshoulder)
+                    ranges[s] = shows(s, paper, peak / paper)
                 return all(lo <= c <= hi for c, lo, hi in zip(h, *ranges[s]))
-            sdr, hdr = each(name, scene, test, 'the SDR screenshot isn\'t the HDR shot through its shoulder, white '
-                            'HUD isn\'t at UI Brightness, or the HDR shot passes the peak')
-            if scene in HUD and (255, 255, 255) not in sdr:
-                problems.append(f'{name}.{scene}: no white HUD to check')
+            sdr, hdr = each(name, scene, test, 'the SDR screenshot isn\'t the HDR shot scaled down to white, white '
+                            'under the HUD is dimmer than the HUD\'s and the world\'s, or the HDR shot passes the peak')
+            if scene in HUD:
+                # 🤖 Agent: The rule above can't tell the HUD's white from light behind it, so the HUD's opaque white
+                # (its text) is counted where it must be.
+                found = sum(s == (255, 255, 255) and all(abs(c - white) <= 1 for c in h) for s, h in zip(sdr, hdr))
+                if found < HUD_WHITE:
+                    problems.append(f'{name}.{scene}: white HUD isn\'t at UI Brightness: {found} white pixels '
+                                    f'there, of at least {HUD_WHITE}')
             if scene == 'night_lights' and max(map(max, hdr)) <= 1023 * pq(paper) + 1:
                 problems.append(f'{name}.{scene}: no light passes paper white in the HDR shot')
     return problems
