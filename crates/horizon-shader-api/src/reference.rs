@@ -116,11 +116,11 @@ space the pack's colours are in, and `frame.luminance` holds that space's lumina
 fn ray_tracing() -> String {
     let mut out = String::from(
         "### Ray tracing\n\n\
-         With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post\n\
-         stage's prelude also has `RayHit` and the functions and constants below, so does the material stage's where its\n\
-         files name one of the four trace functions, and the `Frame` of every stage of the pack has `has_ray_tracing` and\n\
-         `ray_distance`. A pack without the key has none of them, and a material stage that names no trace function is\n\
-         built as without it.\n\n\
+         With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass, a `[[before_world]]` pass or a\n\
+         `[material]` stage) the post stage's prelude also has `RayHit` and the functions and constants below, so do the\n\
+         material, compute and `[[before_world]]` stages' where their files name one of the four trace functions, and the\n\
+         `Frame` of every stage of the pack has `has_ray_tracing` and `ray_distance`. A pack without the key has none of\n\
+         them, and a material, compute or `[[before_world]]` stage that names no trace function is built as without it.\n\n\
          The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it\n\
          ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a\n\
          pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1`\n\
@@ -148,8 +148,8 @@ fn ray_tracing() -> String {
          - `fn hit_normal_map(hit: RayHit) -> vec4<f32>`, `fn hit_specular_map(hit: RayHit) -> vec4<f32>`: the resource\n  \
          packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`\n  \
          and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.\n\
-         - In the post stage, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as the material\n  \
-         stage's.\n\n\
+         - In the post, compute and `[[before_world]]` stages, `fn block_pbr_maps() -> bool`: whether the resource packs\n  \
+         ship LabPBR maps, as the material stage's.\n\n\
          A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what\n\
          the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,\n\
          plants), as terrain's alpha test does: a texel stops it from alpha 0.5 up. In the translucent layer every texel\n\
@@ -172,9 +172,9 @@ fn ray_tracing() -> String {
     out += &table(&RAY_HIT, None);
     out += &format!(
         "Bindings {RAY_SCENE_BINDING} to {} of group {GROUP} hold the scene while the game traces ({RAY_ENTITY_STORE_BINDING} to\n\
-         {RAY_ENTITY_RETAINED_BINDING} the entity layer, for a pack that names it), and in a post pass bindings {PBR_NORMALS_BINDING} and {PBR_SPECULAR_BINDING} the LabPBR maps (the\n\
-         material stage has them there already). They are Horizon's, as their `horizon_` names say, and change with the\n\
-         renderer.\n\n",
+         {RAY_ENTITY_RETAINED_BINDING} the entity layer, for a pack that names it), and in a post, compute or `[[before_world]]` pass bindings\n\
+         {PBR_NORMALS_BINDING} and {PBR_SPECULAR_BINDING} the LabPBR maps (the material stage has them there already). They are Horizon's, as their\n\
+         `horizon_` names say, and change with the renderer.\n\n",
         RAY_SPRITES_BINDING + RAY_SPRITE_ARRAYS - 1
     );
     out
@@ -190,8 +190,6 @@ fn kept() -> String {
     let formats = list(Format::ALL.iter().map(|f| f.wgsl()).collect());
     let mut out = format!(
         "## Kept resources and compute passes\n\n\
-         Not yet with `[ray_tracing]`: the game refuses a pack that has it beside a `[[resource]]`, a `[[before_world]]` entry\n\
-         or a compute `[[post]]` entry, as one that needs a later Horizon.\n\n\
          - `[[resource]]`: `name`; `buffer` (bytes) with `element` ({elements}), or `format`\n  \
          ({formats}) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `\"view\"`\n  \
          (screen history) or `\"world\"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in\n  \
@@ -213,9 +211,9 @@ fn kept() -> String {
          workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`\n\
          reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute\n\
          `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has\n\
-         the frame, the samplers and the shadow maps (bindings below) with `shadow_position`.\n\n\
-         **Not yet, in later steps:** a compute or `[[before_world]]` file doesn't get `trace` or the other ray functions\n\
-         under `[ray_tracing]`, and `[material]` can't read kept resources.\n\n"
+         the frame, the samplers and the shadow maps (bindings below) with `shadow_position`. Under `[ray_tracing]` either\n\
+         may trace (see Ray tracing); a `[[before_world]]` pass traces this frame's scene, built before it runs.\n\n\
+         **Not yet, in a later step:** `[material]` can't read kept resources.\n\n"
     );
     out += &table(&COMPUTE_INPUT, None);
     out += &format!(

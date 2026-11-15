@@ -313,11 +313,11 @@ pass reads a blank one in place of the target it writes).
 
 ### Ray tracing
 
-With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post
-stage's prelude also has `RayHit` and the functions and constants below, so does the material stage's where its
-files name one of the four trace functions, and the `Frame` of every stage of the pack has `has_ray_tracing` and
-`ray_distance`. A pack without the key has none of them, and a material stage that names no trace function is
-built as without it.
+With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass, a `[[before_world]]` pass or a
+`[material]` stage) the post stage's prelude also has `RayHit` and the functions and constants below, so do the
+material, compute and `[[before_world]]` stages' where their files name one of the four trace functions, and the
+`Frame` of every stage of the pack has `has_ray_tracing` and `ray_distance`. A pack without the key has none of
+them, and a material, compute or `[[before_world]]` stage that names no trace function is built as without it.
 
 The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it
 ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a
@@ -347,8 +347,8 @@ asks for ray queries and keeps the scene with any pack or none; any other value 
 - `fn hit_normal_map(hit: RayHit) -> vec4<f32>`, `fn hit_specular_map(hit: RayHit) -> vec4<f32>`: the resource
   packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`
   and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.
-- In the post stage, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as the material
-  stage's.
+- In the post, compute and `[[before_world]]` stages, `fn block_pbr_maps() -> bool`: whether the resource packs
+  ship LabPBR maps, as the material stage's.
 
 A ray starts at `origin` itself, so move a point off its own surface before tracing from it. What stops it is what
 the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,
@@ -393,14 +393,11 @@ The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `
 | `horizon_sprite` | `u32` | Horizon's own: where the hit's sprite is kept, for `hit_normal_map` and `hit_specular_map`. Not for packs to read; it changes with the renderer. |
 
 Bindings 48 to 59 of group 3 hold the scene while the game traces (60 to
-63 the entity layer, for a pack that names it), and in a post pass bindings 12 and 13 the LabPBR maps (the
-material stage has them there already). They are Horizon's, as their `horizon_` names say, and change with the
-renderer.
+63 the entity layer, for a pack that names it), and in a post, compute or `[[before_world]]` pass bindings
+12 and 13 the LabPBR maps (the material stage has them there already). They are Horizon's, as their
+`horizon_` names say, and change with the renderer.
 
 ## Kept resources and compute passes
-
-Not yet with `[ray_tracing]`: the game refuses a pack that has it beside a `[[resource]]`, a `[[before_world]]` entry
-or a compute `[[post]]` entry, as one that needs a later Horizon.
 
 - `[[resource]]`: `name`; `buffer` (bytes) with `element` (`u32`, `atomic<u32>`, `f32`, `vec4<u32>`, `vec4<f32>`), or `format`
   (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
@@ -425,10 +422,10 @@ A compute file defines `fn compute(input: ComputeInput)`, and Horizon adds the `
 workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`
 reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute
 `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`; a `[[before_world]]` pass has
-the frame, the samplers and the shadow maps (bindings below) with `shadow_position`.
+the frame, the samplers and the shadow maps (bindings below) with `shadow_position`. Under `[ray_tracing]` either
+may trace (see Ray tracing); a `[[before_world]]` pass traces this frame's scene, built before it runs.
 
-**Not yet, in later steps:** a compute or `[[before_world]]` file doesn't get `trace` or the other ray functions
-under `[ray_tracing]`, and `[material]` can't read kept resources.
+**Not yet, in a later step:** `[material]` can't read kept resources.
 
 ### `ComputeInput`
 

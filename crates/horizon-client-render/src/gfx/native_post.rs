@@ -1400,15 +1400,14 @@ impl NativePost {
                 }));
             }
             // The passes built against the scene read it too; the tonemap has no `trace`.
-            let layout = match traced.filter(|_| writes.is_some()) {
-                Some((trace, scene)) => {
+            entries.extend(kept::entries(&self.kept, pass, parity));
+            let with_scene = traced.and_then(|(t, scene)| Some((t.layout(pass?)?, t, scene)));
+            let layout = match with_scene {
+                Some((layout, trace, scene)) => {
                     entries.extend(trace.entries(scene));
-                    &trace.layout
+                    layout
                 }
-                None => {
-                    entries.extend(kept::entries(&self.kept, pass, parity));
-                    kept::pass(&self.kept, pass).map_or(&self.layout, |p| &p.layout)
-                }
+                None => kept::pass(&self.kept, pass).map_or(&self.layout, |p| &p.layout),
             };
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Native shader pack post"),
@@ -1453,11 +1452,9 @@ impl NativePost {
         size: [u32; 2],
         history_reset: bool,
         mut timing: Option<&mut super::pack_timing::PassTiming>,
-        scene: Option<(&trace::RayScene, glam::DVec3)>,
+        scene: Option<&trace::Traced<'_>>,
     ) {
         let window = [screen.texture().width(), screen.texture().height()];
-        let scene = scene.and_then(|(scene, camera)| scene.traced(camera));
-        let scene = scene.as_ref();
         self.begin_kept(device, encoder, size);
         self.prepare(device, world, size, window, history_reset, scene);
         if let Some(t) = timing.as_deref_mut() {
@@ -1473,7 +1470,9 @@ impl NativePost {
         };
         d.decoder.run(device, encoder, world.0, scene);
         for (i, ((label, pipeline), group)) in self.passes.iter().zip(passes).enumerate() {
-            kept::dispatch(&self.kept, encoder, passes, i, size);
+            let computes = self.trace.as_ref().filter(|_| self.traced.is_some());
+            let traced = computes.map(|t| t.computes.as_slice());
+            kept::dispatch(&self.kept, encoder, (passes, traced), i, size);
             let view = match (self.plan[i].writes, &self.targets, &self.named, &d.picture) {
                 (Writes::Chain(slot), Some((_, t)), _, _) => &t[slot],
                 (Writes::Target(j), _, Some((_, n)), _) => &n[j],

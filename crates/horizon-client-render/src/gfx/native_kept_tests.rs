@@ -639,7 +639,7 @@ impl Chain {
     /// screen's first pixel.
     fn run(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, size: [u32; 2]) -> [u8; 4] {
         let mut encoder = device.create_command_encoder(&Default::default());
-        self.post.before_world(device, &mut encoder);
+        self.post.before_world(device, &mut encoder, None);
         queue.submit([encoder.finish()]);
         let surface = &self.frame.surface_view;
         (self.screen).show((device, queue), &mut self.post, surface, size)
@@ -936,7 +936,7 @@ fn through_pack(manifest: &str, files: &[(&str, &str)], wants: &[f32]) {
         let display = crate::gfx::output::DisplayValues::SDR;
         pack.write(&queue, &frame, [4, 4], display, None);
         let mut encoder = device.create_command_encoder(&Default::default());
-        pack.before_world(&device, &mut encoder);
+        pack.before_world(&device, &mut encoder, None);
         queue.submit([encoder.finish()]);
         let post = &mut pack.post;
         let got = screen.show((&device, &queue), post, &pack.frame.surface_view, [4, 4]);

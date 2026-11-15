@@ -215,9 +215,10 @@ changes, from at most 2048 sources, the nearest first.
 
 ## Ray tracing
 
-A pack of API 0.2 can trace rays through the world from its post passes and its material stage. It asks with an empty
-`[ray_tracing]` table (the pack needs a `[[post]]` pass or a `[material]` stage), and its post stage gets the trace
-functions, as does its material stage where its files call one ([the reference](api/shaders-reference-0.2.md#ray-tracing) has
+A pack of API 0.2 can trace rays through the world from its post passes, its material stage and its compute passes. It
+asks with an empty `[ray_tracing]` table (the pack needs a `[[post]]` pass, a `[[before_world]]` pass or a `[material]`
+stage), and its post stage gets the trace functions, as do its material stage and its compute and `[[before_world]]`
+passes where their files call one ([the reference](api/shaders-reference-0.2.md#ray-tracing) has
 `RayHit`'s fields):
 
 ```toml
@@ -350,8 +351,9 @@ if input.translucent && frame.has_ray_tracing == 1u {
   reflection, wrong for what lies behind a waterfall. Name the layer to find it: `trace_layers(..., RAY_SOLID |
   RAY_TRANSLUCENT)`, from a point off the surface (`input.position + input.normal * 0.01`), which is in that layer
   itself.
-- **Only a stage that calls them pays.** A material stage whose files name no trace function is built as without
-  `[ray_tracing]`; one that does is built twice, the terrain drawing with the rays in frames that have the scene.
+- **Only a stage that calls them pays.** A material, compute or `[[before_world]]` stage whose files name no trace
+  function is built as without `[ray_tracing]`; one that does is built twice, the one with the rays drawing in frames
+  that have the scene.
 
 `crates/horizon-shader-api/packs/traced_water` is the smallest pack that traces from `material`: water that mixes in
 what a reflected ray hits.
@@ -361,12 +363,13 @@ what a reflected ray hits.
 Shader API 0.2 has the keys for storage a pack keeps between frames and for compute passes: `[[resource]]` (buffers,
 and textures with this frame's and last frame's versions), `[kept] reach`, `[[before_world]]`, `[[post]]` entries
 with `compute = true`, and an option's `resets`. A compute file defines `fn compute(input: ComputeInput)`.
-The game runs them, except beside `[ray_tracing]`: it refuses a pack that has both, as one that needs a later
-Horizon. The keys, their limits and the WGSL each pass sees are in the
+The game runs them. The keys, their limits and the WGSL each pass sees are in the
 [reference](api/shaders-reference-0.2.md#kept-resources-and-compute-passes).
 
-Three parts come in later steps: kept resources beside `[ray_tracing]`, `trace` and the other ray functions in a
-compute or `[[before_world]]` file, and `[material]` reading kept resources.
+Under `[ray_tracing]` a compute or `[[before_world]]` file that calls a trace function gets them, as a post pass does;
+a `[[before_world]]` pass traces this frame's scene. The four trace names are found by name, as in the material
+stage, so under `[ray_tracing]` don't give them to anything of the pack's own. One part comes in a later step: `[material]` can't read kept
+resources.
 
 ## Options
 

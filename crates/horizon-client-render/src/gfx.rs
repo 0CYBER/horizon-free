@@ -9709,7 +9709,8 @@ impl Renderer {
                 timing: self.own_timing.as_mut(),
                 lists,
             });
-            native.before_world(&self.device, &mut encoder);
+            let scene = self.ray_scene.as_ref().and_then(|s| s.traced(frame.camera));
+            native.before_world(&self.device, &mut encoder, scene.as_ref());
         }
         if native_sky_pass && let Some(native) = &mut self.native {
             native.draw_sky_pass(native_sky::SkyPass {
