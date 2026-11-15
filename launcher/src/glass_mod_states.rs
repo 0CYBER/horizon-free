@@ -177,6 +177,9 @@ fn step(key: &str) -> Option<Step> {
             done: 38_000_000,
             total: 112_000_000,
         },
+        "tools-kept" => Step::ToolsKept {
+            build: BUILD.into(),
+        },
         "checking" => Step::Checking(3),
         "backed-up" => Step::BackedUp(trf(
             "Backed up {world} to {path}",

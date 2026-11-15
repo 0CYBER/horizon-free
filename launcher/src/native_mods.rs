@@ -947,6 +947,10 @@ pub enum Step {
         done: u64,
         total: u64,
     },
+    /// The mod tools of a build were all kept from an earlier build: nothing is downloaded.
+    ToolsKept {
+        build: String,
+    },
     /// Each mod is checked against the build: how many.
     Checking(usize),
     /// A world was backed up before the mods saved in it were switched off: where.
@@ -1014,6 +1018,7 @@ impl Step {
             | Self::LeftOut(_)
             | Self::Checking(_)
             | Self::BackedUp(_) => (Stage::Prepare, None),
+            Self::ToolsKept { .. } => (Stage::Prepare, Some(1.)),
             Self::Tools { done, total, .. } => (
                 Stage::Prepare,
                 (*total > 0).then_some(*done as f32 / *total as f32),
@@ -1057,6 +1062,10 @@ impl Step {
                     ("done", &(done / 1_000_000).to_string()),
                     ("total", &total.div_ceil(1_000_000).max(1).to_string()),
                 ],
+            ),
+            Self::ToolsKept { build } => trf(
+                "Using the mod tools for {build} kept from an earlier build",
+                &[("build", build)],
             ),
             Self::BackedUp(said) => said.clone(),
             Self::Checking(count) => match count {
@@ -1124,6 +1133,7 @@ impl Step {
                     ("total", &total.div_ceil(1_000_000).max(1).to_string()),
                 ],
             ),
+            Self::ToolsKept { .. } => tr("Using the mod tools already downloaded").into(),
             Self::Compile { .. } => tr("Building the game with your mods").into(),
             Self::Mod { id, done, total } => trf(
                 "Building {mod} ({done} of {total})",
@@ -2129,11 +2139,18 @@ fn pipeline(
                     &sdk_base,
                     prebuilt::Route::of(&projects),
                     target,
+                    // Nothing to fetch (every slice kept from an earlier build) is said as such,
+                    // never as a download of nothing.
                     &|got: sdk_cache::Fetched| {
-                        progress(Step::Tools {
-                            build: shown.clone(),
-                            done: got.done,
-                            total: got.total,
+                        progress(match got.total {
+                            0 => Step::ToolsKept {
+                                build: shown.clone(),
+                            },
+                            total => Step::Tools {
+                                build: shown.clone(),
+                                done: got.done,
+                                total,
+                            },
                         })
                     },
                 )
