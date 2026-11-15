@@ -97,9 +97,11 @@ impl Game<'_> {
             let mut chains_sign = false;
             if block_answer.is_none() {
                 // TntBlock.useItemOn belongs to the block phase, before
-                // ItemStack.useOn's adventure can_place_on gate.
-                if let Some(stack) = held.as_ref()
-                    && self.ignite_tnt(stack)?
+                // ItemStack.useOn's adventure can_place_on gate. It reads the
+                // hand as the block phase's listeners left it, as
+                // `state.useItemOn(player.getItemInHand(hand), ...)` does.
+                if let Some(stack) = self.held().cloned()
+                    && self.ignite_tnt(&stack)?
                 {
                     return Ok(true);
                 }
