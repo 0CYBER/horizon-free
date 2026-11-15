@@ -295,8 +295,8 @@ impl<'a> Parser<'a> {
                 "b", "s", "t", "n", "f", "r", "\\", "'", "\"", "x", "u", "U", "N",
             ],
         );
-        let escape = self.bump();
-        let value = match escape {
+        let escape_cursor = self.cursor;
+        let value = match self.bump() {
             Some(0x62) => 8,
             Some(0x73) => 32,
             Some(0x74) => 9,
@@ -310,6 +310,7 @@ impl<'a> Parser<'a> {
                     0x75 => 4,
                     _ => 8,
                 };
+                let digits_cursor = self.cursor;
                 let mut value = 0u32;
                 for _ in 0..count {
                     let Some(digit) = self
@@ -318,6 +319,7 @@ impl<'a> Parser<'a> {
                         .and_then(|c| c.to_digit(16))
                     else {
                         let mut error = self.error("snbt.parser.expected_hex_escape");
+                        error.cursor = digits_cursor;
                         error.args.push(count.to_string());
                         return Err(error);
                     };
@@ -341,11 +343,20 @@ impl<'a> Parser<'a> {
                     self.bump();
                     name.push(char::from(c));
                 }
+                if name.is_empty() && self.peek() == Some(0x7d) {
+                    return Err(self.error("snbt.parser.invalid_character_name"));
+                }
                 self.expect(b'}')?;
                 crate::character_names::code_point_of(&name)
                     .ok_or_else(|| self.error("snbt.parser.invalid_character_name"))?
             }
-            _ => return Err(self.error("snbt.parser.invalid_string_contents")),
+            _ => {
+                // The first escape alternative is what a failed literal reports.
+                let mut error = self.error("argument.literal.incorrect");
+                error.cursor = escape_cursor;
+                error.args.push("b".to_owned());
+                return Err(error);
+            }
         };
         push_code_point(units, value);
         Ok(())

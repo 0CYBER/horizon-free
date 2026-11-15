@@ -227,3 +227,39 @@ mod suggestion_tests {
         assert_eq!(suggestions("\"\\q"), Vec::<String>::new());
     }
 }
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+    use std::fmt::Display;
+
+    /// What `parse_fully` must report: the key, its arguments and the absolute cursor.
+    fn assert_fails(text: &str, key: &str, args: &[&str], cursor: usize) {
+        let args: Vec<&dyn Display> = args.iter().map(|arg| arg as &dyn Display).collect();
+        let mut at = Reader::new(text);
+        at.cursor = cursor;
+        assert_eq!(
+            parse_fully(text).unwrap_err(),
+            CommandError::tr_at(key, &args, &at),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn string_escape_errors_keep_their_key_and_cursor() {
+        // An unknown escape fails as the first escape literal, at the letter.
+        assert_fails("{v:'\\q'}", "argument.literal.incorrect", &["b"], 5);
+        // A short or bad hex run is reported where the digits start.
+        assert_fails("{v:'\\u12'}", "snbt.parser.expected_hex_escape", &["4"], 6);
+        // A name the Unicode data lacks is reported after the closing brace; empty braces at it.
+        assert_fails(
+            "{v:'\\N{zzz}'}",
+            "snbt.parser.invalid_character_name",
+            &[],
+            11,
+        );
+        assert_fails("{v:'\\N{}'}", "snbt.parser.invalid_character_name", &[], 7);
+        // A string that never closes fails at the end of the input.
+        assert_fails("{v:'abc", "snbt.parser.invalid_string_contents", &[], 7);
+    }
+}
