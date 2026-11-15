@@ -959,8 +959,8 @@ pub trait PlayersBackendMut {
     /// after `block_drops` go to the player's inventory instead, and what doesn't fit drops from
     /// them as `Inventory.placeItemBackInInventory` drops it. The player needn't reach or look at
     /// the block. Breaking from `break_block` or `block_drops` makes them hear these breaks too:
-    /// a mod keeps its own guard, and a break started from inside eight others is refused. True
-    /// when the block was removed; false, with nothing broken, for a stale handle, a player who
+    /// a mod keeps its own guard, and a break started from inside eight others is refused (a
+    /// Horizon safeguard that the reference does not have). True when the block was removed; false, with nothing broken, for a stale handle, a player who
     /// isn't here or is dead, air, an unloaded block, a block no survival player can break
     /// (bedrock), a canceled break, and off a server.
     #[access(WorldOnly)]
