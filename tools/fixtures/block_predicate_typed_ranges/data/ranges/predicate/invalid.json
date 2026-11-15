@@ -1,1 +1,0 @@
-{"type": "minecraft:location_check", "predicate": {"block": {"blocks": "minecraft:chest", "state": {"facing": {"min": "up"}}}}}

@@ -1,8 +1,0 @@
-{
-  "hooks": [],
-  "helpers": [
-    {"name": "client_entity_update", "target": "horizon_client::game::native_client_entities::Game<'_>::native_client_entity_update"}
-  ],
-  "rust_summary": "a client-side entity's data changed field by field (`native_client_entity_update`).",
-  "doc_summary": "`native_client_entity_update(viewer, id, nbt)` changes only the synched data of the keys `nbt` has on a client-side entity (API 519), where `native_client_entity_set` sends every field; a key at its default is sent, and a display's `start_interpolation` goes with it."
-}

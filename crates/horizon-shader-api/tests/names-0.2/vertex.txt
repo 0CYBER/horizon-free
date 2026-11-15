@@ -1,5 +1,0 @@
-Frame
-VertexInput
-frame
-shadow_distort
-shadow_position

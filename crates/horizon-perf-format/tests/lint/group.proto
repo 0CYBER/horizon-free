@@ -1,8 +1,0 @@
-syntax = "proto2";
-package lint.bad;
-
-message Outer {
-  optional group Inner = 1 {
-    optional uint32 value = 2;
-  }
-}

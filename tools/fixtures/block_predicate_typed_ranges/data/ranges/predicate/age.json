@@ -1,1 +1,0 @@
-{"type": "minecraft:location_check", "predicate": {"block": {"blocks": "minecraft:wheat", "state": {"age": {"min": "2", "max": "6"}}}}}
