@@ -1,9 +1,0 @@
-[
-    {
-        "Protocol": "TCP",
-        "Port": 25565,
-        "Ref": "ServerPort",
-        "Name": "Server Port",
-        "Description": "Port players join on (TCP)"
-    }
-]
