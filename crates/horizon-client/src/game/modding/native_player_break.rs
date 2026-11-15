@@ -286,7 +286,7 @@ mod tests {
     /// their drops, merged within stack sizes, and their experience at the origin, with no
     /// drop or orb anywhere else. The pickaxe wears once per block, as the player's own breaks.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_vein_miner_sets_a_veins_drops_and_experience_down_at_the_origin() {
         // Five diamond ores in a row, then sixty-six stone: more cobblestone than one stack.
         let mut vein: Vec<[i32; 3]> = (0..5).map(|i| [2 + i, 64, 2]).collect();
