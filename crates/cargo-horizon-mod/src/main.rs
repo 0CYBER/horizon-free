@@ -144,8 +144,13 @@ fn code_project(dir: &Path) -> bool {
     dir.join("Cargo.toml").is_file()
 }
 
-/// The SDK the project at `dir` pins, fetched into its `.horizon/sdk/` when missing or stale.
+/// The SDK the project at `dir` pins, fetched into its `.horizon/sdk/` when missing or stale; a
+/// project inside a game checkout builds against that tree instead.
 fn fetched(dir: &Path) -> Result<(), String> {
+    if let Some(tree) = sdk_fetch::game_tree(dir)? {
+        println!("Building against the game checkout {}", tree.display());
+        return Ok(());
+    }
     let sdk = sdk_fetch::ensure_sdk(dir)?;
     println!(
         "SDK {} (build {}) in {}",
@@ -380,11 +385,13 @@ fn new_code(
 
 /// Packs the mod in the current folder into `target/horizon-mod/<id>.hmod`: the manifest and
 /// the files in `assets/` and `data/`, and for a code mod its source and its uses table, scanned
-/// against the pinned build (none for a mod made for exactly one build).
+/// against the pinned build (none for a mod made for exactly one build, or built against the game
+/// checkout it lies in, which has no published surface to scan against).
 fn build(entry: mod_surface::child::ChildEntry) -> Result<PathBuf, String> {
     let root = Path::new(".");
     let package = Package::read(root)?;
-    let uses = if package.manifest.native.is_some() || package.manifest.wasm.is_some() {
+    let code = package.manifest.native.is_some() || package.manifest.wasm.is_some();
+    let uses = if code && sdk_fetch::game_tree(root)?.is_none() {
         let sdk = sdk_fetch::ensure_sdk(root)?;
         match uses_table::scan(entry, root, &uses_table::surface_of(&sdk)?)? {
             uses_table::Scanned::Uses(uses) => Some(uses.table(sdk.build).to_json().into_bytes()),
