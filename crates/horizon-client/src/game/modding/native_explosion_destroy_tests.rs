@@ -332,6 +332,31 @@ fn drops_of_one_item_merge_at_the_first_blocks_position() {
         // Popped from the independently calculated first shuffled cell.
         let cell = [at.x.floor() as i32, at.z.floor() as i32];
         assert_eq!(cell, [1, 1], "{via:?}: {at:?}");
+        // Block.popResource spends the same three position doubles even
+        // when the gamerule prevents constructing the merged item entity.
+        assert!(
+            game.ui
+                .rules
+                .set("block_drops", horizon_client::gamerules::Value::Bool(false))
+        );
+        for p in positions {
+            set(game, p, "cobblestone");
+        }
+        game.world.random.set_seed(7);
+        let before = game.dropped.len();
+        destroy(
+            game,
+            via,
+            &positions,
+            blast(ExplosionInteraction::Block),
+            Ok(2),
+        );
+        assert_eq!(game.dropped.len(), before, "{via:?}: no new item entity");
+        assert_eq!(
+            game.world.random.next_int(),
+            -1_105_573_998,
+            "{via:?}: offsets still drawn"
+        );
     });
 }
 
