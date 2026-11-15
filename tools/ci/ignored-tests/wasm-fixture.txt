@@ -13,4 +13,3 @@ horizon-client game::native_hooks::runtime_environment::tests::native_and_wasm_p
 horizon-client game::registration_capability_coverage_wasm_tests::compiled_guest_reads_game_coverage_during_registration HORIZON_WASM_FIXTURE needs
 horizon-client-lib raw_payloads::wasm_tests::compiled_guest_observes_physical_provider_pressure HORIZON_WASM_FIXTURE needs
 horizon-client game::native_hooks::math::tests::math_profile_selection_matches_platform_and_is_stable HORIZON_WASM_FIXTURE needs-plain
-horizon-client game::machines::native_items::storage_attempt_wasm_tests::compiled_guest_storage_notifies_reentrantly_before_actual_hopper_abort HORIZON_WASM_FIXTURE needs
