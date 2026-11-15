@@ -1,6 +1,7 @@
 //! Stable entity material grouping with renderer-owned, reusable CPU scratch.
 use super::Vertex;
 use super::native_entity::EntityRuns;
+use horizon_shader_api::stages::RAY_ENTITY_QUAD;
 
 /// Entity materials by a quad's overlay (`Vertex::layer`), in draw order:
 /// ordinary entities, world text drawn with a depth bias (35,
@@ -121,9 +122,12 @@ pub(super) struct EntityBatch {
     /// last material (improved transparency on): the dragon's eyes, which share
     /// the additive buffer with its rays.
     pub(super) moved_additive: u32,
-    /// For a native pack's `[entity]` stage (`native_entity.rs`): the runs of the next
-    /// `update`'s entities that it lights.
+    /// For a native pack's `[entity]` stage (`native_entity.rs`) and the ray scene's entity
+    /// layer: the runs of the next `update`'s entities that they take.
     pub(super) kinds: EntityRuns,
+    /// The ordinary quads and the improved transparency ones in `combined`, as (first quad,
+    /// quads): the entity layer's two geometries (gfx/ray_scene.rs).
+    pub(super) ray_ranges: [(u32, u32); 2],
 }
 
 impl EntityBatch {
@@ -222,26 +226,35 @@ impl EntityBatch {
         }
         self.combined.extend_from_slice(hand);
         self.combined.extend_from_slice(see_through);
-        self.tag_kinds();
+        let oit_first: usize = counts[..9].iter().sum();
+        self.ray_ranges = [(0, counts[0]), (oit_first, counts[9])]
+            .map(|(first, quads)| (first as u32, quads as u32));
+        self.tag_kinds(oit_first);
         counts.map(|count| count as u32)
     }
 
-    /// Writes into each ordinary quad's layer the kind of the run of `kinds` it is in, and
+    /// Writes into each ordinary or improved transparency quad's layer the kind of the run of
+    /// `kinds` it is in, and that it is in the ray scene's entity layer (`RAY_ENTITY_QUAD`), and
     /// forgets the runs: they are one frame's. The other materials' quads take none, in a run
     /// or not: each has a pipeline of its own, the same with the stage as without (so a
     /// translucent item an entity holds is Horizon's until items draw through the stage).
-    fn tag_kinds(&mut self) {
+    /// `oit_first` is the first improved transparency quad in `combined`.
+    fn tag_kinds(&mut self, oit_first: usize) {
         if self.kinds.is_empty() {
             return;
         }
-        // The ordinary quads lead `combined`, in the order the game drew them.
-        let quads = self.runs[0]
-            .iter()
-            .flat_map(|&(first, count)| first..first + count);
-        let bits = self.kinds.bits(quads.map(|quad| quad as u32 * 4));
-        for (quad, bits) in self.combined.as_chunks_mut::<4>().0.iter_mut().zip(bits) {
-            for vertex in quad {
-                vertex.layer |= bits;
+        let combined = self.combined.as_chunks_mut::<4>().0;
+        // Each material's quads are together in `combined`, in the order the game drew them.
+        for (material, first) in [(0, 0), (9, oit_first)] {
+            let quads = self.runs[material]
+                .iter()
+                .flat_map(|&(first, count)| first..first + count);
+            let bits = self.kinds.bits(quads.map(|quad| quad as u32 * 4));
+            for (quad, bits) in combined[first..].iter_mut().zip(bits) {
+                let bits = if bits == 0 { 0 } else { bits | RAY_ENTITY_QUAD };
+                for vertex in quad {
+                    vertex.layer |= bits;
+                }
             }
         }
         self.kinds.clear();

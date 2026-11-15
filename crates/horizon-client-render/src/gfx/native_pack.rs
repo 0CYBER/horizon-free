@@ -167,6 +167,13 @@ impl NativePack {
         }
     }
 
+    /// Whether the pack's rays read the scene's entity layer: its files name `RAY_ENTITY`, and
+    /// its stages trace on this device.
+    pub(in crate::gfx) fn traces_entities(&self) -> bool {
+        let material = self.material.as_ref().and_then(|m| m.scene.as_ref());
+        self.post.traces_entities() || material.is_some_and(|t| t.traces_entities())
+    }
+
     /// The pipelines the pack's terrain draws with this frame, and its group 3.
     pub(in crate::gfx) fn terrain(&self) -> Option<(&MaterialPipelines, &wgpu::BindGroup)> {
         Some(self.material.as_ref()?.drawn(&self.frame.group))
@@ -361,6 +368,7 @@ impl NativePack {
         // The decode and the tonemap run without a chain too.
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
         // A `[ray_tracing]` pack's passes as the check built them against the scene.
+        let entities = post.iter().any(CheckedStage::traces_entities);
         let scenes: Vec<(String, naga::Module)> = post
             .iter_mut()
             .filter_map(|s| Some((s.label.clone(), s.scene.take()?)))
@@ -375,7 +383,7 @@ impl NativePack {
             && super::surface_setup::ray_query::on(device)
             && !material.as_ref().is_some_and(traced);
         if !scenes.is_empty() && !refused {
-            let shape = super::native_post::trace::TraceShape::of(terrain);
+            let shape = super::native_post::trace::TraceShape::of(terrain, entities);
             if !post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
                 && let Some(m) = material.as_mut()
             {

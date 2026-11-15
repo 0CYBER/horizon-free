@@ -612,6 +612,7 @@ pub(crate) fn taken(name: &str, ray_tracing: bool, motion: bool) -> bool {
         "trace_any_layers",
         "RAY_SOLID",
         "RAY_TRANSLUCENT",
+        "RAY_ENTITY",
         "hit_normal_map",
         "hit_specular_map",
         "block_pbr_maps",

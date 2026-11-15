@@ -411,6 +411,12 @@ impl super::Renderer {
         self.native.as_ref().is_some_and(|n| n.entity.is_some())
     }
 
+    /// Whether the game names the runs of its entities (`take_entity_runs`): a pack's `[entity]`
+    /// stage lights them, or its rays read them (`traces_entities`).
+    pub fn names_entity_runs(&self) -> bool {
+        self.draws_entity_stage() || self.traces_entities()
+    }
+
     /// Takes the runs of the next frame's entities (`Frame::entities`) that the stage lights.
     /// `runs` is left empty, for the frame after.
     pub fn take_entity_runs(&mut self, runs: &mut EntityRuns) {

@@ -13,8 +13,8 @@ use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{
-    Composed, GROUP, RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
-    compose_traced, identifiers,
+    Composed, GROUP, RAY_ENTITY_SAMPLER_BINDING, RAY_ENTITY_STORE_BINDING, RAY_SCENE_BINDING,
+    StageKind, compose_traced, identifiers,
 };
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::collections::HashSet;
@@ -84,6 +84,18 @@ pub struct CheckedStage {
 }
 
 impl CheckedStage {
+    /// Whether the stage against the scene reads the entity layer too: its pack's files name
+    /// `RAY_ENTITY` (`names_ray_entity`), so the renderer binds the layer for it.
+    pub fn traces_entities(&self) -> bool {
+        self.scene.as_ref().is_some_and(|module| {
+            module.global_variables.iter().any(|(_, g)| {
+                g.binding
+                    .as_ref()
+                    .is_some_and(|b| b.group == GROUP && b.binding == RAY_ENTITY_STORE_BINDING)
+            })
+        })
+    }
+
     /// Whether the stage's function, or a function it calls, reads the prelude's `global`
     /// (a resource of the stage, such as `reflection`).
     pub fn reads(&self, global: &str) -> bool {
@@ -539,11 +551,12 @@ fn vertex_rays(
     composed: &Composed,
     manifest: &crate::manifest::Manifest,
 ) -> Vec<Problem> {
-    let last = RAY_SPRITES_BINDING + RAY_SPRITE_ARRAYS - 1;
+    // The entity layer's bindings come last.
     let scene: Vec<_> = (module.global_variables.iter())
         .filter(|(_, g)| {
             g.binding.as_ref().is_some_and(|b| {
-                b.group == GROUP && (RAY_SCENE_BINDING..=last).contains(&b.binding)
+                let bindings = RAY_SCENE_BINDING..=RAY_ENTITY_SAMPLER_BINDING;
+                b.group == GROUP && bindings.contains(&b.binding)
             })
         })
         .map(|(handle, _)| handle)

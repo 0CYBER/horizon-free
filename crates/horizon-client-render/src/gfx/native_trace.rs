@@ -6,10 +6,12 @@
 //! block sprites and the pack's material id and tags of each sprite layer, which the prelude's
 //! `trace` reads. Those draw in frames that have a scene; in the others, and on a device that
 //! can't hold the bindings, the ones whose `trace` misses draw, as on a device without ray
-//! queries.
+//! queries. A pack whose files name `RAY_ENTITY` also has the entity layer's vertices, atlas
+//! and sampler there.
 
 use horizon_shader_api::stages::{
-    GROUP, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING, RAY_LAYERS_BINDING, RAY_SCENE_BINDING,
+    GROUP, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING, RAY_ENTITY_ATLAS_BINDING,
+    RAY_ENTITY_SAMPLER_BINDING, RAY_ENTITY_STORE_BINDING, RAY_LAYERS_BINDING, RAY_SCENE_BINDING,
     RAY_SPACE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, RAY_STORE_BINDING,
 };
 
@@ -28,28 +30,33 @@ pub(in crate::gfx) struct TraceShape<'a> {
     /// the lists the material stage's `input.tags` and `input.material` come from.
     pub tags: &'a [(u32, u32)],
     pub materials: &'a [(u32, u32)],
+    /// Whether the stages read the entity layer (`CheckedStage::traces_entities`).
+    pub entities: bool,
 }
 
 impl<'a> TraceShape<'a> {
-    pub(in crate::gfx) fn of(terrain: &TerrainShape<'a>) -> Self {
+    pub(in crate::gfx) fn of(terrain: &TerrainShape<'a>, entities: bool) -> Self {
         Self {
             sprites: terrain.sprite_views,
             split: terrain.sprites[1] as u32,
             tags: terrain.sprite_tags,
             materials: terrain.sprite_materials,
+            entities,
         }
     }
 }
 
 /// What a stage built against the scene reads besides the TLAS and the store.
 pub(in crate::gfx) struct Rays {
-    /// The prelude's `horizon_ray_space`: the camera in the scene's space, `split`, then the
-    /// scene's count of solid instances.
+    /// The prelude's `horizon_ray_space`: the camera in the scene's space, `split`, the
+    /// scene's counts of solid and of terrain instances, and the entity layer's two bases.
     space: wgpu::Buffer,
     /// The prelude's `horizon_ray_layers`.
     layers: wgpu::Buffer,
     sprites: Vec<wgpu::TextureView>,
     split: u32,
+    /// Whether the group has the entity layer's bindings.
+    entities: bool,
 }
 
 /// The post passes built against the scene, and what they read besides it.
@@ -96,8 +103,8 @@ fn layer_words(tags: &[(u32, u32)], materials: &[(u32, u32)]) -> Vec<u32> {
     words
 }
 
-/// The scene's bindings in group 3, for the fragment stage.
-fn scene_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
+/// The scene's bindings in group 3, for the fragment stage, with the entity layer's.
+fn scene_entries(entities: bool) -> Vec<wgpu::BindGroupLayoutEntry> {
     let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -132,6 +139,23 @@ fn scene_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
             },
         )
     }));
+    if entities {
+        entries.extend([
+            entry(RAY_ENTITY_STORE_BINDING, buffer(read)),
+            entry(
+                RAY_ENTITY_ATLAS_BINDING,
+                wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+            ),
+            entry(
+                RAY_ENTITY_SAMPLER_BINDING,
+                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            ),
+        ]);
+    }
     entries
 }
 
@@ -232,7 +256,7 @@ fn with_scene<T>(
         return None;
     }
     let mut entries = entries.to_vec();
-    entries.extend(scene_entries());
+    entries.extend(scene_entries(shape.entities));
     let refused = if shape.sprites.len() < RAY_SPRITE_ARRAYS as usize {
         Some("the terrain's sprite arrays aren't there".to_owned())
     } else {
@@ -280,19 +304,21 @@ fn with_scene<T>(
         ),
         sprites: shape.sprites[..RAY_SPRITE_ARRAYS as usize].to_vec(),
         split: shape.split.max(1),
+        entities: shape.entities,
     };
     Some((layout, built, rays))
 }
 
 impl Rays {
-    /// Writes where the camera is in `scene` and which of its instances are solid terrain's,
-    /// and returns this frame's `frame.ray_distance`.
+    /// Writes where the camera is in `scene`, which of its instances are solid and which
+    /// translucent terrain's, and where the entity layer's geometries start, and returns this
+    /// frame's `frame.ray_distance`.
     fn write(&self, queue: &wgpu::Queue, scene: &Traced<'_>) -> f32 {
-        let mut space = [0u8; 20];
-        space[..12].copy_from_slice(bytemuck::cast_slice(&scene.camera));
-        space[12..16].copy_from_slice(&self.split.to_ne_bytes());
-        space[16..].copy_from_slice(&scene.solid_instances.to_ne_bytes());
-        queue.write_buffer(&self.space, 0, &space);
+        queue.write_buffer(
+            &self.space,
+            0,
+            bytemuck::cast_slice(&space_words(self.split, scene)),
+        );
         scene.distance
     }
 
@@ -325,8 +351,40 @@ impl Rays {
                     resource: wgpu::BindingResource::TextureView(view),
                 }),
         );
+        // The renderer has the layer whenever a native pack's rays read it (`ray_prepare`).
+        if let Some(e) = scene.entities.as_ref().filter(|_| self.entities) {
+            let bindings = [
+                RAY_ENTITY_STORE_BINDING,
+                RAY_ENTITY_ATLAS_BINDING,
+                RAY_ENTITY_SAMPLER_BINDING,
+            ];
+            let resources = [
+                wgpu::BindingResource::Buffer(e.vertices.clone()),
+                wgpu::BindingResource::TextureView(e.atlas),
+                wgpu::BindingResource::Sampler(e.sampler),
+            ];
+            let entry = |(binding, resource)| wgpu::BindGroupEntry { binding, resource };
+            entries.extend(bindings.into_iter().zip(resources).map(entry));
+        }
         entries
     }
+}
+
+/// `horizon_RaySpace`'s eight words for `scene`, its sprite arrays holding `split` layers each.
+pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 8] {
+    let [x, y, z] = scene.camera.map(f32::to_bits);
+    let bases = scene.entities.as_ref().map_or([0; 2], |e| e.bases);
+    let instances = [scene.solid_instances, scene.translucent_instances];
+    [
+        x,
+        y,
+        z,
+        split,
+        instances[0],
+        instances[1],
+        bases[0],
+        bases[1],
+    ]
 }
 
 impl NativePost {
@@ -385,6 +443,11 @@ impl NativePost {
         let (trace, scene) = self.trace.as_ref().zip(scene)?;
         Some(trace.rays.write(queue, scene))
     }
+
+    /// Whether the passes trace the entity layer.
+    pub(in crate::gfx) fn traces_entities(&self) -> bool {
+        self.trace.as_ref().is_some_and(|t| t.rays.entities)
+    }
 }
 
 impl NativeTrace {
@@ -410,11 +473,11 @@ impl TerrainTrace {
     pub(in crate::gfx) fn new(
         device: &wgpu::Device,
         frame: &NativeFrame,
-        terrain: &TerrainShape<'_>,
+        (terrain, entities): (&TerrainShape<'_>, bool),
         build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<MaterialPipelines, String>,
     ) -> Option<Self> {
         let groups = (frame.entries.as_slice(), terrain_entries());
-        let shape = TraceShape::of(terrain);
+        let shape = TraceShape::of(terrain, entities);
         let (layout, pipelines, rays) = with_scene(device, (groups.0, &groups.1), &shape, build)?;
         Some(Self {
             layout,
@@ -454,6 +517,11 @@ impl TerrainTrace {
             let joined = frame.joined(device, &self.layout, &self.rays.entries(scene));
             self.group = Some((frame.group.clone(), scene.generation, joined));
         }
+    }
+
+    /// Whether the terrain traces the entity layer.
+    pub(in crate::gfx) fn traces_entities(&self) -> bool {
+        self.rays.entities
     }
 
     /// The pipelines and group 3 the terrain draws with this frame, if it traces.
@@ -511,7 +579,7 @@ mod tests {
             },
             count: None,
         }];
-        entries.extend(scene_entries());
+        entries.extend(scene_entries(false));
         let fits = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 9,
             max_storage_buffers_per_shader_stage: 2,
@@ -577,11 +645,43 @@ mod tests {
         );
     }
 
+    /// The entity layer's store, atlas and sampler count too: one more storage buffer and
+    /// sampled texture, and the group's bindings up to the sampler's.
+    #[test]
+    fn the_entity_layer_counts_toward_the_limits() {
+        let entries = scene_entries(true);
+        let fits = wgpu::Limits {
+            max_sampled_textures_per_shader_stage: 9,
+            max_storage_buffers_per_shader_stage: 3,
+            max_uniform_buffers_per_shader_stage: 1,
+            max_acceleration_structures_per_shader_stage: 1,
+            max_bindings_per_bind_group: 63,
+            ..Default::default()
+        };
+        assert_eq!(over_limits(&entries, &[], &fits, FRAGMENT), None);
+        let two = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 2,
+            ..fits.clone()
+        };
+        let why = over_limits(&entries, &[], &two, FRAGMENT).unwrap();
+        assert_eq!(why, "3 storage buffers, the device takes 2");
+        let eight = wgpu::Limits {
+            max_sampled_textures_per_shader_stage: 8,
+            ..fits.clone()
+        };
+        assert!(over_limits(&entries, &[], &eight, FRAGMENT).is_some());
+        // Without the layer the scene fits as before.
+        assert_eq!(
+            over_limits(&scene_entries(false), &[], &two, FRAGMENT),
+            None
+        );
+    }
+
     /// A traced post pass also reads the LabPBR maps: two more sampled textures in its stage,
     /// at bindings below the scene's that don't raise the group's count.
     #[test]
     fn a_traced_post_pass_s_maps_count_toward_its_limits() {
-        let mut entries = scene_entries();
+        let mut entries = scene_entries(false);
         entries.extend(post_pbr_entries());
         let fits = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 10,
@@ -605,7 +705,7 @@ mod tests {
     /// own doesn't count toward the group's.
     #[test]
     fn the_terrain_s_own_group_counts_toward_its_fragment_stage_s_limits() {
-        let mut entries = scene_entries();
+        let mut entries = scene_entries(false);
         let terrain = terrain_entries();
         // 8 sprite arrays, the lightmap and the emission thresholds; the globals' uniform.
         let textures =

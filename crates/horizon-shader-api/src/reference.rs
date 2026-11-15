@@ -13,7 +13,8 @@ use crate::manifest::{
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{
     GROUP, KEPT_BINDING, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING,
-    RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
+    RAY_ENTITY_SAMPLER_BINDING, RAY_ENTITY_STORE_BINDING, RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS,
+    RAY_SPRITES_BINDING, StageKind,
 };
 
 fn table(s: &Struct, offsets: Option<&[usize]>) -> String {
@@ -132,6 +133,12 @@ fn ray_tracing() -> String {
          - `const RAY_SOLID: u32`, `const RAY_TRANSLUCENT: u32`: the scene's two layers, bits to OR together. Solid\n  \
          terrain, with cut-outs (leaves, plants) and lava; and what the translucent pass draws: water, glass, stained\n  \
          glass, ice, slime and honey blocks, any block whose texture has partly see-through texels.\n\
+         - `const RAY_ENTITY: u32`: a third layer, only in a pack whose files name it, anywhere outside a comment (dead\n  \
+         code too): the entities the camera draws, which are mobs, players, armour stands, item frames, vehicles,\n  \
+         projectiles, falling blocks, block displays and the block entities drawn with them (a chest while it opens). Such\n  \
+         a pack's `RayHit` also has `entity`. Not in it: particles, text, the hand, the camera's own body in first person,\n  \
+         translucent items, additive glows, beams and portals, entities the camera doesn't draw (behind it, hidden), and\n  \
+         block entities at rest (a closed chest). `trace` and `trace_any` never read it.\n\
          - `fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit` and\n  \
          `fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool`: `trace`\n  \
          and `trace_any` over the layers `layers` names; `trace(o, d, m)` is `trace_layers(o, d, m, RAY_SOLID)`. With no\n  \
@@ -145,10 +152,12 @@ fn ray_tracing() -> String {
          the surface's own pass draws. In the solid layer it passes through the clear texels of a cut-out texture (leaves,\n\
          plants), as terrain's alpha test does: a texel stops it from alpha 0.5 up. In the translucent layer every texel\n\
          stops it, however faint, except a clear one (alpha below 0.01), which the translucent pass doesn't draw either;\n\
-         the hit's `albedo.a` is the texel's alpha and its `translucent` is true. A ray over both layers stops at the\n\
-         nearest surface of either: to go on through a translucent one, trace again from just behind the hit. The scene is\n\
-         Horizon's: the terrain around the camera, out to `frame.ray_distance` at least, without entities, particles,\n\
-         clouds or distant terrain. While\n\
+         the hit's `albedo.a` is the texel's alpha and its `translucent` is true. In the entity layer a texel stops it where\n\
+         vanilla's entity alpha test keeps the pixel, `(texel * tint).a` 0.1 or more (on the dying dragon's dissolve,\n\
+         vanilla's mask decides), from either side of the face. A ray over several layers stops at the nearest surface of\n\
+         any: to go on through a translucent one, trace again from just behind the hit. The scene is Horizon's: the\n\
+         terrain around the camera, out to `frame.ray_distance` at least, without particles, clouds or distant terrain,\n\
+         and with entities only in `RAY_ENTITY`. While\n\
          the game doesn't trace (`frame.has_ray_tracing` is 0) the pack is built and runs all the same, and every ray\n\
          misses. Your files name no ray query of their own (`ray_query`, `acceleration_structure`, `RayDesc`,\n\
          `RayIntersection`, a `rayQuery` function, `enable wgpu_ray_query`): the check refuses them, and an `output`\n\
@@ -160,9 +169,10 @@ fn ray_tracing() -> String {
     );
     out += &table(&RAY_HIT, None);
     out += &format!(
-        "Bindings {RAY_SCENE_BINDING} to {} of group {GROUP} hold the scene while the game traces, and in a post pass bindings\n\
-         {PBR_NORMALS_BINDING} and {PBR_SPECULAR_BINDING} the LabPBR maps (the material stage has them there already). They are Horizon's, as their\n\
-         `horizon_` names say, and change with the renderer.\n\n",
+        "Bindings {RAY_SCENE_BINDING} to {} of group {GROUP} hold the scene while the game traces ({RAY_ENTITY_STORE_BINDING} to\n\
+         {RAY_ENTITY_SAMPLER_BINDING} the entity layer, for a pack that names it), and in a post pass bindings {PBR_NORMALS_BINDING} and {PBR_SPECULAR_BINDING} the LabPBR maps (the\n\
+         material stage has them there already). They are Horizon's, as their `horizon_` names say, and change with the\n\
+         renderer.\n\n",
         RAY_SPRITES_BINDING + RAY_SPRITE_ARRAYS - 1
     );
     out

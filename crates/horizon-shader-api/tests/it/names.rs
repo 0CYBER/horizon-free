@@ -325,6 +325,43 @@ fn kept_resources_bring_the_frame_s_epochs_to_their_pack_only() {
     check(&pack_with(resource, Some(("post.wgsl", post)))).unwrap();
 }
 
+/// The rule for the entity layer: a pack brings `RAY_ENTITY` by naming it, and it comes to the
+/// stages that trace (here the post stage alone) and to no other, with the scene or without it.
+#[test]
+fn ray_entity_comes_to_the_traced_stages_of_the_pack_that_names_it() {
+    let post = "fn post(input: PostInput) -> vec4<f32> {\n    \
+                let mob = trace_any_layers(vec3<f32>(0.0), vec3<f32>(0.0, 1.0, 0.0), 8.0, RAY_ENTITY);\n    \
+                return input.color * f32(mob);\n}\n";
+    let pack = pack_with("[ray_tracing]\n", Some(("post.wgsl", post)));
+    check(&pack).unwrap();
+    for kind in StageKind::ALL {
+        let file = format!("{}.wgsl", kind.name());
+        let (mut want, _) = listed_names(kind);
+        if kind == StageKind::Post {
+            let rays = [
+                "RayHit",
+                "trace",
+                "trace_any",
+                "trace_layers",
+                "trace_any_layers",
+                "RAY_SOLID",
+                "RAY_TRANSLUCENT",
+                "RAY_ENTITY",
+                "hit_normal_map",
+                "hit_specular_map",
+                "block_pbr_maps",
+            ];
+            want.extend(rays.map(str::to_owned));
+        }
+        for composed in [
+            compose(&pack, kind, &file),
+            compose_scene(&pack, kind, &file),
+        ] {
+            assert_eq!(prelude_names(&composed, kind), want, "{kind:?}");
+        }
+    }
+}
+
 fn messages(result: Result<horizon_shader_api::Report, Vec<Problem>>) -> Vec<String> {
     result
         .expect_err("should fail")

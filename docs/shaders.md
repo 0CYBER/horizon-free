@@ -249,8 +249,8 @@ and the check refuses a pack that names one itself.
 
 | | |
 | --- | --- |
-| In the scene today | Terrain within 8 chunks of the camera, in two layers: solid terrain (cut-outs and lava included), which `trace` reads, and translucent terrain (water, stained glass, ice), which [`trace_layers`](#layers) reads; `frame.ray_distance` is how far it surely reaches |
-| Not in it yet | Entities, block entities, the hand, distant terrain tiles |
+| In the scene today | Terrain within 8 chunks of the camera, in two layers: solid terrain (cut-outs and lava included), which `trace` reads, and translucent terrain (water, stained glass, ice), which [`trace_layers`](#layers) reads; `frame.ray_distance` is how far it surely reaches. For a pack that names `RAY_ENTITY`, a third layer: [the entities the camera draws](#entities) |
+| Not in it yet | Entities the camera doesn't draw, block entities at rest (a closed chest), the hand, distant terrain tiles |
 | Turning it on | Pick the pack and start the game with it, on a GPU and graphics API with hardware ray queries: the device needs them from its creation, so in a game started without them a pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1` asks for ray queries and keeps the scene with any pack or none; any other value of it turns ray tracing off |
 | Without it | The pack loads and runs as it is: `frame.has_ray_tracing` is 0, `trace` misses and `trace_any` is false. Branch on `has_ray_tracing` and keep a look that works without rays. It is also 0 in a pack none of whose stages calls a trace function |
 | Graphics APIs | Vulkan; DirectX 12 where it compiles shaders with DXC (integrated GPUs, or `WGPU_DX12_COMPILER=dxc`), as FXC has no ray queries; Metal on macOS 15 and later where the GPU traces rays from render passes (untested). OpenGL has none |
@@ -277,14 +277,16 @@ pixel.
 
 ### Layers
 
-The scene has two layers, and a ray reads the ones it names. `trace` and `trace_any` read solid terrain alone;
-`trace_layers(origin, direction, max_distance, layers)` and `trace_any_layers(...)` take the layers, `RAY_SOLID`,
-`RAY_TRANSLUCENT` or both (`RAY_SOLID | RAY_TRANSLUCENT`), and are otherwise the same.
+The scene has two layers, three for a pack that names `RAY_ENTITY`, and a ray reads the ones it names. `trace` and
+`trace_any` read solid terrain alone; `trace_layers(origin, direction, max_distance, layers)` and
+`trace_any_layers(...)` take the layers, `RAY_SOLID`, `RAY_TRANSLUCENT`, `RAY_ENTITY` or several ORed together
+(`RAY_SOLID | RAY_TRANSLUCENT`), and are otherwise the same.
 
 | Layer | Holds | A ray stops |
 | --- | --- | --- |
 | `RAY_SOLID` | What the solid pass draws: opaque blocks, cut-outs (leaves, plants), lava | At an opaque texel, or a cut-out's texel of alpha 0.5 or more: the solid pass's alpha test |
 | `RAY_TRANSLUCENT` | What the translucent pass draws: water, glass and panes, ice, slime and honey blocks; any block whose texture has partly see-through texels | At any texel the translucent pass draws, however faint: only a clear one (alpha below 0.01) lets it through |
+| `RAY_ENTITY` | Only for a pack whose files name it: [the entities the camera draws](#entities) | Where vanilla's entity alpha test keeps the pixel: `(texel * tint).a` of 0.1 or more |
 
 A hit in the translucent layer has `translucent` true, `fluid` 1 on water, and its `albedo.a` is the texture's alpha
 there, so a pack decides what the surface does to the ray: a ray over both layers stops at the nearest surface of
@@ -307,6 +309,26 @@ for (var i = 0; i < 2; i++) {
 
 The translucent layer is the terrain's translucent quads as they are meshed: still and flowing water alike. A picture
 made with `trace` and `trace_any` alone is the same with the layer as without it.
+
+#### Entities
+
+`RAY_ENTITY` is the entities' layer. Only a pack whose files name it has it, anywhere outside a comment (dead code
+too): Horizon then builds it every frame, and binds it to the pack's traced stages, which also get `RayHit.entity`.
+Every other pack is built and runs as without it.
+
+| | |
+| --- | --- |
+| In it | What the camera draws this frame of mobs, players (third person, and the others), armour stands, item frames, projectiles, vehicles, falling blocks, block displays, and the block entities drawn with them (a chest while it opens) |
+| Not in it | Particles, world text and name tags, the hand, the camera's own body in first person, items Horizon draws itself (a dropped item, a framed one), translucent items, breaking cracks, entity shadows, energy swirls, beams, portals, lightning, glowing outlines, additive glows; entities the camera doesn't draw (behind it, or hidden), so they cast no traced shadow and show in no reflection yet; block entities at rest (a closed chest) |
+| A hit | `entity` true. `albedo` the entity texture's texel in linear light, `tint`, `light` and `uv` its vertices' (the colour vanilla multiplies in, alpha included; block and sky light; the atlas position), `normal` the face's against the ray, `tangent` from its uvs; `material`, `tags`, `emission` and `fluid` 0, `translucent` false, and `hit_normal_map` and `hit_specular_map` give their defaults |
+| A ray stops | Where vanilla's alpha test keeps the entity's pixel, `(texel * tint).a` 0.1 or more, from either side of the face (on the dying dragon's dissolve, where vanilla's mask keeps it). A pack's own `[entity]` alpha is not the layer's: the scene runs no pack code |
+| Cost | One BLAS of the frame's entity quads and the TLAS built again every frame, for a pack that names the layer |
+
+A mob's traced shadow on what a post pass lights, starting off the surface as from terrain:
+
+```wgsl
+let shadowed = trace_any_layers(position + normal * 0.01, frame.sun_direction, 64.0, RAY_SOLID | RAY_ENTITY);
+```
 
 **In the material stage.** Translucent terrain (water, stained glass, ice) is blended where `material` shades it and
 leaves no surface for a post pass to light, so that is where its rays go. `input.position` and `input.normal` are

@@ -6630,10 +6630,13 @@ impl Renderer {
 
     /// Whether ordinary entity models may be posed on the GPU (`Frame::skin`, `entity_skin::poses`).
     /// Not under a pack's `[entity]` stage: the game names the runs the stage lights by their
-    /// place in the CPU vertices (`take_entity_runs`), and posed models are not in them.
+    /// place in the CPU vertices (`take_entity_runs`), and posed models are not in them. Nor
+    /// while the ray scene has the entity layer (`traces_entities`), which is built from them.
     pub fn skins_entities(&self) -> bool {
         self.entity_skin.is_some()
             && !self.draws_entity_stage()
+            // The ray scene's entity BLAS is built from the CPU-posed vertices.
+            && !self.traces_entities()
             && entity_skin::poses(
                 self.frame_gen.on,
                 (self.pack_post.as_ref())
@@ -8365,7 +8368,6 @@ impl Renderer {
                 mapped_at_creation: false,
             });
         }
-        self.ray_prepare(&mut encoder, camera, frame.title);
         self.origins.clear();
         let (sections, retiring) = (&self.sections, &self.lod_retiring);
         laps.lap("r_cameras");
@@ -9141,7 +9143,7 @@ impl Renderer {
             self.entity_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Entity vertices"),
                 size: self.entity_capacity * std::mem::size_of::<Vertex>() as u64,
-                usage: entity_skin::EntitySkin::usage(self.entity_skin.is_some()),
+                usage: self.entity_usage(),
                 mapped_at_creation: false,
             });
         }
@@ -9524,6 +9526,7 @@ impl Renderer {
         self.set_up_pack_timing();
         let pack_reads_world = pack_post || native_post;
         laps.lap("r_uploads");
+        self.ray_prepare(&mut encoder, camera, frame.title);
         // Phase 2 of occlusion culling draws over the depth, and a shader pack or TAA reads it.
         // Post effects (a resource pack's chains, `use_depth_buffer`) read the world's depth
         // after the world pass, as `GameRenderer.render` hands them the main target's.

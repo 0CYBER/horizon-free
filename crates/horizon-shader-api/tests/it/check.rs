@@ -846,6 +846,7 @@ fn a_traced_pack_s_own_hit_helper_is_refused_as_its_own_trace_is() {
         "trace_any",
         "trace_layers",
         "RAY_TRANSLUCENT",
+        "RAY_ENTITY",
         "hit_normal_map",
         "block_pbr_maps",
     ];
@@ -1066,6 +1067,23 @@ fn a_ray_from_a_vertex_shader_is_refused() {
         [("material.wgsl".to_owned(), 3)],
         "{problems:#?}"
     );
+    // Nor is the entity layer, in either function.
+    let entities = displaced.replace("8.0)", "8.0, RAY_ENTITY)");
+    let entities = entities.replace("trace_any(", "trace_any_layers(");
+    let problems = traced_material(&entities, "[displacement]\n", &[]).unwrap_err();
+    assert_eq!(
+        reached(&problems, "displacement"),
+        [("material.wgsl".to_owned(), 3)],
+        "{problems:#?}"
+    );
+    let entities = vertex.replace("8.0)", "8.0, RAY_ENTITY)");
+    let entities = entities.replace("trace(", "trace_layers(");
+    let problems = traced_material(MATERIAL, keys, &[("vertex.wgsl", &entities)]).unwrap_err();
+    assert_eq!(
+        reached(&problems, "vertex"),
+        [("vertex.wgsl".to_owned(), 1)],
+        "{problems:#?}"
+    );
     // The material's own rays beside both are its to trace.
     let both = format!(
         "{REFLECTING}fn displacement(input: DisplacementInput) -> f32 {{ return input.height; }}\n"
@@ -1073,4 +1091,81 @@ fn a_ray_from_a_vertex_shader_is_refused() {
     let plain = "fn vertex(input: VertexInput) -> vec3<f32> { return input.position; }\n";
     let keys = format!("{keys}[displacement]\n");
     traced_material(&both, &keys, &[("vertex.wgsl", plain)]).unwrap();
+}
+
+/// A post pass that reads the entity layer: what of an entity the sun's ray meets first.
+const ENTITY_SHADOWED: &str = "fn post(input: PostInput) -> vec4<f32> {
+    let p = view_position(input.uv, input.depth);
+    let hit = trace_layers(p, frame.sun_direction, 64.0, RAY_SOLID | RAY_ENTITY);
+    let mob = select(0.0, 1.0, hit.entity);
+    let shadowed = f32(trace_any_layers(p, frame.sun_direction, 64.0, RAY_ENTITY));
+    return vec4<f32>(hit.albedo.rgb * mob + hit_normal_map(hit).rgb * shadowed, 1.0);
+}
+";
+
+/// The entity layer is only a pack's whose files name `RAY_ENTITY`, anywhere outside a comment:
+/// its post pass is checked without the scene and with it (each translated to SPIR-V, HLSL and
+/// Metal), and has `RayHit.entity`; another pack's has neither.
+#[test]
+fn the_entity_layer_is_the_pack_s_that_names_it() {
+    let report = traced(ENTITY_SHADOWED).unwrap();
+    let post = &report.stages[0];
+    assert!(post.traces_entities());
+    let plain = naga::valid::Capabilities::default();
+    assert!(!ray_queries(&post.module) && valid(&post.module, plain));
+    let scene = post.scene.as_ref().unwrap();
+    assert!(valid(scene, plain | naga::valid::Capabilities::RAY_QUERY));
+    // Dead code names it as well.
+    let dead = format!("fn unused() -> u32 {{ return RAY_ENTITY; }}\n{SHADOWED}");
+    assert!(traced(&dead).unwrap().stages[0].traces_entities());
+    // A comment doesn't; nor does a pack without `[ray_tracing]`, which has no layers at all.
+    let commented = format!("// RAY_ENTITY\n{SHADOWED}");
+    assert!(!traced(&commented).unwrap().stages[0].traces_entities());
+    assert!(post_pack(ENTITY_SHADOWED, TONEMAP, "").is_err());
+    // `entity` is a field only where the layer is.
+    let reads = SHADOWED.replace("hit.material + hit.tags", "u32(hit.entity)");
+    let problems = traced(&reads).unwrap_err();
+    assert!(problems[0].message.contains("entity"), "{problems:#?}");
+    let named = format!("const LAYERS: u32 = RAY_ENTITY;\n{reads}");
+    assert!(traced(&named).unwrap().stages[0].traces_entities());
+}
+
+/// A traced pack whose files don't name `RAY_ENTITY` composes as it did before the entity layer,
+/// byte for byte, with the scene and without it: the hashes are those of its post and material
+/// stages composed before.
+#[test]
+fn a_traced_pack_that_doesn_t_name_ray_entity_composes_as_before() {
+    let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+                    [material]\nfile = \"material.wgsl\"\n[[post]]\nfile = \"post.wgsl\"\n\
+                    [tonemap]\nfile = \"tonemap.wgsl\"\n[ray_tracing]\n";
+    let files = [
+        (MANIFEST, manifest),
+        ("material.wgsl", REFLECTING),
+        ("post.wgsl", SHADOWED),
+        ("tonemap.wgsl", TONEMAP),
+    ]
+    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+    .into();
+    let pack = Pack::from_files(files).unwrap();
+    let stages = [
+        (StageKind::Post, "post.wgsl"),
+        (StageKind::Material, "material.wgsl"),
+    ];
+    let hashes: Vec<String> = stages
+        .into_iter()
+        .flat_map(|(kind, file)| {
+            use horizon_shader_api::{compose, compose_scene};
+            [compose(&pack, kind, file), compose_scene(&pack, kind, file)]
+        })
+        .map(|c| horizon_shader_api::package::sha256_hex(c.text.as_bytes()))
+        .collect();
+    assert_eq!(
+        hashes,
+        [
+            "98798d371e540aa157b5e297d13f4cb26d033cd20fa4d7e0d4812532a3929da1",
+            "38e22f3422efecd68b09c7156406fbbe2a44c11962bc012740bba3b418453505",
+            "97d863f6ab2d52d7b3d7acf56804fc84762007df473b0a9217ae1a52722e0756",
+            "3d90723593cdcf680d2cc479b8eedaafd394a7acdbfc58a9c4c5c4761692e876",
+        ]
+    );
 }

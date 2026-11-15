@@ -27,14 +27,19 @@
 //! (`out_of_memory_free`). A part whose slot or BLAS can't be made waits as at a full store, a
 //! TLAS that can't grow leaves the frame's scene as it was, and without room for the first store
 //! or TLAS there is no scene.
+//!
+//! For a pack whose files name `RAY_ENTITY` the scene has a third layer, the entities the camera
+//! draws (spec #16011 item 3, step 1: `Entities`): one BLAS over the entity stream's quads that
+//! the batch marked, read from its vertex buffer as it is, its instance after the translucent
+//! ones. It is built again every frame, after the stream's upload, so the TLAS is too.
 
 use glam::DVec3;
 
-use horizon_shader_api::stages::{RAY_SOLID, RAY_TRANSLUCENT};
+use horizon_shader_api::stages::{RAY_ENTITY, RAY_SOLID, RAY_TRANSLUCENT};
 
 use crate::fast_hash::FxHashMap;
 use crate::gfx::{Renderer, SectionGpu, SectionKey, arena::Arena, resident::Resident};
-use crate::mesher::TerrainVertex;
+use crate::mesher::{TerrainVertex, Vertex};
 
 /// BLAS builds per frame at most: a world that just loaded builds over a few frames.
 const BUILDS_PER_FRAME: usize = 512;
@@ -47,6 +52,12 @@ const MOST_STORE: u64 = 1 << 26;
 /// Chunks around the camera the TLAS spans, unless `HORIZON_RT_CHUNKS` says otherwise. The
 /// #1180 spike's TLAS over every section cost 2-7 ms of CPU a frame at render distance 32.
 const REACH: i32 = 8;
+/// Bytes per vertex of the entity stream.
+const ENTITY_STRIDE: u64 = std::mem::size_of::<Vertex>() as u64;
+/// What the entity vertex buffer needs on top of its own usages for the entity layer: its BLAS
+/// is built from it, and rays read it.
+const ENTITY_INPUT: wgpu::BufferUsages =
+    wgpu::BufferUsages::STORAGE.union(wgpu::BufferUsages::BLAS_INPUT);
 
 /// The renderer's side: the calls gfx.rs makes, each one line there.
 impl Renderer {
@@ -92,30 +103,206 @@ impl Renderer {
         }
     }
 
-    /// The frame's BLAS builds and TLAS, recorded in `encoder` before the world pass.
+    /// The frame's BLAS builds and TLAS, recorded in `encoder` after the entity stream's
+    /// upload and before the passes that trace (the native shadow pass, the world pass).
     pub(in crate::gfx) fn ray_prepare(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         camera: DVec3,
         title: bool,
     ) {
-        if let Some(rt) = &mut self.ray_scene
-            && !title
-        {
-            crate::spans::time("ray scene", || {
-                rt.prepare(
-                    &self.device,
-                    &self.queue,
-                    encoder,
-                    &self.sections,
-                    &self.arena,
-                    self.translucent_arena.as_ref().unwrap_or(&self.arena),
-                    &self.indices,
-                    camera,
-                )
+        if self.ray_scene.is_none() || title {
+            return;
+        }
+        let entities = self.traces_entities();
+        if entities && !self.entity_buffer.usage().contains(ENTITY_INPUT) {
+            // The layer just came on: a buffer with its usages, given this frame's vertices again,
+            // since the old one can't be copied from. They are the batch's alone: nothing is posed
+            // on the GPU while the layer is on (`skins_entities`).
+            self.entity_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Entity vertices"),
+                size: self.entity_buffer.size(),
+                usage: self.entity_usage(),
+                mapped_at_creation: false,
             });
+            let vertices = bytemuck::cast_slice(&self.entity_batch.combined);
+            self.uploads
+                .buffer(encoder, &self.entity_buffer, 0, vertices);
+        }
+        let stream = entities.then_some(Stream {
+            buffer: &self.entity_buffer,
+            atlas: &self.entity_atlas,
+            ranges: self.entity_batch.ray_ranges,
+        });
+        let Some(rt) = &mut self.ray_scene else {
+            return;
+        };
+        crate::spans::time("ray scene", || {
+            rt.prepare(
+                &self.device,
+                &self.queue,
+                encoder,
+                (&self.sections, &self.arena),
+                self.translucent_arena.as_ref().unwrap_or(&self.arena),
+                &self.indices,
+                camera,
+                stream,
+            )
+        });
+    }
+
+    /// Whether the scene has the entity layer: the device traces, and the native pack's rays
+    /// read the layer (its files name `RAY_ENTITY`). The game then names the stream's entities.
+    pub fn traces_entities(&self) -> bool {
+        self.ray_scene.is_some() && self.native.as_ref().is_some_and(|n| n.traces_entities())
+    }
+
+    /// The entity vertex buffer's usages, `ENTITY_INPUT` among them with the entity layer.
+    pub(in crate::gfx) fn entity_usage(&self) -> wgpu::BufferUsages {
+        let usage = crate::gfx::entity_skin::EntitySkin::usage(self.entity_skin.is_some());
+        match self.traces_entities() {
+            true => usage | ENTITY_INPUT,
+            false => usage,
         }
     }
+}
+
+/// What the entity layer is built from this frame: the entity stream's vertex buffer, its
+/// texture atlas, and where the batch's ordinary and improved transparency quads are in it, as
+/// (first quad, quads) (`EntityBatch::ray_ranges`).
+pub(in crate::gfx) struct Stream<'a> {
+    buffer: &'a wgpu::Buffer,
+    atlas: &'a wgpu::TextureView,
+    ranges: [(u32, u32); 2],
+}
+
+/// The entity layer: one BLAS of two geometries, the stream's two ranges, read where they are
+/// in its vertex buffer (positions first, camera-relative) with the shared quad indices, and
+/// built again every frame. wgpu has no refit, and a compacted BLAS can't be built again.
+struct Entities {
+    blas: wgpu::Blas,
+    /// Quads each geometry holds at most.
+    sizes: [u32; 2],
+    /// Quads of the stream the layer's binding holds (`largest_entity_binding`).
+    most: u32,
+    buffer: wgpu::Buffer,
+    atlas: wgpu::TextureView,
+    /// Nearest, as entity.wgsl samples the atlas.
+    sampler: wgpu::Sampler,
+    /// This frame's geometries, within `most`.
+    ranges: [(u32, u32); 2],
+    /// Whether the log said the binding holds fewer quads than the stream.
+    capped_logged: bool,
+}
+
+impl Entities {
+    fn new(device: &wgpu::Device, stream: &Stream<'_>) -> Self {
+        let sizes = [64; 2];
+        Self {
+            blas: entity_blas(device, sizes),
+            sizes,
+            most: largest_entity_binding(&device.limits()),
+            buffer: stream.buffer.clone(),
+            atlas: stream.atlas.clone(),
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("Ray tracing: entity atlas"),
+                ..Default::default()
+            }),
+            ranges: [(0, 0); 2],
+            capped_logged: false,
+        }
+    }
+
+    /// Takes this frame's `stream`: its ranges, as far as the binding holds them, and a BLAS
+    /// large enough for them. Whether its buffer is another one than last frame's.
+    fn fit(&mut self, device: &wgpu::Device, stream: &Stream<'_>) -> bool {
+        let (ranges, capped) = within_binding(stream.ranges, self.most);
+        if capped && !std::mem::replace(&mut self.capped_logged, true) {
+            log::warn!(
+                "Horizon renderer: the ray tracing scene's entity layer holds {} entity quads; \
+                 the ones past them let rays through",
+                self.most
+            );
+        }
+        self.ranges = ranges;
+        if ranges.iter().zip(self.sizes).any(|(r, size)| r.1 > size) {
+            self.sizes = ranges.map(|r| r.1.next_power_of_two()).map(|n| n.max(64));
+            self.blas = entity_blas(device, self.sizes);
+        }
+        let other = self.buffer != *stream.buffer;
+        self.buffer = stream.buffer.clone();
+        other
+    }
+
+    /// The geometries' sizes this frame.
+    fn built_sizes(&self) -> [wgpu::BlasTriangleGeometrySizeDescriptor; 2] {
+        self.ranges.map(|r| geometry_size(r.1))
+    }
+
+    /// The build of the BLAS from the stream, with the geometries' `sizes` (`built_sizes`).
+    fn build<'a>(
+        &'a self,
+        sizes: &'a [wgpu::BlasTriangleGeometrySizeDescriptor; 2],
+        indices: &'a wgpu::Buffer,
+    ) -> wgpu::BlasBuildEntry<'a> {
+        let geometry = |i: usize| wgpu::BlasTriangleGeometry {
+            size: &sizes[i],
+            vertex_buffer: &self.buffer,
+            first_vertex: self.ranges[i].0 * 4,
+            vertex_stride: ENTITY_STRIDE,
+            index_buffer: Some(indices),
+            first_index: Some(0),
+            transform_buffer: None,
+            transform_buffer_offset: None,
+        };
+        wgpu::BlasBuildEntry {
+            blas: &self.blas,
+            geometry: wgpu::BlasGeometries::TriangleGeometries((0..2).map(geometry).collect()),
+        }
+    }
+}
+
+/// A triangle geometry of `quads` quads: their vertices' positions are three floats, and the
+/// shared quad indices make two triangles of each.
+fn geometry_size(quads: u32) -> wgpu::BlasTriangleGeometrySizeDescriptor {
+    wgpu::BlasTriangleGeometrySizeDescriptor {
+        vertex_format: wgpu::VertexFormat::Float32x3,
+        vertex_count: quads * 4,
+        index_format: Some(wgpu::IndexFormat::Uint32),
+        index_count: Some(quads * 6),
+        // Not opaque: rays test the texels themselves.
+        flags: wgpu::AccelerationStructureGeometryFlags::empty(),
+    }
+}
+
+/// The entity layer's BLAS, of two geometries of `sizes` quads at most.
+fn entity_blas(device: &wgpu::Device, sizes: [u32; 2]) -> wgpu::Blas {
+    device.create_blas(
+        &wgpu::CreateBlasDescriptor {
+            label: Some("Ray tracing: entities"),
+            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_BUILD,
+            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+        },
+        wgpu::BlasGeometrySizeDescriptors::Triangles {
+            descriptors: sizes.map(geometry_size).to_vec(),
+        },
+    )
+}
+
+/// Quads of the entity stream a binding holds on a device with `limits`: rays read the layer's
+/// vertices through one.
+fn largest_entity_binding(limits: &wgpu::Limits) -> u32 {
+    (limits.max_storage_buffer_binding_size / (ENTITY_STRIDE * 4)).min(u64::from(u32::MAX)) as u32
+}
+
+/// `ranges` (first quad, quads) cut to the first `most` quads, and whether any lost quads.
+fn within_binding(ranges: [(u32, u32); 2], most: u32) -> ([(u32, u32); 2], bool) {
+    let cut = ranges.map(|(first, quads)| {
+        let first = first.min(most);
+        (first, quads.min(most - first))
+    });
+    let capped = cut.iter().zip(&ranges).any(|(c, r)| c.1 < r.1);
+    (cut, capped)
 }
 
 /// Which of a section's quads: the scene has a layer of each, and a ray reads the ones it asks
@@ -186,6 +373,10 @@ pub(in crate::gfx) struct RayScene {
     /// `Resident::removals` when the scene last dropped the sections no longer resident:
     /// gfx.rs releases sections (unloaded columns, far terrain's fade-out) without `ray_mark`.
     removals: u64,
+    /// The TLAS's instances of both terrain layers: the entity layer's instance comes after.
+    translucent_instances: u32,
+    /// The entity layer, while the native pack's rays read it.
+    entities: Option<Entities>,
 }
 
 /// What a trace reads this frame (spec #15624).
@@ -196,13 +387,28 @@ pub(in crate::gfx) struct Traced<'a> {
     pub solid_instances: u32,
     /// The sections' vertices: an instance's custom data is its quads' first here.
     pub store: &'a wgpu::Buffer,
-    /// Changes when `tlas` or `store` is another object than last frame's.
+    /// Where translucent terrain's instances end: the next is the entity layer's.
+    pub translucent_instances: u32,
+    /// The entity layer, while the native pack's rays read it.
+    pub entities: Option<TracedEntities<'a>>,
+    /// Changes when `tlas`, `store` or the entity layer's buffer is another object than last
+    /// frame's.
     pub generation: u64,
     /// The camera in the TLAS's space: from the anchor column's corner along x and z, the
     /// world's y.
     pub camera: [f32; 3],
     /// Blocks from the camera, along x and along z, the TLAS spans whichever way one goes.
     pub distance: f32,
+}
+
+/// What a trace reads of the entity layer.
+pub(in crate::gfx) struct TracedEntities<'a> {
+    /// The stream's vertices, as far as a binding holds them.
+    pub vertices: wgpu::BufferBinding<'a>,
+    pub atlas: &'a wgpu::TextureView,
+    pub sampler: &'a wgpu::Sampler,
+    /// Each of the BLAS's two geometries' first quad in `vertices`.
+    pub bases: [u32; 2],
 }
 
 impl RayScene {
@@ -235,6 +441,8 @@ impl RayScene {
             rebuild: false,
             generation: 0,
             removals: 0,
+            translucent_instances: 0,
+            entities: None,
         })
     }
 
@@ -250,10 +458,24 @@ impl RayScene {
     /// the TLAS is unbuilt, or still holds the world left.
     pub(in crate::gfx) fn traced(&self, camera: DVec3) -> Option<Traced<'_>> {
         let (camera, distance) = scene_space(camera, self.anchor?, self.reach);
+        let entities = self.entities.as_ref().map(|e| TracedEntities {
+            vertices: wgpu::BufferBinding {
+                buffer: &e.buffer,
+                offset: 0,
+                size: wgpu::BufferSize::new(
+                    e.buffer.size().min(u64::from(e.most) * 4 * ENTITY_STRIDE),
+                ),
+            },
+            atlas: &e.atlas,
+            sampler: &e.sampler,
+            bases: e.ranges.map(|r| r.0),
+        });
         Some(Traced {
             tlas: &self.tlas,
             solid_instances: self.solid_instances,
             store: &self.unpacker.store,
+            translucent_instances: self.translucent_instances,
+            entities,
             generation: self.generation,
             camera,
             distance,
@@ -304,20 +526,35 @@ impl RayScene {
 
     /// Builds the BLAS of parts marked since the last frame (at most `BUILDS_PER_FRAME`, and as
     /// many as the store has room for), and the TLAS again when a BLAS changed or the camera
-    /// entered another chunk column. `translucent` is the arena the sections' translucent quads
-    /// are in (`SectionGpu::translucent_at`).
+    /// entered another chunk column, or every frame with the entity layer (from `stream`).
+    /// `translucent` is the arena the sections' translucent quads are in
+    /// (`SectionGpu::translucent_at`).
     #[allow(clippy::too_many_arguments)]
     fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        sections: &Resident<SectionGpu>,
-        arena: &Arena,
+        (sections, arena): (&Resident<SectionGpu>, &Arena),
         translucent: &Arena,
         indices: &wgpu::Buffer,
         camera: DVec3,
+        stream: Option<Stream<'_>>,
     ) {
+        match (&mut self.entities, stream) {
+            (_, None) => self.entities = None,
+            (Some(e), Some(stream)) => {
+                if e.fit(device, &stream) {
+                    self.generation += 1;
+                }
+            }
+            (None, Some(stream)) => {
+                let mut e = Entities::new(device, &stream);
+                e.fit(device, &stream);
+                self.entities = Some(e);
+                self.generation += 1;
+            }
+        }
         let column = crate::gfx::resident::camera_column(camera);
         // Only sections within `reach` get a BLAS (at render distance 32 all of them took 1.3 GB
         // of video memory); those past `reach + 2` lose theirs, so walking along a chunk border
@@ -350,7 +587,11 @@ impl RayScene {
         // wrong side of `solid_instances`. The first frame needs no more than the first TLAS
         // holds (`BUILDS_PER_FRAME`), so it never keeps one that was never built.
         let near = |part: &Part| within(&part.0, column, self.reach);
-        let wanted = instances_wanted(&self.blas, &self.dirty, near);
+        let entity_layer = self
+            .entities
+            .as_ref()
+            .is_some_and(|e| e.ranges.iter().any(|r| r.1 > 0));
+        let wanted = instances_wanted(&self.blas, &self.dirty, near) + usize::from(entity_layer);
         let len = self.tlas.get().len();
         let retry = self.refused != Some((wanted, column));
         match tlas_room(&mut self.tlas, len, wanted, |capacity| {
@@ -443,7 +684,7 @@ impl RayScene {
         }
         self.dirty.drain(..taken);
         self.dirty.extend(deferred);
-        if builds.is_empty() && !changed && self.anchor == Some(column) {
+        if builds.is_empty() && !changed && self.anchor == Some(column) && self.entities.is_none() {
             return;
         }
         self.unpacker
@@ -452,8 +693,16 @@ impl RayScene {
             self.blas.insert(b.part, b.blas.clone());
             self.to_compact.push((b.part, b.blas.clone()));
         }
+        // A layer without quads this frame has no instance: an empty BLAS can't be built.
+        let entities = self
+            .entities
+            .as_ref()
+            .filter(|e| e.ranges.iter().any(|r| r.1 > 0));
         // `instances_wanted` counted these, and more.
-        debug_assert!(self.blas.keys().filter(|part| near(part)).count() <= self.tlas.get().len());
+        debug_assert!(
+            self.blas.keys().filter(|part| near(part)).count() + usize::from(entities.is_some())
+                <= self.tlas.get().len()
+        );
         let min_y = sections.min_y();
         let mut n = 0;
         // The solid layer's instances first: a hit tells its layer by its instance's index.
@@ -477,13 +726,26 @@ impl RayScene {
                 self.solid_instances = n as u32;
             }
         }
+        self.translucent_instances = n as u32;
+        if let Some(e) = entities {
+            // The stream's vertices are camera-relative: the camera's place in the TLAS's space.
+            let ([x, y, z], _) = scene_space(camera, column, self.reach);
+            let transform = [1.0, 0.0, 0.0, x, 0.0, 1.0, 0.0, y, 0.0, 0.0, 1.0, z];
+            let mask = RAY_ENTITY as u8;
+            self.tlas[n] = Some(wgpu::TlasInstance::new(&e.blas, transform, 0, mask));
+            n += 1;
+        }
         for i in n..self.tlas.get().len() {
             if self.tlas[i].is_none() {
                 break;
             }
             self.tlas[i] = None;
         }
-        let entries = build_entries(&builds, &self.unpacker.store, indices);
+        let mut entries = build_entries(&builds, &self.unpacker.store, indices);
+        let sizes = entities.map(Entities::built_sizes);
+        if let (Some(e), Some(sizes)) = (entities, &sizes) {
+            entries.push(e.build(sizes, indices));
+        }
         encoder.build_acceleration_structures(entries.iter(), std::iter::once(&self.tlas));
         self.anchor = Some(column);
     }
@@ -992,6 +1254,10 @@ fn instance_origin(key: SectionKey, min_y: i32, anchor: (i32, i32)) -> [f32; 3] 
         ((key.2 - anchor.1) * 16) as f32,
     ]
 }
+
+#[cfg(test)]
+#[path = "ray_entity_tests.rs"]
+mod entity_tests;
 
 #[cfg(test)]
 mod tests {

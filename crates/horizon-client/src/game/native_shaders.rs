@@ -121,10 +121,11 @@ impl Game<'_> {
     /// material (a translucent item in a hand, an energy swirl) and unlit overlays (the beam
     /// that heals the dragon, an End portal) stay Horizon's all the same: `EntityBatch` names
     /// only its ordinary quads, and the stage's shader passes the unlit ones on.
-    /// Kept only while the pack in use has the stage.
+    /// Kept only while the pack in use has the stage, or its rays read the entity layer
+    /// (`names_entity_runs`).
     fn lit_run(&self, run: std::ops::Range<usize>, kind: EntityKind) {
         let stage = self.renderer.as_ref();
-        if stage.is_some_and(|r| r.draws_entity_stage()) {
+        if stage.is_some_and(|r| r.names_entity_runs()) {
             self.native_shaders.entity_runs.borrow_mut().push(run, kind);
         }
     }
