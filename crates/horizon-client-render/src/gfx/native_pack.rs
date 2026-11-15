@@ -318,7 +318,7 @@ impl NativePack {
         let (mut post, others): (Vec<_>, Vec<_>) = report
             .stages
             .into_iter()
-            .partition(|s| s.kind == StageKind::Post);
+            .partition(|s| matches!(s.kind, StageKind::Post | StageKind::Compute));
         let sky = others
             .iter()
             .find(|s| s.kind == StageKind::Sky)
@@ -517,7 +517,7 @@ pub struct WorldTargets<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::gfx) mod tests {
     use super::{NativePack, TerrainShape, chosen_shadow, reads_opaque};
     use horizon_shader_api::manifest::{OptionKind, PackOption, Shadow};
 
@@ -635,7 +635,9 @@ file = \"material.wgsl\"
 
     /// The terrain's group 0 as the renderer makes it (`Renderer::new`), and an empty layout
     /// for the other groups.
-    fn terrain_layouts(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
+    pub(in crate::gfx) fn terrain_layouts(
+        device: &wgpu::Device,
+    ) -> (wgpu::BindGroupLayout, wgpu::BindGroupLayout) {
         // Its uniform, the 10 sampled textures (_terrain.wgsl_'s 8 sprite arrays, the
         // lightmap and the emission thresholds) and two samplers.
         let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
@@ -680,7 +682,7 @@ file = \"material.wgsl\"
         (globals, empty)
     }
 
-    fn terrain_shape<'a>(
+    pub(in crate::gfx) fn terrain_shape<'a>(
         globals: &'a wgpu::BindGroupLayout,
         empty: &'a wgpu::BindGroupLayout,
     ) -> TerrainShape<'a> {

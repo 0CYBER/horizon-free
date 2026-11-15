@@ -2,7 +2,8 @@
 //! made per view when the pack is installed, the layout entries a pass binds them with, what a
 //! device lacks for them, and the epochs that say when they start over; the post chain's passes
 //! bind them, and each frame starts by swapping, fitting and clearing them (`KeptStore::begin`).
-//! Compute passes don't run yet, and the game still refuses such a pack.
+//! Compute `[[post]]` entries dispatch where they stand in the chain; the game still refuses a
+//! pack with them (`not_drawn`).
 use horizon_shader_api::check::{CheckedStage, Report};
 use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
 use horizon_shader_api::stages::{GROUP, KeptAccess, KeptBinding, kept_bindings};
@@ -14,6 +15,15 @@ use super::{NativePost, Writes};
 pub(super) enum Held {
     Buffer(wgpu::Buffer),
     Pair([wgpu::TextureView; 2]),
+}
+
+/// A compute `[[post]]` entry: its pipeline, and the ordinary pass it runs before (`at`).
+pub(super) struct ComputePass {
+    label: String,
+    at: usize,
+    pipeline: wgpu::ComputePipeline,
+    workgroup: [u32; 3],
+    dispatch: Dispatch,
 }
 
 /// A post pass's kept bindings, and its layouts: the chain's shared entries and those.
@@ -30,13 +40,18 @@ pub(super) struct KeptStore {
     size: [u32; 2],
     /// This frame's view and world epochs and R, from frame prep (`NativePack::write`).
     next: ([u32; 2], [u32; 2]),
-    /// Each post pass's bindings and layouts (`chain`); a rebuild carries the rest, not these.
+    /// Each post pass's bindings and layouts (`chain`), the ordinary passes' then the compute
+    /// ones', and the compute passes; a rebuild carries the rest, not these.
     passes: Vec<KeptPass>,
+    computes: Vec<ComputePass>,
     /// Which version of each texture this frame writes; the other is `_previous`.
     parity: usize,
     /// Real frames handed over (`frame`), and the one `begin` last started.
     serial: u32,
     begun: u32,
+    /// Whether the last `begin` started its frame: the compute passes run once a frame, so
+    /// an in-place write (`x[i] += 1`) counts once however often the chain runs.
+    started: bool,
     /// The epochs the resources were last cleared for.
     cleared: [u32; 2],
 }
@@ -58,8 +73,10 @@ impl KeptStore {
             size,
             next: ([1, 1], size),
             passes: Vec::new(),
+            computes: Vec::new(),
             parity: 0,
             serial: 0,
+            started: false,
             begun: 0,
             cleared: [1, 1],
         }
@@ -117,7 +134,8 @@ impl KeptStore {
         size: [u32; 2],
     ) -> bool {
         let remade = self.fit(device, size);
-        if self.begun == self.serial {
+        self.started = self.begun != self.serial;
+        if !self.started {
             return remade;
         }
         (self.begun, self.parity) = (self.serial, 1 - self.parity);
@@ -154,36 +172,41 @@ impl KeptStore {
     }
 }
 
-/// The kept resources of a post chain of the ordinary passes `stages` of `manifest`, each pass's
-/// layouts holding the group's `shared` entries and its kept ones: none without
-/// `[[resource]]`, an error where the device can't run or make them (`unmet`) or the pack has
-/// compute passes.
+/// The kept resources and compute passes of the post chain `stages` (the `[[post]]` entries of
+/// `manifest`, in order), and its ordinary passes: each pass's layouts hold the group's
+/// `shared` entries and its kept ones. None without `[[resource]]`: a compute pass would have
+/// nothing to write, so it doesn't run. An error where the device can't run or make them
+/// (`unmet`) or refuses a compute pipeline.
 pub(super) fn chain(
     device: &wgpu::Device,
     manifest: &Manifest,
-    stages: &[CheckedStage],
+    stages: Vec<CheckedStage>,
     shared: &[wgpu::BindGroupLayoutEntry],
-) -> Result<Option<KeptStore>, String> {
+    constants: &[(String, f64)],
+) -> Result<(Vec<CheckedStage>, Option<KeptStore>), String> {
     let kept = &manifest.kept;
+    let computing = |s: &CheckedStage| s.kind == StageKind::Compute;
     if kept.resources.is_empty() {
-        return Ok(None);
+        return Ok((stages.into_iter().filter(|s| !computing(s)).collect(), None));
     }
-    if let Some(why) = unmet(device, manifest, stages, shared) {
+    if let Some(why) = unmet(device, manifest, &stages, shared) {
         return Err(why);
     }
-    if manifest.post.iter().any(|p| p.compute) {
-        return Err("compute [[post]] passes don't run yet".into());
-    }
+    let (computes, ordinary): (Vec<_>, Vec<_>) = stages.into_iter().partition(computing);
     let mut store = KeptStore::declared(kept, [1, 1]);
-    store.passes = (manifest.post.iter())
-        .map(|entry| {
+    // The ordinary passes' layouts first, so a pass's index is its index in the chain.
+    let (plain, compute): (Vec<_>, Vec<_>) = manifest.post.iter().partition(|p| !p.compute);
+    let plain = plain.into_iter().map(|p| (p, wgpu::ShaderStages::FRAGMENT));
+    let compute = compute
+        .into_iter()
+        .map(|p| (p, wgpu::ShaderStages::COMPUTE));
+    store.passes = (plain.chain(compute))
+        .map(|(entry, visibility)| {
             let bindings = kept_bindings(manifest, entry);
-            let mut entries = shared.to_vec();
-            entries.extend(layout_entries(
-                kept,
-                &bindings,
-                wgpu::ShaderStages::FRAGMENT,
-            ));
+            let mut entries: Vec<_> = (shared.iter())
+                .map(|e| wgpu::BindGroupLayoutEntry { visibility, ..*e })
+                .collect();
+            entries.extend(layout_entries(kept, &bindings, visibility));
             let label = Some("Native shader pack post, kept");
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label,
@@ -204,14 +227,97 @@ pub(super) fn chain(
             }
         })
         .collect();
-    Ok(Some(store))
+    // A compute entry runs before the ordinary pass after it in the list (`at`).
+    let (mut at, mut computes) = (0, computes.into_iter());
+    for entry in &manifest.post {
+        if !entry.compute {
+            at += 1;
+            continue;
+        }
+        let Some(stage) = computes.next() else {
+            return Err(format!("{}: no checked compute stage", entry.file));
+        };
+        let layout = &store.passes[ordinary.len() + store.computes.len()].pipeline;
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let present = super::present_constants(&stage.module, constants);
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(&super::super::dx12_compiler::module_label(&stage.label)),
+            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(stage.module)),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(&stage.label),
+            layout: Some(layout),
+            module: &module,
+            entry_point: Some("horizon_cs_compute"),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &present,
+                ..Default::default()
+            },
+            cache: None,
+        });
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            return Err(format!("{}: {e}", stage.file));
+        }
+        store.computes.push(ComputePass {
+            label: stage.label,
+            at,
+            pipeline,
+            workgroup: entry.workgroup.unwrap_or([1, 1, 1]),
+            dispatch: entry.dispatch.unwrap_or(Dispatch::Pixels),
+        });
+    }
+    Ok((ordinary, Some(store)))
 }
 
-/// Where each `[[post]]` entry's `output` draws: one of the pack's `targets`
+/// The bind groups a parity of the chain makes, in order: each ordinary pass's (index, its own
+/// index), then each compute pass's (index, the ordinary pass it runs before, whose `previous`
+/// it reads too).
+pub(super) fn order(
+    kept: &Option<KeptStore>,
+    ordinary: usize,
+) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let computes = kept.iter().flat_map(|k| &k.computes);
+    (0..ordinary)
+        .map(|i| (i, i))
+        .chain(computes.enumerate().map(move |(c, p)| (ordinary + c, p.at)))
+}
+
+/// Dispatches, in `encoder`, the compute passes that run before ordinary pass `at`, with this
+/// frame's `groups` (`order`'s) at R `size`, on the frame's first run of the chain only
+/// (`begin`): `"pixels"` covers R in whole workgroups, the prelude's `in_bounds` false past it.
+/// An indirect dispatch (#16545's follow-up) would take its workgroups from a buffer here.
+pub(super) fn dispatch(
+    kept: &Option<KeptStore>,
+    encoder: &mut wgpu::CommandEncoder,
+    groups: &[wgpu::BindGroup],
+    at: usize,
+    size: [u32; 2],
+) {
+    let Some(k) = kept.as_ref().filter(|k| k.started) else {
+        return;
+    };
+    let ordinary = k.passes.len() - k.computes.len();
+    for (c, p) in k.computes.iter().enumerate().filter(|(_, p)| p.at == at) {
+        let cells = match p.dispatch {
+            Dispatch::Cells(cells) => cells,
+            Dispatch::Pixels => [size[0], size[1], 1],
+        };
+        let [x, y, z] = [0, 1, 2].map(|i| cells[i].div_ceil(p.workgroup[i]));
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(&p.label),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&p.pipeline);
+        pass.set_bind_group(GROUP, &groups[ordinary + c], &[]);
+        pass.dispatch_workgroups(x, y, z);
+    }
+}
+
+/// Where each ordinary `[[post]]` entry's `output` draws: one of the pack's `targets`
 /// (`Manifest::post_targets`), a kept texture, or nowhere of its own (the chain).
 pub(super) fn outputs(manifest: &Manifest, targets: &[(&str, f32)]) -> Vec<Option<Writes>> {
     let kept = |name| (manifest.kept.resources.iter()).position(|r| r.name == name);
-    (manifest.post.iter())
+    (manifest.post.iter().filter(|p| !p.compute))
         .map(|p| {
             let name = p.output.as_deref()?;
             let target = targets.iter().position(|t| t.0 == name).map(Writes::Target);
@@ -301,6 +407,7 @@ impl NativePost {
     pub(in crate::gfx) fn carry(&mut self, old: &mut Self) {
         if let (Some(new), Some(was)) = (&mut self.kept, &mut old.kept) {
             std::mem::swap(&mut new.passes, &mut was.passes);
+            std::mem::swap(&mut new.computes, &mut was.computes);
             std::mem::swap(new, was);
         }
     }

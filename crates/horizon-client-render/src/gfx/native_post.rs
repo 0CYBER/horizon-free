@@ -1066,9 +1066,9 @@ fn post_pipeline(
 }
 
 impl NativePost {
-    /// Pipelines for `stages` (the pack's post passes, in order) with the option values
-    /// `constants`, the last onto `picture`, and `tonemap` (else Horizon's) onto a screen of
-    /// `format`. Errors name the pass wgpu refused.
+    /// Pipelines for `stages` (the pack's `[[post]]` entries in order, the compute ones run by
+    /// the kept store) with the option values `constants`, the last onto `picture`, and
+    /// `tonemap` (else Horizon's) onto a screen of `format`. Errors name the pass wgpu refused.
     pub fn new(
         device: &wgpu::Device,
         stages: Vec<CheckedStage>,
@@ -1100,7 +1100,7 @@ impl NativePost {
             .extend((0..targets.len() as u32).map(|j| {
                 texture_entry(horizon_shader_api::stages::POST_TARGET_BINDING + j, float)
             }));
-        let kept = kept::chain(device, manifest, &stages, &entries)?;
+        let (stages, kept) = kept::chain(device, manifest, stages, &entries, constants)?;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack post"),
             entries: &entries,
@@ -1332,7 +1332,7 @@ impl NativePost {
         // The passes read the world decoded.
         let scene = &self.display.scene.as_ref().expect("made above").1;
         let group = |previous: &wgpu::TextureView, pass: Option<usize>, parity| {
-            let writes = pass.map(|i| self.plan[i].writes);
+            let writes = pass.and_then(|i| self.plan.get(i)).map(|p| p.writes);
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1418,9 +1418,9 @@ impl NativePost {
         // One set a parity of the kept textures' versions.
         let mut groups = Vec::new();
         for parity in 0..1 + usize::from(self.kept.is_some()) {
-            groups.extend((0..self.passes.len()).map(|i| {
+            groups.extend(kept::order(&self.kept, self.passes.len()).map(|(i, at)| {
                 // The chain's picture so far: the world's before its first pass.
-                let previous = match (&self.targets, self.plan[i].reads) {
+                let previous = match (&self.targets, self.plan[at].reads) {
                     (Some((_, t)), Some(slot)) => &t[slot],
                     _ => scene,
                 };
@@ -1472,6 +1472,7 @@ impl NativePost {
         };
         d.decoder.run(device, encoder, world.0, scene);
         for (i, ((label, pipeline), group)) in self.passes.iter().zip(passes).enumerate() {
+            kept::dispatch(&self.kept, encoder, passes, i, size);
             let view = match (self.plan[i].writes, &self.targets, &self.named, &d.picture) {
                 (Writes::Chain(slot), Some((_, t)), _, _) => &t[slot],
                 (Writes::Target(j), _, Some((_, n)), _) => &n[j],
