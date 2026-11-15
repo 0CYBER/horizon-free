@@ -240,20 +240,17 @@ fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
             }
             let count = calls.lock().unwrap().len();
             let state = game.take_transferred_entity_state(replacement);
-            assert!(
-                game.load_listed_transferred(
-                    "minecraft:armor_stand",
-                    Some([900, 2, 3, 4]),
-                    None,
-                    tag("minecraft:armor_stand", 900),
-                    state,
-                )
-                .is_err()
-            );
-            assert!(
-                game.armor_stands.is_empty(),
-                "unsupported transfer never constructs a fallback"
-            );
+            // Armor stands now have a typed transfer loader, just like the
+            // listed families above. Adopting one must not initialize it again.
+            game.load_listed_transferred(
+                "minecraft:armor_stand",
+                Some([900, 2, 3, 4]),
+                None,
+                tag("minecraft:armor_stand", 900),
+                state,
+            )
+            .unwrap();
+            assert_eq!(game.armor_stands.len(), 1);
             assert_eq!(calls.lock().unwrap().len(), count);
             // Constructor ownership is pruned by object identity before UUID cleanup.
             // Equal UUIDs must not make an unreachable object's marker erase a survivor;
