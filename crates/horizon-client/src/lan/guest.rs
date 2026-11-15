@@ -2580,11 +2580,11 @@ mod tests {
         guest.death_time = 20;
         guest.death_canceled = true;
         let epoch = WorldEpoch::new(7);
-        let before = player_ref(EntityRef::new(epoch, guest.entity_id), guest.uuid);
+        let before = player_ref(EntityRef::new(epoch, guest.entity_id as u32), guest.uuid);
 
         // This is the respawn reset, with no motion/resources needed for identity.
         let _ = guest.new_body(false);
-        let after = player_ref(EntityRef::new(epoch, guest.entity_id), guest.uuid);
+        let after = player_ref(EntityRef::new(epoch, guest.entity_id as u32), guest.uuid);
         assert_eq!(before, after);
         assert_eq!(guest.death_time, 0);
         assert!(!guest.death_canceled);
