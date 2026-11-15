@@ -48,13 +48,21 @@ fn a_states_path_type_follows_the_land_answer_its_parts_gave() {
     );
     // Glass becomes land; grass, seagrass, the fence, the leaves and air stop being land.
     let glass = state("minecraft:glass");
-    let land = |id: BlockStateId, kind: PathComputationType, own: bool| {
-        if kind == PathComputationType::Land {
-            id == glass
-        } else {
-            own
-        }
-    };
+    let land: Box<[u8]> = (0..data.states.len())
+        .map(|i| {
+            let id = BlockStateId(i as u32);
+            PathComputationType::ALL
+                .into_iter()
+                .filter(|&kind| {
+                    if kind == PathComputationType::Land {
+                        id == glass
+                    } else {
+                        data.block_pathfindable(id, kind)
+                    }
+                })
+                .fold(0, |bits, kind| bits | PartAnswers::pathfindable_bit(kind))
+        })
+        .collect();
     data.resolve_parts(
         &facts,
         &PartAnswers {

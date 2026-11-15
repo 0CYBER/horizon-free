@@ -173,6 +173,7 @@ mod tests {
                 render,
                 biomes: Arc::new(Biomes::load(&source).unwrap()),
                 hidden_states: Arc::from([]),
+                part_tables: Default::default(),
             });
             BlockStates::new(&facts, &collision, context, SMALL_SPLIT)
         })

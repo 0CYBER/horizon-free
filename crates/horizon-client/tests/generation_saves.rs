@@ -222,6 +222,7 @@ fn worker_context(root: &Path) -> Arc<WorkerContext> {
         assets,
         render: render.clone(),
         hidden_states: Arc::from([]),
+        part_tables: Default::default(),
     })
 }
 
@@ -336,6 +337,7 @@ fn proto_chunks_are_viewed_once_per_state() {
         assets,
         render: render.clone(),
         hidden_states: Arc::from([]),
+        part_tables: Default::default(),
     });
     let generator = Arc::new(Recorder::default());
     let mut session = Session::new(generator.clone(), context);

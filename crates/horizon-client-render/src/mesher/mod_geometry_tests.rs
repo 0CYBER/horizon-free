@@ -261,6 +261,7 @@ impl World {
             translucent_layers: &[],
             leaf_culling: LeafCullingMode::Off,
             hidden_states: &[],
+            part_tables: Default::default(),
         }
     }
 
