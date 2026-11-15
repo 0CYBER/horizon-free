@@ -30,6 +30,8 @@ use super::pack_uniforms::{self, FrameUniforms, PackInputs};
 
 mod packed;
 
+mod flip_carry;
+
 #[cfg(test)]
 mod history_reset_tests;
 
@@ -2429,10 +2431,10 @@ impl PackPost {
         }
         let mask =
             |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
-        let mut used = 1u16;
+        let used = std::cell::Cell::new(1u16);
         // Buffers some pass draws into the "alt" side of, or flips: only these get a B texture.
-        let mut doubled = mask(&post.deferred_pre) | mask(&post.composite_pre);
-        let mut shadow_doubled = 0u16;
+        let doubled = std::cell::Cell::new(mask(&post.deferred_pre) | mask(&post.composite_pre));
+        let shadow_doubled = std::cell::Cell::new(0u16);
         let draws = DrawUniforms::new(device);
         // The shadow buffers' formats when the shadow pass runs; their programs see them as
         // buffers 0 to 7.
@@ -2634,18 +2636,18 @@ impl PackPost {
                 0
             };
             if in_shadow {
-                shadow_doubled |= alt;
+                shadow_doubled.set(shadow_doubled.get() | alt);
             } else {
-                doubled |= alt;
+                doubled.set(doubled.get() | alt);
             }
             for p in std::iter::once(&pass).chain(&pass.compute) {
                 let (stage, flipped) = pack.released.get();
                 pack.released.set((stage, flipped | p.flip));
                 if in_shadow {
-                    shadow_doubled |= p.flip;
+                    shadow_doubled.set(shadow_doubled.get() | p.flip);
                 } else {
-                    used |= p.reads | p.written | p.flip;
-                    doubled |= p.flip;
+                    used.set(used.get() | p.reads | p.written | p.flip);
+                    doubled.set(doubled.get() | p.flip);
                 }
                 storage |= image_buffers(&p.images);
                 image_copied |= p.image_copies;
@@ -2896,18 +2898,14 @@ impl PackPost {
         let lines = post.lines.and_then(|p| build(p, Some(&line_geometry)));
         // Developers' aid: `HORIZON_SHADER_PACK_SKIP=composite,final` leaves programs out.
         let skip = std::env::var("HORIZON_SHADER_PACK_SKIP").unwrap_or_default();
-        let passes: Vec<Pass> = post
-            .programs
-            .into_iter()
-            .filter(|p| !skip.split(',').any(|s| s == p.name))
-            .filter_map(|p| build(p, None))
-            .collect();
+        let passes =
+            flip_carry::build_passes(post.programs, &skip, &used, &doubled, &pack.released, |p| {
+                build(p, None)
+            });
         // The screen gets colortex0 through `final`, or else through Horizon's copy, which reads
         // floats: an integer colortex0 (`RGBA32UI`...) with no `final` left to draw can't reach
         // it (#9165).
-        let shows = passes
-            .iter()
-            .any(|p| p.group == Group::Final && matches!(p.pipeline, Pipeline::Render(_)));
+        let shows = flip_carry::shows(&passes);
         if !shows && !holds_floats(formats[0]) {
             return Err(Refused {
                 reason: format!(
@@ -2918,12 +2916,13 @@ impl PackPost {
                 notes,
             });
         }
-        let shadow_comp: Vec<Pass> = post
-            .shadow_comp
-            .into_iter()
-            .filter(|p| !skip.split(',').any(|s| s == p.name))
-            .filter_map(|p| build(p, None))
-            .collect();
+        let shadow_comp = flip_carry::build_shadow_passes(
+            post.shadow_comp,
+            &skip,
+            &shadow_doubled,
+            &pack.released,
+            |p| build(p, None),
+        );
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(Refused::cancelled(notes));
         }
@@ -3067,7 +3066,7 @@ impl PackPost {
                 &shadow_config,
                 f,
                 colors,
-                shadow_doubled & colors,
+                shadow_doubled.get() & colors,
                 depth1,
             );
             notes.push(format!(
@@ -3076,13 +3075,14 @@ impl PackPost {
                 if depth1 { ", shadowtex1" } else { "" },
                 shadow_config.distance,
                 shadow_config.sun_path_rotation,
-                shadow_doubled & colors,
+                shadow_doubled.get() & colors,
             ));
             t
         });
         log::info!(
-            "shader pack: colortex buffers {used:#b}, with two textures {:#b}",
-            doubled & used
+            "shader pack: colortex buffers {:#b}, with two textures {:#b}",
+            used.get(),
+            doubled.get() & used.get()
         );
         // Any program can leave pixels untouched. Composite-style passes also write the
         // alternate image, so their first write does not replace the main image's clear.
@@ -3327,8 +3327,8 @@ impl PackPost {
             clears,
             rgb,
             rgb_unset: true,
-            used,
-            doubled: doubled & used,
+            used: used.get(),
+            doubled: doubled.get() & used.get(),
             storage,
             copied,
             sizes,
