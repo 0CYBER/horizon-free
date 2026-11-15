@@ -1310,7 +1310,7 @@ mod tests {
             ),
         ]
         .into();
-        mod_api::testing::with_mods(mods, || {
+        mod_platform::testing::with_mods(mods, || {
             crate::game::native_entity_refs::tests::with_client_game(|game| {
                 game.screen = Screen::Inventory;
                 game.container = None;
@@ -1378,7 +1378,7 @@ mod tests {
             } else {
                 Vec::<ModEntry>::new().into()
             };
-            mod_api::testing::with_mods(mods, || {
+            mod_platform::testing::with_mods(mods, || {
                 crate::game::native_entity_refs::tests::with_client_game(|game| {
                     game.screen = Screen::Inventory;
                     game.container = None;

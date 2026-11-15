@@ -2368,7 +2368,7 @@ mod screen_room_tests {
         let room = Arc::new(AtomicUsize::new(100));
         let mods: mod_api::Mods =
             vec![ModEntry::new("panel", Box::new(Panel(room.clone())))].into();
-        mod_api::testing::with_mods(mods, || {
+        mod_platform::testing::with_mods(mods, || {
             crate::game::native_entity_refs::tests::with_client_game(|game| {
                 game.screen = Screen::Inventory;
                 game.container = None;
