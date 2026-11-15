@@ -108,11 +108,11 @@ fn with_parts(test: impl FnOnce(&mut Game<'_>, &Answers)) {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
             game.resolve_parts().unwrap();
-            test(game, &answers)
+            test(game, &answers);
+            // The resources may be shared with the next test's game: retire the answers.
+            game.clear_world_parts();
         });
     });
-    // No part listens to the next test's items.
-    horizon_items::primary_items::install(Default::default());
 }
 
 /// `available_results` at value 30 over `[sharpness]` for `item`.
@@ -155,6 +155,34 @@ fn primary_answers_are_asked_at_install_and_read_by_selection() {
         assert_eq!(*answers.primary_asked.lock().unwrap(), 6 * registered);
         // A book is offered every enchantment whatever the parts say.
         assert_eq!(sharpness_at_30(game, "minecraft:book"), level_3);
+        // The answers are this server's snapshot's: its stations and its loot items read them.
+        let items = &game.items().enchantments;
+        assert_eq!(items.primary_answers().answer("minecraft:stick", SHARPNESS), Some(true));
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_client_refresh_keeps_and_a_world_close_retires_the_servers_answers() {
+    use crate::game::execution_role::ExecutionRole;
+    with_parts(|game, answers| {
+        *answers.primary.lock().unwrap() = vec![("minecraft:stick".into(), true)];
+        game.resolve_parts().unwrap();
+        let level_3 = vec![(SHARPNESS.to_owned(), 3)];
+        assert_eq!(sharpness_at_30(game, "minecraft:stick"), level_3);
+        let asked = *answers.primary_asked.lock().unwrap();
+        // A logical client's tag install (a client refresh on an integrated server, which may
+        // share this snapshot) neither asks nor clears: the server's answers stay.
+        game.options.execution_role = ExecutionRole::Client;
+        *answers.primary.lock().unwrap() = Vec::new();
+        game.resolve_primary_items();
+        assert_eq!(*answers.primary_asked.lock().unwrap(), asked);
+        assert_eq!(sharpness_at_30(game, "minecraft:stick"), level_3);
+        game.options.execution_role = ExecutionRole::IntegratedServer;
+        // The server's world closes with its parts: the answers are retired.
+        game.clear_world_parts();
+        assert!(sharpness_at_30(game, "minecraft:stick").is_empty());
+        assert!(game.stations().enchantments.primary_answers().is_empty());
     });
 }
 

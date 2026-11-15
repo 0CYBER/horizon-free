@@ -11,8 +11,9 @@ pub trait Hooks {
     /// the enchantment to the item or `false` to withhold it. The answer is per item and
     /// enchantment: selection runs inside rolls that can't ask a part, so each item's parts
     /// are asked once per registered enchantment when parts install (world open and
-    /// `/reload`), with `stack` the item's default stack, and selection reads the stored
-    /// answers. Answer from the item and `enchantment` alone. Only the `ItemPart`s attached to
+    /// `/reload`), with `stack` the item's default stack, and selection reads the answers
+    /// stored on that server's enchantment registry until its next install or its world
+    /// closes. Answer from the item and `enchantment` alone. Only the `ItemPart`s attached to
     /// `stack`'s item are asked, on the logical server, with a read-only `Host`. The contract
     /// beyond the method's name and parameters is Horizon's reading, not checked against
     /// NeoForge's.

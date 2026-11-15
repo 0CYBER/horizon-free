@@ -136,7 +136,8 @@ Three server-side methods, each with a read-only `Host`, whose `event` field arr
   enchantment's `supported_items`, and in its `primary_items` when that is set). Selection chooses the enchanting
   table's offers and clues, loot `enchant_with_levels`, trades and spawn gear, all inside a roll. So the part is
   asked once per registered enchantment when parts install (world open and `/reload`), with the item's default
-  stack, and selection reads the stored answers: answer from the item and the enchantment alone. A book is
+  stack, and selection reads the answers stored on that server's enchantment registry until the next install
+  or the world closing: answer from the item and the enchantment alone. A book is
   offered every enchantment and never asks.
 - `ItemPart::apply_enchantments` is `IItemExtension.applyEnchantments`: the enchanting table's result for the
   input stack and the list it chose (`event.enchantments`). `event.result` arrives as vanilla's (a book becomes
