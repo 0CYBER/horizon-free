@@ -59,7 +59,7 @@ fn local_server(address: &str) -> bool {
 fn turned_away(game: &Game<'_>) -> Option<String> {
     use horizon_client::{multiplayer::Screen, title::Mode};
     let why = match &game.title.as_ref()?.mode {
-        Mode::Multiplayer(Screen::Disconnected { reason, .. }) => reason.clone(),
+        Mode::Multiplayer(Screen::Disconnected { reason, .. }) => reason.plain(),
         Mode::Error { message, .. } => message.clone(),
         _ => return None,
     };

@@ -43,7 +43,7 @@ impl Game<'_> {
             return Ok(());
         }
         let left = match request.reason {
-            Some(reason) => self.leave_server(Some(reason.plain())),
+            Some(reason) => self.leave_server(Some(reason)),
             None => self.close_world(),
         };
         // A hook the leaving fired (a disconnect or unload listener) may have asked again: that

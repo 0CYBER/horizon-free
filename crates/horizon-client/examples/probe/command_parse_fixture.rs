@@ -55,6 +55,7 @@ fn parser_id(ty: &ArgType) -> String {
         ArgType::BlockPredicate => "minecraft:block_predicate".into(),
         ArgType::Resource(_) => "minecraft:resource".into(),
         ArgType::Id(_) => "minecraft:resource_location".into(),
+        ArgType::Identifier => "minecraft:resource_location".into(),
         ArgType::Res(_) => "minecraft:resource".into(),
         ArgType::ResKey(_) => "minecraft:resource_key".into(),
         ArgType::ResOrTag(_) => "minecraft:resource_or_tag".into(),

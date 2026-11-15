@@ -57,7 +57,11 @@ pub mod tests {
                 }
             }
 
-            fn suggest(&self, prefix: &str) -> Vec<crate::CommandSuggestion> {
+            fn suggest(
+                &self,
+                _: Option<&crate::CommandSender>,
+                prefix: &str,
+            ) -> Vec<crate::CommandSuggestion> {
                 ["fast", "slow"]
                     .into_iter()
                     .filter(|mode| mode.starts_with(prefix))
@@ -95,7 +99,7 @@ pub mod tests {
         assert_eq!(&*installed[0].id, "test:mode");
         assert_eq!(installed[0].argument.parse("fast"), Ok("fast".to_owned()));
         assert_eq!(
-            installed[0].argument.suggest("s"),
+            installed[0].argument.suggest(None, "s"),
             [crate::CommandSuggestion::new("slow")]
         );
 
