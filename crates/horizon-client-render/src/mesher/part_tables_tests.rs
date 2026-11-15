@@ -91,7 +91,7 @@ fn faces(tables: &MeshTables, parts: &PartTables) -> [Vec<u16>; 6] {
         [0, 0, 0],
     );
     let mut faces: [Vec<u16>; 6] = Default::default();
-    for quad in mesh.translucent.chunks_exact(4) {
+    for quad in mesh.translucent.as_chunks::<4>().0 {
         let on = |axis: usize, at: fn(f32) -> bool| quad.iter().all(|v| at(v.pos[axis]));
         let face = if on(0, |x| x > 0.99) {
             Direction::East
