@@ -14,13 +14,9 @@ pub fn pick(
     stack: &ItemStack,
     infinite_materials: bool,
 ) -> bool {
-    let picked = plan(
-        items,
-        *selected,
-        stack,
-        infinite_materials,
-        &mut |s, _| vanilla_not_replaceable(s),
-    );
+    let picked = plan(items, *selected, stack, infinite_materials, &mut |s, _| {
+        vanilla_not_replaceable(s)
+    });
     picked.is_some_and(|picked| {
         apply(items, selected, stack, picked);
         true
@@ -109,13 +105,7 @@ fn suitable_hotbar_slot(
     let order = || (0..9).map(|i| (selected + i) % 9);
     order()
         .find(|&i| items[i].is_none())
-        .or_else(|| {
-            order().find(|&i| {
-                items[i]
-                    .as_ref()
-                    .is_some_and(|s| !not_replaceable(s, i))
-            })
-        })
+        .or_else(|| order().find(|&i| items[i].as_ref().is_some_and(|s| !not_replaceable(s, i))))
         .unwrap_or(selected)
 }
 
@@ -262,7 +252,10 @@ mod tests {
         let items = inventory(&[(0, "dirt"), (20, "stone")]);
         assert_eq!(
             plan(&items, 0, &stone(), false, &mut never),
-            Some(Picked::Swap { hotbar: 1, from: 20 })
+            Some(Picked::Swap {
+                hotbar: 1,
+                from: 20
+            })
         );
         let items = inventory(&[(0, "dirt"), (4, "stone")]);
         assert_eq!(
