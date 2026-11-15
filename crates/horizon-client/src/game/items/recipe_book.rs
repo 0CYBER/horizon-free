@@ -1407,6 +1407,20 @@ impl Game<'_> {
             },
         ));
     }
+    /// The display ids of `recipe_id`'s entries in the book, the ones
+    /// `transfer_viewer_recipe` and `transfer_recipe_check` find: a server
+    /// numbers the recipes it sent itself, so these can differ from the
+    /// display index's.
+    pub(in crate::game) fn viewer_book_ids(&mut self, recipe_id: &str) -> Vec<i32> {
+        self.ensure_book();
+        let Some(book) = self.recipe_ui.book.as_ref() else {
+            return Vec::new();
+        };
+        (book.entries.iter())
+            .filter(|e| e.id == recipe_id && e.display_id >= 0)
+            .map(|e| e.display_id)
+            .collect()
+    }
     /// A viewer's transfer of one set of ingredients.
     pub(super) fn transfer_viewer_recipe(&mut self, display_id: i32) {
         self.panel.transfer_warning = None;

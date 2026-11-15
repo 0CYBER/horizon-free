@@ -121,6 +121,19 @@ pub trait RecipesClientHost {
     /// takes `transfer_recipe` and on a server that doesn't answer it.
     #[access(WorldOnly)]
     fn transfer_recipe_check(&mut self, book_id: i32) -> Option<RecipeTransferCheck>;
+    /// Side: client.
+    /// The `book_id`s of the recipe `recipe_id` (`minecraft:stick`), the ids
+    /// `transfer_recipe`, `transfer_recipe_check`, `place_recipe` and
+    /// `known_recipes` use: one for each way the recipe book shows it, in the
+    /// book's order, whether or not the player's book holds it. For a recipe
+    /// viewer, which has the recipe from `recipes_of_type` and needs its id
+    /// for "+". Empty for a recipe the book doesn't show (campfire,
+    /// stonecutting, smithing, a mod's own type), an unknown id, and outside
+    /// a world. A server numbers the recipes it sends itself and they follow
+    /// its recipes once those arrived (`recipes_received`): ask again after
+    /// that hook rather than keeping them.
+    #[access(WorldOnly)]
+    fn recipe_book_ids(&mut self, recipe_id: &str) -> Arc<[i32]>;
 }
 /// The handles' reads of the `recipes` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
