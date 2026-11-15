@@ -5,7 +5,9 @@ Reads this run's jobs (names, conclusions and step names from the Actions API, n
 files (tools/ci/ignored_tests.py --report: test identity, kind, panic location, policy file), then:
 - every leg green: moves the tag `daily-green` to the commit;
 - a failing test: files `Daily: <crate> <test>` (label `bug`) with its panic location, this run as the first that
-  saw it and the pull requests merged since the last green daily as suspects, or comments on the open one;
+  saw it and the pull requests merged since the last green daily as suspects, or comments on the open one; when its
+  newest issue was closed by a pull request or commit that is not in this run's commit (a fix merged after the commit
+  under test), it comments on that closed issue and leaves it closed instead of filing a new one;
 - a leg that failed without a test name (build error, timeout, killed, cancelled, skipped, or a leg with no
   sanitised verdict): one issue per leg, `Daily: <leg> did not complete`, naming the failed steps and, for a shard,
   why each run stopped as its verdict file says (signal or exit status, memory peak and limit, wall time, the tests
@@ -64,13 +66,20 @@ FRESH = "sdk / fresh"
 FIXTURE_TESTS_STEP = "Run the client tests that load the compiled fixture"
 MERGE = re.compile(r"^Merge pull request #(\d+) from ")
 MAX_PAGES = 100
+# How far back a closed issue's fix is looked for: a fix that merged after the commit under test is hours old.
+FIX_LOOKBACK = dt.timedelta(days=14)
+# What closed an issue: a pull request (its merge commit) or a commit that named it.
+CLOSER = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { issue(number: $number) {
+    timelineItems(itemTypes: [CLOSED_EVENT], last: 1) { nodes { ... on ClosedEvent {
+      closer { ... on PullRequest { mergeCommit { oid } } ... on Commit { oid } } } } } } }
+}"""
 
 
-def api(method, path, body=None):
-    """One GitHub REST call; any HTTP error (a rate limit included) ends the job."""
+def send(url, method, body, what):
+    """One GitHub HTTP call; any HTTP error (a rate limit included) ends the job."""
     request = urllib.request.Request(
-        f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/{path}", method=method,
-        data=json.dumps(body).encode() if body is not None else None,
+        url, method=method, data=json.dumps(body).encode() if body is not None else None,
         headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}", "Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28"})
     try:
@@ -78,9 +87,24 @@ def api(method, path, body=None):
             return json.load(response) if response.status != 204 else None
     except urllib.error.HTTPError as error:
         remaining = error.headers.get("x-ratelimit-remaining")
-        sys.exit(f"::error::GitHub refused {method} {path}: HTTP {error.code}"
+        sys.exit(f"::error::GitHub refused {what}: HTTP {error.code}"
                  + (" (rate limit exhausted)" if remaining == "0" else "")
                  + "; nothing more is written, so no duplicate issue can follow")
+
+
+def api(method, path, body=None):
+    """One GitHub REST call on this repository."""
+    return send(f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/{path}", method, body,
+                f"{method} {path}")
+
+
+def graphql(query, variables):
+    """One GitHub GraphQL query; an error in its answer ends the job like an HTTP error."""
+    answer = send("https://api.github.com/graphql", "POST", {"query": query, "variables": variables}, "a GraphQL query")
+    if answer.get("errors"):
+        sys.exit(f"::error::GitHub refused a GraphQL query: {answer['errors'][0].get('message')}; "
+                 "nothing more is written, so no duplicate issue can follow")
+    return answer["data"]
 
 
 def pages(call, path, key=None):
@@ -272,6 +296,29 @@ def suspects(commit, git):
     return sorted({int(found[1]) for line in log.splitlines() if (found := MERGE.match(line))})
 
 
+def fixes_after(commit, titles, call, query, git):
+    """title -> (number, fix) for each red title with no open issue whose newest closed issue was closed by a pull
+    request or commit `fix` that `commit` does not contain: the fix merged after the commit this run tested."""
+    if not titles:
+        return {}
+    since = (dt.datetime.now(dt.timezone.utc) - FIX_LOOKBACK).date().isoformat()
+    newest = {}
+    for issue in pages(call, f"issues?state=closed&labels={LABEL}&since={since}"):
+        if "pull_request" not in issue and issue["title"] in titles:
+            newest[issue["title"]] = max(newest.get(issue["title"], 0), issue["number"])
+    owner, name = os.environ["GITHUB_REPOSITORY"].split("/")
+    fixes = {}
+    for title, number in sorted(newest.items()):
+        nodes = query(CLOSER, {"owner": owner, "name": name, "number": number})["repository"]["issue"][
+            "timelineItems"]["nodes"]
+        closer = (nodes[-1].get("closer") if nodes else None) or {}
+        fix = (closer.get("mergeCommit") or {}).get("oid") or closer.get("oid")
+        # A commit missing from the checkout is not in `commit` either: the checkout holds all of its history.
+        if fix and git("merge-base", "--is-ancestor", fix, commit) is None:
+            fixes[title] = (number, fix)
+    return fixes
+
+
 def suspect_line(numbers, commit):
     if numbers is None:
         return f"Suspects: no daily run has been green yet, so every merge before `{commit[:9]}` is a suspect."
@@ -307,9 +354,10 @@ def leg_detail(leg, conclusion, steps, reason):
             + f"Leg `{leg}` ended `{conclusion}`: {reason}. Failed steps: {named_steps}.")
 
 
-def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers):
+def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers, fixes=None):
     """Every write this run makes, in order: ("tag", sha) / ("create", title, body) / ("comment", number, title, body)
-    / ("close", number, title, body)."""
+    / ("close", number, title, body). `fixes` (fixes_after) holds the closed issues whose fix this commit predates."""
+    fixes = fixes or {}
     actions = []
     if green:
         actions.append(("tag", commit))
@@ -324,6 +372,11 @@ def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_iss
         if title in open_issues:
             actions.append(("comment", open_issues[title], title,
                             f"🤖 Agent: {red_marks(run_url)[1]} on `{commit[:9]}`.\n\n{text}\n\n{line}\n"))
+        elif title in fixes:
+            number, fix = fixes[title]
+            actions.append(("comment", number, title,
+                            f"🤖 Agent: {red_marks(run_url)[1]} on `{commit[:9]}`, which predates the fix `{fix[:9]}`"
+                            f" that closed this issue; it stays closed.\n\n{text}\n"))
         else:
             actions.append(("create", title,
                             f"{DISCLOSURE}\n\n{text}\n\n{red_marks(run_url)[0]} on `{commit[:9]}`.\n\n"
@@ -406,7 +459,7 @@ def git(*args):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def main(call=api, run_git=git):
+def main(call=api, run_git=git, query=graphql):
     env = os.environ
     commit = env["COMMIT"]
     # Only main writes, whatever the input says: a branch's run is always a dry run.
@@ -420,7 +473,9 @@ def main(call=api, run_git=git):
                    for issue in pages(call, f"issues?state=open&labels={LABEL}")
                    if "pull_request" not in issue and issue["title"].startswith(PREFIX)}
     numbers = suspects(commit, run_git) if tests or unfinished else []
-    actions = plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers)
+    reds = {test_title(item) for item in tests} | {leg_title(leg) for leg, *_ in unfinished}
+    fixes = fixes_after(commit, reds - open_issues.keys(), call, query, run_git)
+    actions = plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers, fixes)
     text = render(actions, writes)
     print(text)
     if env.get("GITHUB_STEP_SUMMARY"):

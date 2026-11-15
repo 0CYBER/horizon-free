@@ -81,20 +81,34 @@ class Api:
         if "/jobs" in path:
             return {"jobs": self.jobs[(page - 1) * 100:page * 100]}
         if path.startswith("issues?"):
-            return self.issues[(page - 1) * 100:page * 100]
+            closed = "state=closed" in path
+            listed = [issue for issue in self.issues if (issue.get("state") == "closed") == closed]
+            return listed[(page - 1) * 100:page * 100]
         raise AssertionError(path)
 
 
-def git(merged=(), tag=True):
+def closers(fixes):
+    """GraphQL as fixes_after sees it: issue number -> the merge commit of the pull request that closed it."""
+    def query(text, variables):
+        fix = fixes.get(variables["number"])
+        nodes = [{"closer": {"mergeCommit": {"oid": fix}} if fix else None}]
+        return {"repository": {"issue": {"timelineItems": {"nodes": nodes}}}}
+    return query
+
+
+def git(merged=(), tag=True, ancestors=()):
     def run(*args):
         if args[0] == "rev-parse":
             return "d" * 40 if tag else None
+        if args[0] == "merge-base":
+            return "" if args[2] in ancestors else None
         return "\n".join(f"Merge pull request #{n} from arismoko/topic" for n in merged) + "\nMerge branch 'x'"
     return run
 
 
 class DailySummaryTests(unittest.TestCase):
-    def run_summary(self, api, reports=(), results=LEGS, ref="refs/heads/main", dry_run="false", merged=(), tag=True):
+    def run_summary(self, api, reports=(), results=LEGS, ref="refs/heads/main", dry_run="false", merged=(), tag=True,
+                    fixes=None, ancestors=()):
         with tempfile.TemporaryDirectory() as folder:
             for index, report in enumerate(reports):
                 path = Path(folder, "reports", f"daily-report-{index}")
@@ -105,7 +119,7 @@ class DailySummaryTests(unittest.TestCase):
                    "RESULTS": json.dumps(results), "REPORTS": str(Path(folder, "reports")),
                    "GITHUB_STEP_SUMMARY": str(Path(folder, "summary")), "GITHUB_OUTPUT": str(Path(folder, "out"))}
             with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
-                summary.main(api, git(merged, tag))
+                summary.main(api, git(merged, tag, ancestors), closers(fixes or {}))
             return Path(folder, "summary").read_text(), Path(folder, "out").read_text()
 
     def run_after(self, api, result, ref="refs/heads/main", run="77"):
@@ -199,6 +213,24 @@ class DailySummaryTests(unittest.TestCase):
         self.assertEqual([(m, p) for m, p, _ in api.writes], [("POST", "issues/900/comments")],
                          "found past the first page of open issues")
         self.assertTrue(api.writes[0][2]["body"].startswith("🤖 Agent: "))
+
+    def test_a_red_whose_fix_merged_after_the_tested_commit_comments_on_the_closed_issue(self):
+        jobs = [job("shards / ignored-tests-shards (horizon-world)", "failure", ["Run"])] + GREEN_JOBS[2:]
+        late, early = "f" * 40, "e" * 40
+        issues = [{"number": 901, "title": "Daily: horizon-world a::fixed_later", "state": "closed"},
+                  {"number": 902, "title": "Daily: horizon-world a::fixed_before", "state": "closed"},
+                  {"number": 903, "title": "Daily: horizon-world a::closed_by_hand", "state": "closed"}]
+        api = Api(jobs, issues=issues)
+        report = shard_report([failure("a::fixed_later"), failure("a::fixed_before"), failure("a::closed_by_hand")])
+        self.run_summary(api, [report], results=dict(LEGS, shards={"result": "failure"}),
+                         fixes={901: late, 902: early}, ancestors=(early,))
+        comments = [(path, body["body"]) for method, path, body in api.writes if path.endswith("/comments")]
+        self.assertEqual([path for path, _ in comments], ["issues/901/comments"])
+        self.assertIn(f"on `{COMMIT[:9]}`, which predates the fix `{late[:9]}`", comments[0][1])
+        self.assertFalse(any(path == "issues/901" for _, path, _ in api.writes), "it stays closed")
+        # A fix the tested commit holds did not fix it, and a hand close names no fix: both are filed anew.
+        self.assertCountEqual([body["title"] for _, path, body in api.writes if path == "issues"],
+                              ["Daily: horizon-world a::fixed_before", "Daily: horizon-world a::closed_by_hand"])
 
     def test_a_leg_that_failed_without_test_names_gets_one_issue_per_leg(self):
         jobs = [job("shards / ignored-tests-shards (horizon-world)", "cancelled", ["Prepare checkout-keyed vanilla data"]),

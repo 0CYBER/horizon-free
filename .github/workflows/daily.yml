@@ -157,6 +157,7 @@ jobs:
       contents: write  # the daily-green tag
       issues: write
       actions: read
+      pull-requests: read  # which pull request closed a test's last issue, and whether this commit holds its fix
     outputs:
       green: ${{ steps.summary.outputs.green }}
     steps:
