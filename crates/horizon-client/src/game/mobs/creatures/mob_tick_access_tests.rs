@@ -17,7 +17,6 @@ struct DespawnRecords(Vec<(u32, Option<[f64; 3]>, Option<[f64; 3]>)>);
 
 struct DespawnProbe {
     records: Arc<Mutex<DespawnRecords>>,
-    other: Arc<AtomicU32>,
     allow: Arc<AtomicU32>,
 }
 
@@ -26,7 +25,7 @@ impl mod_api::Hooks for DespawnProbe {
     fn mob_despawn(&self, host: &dyn mod_api::Host, event: &mut mod_api::MobDespawnEvent<'_>) {
         let id = event.mob.entity().id();
         let own = event.mob.entity().position(host);
-        let other_id = self.other.load(Ordering::Relaxed);
+        let other_id = if id == 71 { 72 } else { 71 };
         let other = host
             .entity(other_id)
             .and_then(|entity| entity.position(host));
@@ -127,7 +126,7 @@ impl mod_api::Hooks for RemovedPeerProbe {
 /// its own callback, a later callback asking for its handle gets nothing, even
 /// though the removed row stays indexed with its old position.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn a_removed_mob_handle_resolves_nothing_in_a_later_callback() {
     let records = Arc::new(Mutex::new(Vec::new()));
     let mods: mod_api::Mods = vec![ModEntry::new(
@@ -172,16 +171,14 @@ fn a_removed_mob_handle_resolves_nothing_in_a_later_callback() {
 /// handle of the other mob (the tick snapshot) too; `Allow` removes the
 /// mob and its handle then resolves nothing.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn mob_despawn_handles_resolve_the_ticking_mob_and_its_peers() {
     let records = Arc::new(Mutex::new(DespawnRecords::default()));
-    let other = Arc::new(AtomicU32::new(72));
     let allow = Arc::new(AtomicU32::new(72));
     let mods: mod_api::Mods = vec![ModEntry::new(
         "mob-tick-access",
         Box::new(DespawnProbe {
             records: records.clone(),
-            other: other.clone(),
             allow: allow.clone(),
         }),
     )]
@@ -192,10 +189,13 @@ fn mob_despawn_handles_resolve_the_ticking_mob_and_its_peers() {
             let records = records.lock().unwrap();
             assert_eq!(records.0.len(), 2, "both mobs heard their despawn check");
             for (id, own, peer) in &records.0 {
-                let own = own.expect("the ticking mob's own handle resolves");
-                assert_eq!(own[0], f64::from(*id - 70), "own position, mob {id}");
-                let peer = peer.expect("the other mob's handle resolves in the same tick");
-                assert!((1.0..=2.0).contains(&peer[0]), "peer position, mob {id}");
+                let (expected_own, expected_peer) = match id {
+                    71 => ([1.0, 80.0, 0.5], [2.0, 80.0, 0.5]),
+                    72 => ([2.0, 80.0, 0.5], [1.0, 80.0, 0.5]),
+                    _ => panic!("unexpected mob {id}"),
+                };
+                assert_eq!(*own, Some(expected_own), "own position, mob {id}");
+                assert_eq!(*peer, Some(expected_peer), "different peer, mob {id}");
             }
             // `Allow` removed 72 during the pass; 71 is still there.
             assert!(
@@ -213,7 +213,7 @@ fn mob_despawn_handles_resolve_the_ticking_mob_and_its_peers() {
 /// A mob's own `entity_tick_pre` handle reads where it stands and moves it;
 /// the real tick then starts from the position the handle wrote.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn entity_tick_pre_reads_and_moves_the_ticking_mob() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mods: mod_api::Mods = vec![ModEntry::new(
@@ -241,6 +241,103 @@ fn entity_tick_pre_reads_and_moves_the_ticking_mob() {
     });
 }
 
+/// Observations made by the actual scoped despawn hook, not by the spawn
+/// fixture or a replacement host.
+#[derive(Debug, PartialEq)]
+struct PassObservation {
+    actor: u32,
+    peer_velocity: Option<[f64; 3]>,
+    spawned_position: Option<[f64; 3]>,
+}
+
+struct PassProbe {
+    records: Arc<Mutex<Vec<PassObservation>>>,
+}
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for PassProbe {
+    fn mob_despawn(&self, host: &dyn mod_api::Host, event: &mut mod_api::MobDespawnEvent<'_>) {
+        self.records.lock().unwrap().push(PassObservation {
+            actor: event.mob.entity().id(),
+            peer_velocity: host.entity(72).and_then(|peer| peer.velocity(host)),
+            spawned_position: host.entity(74).and_then(|spawned| spawned.position(host)),
+        });
+        *event.result = Despawn::Deny;
+    }
+}
+
+/// NoAI still drops motion below 0.003 during its real turn. The observers
+/// bracket that turn, so a frozen initial snapshot or an all-post-turn view
+/// cannot satisfy both assertions. The existing lifted-pass spawn fixture
+/// inserts a real mob after the pass has taken its snapshot and storage;
+/// observations still go through the actual scoped hook on both passes.
+#[test]
+#[ignore = "daily"]
+fn scoped_despawn_view_tracks_peer_turns_and_defers_mid_pass_spawns() {
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![ModEntry::new(
+        "mob-tick-pass-visibility",
+        Box::new(PassProbe {
+            records: records.clone(),
+        }),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            game.mobs[1].position.x = 4.0;
+            game.mobs[1].velocity = Vec3::new(0.001, 0.0, 0.0);
+            let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            let mut observer = Mob::new(73, kind, Vec3::new(7.0, 80.0, 0.5), 0.0);
+            observer.no_ai = true;
+            observer.no_gravity = true;
+            observer.on_ground = true;
+            game.mobs.push(observer);
+            super::super::super::entity::taken_pass_tests::with_spawn(
+                |game| {
+                    let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+                    let mut spawned = Mob::new(74, kind, Vec3::new(10.0, 80.0, 0.5), 0.0);
+                    spawned.no_ai = true;
+                    spawned.no_gravity = true;
+                    spawned.on_ground = true;
+                    game.mobs.push(spawned);
+                },
+                || game.tick_creature_entities().unwrap(),
+            );
+            assert_eq!(
+                records.lock().unwrap().as_slice(),
+                &[
+                    PassObservation {
+                        actor: 71,
+                        peer_velocity: Some([0.001, 0.0, 0.0]),
+                        spawned_position: None
+                    },
+                    PassObservation {
+                        actor: 72,
+                        peer_velocity: Some([0.001, 0.0, 0.0]),
+                        spawned_position: None
+                    },
+                    PassObservation {
+                        actor: 73,
+                        peer_velocity: Some([0.0, 0.0, 0.0]),
+                        spawned_position: None
+                    },
+                ]
+            );
+            let spawned = game.mobs.iter().find(|mob| mob.id == 74).unwrap();
+            assert_eq!(spawned.age, 0, "the mid-pass spawn has not taken a turn");
+            records.lock().unwrap().clear();
+            game.tick_creature_entities().unwrap();
+            let records = records.lock().unwrap();
+            assert_eq!(records.len(), 4, "the spawn joins the next pass");
+            for actor in [71, 72, 73, 74] {
+                let observation = records.iter().find(|record| record.actor == actor).unwrap();
+                assert_eq!(observation.peer_velocity, Some([0.0, 0.0, 0.0]));
+                assert_eq!(observation.spawned_position, Some([10.0, 80.0, 0.5]));
+            }
+        });
+    });
+}
+
 /// Extends the lifetime of the dropped item it names, through `extra_life`.
 struct ExtendLife {
     id: Arc<AtomicU32>,
@@ -259,7 +356,7 @@ impl mod_api::Hooks for ExtendLife {
 /// item tick still lifts its list, and an `item_expire` listener still edits
 /// the item's lifetime, which the engine applies when the tick ends.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn item_lifetime_edit_in_the_item_tick_still_lands() {
     let named = Arc::new(AtomicU32::new(0));
     let mods: mod_api::Mods = vec![ModEntry::new(
@@ -342,7 +439,7 @@ impl mod_api::Hooks for DiscardOnPre {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn a_tick_hook_discards_another_mob_nested() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mods: mod_api::Mods = vec![ModEntry::new(
