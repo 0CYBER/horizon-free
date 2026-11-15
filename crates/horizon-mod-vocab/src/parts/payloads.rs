@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     HandlerThread, IPayloadHandler, PayloadDeclaration, PayloadDirection, PayloadId,
-    PayloadProtocol,
+    PayloadProtocol, PayloadSendError, PayloadToken,
 };
 
 #[derive(Clone)]
@@ -14,6 +14,10 @@ pub(crate) struct Registered {
     pub(crate) server: Option<Arc<dyn IPayloadHandler>>,
     pub(crate) client: Option<Arc<dyn IPayloadHandler>>,
     pub(crate) client_thread: HandlerThread,
+    /// Set once the server callback panicked: it is never invoked again, on any connection.
+    pub(crate) server_panicked: Arc<std::sync::atomic::AtomicBool>,
+    /// The same for the client callback.
+    pub(crate) client_panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // no wire: frozen process-local registration storage contains callback trait objects and owning-mod identities.
@@ -25,6 +29,21 @@ pub struct Payloads {
     pub(crate) phases: [HashMap<String, Registered>; 2],
     /// Raw play channels by exact id, each with its declaring mods in load order.
     pub(crate) raw: HashMap<String, Vec<RawRegistered>>,
+    /// Typed declarations by the slot their tokens carry, in registration order.
+    pub(crate) typed: Vec<TypedSlot>,
+    /// The load these declarations belong to, never 0 (a refused registration's); tokens of
+    /// another load are stale.
+    pub(crate) load: u64,
+}
+
+/// What a typed token must match: its declaration as registered, before protocol splitting.
+#[derive(Clone)]
+pub(crate) struct TypedSlot {
+    pub(crate) id: PayloadId,
+    pub(crate) protocol: PayloadProtocol,
+    pub(crate) direction: PayloadDirection,
+    pub(crate) schema: u64,
+    pub(crate) owner_index: usize,
 }
 
 #[derive(Clone)]
@@ -32,6 +51,8 @@ pub(crate) struct RawRegistered {
     pub(crate) owner: &'static str,
     pub(crate) owner_index: usize,
     pub(crate) server: Option<Arc<dyn IPayloadHandler>>,
+    /// Set once the server callback panicked: it is never invoked again.
+    pub(crate) panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // no wire: resolved process-local callback and its owning mod's live enable guard.
@@ -45,6 +66,8 @@ pub struct PayloadReceiver {
     /// Its chosen executor.
     pub thread: HandlerThread,
     owner_index: usize,
+    /// Shared by every connection's receiver of this callback.
+    panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PayloadReceiver {
@@ -52,9 +75,11 @@ impl PayloadReceiver {
     pub fn owner(&self) -> &'static str {
         self.owner
     }
-    /// Recheck the owner without scanning registrations or resolving the id again.
+    /// Recheck the owner without scanning registrations or resolving the id again: off when
+    /// its mod is off or this callback panicked.
     pub fn enabled(&self) -> bool {
         crate::mod_index_on(self.owner_index)
+            && !self.panicked.load(std::sync::atomic::Ordering::Acquire)
     }
     /// Invoke only this owner. The caller owns the root transaction and handles
     /// a native panic as `Failed`, never as retryable contention.
@@ -116,14 +141,38 @@ impl Payloads {
                 thread: entry.client_thread,
                 owner_index: entry.owner_index,
                 owner: entry.owner,
+                panicked: entry.client_panicked.clone(),
             }),
             PayloadDirection::ToServer => entry.server.clone().map(|handler| PayloadReceiver {
                 handler,
                 thread: entry.declaration.thread,
                 owner_index: entry.owner_index,
                 owner: entry.owner,
+                panicked: entry.server_panicked.clone(),
             }),
             PayloadDirection::Bidirectional => None,
+        }
+    }
+    /// Whether `token` is one this load's registrar handed out: the declaration at its slot
+    /// has its id, protocol, schema and a direction it sends in, and its owner is on.
+    pub fn check_token(&self, token: &PayloadToken) -> Result<(), PayloadSendError> {
+        let matches = token.load == self.load
+            && token.direction != PayloadDirection::Bidirectional
+            && usize::try_from(token.slot)
+                .ok()
+                .and_then(|slot| self.typed.get(slot))
+                .is_some_and(|slot| {
+                    slot.id == token.id
+                        && slot.protocol == token.protocol
+                        && slot.schema == token.schema
+                        && (slot.direction == token.direction
+                            || slot.direction == PayloadDirection::Bidirectional)
+                        && crate::mod_index_on(slot.owner_index)
+                });
+        if matches {
+            Ok(())
+        } else {
+            Err(PayloadSendError::StaleToken(token.id.clone()))
         }
     }
     /// The raw play channels an enabled mod declared, by exact id.
@@ -150,6 +199,7 @@ impl Payloads {
                         owner: owner.owner,
                         thread: HandlerThread::Main,
                         owner_index: owner.owner_index,
+                        panicked: owner.panicked.clone(),
                     })
                 })
                 .collect()
@@ -189,6 +239,17 @@ pub fn installed_payloads() -> Option<Arc<Payloads>> {
     installed().and_then(|installed| installed.keys.payloads.clone())
 }
 
+/// Check `token` against the installed load: what the host runs before every typed send.
+/// With no payloads installed, every token is stale.
+// hidden: engine send check exported only through __private::game.
+#[doc(hidden)]
+pub fn check_payload_token(token: &PayloadToken) -> Result<(), PayloadSendError> {
+    installed_payloads().map_or_else(
+        || Err(PayloadSendError::StaleToken(token.id.clone())),
+        |payloads| payloads.check_token(token),
+    )
+}
+
 /// Load-only operations backing the public payload registration views.
 pub trait PayloadsRegistrar {
     /// Register a declaration and its receiving callbacks. Invalid declarations
@@ -207,6 +268,17 @@ pub trait PayloadsRegistrar {
         thread: HandlerThread,
         handler: Arc<dyn IPayloadHandler>,
     );
+    /// Register a typed declaration: `declaration` carries the mod's own version, to which
+    /// the registrar appends `schema`. Refused like [`add_payload`](Self::add_payload). The
+    /// token names the declaration's slot and this load; a refused one names load 0, so every
+    /// send with it is stale.
+    fn add_typed_payload(
+        &mut self,
+        declaration: PayloadDeclaration,
+        schema: u64,
+        server: Option<Arc<dyn IPayloadHandler>>,
+        client: Option<Arc<dyn IPayloadHandler>>,
+    ) -> PayloadToken;
     /// Declare a raw play channel by exact id, with an optional server receiver.
     /// Reserved namespaces, a second declaration by the same mod and an id a
     /// typed payload uses refuse startup, naming the mods involved.

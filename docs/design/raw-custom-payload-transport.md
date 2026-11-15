@@ -37,8 +37,8 @@ incompatible matching declaration is ignored. A vanilla
 peer is admitted when all local requirements are optional; sending an absent
 optional payload returns UnsupportedPeer without a packet. There is no per-tick mod
 work for empty registries. Configuration still exchanges a constant-size protocol
-mark (and an empty Offer) for Horizon-branded peers, even with empty or all-optional
-registries. On `horizon:payloads`, Query is bytes `[0, 1]`; Offer begins `[1, 1]`
+mark (and an Offer, which carries the engine's optional declarations even with no mods) for
+Horizon-branded peers, even with empty or all-optional mod registries. On `horizon:payloads`, Query is bytes `[0, 1]`; Offer begins `[1, 1]`
 then the manifest record count. The second byte is raw transport revision 1,
 independent of application versions. A wrong revision or an absent marked response
 from a Horizon-branded peer refuses admission with a named raw-protocol cause.

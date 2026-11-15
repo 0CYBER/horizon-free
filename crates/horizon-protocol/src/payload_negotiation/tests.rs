@@ -258,3 +258,43 @@ fn horizon_protocol_mark_is_required_independently_of_declarations() {
         }
     }
 }
+#[test]
+fn another_typed_schema_is_refused_when_required_and_absent_when_optional() {
+    let two = "1+payload-schema.0000000000000002";
+    let one = "1+payload-schema.0000000000000001";
+    let required = intersect(
+        &manifest(false, two, Flow::ToServer),
+        &manifest(false, one, Flow::ToServer),
+    );
+    assert!(matches!(
+        required,
+        Err(Error::Incompatible { reason: Mismatch::Schema, local: Some((ref local, _)), peer: Some((ref peer, _)), .. })
+            if local == two && peer == one
+    ));
+    // One required end still refuses: its peer cannot read what it requires.
+    assert!(
+        intersect(
+            &manifest(true, two, Flow::ToServer),
+            &manifest(false, one, Flow::ToServer)
+        )
+        .is_err()
+    );
+    assert_eq!(
+        intersect(
+            &manifest(true, two, Flow::ToServer),
+            &manifest(true, one, Flow::ToServer)
+        ),
+        Ok(vec![])
+    );
+    // Another application version stays a version mismatch, optional or not.
+    assert!(matches!(
+        intersect(
+            &manifest(true, two, Flow::ToServer),
+            &manifest(true, "2+payload-schema.0000000000000002", Flow::ToServer)
+        ),
+        Err(Error::Incompatible {
+            reason: Mismatch::Version,
+            ..
+        })
+    ));
+}

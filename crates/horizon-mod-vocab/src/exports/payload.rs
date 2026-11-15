@@ -1,7 +1,9 @@
 mod payload;
 pub mod __private {
     pub mod game {
-        pub use crate::parts::{PayloadReceiver, Payloads, installed_payloads};
+        pub use crate::parts::{
+            PayloadReceiver, Payloads, check_payload_token, installed_payloads,
+        };
     }
 }
 pub use payload::{
@@ -11,3 +13,4 @@ pub use payload::{
     RegisterClientPayloadHandlersEvent, RegisterPayloadHandlersEvent,
 };
 pub use payload::{PayloadBusy, PayloadHandleError};
+pub use payload::{PayloadToken, ToClient, ToServer};

@@ -265,6 +265,9 @@ impl IPayloadContext for MainContext<'_, '_> {
         self.game
             .queue_payload(self.endpoint.clone(), self.epoch.clone(), id, bytes)
     }
+    fn check_payload_token(&self, token: &mod_api::PayloadToken) -> Result<(), PayloadSendError> {
+        mod_api::__private::game::check_payload_token(token)
+    }
     fn disconnect(&mut self, reason: Text) {
         self.disconnect = Some(reason);
     }
@@ -298,6 +301,12 @@ mod sender_tests;
 #[cfg(test)]
 #[path = "payload_transport/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "payload_transport/typed_tests.rs"]
+mod typed_tests;
+#[cfg(test)]
+#[path = "payload_transport/typed_wasm_tests.rs"]
+mod typed_wasm_tests;
 #[cfg(test)]
 #[path = "payload_transport/wasm_config_tests.rs"]
 mod wasm_config_tests;
