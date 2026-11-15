@@ -47,8 +47,9 @@ pub fn trusted_keys_for(repository: &str) -> Vec<PublicKey> {
     parse_keys(repository_keys(repository, KEYS, FORK_KEYS)).unwrap_or_default()
 }
 
-/// The environment variable that adds one more trusted SDK key (one base64 Ed25519 public key, what
-/// `tools/ci/sign_release.sh` writes to `ephemeral.pub` under `EPHEMERAL=yes`).
+/// The environment variable that adds one more trusted SDK key: exactly one base64 Ed25519 public key, what
+/// `tools/ci/sign_release.sh` writes to `ephemeral.pub` under `EPHEMERAL=yes`. A value that is not exactly one
+/// key is reported on stderr and adds nothing.
 pub const SDK_KEY_VAR: &str = "HORIZON_SDK_TRUSTED_KEY";
 
 /// The keys an SDK release (`sdk-<build>`) may be signed with: [`trusted_keys_for`] and, in a build with
@@ -65,10 +66,23 @@ pub fn sdk_keys_for(repository: &str) -> Vec<PublicKey> {
 
 #[cfg(debug_assertions)]
 fn extra_sdk_keys() -> Vec<PublicKey> {
-    std::env::var(SDK_KEY_VAR)
-        .ok()
-        .and_then(|text| parse_keys(&text).ok())
-        .unwrap_or_default()
+    let Ok(text) = std::env::var(SDK_KEY_VAR) else {
+        return Vec::new();
+    };
+    match parse_keys(&text) {
+        Ok(keys) if keys.len() == 1 => keys,
+        Ok(keys) => {
+            eprintln!(
+                "{SDK_KEY_VAR} ignored: expected exactly one public key, found {}",
+                keys.len()
+            );
+            Vec::new()
+        }
+        Err(error) => {
+            eprintln!("{SDK_KEY_VAR} ignored: {error}");
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(not(debug_assertions))]
@@ -628,8 +642,16 @@ mod tests {
             .is_ok(),
             cfg!(debug_assertions)
         );
-        unsafe { std::env::set_var(SDK_KEY_VAR, "not a key") };
-        assert_eq!(sdk_keys_for(repository), trusted_keys_for(repository));
+        let (second, _) = SigningKey::generate().unwrap();
+        // Unparseable, empty, and more than one key: none is trusted (debug builds also report it on stderr).
+        for bad in [
+            "not a key".to_string(),
+            String::new(),
+            format!("{}\n{}", signer.public_base64(), second.public_base64()),
+        ] {
+            unsafe { std::env::set_var(SDK_KEY_VAR, &bad) };
+            assert_eq!(sdk_keys_for(repository), trusted_keys_for(repository));
+        }
         unsafe { std::env::remove_var(SDK_KEY_VAR) };
     }
 
