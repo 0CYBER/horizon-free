@@ -3,14 +3,22 @@
 //! so it faces yaw 0 and its facing takes no draw from the level's random.
 use crate::game::game_tests::tests::server_game;
 use horizon_client::mobs::Species;
+use horizon_core::random::RandomSource;
 
 #[test]
 #[ignore = "daily"]
 fn a_cat_spawner_cat_faces_south_without_a_level_draw() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
-    let level = game.world.random.state();
+    let mut level = game.world.random.clone();
     for _ in 0..8 {
+        // Mob.finalizeSpawn: triangle follow-range bonus and left hand;
+        // Cat.finalizeSpawn: variant and sound. No additional yaw draw.
+        level.next_double();
+        level.next_double();
+        level.next_float();
+        level.next_int_bound(11).unwrap();
+        level.next_int_bound(3).unwrap();
         let before = game.mobs.len();
         game.spawn_cat([4, 100, 8], false);
         assert_eq!(game.mobs.len(), before + 1, "one cat");
@@ -25,6 +33,6 @@ fn a_cat_spawner_cat_faces_south_without_a_level_draw() {
             [4.5, 100.0, 8.5]
         );
     }
-    // Eight cats and not one draw: the facing is fixed, not drawn.
-    assert_eq!(game.world.random.state(), level);
+    // Finalization draws remain, but the fixed facing adds none.
+    assert_eq!(game.world.random.state(), level.state());
 }
