@@ -42,7 +42,3 @@ Path('crates/horizon-client/src/game/world/weather_queries.rs').write_text(
     "use super::*;\n\nimpl Game<'_> {\n" + chunk + "}\n"
 )
 game.write_text(s[:a] + s[b:])
-
-baseline = Path('tools/file_size_baseline.txt')
-s = baseline.read_text()
-baseline.write_text(s.replace('crates/horizon-client/src/game/network/remote/mod.rs 12654\n', ''))

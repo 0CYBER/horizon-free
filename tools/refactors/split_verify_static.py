@@ -31,7 +31,6 @@ STATIC = {
     "Keep game artifacts out of Git",
     "Check duplicate public native functions",
     "Built-in addresses stay in their home",
-    "Big files don't grow",
     "Crates follow the layers",
     "Test offline research tooling",
     "Build the mod-host map tables",

@@ -1122,6 +1122,7 @@ pub fn publish(
     let v = &project.versions[0];
     let capabilities: Vec<String> = v
         .capabilities
+        .known()
         .iter()
         .map(|c| format!("- may {}", c.describe()))
         .collect();

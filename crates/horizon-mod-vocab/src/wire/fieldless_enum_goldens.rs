@@ -155,7 +155,7 @@ fn existing_fieldless_enum_layouts_match_baseline() {
     );
     assert_eq!(
         <crate::world::data_maps::DataMapError as Wire>::layout(&mut vec![]),
-        0x38e6144ff0918aa9,
+        0x3c338ccd2a00316e,
         "DataMapError"
     );
     assert_eq!(

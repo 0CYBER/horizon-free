@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tools import check_addresses, check_file_size
+from tools import check_addresses, merge_base
 
 
 def strings(source):
@@ -111,7 +111,6 @@ class UpstreamRestorationTests(unittest.TestCase):
         self.git("config", "user.email", "fixture@example.invalid")
         (self.root / "tools").mkdir()
         (self.root / "tools/addresses.json").write_text('{"allowed": []}')
-        (self.root / "tools/file_size_baseline.txt").write_text("")
         self.git("add", "tools")
         self.git("commit", "-q", "-m", "base")
         self.base = self.git("rev-parse", "HEAD").strip()
@@ -119,7 +118,6 @@ class UpstreamRestorationTests(unittest.TestCase):
         self.git("checkout", "-q", "-b", "upstream")
         (self.root / "tools/addresses.json").write_text(json.dumps({"allowed": [self.row]}))
         self.git("commit", "-q", "-am", "upstream address")
-        upstream = self.git("rev-parse", "HEAD").strip()
         remote = self.root / "remote.git"
         self.git("init", "-q", "--bare", str(remote))
         self.git("push", "-q", str(remote), "HEAD:refs/heads/main")
@@ -128,9 +126,8 @@ class UpstreamRestorationTests(unittest.TestCase):
         self.git("add", "fork")
         self.git("commit", "-q", "-m", "fork")
         self.git("merge", "-q", "--no-edit", "upstream")
-        (self.root / "tools/file_size_baseline.txt").write_text(f"# sync-baseline: {upstream}\n")
         for patch in (mock.patch.object(check_addresses, "ROOT", self.root),
-                      mock.patch.object(check_file_size, "ROOT", self.root),
+                      mock.patch.object(merge_base, "ROOT", self.root),
                       mock.patch.dict(os.environ, {"HORIZON_UPSTREAM_URL": str(remote)})):
             patch.start()
             self.addCleanup(patch.stop)
@@ -155,14 +152,18 @@ class UpstreamRestorationTests(unittest.TestCase):
         self.assertTrue(self.problems(self.row.replace("service/", "service2/")))
 
     def test_forged_sync_provenance_cannot_restore_rows(self):
-        marker = self.git("rev-parse", "HEAD").strip()
-        (self.root / "tools/file_size_baseline.txt").write_text(f"# sync-baseline: {marker}\n")
+        self.git("reset", "-q", "--hard", "HEAD^")
+        self.git("checkout", "-q", "-b", "forgery", self.base)
+        (self.root / "tools/addresses.json").write_text(json.dumps({"allowed": [self.row]}))
+        self.git("commit", "-q", "-am", "forged upstream address")
+        self.git("checkout", "-q", "work")
+        self.git("merge", "-q", "--no-edit", "forgery")
         rows, errors = check_addresses.restored_upstream_rows(self.base)
         self.assertEqual(rows, set())
-        self.assertTrue(errors)
+        self.assertEqual(errors, [])
 
-    def test_verbatim_row_without_changed_sync_declaration_fails(self):
-        (self.root / "tools/file_size_baseline.txt").write_text("")
+    def test_verbatim_row_without_a_merge_of_upstream_fails(self):
+        self.git("reset", "-q", "--hard", "HEAD^")
         self.assertTrue(self.problems(self.row))
 
 
@@ -184,7 +185,6 @@ class PullRequestMergeTests(unittest.TestCase):
             run("init", "-q", "-b", "main")
             (root / "tools").mkdir()
             (root / "tools/addresses.json").write_text(config([]))
-            (root / "tools/file_size_baseline.txt").write_text("")
             (root / "tools/layers.json").write_text('{"crates": {}}')
             (root / "crates/a/src").mkdir(parents=True)
             (root / "crates/a/src/lib.rs").write_text("pub fn a() {}\n")
@@ -202,11 +202,16 @@ class PullRequestMergeTests(unittest.TestCase):
             run("commit", "-q", "-m", "main allows an address")
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge work", "work")
-            with mock.patch.object(check_addresses, "ROOT", root), mock.patch.object(check_file_size, "ROOT", root), \
+            fetch = mock.Mock(return_value=["no network"])
+            with mock.patch.object(check_addresses, "ROOT", root), mock.patch.object(merge_base, "ROOT", root), \
+                    mock.patch.object(merge_base, "fetch_upstream_main", fetch), \
                     mock.patch("sys.stdout", new_callable=io.StringIO) as out:
                 self.assertEqual(check_addresses.main(["--base", base, "--pull-request-merge"]), 0)
-                # Against the branch's old base, main's new entry was charged to the pull request.
+                fetch.assert_not_called()  # a merge and no violation never reaches the network
+                # Against the branch's old base, main's new entry was charged to the pull request, and only that
+                # violation looks for an upstream inventory that could excuse it.
                 self.assertEqual(check_addresses.main(["--base", base]), 1)
+                fetch.assert_called_once()
             self.assertIn("relay.playhorizon.dev", out.getvalue())
 
 

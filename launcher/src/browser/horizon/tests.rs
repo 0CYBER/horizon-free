@@ -343,7 +343,7 @@ fn data_pack(index: &mut Index, dir: &Path) -> Project {
     version.version = "1.0.0".into();
     version.api = "94".into();
     version.side = None;
-    version.capabilities.clear();
+    version.capabilities = Default::default();
     version.requires.clear();
     version.file = index::File {
         name: "lanterns-1.0.0.zip".into(),
@@ -444,7 +444,7 @@ fn installs_combined_native_content_as_one_hmod() {
     v.game = GAME.into();
     v.side = None;
     v.requires.clear();
-    v.capabilities.clear();
+    v.capabilities = Default::default();
     v.file.name = "coords_hud.hmod".into();
     v.file.url = format!("file://{}", archive.display());
     v.file.size = bytes.len() as u64;

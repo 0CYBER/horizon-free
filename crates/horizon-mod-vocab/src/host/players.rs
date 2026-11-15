@@ -428,6 +428,18 @@ pub trait PlayersBackend {
     /// unavailable player.
     #[access(WorldOnly)]
     fn player_announced_channels(&self, player: PlayerRef) -> Option<Vec<String>>;
+    /// Side: server.
+    /// Whether `viewer`'s client is shown the player `target` by the rules players are tracked
+    /// with (`ServerPlayer.broadcastToPlayer`; Paper's `Player.canSee`): a spectator is seen
+    /// only by spectators, and by them only while it watches through its own camera, and a
+    /// player hidden with `player_hide` is seen only by players of at least that level.
+    /// Distance and chunks are not part of it, so a player out of range is still seen. A player
+    /// sees themselves. Refuses with `PlayerWorldRefusal`: `Client`, `Stale` (a handle of the
+    /// two no longer identifies a player in the server's list) and `NoConnection` (a fake
+    /// player is no one's viewer or target).
+    #[access(WorldOnly)]
+    fn player_sees(&self, viewer: PlayerRef, target: PlayerRef)
+    -> Result<bool, PlayerWorldRefusal>;
 }
 /// The handles' client reads of the `players` area, implemented by the game and reached through [`Backend`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
@@ -938,6 +950,74 @@ pub trait PlayersBackendMut {
         input: PlayerInput,
     ) -> Option<SimulatedMove>;
     /// Side: server.
+    /// Respawns a dead player as their client's Respawn button does
+    /// (`ServerGamePacketListenerImpl.handleClientCommand`'s `PERFORM_RESPAWN`, then
+    /// `PlayerList.respawn`): at their respawn point, else the world spawn, with
+    /// `player_respawned` heard. It is a call for outside every player's hook, and it
+    /// returns once the player is alive again. Each refusal changes nothing and is named by
+    /// `RespawnRefusal`, checked in this order: `Client`, `InPlayerHook` (a player's state is
+    /// swapped in; call it from `server_tick`), `Stale` (no player on this server behind the
+    /// handle), `NoConnection` (a fake player, or the world's own player in a single-player
+    /// world) and `Alive` (health above 0 and the game not won: the Respawn button
+    /// ignores exactly that player; one who has won the game and is watching the End poem is
+    /// respawned even alive, on the server's next tick, as the button does).
+    #[access(WorldOnly)]
+    fn player_respawn(&mut self, player: PlayerRef) -> Result<(), RespawnRefusal>;
+    /// Side: server.
+    /// Acknowledges the player's block actions up to `sequence`
+    /// (`ServerGamePacketListenerImpl.ackBlockChangesUpTo`), for a mod that handled one itself,
+    /// such as an editor's own message: the client's predicted blocks settle on the server's
+    /// states once it gets `ClientboundBlockChangedAckPacket`, which goes after the next tick's
+    /// block changes. Pending acknowledgements take the maximum: a lower sequence after a
+    /// higher one has no effect. Any nonnegative sequence is accepted, so a value too high can
+    /// end pending client predictions early. Refuses, queueing nothing, with
+    /// `PlayerWorldRefusal`: `Client`, `Stale`, `NoConnection` and `NegativeSequence`.
+    #[access(WorldOnly)]
+    fn player_ack_block_changes(
+        &mut self,
+        player: PlayerRef,
+        sequence: i32,
+    ) -> Result<(), PlayerWorldRefusal>;
+    /// Side: server.
+    /// Shows that player alone `state` at `pos` in their level (`ClientboundBlockUpdatePacket`
+    /// to their client; Paper's `Player.sendBlockChange`), at once. The world is not changed:
+    /// the real block comes back when it or its chunk is next sent, as in vanilla, so a mod
+    /// sends it again while it still wants it shown. The visual override is not remembered;
+    /// it does not itself acknowledge or clear pending client predictions.
+    /// Refuses, sending nothing, with `PlayerWorldRefusal`: `Client`, `Stale`, `NoConnection`, `UnknownState` and
+    /// `PositionNotSendable` (y outside -2048..=2047, x or z outside -33554432..33554432).
+    #[access(WorldOnly)]
+    fn player_show_block(
+        &mut self,
+        player: PlayerRef,
+        pos: [i32; 3],
+        state: BlockState,
+    ) -> Result<(), PlayerWorldRefusal>;
+    /// Side: server.
+    /// Writes `state` at `pos` in `level` for the player, for a state the mod already chose
+    /// (an editor's or a schematic's). It is `level_set_block` with a placement's flags
+    /// (`NEIGHBORS | CLIENTS`, plus `KNOWN_SHAPE` when `update_neighbour_shapes` is false; without
+    /// it the neighbours' shapes update, so fences, walls and stairs connect), so the block entity
+    /// follows that write's rules, and then `Block.setPlacedBy` of the block that stands there, run in
+    /// the player's turn (a bed places its head, a door its upper half). Nothing else of vanilla's `BlockItem.place`
+    /// or `useOn` runs: no check that the block may be placed there (survival, entity
+    /// obstruction, build permission, spawn protection), no `placed_block` advancement trigger or
+    /// statistic, no place sound, no game event, no item used or consumed, and `setPlacedBy` is
+    /// not given the player as placer. The player is only whose turn `setPlacedBy` runs in, so it is
+    /// not "as player" in the sense of a use-on. The state is written as given. Refuses, writing
+    /// nothing, with `PlayerWorldRefusal`: `Client`, `Stale`, `Dead`, `StaleLevel`, `OtherLevel`
+    /// (not the level in place, where the player is), `UnknownState`, `OutOfWorld`, `NotLoaded`
+    /// and `Unchanged` (that state already stands there, or the write was refused as
+    /// `level_set_block` returns false).
+    #[access(WorldOnly)]
+    fn player_place_block(
+        &mut self,
+        player: PlayerRef,
+        level: LevelRef,
+        pos: [i32; 3],
+        state: BlockState,
+        update_neighbour_shapes: bool,
+    ) -> Result<(), PlayerWorldRefusal>;
     /// Numbers: 0..35 main (0..8 hotbar), 36..39 feet to head, 40 offhand,
     /// 41 body, 42 saddle. ItemPlace uses 100..103 for armour and -106 for offhand;
     /// InventoryMenu has no 41 or 42.

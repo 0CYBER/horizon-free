@@ -185,7 +185,8 @@
     {
       "name": "DataMapError",
       "path": "crate::world::data_maps::DataMapError",
-      "hash": "38e6144ff0918aa9",
+      "hash": "3c338ccd2a00316e",
+      "contract_change": "arismoko/horizon#4199 appends DataMapError::InvalidKey; ordinals 0, 1, 2 remain unchanged; the frozen hash was 38e6144ff0918aa9",
       "canonical_path": "crate::world::data_maps::DataMapError"
     },
     {

@@ -302,6 +302,7 @@ pub(crate) fn install_registrar(
         fluids: OnceLock::new(),
         resolved_items: OnceLock::new(),
         resolved_entity_types: OnceLock::new(),
+        resolved_game_events: OnceLock::new(),
         resolved_blocks: OnceLock::new(),
         particles: OnceLock::new(),
         controllers: registrar.controllers,
