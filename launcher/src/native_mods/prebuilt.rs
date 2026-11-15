@@ -47,6 +47,28 @@ impl std::fmt::Display for Refusal {
     }
 }
 
+impl Refusal {
+    /// What the player reads about it, in the words of a mod that doesn't compile: the code and
+    /// its remedy for the mod's author stay in the build log ([`Display`](std::fmt::Display)).
+    pub fn plain(&self) -> String {
+        let why = match self {
+            Self::BuildScript { mod_id } => trf(
+                "{mod} can't be built here: it brings build steps of its own, which Horizon doesn't run.",
+                &[("mod", mod_id)],
+            ),
+            Self::Features { mod_id } => trf(
+                "{mod} can't be built here: it asks for build options Horizon's game doesn't offer.",
+                &[("mod", mod_id)],
+            ),
+            Self::Sdk(refusal) => return refusal.to_string(),
+        };
+        format!(
+            "{why} {}",
+            tr("The problem is in the mod, not in your game. Switch it off to play, or send the log to its author.")
+        )
+    }
+}
+
 /// The first structural reason these projects cannot use the prebuilt game.
 pub(super) fn refusal(projects: &[api::Project<'_>]) -> Option<Refusal> {
     projects.iter().find_map(project_refusal)
@@ -655,16 +677,8 @@ pub(super) fn compile(
     let key = kept_build(rust, package)?;
     if route == Route::Api {
         let out = &builds.join(format!("api-{key}"));
-        let built = super::api_route::compile(
-            rust,
-            &package.runtime,
-            &package.api,
-            out,
-            projects,
-            declared,
-            resolution,
-            on_mod,
-        );
+        let built =
+            super::api_route::compile(rust, package, out, projects, declared, resolution, on_mod);
         // Stamped after the route has made its folder again, failed or not.
         if out.exists() {
             crate::storage::mark_used(out).map_err(super::cache_error)?;
@@ -863,7 +877,6 @@ pub(super) fn dylib_name(krate: &str) -> String {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn library_entry(
     template: &str,
     mods: &[&horizon_mod_package::Manifest],

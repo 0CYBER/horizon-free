@@ -27,6 +27,9 @@ impl Launcher {
                     if let (Ok(_), Some(checked)) = (&r, self.checked) {
                         self.perf.record_since("launcher.release_list_ms", checked);
                     }
+                    if let Ok(list) = &r {
+                        horizon_launcher::nightly::note_published(list);
+                    }
                     self.releases = r.map_or_else(Load::Failed, Load::Ready)
                 }
                 Msg::Links(links) => {

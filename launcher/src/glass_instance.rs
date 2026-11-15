@@ -419,7 +419,7 @@ impl Launcher {
         );
         let mut summary = match kind {
             NewKind::Horizon => match self.draft_horizon() {
-                Some(tag) => format!("Horizon · {}", version_label(&tag)),
+                Some(tag) => format!("Horizon · {}", self.version_label(&tag)),
                 None => "Horizon".into(),
             },
             NewKind::Vanilla => format!("{} · {minecraft}", tr("Vanilla")),
@@ -775,29 +775,29 @@ impl Launcher {
     }
 }
 
-/// A version as a player reads it: "Nov 13 update" for a build of the game (its commit stays in
-/// the details), "Imported · 2026-10-30", a developer build's name, or the tag. Players who
-/// don't know what a nightly is see the day it came out, not the channel's jargon.
-pub(super) fn version_label(tag: &str) -> String {
-    if let Some(developer) = horizon_launcher::developer_install::label(tag) {
-        return developer;
-    }
-    // A game built with mods reads as what it was built on: "Nov 13 update, with your mods".
-    if native_mods::is_native(tag) {
-        return match native_base(tag) {
-            Some(base) => trf(
-                "{version}, with your mods",
-                &[("version", &version_label(&base))],
-            ),
-            None => tr("A build with your mods").to_string(),
-        };
-    }
-    match horizon_launcher::nightly::date_of(tag) {
-        Some(date) => trf(
-            "{date} update",
-            &[("date", &glass_versions::published(date, ""))],
-        ),
-        None => build_import::label(tag).unwrap_or_else(|| tag.to_string()),
+impl Launcher {
+    /// A version as a player reads it: the Versions page's name for a build of the game ("Nov 13
+    /// update", with its time when another came out that day; its commit stays in the details),
+    /// "Imported · 2026-10-30", a developer build's name, or the tag. Players who don't know what
+    /// a nightly is see the day it came out, not the channel's jargon.
+    pub(super) fn version_label(&self, tag: &str) -> String {
+        if let Some(developer) = horizon_launcher::developer_install::label(tag) {
+            return developer;
+        }
+        // A game built with mods reads as what it was built on: "Nov 13 update, with your mods".
+        if native_mods::is_native(tag) {
+            return match native_base(tag) {
+                Some(base) => trf(
+                    "{version}, with your mods",
+                    &[("version", &self.version_label(&base))],
+                ),
+                None => tr("A build with your mods").to_string(),
+            };
+        }
+        match horizon_launcher::nightly::date_of(tag) {
+            Some(_) => self.version_name(tag),
+            None => build_import::label(tag).unwrap_or_else(|| tag.to_string()),
+        }
     }
 }
 
@@ -1097,7 +1097,7 @@ impl Launcher {
                 "Week of {date}",
                 &[("date", &glass_versions::published(week, ""))],
             ),
-            None => version_label(tag),
+            None => self.version_label(tag),
         };
         let this = cx.entity().downgrade();
         let segs = ui::segments(
@@ -1220,7 +1220,7 @@ impl Launcher {
                 list = list.child(row(
                     format!("horizon-version-{tag}"),
                     pin.as_ref() == Some(tag),
-                    version_label(tag),
+                    self.version_label(tag),
                     String::new(),
                     Some(tag.clone()),
                 ));

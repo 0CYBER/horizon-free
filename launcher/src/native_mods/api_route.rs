@@ -13,17 +13,16 @@ const BIN: &str = "bin";
 
 /// Compile the mods in dependency order against API metadata and the runtime's dynamic
 /// closure. Return the unchanged executable and its runtime libraries, followed by mod dylibs.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn compile(
     rust: &Toolchain,
-    runtime: &Path,
-    api: &Path,
+    package: &prebuilt::Package,
     out: &Path,
     projects: &[api::Project<'_>],
     declared: &[Vec<dependencies::Dependency>],
     resolution: &dependencies::Resolution,
     on_mod: &dyn Fn(&str, usize, usize),
 ) -> Result<(PathBuf, Vec<PathBuf>), String> {
+    let (runtime, api) = (package.runtime.as_path(), package.api.as_path());
     let sdk = prebuilt::identity(runtime)?;
     fs::create_dir_all(out).map_err(|e| e.to_string())?;
     let deps = api.join("deps");

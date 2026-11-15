@@ -26,7 +26,7 @@ pub(super) fn classify(
             Ok(project) => {
                 let route = prebuilt::project_refusal(&project).map_or(Route::Prebuilt, |reason| {
                     Route::Invalid {
-                        reason: reason.to_string(),
+                        reason: reason.plain(),
                     }
                 });
                 projects.push(project);
