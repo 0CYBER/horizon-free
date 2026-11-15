@@ -65,7 +65,11 @@ enum Body<'a> {
 impl Game<'_> {
     /// The player's body or the mob a handle names, or its target.
     fn native_entity_body(&self, entity: EntityRef) -> Option<Body<'_>> {
-        Some(match self.native_entity_target(entity)? {
+        self.native_target_body(self.native_entity_target(entity)?)
+    }
+
+    fn native_target_body(&self, target: Target) -> Option<Body<'_>> {
+        Some(match target {
             Target::Player => Body::Player(self.player.as_ref()?),
             Target::Guest(conn) => Body::Player(self.command_guest(conn)?.motion.as_deref()?),
             Target::Mob(id) => Body::Mob(self.mobs.iter().find(|m| m.id == id)?),
@@ -121,31 +125,36 @@ impl Game<'_> {
     }
     /// The fluids the entity touched at its last fluid update, each with how deep its box is in
     /// it (`IEntityExtension.getFluidTypeHeight`), highest first; empty in no fluid. Players and
-    /// mobs: water and lava, the fluids Horizon's entity update tracks. Server only.
+    /// mobs: water and lava, the fluids Horizon's entity update tracks. On a client these
+    /// are the predicted local player's state or the displayed entity's last fluid update.
     pub(super) fn entity_fluid_heights(&self, entity: EntityRef) -> Option<Vec<(String, f64)>> {
         use horizon_client::motion::{LAVA, WATER};
-        Some(match self.native_entity_body(entity)? {
-            Body::Player(p) => touched_fluids(
-                (p.fluid_height(WATER), p.fluids.was_touching_water),
-                (p.fluid_height(LAVA), p.is_in_lava()),
-            ),
-            Body::Mob(m) => touched_fluids(
-                (m.fluids.water, m.fluids.in_water),
-                (m.fluids.lava, m.fluids.in_lava),
-            ),
-            Body::Other(_) => return None,
-        })
+        Some(
+            match self.native_target_body(self.native_entity_read_target(entity)?)? {
+                Body::Player(p) => touched_fluids(
+                    (p.fluid_height(WATER), p.fluids.was_touching_water),
+                    (p.fluid_height(LAVA), p.is_in_lava()),
+                ),
+                Body::Mob(m) => touched_fluids(
+                    (m.fluids.water, m.fluids.in_water),
+                    (m.fluids.lava, m.fluids.in_lava),
+                ),
+                Body::Other(_) => return None,
+            },
+        )
     }
     /// The fluid at the entity's eyes from its last fluid update
     /// (`IEntityExtension.getFirstEyeInFluidType`): water or lava, none in air. Players and mobs.
-    /// Server only.
+    /// On a client this reads its own cached fluid update, without sampling the world again.
     pub(super) fn entity_eye_fluid(&self, entity: EntityRef) -> Option<Option<String>> {
         use horizon_client::motion::{LAVA, WATER};
-        Some(match self.native_entity_body(entity)? {
-            Body::Player(p) => eye_fluid(p.is_eye_in_fluid(WATER), p.is_eye_in_fluid(LAVA)),
-            Body::Mob(m) => eye_fluid(m.fluids.eye_in_water, m.fluids.eye_in_lava),
-            Body::Other(_) => return None,
-        })
+        Some(
+            match self.native_target_body(self.native_entity_read_target(entity)?)? {
+                Body::Player(p) => eye_fluid(p.is_eye_in_fluid(WATER), p.is_eye_in_fluid(LAVA)),
+                Body::Mob(m) => eye_fluid(m.fluids.eye_in_water, m.fluids.eye_in_lava),
+                Body::Other(_) => return None,
+            },
+        )
     }
     /// Whether the entity's type never burns (`EntityType.fireImmune`):
     /// players and mobs.
@@ -1281,6 +1290,95 @@ mod tests {
                 Some(true),
                 "server keeps its semantic entity flag"
             );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn client_fluid_reads_use_cached_local_and_tracked_bodies() {
+        use super::super::{
+            native_client_session::tests::logged_client,
+            native_entity_refs::tests::with_client_game,
+        };
+        use horizon_core::geometry::Vec3;
+        use horizon_protocol::packets::play;
+
+        with_client_game(|game| {
+            let _server = logged_client(game);
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            let local = game.entity(7).unwrap();
+            let host = &*game as &dyn mod_api::ClientHost;
+            assert_eq!(local.fluid_heights(host), Some(Vec::new()));
+            assert_eq!(local.eye_fluid(host), Some(None));
+
+            game.spawn_entity(15, "minecraft:zombie", [2.0, 0.0, 0.0], [0.0; 3]);
+            let zombie = game.entity(15).unwrap();
+            // No water or lava in the world: these answers must come from the last
+            // client fluid update, without a fresh world query or a server body.
+            for (water, lava, eye_water, eye_lava, expected, eye) in [
+                (
+                    0.75,
+                    0.0,
+                    true,
+                    false,
+                    vec![("minecraft:water".to_owned(), 0.75)],
+                    Some("minecraft:water"),
+                ),
+                (
+                    0.0,
+                    0.5,
+                    false,
+                    false,
+                    vec![("minecraft:lava".to_owned(), 0.5)],
+                    None,
+                ),
+                (
+                    0.25,
+                    1.5,
+                    false,
+                    true,
+                    vec![
+                        ("minecraft:lava".to_owned(), 1.5),
+                        ("minecraft:water".to_owned(), 0.25),
+                    ],
+                    Some("minecraft:lava"),
+                ),
+                (0.0, 0.0, false, false, Vec::new(), None),
+            ] {
+                let fluids = &mut game.mobs.iter_mut().find(|m| m.id == 15).unwrap().fluids;
+                fluids.water = water;
+                fluids.lava = lava;
+                fluids.in_water = water > 0.0;
+                fluids.in_lava = lava > 0.0;
+                fluids.eye_in_water = eye_water;
+                fluids.eye_in_lava = eye_lava;
+                let host = &*game as &dyn mod_api::ClientHost;
+                assert_eq!(zombie.fluid_heights(host), Some(expected));
+                assert_eq!(zombie.eye_fluid(host), Some(eye.map(str::to_owned)));
+            }
+            game.spawn_entity(16, "minecraft:armor_stand", [2.0, 0.0, 0.0], [0.0; 3]);
+            let stand = game.entity(16).unwrap();
+            let host = &*game as &dyn mod_api::ClientHost;
+            assert_eq!(stand.fluid_heights(host), None);
+            assert_eq!(stand.eye_fluid(host), None);
+            let stale = EntityRef::new(mod_api::WorldEpoch::new(0), 15);
+            assert_eq!(stale.fluid_heights(host), None);
+            assert_eq!(stale.eye_fluid(host), None);
+            game.handle_packet(play::Clientbound::RemoveEntities(play::RemoveEntities {
+                ids: vec![15],
+            }))
+            .unwrap();
+            assert_eq!(
+                zombie.fluid_heights(&*game as &dyn mod_api::ClientHost),
+                None
+            );
+            assert_eq!(zombie.eye_fluid(&*game as &dyn mod_api::ClientHost), None);
+            game.remote.as_mut().unwrap().logged_in = false;
+            assert_eq!(
+                local.fluid_heights(&*game as &dyn mod_api::ClientHost),
+                None
+            );
+            assert_eq!(local.eye_fluid(&*game as &dyn mod_api::ClientHost), None);
         });
     }
 
