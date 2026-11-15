@@ -15,8 +15,9 @@ pub(crate) fn chat_px(caption: &str, px: f32) -> Text {
     )
 }
 pub(crate) fn percent(caption: &str, value: f32) -> Text {
-    Text::translate(
+    Text::translate_with_fallback(
         "options.percent_value",
+        "%s: %s%%",
         &[
             tr(caption),
             Text::literal(((f64::from(value) * 100.0) as i32).to_string()),

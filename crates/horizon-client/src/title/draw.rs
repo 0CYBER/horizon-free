@@ -12,7 +12,7 @@ impl Title {
         self.draw_with_items(atlas, None, batch, cursor, hide_splash, false, phases);
     }
     /// [`Title::draw`] with the item models, which draw the item icons of the
-    /// Superflat screens the way `GuiGraphics.renderItem` does.
+    /// Superflat screens the way `GuiGraphicsExtractor.item` does.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_with_items(
         &self,

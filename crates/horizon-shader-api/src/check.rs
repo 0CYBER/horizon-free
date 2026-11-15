@@ -13,7 +13,7 @@ use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
 use crate::stages::{
-    Composed, GROUP, RAY_ENTITY_SAMPLER_BINDING, RAY_ENTITY_STORE_BINDING, RAY_SCENE_BINDING,
+    Composed, GROUP, RAY_ENTITY_RETAINED_BINDING, RAY_ENTITY_STORE_BINDING, RAY_SCENE_BINDING,
     StageKind, compose_traced, identifiers,
 };
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
@@ -555,7 +555,7 @@ fn vertex_rays(
     let scene: Vec<_> = (module.global_variables.iter())
         .filter(|(_, g)| {
             g.binding.as_ref().is_some_and(|b| {
-                let bindings = RAY_SCENE_BINDING..=RAY_ENTITY_SAMPLER_BINDING;
+                let bindings = RAY_SCENE_BINDING..=RAY_ENTITY_RETAINED_BINDING;
                 b.group == GROUP && bindings.contains(&b.binding)
             })
         })

@@ -1125,7 +1125,7 @@ impl Screen {
                             batch.text(atlas, &server.name, cx + 35.0, cy + 1.0, u32::MAX, true);
                             // OnlineServerEntry: up to two lines of MOTD, the
                             // player count left of the status icon, all with
-                            // GuiGraphics.text's shadow.
+                            // GuiGraphicsExtractor.text's shadow.
                             let (motd, status, sprite) = match pings.get(&server.ip) {
                                 Some(Ping::Ok {
                                     motd, players, ms, ..

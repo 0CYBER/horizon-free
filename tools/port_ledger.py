@@ -28,7 +28,8 @@ method-by-method reading misses:
   0.30000001192092896) as the double 0.3;
 - drift: a port that never names what its vanilla method uses: a sound, particle, item, block, effect or
   game event, or a rare number (a missing sound or a changed constant);
-- stale: a citation whose class or method doesn't exist in the pinned version;
+- stale: a citation whose own vanilla class exists but whose method doesn't, on it or a supertype
+  (a rename candidate); a class the pinned version has never heard of is skipped, not reported;
 - unported: vanilla methods with no port, ranked by how many vanilla methods call them.
 
     python3 tools/port_ledger.py build                         # index into .local/port-ledger/ledger.json
@@ -127,8 +128,6 @@ SKIP_PACKAGES = (
 
 CITE = re.compile(r"\b([A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*)(?:(?:\.|::|#)([A-Za-z_][A-Za-z0-9_]*))?")
 JAVA_CLASS = re.compile(r"\b(class|interface|enum|record|@interface)\s+([A-Za-z_]\w*)")
-JAVA_EXTENDS = re.compile(r"\bextends\s+([\w.]+)")
-JAVA_IMPLEMENTS = re.compile(r"\bimplements\s+([\w.,\s<>?]+)")
 JAVA_METHOD = re.compile(r"\b([A-Za-z_]\w*)\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*(?:throws\s+[\w.,\s]+)?$")
 JAVA_CALL = re.compile(r"(?:\b([A-Za-z_]\w*)\s*(?:\.|::)\s*|(\.|::)\s*)?\b([a-z][A-Za-z0-9_]*)\s*\(")
 JAVA_METHOD_REF = re.compile(r"\b([A-Za-z_]\w*)::([a-z]\w*)\b")
@@ -412,6 +411,39 @@ def id_tokens_from_string(s):
 # ---- Java ---------------------------------------------------------------------------------------------
 
 
+def strip_generics(text):
+    """`text` without its `<...>` type arguments and type-parameter bounds (balanced, nested)."""
+    out, depth = [], 0
+    for ch in text:
+        if ch == "<":
+            depth += 1
+        elif ch == ">" and depth:
+            depth -= 1
+        elif not depth:
+            out.append(ch)
+    return "".join(out)
+
+
+def java_supertypes(header):
+    """Every supertype a class header names, generics stripped: the superclass plus all interfaces.
+
+    A type-parameter bound (`class Foo<T extends Bar> extends Baz`) must not shadow the real extends
+    clause, and an interface may extend several interfaces (`extends A, B`)."""
+    header = strip_generics(header)
+    names = []
+    for keyword in ("extends", "implements"):
+        m = re.search(r"\b" + keyword + r"\b", header)
+        if not m:
+            continue
+        clause = header[m.end():]
+        stop = re.search(r"\b(?:extends|implements|permits)\b", clause)
+        if stop:
+            clause = clause[:stop.start()]
+        clause = clause.split("(", 1)[0]  # a record components list comes before implements
+        names += [n.strip() for n in clause.split(",") if re.fullmatch(r"[\w.$]+", n.strip())]
+    return names
+
+
 def parse_java(path_and_root):
     path, root = path_and_root
     rel = os.path.relpath(path, root).replace(os.sep, "/")
@@ -453,12 +485,7 @@ def parse_java(path_and_root):
                     "outer": outer["path"] if outer else None,
                     "fields": {},
                 }
-                ext = JAVA_EXTENDS.search(header_one)
-                if ext:
-                    cls["extends"].append(ext.group(1).split("<")[0])
-                imp = JAVA_IMPLEMENTS.search(header_one)
-                if imp:
-                    cls["extends"] += [p.strip().split("<")[0] for p in re.split(r",(?![^<]*>)", imp.group(1)) if p.strip()]
+                cls["extends"] += java_supertypes(header_one)
                 if m.group(1) == "record":
                     cls["fields"].update({v: t.split(".")[-1] for t, v in JAVA_TYPED.findall(header_one.split("(", 1)[-1])})
                     for field in re.findall(r"\b([a-z]\w*)\s*(?:,|\)\s*(?:implements|$))", header_one.split("(", 1)[-1]):
@@ -722,7 +749,8 @@ def default_jars():
     lock = json.loads((ROOT / "research-lock.json").read_text()) if (ROOT / "research-lock.json").exists() else {}
     version = str((lock.get("minecraft") or {}).get("version") or lock.get("version") or lab.VERSION)
     home = Path.home()
-    candidates = sorted((ROOT / ".local" / "minecraft" / version).glob("*.jar")) + [
+    directory = ROOT / ".local" / "minecraft" / version
+    candidates = sorted((directory / "jars").glob("*.jar")) + sorted(directory.glob("*.jar")) + [
         home / "Library/Application Support/minecraft/versions" / version / f"{version}.jar",
         home / ".minecraft/versions" / version / f"{version}.jar",
         Path(os.environ.get("APPDATA", "")) / ".minecraft/versions" / version / f"{version}.jar",
@@ -1029,22 +1057,33 @@ class Vanilla:
         top = [c for c in cands if "$" not in c and c.startswith("net/minecraft/")]
         return top[0] if len(top) == 1 else None
 
-    def lineage(self, path, limit=12):
-        """The class and its supertypes, nearest first."""
+    def resolve_type(self, name, near=None):
+        """The index path a supertype name means: a jar path, a qualified name, or `Outer.Inner`."""
+        if name in self.classes:
+            return name
+        name = strip_generics(name).replace("$", ".").strip()
+        if name in self.classes:
+            return name
+        parts = name.split(".")
+        first = next((i for i, part in enumerate(parts) if part[:1].isupper()), len(parts))
+        if first < len(parts):
+            path = "/".join(parts[:first] + ["$".join(parts[first:])])
+            if path in self.classes:
+                return path
+        return self.resolve(name, near=near)
+
+    def lineage(self, path, limit=None):
+        """The class and all its supertypes, nearest first. No depth cap unless one is given: a method
+        deep in the hierarchy is still inherited, so stale detection must not stop before it."""
         out, todo, seen = [], [path], set()
-        while todo and len(out) < limit:
+        while todo and (limit is None or len(out) < limit):
             p = todo.pop(0)
             if p in seen or p not in self.classes:
                 continue
             seen.add(p)
             out.append(p)
             for sup in self.classes[p]["extends"]:
-                if sup in self.classes:
-                    todo.append(sup)
-                    continue
-                r = self.resolve(sup.split(".")[-1] if "." not in sup or sup.startswith(("net.", "com.")) else sup, near=p)
-                if not r and "." in sup:
-                    r = self.resolve(sup.rsplit(".", 1)[-1], near=p)
+                r = self.resolve_type(sup, near=p)
                 if r:
                     todo.append(r)
         return out
@@ -1298,8 +1337,11 @@ def build(sources, jars, jobs):
                             continue
                     cp = van.resolve(cls_name)
                     if not cp:
-                        if member and sum(ch.isupper() for ch in cls_name) >= 1 and len(cls_name) > 3 and cls_name not in ("Self", "Some", "None", "Ok", "Err", "Vec", "Option", "Result", "String", "Box", "Arc", "Rc", "HashMap", "HashSet", "BTreeMap"):
-                            stale.append({"what": "class", "cite": f"{cls_name}.{member}", "file": f["file"], "line": line})
+                        # Only the pinned version can call a citation stale. An unknown class is no evidence
+                        # of a rename: Java's Math/Number/UUID, JOML's Matrix4f/Quaternion, authlib and
+                        # Horizon's own types (Ranges, Game, its snake_case helpers) are not vanilla 26.3
+                        # classes, so citing one says nothing about whether vanilla had it. When its class
+                        # is in the index but the method is not, the method is a real rename candidate.
                         continue
                     if not member:
                         if sum(ch.isupper() for ch in cls_name.split(".")[-1]) >= 2:

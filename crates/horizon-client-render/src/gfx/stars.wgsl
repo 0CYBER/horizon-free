@@ -5,7 +5,6 @@ struct Stars {
     // starBrightness in every channel (RenderSystem.setShaderColor).
     color: vec4<f32>,
     hdr_settings: vec4<f32>,
-    hdr_gains: vec4<f32>,
     hdr_light: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> stars: Stars;
@@ -15,12 +14,12 @@ struct Stars {
 }
 
 // The colour premultiplied, as the celestial blend (src alpha, one) would: the pipeline adds it.
-// Stars are points of light: in Horizon's lifted world they shine at the bright tier's mark
-// (0.175), fully lifted wherever they show at all.
+// Stars are points of light: in Horizon's lifted world they shine at the bright tier's mark,
+// fully lifted wherever they show at all.
 @fragment fn fs_stars() -> @location(0) vec4<f32> {
     let b = stars.color.a;
     if HDR_WRITE_LIGHT && stars.hdr_light.w != 0.0 {
-        return vec4(hdr_written(stars.color.rgb * b, 0.175, stars.hdr_settings, stars.hdr_gains), b);
+        return vec4(hdr_written(stars.color.rgb * b, hdr_mark(3u, 1.0), stars.hdr_settings), b);
     }
     if HDR_WRITE_LIGHT { return vec4(frame_stored(stars.color).rgb * b, b); }
     return vec4(stars.color.rgb * b, 1.0);

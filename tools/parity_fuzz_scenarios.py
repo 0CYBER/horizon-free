@@ -192,6 +192,10 @@ def spawn(rng, seed):
         steps.append({'k': 'summon', 'type': kind, 'at': [7.5, rng.choice([0, 0.5, 2]), 7.5], 'n': 0, 'nbt': nbt})
     read = {'k': 'read_near', 'type': kind, 'at': c}
     steps.append(read)
+    if mechanism == 'pulse':
+        # The dispenser fires in the next tick, four ticks after the redstone block: sync both engines' randoms
+        # there again, so the fire draws from one state and not from the ticks since the scenario's sync (#16834).
+        steps.append({'k': 'sync'})
     for _ in range(rng.choice([2, 3, 4])):
         steps += [{'k': 'tick', 'n': 1}, read]
     return {'family': 'spawn', 'seed': seed, 'steps': steps}

@@ -1400,15 +1400,14 @@ impl NativePost {
                 }));
             }
             // The passes built against the scene read it too; the tonemap has no `trace`.
-            let layout = match traced.filter(|_| writes.is_some()) {
-                Some((trace, scene)) => {
+            entries.extend(kept::entries(&self.kept, pass, parity));
+            let with_scene = traced.and_then(|(t, scene)| Some((t.layout(pass?)?, t, scene)));
+            let layout = match with_scene {
+                Some((layout, trace, scene)) => {
                     entries.extend(trace.entries(scene));
-                    &trace.layout
+                    layout
                 }
-                None => {
-                    entries.extend(kept::entries(&self.kept, pass, parity));
-                    kept::pass(&self.kept, pass).map_or(&self.layout, |p| &p.layout)
-                }
+                None => kept::pass(&self.kept, pass).map_or(&self.layout, |p| &p.layout),
             };
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Native shader pack post"),
@@ -1453,11 +1452,9 @@ impl NativePost {
         size: [u32; 2],
         history_reset: bool,
         mut timing: Option<&mut super::pack_timing::PassTiming>,
-        scene: Option<(&trace::RayScene, glam::DVec3)>,
+        scene: Option<&trace::Traced<'_>>,
     ) {
         let window = [screen.texture().width(), screen.texture().height()];
-        let scene = scene.and_then(|(scene, camera)| scene.traced(camera));
-        let scene = scene.as_ref();
         self.begin_kept(device, encoder, size);
         self.prepare(device, world, size, window, history_reset, scene);
         if let Some(t) = timing.as_deref_mut() {
@@ -1473,7 +1470,9 @@ impl NativePost {
         };
         d.decoder.run(device, encoder, world.0, scene);
         for (i, ((label, pipeline), group)) in self.passes.iter().zip(passes).enumerate() {
-            kept::dispatch(&self.kept, encoder, passes, i, size);
+            let computes = self.trace.as_ref().filter(|_| self.traced.is_some());
+            let traced = computes.map(|t| t.computes.as_slice());
+            kept::dispatch(&self.kept, encoder, (passes, traced), i, size);
             let view = match (self.plan[i].writes, &self.targets, &self.named, &d.picture) {
                 (Writes::Chain(slot), Some((_, t)), _, _) => &t[slot],
                 (Writes::Target(j), _, Some((_, n)), _) => &n[j],
@@ -1636,7 +1635,7 @@ pub fn frame_inputs(
         mods: pack.mod_params,
         light_direction: match shadow {
             Some(s) => super::pack_uniforms::shadow_light(frame, s),
-            None => Vec3::Y,
+            None => body(super::pack_uniforms::light_angle(frame)),
         }
         .to_array(),
         has_shadow: u32::from(shadow.is_some()),
@@ -1804,6 +1803,36 @@ mod tests {
     use horizon_shader_api::{MANIFEST, Pack, check};
 
     const SDR: DisplayValues = DisplayValues::SDR;
+
+    /// `light_direction` is the sun by day and the moon by night, as the same frame's
+    /// `sun_direction` and `moon_direction` have them, also for a pack without a shadow map; a
+    /// pack with `[shadow]` gets the shadow camera's light as before, to the bit.
+    #[test]
+    fn the_light_is_the_sun_by_day_and_the_moon_by_night_with_or_without_a_shadow_map() {
+        let hud = crate::hud::HudBatch::new([4, 4]);
+        let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+        let shadow = crate::gfx::native_shadow::camera(&Default::default());
+        let light = |frame: &Frame, shadow| {
+            frame_inputs(frame, [4, 4], 0.0, 0, shadow)
+                .light_direction
+                .map(f32::to_bits)
+        };
+        // Morning and night, where the sun, the moon and straight up all differ.
+        for (sun, moon, by_day, shadowed) in [
+            (35.0, 215.0, true, [0xbf12_d5e7, 0x3f51_b3f3, 0xb2d7_5d86]),
+            (200.0, 20.0, false, [0xbeaf_1d43, 0x3f70_8fb3, 0xb280_6bc8]),
+        ] {
+            (frame.sky.sun_angle, frame.sky.moon_angle) = (sun, moon);
+            let inputs = frame_inputs(&frame, [4, 4], 0.0, 0, None);
+            let body = if by_day {
+                inputs.sun_direction
+            } else {
+                inputs.moon_direction
+            };
+            assert_eq!(light(&frame, None), body.map(f32::to_bits), "{sun}");
+            assert_eq!(light(&frame, Some(&shadow)), shadowed, "{sun}");
+        }
+    }
 
     #[test]
     fn wetness_rises_slower_than_it_dries() {

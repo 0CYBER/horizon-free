@@ -64,7 +64,7 @@ fn stage_input(
     let frame = texture(LINEAR_FRAME, wgpu::TextureUsages::TEXTURE_BINDING);
     let input = texture(INTERMEDIATE, wgpu::TextureUsages::COPY_SRC);
     let frame_view = frame.create_view(&Default::default());
-    let source = include_str!("../hdr_light.wgsl").to_owned() + line_helpers(linear) + SOURCE;
+    let source = super::super::wgsl_prefix::HDR_LIGHT.to_owned() + line_helpers(linear) + SOURCE;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(source.into()),

@@ -3,7 +3,7 @@
 
 pub trait Hooks {
     /// A player takes an item from an armor stand or puts one on it
-    /// (`ArmorStand.interactAt`, after the stand's disabled-slot checks and
+    /// (`ArmorStand.interact`, after the stand's disabled-slot checks and
     /// `swapItem`'s take/put locks, before anything moves): `stand_id` is the
     /// stand's `Entity.getId` and `slot` the one the click reached
     /// (`mainhand`, `offhand`, `feet`, `legs`, `chest` or `head`). Set

@@ -91,7 +91,7 @@ type where it is known (`self`, a parameter, a `let`, a struct field, a trait to
 | `float` | A vanilla method widens a float literal to double (`vec.add(0.0, -0.04F, 0.0)`: javac folds it to -0.03999999910593033) and its port spells the literal as a double (`-0.04`) and nowhere as the float (`f64::from(0.04_f32)`, `0.04_f32 as f64`, or the widened value written out). The difference is in the eighth digit: invisible in play, but every exact parity trace that reaches it diverges, and it compounds per tick in motion. | `Blaze.customServerAiStep` rises by `(0.3F - y) * 0.3F`; `blaze_server_ai_step` used `(0.3 - y) * 0.3` |
 | `class` | A whole class nothing ports while most of its package is ported. Renderers, sound instances and goals are reached by registration, so no call graph shows them. | `ShulkerBulletRenderer`, `ElytraOnPlayerSoundInstance` |
 | `callee` | A ported method whose ported callee its port never reaches. Noisier: a port may get the value as an argument instead. | `Projectile.shootFromRotation` without `Entity.getKnownMovement`: throws added a stale server velocity; `ServerPlayer.getKnownMovement` without `getVehicle`: a spear's charge ignored the horse |
-| `stale` | A citation whose class or method the pinned version doesn't have (renamed, removed, or a typo). | |
+| `stale` | A citation whose own vanilla class exists but whose method doesn't (renamed, removed, or a typo). A class the pinned version has never heard of (JDK, JOML, Horizon's own) is skipped. | |
 | `map` | A verdict-map row whose class, method or Rust fn doesn't exist, or whose verdict isn't one of the above. | |
 | `unported` | (`gaps --kind unported`) Vanilla methods with no port, ranked by how many vanilla methods call them. | |
 

@@ -164,7 +164,7 @@ pub trait DrawContext {
     fn entity(&mut self, entity: &GuiEntity, view: GuiEntityView) -> Result<(), GuiEntityError> {
         Err(GuiEntityError::Unavailable)
     }
-    /// `Screen.renderMenuBackground`: draws the tiled menu background (32x32) across `rect`
+    /// `Screen.extractMenuBackground`: draws the tiled menu background (32x32) across `rect`
     /// (`[x, y, w, h]` in GUI pixels). If `in_world` is true, uses the dark translucent
     /// texture (`gui/inworld_menu_background`); otherwise uses the opaque dirt-like
     /// texture (`gui/menu_background`). API @API:screen_transparent_background@.

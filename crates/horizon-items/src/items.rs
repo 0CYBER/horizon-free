@@ -789,7 +789,7 @@ impl Items {
                     .or_insert(BlockStateId(i as u32));
             }
         }
-        // Block.getItem is not an inverse of BlockItem.getBlock: several items
+        // Block.asItem is not an inverse of BlockItem.getBlock: several items
         // may place the same block. Read their normal compiled bindings too.
         #[derive(Default, serde::Deserialize)]
         struct Bindings {
@@ -2044,7 +2044,7 @@ impl<R: RandomSource> LootContext<'_, R> {
                 "minecraft:uniform" => {
                     let min = Self::number(o.get("min").unwrap_or(&Value::Null), random);
                     let max = Self::number(o.get("max").unwrap_or(&Value::Null), random);
-                    // UniformGenerator.getFloat / getInt (Mth.nextInt) differ; use int for counts.
+                    // UniformGenerator.getFloatUnsafe / getIntUnsafe (Mth.nextInt) differ; use int for counts.
                     if max <= min {
                         min
                     } else {

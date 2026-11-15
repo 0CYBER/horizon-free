@@ -20,8 +20,8 @@ MobEffectsPredicate.Builder.and	skip:java		builder for effect predicates in code
 MobEffectsPredicate.MobEffectInstancePredicate.matches	inline	crates/horizon-client/src/advancements.rs::entity	gap: minor: ambient and visible flags are not checked; amplifier and duration are
 NbtPredicate.matches	missing		minor: custom_data and entity NBT predicates are not read; no vanilla advancement uses them
 SingleComponentItemPredicate.matches	inline	crates/horizon-client/src/advancements.rs::item	gap: minor: enchantments, damage and potion contents are read from components and predicates; adventure/play_jukebox_in_meadows asks for minecraft:jukebox_playable, which is ignored, so any tool passes that match_tool test
-SlotsPredicate.matches	missing		minor: slot-range item test is not read; no vanilla advancement uses it
-SlotsPredicate.matchSlots	missing		minor: helper of SlotsPredicate.matches; not read
+SlotsPredicate.matches	port	crates/horizon-world/src/loot.rs::LootData::entity_matches	the loot reader's minecraft:slots arm: every range needs a matching item, over the equipment ranges; container and inventory ranges have no slot source here
+SlotsPredicate.matchSlots	inline	crates/horizon-world/src/loot.rs::LootData::entity_matches	the any-slot-of-the-range test inside the minecraft:slots arm
 StatePropertiesPredicate.matches	port	crates/horizon-client/src/advancements.rs::block	the state property test of block()
 StatePropertiesPredicate.checkState	skip:data		load-time check that property names exist
 StatePropertiesPredicate.Builder.hasProperty	skip:java		builder

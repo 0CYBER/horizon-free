@@ -1,7 +1,7 @@
 //! The sun's passes on the float frame, through the actual entity shader and pipelines: a row
 //! of sun texels across the target, over the sky at paper white.
 use super::Celestial;
-use crate::gfx::hdr::{SCENE_PEAK as S, SUN_CAP, TIERS};
+use crate::gfx::hdr::{SCENE_PEAK as S, SUN_CAP};
 use crate::mesher::{LOW, VERY_BRIGHT, Vertex};
 use wgpu::util::DeviceExt;
 
@@ -27,13 +27,13 @@ fn top(c: [f32; 3]) -> f32 {
 }
 
 /// The float frame's stored colour of each texel of `row` drawn by the bodies' passes at `tier`
-/// onto vanilla's `sky`, the sun's disc's peak at `sun_peak`.
+/// onto vanilla's `sky`, on a display whose peak is `headroom` times paper white.
 fn draw(
     lifted: bool,
     row: &[[u8; 3]],
     tier: u8,
     sky: [f32; 3],
-    sun_peak: f32,
+    headroom: f32,
 ) -> Option<Vec<[f32; 3]>> {
     let (device, queue) = gpu()?;
     let width = row.len() as u32;
@@ -114,10 +114,8 @@ fn draw(
     );
     let globals = super::super::Globals {
         view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
-        hdr_windows: [TIERS.map(|t| t.start), TIERS.map(|t| t.full)],
         hdr_light: [0.0, 0.0, 1.0, 1.0],
-        hdr_settings: [sun_peak, 0.0, 1.0, 0.0],
-        hdr_gains: TIERS.map(|t| t.gain),
+        hdr_settings: [headroom, 0.0, 1.0, 0.0],
         ..bytemuck::Zeroable::zeroed()
     };
     let buffer = |contents: &[u8], usage| {
@@ -314,18 +312,23 @@ fn a_soft_edged_sun_fades_into_the_sky_without_a_ring() {
     }
 }
 
-/// A display above the scene's peak (`Hdr::sun_peak`: 1500 nits, and the cap, at a paper white
-/// of 203): the disc's white is the display's, and what isn't the disc is drawn exactly as on a
-/// display at the scene's peak.
+/// A display above the scene's peak (hdr_look.wgsl `hdr_sun_peak`: 1500 nits, the cap and past
+/// it, at a paper white of 203): the disc's white is the display's up to the cap, and what isn't
+/// the disc is drawn exactly as on a display at the scene's peak. So is all of it on a dimmer
+/// display.
 #[test]
 fn on_a_brighter_display_only_the_disc_follows_its_peak() {
     let halo = [40u8, 36, 27, 19, 10, 4, 1].map(|v| [v, v, v / 2]);
     let row: Vec<_> = RINGS.into_iter().chain(halo).collect();
     let moon = [[217, 228, 255], [122, 130, 150], [40, 40, 50]];
-    for peak in [1500.0 / 203.0, SUN_CAP] {
+    for (headroom, peak) in [
+        (1500.0 / 203.0, 1500.0 / 203.0),
+        (SUN_CAP, SUN_CAP),
+        (4000.0 / 203.0, SUN_CAP),
+    ] {
         for sky in SKIES {
             let (Some(bright), Some(mastered)) = (
-                draw(true, &row, VERY_BRIGHT, sky, peak),
+                draw(true, &row, VERY_BRIGHT, sky, headroom),
                 draw(true, &row, VERY_BRIGHT, sky, S),
             ) else {
                 eprintln!("celestial GPU unavailable");
@@ -347,10 +350,17 @@ fn on_a_brighter_display_only_the_disc_follows_its_peak() {
                 "peak {peak}, sky {sky:?}: the halo"
             );
             assert_eq!(
-                draw(true, &moon, LOW, sky, peak),
+                draw(true, &moon, LOW, sky, headroom),
                 draw(true, &moon, LOW, sky, S),
                 "peak {peak}, sky {sky:?}: the moon"
             );
         }
+    }
+    for sky in SKIES {
+        assert_eq!(
+            draw(true, &row, VERY_BRIGHT, sky, 300.0 / 203.0),
+            draw(true, &row, VERY_BRIGHT, sky, S),
+            "sky {sky:?}: a dimmer display"
+        );
     }
 }

@@ -1,7 +1,7 @@
 //! Declarations carried from upstream `screen_transparent_background`; the generator owns the typed bindings.
 
 pub trait Hooks {
-    /// `Screen.renderTransparentBackground`: draws the translucent dark background
+    /// `Screen.extractTransparentBackground`: draws the translucent dark background
     /// behind an in-game screen (inventory, container, creative, book, sign, editor).
     /// Set `canceled` (or return `Flow::Cancel`) to suppress the vanilla dark gradient,
     /// allowing a mod to draw its own background or apply menu background blur

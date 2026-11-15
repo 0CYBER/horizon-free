@@ -1197,7 +1197,7 @@ impl Game<'_> {
     ) {
         self.fire_screen_draw(block, data, draw, origin);
     }
-    /// The open screen has drawn itself and its tooltips (`Screen.render`,
+    /// The open screen has drawn itself and its tooltips (`Screen.extractRenderStateWithTooltipAndSubtitles`,
     /// the point of `ScreenEvent.Render.Post`): draw over it with
     /// `native_fill`, `native_sprite` and `native_text`, `screen.rect` being
     /// its container panel (or the whole window) and `screen.id` the screen
@@ -1497,7 +1497,7 @@ impl Game<'_> {
         self.fire_run_mod_command(source, command, ran);
     }
     /// A player takes an item from an armor stand or puts one on it
-    /// (`ArmorStand.interactAt`, after the stand's disabled-slot checks and
+    /// (`ArmorStand.interact`, after the stand's disabled-slot checks and
     /// `swapItem`'s take/put locks, before anything moves): `stand_id` is the
     /// stand's `Entity.getId` and `slot` the one the click reached
     /// (`mainhand`, `offhand`, `feet`, `legs`, `chest` or `head`). Set

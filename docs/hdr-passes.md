@@ -30,7 +30,8 @@ Each frame without a shader pack (`Renderer::render` in `gfx.rs`), in order:
 1. The world.
 2. `world_post` (`gfx/world_post.rs`): resolution scale, FXAA or TAA, sharpening. An upscaler goes here.
 3. Post effects: vanilla's post chains, entity outlines.
-4. The tone curve (`Hdr::tonemap` in `gfx/hdr.rs`): the light eases into the display's peak.
+4. The tone curve (`Hdr::tonemap` in `gfx/hdr.rs`; the curve itself is `hdr_tone_scale` in `hdr_look.wgsl`): the
+   light eases into the display's peak.
 5. Camera overlays: vignette, pumpkin, powder snow, portal, nausea.
 6. The HUD and menus, on an 8-bit layer of their own, with how much of the world they cover.
 7. HDR output's last pass (`hdr.wgsl`): the HUD over the world, encoded for the display (PQ or scRGB). The HDR10

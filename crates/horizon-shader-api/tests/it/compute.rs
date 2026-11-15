@@ -800,3 +800,83 @@ fn before_world_work_shares_the_frame_cap() {
         "the compute passes run 67108928 invocations a frame",
     );
 }
+
+/// Under `[ray_tracing]`, a `[[before_world]]` pass that traces the sun and a compute `[[post]]`
+/// pass that reads a hit's maps.
+const TRACING: &str = "[ray_tracing]\n[[resource]]\nname = \"hits\"\nbuffer = 64\nelement = \"f32\"\n\
+                       keep = \"view\"\n[[before_world]]\nfile = \"w.wgsl\"\ndispatch = [16, 1, 1]\n\
+                       workgroup = [16, 1, 1]\nwrites = [\"hits\"]\n[[post]]\nfile = \"c.wgsl\"\n\
+                       compute = true\ndispatch = \"pixels\"\nworkgroup = [8, 8, 1]\nreads = [\"hits\"]\n";
+const TRACES_BEFORE_WORLD: &str = "\
+fn compute(input: ComputeInput) {
+    if input.in_bounds {
+        let hit = trace_layers(vec3<f32>(0.0), frame.sun_direction, frame.ray_distance, RAY_SOLID);
+        hits[input.cell.x] = hit.distance + f32(trace_any(vec3<f32>(0.0), vec3<f32>(0.0, -1.0, 0.0), 4.0));
+    }
+}
+";
+const TRACES_POST: &str = "\
+fn compute(input: ComputeInput) {
+    let hit = trace(vec3<f32>(0.0), vec3<f32>(0.0, -1.0, 0.0), hits[0]);
+    let maps = hit_normal_map(hit) * hit_specular_map(hit) * f32(block_pbr_maps());
+    _ = maps + vec4<f32>(f32(trace_any_layers(hit.position, hit.normal, 8.0, RAY_TRANSLUCENT)));
+}
+";
+const PLAIN: &str = "fn compute(input: ComputeInput) {}\n";
+const PICTURE: &str = "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n";
+
+/// A compute or `[[before_world]]` file that calls a trace function gets them under
+/// `[ray_tracing]`, and the check builds it a second time against the scene, which needs ray
+/// queries; one that calls none is built once, as without the scene.
+#[test]
+fn compute_files_that_trace_are_built_against_the_scene() {
+    for (before_world, post, traced) in [
+        (TRACES_BEFORE_WORLD, TRACES_POST, true),
+        (PLAIN, PLAIN, false),
+    ] {
+        let files = [
+            ("w.wgsl", before_world),
+            ("c.wgsl", post),
+            ("last.wgsl", PICTURE),
+        ];
+        let pack = pack(&format!("{TRACING}{LAST}"), &files);
+        let report = check(&pack).unwrap();
+        for kind in [StageKind::BeforeWorld, StageKind::Compute] {
+            let stage = report.stages.iter().find(|s| s.kind == kind).unwrap();
+            assert_eq!(stage.scene.is_some(), traced, "{kind:?}");
+            let file = if kind == StageKind::Compute {
+                "c.wgsl"
+            } else {
+                "w.wgsl"
+            };
+            let (stub, scene) = (
+                compose(&pack, kind, file).text,
+                horizon_shader_api::compose_scene(&pack, kind, file).text,
+            );
+            assert!(!stub.contains("ray_query"), "{kind:?}");
+            assert_eq!(scene.contains("ray_query"), traced, "{kind:?}");
+            assert_eq!(stub.contains("fn trace("), traced, "{kind:?}");
+        }
+    }
+}
+
+/// `[ray_tracing]` with only a `[[before_world]]` pass to trace from (and a sky to draw) is a
+/// pack that traces.
+#[test]
+fn a_before_world_pass_is_enough_for_ray_tracing() {
+    let tracing = TRACING.split("[[post]]").next().unwrap();
+    let manifest = format!(
+        "{tracing}[sky]
+file = \"s.wgsl\"
+"
+    );
+    let sky = "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }
+";
+    let files = [("w.wgsl", TRACES_BEFORE_WORLD), ("s.wgsl", sky)];
+    let report = check(&pack(&manifest, &files)).unwrap();
+    let stage = report
+        .stages
+        .iter()
+        .find(|s| s.kind == StageKind::BeforeWorld);
+    assert!(stage.unwrap().scene.is_some());
+}

@@ -12,8 +12,9 @@ use std::path::{Component, Path, PathBuf};
 
 const LAUNCHER_HINT: &str = "Horizon does not download the game: play {version} once in the launcher you play \
 Minecraft Java Edition with so it downloads the game's files, then rerun. Horizon reads the \
-official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher, MultiMC, \
-the Modrinth App or GDLauncher, prepare from the Horizon launcher, which finds their files. If your launcher keeps \
+official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher or MultiMC, \
+pass --prism-dir with its folder; for the Modrinth App or GDLauncher, prepare from the Horizon \
+launcher, which finds their files. If your launcher keeps \
 them in another folder, pass --minecraft-dir or set HORIZON_MINECRAFT_DIR, or name the files with \
 --version-json, --client-jar, --libraries-dir and --assets-dir.";
 const SERVER_HINT: &str = "Horizon does not download the game: download the {version} server jar yourself (minecraft.net/download/server \
@@ -841,7 +842,12 @@ fn library_allowed(library: &Value) -> Result<bool, String> {
     for rule in rules {
         let empty = Value::Object(Vec::new());
         let os = rule.get("os").unwrap_or(&empty);
-        if os.get("name").and_then(Value::as_str).unwrap_or(system) != system {
+        let name = os.get("name").and_then(Value::as_str).unwrap_or(system);
+        // Prism's metadata names an ARM native's OS `osx-arm64` (`linux-arm64`, `windows-arm64`).
+        let arm_name = name
+            .strip_suffix("-arm64")
+            .filter(|_| architectures.contains(&"arm64"));
+        if arm_name.unwrap_or(name) != system {
             continue;
         }
         if let Some(arch) = os.get("arch") {
@@ -882,21 +888,28 @@ fn classifier_ends_with(classifier: &str, names: &[&str]) -> bool {
 }
 
 /// Modern manifests list x64 and ARM natives with OS-only rules; keep this machine's. A plain
-/// natives-<os> jar is the x64 build when the manifest also lists an ARM variant of it.
+/// natives-<os> jar is the x64 build when the manifest also lists an ARM variant of it. Prism's
+/// metadata moves the classifier into the artifact name (`com.mojang:jtracy-natives-macos:1.14.38`).
 fn native_library_matches(library: &Value, names: &[&str]) -> bool {
     let arm = rule_architectures().contains(&"arm64");
     let name = library.get("name").and_then(Value::as_str).unwrap_or("");
-    let classifier = name.split(':').nth(3).unwrap_or("");
+    let (classifier, variant) = match name.split(':').collect::<Vec<_>>()[..] {
+        [group, artifact, version] if artifact.contains("-natives-") => {
+            (artifact, format!("{group}:{artifact}-{{}}:{version}"))
+        }
+        [_, _, _, classifier, ..] => (classifier, format!("{name}-{{}}")),
+        _ => ("", String::new()),
+    };
     if classifier_ends_with(classifier, &["arm64", "aarch64", "aarch_64"]) {
         return arm;
     }
     if classifier_ends_with(classifier, &["x86_64", "x64"]) {
         return !arm;
     }
-    if arm && classifier.starts_with("natives-") {
+    if arm && classifier.contains("natives-") {
         return !["arm64", "aarch64"]
             .iter()
-            .any(|suffix| names.contains(&format!("{name}-{suffix}").as_str()));
+            .any(|suffix| names.contains(&variant.replace("{}", suffix).as_str()));
     }
     true
 }
@@ -2329,6 +2342,28 @@ mod tests {
             !arm
         );
         assert!(native_library_matches(&lib("a:b:1"), &names));
+
+        let prism = ["a:b-natives-macos:1", "a:b-natives-macos-arm64:1"];
+        assert_eq!(
+            native_library_matches(&lib("a:b-natives-macos-arm64:1"), &prism),
+            arm
+        );
+        assert_eq!(
+            native_library_matches(&lib("a:b-natives-macos:1"), &prism),
+            !arm
+        );
+        let rule = |os: &str| {
+            pyjson::loads(&format!(
+                "{{\"name\":\"a:b:1\",\"rules\":[{{\"action\":\"allow\",\"os\":{{\"name\":\"{os}\"}}}}]}}"
+            ))
+            .unwrap()
+        };
+        let system = rule_system();
+        assert!(library_allowed(&rule(system)).unwrap());
+        assert_eq!(
+            library_allowed(&rule(&format!("{system}-arm64"))).unwrap(),
+            arm
+        );
     }
 
     #[test]

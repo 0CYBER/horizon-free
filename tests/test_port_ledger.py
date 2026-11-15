@@ -29,6 +29,30 @@ def class_bytes(name: str, parent: str, fields: tuple[str, ...] = (), methods: t
 
 
 class PortLedgerJarOnlyTests(unittest.TestCase):
+    def test_default_build_inventories_the_lab_imported_jars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "research-lock.json").write_text(json.dumps({"minecraft": {"version": "fixture"}}),
+                                                    encoding="utf-8")
+            jars = root / ".local/minecraft/fixture/jars"
+            jars.mkdir(parents=True)
+            for filename, name, method in (("client.jar", "ClientOnly", "clientTick"),
+                                           ("server-game.jar", "ServerOnly", "serverTick")):
+                with zipfile.ZipFile(jars / filename, "w") as archive:
+                    archive.writestr(f"net/minecraft/test/{name}.class", class_bytes(
+                        f"net/minecraft/test/{name}", "java/lang/Object", methods=(method,)))
+            out = root / "output"
+            env = dict(os.environ, PORT_LEDGER_ROOT=str(root), PORT_LEDGER_OUT=str(out),
+                       HOME=str(root / "home"), APPDATA=str(root / "appdata"))
+            done = subprocess.run([sys.executable, str(SCRIPT), "build", "--jobs", "1"],
+                                  cwd=root, env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            ledger = json.loads((out / "ledger.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(ledger["methods"]), {
+                "net/minecraft/test/ClientOnly#clientTick",
+                "net/minecraft/test/ServerOnly#serverTick",
+            })
+
     def test_jar_only_and_partial_sources_preserve_field_and_stale_citations(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -76,6 +100,85 @@ class PortLedgerJarOnlyTests(unittest.TestCase):
                         self.assertNotIn("Child.sourceOnly", stale)
                         self.assertNotIn("Child.tick", stale)
                         self.assertIn("Child.missing", stale)
+
+
+class PortLedgerStaleScanTests(unittest.TestCase):
+    """A citation is stale only when its own vanilla class and all its supertypes lack the method."""
+
+    SOURCES = {
+        "net/minecraft/test/SimplexNoise.java":
+            "package net.minecraft.test;\n"
+            "public class SimplexNoise { public double get(double x, double y) { return 0.0; } }\n",
+        "net/minecraft/test/AbstractScrollArea.java":
+            "package net.minecraft.test;\n"
+            "public abstract class AbstractScrollArea { public void updateScrolling() {} }\n",
+        "net/minecraft/test/AbstractSelectionList.java":
+            "package net.minecraft.test;\n"
+            "public abstract class AbstractSelectionList<E extends AbstractSelectionList.Entry<E>>\n"
+            "   extends AbstractScrollArea { public static class Entry<E> {} }\n",
+        "net/minecraft/test/Base.java":
+            "package net.minecraft.test;\npublic class Base { public void inherited() {} }\n",
+        "net/minecraft/test/Middle.java":
+            "package net.minecraft.test;\npublic class Middle extends Base { }\n",
+        "net/minecraft/test/Leaf.java":
+            "package net.minecraft.test;\npublic class Leaf extends Middle { }\n",
+        "net/minecraft/test/QualifiedLeaf.java":
+            "package net.minecraft.test;\npublic class QualifiedLeaf extends net.minecraft.test.Base { }\n",
+        "net/minecraft/test/Level.java":
+            "package net.minecraft.test;\npublic abstract class Level implements LevelAccessor, AutoCloseable { }\n",
+        "net/minecraft/test/LevelAccessor.java":
+            "package net.minecraft.test;\n"
+            "public interface LevelAccessor extends CollisionGetter, EntityGetter { }\n",
+        "net/minecraft/test/CollisionGetter.java":
+            "package net.minecraft.test;\n"
+            "public interface CollisionGetter { default void getBlockCollisions() {} }\n",
+        "net/minecraft/test/EntityGetter.java":
+            "package net.minecraft.test;\n"
+            "public interface EntityGetter { default void getEntitiesOfClass() {} }\n",
+        "net/minecraft/world/level/gameevent/vibrations/VibrationSystem.java":
+            "package net.minecraft.world.level.gameevent.vibrations;\n"
+            "public interface VibrationSystem { class Listener { boolean present() { return false; } } }\n",
+        **{f"net/minecraft/test/Chain{depth}.java":
+            f"package net.minecraft.test;\npublic class Chain{depth}"
+            + (f" extends Chain{depth + 1}" if depth < 14 else "")
+            + (" { public void deep() {} }\n" if depth == 14 else " { }\n")
+            for depth in range(15)},
+    }
+    RUST = (
+        "/// Math.max for the bounds.\nfn a() {}\n"
+        "/// Ranges.margins for the viewport.\nfn b() {}\n"
+        "/// SimplexNoise.getValue, which 1.21 had; 26.3 spells it get.\nfn c() {}\n"
+        "/// VibrationSystem.Listener.isOccluded for the allay.\nfn d() {}\n"
+        "/// VibrationSystem.Listener.present does exist.\nfn e() {}\n"
+        "/// AbstractSelectionList.updateScrolling, through the generic superclass.\nfn f() {}\n"
+        "/// Leaf.inherited, from Base through Middle.\nfn g() {}\n"
+        "/// Level.getBlockCollisions, through LevelAccessor to CollisionGetter.\nfn h() {}\n"
+        "/// Level.getEntitiesOfClass, through the second superinterface.\nfn i() {}\n"
+        "/// QualifiedLeaf.inherited, through a fully qualified superclass.\nfn j() {}\n"
+        "/// Chain0.deep, from the deepest supertype in a long chain.\nfn k() {}\n"
+    )
+
+    def test_only_a_known_vanilla_class_makes_a_citation_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sources = root / "sources"
+            for rel, text in self.SOURCES.items():
+                source = sources / rel
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(text, encoding="utf-8")
+            rust = root / "crates/example/src/lib.rs"
+            rust.parent.mkdir(parents=True)
+            rust.write_text(self.RUST, encoding="utf-8")
+            out = root / "output"
+            with mock.patch.multiple(port_ledger, ROOT=root, OUT=out, LEDGER=out / "ledger.json",
+                                     MAP_DIR=root / "maps", ORACLE_DIR=root / "oracles",
+                                     ProcessPoolExecutor=ThreadPoolExecutor), \
+                    mock.patch.object(port_ledger, "rust_files", return_value=["crates/example/src/lib.rs"]):
+                result = port_ledger.build([str(sources)], [], 1)
+                stale = {g["cite"] for g in result["gaps"] if g["kind"] == "stale"}
+                # Math (JDK) and Ranges (Horizon) are not vanilla classes, and every inherited method
+                # is found through its supertypes; only the rename and the nested-class miss are stale.
+                self.assertEqual(stale, {"SimplexNoise.getValue", "VibrationSystem.Listener.isOccluded"})
 
 
 class PortLedgerCliTests(unittest.TestCase):

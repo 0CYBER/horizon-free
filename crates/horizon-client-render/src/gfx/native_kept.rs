@@ -3,8 +3,8 @@
 //! device lacks for them, and the epochs that say when they start over; the post chain's passes
 //! bind them, and each frame starts by swapping, fitting and clearing them (`KeptStore::begin`).
 //! Compute `[[post]]` entries dispatch where they stand in the chain, and `[[before_world]]`
-//! entries once a frame after the shadow map (`NativePack::before_world`); the game still
-//! refuses a pack with them (`not_drawn`).
+//! entries once a frame after the shadow map (`NativePack::before_world`). Under `[ray_tracing]`
+//! a pass that traces binds the scene besides (`trace_scene`).
 use horizon_shader_api::check::{CheckedStage, Report};
 use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
 use horizon_shader_api::stages::{GROUP, KeptAccess, KeptBinding, kept_bindings};
@@ -19,18 +19,22 @@ pub(super) enum Held {
 }
 
 /// A compute `[[post]]` entry, with the ordinary pass it runs before (`at`), or a
-/// `[[before_world]]` one (`at` none): its pipeline and dispatch.
+/// `[[before_world]]` one (`at` none): its pipeline and dispatch, and under `[ray_tracing]`,
+/// where its file traces, its module against the scene until `trace_scene` takes it.
 pub(super) struct ComputePass {
-    label: String,
+    pub(super) label: String,
     at: Option<usize>,
     pipeline: wgpu::ComputePipeline,
     workgroup: [u32; 3],
     dispatch: Dispatch,
+    pub(super) scene: Option<naga::Module>,
 }
 
-/// A post pass's kept bindings, and its layouts: the chain's shared entries and those.
+/// A post pass's kept bindings, and its layouts: the chain's shared entries and those, which
+/// `entries` holds for a layout with the scene besides (`trace_scene`).
 pub(super) struct KeptPass {
     bindings: Vec<KeptBinding>,
+    pub(super) entries: Vec<wgpu::BindGroupLayoutEntry>,
     pub(super) layout: wgpu::BindGroupLayout,
     pub(super) pipeline: wgpu::PipelineLayout,
 }
@@ -45,11 +49,13 @@ pub(super) struct KeptStore {
     /// Each pass's bindings and layouts (`chain`), the ordinary passes' then the compute
     /// ones', and the compute passes, `[[post]]`'s then `[[before_world]]`'s; a rebuild carries
     /// the rest, not these.
-    passes: Vec<KeptPass>,
-    computes: Vec<ComputePass>,
+    pub(super) passes: Vec<KeptPass>,
+    pub(super) computes: Vec<ComputePass>,
     /// The `[[before_world]]` passes' bind groups, a parity's after another, made once
-    /// (`before_world`) and again after the textures or the pass they bind change.
+    /// (`before_world`) and again after the textures or the pass they bind change, or the
+    /// scene they hold (its generation, none without the scene).
     worlds: Vec<wgpu::BindGroup>,
+    worlds_traced: Option<u64>,
     /// Which version of each texture this frame writes; the other is `_previous`.
     parity: usize,
     /// Real frames handed over (`frame`), and the one `begin` last started.
@@ -83,6 +89,7 @@ impl KeptStore {
             passes: Vec::new(),
             computes: Vec::new(),
             worlds: Vec::new(),
+            worlds_traced: None,
             parity: 0,
             serial: 0,
             ran: [0, 0],
@@ -255,6 +262,7 @@ pub(super) fn chain(
             });
             KeptPass {
                 bindings,
+                entries,
                 layout,
                 pipeline,
             }
@@ -281,22 +289,7 @@ pub(super) fn chain(
         };
         let layout = &store.passes[ordinary.len() + store.computes.len()].pipeline;
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let present = super::present_constants(&stage.module, constants);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(&super::super::dx12_compiler::module_label(&stage.label)),
-            source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(stage.module)),
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(&stage.label),
-            layout: Some(layout),
-            module: &module,
-            entry_point: Some("horizon_cs_compute"),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &present,
-                ..Default::default()
-            },
-            cache: None,
-        });
+        let pipeline = compute_pipeline(device, &stage.label, layout, stage.module, constants);
         if let Some(e) = pollster::block_on(scope.pop()) {
             return Err(format!("{}: {e}", stage.file));
         }
@@ -306,9 +299,37 @@ pub(super) fn chain(
             pipeline,
             workgroup: entry.workgroup.unwrap_or([1, 1, 1]),
             dispatch: entry.dispatch.unwrap_or(Dispatch::Pixels),
+            scene: stage.scene,
         });
     }
     Ok((ordinary, Some(store)))
+}
+
+/// A compute pass's pipeline from its checked `module` (`horizon_cs_compute`), with the option
+/// values `constants`.
+pub(super) fn compute_pipeline(
+    device: &wgpu::Device,
+    label: &str,
+    layout: &wgpu::PipelineLayout,
+    module: naga::Module,
+    constants: &[(String, f64)],
+) -> wgpu::ComputePipeline {
+    let present = super::present_constants(&module, constants);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(&super::super::dx12_compiler::module_label(label)),
+        source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(module)),
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        module: &module,
+        entry_point: Some("horizon_cs_compute"),
+        compilation_options: wgpu::PipelineCompilationOptions {
+            constants: &present,
+            ..Default::default()
+        },
+        cache: None,
+    })
 }
 
 /// The bind groups a parity of the chain makes, in order: each ordinary pass's (index, its own
@@ -327,11 +348,12 @@ pub(super) fn order(
 /// Dispatches, in `encoder`, the compute passes that run before ordinary pass `at`, with this
 /// frame's `groups` (`order`'s) at R `size`, on the frame's first run of the chain only
 /// (`begin`): `"pixels"` covers R in whole workgroups, the prelude's `in_bounds` false past it.
+/// With `traced` (a frame with the scene), a pass that traces runs its pipeline against it.
 /// An indirect dispatch (#16545's follow-up) would take its workgroups from a buffer here.
 pub(super) fn dispatch(
     kept: &Option<KeptStore>,
     encoder: &mut wgpu::CommandEncoder,
-    groups: &[wgpu::BindGroup],
+    (groups, traced): (&[wgpu::BindGroup], Option<&[Option<wgpu::ComputePipeline>]>),
     at: usize,
     size: [u32; 2],
 ) {
@@ -341,16 +363,17 @@ pub(super) fn dispatch(
     let ordinary = k.passes.len() - k.computes.len();
     for (c, p) in k.computes.iter().enumerate() {
         if p.at == Some(at) {
-            record(p, encoder, &groups[ordinary + c], size);
+            let pipeline = traced.and_then(|t| t[c].as_ref()).unwrap_or(&p.pipeline);
+            record(p, encoder, (&groups[ordinary + c], pipeline), size);
         }
     }
 }
 
-/// Records compute pass `p` in `encoder` with its `group` at R `size`.
+/// Records compute pass `p` in `encoder` with its `group` and `pipeline` at R `size`.
 fn record(
     p: &ComputePass,
     encoder: &mut wgpu::CommandEncoder,
-    group: &wgpu::BindGroup,
+    (group, pipeline): (&wgpu::BindGroup, &wgpu::ComputePipeline),
     size: [u32; 2],
 ) {
     let cells = match p.dispatch {
@@ -362,7 +385,7 @@ fn record(
         label: Some(&p.label),
         timestamp_writes: None,
     });
-    pass.set_pipeline(&p.pipeline);
+    pass.set_pipeline(pipeline);
     pass.set_bind_group(GROUP, group, &[]);
     pass.dispatch_workgroups(x, y, z);
 }
@@ -486,11 +509,13 @@ impl NativePost {
 
     /// Dispatches the `[[before_world]]` passes, once a frame (the first call after
     /// `kept_frame`): the frame starts there (`KeptStore::begin`, at the frame's R), so the
-    /// passes after them read what they wrote as this frame's.
+    /// passes after them read what they wrote as this frame's. With `scene`, this frame's (built
+    /// before them), the passes that trace run against it.
     pub(in crate::gfx) fn before_world(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
+        scene: Option<&super::trace::Traced<'_>>,
     ) {
         let Some(k) = &mut self.kept else {
             return;
@@ -502,36 +527,43 @@ impl NativePost {
         if k.begin(device, encoder, k.next.1) {
             self.groups = None;
         }
+        let traced = self.trace.as_ref().zip(scene);
+        let generation = traced.map(|(_, scene)| scene.generation);
         let Some(k) = &self.kept else {
             return;
         };
-        if k.worlds.is_empty() {
+        if k.worlds.is_empty() || k.worlds_traced != generation {
             let (post, passes) = (&*self, k.passes.len());
             let groups = (0..2).flat_map(|parity| {
-                (passes - worlds..passes).map(move |i| post.world_group(k, device, i, parity))
+                (passes - worlds..passes)
+                    .map(move |i| post.world_group(k, device, (i, parity), traced))
             });
             let groups: Vec<_> = groups.collect();
             if let Some(k) = &mut self.kept {
-                k.worlds = groups;
+                (k.worlds, k.worlds_traced) = (groups, generation);
             }
         }
         let Some(k) = &self.kept else {
             return;
         };
         let first = k.computes.len() - worlds;
+        let pipelines = traced.map(|(trace, _)| &trace.computes[first..]);
         for (w, p) in k.computes[first..].iter().enumerate() {
-            record(p, encoder, &k.worlds[k.parity * worlds + w], k.next.1);
+            let pipeline = pipelines.and_then(|t| t[w].as_ref()).unwrap_or(&p.pipeline);
+            let group = &k.worlds[k.parity * worlds + w];
+            record(p, encoder, (group, pipeline), k.next.1);
         }
     }
 
     /// The bind group of `[[before_world]]` pass `pass` (its index in `KeptStore::passes`) for
-    /// `parity`: what the API gives that stage (`before_world_binds`) and its kept resources.
+    /// `parity`: what the API gives that stage (`before_world_binds`) and its kept resources,
+    /// and with `traced` where the pass traces, the scene.
     fn world_group(
         &self,
         k: &KeptStore,
         device: &wgpu::Device,
-        pass: usize,
-        parity: usize,
+        (pass, parity): (usize, usize),
+        traced: Option<(&super::trace::NativeTrace, &super::trace::Traced<'_>)>,
     ) -> wgpu::BindGroup {
         let view = wgpu::BindingResource::TextureView;
         let mut entries = vec![
@@ -548,11 +580,25 @@ impl NativePost {
         .collect::<Vec<_>>();
         entries.extend(super::pack_texture_group_entries(&self.textures));
         entries.extend(self::entries(&self.kept, Some(pass), parity));
+        let layout =
+            match traced.and_then(|(trace, scene)| Some((trace.layout(pass)?, trace, scene))) {
+                Some((layout, trace, scene)) => {
+                    entries.extend(trace.entries(scene));
+                    layout
+                }
+                None => &k.passes[pass].layout,
+            };
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Native shader pack before the world"),
-            layout: &k.passes[pass].layout,
+            layout,
             entries: &entries,
         })
+    }
+
+    /// Whether a compute pass of the chain was built against the scene (`ComputePass::scene`).
+    pub(in crate::gfx) fn computes_trace(&self) -> bool {
+        let computes = self.kept.iter().flat_map(|k| &k.computes);
+        computes.into_iter().any(|p| p.scene.is_some())
     }
 
     /// Hands the kept resources this frame's `epochs` (view, world) and R (`NativePack::write`).
@@ -565,9 +611,15 @@ impl NativePost {
 
 impl super::super::native_pack::NativePack {
     /// The pack's `[[before_world]]` passes (`NativePost::before_world`), in `encoder` after its
-    /// shadow passes, which they read, and before the world draws.
-    pub fn before_world(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
-        self.post.before_world(device, encoder);
+    /// shadow passes, which they read, and before the world draws, against this frame's
+    /// `scene` where they trace.
+    pub fn before_world(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: Option<&super::trace::Traced<'_>>,
+    ) {
+        self.post.before_world(device, encoder, scene);
     }
 }
 
@@ -993,3 +1045,7 @@ fn workgroup_bytes(stage: &CheckedStage) -> u32 {
 #[cfg(test)]
 #[path = "native_kept_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_kept_trace_tests.rs"]
+mod trace_tests;

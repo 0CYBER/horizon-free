@@ -31,7 +31,7 @@ const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
 
 /// entity.wgsl after the OverlayTexture constants it reads.
 fn entity_shader() -> String {
-    crate::overlay::wgsl_constants() + include_str!("hdr_light.wgsl") + include_str!("entity.wgsl")
+    crate::overlay::wgsl_constants() + wgsl_prefix::HDR_LIGHT + include_str!("entity.wgsl")
 }
 
 fn no_pack_hdr_gain(layered: bool, pack: bool, world: bool) -> bool {
@@ -39,11 +39,11 @@ fn no_pack_hdr_gain(layered: bool, pack: bool, world: bool) -> bool {
 }
 
 fn terrain_shader() -> String {
-    include_str!("hdr_light.wgsl").to_owned() + include_str!("terrain.wgsl")
+    wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("terrain.wgsl")
 }
 
 fn border_shader() -> String {
-    include_str!("hdr_light.wgsl").to_owned() + include_str!("border.wgsl")
+    wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("border.wgsl")
 }
 
 fn entity_binding_entries() -> [wgpu::BindGroupLayoutEntry; 8] {
@@ -631,15 +631,10 @@ struct Globals {
     /// x: `Options.textureFiltering` (0 none, 1 RGSS, 2 anisotropic); y: the sprite arrays' width;
     /// z: the mip level at which a sprite is one texel, when the views reach it, else 0.
     filtering: [f32; 4],
-    /// HDR output's tier windows, low to very bright: where the lift starts, where it is
-    /// full (`hdr::Hdr::windows`); zero without HDR.
-    hdr_windows: [[f32; 4]; 2],
     /// x and y unused; z 1 with HDR output on; w the world's writers write light (terrain.wgsl).
     hdr_light: [f32; 4],
-    /// The sun's disc's peak, an unused lane, world/look and debug; then the tiers' gains
-    /// (`Hdr::draw_params`).
+    /// The display's headroom, an unused lane, world/look and debug (`Hdr::draw_params`).
     hdr_settings: [f32; 4],
-    hdr_gains: [f32; 4],
     /// The camera-relative eye fog is measured from: zero but in a mod's world view.
     view_origin: [f32; 4],
     /// A mod's world view's own (`world_views::ViewCamera`), zero outside one: x -1 when it is
@@ -6582,12 +6577,10 @@ impl Renderer {
     }
 
     /// Whether ordinary entity models may be posed on the GPU (`Frame::skin`, `entity_skin::poses`).
-    /// Not under a pack's `[entity]` stage: the game names the runs the stage lights by their
-    /// place in the CPU vertices (`take_entity_runs`), and posed models are not in them. Nor
-    /// while the ray scene has the entity layer (`traces_entities`), which is built from them.
+    /// Not while the ray scene has the entity layer (`traces_entities`): its BLAS is built from
+    /// the CPU-posed vertices.
     pub fn skins_entities(&self) -> bool {
         self.entity_skin.is_some()
-            && !self.draws_entity_stage()
             // The ray scene's entity BLAS is built from the CPU-posed vertices.
             && !self.traces_entities()
             && entity_skin::poses(
@@ -7771,16 +7764,11 @@ impl Renderer {
             self.shader_pack_kind().is_some(),
             !frame.title,
         );
-        let (hdr_settings, hdr_gains) = self
+        let hdr_settings = self
             .hdr
             .as_ref()
-            .map_or(([0.0; 4], [0.0; 4]), |h| h.draw_params(!frame.title));
-        self.world_post.baked_light(
-            hdr_gain,
-            hdr_settings,
-            hdr_gains,
-            self.hdr.as_ref().map_or([[0.0; 4]; 2], hdr::Hdr::windows),
-        );
+            .map_or([0.0; 4], |h| h.draw_params(!frame.title));
+        self.world_post.baked_light(hdr_gain, hdr_settings);
         let jitter = self.world_post.jitter(
             [self.config.width, self.config.height],
             taa,
@@ -7924,7 +7912,6 @@ impl Renderer {
                 },
                 0.0,
             ],
-            hdr_windows: self.hdr.as_ref().map_or([[0.0; 4]; 2], hdr::Hdr::windows),
             hdr_light: [
                 0.0,
                 0.0,
@@ -7933,7 +7920,6 @@ impl Renderer {
                 f32::from(u8::from(hdr_gain)),
             ],
             hdr_settings,
-            hdr_gains,
             view_origin: [0.0; 4],
             world_view: [0.0; 4],
         };
@@ -9505,7 +9491,7 @@ impl Renderer {
         self.set_up_pack_timing();
         let pack_reads_world = pack_post || native_post;
         laps.lap("r_uploads");
-        self.ray_prepare(&mut encoder, camera, frame.title);
+        self.ray_prepare(&mut encoder, camera, frame);
         // Phase 2 of occlusion culling draws over the depth, and a shader pack or TAA reads it.
         // Post effects (a resource pack's chains, `use_depth_buffer`) read the world's depth
         // after the world pass, as `GameRenderer.render` hands them the main target's.
@@ -9702,7 +9688,8 @@ impl Renderer {
                 timing: self.own_timing.as_mut(),
                 lists,
             });
-            native.before_world(&self.device, &mut encoder);
+            let scene = self.ray_scene.as_ref().and_then(|s| s.traced(frame.camera));
+            native.before_world(&self.device, &mut encoder, scene.as_ref());
         }
         if native_sky_pass && let Some(native) = &mut self.native {
             native.draw_sky_pass(native_sky::SkyPass {
@@ -10418,6 +10405,11 @@ impl Renderer {
                 }
                 pass.set_bind_group(0, &self.group, &[]);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+            }
+            if entity_stage.is_some() {
+                // The entity stage binds the frame's own group; a material stage that traces
+                // draws translucent terrain with the scene's.
+                pack_frame(&mut pass);
             }
             if text_quads > 0 && !oit_on {
                 pass.stage(self.own_timing.as_mut(), "entity text");
@@ -12667,10 +12659,12 @@ mod tests {
                 || name == "border.wgsl"
                 || name == "world_primitives.wgsl"
             {
-                let base = include_str!("hdr_light.wgsl").to_owned() + &text;
+                let base = super::wgsl_prefix::HDR_LIGHT.to_owned() + &text;
                 sources.push((path, crate::overlay::wgsl_constants() + &base));
             } else if name == "hdr.wgsl" {
                 sources.push((path, super::hdr::shader()));
+            } else if name == "hdr_stats.wgsl" {
+                sources.push((path, super::hdr_stats::shader()));
             } else if name == "oit_world.wgsl" {
                 let base = super::terrain_shader() + include_str!("oit.wgsl");
                 sources.push((path, base + &text));

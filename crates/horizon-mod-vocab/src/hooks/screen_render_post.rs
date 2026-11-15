@@ -2,7 +2,7 @@
 // catalog-order: 0091
 
 pub trait Hooks {
-    /// The open screen has drawn itself and its tooltips (`Screen.render`,
+    /// The open screen has drawn itself and its tooltips (`Screen.extractRenderStateWithTooltipAndSubtitles`,
     /// the point of `ScreenEvent.Render.Post`): draw over it with
     /// `native_fill`, `native_sprite` and `native_text`, `screen.rect` being
     /// its container panel (or the whole window) and `screen.id` the screen

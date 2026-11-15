@@ -118,9 +118,9 @@ pub(super) fn ordinary_vertices_at_cuts(
     walked
 }
 
-/// The material of a quad by its overlay (`MATERIALS` order). The overlay is the
-/// layer's low 16 bits, as entity.wgsl reads it; the HDR tier rides above that.
-fn material(layer: u32, oit: bool) -> usize {
+/// The material of a quad by its overlay (`MATERIALS` order): the overlay is the layer's low 16
+/// bits, as entity.wgsl reads it; HDR output's tier rides in the high ones.
+pub(in crate::gfx) fn material(layer: u32, oit: bool) -> usize {
     match layer & 0xffff {
         TERRAIN_MODEL_SOLID_OVERLAY => return 13,
         TERRAIN_MODEL_CUTOUT_OVERLAY => return 14,

@@ -9,6 +9,29 @@ def record(text):
     return {'cmd': '/data get entity @s', 'messages': [[[text, None]]], 'results': [[True, 1]]}
 
 
+class DispenserSyncTests(unittest.TestCase):
+    def test_a_redstone_dispenser_fire_syncs_the_engines_randoms_again(self):
+        scenarios = [families.FAMILIES['spawn'](random.Random(seed), seed) for seed in range(200)]
+
+        def fires_a_dispenser(scenario):
+            steps = scenario['steps']
+            return (any(str(step.get('block', '')).startswith(('dispenser', 'dropper')) for step in steps)
+                    and any(step.get('block') == 'redstone_block' for step in steps))
+
+        pulse = next(s for s in scenarios if fires_a_dispenser(s))
+        steps = pulse['steps']
+        before_fire = next(i for i, step in enumerate(steps) if step['k'] == 'read_near')
+        self.assertEqual(steps[before_fire + 1], {'k': 'sync'})  # right before the tick that fires the dispenser
+        self.assertNotIn(('drop', before_fire + 1), list(fuzz.edits(pulse)))  # the sync is not shrunk away
+        ops = fuzz.render(pulse, 0)
+        syncs = [i for i, op in enumerate(ops) if op['op'] == 'sync_randoms']
+        self.assertEqual(len(syncs), 2)  # the scenario's own, then the one at the fire
+        self.assertEqual(ops[syncs[0]], ops[syncs[1]])  # the same state, drawn from again at the fire
+        self.assertEqual(ops[syncs[1] + 1]['op'], 'tick')  # the firing tick is the next op
+        quiet = next(s for s in scenarios if not fires_a_dispenser(s))
+        self.assertEqual(sum(op['op'] == 'sync_randoms' for op in fuzz.render(quiet, 0)), 1)
+
+
 class SnbtDiffTests(unittest.TestCase):
     def test_a_difference_names_its_field_and_key_order_is_not_one(self):
         vanilla = record('Pig has the following entity data: {Motion: [0.0d, 0.1d, 0.0d], Tags: ["a b"], '
@@ -77,6 +100,32 @@ class FamilyTests(unittest.TestCase):
                 self.assertEqual(scenario, family(random.Random(seed), seed))
                 self.assertTrue(fuzz.runnable(scenario), (name, seed))
                 self.assertTrue(any(op.get('read') for op in fuzz.render(scenario, 1)), (name, seed))
+
+
+class ReloadWitnessTests(unittest.TestCase):
+    def test_a_reload_witnesses_the_chunk_and_every_entity_summoned_before_it(self):
+        scenario = {'family': 'persist', 'seed': 1, 'steps': [
+            {'k': 'summon', 'type': 'pig', 'at': [1.5, 0, 1.5], 'n': 0, 'nbt': {}},
+            {'k': 'reload'},
+            {'k': 'summon', 'type': 'cow', 'at': [2.5, 0, 2.5], 'n': 1, 'nbt': {}},
+            {'k': 'reload'}, {'k': 'read_entity', 'n': 1}]}
+        pig, cow = (fuzz.uuid_text(fuzz.uuid_words(0, n)) for n in (0, 1))
+        chunk = '/execute unless loaded 4096 300 4096'
+        guards = [(op['guard'], op['cmd']) for op in fuzz.render(scenario, 0) if op.get('guard')]
+        self.assertEqual(guards, [('chunk', chunk), ('entity', f'/execute if entity {pig}'),
+                                  ('chunk', chunk), ('entity', f'/execute if entity {pig}'),
+                                  ('entity', f'/execute if entity {cow}')])  # the second reload sees both
+        entity = {'cmd': f'/execute if entity {pig}', 'guard': 'entity'}
+        gone = {'cmd': entity['cmd'], 'results': [[False, 0]]}
+        kept = {'cmd': entity['cmd'], 'results': [[True, 1]]}
+        self.assertEqual(fuzz.witness('persist', entity, gone, gone), (None, None))
+        self.assertEqual(fuzz.witness('persist', entity, kept, kept)[0],
+                         'vanilla kept the entity loaded: [[True, 1]]')
+        self.assertEqual(fuzz.witness('persist', entity, gone, kept)[1][0], 'persist|chunk|<unload>')
+        chunk_op = {'cmd': chunk, 'guard': 'chunk'}
+        chunk_stayed = {'cmd': chunk, 'results': [[False, 0]]}  # `/execute unless loaded` failed
+        self.assertEqual(fuzz.witness('persist', chunk_op, chunk_stayed, chunk_stayed)[0],
+                         'vanilla kept the chunk loaded: [[False, 0]]')
 
 
 if __name__ == '__main__':

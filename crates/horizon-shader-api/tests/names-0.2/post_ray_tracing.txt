@@ -1,5 +1,6 @@
 # The ray tracing names: every 0.2 post pass of a pack with [ray_tracing] gets them, on top of
-# post.txt's (so does its material stage where that calls a trace function), and a pack without the key none (tests/it/names.rs).
+# post.txt's (so do its material stage, and its compute and [[before_world]] passes, where they call a trace
+# function), and a pack without the key none (tests/it/names.rs).
 RayHit
 trace
 trace_any

@@ -69,7 +69,7 @@ impl Context<'_> {
             let floodedness = conv(self, report, "fluid_level_floodedness");
             let spread = conv(self, report, "fluid_level_spread");
             let lava = conv(self, report, "lava");
-            // 26.2's OverworldBiomeBuilder.isDeepDarkRegion: no aquifer
+            // 26.2's deep dark test (`OverworldBiomeBuilder.deepDarkRegion` in 26.3): no aquifer
             // where erosion < -0.225 and depth > 0.9 (positive excludes).
             let exclusion = json!({"type": "minecraft:min",
                 "left": {"type": "minecraft:sub", "left": -0.225, "right": erosion.clone()},

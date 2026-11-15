@@ -267,6 +267,92 @@ fn ray_tracing_brings_its_names_to_the_stages_of_the_pack_that_trace() {
     }
 }
 
+/// `[ray_tracing]` brings a compute or `[[before_world]]` pass the names of
+/// `post_ray_tracing.txt` and `block_pbr_maps` where its file calls a trace function, and
+/// nothing where it calls none, with the scene or without it.
+#[test]
+fn ray_tracing_brings_its_names_to_the_compute_passes_that_trace() {
+    let traces = "fn compute(input: ComputeInput) {
+                      _ = trace_any(vec3<f32>(0.0), frame.sun_direction, 8.0);
+}
+";
+    let plain = "fn compute(input: ComputeInput) {}
+";
+    let manifest = |rays: &str| {
+        format!(
+            "schema = 1
+id = \"p\"
+name = \"P\"
+version = \"1\"
+api = \"0.2\"
+{rays}             [[resource]]
+name = \"r\"
+buffer = 16
+element = \"u32\"
+keep = \"view\"
+             [[before_world]]
+file = \"before_world.wgsl\"
+dispatch = [64, 1, 1]
+             workgroup = [64, 1, 1]
+writes = [\"r\"]
+[[post]]
+file = \"compute.wgsl\"
+             compute = true
+dispatch = \"pixels\"
+workgroup = [8, 8, 1]
+writes = [\"r\"]
+             [[post]]
+file = \"post.wgsl\"
+reads = [\"r\"]
+"
+        )
+    };
+    let pack = |rays: &str, file: &str| {
+        let files = [
+            (MANIFEST, manifest(rays)),
+            ("before_world.wgsl", file.to_owned()),
+            ("compute.wgsl", file.to_owned()),
+            ("post.wgsl", FILES[4].1.to_owned()),
+        ];
+        let pack = Pack::from_files(
+            (files.iter())
+                .map(|(n, t)| ((*n).to_owned(), t.as_bytes().to_vec()))
+                .collect(),
+        )
+        .unwrap();
+        check(&pack).unwrap();
+        pack
+    };
+    for (file, traced) in [(traces, true), (plain, false)] {
+        let mut want = BTreeSet::new();
+        if traced {
+            want.extend(listed("post_ray_tracing"));
+            want.insert("block_pbr_maps".to_owned());
+        }
+        let (with, without) = (
+            pack(
+                "[ray_tracing]
+",
+                file,
+            ),
+            pack("", plain),
+        );
+        for kind in [StageKind::Compute, StageKind::BeforeWorld] {
+            let name = format!("{}.wgsl", kind.name());
+            let before = prelude_names(&compose(&without, kind, &name), kind);
+            for composed in [
+                compose(&with, kind, &name),
+                compose_scene(&with, kind, &name),
+            ] {
+                let have = prelude_names(&composed, kind);
+                let added: BTreeSet<String> = have.difference(&before).cloned().collect();
+                assert_eq!(added, want, "{kind:?}");
+                assert!(before.is_subset(&have), "{kind:?}");
+            }
+        }
+    }
+}
+
 /// `[motion]` brings the post stage the motion guide's names, `post_motion.txt`, and no others.
 #[test]
 fn motion_brings_the_post_stage_only_the_motion_names() {

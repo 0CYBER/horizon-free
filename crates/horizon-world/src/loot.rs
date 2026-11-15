@@ -437,6 +437,25 @@ fn slot_in_group(slot: &str, group: &str) -> bool {
         _ => slot == group,
     }
 }
+/// `SlotRanges`' equipment ranges, as the `LootEntity.equipment` names they
+/// cover. The container, ender chest, mob and horse inventories and a
+/// player's cursor and crafting grid are slots a loot context's entity does
+/// not expose, so a range naming those matches nothing.
+fn slot_range_equipment(range: &str) -> &'static [&'static str] {
+    match range {
+        "weapon" | "weapon.mainhand" => &["mainhand"],
+        "weapon.offhand" => &["offhand"],
+        "weapon.*" => &["mainhand", "offhand"],
+        "armor.head" => &["head"],
+        "armor.chest" => &["chest"],
+        "armor.legs" => &["legs"],
+        "armor.feet" => &["feet"],
+        "armor.body" => &["body"],
+        "armor.*" => &["head", "chest", "legs", "feet", "body"],
+        "saddle" => &["saddle"],
+        _ => &[],
+    }
+}
 /// The item a recipe's `result` names. `ItemStackTemplate.CODEC` and `TransmuteResult.CODEC`
 /// read a stack's fields (`id`, `count`, `components`) or, as their alternative, a bare item id
 /// (`Item.CODEC`): `"result": {"id": "mod:item"}` and `"result": "mod:item"` are the same item.
@@ -3628,6 +3647,14 @@ impl LootData {
                             .is_some_and(|stack| self.item_matches(item, stack))
                     })
             }
+            // SlotsPredicate (EntitySlotsPredicate): every range must have an
+            // item matching its predicate.
+            "minecraft:slots" => v.as_object().into_iter().flatten().all(|(range, item)| {
+                slot_range_equipment(range).iter().any(|slot| {
+                    e.item(slot)
+                        .is_some_and(|stack| self.item_matches(item, stack))
+                })
+            }),
             "minecraft:components" => v.as_object().into_iter().flatten().all(|(c, want)| match c
                 .as_str()
             {
@@ -3823,3 +3850,63 @@ mod custom_data_predicate_tests {
 #[cfg(test)]
 #[path = "loot_fill_tests.rs"]
 mod fill_tests;
+
+#[cfg(test)]
+mod slots_predicate_tests {
+    use super::*;
+
+    /// A one-pool table whose stone entry asks for `predicate` on `this`.
+    fn table(name: &str, predicate: &str) -> LootData {
+        let root = std::env::temp_dir().join(format!("loot-slots-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dir = root.join("data/minecraft/loot_table");
+        fs::create_dir_all(&dir).unwrap();
+        let json = format!(
+            r#"{{"pools":[{{"rolls":1,"entries":[{{"type":"minecraft:item","name":"minecraft:stone",
+                "condition":{{"type":"minecraft:entity_properties","entity":"this","predicate":{predicate}}}}}]}}]}}"#
+        );
+        fs::write(dir.join("test.json"), json).unwrap();
+        fs::write(root.join("items.json"), "{}").unwrap();
+        let data = LootData::load(&root, &PackOverlay::NONE).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        data
+    }
+
+    fn drops(data: &LootData, this: LootEntity) -> bool {
+        let params = EntityLootParams {
+            this,
+            ..Default::default()
+        };
+        !data
+            .roll_entity("minecraft:test", &mut LegacyRandom::new(1), &params)
+            .is_empty()
+    }
+
+    /// `SlotsPredicate` (the `minecraft:slots` entity predicate): every
+    /// range must hold an item matching its predicate, so a worn diamond
+    /// sword satisfies `weapon.mainhand` and an empty head fails
+    /// `armor.head`.
+    #[test]
+    fn a_slot_range_matches_its_equipment() {
+        let mut this = LootEntity::new("minecraft:zombie");
+        this.equipment = vec![(
+            "mainhand".to_owned(),
+            LootStack::new("minecraft:diamond_sword"),
+        )];
+        let sword = table(
+            "sword",
+            r#"{"minecraft:slots":{"weapon.mainhand":{"items":"minecraft:diamond_sword"}}}"#,
+        );
+        assert!(drops(&sword, this.clone()));
+        let axe = table(
+            "axe",
+            r#"{"minecraft:slots":{"weapon.mainhand":{"items":"minecraft:diamond_axe"}}}"#,
+        );
+        assert!(!drops(&axe, this.clone()));
+        let helmet = table(
+            "helmet",
+            r#"{"minecraft:slots":{"armor.head":{"items":"minecraft:diamond_helmet"}}}"#,
+        );
+        assert!(!drops(&helmet, this));
+    }
+}

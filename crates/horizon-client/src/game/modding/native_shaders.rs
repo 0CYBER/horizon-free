@@ -72,6 +72,8 @@ pub(super) struct NativeShaders {
     /// The runs of this frame's entity geometry that the pack's `[entity]` stage lights
     /// (`Game::lit_entity`), up to the renderer taking them (`Renderer::take_entity_runs`).
     pub entity_runs: std::cell::RefCell<EntityRuns>,
+    /// The same runs' vertices posed on the GPU, counted as `SkinFrame::vertices` counts them.
+    pub posed_runs: std::cell::RefCell<EntityRuns>,
     /// While the ray scene has the entity layer: the camera-relative box of its reach this frame
     /// (`Renderer::ray_entity_reach`), and the models of the entities within it that the camera
     /// doesn't draw, with their runs (`Game::ray_only`), up to the renderer taking them.
@@ -86,7 +88,7 @@ pub(super) struct NativeShaders {
 impl NativeShaders {
     /// Gives `renderer` the frame's entity runs and its ray-only entities.
     pub fn hand_over(&mut self, renderer: &mut horizon_client::gfx::Renderer) {
-        renderer.take_entity_runs(self.entity_runs.get_mut());
+        renderer.take_entity_runs(self.entity_runs.get_mut(), self.posed_runs.get_mut());
         renderer.take_ray_only(self.ray_only.get_mut(), self.ray_runs.get_mut());
     }
 
@@ -136,35 +138,53 @@ impl Game<'_> {
     /// material (a translucent item in a hand, an energy swirl) and unlit overlays (the beam
     /// that heals the dragon, an End portal) stay Horizon's all the same: `EntityBatch` names
     /// only its ordinary quads, and the stage's shader passes the unlit ones on.
+    /// The models the run posed on the GPU (`entity_skin`) are the vertices it drew there
+    /// from `posed` on (`SkinFrame::vertices` when it began): the stage lights them alike.
     /// Kept only while the pack in use has the stage, or its rays read the entity layer
     /// (`names_entity_runs`).
-    fn lit_run(&self, run: std::ops::Range<usize>, kind: EntityKind) {
+    fn lit_run(&self, run: std::ops::Range<usize>, posed: u32, kind: EntityKind) {
         let stage = self.renderer.as_ref();
         if stage.is_some_and(|r| r.names_entity_runs()) {
             self.native_shaders.entity_runs.borrow_mut().push(run, kind);
+            let posed = posed as usize..self.skin_frame.borrow().vertices as usize;
+            self.native_shaders
+                .posed_runs
+                .borrow_mut()
+                .push(posed, kind);
         }
+    }
+
+    /// Where the next run's posed vertices start (`lit_posed_entity`).
+    pub(super) fn posed_vertices(&self) -> u32 {
+        self.skin_frame.borrow().vertices
     }
 
     /// Vertices `run` are an entity's model: a mob's or a player's with what it holds and
     /// wears, a vehicle's, a projectile's.
     pub(super) fn lit_entity(&self, run: std::ops::Range<usize>) {
-        self.lit_run(run, EntityKind::Entity);
+        self.lit_run(run, self.posed_vertices(), EntityKind::Entity);
+    }
+
+    /// [`Self::lit_entity`] of a run that may have posed models on the GPU since its posed
+    /// vertices numbered `posed` (`posed_vertices`).
+    pub(super) fn lit_posed_entity(&self, run: std::ops::Range<usize>, posed: u32) {
+        self.lit_run(run, posed, EntityKind::Entity);
     }
 
     /// Vertices `run` are block entities' models.
     pub(super) fn lit_block_entity(&self, run: std::ops::Range<usize>) {
-        self.lit_run(run, EntityKind::BlockEntity);
+        self.lit_run(run, self.posed_vertices(), EntityKind::BlockEntity);
     }
 
-    /// What `draw` adds to `out` is entities' models (`lit_entity`).
+    /// What `draw` adds to `out` is entities' models (`lit_entity`), on the GPU too.
     pub(super) fn lit(
         &mut self,
         out: &mut Vec<horizon_client::mesher::Vertex>,
         draw: impl FnOnce(&mut Self, &mut Vec<horizon_client::mesher::Vertex>),
     ) {
-        let start = out.len();
+        let (start, posed) = (out.len(), self.posed_vertices());
         draw(self, out);
-        self.lit_entity(start..out.len());
+        self.lit_posed_entity(start..out.len(), posed);
     }
 
     /// Builds the pack at `path` when its files changed since it was last read.
@@ -303,21 +323,15 @@ fn manifest_refused(path: &Path) -> Option<String> {
 }
 
 /// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
-/// isn't served yet (#14584), and neither are `[motion]` or compute entries.
+/// isn't served yet (#14584), and neither is `[motion]`.
 fn not_drawn(m: &Manifest) -> Option<&'static str> {
     if m.primaries == Primaries::Bt2020 {
         return Some(
             "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\"",
         );
     }
-    if m.motion.is_some() {
-        return Some(
-            "[motion] needs a later Horizon: this one checks the motion guide but doesn't draw it",
-        );
-    }
-    m.computes().then_some(
-        "[[resource]], [[before_world]] and compute [[post]] entries need a later Horizon: \
-         this one checks them but doesn't run them",
+    m.motion.is_some().then_some(
+        "[motion] needs a later Horizon: this one checks the motion guide but doesn't draw it",
     )
 }
 
@@ -504,7 +518,8 @@ mod tests {
         assert!(why.contains("[motion] needs a later Horizon"), "{why}");
         let kept =
             "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n";
-        let why = not_drawn(&manifest(kept)).unwrap();
-        assert!(why.contains("need a later Horizon"), "{why}");
+        assert_eq!(not_drawn(&manifest(kept)), None);
+        let traced = format!("{kept}[ray_tracing]\n");
+        assert_eq!(not_drawn(&manifest(&traced)), None);
     }
 }

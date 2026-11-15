@@ -5,6 +5,7 @@
 // drawing. One texel per sprite (x the layer, y the array): r for a light
 // source whose bright parts shine (a torch's flame, not its handle), g for one
 // that shines all over (a froglight), b 1 when the sprite has an opaque pixel.
+// Brightness is the look's (hdr_look.wgsl `brightness`, which this file follows).
 @group(0) @binding(0) var sprites: texture_2d_array<f32>;
 @group(0) @binding(1) var sprites_1: texture_2d_array<f32>;
 @group(0) @binding(2) var sprites_2: texture_2d_array<f32>;
@@ -21,13 +22,6 @@ struct Params {
     whole: f32,
 };
 @group(0) @binding(8) var<uniform> params: Params;
-
-// hdr.wgsl's brightness: the mean of luminance and the brightest channel, in
-// linear light.
-fn brightness(c: vec3<f32>) -> f32 {
-    let l = pow(max(c, vec3(0.0)), vec3(2.2));
-    return 0.5 * (dot(l, vec3(0.2126, 0.7152, 0.0722)) + max(l.r, max(l.g, l.b)));
-}
 
 fn texel(array: u32, at: vec2<i32>, layer: i32) -> vec4<f32> {
     switch array {

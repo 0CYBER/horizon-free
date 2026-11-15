@@ -29,8 +29,9 @@ pub enum EntityKind {
 }
 
 /// The bits of a quad's `Vertex::layer`, above `OIT_ENTITY`, that hold its kind: 0 for one
-/// Horizon draws itself, else [`EntityKind`] + 1. Only in the batch's copy of the vertices,
-/// and only while a pack with the stage runs.
+/// Horizon draws itself, else [`EntityKind`] + 1. Only in the batch's copy of the vertices
+/// and in those posed on the GPU (`EntitySkin::dispatch`), and only while a pack with the
+/// stage runs.
 pub(super) const KIND_SHIFT: u32 = 25;
 
 /// A kind as a quad's layer carries it.
@@ -417,11 +418,16 @@ impl super::Renderer {
         self.draws_entity_stage() || self.traces_entities()
     }
 
-    /// Takes the runs of the next frame's entities (`Frame::entities`) that the stage lights.
-    /// `runs` is left empty, for the frame after.
-    pub fn take_entity_runs(&mut self, runs: &mut EntityRuns) {
+    /// Takes the runs of the next frame's entities (`Frame::entities`) that the stage lights,
+    /// and of their vertices posed on the GPU (`Frame::skin`, counted from its first).
+    /// Both are left empty, for the frame after.
+    pub fn take_entity_runs(&mut self, runs: &mut EntityRuns, posed: &mut EntityRuns) {
         std::mem::swap(&mut self.entity_batch.kinds, runs);
         runs.clear();
+        if let Some(skin) = &mut self.entity_skin {
+            std::mem::swap(&mut skin.kinds, posed);
+        }
+        posed.clear();
     }
 }
 

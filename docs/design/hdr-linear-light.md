@@ -145,7 +145,7 @@ The water mirror and `shadow_color` draw no blends, so they store linear in both
 
 Each shader that marks the frame today writes the light instead:
 
-- **Light sources** (`mesher` `EMISSION_BITS`, `hdr_tier`, `gfx/hdr.rs` `TIERS`): the face's colour times its tier's
+- **Light sources** (`mesher` `EMISSION_BITS`, `hdr_tier`, `hdr_look.wgsl`'s tiers): the face's colour times its tier's
   gain, in units of paper white. Easing into the peak moves to the tone curve. A placed block's texel leaves the
   light that falls on it behind as it lifts (`hdr_unshade`, terrain.wgsl `solid_finish_at`): the face's shading,
   ambient occlusion and its light level lose their darkening by the texel's lift, so a fully lifted texel shines
@@ -268,13 +268,13 @@ before fade-in and fog, where the lift today multiplies the pixel after them. An
 lightning, additive particles and beacon beams reach no stage. Running the pack itself by default waits until the
 pack path keeps those features; #16126 lists each as its own step, and the flip is its step 16.
 
-**One look file, two users.** `hdr_look.wgsl` holds the look's constants (`TIERS`, `SCENE_PEAK`, `SUN_CAP`) and
-pure functions (brightness, the lift's window and gain, `hdr_unshade`, the sun's peak from the headroom), with no
-engine name in it.
+**One look file, two users.** `hdr_look.wgsl` holds the look's constants (the tiers' windows and gains,
+`HDR_SCENE_PEAK`, `HDR_SUN_CAP`) and pure functions (brightness, the lift's window and gain, `hdr_unshade`, the sun's
+peak from the headroom, the tone curve), with no engine name in it.
 
 - Until the flip, the default pipelines compile it in: today's bytes and cost. The compiled-in copy is removed at the
   flip (step 16 of #16126); the file survives in the pack. The display reaches it as `Frame.headroom` does a
-  pack (the sun's peak is the headroom clamped between `SCENE_PEAK` and `SUN_CAP`), so the uniforms that carry the
+  pack (the sun's peak is the headroom clamped between `HDR_SCENE_PEAK` and `HDR_SUN_CAP`), so the uniforms that carry the
   windows and gains, and the duplicated functions in `terrain.wgsl` and `entity.wgsl`, go.
 - `packs/horizon_hdr` (in `horizon-shader-api`, beside Golden Hour) is a real 0.2 pack that lists the same file as
   its shared source: a material stage, an entity stage and a `[tonemap]` with the scene's peak. It is the proof
@@ -390,7 +390,7 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
      writes, and the world is mastered for a 1000-nit display at ITU-R BT.2408's 203-nit reference white, as HDR10
      content usually is: S = 1000/203 (4.93). The tiers multiply their brightest pixels by 1.6 (low), 2.4
      (incandescent), 2.8 (bright) and 4.0 (very bright), and lit surfaces stay at their SDR light, diffuse
-     white at paper white (`gfx/hdr.rs` `TIERS`, `SCENE_PEAK`). The sun's disc shows vanilla's colour, sky plus sun
+     white at paper white (`hdr_look.wgsl`). The sun's disc shows vanilla's colour, sky plus sun
      clipped at white channel by channel, with white at S (`gfx/celestial.rs`, `fs_sky_sun`). The sky under it is
      vanilla's, at paper white, so a blend of the frame by a weight and a min at S give it exactly;
      added in the frame's gamma instead, sky and sun passed S and the hold flattened the disc in the sky's hue. The
@@ -399,8 +399,8 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
      onto a bright sky), then maps S onto the display's peak T with BT.2390's EETF in PQ on the brightest
      channel: the identity where T reaches S, that is where Peak Brightness is at least 1000/203 times Paper White,
      so at a paper white of 203 a display at 1000 nits or more shows the scene as written and one above 1000 shows
-     it as at 1000, but for the sun's disc: where T passes S its white is min(T, `SUN_CAP`) (2000 nits at a paper
-     white of 203; `Hdr::sun_peak`), so Peak Brightness above S moves the disc alone, and nothing from the cap up.
+     it as at 1000, but for the sun's disc: where T passes S its white is min(T, `HDR_SUN_CAP`) (2000 nits at a paper
+     white of 203; `hdr_look.wgsl` `hdr_sun_peak`), so Peak Brightness above S moves the disc alone, and nothing from the cap up.
      The disc's writer reads that peak, the one thing of the display a writer reads, and the curve holds light at
      it instead of at S: min(light, the disc's peak), the identity up to it. The frame carries no mark for the
      disc, so light that adds up past S (additive particles over a light source, lightning's quads over a bright
@@ -418,10 +418,16 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
 7. Horizon's look as a look file and a 0.2 pack (see Horizon's look). Each pull request keeps HDR off
    byte-identical and, unless it says otherwise, the HDR picture too:
    - 7a: the Look row in place of HDR Lighting, and `hdrLook`.
-   - 7b: the lift's numbers and maths in `hdr_look.wgsl`; the windows' and gains' uniforms and the duplicated
-     functions go.
-   - 7c: the lifted world's tone curve in the look file (`scene_peak` and the sun's peak leave `hdr.wgsl`'s
-     parameters).
+   - 7b (done): the lift's numbers and maths in `hdr_look.wgsl`, which the renderer's own shaders start with. The
+     windows' and gains' uniforms and the duplicated functions are gone, and the writers read the display's
+     headroom where they read the sun's peak.
+   - 7c (done): the tone curve in the look file (`hdr_tone_scale`), which `hdr.wgsl`'s pass calls. `scene_peak` and
+     the sun's peak are gone from that pass's parameters: the look works the sun's peak out of the headroom, and
+     the pass says only whether the look lifted the world. A `[tonemap]` shares the curve's scale, not the pass's
+     bytes: the pass scales the stored colour in gamma and leaves what the curve doesn't move exactly as stored,
+     where a stage takes linear light and returns it, through a decode and an encode. The curve for light of
+     unknown range stays in the same function, and the scene's peak reaches it as a run-time value: DX12's compiler
+     rounds a split curve, and a constant peak, a step apart in a few pixels.
    - 7d: `emission_threshold`, `light_source` and `full_light` in the API and its reference, then wired into the
      material and entity stages.
    - 7f: `packs/horizon_hdr`, and its session in the frame identity harness, held to the default path. The gate
