@@ -45,7 +45,7 @@ fn holder_set(t: &Tag, reg: &Registries) -> Result<(), String> {
     holder(t, reg)
 }
 /// `ExtraCodecs.POSITIVE_INT`: `Codec.INT` takes any numeric tag's
-/// `Number.intValue()`, then `intRangeWithMessage(1, MAX_VALUE, ...)`.
+/// `intValue`, then `intRangeWithMessage(1, MAX_VALUE, ...)`.
 fn positive_int(t: &Tag) -> Result<(), String> {
     let value = match *t {
         Tag::Byte(v) => i32::from(v),

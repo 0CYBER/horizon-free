@@ -281,7 +281,7 @@ impl<V: Value> Grammar<V> {
     pub fn parse_for_commands(&self, reader: &mut Reader) -> CmdResult<V> {
         self.parse_for_commands_with(reader, None)
     }
-    /// parse_for_commands with a context value the rules can read (`State::ctx`).
+    /// parse_for_commands with a context value the rules can read (`ctx`).
     pub fn parse_for_commands_with(
         &self,
         reader: &mut Reader,

@@ -130,7 +130,7 @@ fn for_input(s: &str, radix: u32) -> String {
         format!("For input string: \"{s}\" under radix {radix}")
     }
 }
-/// Long.parseLong(s, radix) with its NumberFormatException messages.
+/// Java's radix long parse and its number-format messages.
 fn parse_long(s: &str, radix: u32) -> Result<i64, String> {
     let digits = s.strip_prefix(['-', '+']).unwrap_or(s);
     if digits.is_empty() {
@@ -560,7 +560,7 @@ pub fn grammar() -> Grammar<SV> {
                     char::from_u32(cp).unwrap_or('\u{fffd}').to_string(),
                 ));
             }
-            // Character.codePointOf: Unicode names are not tabulated here.
+            // Unicode character names are not tabulated here.
             s.store_at_mark(delayed("snbt.parser.invalid_character_name"));
             None
         },

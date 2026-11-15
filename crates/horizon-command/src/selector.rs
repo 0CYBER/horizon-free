@@ -118,7 +118,7 @@ pub struct SelectorParser<'r, 'a> {
     advancements_option: bool,
 }
 
-/// UUID.fromString.
+/// Java UUID parsing.
 pub fn java_uuid(name: &str) -> Option<u128> {
     if name.encode_utf16().count() > 36 {
         return None;
@@ -129,7 +129,7 @@ pub fn java_uuid(name: &str) -> Option<u128> {
     }
     let mut v: [i64; 5] = [0; 5];
     for (i, p) in parts.iter().enumerate() {
-        // Long.parseLong(s, 16): an optional sign then hex digits.
+        // Java's hexadecimal long parse: an optional sign then hex digits.
         let digits = p.strip_prefix(['+', '-']).unwrap_or(p);
         if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
             return None;

@@ -619,7 +619,7 @@ pub fn compare_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
         }
     }
 }
-/// Suggestion.compareToIgnoreCase (IntegerSuggestion compares numerically).
+/// Case-insensitive text order, with IntegerSuggestion comparing numerically.
 fn compare_suggestions(a: &Suggestion, b: &Suggestion) -> std::cmp::Ordering {
     match (a.int_value, b.int_value) {
         (Some(x), Some(y)) => x.cmp(&y),
@@ -627,7 +627,7 @@ fn compare_suggestions(a: &Suggestion, b: &Suggestion) -> std::cmp::Ordering {
         _ => compare_ignore_case(&a.text, &b.text),
     }
 }
-/// Suggestions.create: merged, expanded to a common range and sorted case-insensitively.
+/// Brigadier's suggestions create: merged, expanded to a common range and sorted case-insensitively.
 pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Suggestion>) {
     if list.is_empty() {
         return ((0, 0), Vec::new());
@@ -638,7 +638,7 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
     let mut seen: std::collections::HashSet<(String, Option<String>)> =
         std::collections::HashSet::new();
     for s in list {
-        // Suggestion.expand: pad the text with the input around it.
+        // Brigadier's suggestion expand: pad the text with the input around it.
         let text = format!(
             "{}{}{}",
             &input[start..s.range.0],
@@ -676,7 +676,7 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
 
 impl Suggests {
     /// The provider's candidates; `context` is the whole parse context
-    /// (CommandContextBuilder.build), whose arguments some providers read.
+    /// (the built parse context), whose arguments some providers read.
     pub fn suggest(&self, builder: &mut SuggestionsBuilder, reg: &Registries, context: &Context) {
         match self {
             Suggests::AdvancementCriteria => {
@@ -811,7 +811,7 @@ impl Dispatcher {
             NodeKind::Argument { name, .. } => name.clone(),
             NodeKind::Root => String::new(),
         };
-        // CommandNode.addChild merges same-named children.
+        // Same-named children merge.
         if let Some(&existing) = self.nodes[parent]
             .children
             .iter()
@@ -1096,7 +1096,7 @@ impl Dispatcher {
             errors,
         }
     }
-    /// CommandDispatcher.parse from the start of `input` (no leading slash).
+    /// The dispatcher parses from the start of `input` (no leading slash).
     pub fn parse(&self, input: &str, reg: &Registries) -> ParseResults {
         self.parse_at(input, 0, reg)
     }
@@ -1105,7 +1105,7 @@ impl Dispatcher {
         let context = Context::new(0, start);
         self.parse_nodes(0, input, start, &context, reg, reg.permission, 0)
     }
-    /// CommandDispatcher.getCompletionSuggestions at `cursor`: brigadier
+    /// Brigadier's completion suggestions at `cursor`: it
     /// lists every child, whatever its requirement.
     pub fn suggestions(
         &self,
@@ -1241,7 +1241,7 @@ impl Dispatcher {
         }
         Some(this)
     }
-    /// CommandDispatcher.getSmartUsage: one line per child of `node`.
+    /// Brigadier's smart usage: one line per child of `node`.
     pub fn smart_usage(&self, node: usize, level: u8) -> Vec<(usize, String)> {
         let optional = self.nodes[node].command.is_some();
         self.nodes[node]
