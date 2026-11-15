@@ -58,6 +58,7 @@ horizon-client game::native_datafix_tests::a_mods_host_upgrades_old_data_and_ref
 horizon-client game::native_disconnect_tests::a_client_mod_leaves_at_the_end_of_the_frame_with_its_reason lib daily resources
 horizon-client game::native_disconnect_tests::a_leave_request_does_not_follow_a_world_switch lib daily resources
 horizon-client game::native_entity_commands::tests::player_command_returns_permission_failures_and_success_without_swallowing_chat lib daily resources
+horizon-client game::native_entity_riding::tests::a_player_gets_off_where_the_query_says lib daily resources
 horizon-client game::native_entity_selectors::tests::nearest_teammate_filters_before_limit_and_drops_false_and_panicking_candidates lib daily game-boot
 horizon-client game::native_entity_selectors::tests::synced_selector_tokens_survive_client_registry_refresh lib daily game-boot
 horizon-client game::native_explosion_destroy_tests::a_cancelled_start_destroys_nothing lib daily resources
