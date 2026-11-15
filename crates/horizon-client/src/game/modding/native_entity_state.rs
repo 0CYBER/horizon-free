@@ -1296,19 +1296,15 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn client_fluid_reads_use_cached_local_and_tracked_bodies() {
-        use super::super::execution_role::ExecutionRole;
+        use super::super::{
+            native_client_session::tests::logged_client,
+            native_entity_refs::tests::with_client_game,
+        };
         use horizon_core::geometry::Vec3;
-        use horizon_protocol::{connection::Pipe, packets::play};
+        use horizon_protocol::packets::play;
 
-        super::super::native_entity_refs::tests::with_game(|game| {
-            game.options.execution_role = ExecutionRole::Client;
-            game.options.dedicated = None;
-            let (client, _server) = Pipe::pair();
-            game.connect_local(client, "FluidReadTest").unwrap();
-            let remote = game.remote.as_mut().unwrap();
-            remote.logged_in = true;
-            remote.entity_id = 7;
-            remote.profile = 42;
+        with_client_game(|game| {
+            let _server = logged_client(game);
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
             let local = game.entity(7).unwrap();
             let host = &*game as &dyn mod_api::ClientHost;
