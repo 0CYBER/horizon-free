@@ -950,6 +950,64 @@ pub fn post_target_declarations(manifest: &crate::manifest::Manifest) -> String 
         .collect()
 }
 
+/// The motion guide's binding in group 3, in the 0.2 post passes of a pack with `[motion]`.
+pub const MOTION_BINDING: u32 = 14;
+
+/// The motion guide's declarations, at `MOTION_BINDING`. The raw texture holds the engine's
+/// objects (`frame_gen/motion.wgsl`): z 1 a matched one with xy its delta, w 1 one with nothing
+/// to match. At depth 0 the engine writes the sky's camera motion from its unposed view (no bob
+/// or spin, as the sky is drawn): xy the delta, w 1 behind last frame's view. `motion_at` adds
+/// the camera's motion for the rest.
+const MOTION: &str = "\
+// The engine's objects' motion this frame (read it through `motion_at`).
+@group(3) @binding(14) var scene_motion: texture_2d<f32>;
+const MOTION_CAMERA: u32 = 0u;
+const MOTION_OBJECT: u32 = 1u;
+const MOTION_NEW: u32 = 2u;
+const MOTION_NO_HISTORY: u32 = 3u;
+struct MotionData {
+    // Where the surface was last frame less where it is: top-left UV of the world's picture.
+    delta: vec2<f32>,
+    // A MOTION_ constant: how far to trust `delta`.
+    kind: u32,
+}
+// How the surface `scene_depth` holds at `texel` moved since last frame.
+fn motion_at(texel: vec2<i32>) -> MotionData {
+    if frame.delta_time == 0.0 {
+        return MotionData(vec2<f32>(0.0), MOTION_NO_HISTORY);
+    }
+    let size = vec2<i32>(textureDimensions(scene_depth));
+    let t = clamp(texel, vec2<i32>(0), size - 1);
+    let objects = vec2<i32>(textureDimensions(scene_motion));
+    let object = textureLoad(scene_motion, clamp(t, vec2<i32>(0), objects - 1), 0);
+    if object.z > 0.5 {
+        return MotionData(object.xy, MOTION_OBJECT);
+    }
+    let depth = textureLoad(scene_depth, t, 0);
+    // The sky, drawn without the view bob: the engine wrote its motion, w 1 behind last frame's view.
+    if depth == 0.0 {
+        if object.w > 0.5 {
+            return MotionData(vec2<f32>(0.0), MOTION_NO_HISTORY);
+        }
+        return MotionData(object.xy, MOTION_CAMERA);
+    }
+    if object.w > 0.5 {
+        return MotionData(vec2<f32>(0.0), MOTION_NEW);
+    }
+    // Still geometry, moved by the camera alone.
+    let uv = (vec2<f32>(t) + 0.5) / vec2<f32>(size);
+    let view = frame.projection_inverse * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+    let point = (frame.view_inverse * vec4<f32>(view.xyz / view.w, 0.0)).xyz + frame.camera_motion;
+    let clip = frame.previous_view_projection * vec4<f32>(point, 1.0);
+    // Behind last frame's camera: nothing there to reproject from.
+    if clip.w <= 0.0 {
+        return MotionData(vec2<f32>(0.0), MOTION_NO_HISTORY);
+    }
+    let then = vec2<f32>(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+    return MotionData(then - uv, MOTION_CAMERA);
+}
+";
+
 /// The WGSL of the stage `kind` whose own file is `file`: the prelude, the
 /// pack's shared files in order, the file, then the entry points, all of the pack's line.
 pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
@@ -971,6 +1029,9 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
     let mut prelude = kind.prelude(api) + &texture_declarations(&pack.manifest.textures);
     if kind == StageKind::Post {
         prelude += &post_target_declarations(&pack.manifest);
+        if api == Api::V0_2 && pack.manifest.motion.is_some() {
+            prelude += MOTION;
+        }
     }
     push("<prelude>", &prelude);
     for shared in pack.manifest.shared.iter().filter(|s| *s != file) {

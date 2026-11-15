@@ -196,6 +196,9 @@ uses the no-pack frame. What it changes from 0.1:
   returns. BT.2020 holds colours outside sRGB, which HDR displays show. It needs `blend = "linear"`. `Frame` says
   which in `primaries`, with that space's luminance weights in `luminance`, after `black_level`. `"bt2020"` passes
   the check, but the game doesn't serve it yet.
+- **`[motion]`** (no keys, needs `[[post]]`): every post pass gets `fn motion_at(texel: vec2<i32>) -> MotionData`, how
+  each pixel's surface moved since last frame, for temporal passes. The check takes it, but **the game doesn't draw
+  it yet** and refuses a pack that has it.
 - **`[material] coverage`**: `"engine"` (the default) or `"pack"`, whose alpha decides which points of terrain are
   drawn. Under `"engine"` solid and cutout terrain keep Horizon's alpha test on the texture's alpha and ignore the
   returned alpha, translucent terrain is cut on the texture's alpha too and takes the returned alpha as its opacity,
@@ -218,10 +221,13 @@ file = "entity.wgsl"
 [frame]
 blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
+
+[motion]                   # optional, needs [[post]]: the post stage's motion guide (not drawn yet)
 ```
 
-0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]`, `[entity]` or
-`[frame]` is refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK.
+0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]`, `[entity]`,
+`[frame]` or `[motion]` is refused. The example's port is `crates/horizon-shader-api/packs/golden_hour_0_2`, a test
+pack of the SDK.
 
 ## Testing a pack frame by frame
 
@@ -255,6 +261,11 @@ draws them itself (the material stage covers terrain only). The first-person han
 
 ## Changelog
 
+- 2026-11-14: API 0.2 (additions, experimental): `[motion]`: the post stage of a pack that sets it gets the motion
+  guide, `scene_motion` (binding 14), `fn motion_at(texel: vec2<i32>) -> MotionData` and the `MOTION_CAMERA`,
+  `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
+  temporal passes. `horizon-shader check` takes it; the game refuses a pack with `[motion]` until it draws the guide.
+  A pack without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
 - 2026-11-13: API 0.2 (**breaking**, experimental): the material stage keeps the engine's coverage unless the pack
   declares it, with `[material] coverage`, `"engine"` (the default) or `"pack"`. Under `"engine"` solid and cutout
   terrain's alpha test reads the texture's alpha, not the returned one, translucent terrain is cut on the texture's

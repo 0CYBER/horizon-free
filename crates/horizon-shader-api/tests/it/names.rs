@@ -174,6 +174,38 @@ fn a_0_2_prelude_declares_only_the_names_on_its_list() {
     }
 }
 
+/// The names on `tests/names-0.2/<list>.txt`.
+fn listed(list: &str) -> BTreeSet<String> {
+    let path = format!("{}/tests/names-0.2/{list}.txt", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let lines = text.lines().map(str::trim);
+    (lines.filter(|l| !l.is_empty() && !l.starts_with('#')))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `[motion]` brings the post stage the motion guide's names, `post_motion.txt`, and no others.
+#[test]
+fn motion_brings_the_post_stage_only_the_motion_names() {
+    let mut files = pack(None).files;
+    let manifest = files.get_mut(MANIFEST).unwrap();
+    manifest.extend_from_slice(b"[motion]\n");
+    let pack = Pack::from_files(files).unwrap();
+    for &kind in Api::V0_2.stages() {
+        let composed = compose(&pack, kind, &format!("{}.wgsl", kind.name()));
+        let have: BTreeSet<String> = declared(&composed.text[composed.parts[0].1.clone()])
+            .into_iter()
+            .filter(|n| !n.starts_with("horizon_"))
+            .collect();
+        let mut expected = listed(kind.name());
+        if kind == horizon_shader_api::StageKind::Post {
+            expected.extend(listed("post_motion"));
+        }
+        assert_eq!(have, expected, "{kind:?}");
+    }
+    check(&pack).unwrap();
+}
+
 fn messages(result: Result<horizon_shader_api::Report, Vec<Problem>>) -> Vec<String> {
     result
         .expect_err("should fail")

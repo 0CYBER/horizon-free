@@ -1,0 +1,9 @@
+# The motion guide's names: every 0.2 post pass of a pack with [motion] gets them, on top of
+# post.txt's, and a pack without the key none (tests/motion.rs).
+MOTION_CAMERA
+MOTION_NEW
+MOTION_NO_HISTORY
+MOTION_OBJECT
+MotionData
+motion_at
+scene_motion
