@@ -4,6 +4,22 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Fields, parse_quote};
 
+struct UsedTypeParams<'a> {
+    params: &'a std::collections::HashSet<String>,
+    found: bool,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for UsedTypeParams<'_> {
+    fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+        self.found |= path
+            .path
+            .segments
+            .first()
+            .is_some_and(|segment| self.params.contains(&segment.ident.to_string()));
+        syn::visit::visit_type_path(self, path);
+    }
+}
+
 pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
     let mut contract: Option<syn::Path> = None;
     for attr in &input.attrs {
@@ -49,8 +65,35 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
         }
     }
     let c = contract.unwrap_or_else(|| parse_quote!(::mod_api));
-    for param in input.generics.type_params_mut() {
-        param.bounds.push(parse_quote!(#c::PayloadCodec));
+    let type_params: std::collections::HashSet<_> = input
+        .generics
+        .type_params()
+        .map(|param| param.ident.to_string())
+        .collect();
+    let mut field_types = Vec::new();
+    match &input.data {
+        Data::Struct(data) => field_types.extend(data.fields.iter().map(|field| &field.ty)),
+        Data::Enum(data) => field_types.extend(
+            data.variants
+                .iter()
+                .flat_map(|variant| variant.fields.iter().map(|field| &field.ty)),
+        ),
+        Data::Union(_) => {}
+    }
+    let mut predicates = std::collections::HashSet::new();
+    for ty in field_types {
+        let mut used = UsedTypeParams {
+            params: &type_params,
+            found: false,
+        };
+        syn::visit::Visit::visit_type(&mut used, ty);
+        if used.found && predicates.insert(quote!(#ty).to_string()) {
+            input
+                .generics
+                .make_where_clause()
+                .predicates
+                .push(parse_quote!(#ty: #c::PayloadCodec));
+        }
     }
     let name = &input.ident;
     let (encode, decode) = match &input.data {

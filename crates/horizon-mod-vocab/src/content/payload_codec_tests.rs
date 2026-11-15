@@ -1,5 +1,26 @@
 use super::*;
 
+#[derive(Debug, PartialEq)]
+struct NoCodec;
+
+#[derive(Debug, PartialEq)]
+struct Opaque<T>(u8, std::marker::PhantomData<T>);
+
+impl<T> PayloadCodec for Opaque<T> {
+    fn encode(&self, out: &mut PayloadWriter) {
+        self.0.encode(out);
+    }
+
+    fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
+        u8::decode(input).map(|value| Self(value, std::marker::PhantomData))
+    }
+}
+
+#[derive(Debug, PartialEq, horizon_mod_api_macros::PayloadCodec)]
+struct OpaqueEnvelope<T> {
+    value: Opaque<T>,
+}
+
 /// The acceptance matrix's payload: `counter=7`.
 #[derive(Debug, PartialEq)]
 struct Counter {
@@ -321,6 +342,20 @@ struct Cell {
     out: VarInt,
     input: Option<String>,
     flags: u8,
+}
+
+#[test]
+fn a_derived_codec_does_not_bound_generic_parameters_its_fields_do_not_need() {
+    let envelope = OpaqueEnvelope {
+        value: Opaque(42, std::marker::PhantomData::<NoCodec>),
+    };
+    assert_eq!(encode_payload(&envelope, 1), Ok(vec![42]));
+    assert_eq!(
+        decode_payload::<OpaqueEnvelope<NoCodec>>(&[42]),
+        Ok(OpaqueEnvelope {
+            value: Opaque(42, std::marker::PhantomData),
+        })
+    );
 }
 
 /// A derived enum: a VarInt tag counting variants from 0, then the variant's
