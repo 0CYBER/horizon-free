@@ -551,17 +551,12 @@ impl Launcher {
         launcher: String,
         launcher_action: Option<AnyElement>,
     ) -> Div {
+        // Named as the Versions page names it; the exact build is on About.
         let installed = self
             .settings
             .selected
-            .clone()
-            .map(|tag| match &self.releases {
-                Load::Ready(list) => list
-                    .iter()
-                    .find(|r| r.tag == tag)
-                    .map_or(tag.clone(), |r| update_name(r).to_owned()),
-                _ => tag,
-            });
+            .as_deref()
+            .map(|tag| self.version_name(tag));
         let tone = if self.updates.horizon.is_some() {
             ui::Tone::Accent(ui::look().accent_soft)
         } else if self.update_error.is_some() {
@@ -602,19 +597,7 @@ impl Launcher {
             .child(tile(
                 self.horizon_mark(42.),
                 "Horizon".into(),
-                // Named as the Versions page names it; the exact build is on About.
-                installed
-                    .map(|tag| {
-                        horizon_launcher::nightly::date_of(&tag)
-                            .map(|date| {
-                                trf(
-                                    "{day} update",
-                                    &[("day", &horizon_launcher::nightly::day(date))],
-                                )
-                            })
-                            .unwrap_or(tag)
-                    })
-                    .unwrap_or_else(|| tr("Nightly").to_string()),
+                installed.unwrap_or_else(|| tr("Nightly").to_string()),
                 div()
                     .flex()
                     .flex_col()

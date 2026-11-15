@@ -61,6 +61,31 @@ fn nightly_card_text(release: &Release, same_day: bool) -> Option<(String, Strin
 }
 
 impl Launcher {
+    /// Version `tag` as the Versions page titles it ("Nov 11 update", with its time when another
+    /// update came out the same day), for any screen that names it; the tag itself otherwise.
+    pub(crate) fn version_name(&self, tag: &str) -> String {
+        if let Load::Ready(list) = &self.releases {
+            if let Some(release) = list.iter().find(|r| r.tag == tag) {
+                let same_day = list
+                    .iter()
+                    .filter(|r| r.nightly.is_some() && r.date == release.date)
+                    .count()
+                    > 1;
+                if let Some((title, _)) = nightly_card_text(release, same_day) {
+                    return title;
+                }
+            }
+        }
+        horizon_launcher::nightly::date_of(tag)
+            .map(|date| {
+                trf(
+                    "{day} update",
+                    &[("day", &horizon_launcher::nightly::day(date))],
+                )
+            })
+            .unwrap_or_else(|| tag.to_owned())
+    }
+
     /// The names of the Horizon instances that play `tag`.
     pub(crate) fn instances_using(&self, tag: &str) -> Vec<&str> {
         self.instances
