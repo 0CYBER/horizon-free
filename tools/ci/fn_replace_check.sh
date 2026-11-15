@@ -149,7 +149,10 @@ if [ -n "${FNR_ROUTE:-}" ]; then grep -F "Native mods route: $FNR_ROUTE." "$log"
 if [ "${FNR_ROUTE:-}" = prebuilt-api ]; then
   marker=$(sed -n 's/^pub static CAPABILITY: \[u8; [0-9]*\] = \*b"\([^"]*\)";$/\1/p' "$root/crates/horizon-mod-package/src/holder.rs")
   test -n "$marker"
-  played=$(ls "$scratch/engine/horizon-engine" "$scratch/engine/horizon-engine.exe" 2>/dev/null | head -1)
+  # Whichever of the two exists: `ls` of the missing one exits 2, which pipefail would make the step's exit.
+  for played in "$scratch/engine/horizon-engine" "$scratch/engine/horizon-engine.exe"; do
+    [ -f "$played" ] && break
+  done
   grep -qaF "$marker" "$played" || { echo "$played does not carry the holder marker $marker"; exit 1; }
   echo "holder marker $marker found in $played"
 fi
