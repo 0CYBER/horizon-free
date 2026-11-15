@@ -825,17 +825,14 @@ impl Game<'_> {
                     .collect(),
                 _ => Vec::new(),
             },
-            Some("vehicle") => self.ride_vehicle(entity).into_iter().collect(),
+            Some("vehicle") => self.passenger_vehicle_target(entity).into_iter().collect(),
             Some("passengers") => {
                 let mut passengers = self.player_passengers(entity);
-                // Direct runtime children only. Complete mount insertion order is
-                // not modeled; retain the existing mob collection order here.
-                if let Target::Mob(id) | Target::Boat(id) = entity {
+                if let Some(id) = super::super::native_entities::target_id(entity) {
                     passengers.extend(
-                        self.mobs
-                            .iter()
-                            .filter(|m| m.extra.mount == Some(id) && m.alive() && !m.removed)
-                            .map(|m| Target::Mob(m.id)),
+                        self.ordered_live_passengers(id)
+                            .into_iter()
+                            .filter_map(|id| self.level_entity(id as i32)),
                     );
                 }
                 passengers

@@ -14221,7 +14221,9 @@ def check_ride_seats(host, guest, out):
     """RideCommand.mount forces the ride (startRiding(vehicle, true, true)), so an item display, an
     armor stand or a marker takes a rider: the guest sits on the vehicle's passenger point (its box
     height, less the player's 0.6 vehicle attachment), follows it when it is moved, and gets off on top
-    of it on sneak (Entity.getDismountLocationForPassenger); a mob rides a marker the same way."""
+    of it on sneak (Entity.getDismountLocationForPassenger). A marker is the exception:
+    Marker.couldAcceptPassenger() is false and Entity.startRiding checks it before `force`, so a mob
+    cannot ride one."""
     x, y, z = (int(v // 1) for v in pos_of(host))
     x, z = x + 4, z + 4
     host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 6} {y - 1} {z + 2} minecraft:stone')
@@ -14271,7 +14273,7 @@ def check_ride_seats(host, guest, out):
         assert abs(r['followed']) < 0.01, f'the guest follows the moved {kind}: {seen}'
         # Off on top of the vehicle, then falling to the floor below like any player (10 ticks later).
         assert r['off'] and -0.01 <= r['off_y'] <= r['expected'][1] + 0.01, f'the guest gets off the {kind}: {seen}'
-    assert any('started riding' in line for line in seen['zombie on marker'] or []), f'a mob rides a marker: {seen}'
+    assert any("couldn't start riding" in line for line in seen['zombie on marker'] or []), f'a marker refuses a mob: {seen}'
     return seen
 
 

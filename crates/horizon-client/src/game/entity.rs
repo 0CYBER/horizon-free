@@ -991,14 +991,6 @@ impl Game<'_> {
         super::boats::any_boat_wood(kind)
             .is_some_and(|(wood, chest)| self.boat_models.has(wood, chest))
     }
-    /// Whether `load_listed` loads `kind` as a vehicle that takes its mob
-    /// riders (`take_mob_passengers`): a mob, boat, minecart or primed TNT.
-    pub(super) fn listed_kind_takes_riders(&self, kind: &str) -> bool {
-        self.loads_as_mob(kind)
-            || self.loads_as_boat(kind)
-            || loads_as_cart(kind)
-            || loads_as_tnt(kind)
-    }
     /// Loads a saved entity as the first kind in `entity_lists!` that claims
     /// its type id: `Err` hands the compound back when none does.
     pub(super) fn load_listed(

@@ -168,9 +168,18 @@ impl Game<'_> {
         for (_, vehicle, guest) in seated {
             riding.add(vehicle as i32, guest);
         }
-        for m in self.mobs.iter().filter(|m| !m.removed) {
-            if let Some(vehicle) = m.extra.mount {
-                riding.add(vehicle as i32, m.id as i32);
+        let mut vehicles: Vec<u32> = self
+            .persist
+            .passenger_slots
+            .keys()
+            .copied()
+            .chain(self.mobs.iter().filter_map(|m| m.extra.mount))
+            .collect();
+        vehicles.sort_unstable();
+        vehicles.dedup();
+        for vehicle in vehicles {
+            for rider in self.ordered_live_passengers(vehicle) {
+                riding.add(vehicle as i32, rider as i32);
             }
         }
         for (&vehicle, pass) in &mut riding.passengers {

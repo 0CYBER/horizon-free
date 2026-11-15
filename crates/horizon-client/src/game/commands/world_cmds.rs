@@ -1658,14 +1658,18 @@ impl Game<'_> {
             return self.ride_guest(id, ctx, target, name);
         }
         if id == "ride.dismount" {
-            let Some(v) = self.ride_vehicle(target) else {
+            let Some(v) = self.passenger_vehicle_target(target) else {
                 return Err(err("commands.ride.not_riding", &[&name.plain()]));
             };
             let vehicle_name = self.target_name(v);
             match target {
                 Target::Player => self.stop_riding(),
                 Target::Mob(rider) => self.dismount_mob(rider),
-                _ => {}
+                _ => {
+                    if let Some(id) = super::super::native_entities::target_id(target) {
+                        self.unlink_passenger(id);
+                    }
+                }
             }
             self.feedback(Text::translate(
                 "commands.ride.dismount.success",
@@ -1693,7 +1697,7 @@ impl Game<'_> {
             let not_riding = || err("commands.ride.not_riding", &[&name.plain()]);
             let vehicle_name = self
                 .for_player(target, |g| {
-                    let vehicle = g.ride_vehicle(Target::Player)?;
+                    let vehicle = g.passenger_vehicle_target(Target::Player)?;
                     let vehicle_name = g.target_name(vehicle);
                     g.stop_riding();
                     Some(vehicle_name)
@@ -1731,7 +1735,7 @@ impl Game<'_> {
     pub(in crate::game) fn ride_mount(&mut self, target: Target, vehicle: Target) -> R<()> {
         let name = self.target_name(target);
         let vehicle_name = self.target_name(vehicle);
-        if let Some(current) = self.ride_vehicle(target) {
+        if let Some(current) = self.passenger_vehicle_target(target) {
             let current = self.target_name(current);
             return Err(err(
                 "commands.ride.already_riding",
@@ -1748,7 +1752,7 @@ impl Game<'_> {
             if v == target {
                 return Err(err("commands.ride.mount.failure.loop", &[]));
             }
-            up = self.ride_vehicle(v);
+            up = self.passenger_vehicle_target(v);
         }
         let rider = match target {
             Target::Mob(id) => Some(id),
@@ -1760,9 +1764,32 @@ impl Game<'_> {
                 &[&name.plain(), &vehicle_name.plain()],
             )
         };
-        // Only players and mobs ride.
-        if !(target == Target::Player || rider.is_some()) {
+        if self.target_type(vehicle) == "minecraft:marker"
+            || !super::super::spawner::entity_type_saves(&self.target_type(vehicle))
+        {
             return Err(generic());
+        }
+        // Existing simulated seats keep their rules. Other registered entities
+        // use Entity.startRiding's forced relationship, not a mob-only stand-in.
+        if target != Target::Player
+            && (rider.is_none()
+                || !matches!(
+                    vehicle,
+                    Target::Mob(_)
+                        | Target::Boat(_)
+                        | Target::Cart(_)
+                        | Target::Tnt(_)
+                        | Target::Cushion(_)
+                ))
+        {
+            let id = super::super::native_entities::target_id(target).ok_or_else(generic)?;
+            let parent = super::super::native_entities::target_id(vehicle).ok_or_else(generic)?;
+            if !self.native_mob_may_ride(id, parent, true) {
+                return Err(generic());
+            }
+            self.link_loaded_passenger(id, parent);
+            self.note_started_riding(parent);
+            return Ok(());
         }
         // `RideCommand.mount` forces the ride (`startRiding(vehicle, true, true)`),
         // which skips `canRide` and `canAddPassenger`: a boat under water still
@@ -1859,6 +1886,17 @@ impl Game<'_> {
         self.mount.jump_scale = 0.0;
         self.start_riding(mob_id);
         Ok(())
+    }
+
+    /// Non-player graph lookup; player/Guest resolution remains with the
+    /// existing command helper (the separate Guest repair owns that method).
+    pub(in crate::game) fn passenger_vehicle_target(&self, target: Target) -> Option<Target> {
+        match super::super::native_entities::target_id(target) {
+            Some(id) => self
+                .passenger_vehicle(id)
+                .and_then(|parent| self.level_entity(parent as i32)),
+            None => self.ride_vehicle(target),
+        }
     }
 
     /// Entity.getVehicle: the player's mount, or a mob's.

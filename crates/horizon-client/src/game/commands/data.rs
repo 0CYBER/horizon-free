@@ -76,8 +76,18 @@ impl Game<'_> {
     /// `NbtPredicate.getEntityTagToCompare`: the entity as saved. An entity
     /// in another level is read in the level that holds it.
     pub(in crate::game) fn entity_nbt(&mut self, t: Target) -> Option<Tag> {
-        self.in_target_level(t, |g| g.entity_nbt_in_level(t))
-            .flatten()
+        self.in_target_level(t, |g| {
+            let mut body = g.entity_nbt_in_level(t)?;
+            if !matches!(
+                t,
+                Target::Mob(_) | Target::Boat(_) | Target::Cart(_) | Target::Tnt(_)
+            ) && let Some(id) = super::super::native_entities::target_id(t)
+            {
+                g.put_mob_passengers(&mut body, id);
+            }
+            Some(body)
+        })
+        .flatten()
     }
     /// The acting player's own UUID: a guest's turn (the window's player on
     /// the server thread) keeps the world owner's in `level`.
@@ -390,16 +400,9 @@ impl Game<'_> {
         strip_finalize_tree(&mut tag);
         // Entity.load does not read Passengers: the riders stay, and so do the
         // passengers the load kept raw (none, when it kept none).
-        let kept_passengers = match t {
-            Target::Mob(id) | Target::Boat(id) | Target::Cart(id) | Target::Tnt(id) => Some(
-                self.persist
-                    .raw
-                    .get(&id)
-                    .and_then(|raw| raw.get("Passengers"))
-                    .cloned(),
-            ),
-            _ => None,
-        };
+        if let Tag::Compound(c) = &mut tag {
+            c.remove(&"Passengers".into());
+        }
         match t {
             // EntityDataAccessor.setData: players can't be modified, guests neither.
             Target::Player | Target::Guest(_) => {
@@ -532,6 +535,7 @@ impl Game<'_> {
                     // and its place in the level's join order.
                     new.first_tick = slot.first_tick;
                     new.join = slot.join;
+                    new.vehicle = slot.vehicle;
                     *slot = new;
                 }
             }
@@ -747,11 +751,7 @@ impl Game<'_> {
                 let marker = self
                     .others
                     .iter_mut()
-                    .find(|o| {
-                        o.id == id
-                            && (matches!(o.kind.as_str(), "minecraft:marker" | "marker")
-                                || crate::game::interactions::is_interaction(&o.kind))
-                    })
+                    .find(|o| o.id == id)
                     .ok_or_else(stale)?;
                 let position = entity_nbt::position(&tag).ok_or_else(stale)?;
                 let [yaw, pitch] = entity_nbt::rotation(&tag);
@@ -763,7 +763,14 @@ impl Game<'_> {
                     marker.interaction =
                         Some(crate::game::interactions::InteractionState::from_tag(&tag));
                 }
-                // Keep the existing marker identity even when the input edits UUID or id.
+                if marker.kind == "minecraft:item_display" {
+                    marker.item_transformation = Some(
+                        super::super::native_entities::DisplayTransformation::from_tag(
+                            tag.get("transformation"),
+                        ),
+                    );
+                }
+                // Loading data never replaces the existing entity's identity.
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
                 set_key(&mut tag, "id", Tag::String(marker.kind.as_str().into()));
             }
@@ -805,18 +812,6 @@ impl Game<'_> {
         | Target::Fangs(id)
         | Target::Projectile(id) = t
         {
-            if let Some(kept) = kept_passengers
-                && let Tag::Compound(c) = &mut tag
-            {
-                match kept {
-                    Some(passengers) => {
-                        c.insert("Passengers".into(), passengers);
-                    }
-                    None => {
-                        c.remove(&"Passengers".into());
-                    }
-                }
-            }
             self.persist.raw.insert(id, tag);
         }
         Ok(())

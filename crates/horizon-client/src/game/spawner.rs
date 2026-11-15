@@ -2,7 +2,9 @@
 //! `clientTick` for every spawner (`mobs::spawner`), the mobs they add, a
 //! spawn egg used on one (`SpawnEggItem.useOn`), their events and the mob
 //! spinning inside (`SpawnerRenderer`).
+mod entity_registry;
 use super::Game;
+pub(super) use entity_registry::entity_type_saves;
 use horizon_client::{
     Result,
     containers::BlockEntity,
@@ -37,44 +39,14 @@ pub(super) enum Planned {
 pub(super) struct SpawnerState {
     /// Every entity type id (`EntityType.byString`), read once.
     entity_types: Option<HashSet<String>>,
+    /// Dimensions from the same loaded entity-type registry, not a second loader.
+    entity_dimensions: HashMap<String, [f32; 2]>,
     /// The mob shown in each spawner and the id it was made for
     /// (`getOrCreateDisplayEntity`).
     displays: HashMap<Pos, (String, Mob)>,
 }
 
 impl Game<'_> {
-    /// `EntityType.byString`: the type is in the registry.
-    pub(super) fn entity_type_exists(&self, id: &str) -> bool {
-        self.spawners
-            .entity_types
-            .as_ref()
-            .is_some_and(|t| t.contains(id))
-    }
-    /// Whether `entity_type_exists` has a registry to answer from.
-    pub(super) fn entity_types_loaded(&self) -> bool {
-        self.spawners
-            .entity_types
-            .as_ref()
-            .is_some_and(|t| !t.is_empty())
-    }
-    pub(super) fn load_entity_types(&mut self) {
-        if self.spawners.entity_types.is_some() {
-            return;
-        }
-        let path = self.options.resources.join("entity-types.json");
-        let types = std::fs::read(path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .and_then(|v| {
-                v.as_object().map(|o| {
-                    o.keys()
-                        .map(|k| horizon_client::command::args::normalize(k))
-                        .collect()
-                })
-            })
-            .unwrap_or_default();
-        self.spawners.entity_types = Some(types);
-    }
     /// The server tick of the spawner at `key`. Its client tick comes after
     /// every block entity's (`client_tick_spawners`).
     ///

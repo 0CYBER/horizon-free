@@ -71,10 +71,7 @@ pub(super) struct PlacedRotation {
 
 /// The entity id a vehicle's riders point at, for the targets that carry some.
 fn vehicle_id(t: Target) -> Option<u32> {
-    match t {
-        Target::Boat(id) | Target::Cart(id) | Target::Mob(id) => Some(id),
-        _ => None,
-    }
+    super::native_entities::target_id(t)
 }
 
 /// `Entity.teleportSetPosition` with a command's transition: the destination
@@ -320,10 +317,10 @@ impl Game<'_> {
             // the transition's motion, which /tp's teleportTo makes zero. (The
             // ground flag performTeleport then sets lands on the old entity.)
             game.teleport_stops(target);
-            let mounts: Vec<_> = game.mobs.iter().map(|m| (m.id, m.extra.mount)).collect();
-            let tree = super::persist::vehicle_tree(root, &mounts);
-            let tag = game.vehicle_tree_nbt(root).ok_or("missing vehicle tree")?;
-            let kind = horizon_client::entity_nbt::kind(&tag).ok_or("missing vehicle type")?;
+            let tree = game.passenger_tree(root);
+            let tag = game
+                .vehicle_transfer_tag(root)
+                .ok_or("missing vehicle tree")?;
             let uuid = horizon_client::entity_nbt::uuid(&tag);
             let mut players = Vec::new();
             // A command runs with its source player swapped out of the hub.
@@ -355,27 +352,20 @@ impl Game<'_> {
                 .into_iter()
                 .map(|(conn, at, rotation, mount)| (conn, at, rotation, game.uuid_for(mount)))
                 .collect();
-            game.mobs.retain(|m| !tree.contains(&m.id));
-            game.boats.retain(|b| !tree.contains(&b.id));
-            game.carts.retain(|c| !tree.contains(&c.id));
-            for id in tree {
-                game.release_vehicle_container(id);
-                game.detach_entity(id);
-            }
+            game.take_passenger_entities(&tree, true);
             game.native_leaves_flush();
             game.enter_level(None, destination)?;
             // restoreFrom reloads saved state into fresh entities, rather than
             // retaining navigation paths or goals from the old level.
-            game.load_listed(&kind, uuid, game.level.player_uuid, tag)
-                .map_err(|_| "could not restore vehicle tree")?;
+            game.spawn_entity_from_nbt(tag)
+                .ok_or("could not restore vehicle tree")?;
             // AbstractHorse.addPassenger snaps a reattached passenger to the
             // new horse's getViewYRot(0) / getViewXRot(0). A fresh living
             // entity's previous head yaw is still zero, before its first tick.
             let new_root = uuid
                 .and_then(|uuid| game.vehicle_by_uuid(uuid))
                 .ok_or("restored vehicle is missing")?;
-            let mounts: Vec<_> = game.mobs.iter().map(|m| (m.id, m.extra.mount)).collect();
-            let restored = super::persist::vehicle_tree(new_root, &mounts);
+            let restored = game.passenger_tree(new_root);
             let horses: Vec<_> = game
                 .mobs
                 .iter()
@@ -547,13 +537,30 @@ impl Game<'_> {
         new: Vec3,
         rotation: Option<PlacedRotation>,
     ) {
-        let riders: Vec<u32> = self
-            .mobs
-            .iter()
-            .filter(|m| m.extra.mount == Some(vehicle))
-            .map(|m| m.id)
-            .collect();
+        let riders = self.ordered_live_passengers(vehicle);
         for id in riders {
+            if !self.mobs.iter().any(|m| m.id == id) {
+                if let Some(target) = self.level_entity(id as i32)
+                    && let Some(at) = self.target_position(target)
+                {
+                    let at = passenger_destination(old, new, Vec3::new(at[0], at[1], at[2]));
+                    let turn = rotation.map(|placed| {
+                        passenger_rotation(
+                            placed.before,
+                            placed.after,
+                            self.target_rotation(target),
+                        )
+                    });
+                    if matches!(target, Target::Frame(_) | Target::Painting(_)) {
+                        self.place_saved_passenger(target, at);
+                        self.move_riders(id, old, new, rotation);
+                    } else {
+                        // This existing writer also carries this rider's descendants.
+                        self.teleport_to_in_level(target, [at.x, at.y, at.z], turn, true);
+                    }
+                }
+                continue;
+            }
             if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                 m.position = passenger_destination(old, new, m.position);
                 m.previous = m.position;

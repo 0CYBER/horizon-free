@@ -3,6 +3,7 @@
 //! jockeys, strider jockeys, zombie horsemen) and the skeleton horse trap.
 //! Saving riders under `Passengers` lives in `persist.rs`.
 use super::Game;
+mod mob_seating;
 use horizon_client::mobs::{Species, riders};
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -136,6 +137,7 @@ impl Game<'_> {
                     || tnts.contains(&v)
                     || cushions.contains(&v)
                     || self.seat(v).is_some()
+                    || self.passenger_present(v)
                     || index
                         .get(&v)
                         .is_some_and(|&j| self.mobs[j].alive() && !self.mobs[j].removed));
@@ -151,6 +153,9 @@ impl Game<'_> {
             m.extra.rider = riding.get(&m.id).copied();
         }
         self.position_riders();
+        if self.remote.is_none() {
+            self.position_saved_passengers();
+        }
     }
     /// `Entity.positionRider` for every mob passenger: in its boat, then on
     /// its mob. A server's client places them itself too, as the server sends
@@ -179,127 +184,7 @@ impl Game<'_> {
         // Riders of riders settle over a few passes.
         for _ in 0..3 {
             for i in 0..self.mobs.len() {
-                let Some(v) = self.mobs[i].extra.mount else {
-                    continue;
-                };
-                let Some(&j) = index.get(&v) else {
-                    // Boats, minecarts, primed TNT and cushions seated their
-                    // riders above, each in its own seat and from the
-                    // vehicle's drawn position; re-seating them here from the
-                    // shared seat 0 yanked boat riders between two places.
-                    if self.seats_own_riders(v) {
-                        continue;
-                    }
-                    // A mob on a text display: NPC plugins seat their sitting
-                    // NPCs on one. The server's position for a passenger
-                    // gives way to its seat, as `rideTick` places it.
-                    let me = self.remote.as_ref().map(|r| r.entity_id as u32);
-                    let own_seat = self.player.as_ref().map(|p| {
-                        p.position
-                            .add_vector(Vec3::new(0.0, f64::from(p.dimensions.height), 0.0))
-                    });
-                    let Some(at) = self.passenger_riding_position(v, me, own_seat, &index) else {
-                        continue;
-                    };
-                    let before = self
-                        .text_displays
-                        .get(&(v as i32))
-                        .map(|d| d.seat().1)
-                        .unwrap_or_else(|| {
-                            let old = self.mobs[i].previous;
-                            glam::DVec3::new(
-                                old.x,
-                                old.y + riders::vehicle_attachment(&self.mobs[i], 0.0),
-                                old.z,
-                            )
-                        });
-                    let m = &mut self.mobs[i];
-                    // EntityType.TEXT_DISPLAY's box is zero wide.
-                    let offset = riders::vehicle_attachment(m, 0.0);
-                    // EntityType.TEXT_DISPLAY's box is a point at the seat.
-                    let seat = Vec3::new(at.x, at.y, at.z);
-                    m.seated(v, offset, Aabb::new(seat, seat));
-                    m.position = Vec3::new(at.x, at.y - offset, at.z);
-                    m.previous = Vec3::new(before.x, before.y - offset, before.z);
-                    m.velocity = Vec3::ZERO;
-                    m.fall_distance = 0.0;
-                    m.on_ground = false;
-                    m.extra.passenger = true;
-                    m.ai.nav.stop();
-                    continue;
-                };
-                let vehicle = &self.mobs[j];
-                let mut attach = riders::passenger_attachment(vehicle);
-                if horizon_client::mobs::camel::is_camel(vehicle.species()) {
-                    // Camel.getPassengerAttachmentPoint: the seat follows the
-                    // rider's place in `getPassengers` (load order).
-                    let mut aboard: Vec<usize> = (0..self.mobs.len())
-                        .filter(|&k| self.mobs[k].extra.mount == Some(v))
-                        .collect();
-                    let player_aboard = vehicle.rider.is_some() || self.riding == Some(v);
-                    let (seat, count) = if player_aboard {
-                        let mob_seat = aboard.iter().position(|&k| k == i).unwrap_or(0);
-                        (mob_seat + 1, aboard.len() + 1)
-                    } else {
-                        if let Some(driver) = vehicle.extra.rider
-                            && let Some(pos) =
-                                aboard.iter().position(|&k| self.mobs[k].id == driver)
-                            && pos != 0
-                        {
-                            let driver_idx = aboard.remove(pos);
-                            aboard.insert(0, driver_idx);
-                        }
-                        let seat = aboard.iter().position(|&k| k == i).unwrap_or(0);
-                        (seat, aboard.len())
-                    };
-                    let animal = horizon_client::mobs::drops::is_animal(self.mobs[i].species());
-                    attach = horizon_client::mobs::camel::passenger_attachment_at(
-                        vehicle, seat, count, animal,
-                    );
-                }
-                if vehicle.species() == horizon_client::mobs::Species::HappyGhast {
-                    // EntityType.HAPPY_GHAST: four seats, by the rider's place
-                    // in `getPassengers`. `Entity.addPassenger` puts a player
-                    // first, so a mob that boards after one sits at index 1.
-                    let player_aboard = vehicle.rider.is_some() || self.riding == Some(v);
-                    let seat = usize::from(player_aboard)
-                        + self.mobs[..i]
-                            .iter()
-                            .filter(|r| r.extra.mount == Some(v))
-                            .count();
-                    attach = riders::happy_ghast_attachment(seat);
-                }
-                let (pos, prev) = (vehicle.position, vehicle.previous);
-                let (yaw, prev_yaw) = (vehicle.yaw, vehicle.previous_yaw);
-                let (body, prev_body) = (vehicle.body_yaw, vehicle.previous_body_yaw);
-                let rider = &self.mobs[i];
-                let controlling = riders::controls_vehicle(
-                    vehicle,
-                    rider,
-                    vehicle.rider.is_some() || self.riding == Some(v),
-                    self.res
-                        .mob_data()
-                        .entity_has("minecraft:non_controlling_rider", &rider.kind.id),
-                );
-                let takes_body = riders::takes_vehicle_body(vehicle, rider, controlling);
-                let vehicle_width = vehicle.width();
-                let vehicle_box = vehicle.bounds();
-                let m = &mut self.mobs[i];
-                let offset = riders::vehicle_attachment(m, vehicle_width);
-                m.seated(v, offset, vehicle_box);
-                m.position = riders::seat(attach, offset, pos, yaw);
-                m.previous = riders::seat(attach, offset, prev, prev_yaw);
-                m.velocity = Vec3::ZERO;
-                m.fall_distance = 0.0;
-                m.on_ground = false;
-                if takes_body {
-                    m.body_yaw = body;
-                    m.previous_body_yaw = prev_body;
-                }
-                m.extra.vehicle_body = Some((v, prev_body, body));
-                m.extra.passenger = true;
-                // A rider never walks off on its own.
-                m.ai.nav.stop();
+                self.position_mob_rider(i, &index);
             }
         }
         // Displays and interaction boxes riding anything the client tracks,
@@ -489,6 +374,12 @@ impl Game<'_> {
                 glam::DVec3::new(a.position.x, a.position.y, a.position.z)
             };
             return Some(at + glam::DVec3::Y * height);
+        }
+        if self.remote.is_none() {
+            let bounds = self.local_passenger_vehicle_bounds(vehicle)?;
+            let target = self.level_entity(vehicle as i32)?;
+            let at = self.target_position(target)?;
+            return Some(glam::DVec3::new(at[0], bounds.max_position().y, at[2]));
         }
         // Any other tracked entity sits on its feet; an area effect cloud is
         // 0.5 tall, and ModelEngine parks a model's pivot half a block below
