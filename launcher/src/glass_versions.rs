@@ -66,9 +66,10 @@ fn commit_of(tag: &str) -> String {
 
 /// The release title from GitHub is an implementation-facing ISO date and commit. Players get
 /// "Nov 7 update" and the day it came out; the commit is in a tooltip on that line.
-fn nightly_card_text(release: &Release) -> Option<(String, String)> {
+fn nightly_card_text(release: &Release, same_day: bool) -> Option<(String, String)> {
     release.nightly.as_ref()?;
-    let date = published(&release.date, "");
+    // Two updates on one day are told apart by their time in the title.
+    let date = published(&release.date, if same_day { &release.time } else { "" });
     let title = trf("{date} update", &[("date", &date)]);
     Some((title, published(&release.date, &release.time)))
 }
@@ -253,19 +254,25 @@ impl Launcher {
             keep,
             |i| {
                 let release = releases[i].clone();
-                let (title, mut line) = nightly_card_text(&release).unwrap_or_else(|| {
-                    let title = release
-                        .name
-                        .split_once(": ")
-                        .map(|(_, rest)| rest.to_string())
-                        .unwrap_or_else(|| release.name.clone());
-                    let title = if title.is_empty() {
-                        release.tag.clone()
-                    } else {
-                        title
-                    };
-                    (title, published(&release.date, &release.time))
-                });
+                let same_day = releases
+                    .iter()
+                    .filter(|r| r.nightly.is_some() && r.date == release.date)
+                    .count()
+                    > 1;
+                let (title, mut line) =
+                    nightly_card_text(&release, same_day).unwrap_or_else(|| {
+                        let title = release
+                            .name
+                            .split_once(": ")
+                            .map(|(_, rest)| rest.to_string())
+                            .unwrap_or_else(|| release.name.clone());
+                        let title = if title.is_empty() {
+                            release.tag.clone()
+                        } else {
+                            title
+                        };
+                        (title, published(&release.date, &release.time))
+                    });
                 if line.is_empty() {
                     line = published(&release.date, &release.time);
                 }
@@ -532,7 +539,11 @@ impl Launcher {
             }))
         } else {
             disabled(bin).tooltip(ui::tip(trf(
-                "In use by {names}. Pick another version for it first.",
+                if users.len() > 1 {
+                    "In use by {names}. Pick another version for them first."
+                } else {
+                    "In use by {names}. Pick another version for it first."
+                },
                 &[(
                     "names",
                     &match users.as_slice() {
@@ -847,7 +858,7 @@ mod tests {
             nightly: Some("nightly".into()),
         };
 
-        let (title, line) = nightly_card_text(&release).expect("nightlies have card text");
+        let (title, line) = nightly_card_text(&release, false).expect("nightlies have card text");
         assert_eq!(title, "Nov 7 update");
         assert_eq!(line, "Nov 7, 14:32 UTC");
         assert_eq!(commit_of(&release.tag), "4aa6854");
