@@ -124,8 +124,8 @@ pub(super) fn read_component(kind: i32, r: &mut Reader) -> Result<Component> {
                 ));
             }
             Ok(Component::Trim {
-                material: material - 1,
-                pattern: pattern - 1,
+                material: ids::synced_up("minecraft:trim_material", material - 1),
+                pattern: ids::synced_up("minecraft:trim_pattern", pattern - 1),
             })
         }
         _ => Component::read(kind, r),

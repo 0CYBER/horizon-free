@@ -239,6 +239,62 @@ thread_local! {
     static TRIM_PATTERNS: RefCell<HashMap<i32,i32>> = RefCell::new(HashMap::new());
     static LEGACY_REGISTRIES: RefCell<Option<Arc<LegacyRegistries>>> = const { RefCell::new(None) };
     static LEGACY_ITEMS: RefCell<Option<Arc<Mutex<crate::item::v1_20_3::Cache>>>> = const { RefCell::new(None) };
+    static SYNCED: RefCell<Option<Arc<dyn SyncedIds>>> = const { RefCell::new(None) };
+    static SYNCED_UP: RefCell<Option<Arc<dyn SyncedIds>>> = const { RefCell::new(None) };
+}
+
+/// A connection's renumbering of synchronised registries that lost entries for its older client.
+pub(crate) trait SyncedIds: Send + Sync {
+    /// The client's id of the pinned `id` in `registry`: `None` when it was removed without a stand-in.
+    fn down(&self, registry: &str, id: i32) -> Option<i32>;
+    /// The pinned id of the client's `id` in `registry`.
+    fn up(&self, registry: &str, id: i32) -> i32;
+}
+
+/// Writers on this thread renumber synchronised registry ids through `ids` until the guard drops.
+pub(crate) fn synced(ids: Arc<dyn SyncedIds>) -> SyncedGuard {
+    SyncedGuard(SYNCED.replace(Some(ids)), &SYNCED)
+}
+/// Readers renumbering [`Way::Up`] on this thread take synchronised registry ids back through `ids` until the
+/// guard drops.
+pub(crate) fn synced_reading(ids: Arc<dyn SyncedIds>) -> SyncedGuard {
+    SyncedGuard(SYNCED_UP.replace(Some(ids)), &SYNCED_UP)
+}
+/// Whether writers on this thread renumber synchronised registry ids ([`synced`]).
+pub(crate) fn synced_set() -> bool {
+    SYNCED.with_borrow(Option::is_some)
+}
+/// The renumbering [`synced`] set on this thread.
+pub(crate) fn synced_writing() -> Option<Arc<dyn SyncedIds>> {
+    SYNCED.with_borrow(Clone::clone)
+}
+pub(crate) struct SyncedGuard(
+    Option<Arc<dyn SyncedIds>>,
+    &'static std::thread::LocalKey<RefCell<Option<Arc<dyn SyncedIds>>>>,
+);
+impl Drop for SyncedGuard {
+    fn drop(&mut self) {
+        self.1.replace(self.0.take());
+    }
+}
+/// A synchronised registry id as read on this thread: the pinned one when an older client's is being read
+/// ([`synced_reading`]), else as it is.
+pub(crate) fn synced_up(registry: &str, id: i32) -> i32 {
+    if !matches!(ACTIVE.get(), Some((_, Way::Up))) {
+        return id;
+    }
+    SYNCED_UP.with_borrow(|s| s.as_ref().map_or(id, |s| s.up(registry, id)))
+}
+/// A synchronised registry id as written on this thread: `None` when the client lacks it (left out).
+pub(crate) fn synced_down(registry: &str, id: i32) -> Option<i32> {
+    SYNCED.with_borrow(|s| match s {
+        Some(s) => s.down(registry, id),
+        None => Some(id),
+    })
+}
+/// The same, the first entry where one id must be written.
+pub(crate) fn synced_down_or_first(registry: &str, id: i32) -> i32 {
+    synced_down(registry, id).unwrap_or(0)
 }
 
 pub(crate) fn legacy_items(cache: Arc<Mutex<crate::item::v1_20_3::Cache>>) -> LegacyItemGuard {
