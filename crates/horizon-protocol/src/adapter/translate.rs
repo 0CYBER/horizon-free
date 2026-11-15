@@ -1216,7 +1216,8 @@ pub(crate) mod v1_21_11 {
         let kind = session.kinds.lock().unwrap().get(&data.id).copied();
         if kind.is_some_and(|k| AGEABLE.contains(&k)) {
             for (index, _, _) in &mut data.values {
-                if *index >= 17 {
+                // 0xFF is the end of the list: an index the shift would make it stays put.
+                if (17..0xFE).contains(index) {
                     *index += 1;
                 }
             }

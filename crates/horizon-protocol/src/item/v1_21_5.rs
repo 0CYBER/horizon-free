@@ -69,7 +69,7 @@ fn rewrite(kind: i32, r: &mut Reader, up: bool) -> Result<Option<Vec<u8>>> {
                     w.varint(0);
                     w.string(&r.string(32767)?);
                 } else {
-                    let count = usize::try_from(n - 1)
+                    let count = usize::try_from(n.wrapping_sub(1))
                         .map_err(|_| Error::new("negative holder set size"))?;
                     if count > r.remaining() {
                         return Err(Error::new("holder set past the end"));

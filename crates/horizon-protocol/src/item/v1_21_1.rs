@@ -163,7 +163,7 @@ fn write_potion(value: &Component, w: &mut Writer) -> Result<()> {
 fn read_instrument(r: &mut Reader) -> Result<Component> {
     let holder = r.varint()?;
     if holder != 0 {
-        return Ok(Component::Instrument(holder - 1));
+        return Ok(Component::Instrument(holder.wrapping_sub(1)));
     }
     let mut w = Writer::new();
     w.varint(0);
@@ -200,9 +200,9 @@ fn sound(r: &mut Reader, w: &mut Writer, up: bool) -> Result<()> {
         }
     } else {
         let mapped = match ids::active() {
-            Some((ids, _)) if up => ids.sound_event.up(holder - 1),
-            Some((ids, _)) => ids.sound_event.down(holder - 1),
-            None => Some(holder - 1),
+            Some((ids, _)) if up => ids.sound_event.up(holder.wrapping_sub(1)),
+            Some((ids, _)) => ids.sound_event.down(holder.wrapping_sub(1)),
+            None => Some(holder.wrapping_sub(1)),
         }
         .ok_or_else(|| Error::new("instrument sound absent from target registry"))?;
         w.varint(mapped + 1);

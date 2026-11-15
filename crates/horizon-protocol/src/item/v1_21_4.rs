@@ -202,7 +202,8 @@ fn block_set(r: &mut Reader, w: &mut Writer) -> Result<()> {
     if n == 0 {
         w.string(&r.string(32767)?);
     } else {
-        let n = usize::try_from(n - 1).map_err(|_| Error::new("negative holder set"))?;
+        let n =
+            usize::try_from(n.wrapping_sub(1)).map_err(|_| Error::new("negative holder set"))?;
         if n > r.remaining() {
             return Err(Error::new("holder set past the end"));
         }

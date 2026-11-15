@@ -33,7 +33,9 @@ packet!(ResourcePackPush {
     required: bool => Bool,
     prompt: Option<Tag> => Opt<Nbt>,
 });
-packet!(StoreCookie { key: String => Ident, payload: Vec<u8> => crate::buf::Bytes });
+/// Vanilla's cookie payloads are `ByteBufCodecs.byteArray(5120)`.
+pub const MAX_COOKIE: usize = 5120;
+packet!(StoreCookie { key: String => Ident, payload: Vec<u8> => crate::buf::BytesN<MAX_COOKIE> });
 packet!(Transfer { host: String => Str, port: i32 => VarInt });
 packet!(UpdateEnabledFeatures { features: Vec<String> => List<Ident> });
 packet!(TagEntry { name: String => Ident, ids: Vec<i32> => List<VarInt> });
@@ -201,7 +203,7 @@ impl Codec<ClientInformation> for ClientInformation {
         w.varint(v.particle_status);
     }
 }
-packet!(CookieResponse { key: String => Ident, payload: Option<Vec<u8>> => Opt<crate::buf::Bytes> });
+packet!(CookieResponse { key: String => Ident, payload: Option<Vec<u8>> => Opt<crate::buf::BytesN<MAX_COOKIE>> });
 packet!(
     /// ServerboundResourcePackPacket.Action: 0 loaded, 1 declined, 2 failed
     /// download, 3 accepted, 4 downloaded, 5 invalid url, 6 failed reload, 7 discarded.

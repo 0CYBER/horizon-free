@@ -31,14 +31,24 @@ pub struct Batch {
     pub lines: Vec<String>,
 }
 
+/// The longest prefix of `s` of at most `max` UTF-16 units: what `decode` (and Java) count, so a
+/// line of emoji is cut short rather than refused whole.
+fn utf16_prefix(s: &str, max: usize) -> String {
+    let mut units = 0;
+    s.chars()
+        .take_while(|c| {
+            units += c.len_utf16();
+            units <= max
+        })
+        .collect()
+}
+
 /// `lines` as few payloads as fit [`MAX_PAYLOAD`] and [`MAX_LINES`], in
 /// order. Lines longer than [`MAX_LINE`] are cut, as a chat command's are.
 pub fn encode(mod_id: &str, lines: &[String]) -> Vec<Vec<u8>> {
-    let mod_id: String = mod_id.chars().take(MAX_MOD_ID).collect();
+    let mod_id = utf16_prefix(mod_id, MAX_MOD_ID);
     let mut payloads = Vec::new();
-    let mut rest = lines
-        .iter()
-        .map(|l| -> String { l.chars().take(MAX_LINE).collect() });
+    let mut rest = lines.iter().map(|l| utf16_prefix(l, MAX_LINE));
     let mut next = rest.next();
     while next.is_some() {
         let mut batch = Vec::new();
@@ -189,5 +199,14 @@ mod tests {
         w.varint(0);
         w.u8(1);
         assert!(decode(&w.data).is_err());
+    }
+
+    #[test]
+    fn lines_are_cut_in_utf16_units_so_decode_takes_them() {
+        let emoji = "😀".repeat(200);
+        let payloads = encode(&"🦀".repeat(40), &[emoji]);
+        let batch = decode(&payloads[0]).unwrap();
+        assert_eq!(batch.lines[0].chars().count(), MAX_LINE / 2);
+        assert_eq!(batch.mod_id.chars().count(), MAX_MOD_ID / 2);
     }
 }

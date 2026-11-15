@@ -100,7 +100,7 @@ pub(super) fn sound(r: &mut Reader, names: &dyn Names) -> Option<Sound> {
             })
         }
         id => {
-            let name = names.name("minecraft:sound_event", id - 1)?;
+            let name = names.name("minecraft:sound_event", id.wrapping_sub(1))?;
             Some(Sound {
                 code: string(&name),
                 name: Some(name),
@@ -122,7 +122,7 @@ fn holder_set(registry: &str, names: &dyn Names, r: &mut Reader) -> Option<HashC
     match int(r)? {
         0 => Some(string(&format!("#{}", r.string(32767).ok()?))),
         n => {
-            let n = usize::try_from(n - 1)
+            let n = usize::try_from(n.wrapping_sub(1))
                 .ok()
                 .filter(|n| *n <= r.remaining())?;
             let mut ids = Vec::with_capacity(n);
@@ -580,7 +580,7 @@ pub(super) fn code(kind: i32, r: &mut Reader, names: &dyn Names) -> Option<HashC
         // encoded (vanilla's client would throw), so only a reference hashes.
         66 => match int(r)? {
             0 => return None,
-            id => entry(names, "minecraft:jukebox_song", id - 1)?,
+            id => entry(names, "minecraft:jukebox_song", id.wrapping_sub(1))?,
         },
         67 => holder_set("minecraft:banner_pattern", names, r)?,
         83 => sound(r, names)?.code,

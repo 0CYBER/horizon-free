@@ -16,7 +16,7 @@ pub enum HolderSet {
 }
 impl HolderSet {
     pub fn read(r: &mut Reader) -> Result<Self> {
-        let n = r.varint()? - 1;
+        let n = r.varint()?.wrapping_sub(1);
         if n == -1 {
             return Ok(Self::Tag(r.string(32767)?));
         }
@@ -169,7 +169,7 @@ impl SlotDisplay {
                             description: r.nbt()?,
                             decal: r.bool()?,
                         },
-                        id => TrimPattern::Id(id - 1),
+                        id => TrimPattern::Id(id.wrapping_sub(1)),
                     };
                     Self::SmithingTrim {
                         base,
@@ -270,7 +270,7 @@ impl SlotDisplay {
                 base.write(w);
                 material.write(w);
                 match pattern {
-                    TrimPattern::Id(id) => w.varint(id + 1),
+                    TrimPattern::Id(id) => w.varint(id.wrapping_add(1)),
                     TrimPattern::Direct {
                         asset,
                         description,

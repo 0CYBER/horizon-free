@@ -483,6 +483,17 @@ impl<T, C: Codec<T>> Codec<Vec<T>> for List<C> {
         }
     }
 }
+/// ByteBufCodecs.list(N): as [`List`], at most N elements.
+pub struct ListN<C, const N: usize>(PhantomData<C>);
+impl<T, C: Codec<T>, const N: usize> Codec<Vec<T>> for ListN<C, N> {
+    fn read(r: &mut Reader) -> Result<Vec<T>> {
+        let n = r.count(N)?;
+        (0..n).map(|_| C::read(r)).collect()
+    }
+    fn write(v: &Vec<T>, w: &mut Writer) {
+        List::<C>::write(v, w)
+    }
+}
 /// ByteBufCodecs.optional(): a boolean presence flag.
 pub struct Opt<C>(PhantomData<C>);
 impl<T, C: Codec<T>> Codec<Option<T>> for Opt<C> {
@@ -505,10 +516,14 @@ pub struct OptVarInt;
 impl Codec<Option<i32>> for OptVarInt {
     fn read(r: &mut Reader) -> Result<Option<i32>> {
         let v = r.varint()?;
-        Ok(if v == 0 { None } else { Some(v - 1) })
+        Ok(if v == 0 {
+            None
+        } else {
+            Some(v.wrapping_sub(1))
+        })
     }
     fn write(v: &Option<i32>, w: &mut Writer) {
-        w.varint(v.map_or(0, |v| v + 1))
+        w.varint(v.map_or(0, |v| v.wrapping_add(1)))
     }
 }
 /// Vec3i.STREAM_CODEC: three var ints.
@@ -706,6 +721,34 @@ macro_rules! packet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_optional_var_int_wraps_as_java_does() {
+        let mut w = Writer::new();
+        w.varint(i32::MIN);
+        assert_eq!(
+            OptVarInt::read(&mut Reader::new(&w.data)).unwrap(),
+            Some(i32::MAX)
+        );
+        let mut w = Writer::new();
+        OptVarInt::write(&Some(i32::MAX), &mut w);
+        assert_eq!(Reader::new(&w.data).varint().unwrap(), i32::MIN);
+    }
+
+    #[test]
+    fn a_capped_list_refuses_one_more() {
+        let mut w = Writer::new();
+        List::<VarInt>::write(&(0..17).collect(), &mut w);
+        assert!(ListN::<VarInt, 16>::read(&mut Reader::new(&w.data)).is_err());
+        let mut w = Writer::new();
+        List::<VarInt>::write(&(0..16).collect(), &mut w);
+        assert_eq!(
+            ListN::<VarInt, 16>::read(&mut Reader::new(&w.data))
+                .unwrap()
+                .len(),
+            16
+        );
+    }
 
     /// A network NBT list of `n` byte tags: one root list plus `n` elements.
     fn byte_list(n: usize) -> Vec<u8> {

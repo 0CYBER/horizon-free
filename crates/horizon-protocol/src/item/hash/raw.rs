@@ -246,7 +246,7 @@ fn holder_or(
 ) -> Option<HashCode> {
     match r.varint().ok()? {
         0 => direct(r),
-        id => entry(names, registry, id - 1),
+        id => entry(names, registry, id.wrapping_sub(1)),
     }
 }
 /// `TrimMaterial.DIRECT_CODEC`.

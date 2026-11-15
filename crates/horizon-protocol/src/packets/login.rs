@@ -19,7 +19,8 @@ packet!(
     GameProfile {
         uuid: u128 => Uuid,
         name: String => StrN<16>,
-        properties: Vec<Property> => crate::buf::List<Property>,
+        // ByteBufCodecs.GAME_PROFILE_PROPERTIES: at most 16.
+        properties: Vec<Property> => crate::buf::ListN<Property, 16>,
     }
 );
 packet!(Disconnect { reason_json: String => StrN<262144> });
@@ -55,7 +56,7 @@ packet!(CustomQueryAnswer {
     transaction: i32 => VarInt,
     payload: Option<Vec<u8>> => Opt<RestN<MAX_QUERY_PAYLOAD>>,
 });
-packet!(CookieResponse { key: String => Ident, payload: Option<Vec<u8>> => Opt<Bytes> });
+packet!(CookieResponse { key: String => Ident, payload: Option<Vec<u8>> => Opt<crate::buf::BytesN<{ super::configuration::MAX_COOKIE }>> });
 
 packet_enum!(Serverbound, crate::ids::login::serverbound {
     Hello(ServerHello) = HELLO,
@@ -68,6 +69,44 @@ packet_enum!(Serverbound, crate::ids::login::serverbound {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cookies_and_profile_properties_keep_vanillas_caps() {
+        use crate::buf::{Reader, Writer};
+        let response = |n: usize| {
+            let mut w = Writer::new();
+            w.string("a:b");
+            w.bool(true);
+            w.byte_array(&vec![7; n]);
+            w.data
+        };
+        let read = |data: &[u8]| {
+            <CookieResponse as crate::buf::Codec<CookieResponse>>::read(&mut Reader::new(data))
+        };
+        assert!(read(&response(5120)).is_ok());
+        assert!(read(&response(5121)).is_err());
+        let profile = |n: usize| GameProfile {
+            uuid: 1,
+            name: "Kim".into(),
+            properties: (0..n)
+                .map(|i| Property {
+                    name: format!("p{i}"),
+                    value: String::new(),
+                    signature: None,
+                })
+                .collect(),
+        };
+        let bytes = |p: &GameProfile| {
+            let mut w = Writer::new();
+            <GameProfile as crate::buf::Codec<GameProfile>>::write(p, &mut w);
+            w.data
+        };
+        let read = |data: &[u8]| {
+            <GameProfile as crate::buf::Codec<GameProfile>>::read(&mut Reader::new(data))
+        };
+        assert!(read(&bytes(&profile(16))).is_ok());
+        assert!(read(&bytes(&profile(17))).is_err());
+    }
     use crate::packets::round_trip;
 
     #[test]

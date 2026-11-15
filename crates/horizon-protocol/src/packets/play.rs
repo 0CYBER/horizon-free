@@ -249,7 +249,7 @@ impl Codec<i32> for HolderId {
     fn read(r: &mut Reader) -> Result<i32> {
         match r.varint()? {
             0 => Err(Error::new("inline registry values are not supported")),
-            id => Ok(id - 1),
+            id => Ok(id.wrapping_sub(1)),
         }
     }
     fn write(v: &i32, w: &mut Writer) {
@@ -268,7 +268,7 @@ impl Codec<DialogHolder> for DialogHolder {
     fn read(r: &mut Reader) -> Result<Self> {
         Ok(match r.varint()? {
             0 => Self::Direct(r.nbt()?),
-            id => Self::Registry(id - 1),
+            id => Self::Registry(id.wrapping_sub(1)),
         })
     }
     fn write(v: &Self, w: &mut Writer) {
@@ -606,7 +606,7 @@ packet!(PlayerAbilities { flags: i8 => Byte, flying_speed: f32 => Float, walking
 pub struct PackedSignature;
 impl Codec<(i32, Option<Vec<u8>>)> for PackedSignature {
     fn read(r: &mut Reader) -> Result<(i32, Option<Vec<u8>>)> {
-        let id = r.varint()? - 1;
+        let id = r.varint()?.wrapping_sub(1);
         Ok(if id == -1 {
             (-1, Some(r.bytes(256)?.to_vec()))
         } else {
@@ -915,7 +915,7 @@ impl Codec<(i32, Option<(String, Option<f32>)>)> for SoundHolder {
     fn read(r: &mut Reader) -> Result<(i32, Option<(String, Option<f32>)>)> {
         let id = r.varint()?;
         if id != 0 {
-            return Ok((crate::adapter::ids::sound_event(id - 1), None));
+            return Ok((crate::adapter::ids::sound_event(id.wrapping_sub(1)), None));
         }
         let location = r.string(32767)?;
         let range = if r.bool()? { Some(r.f32()?) } else { None };

@@ -335,7 +335,11 @@ impl ClientSession {
                 let mut r = Reader::new(&payload);
                 let action = r.varint()?;
                 let mut w = Writer::new();
-                w.varint(if action == 0 { 0 } else { action + 1 });
+                w.varint(if action == 0 {
+                    0
+                } else {
+                    action.wrapping_add(1)
+                });
                 w.bytes(r.rest());
                 w.data
             }

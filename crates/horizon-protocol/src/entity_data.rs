@@ -360,7 +360,8 @@ fn legacy_rgb(r: &mut Reader) -> Result<i32> {
     let red = (r.f32()? * 255.0).floor() as i32;
     let green = (r.f32()? * 255.0).floor() as i32;
     let blue = (r.f32()? * 255.0).floor() as i32;
-    Ok((255_i32 << 24) | (red << 16) | (green << 8) | blue)
+    // ARGB.color masks each channel: a component outside 0..1 stays in its own byte.
+    Ok((255_i32 << 24) | ((red & 0xFF) << 16) | ((green & 0xFF) << 8) | (blue & 0xFF))
 }
 
 /// Serializer ids in EntityDataSerializers registration order.
@@ -1059,5 +1060,17 @@ mod tests {
                 (18, serializer::BOOLEAN, Value::Bool(true)),
             ]
         );
+    }
+
+    #[test]
+    fn a_legacy_dust_colour_keeps_each_channel_in_its_byte() {
+        let colour = |rgb: [f32; 3]| {
+            let mut w = Writer::new();
+            rgb.iter().for_each(|c| w.f32(*c));
+            legacy_rgb(&mut Reader::new(&w.data)).unwrap()
+        };
+        assert_eq!(colour([1.0, 0.5, 0.0]) as u32, 0xFFFF_7F00);
+        // 2.0 * 255 = 510 = 0x1FE: only 0xFE stays in red; -0.5 floors to -128 = 0x80 in green.
+        assert_eq!(colour([2.0, -0.5, 0.0]) as u32, 0xFFFE_8000);
     }
 }
