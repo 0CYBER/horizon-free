@@ -10,8 +10,8 @@ pub trait Hooks {
     /// after every `/reload`, on a server whose mods asked for them
     /// (`native_datapack_sync`), single player included; with no types when
     /// the server stopped sending them and the window is back on its own
-    /// recipes. A recipe the
-    /// window's own recipe book doesn't know has `book_id` -1. Client-side.
+    /// recipes. A recipe's recipe book ids are not part of what arrives:
+    /// `recipe_book_ids` answers them. Client-side.
     #[hook(
         side = "client",
         contract = "listen",

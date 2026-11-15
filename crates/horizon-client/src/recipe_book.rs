@@ -348,6 +348,13 @@ pub struct Book {
     /// number (`1 + index`): the name of a book entry kept in that group, so
     /// that the entries taken from the packet join it.
     pub server_groups: HashMap<i32, String>,
+    /// The display ids the server sent an entry for that this book numbers the
+    /// same way: the book's own entry there is the same recipe (`same_recipe`).
+    /// Only these tie a recipe's name to the number the server knows it by.
+    confirmed: std::collections::BTreeSet<i32>,
+    /// The confirmed display ids of each recipe in the book's order, made when
+    /// first asked and dropped whenever `confirmed` changes.
+    confirmed_by_recipe: std::sync::OnceLock<HashMap<String, std::sync::Arc<[i32]>>>,
 }
 pub(crate) fn crafting_category(name: &str) -> Category {
     match name {
@@ -452,6 +459,7 @@ impl Book {
             order,
             server_requirements: HashMap::new(),
             server_groups: HashMap::new(),
+            ..Default::default()
         }
     }
     /// `RecipeDisplayEntry.canCraft`: the recipe's placement ingredients
@@ -470,6 +478,9 @@ impl Book {
     /// Numbers the entries as `RecipeManager.unpackRecipeInfo` numbers the
     /// displays: every recipe in id order, each with its displays.
     pub fn set_display_ids(&mut self, index: &RecipeIndex) {
+        // New numbers: no number the server sent is known to match any more.
+        self.confirmed.clear();
+        self.confirmed_by_recipe = Default::default();
         let mut previous: Option<(String, i32)> = None;
         for e in &mut self.entries {
             let next = match &previous {
@@ -885,6 +896,31 @@ fn same_recipe(own: &Entry, server: &Entry) -> bool {
 }
 
 impl Book {
+    /// The display ids the server sent for `recipe_id` that this book numbers
+    /// the same way, in the book's order. Empty for a recipe the server sent
+    /// no entry for, for one it numbers differently from this book (the
+    /// number may name another recipe here: a name is not tied to it), and for
+    /// an unknown name.
+    pub fn confirmed_ids(&self, recipe_id: &str) -> std::sync::Arc<[i32]> {
+        let by_recipe = self.confirmed_by_recipe.get_or_init(|| {
+            let mut ids = HashMap::<String, Vec<i32>>::new();
+            for e in &self.entries {
+                if self.confirmed.contains(&e.display_id) {
+                    ids.entry(e.id.clone()).or_default().push(e.display_id);
+                }
+            }
+            ids.into_iter().map(|(id, ids)| (id, ids.into())).collect()
+        });
+        static NONE: std::sync::LazyLock<std::sync::Arc<[i32]>> =
+            std::sync::LazyLock::new(|| std::sync::Arc::from([]));
+        by_recipe.get(recipe_id).unwrap_or(&NONE).clone()
+    }
+    /// The server removed `display`: it no longer vouches for that number.
+    pub fn unconfirm(&mut self, display: i32) {
+        if self.confirmed.remove(&display) {
+            self.confirmed_by_recipe = Default::default();
+        }
+    }
     /// Puts a server's entries over this book. The book numbers its own
     /// recipes the way a server of the same recipes does, but a server with
     /// a plugin's recipes, a datapack or another order numbers them
@@ -906,7 +942,10 @@ impl Book {
             Hide,
         }
         let mut acts = Vec::new();
+        self.confirmed_by_recipe = Default::default();
         for e in entries {
+            // Each entry is judged afresh: a number stays confirmed only if this one matches.
+            self.confirmed.remove(&e.id);
             let at = self.entry_of_display(e.id);
             let act = match entry_from_packet(e, names) {
                 FromPacket::Unknown => Act::Keep,
@@ -931,8 +970,12 @@ impl Book {
                                 }
                             }
                         }
+                        // A synthetic `server:` entry is the server's own and names no recipe.
                         if !self.entries[i].id.starts_with("server:") {
                             self.server_requirements.remove(&e.id);
+                            if e.id >= 0 {
+                                self.confirmed.insert(e.id);
+                            }
                         }
                         Act::Keep
                     }
@@ -1600,6 +1643,7 @@ mod tests {
             order: HashMap::new(),
             server_requirements: HashMap::new(),
             server_groups: HashMap::new(),
+            ..Default::default()
         };
         let mut client = ClientBook::default();
         for d in 0..4 {
@@ -1643,6 +1687,7 @@ mod tests {
             order: HashMap::new(),
             server_requirements: HashMap::new(),
             server_groups: HashMap::new(),
+            ..Default::default()
         };
         let lines = |s: &ItemStack| vec![format!("Item {}", s.item), "Stick".to_owned()];
         assert!(book.collection_matches(&[0], "STI", &lines));
@@ -1853,6 +1898,7 @@ mod tests {
             order: HashMap::new(),
             server_requirements: HashMap::new(),
             server_groups: HashMap::new(),
+            ..Book::default()
         }
     }
     /// A server entry: a shapeless recipe of one gunpowder for `item`.
@@ -1963,6 +2009,106 @@ mod tests {
         let after: Vec<String> = book.entries.iter().map(|e| e.id.clone()).collect();
         assert_eq!(after, before);
         assert!(book.server_requirements.is_empty());
+    }
+    fn ids(book: &Book, recipe: &str) -> Vec<i32> {
+        book.confirmed_ids(recipe).to_vec()
+    }
+    #[test]
+    fn a_recipe_is_tied_to_the_number_a_server_sent_for_the_same_recipe() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        // The server numbers the tnt and the piston as this book does; it sent
+        // no stick.
+        book.use_server_entries(
+            &[packet_entry(10, 0, 1), packet_entry(11, 1, 1)],
+            &names(&tags),
+        );
+        assert_eq!(ids(&book, "minecraft:tnt"), [10]);
+        assert_eq!(ids(&book, "minecraft:piston"), [11]);
+        assert_eq!(ids(&book, "minecraft:stick"), Vec::<i32>::new());
+        // The book's entry at that number is what a transfer by number finds.
+        let at = book.entry_of_display(10).unwrap();
+        assert_eq!(book.entries[at].id, "minecraft:tnt");
+    }
+    #[test]
+    fn a_number_the_server_gives_another_recipe_ties_no_name_to_it() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        // This book's stick is number 12; the server's 12 is a tnt.
+        book.use_server_entries(&colliding_packet().entries, &names(&tags));
+        for recipe in ["minecraft:stick", "minecraft:tnt", "server:12"] {
+            assert_eq!(ids(&book, recipe), Vec::<i32>::new(), "{recipe}");
+        }
+        // A server of other numbers throughout.
+        let mut book = local_book();
+        book.use_server_entries(&paper_packet().entries, &names(&tags));
+        for recipe in ["minecraft:tnt", "minecraft:piston", "minecraft:stick"] {
+            assert_eq!(ids(&book, recipe), Vec::<i32>::new(), "{recipe}");
+        }
+    }
+    #[test]
+    fn a_colliding_packet_applied_twice_confirms_no_server_entry() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        // The first packet replaces this book's stick at 12 with a `server:` entry, the second
+        // matches that entry: neither ties a name to 12.
+        book.use_server_entries(&colliding_packet().entries, &names(&tags));
+        book.use_server_entries(&colliding_packet().entries, &names(&tags));
+        let at = book.entry_of_display(12).unwrap();
+        assert!(book.entries[at].id.starts_with("server:"));
+        assert_eq!(ids(&book, &book.entries[at].id), Vec::<i32>::new());
+        assert_eq!(ids(&book, "minecraft:stick"), Vec::<i32>::new());
+    }
+    #[test]
+    fn an_entry_of_an_unknown_category_withdraws_that_numbers_confirmation() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        book.use_server_entries(&[packet_entry(10, 0, 1)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:tnt"), [10]);
+        // The server's new entry at 10 is of a category this client doesn't know: unverified.
+        book.use_server_entries(&[packet_entry(10, 0, 9999)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:tnt"), Vec::<i32>::new());
+    }
+    #[test]
+    fn renumbering_the_book_drops_its_confirmations() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        book.use_server_entries(&[packet_entry(10, 0, 1)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:tnt"), [10]);
+        book.set_display_ids(&RecipeIndex::default());
+        assert_eq!(ids(&book, "minecraft:tnt"), Vec::<i32>::new());
+    }
+    #[test]
+    fn unknown_empty_and_very_long_names_have_no_ids() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        book.use_server_entries(&[packet_entry(10, 0, 1)], &names(&tags));
+        for recipe in ["", "minecraft:nope", &"x".repeat(100_000)] {
+            assert_eq!(ids(&book, recipe), Vec::<i32>::new());
+        }
+        assert_eq!(ids(&Book::default(), "minecraft:tnt"), Vec::<i32>::new());
+    }
+    #[test]
+    fn the_ids_follow_added_removed_and_replaced_entries() {
+        let mut book = local_book();
+        let tags = |_: &str| Vec::new();
+        book.use_server_entries(&[packet_entry(10, 0, 1)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:piston"), Vec::<i32>::new());
+        // Added later: the answer asked for before is not kept.
+        book.use_server_entries(&[packet_entry(11, 1, 1)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:piston"), [11]);
+        assert_eq!(ids(&book, "minecraft:tnt"), [10]);
+        // Removed: the server no longer vouches for 11.
+        book.unconfirm(11);
+        assert_eq!(ids(&book, "minecraft:piston"), Vec::<i32>::new());
+        assert_eq!(ids(&book, "minecraft:tnt"), [10]);
+        // Replaced by entries of other numbers, as after a reload.
+        let mut book = local_book();
+        book.use_server_entries(&[packet_entry(10, 0, 1)], &names(&tags));
+        assert_eq!(ids(&book, "minecraft:tnt"), [10]);
+        let mut reloaded = local_book();
+        reloaded.use_server_entries(&colliding_packet().entries, &names(&tags));
+        assert_eq!(ids(&reloaded, "minecraft:tnt"), Vec::<i32>::new());
     }
     #[test]
     fn an_entry_this_book_cannot_show_hides_the_recipe_that_has_its_number() {
