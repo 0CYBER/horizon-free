@@ -1,8 +1,8 @@
 name: sdk publish
 # The mod SDK's one publish step (docs/release-flow.md "Mod SDK"; design: the SDK design §3): the
 # release `sdk-<sha>` from the packing legs of prebuilt-game-build.yml in the caller's run (their `sdk-leg-*`
-# artifacts). Only `publish` may write; the jobs that read the legs' output have `contents: read`. Called by the daily run
-# after a green summary (daily.yml, sdk-publish) and by prebuilt-game.yml's hand dispatch.
+# artifacts). Only `publish` may write; the jobs that read the legs' output have `contents: read`. Called by the nightly
+# build once the game is built (nightly-build.yml, sdk-publish) and by prebuilt-game.yml's hand dispatch.
 # - `index` (no secrets): gathers every leg's assets once, after checking that each copy of the build data and the
 #   surface is the same (tools/prebuilt_game.py gather), compares the surface with the SDK published before it on
 #   this commit's history (horizon-stage surface-diff), writes the API source (tools/sdk_api_source.py), and writes

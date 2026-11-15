@@ -2,12 +2,8 @@
 """The Nightly, the only build Horizon ships (.github/workflows/nightly-build.yml, docs/release-flow.md "Nightly").
 
     nightly.py pick [--force]      which commit tonight's nightly builds: GitHub outputs and nightly-notes.md
-    nightly.py pick --kind snapshot   a snapshot of NIGHTLY_BASE (default main's head), a commit of main
-                                   with the gate green: built alone, published as snapshot-<date>-<short>
     nightly.py rotate              renames the current `nightly` pre-release to nightly-<its date>, frees the tag
     nightly.py prune [--days 7]    deletes the nightly-<date> pre-releases and tags older than that, nothing else
-    nightly.py prune-snapshots [--days 7]   deletes the snapshot-<date>-<short> pre-releases older than that, but
-                                   the newest; never an sdk-<sha> SDK (snapshots and nightlies reference those)
     nightly.py prune-builds [--days 7]   deletes the nightly/build-<date>-<n> branches older than that, but the
                                    newest and any a published nightly points to (Ludovic, 2026-10-27)
     nightly.py keep-source <sha> <date>  tags the nightly's commit nightly-source/<date>-<short>, for good
@@ -22,10 +18,8 @@ in their order and pushed as nightly/build-<date>-<n>; with no set, main alone. 
 this repository's checks passed (`checks` and `parity-main`), as for a release
 (release_train.green_main_head), or NIGHTLY_BASE when the caller gives that commit. It is published as the
 `nightly` pre-release; the previous one stays a week as nightly-<date>.
-On arismoko/horizon only, the base is the commit `daily-green` points to (the newest daily run that passed every
-leg, which also published its SDK: release_train.daily_green_commit), with a complete published `sdk-<sha>` release
-of the current package format for that exact SHA, whose sdk.json the Nightly carries in its signed sums. An explicit base that is any other commit, or has no SDK, fails; PR picks are
-disabled, and the final SHA is rechecked before pushing.
+On arismoko/horizon the Nightly is exactly main's commit (PR picks are refused), and the SDK built for that commit
+(`sdk-<sha>`, published first by nightly-build.yml) is its pair: its sdk.json goes into the Nightly's signed sums.
 Its notes list what reached main since the previous nightly, then the picked pull requests. Runs from main's
 checkout with `gh`; it reads and merges the branches with git and never runs anything from them.
 
@@ -196,8 +190,8 @@ def build_set(main: Ref, prs: list[dict], left_out: list[str], today: str, force
         state, _, _ = ns.load_state()
         asked_in = issue or next((x["issue"] for x in reversed(state.get("log", [])) if x.get("issue")), "")
         stop(repo, asked_in, f"the build stopped: {c.text()}")
-    if repo == "arismoko/horizon" and (sha != main.sha or not sdk_ready(sha)):
-        stop(repo, issue, f"the build stopped: final source {sha} is not the SDK-paired main commit.")
+    if repo == "arismoko/horizon" and sha != main.sha:
+        stop(repo, issue, f"the build stopped: final source {sha} is not main's commit {main.sha}, the one an SDK is built for.")
     previous = git("ls-remote", "--tags", "origin", "refs/tags/nightly").split("\t")[0] or None
     build = force or previous != sha
     name = "(unchanged)"
@@ -342,28 +336,15 @@ def require_sdk(sha: str) -> None:
 
 
 def green_base(repo: str, issue: str) -> Ref:
-    """NIGHTLY_BASE, else a green main commit from this repository's checks
-    (checks plus parity-main), never an untested fallback."""
-    explicit = os.environ.get("NIGHTLY_BASE", "").strip()
-    fork = repo == "arismoko/horizon"
-    if explicit:
-        sha = explicit
-    elif fork:
-        sha = train.daily_green_commit()
-    else:
-        sha = train.green_main_head(parity=True)
+    """The main commit a nightly builds on: NIGHTLY_BASE, else main's newest commit where checks and parity-main
+    passed (what releases ship), so a merge that breaks main never reaches a nightly: it builds on the commit before."""
+    sha = os.environ.get("NIGHTLY_BASE", "").strip() or train.green_main_head(parity=True)
     if not sha:
-        checks = "every leg of a daily run (no `daily-green` tag yet)" if fork else "checks and parity-main"
-        stop(repo, issue, f"the build stopped: no recent commit of main passed {checks}, so "
+        stop(repo, issue, "the build stopped: no recent commit of main passed both checks and parity-main, so "
                           "none is green to build on. The next build after they pass takes it.")
     if not is_ancestor(sha, "refs/remotes/origin/main"):
         stop(repo, issue, f"the build stopped: {sha[:9]} is not on main.")
     sha = git("rev-parse", sha)
-    if fork and explicit and sha != train.daily_green_commit():
-        stop(repo, issue, f"the build stopped: {sha} is not the commit `daily-green` points to; a nightly builds "
-                          "only the newest fully green daily run's commit, never an older one without its own daily run.")
-    if fork and not sdk_ready(sha):
-        stop(repo, issue, f"the build stopped: {sha} has no complete published sdk-{sha} release.")
     return Ref("main", sha, dt.datetime.fromisoformat(git("show", "-s", "--format=%cI", sha)))
 
 
@@ -380,7 +361,7 @@ def pick(force: bool) -> None:
     dry_run = os.environ.get("DRY_RUN") == "true"
     if repo == "arismoko/horizon":
         if os.environ.get("NIGHTLY_PRS", "").strip():
-            stop(repo, os.environ.get("NIGHTLY_ISSUE", ""), "fork Nightlies require an SDK-paired main commit, not PR picks")
+            stop(repo, os.environ.get("NIGHTLY_ISSUE", ""), "fork Nightlies build main's commit, which their SDK is built for, not PR picks")
         return build_set(main, [], [], today, force, dry_run)
     if spec := os.environ.get("NIGHTLY_PRS", "").strip():  # a dry run's own set; the saved one stays
         return build_set(main, requested(spec, ns.lookup(repo)), [], today, force, dry_run)
@@ -398,33 +379,6 @@ def pick(force: bool) -> None:
             return {**st, "prs": kept}, builds, "the scheduled nightly drops the merged, closed and refused"
         prs = ns.update_state(fresh, token).get("prs", [])
     build_set(main, prs, left_out, today, force, dry_run)
-
-
-def pick_snapshot() -> None:
-    """A snapshot (release.yml kind snapshot, docs/release-flow.md "Snapshot"): a commit of main whose gate passed
-    (checked again here, so a hand dispatch can't skip it), with its SDK published, built alone: no picked pull
-    requests, no build branch, no nightly-state record, no daily cap. Unchanged since the same day's snapshot of the
-    same commit, it is skipped (a tag is never replaced). It is published as snapshot-<date>-<short>, its own tag and version."""
-    git("fetch", "--quiet", "origin", "+refs/heads/main:refs/remotes/origin/main")
-    repo, dry_run = os.environ.get("GITHUB_REPOSITORY", ""), os.environ.get("DRY_RUN") == "true"
-    sha = train.channel_head("snapshot", os.environ.get("NIGHTLY_BASE", "").strip())
-    sdk = repo != "arismoko/horizon" or sdk_ready(sha)
-    if not sdk:
-        if not dry_run:
-            stop(repo, "", f"the snapshot stopped: {sha} has no complete published SDK (release.yml publishes it first).")
-        print(f"::warning::{sha} has no published SDK yet: a real snapshot publishes sdk-{sha} first; this dry run "
-              "carries no sdk.json")
-    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
-    tag = train.build_tag("snapshot", today, sha)
-    # A tag is never replaced: the same day's snapshot of the same commit is that build already (a dry run builds).
-    build = dry_run or not gh("release", "view", tag, "--json", "tagName", check=False)
-    with open("nightly-notes.md", "w") as f:
-        f.write(f"Snapshot {today} · {sha[:7]}: main at {sha}, built to test it after merge. Not a Nightly: no "
-                "launcher offers or updates to it; a developer installs it with "
-                f"`horizon-launcher install {tag}`. Its SDK is the release sdk-{sha}.\n\n{train.DISCLAIMER}\n")
-    output(build=str(build).lower(), sha=sha, short=sha[:7], source="main", date=today, version=f"snapshot-{today}",
-           nightly=f"{today} {sha[:7]}", source_tag="", tag=tag, sdk=str(sdk).lower())
-    print(f"{'build' if build else f'skip ({tag} is already published)'}: {tag} {sha}")
 
 
 def rotate() -> None:
@@ -451,28 +405,6 @@ def stale(tags: list[dict], today: dt.date, days: int) -> list[str]:
 def prune(days: int) -> None:
     tags = json.loads(gh("release", "list", "--limit", "200", "--json", "tagName,isPrerelease"))
     for tag in stale(tags, dt.datetime.now(dt.timezone.utc).date(), days):
-        gh("release", "delete", tag, "--cleanup-tag", "--yes")
-        print(f"deleted {tag}")
-
-
-SNAPSHOT = re.compile(r"^snapshot-(\d{4}-\d{2}-\d{2})-[0-9a-f]{7,40}$")
-
-
-def stale_snapshots(tags: list[dict], today: dt.date, days: int) -> list[str]:
-    """The snapshot pre-releases older than `days`, never the newest one, never anything not named
-    snapshot-<date>-<short> (an sdk-<sha> SDK above all)."""
-    snapshots = [r["tagName"] for r in tags if r["isPrerelease"] and SNAPSHOT.match(r["tagName"])]
-    if not snapshots:
-        return []
-    newest = max(snapshots, key=lambda tag: SNAPSHOT.match(tag).group(1))
-    cutoff = today - dt.timedelta(days=days)
-    return [tag for tag in snapshots
-            if tag != newest and dt.date.fromisoformat(SNAPSHOT.match(tag).group(1)) < cutoff]
-
-
-def prune_snapshots(days: int) -> None:
-    tags = json.loads(gh("release", "list", "--limit", "200", "--json", "tagName,isPrerelease"))
-    for tag in stale_snapshots(tags, dt.datetime.now(dt.timezone.utc).date(), days):
         gh("release", "delete", tag, "--cleanup-tag", "--yes")
         print(f"deleted {tag}")
 
@@ -536,9 +468,7 @@ def keep_source(sha: str, today: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    picker = sub.add_parser("pick")
-    picker.add_argument("--force", action="store_true")
-    picker.add_argument("--kind", choices=["nightly", "snapshot"], default="nightly")
+    sub.add_parser("pick").add_argument("--force", action="store_true")
     sub.add_parser("rotate")
     sub.add_parser("require-sdk").add_argument("sha")
     sub.add_parser("sdk-archives")
@@ -550,17 +480,13 @@ def main() -> None:
     previous.add_argument("sha")
     previous.add_argument("out", type=Path)
     sub.add_parser("prune").add_argument("--days", type=int, default=7)
-    sub.add_parser("prune-snapshots").add_argument("--days", type=int, default=7)
     sub.add_parser("prune-builds").add_argument("--days", type=int, default=7)
     keep = sub.add_parser("keep-source")
     keep.add_argument("sha")
     keep.add_argument("date")
     args = ap.parse_args()
     if args.cmd == "pick":
-        if args.kind == "snapshot":
-            pick_snapshot()
-        else:
-            pick(args.force)
+        pick(args.force)
     elif args.cmd == "require-sdk":
         require_sdk(args.sha)
     elif args.cmd == "sdk-archives":
@@ -577,8 +503,6 @@ def main() -> None:
         rotate()
     elif args.cmd == "prune-builds":
         prune_builds(args.days)
-    elif args.cmd == "prune-snapshots":
-        prune_snapshots(args.days)
     elif args.cmd == "keep-source":
         keep_source(args.sha, args.date)
     else:

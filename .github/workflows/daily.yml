@@ -3,11 +3,9 @@ run-name: daily ${{ inputs.commit || github.sha }}${{ github.event_name == 'work
 # The daily tier (CI tiers, owner 2026-11-13; docs/release-flow.md "Daily run"): every in-game test, once a day on
 # main's head and by a maintainer's dispatch. Its legs are the workflows that used to run on main pushes, called unchanged:
 # the ignored-tests data shards, the wasm fixture and guest stacks, fn-replace-check and the native linkage probe,
-# plus the launcher's Windows runtime-lease tests (launcher-windows-check.yml) and the prebuilt SDK of the commit
-# (prebuilt-game-build.yml), which the nightly needs.
-# The summary then moves the tag `daily-green` to the commit when every leg passed, or files one issue per failing
-# test (tools/ci/daily_summary.py), and on all green the nightly is published from that commit (release.yml).
-# Only a run on main with dry_run false writes anything: tags, issues, the nightly.
+# plus the launcher's Windows runtime-lease tests (launcher-windows-check.yml). The summary files one issue per
+# failing test (tools/ci/daily_summary.py). The Nightly and its SDK are built by nightly-build.yml, not here.
+# Only a run on main with dry_run false writes anything: issues.
 #   gh workflow run daily.yml --ref main -f dry_run=false             # the real run, as the schedule starts it
 #   gh workflow run daily.yml --ref <branch> -f dry_run=true          # writes nothing; prints what it would do
 on:
@@ -20,7 +18,7 @@ on:
         type: string
         default: ''
       dry_run:
-        description: Print the tag move, issues and nightly the run would make; write nothing
+        description: Print the issues the run would file; write nothing
         type: boolean
         default: true
       scheduled:
@@ -79,7 +77,7 @@ jobs:
         run: |
           # A branch, tag or short SHA becomes the full SHA here; every later job and the run's summary job name use it.
           sha=$(git rev-parse --verify --quiet "$COMMIT^{commit}") || { echo "::error::$COMMIT is not a commit of this repository"; exit 1; }
-          # A writing run tags, files issues and signs and publishes the SDK and the Nightly: only for main's commits.
+          # A writing run files issues: only for main's commits.
           if [ "$DRY_RUN" != true ]; then
             git fetch -q --no-tags origin +refs/heads/main:refs/remotes/origin/main
             git merge-base --is-ancestor "$sha" refs/remotes/origin/main \
@@ -108,10 +106,10 @@ jobs:
     uses: ./.github/workflows/wasm-mods.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
-  # Against this run's own SDK (the sdk job's legs, or sdk-<sha> when that is already released), signed with a
-  # throwaway key that only the debug-assertions launcher it builds trusts. It waits for the sdk job for the legs.
+  # Against the server SDK it builds (or sdk-<sha> when that is already released), signed with a throwaway key that
+  # only the debug-assertions launcher it builds trusts.
   fn-replace-check:
-    needs: [resolve, sdk]
+    needs: resolve
     if: needs.resolve.outputs.skip == 'false'
     uses: ./.github/workflows/fn-replace-check.yml
     with:
@@ -130,34 +128,22 @@ jobs:
     uses: ./.github/workflows/launcher-windows-check.yml
     with:
       commit: ${{ needs.resolve.outputs.commit }}
-  # The prebuilt SDK of this commit, built and smoked on every OS; its archives stay this run's artifacts until
-  # sdk-publish releases them after a green summary (a red daily publishes no SDK, as it publishes no nightly).
-  sdk:
-    needs: resolve
-    if: needs.resolve.outputs.skip == 'false'
-    uses: ./.github/workflows/prebuilt-game-build.yml
-    with:
-      commit: ${{ needs.resolve.outputs.commit }}
-
-  # Reads every leg's result and verdict file (never a log) and moves `daily-green` or files the issues.
+  # Reads every leg's result and verdict file (never a log) and files the issues.
   summary:
     # The resolved commit names the job: what a scheduled run's lookup (daily_summary.py --seen) matches.
     name: summary ${{ needs.resolve.outputs.commit }}${{ needs.resolve.outputs.dry_run == 'true' && ' (dry run)' || '' }}
-    needs: [resolve, shards, wasm-mods, fn-replace-check, linkage, windows-runtime-leases, sdk]
+    needs: [resolve, shards, wasm-mods, fn-replace-check, linkage, windows-runtime-leases]
     if: always() && needs.resolve.result == 'success' && needs.resolve.outputs.skip == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write  # the daily-green tag
       issues: write
       actions: read
       pull-requests: read  # which pull request closed a test's last issue, and whether this commit holds its fix
-    outputs:
-      green: ${{ steps.summary.outputs.green }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # the commit's whole history, for that check
           persist-credentials: false
       # No verdict file (a leg that never ran or died first) means that leg did not complete, never green.
       - uses: actions/download-artifact@v4
@@ -173,62 +159,3 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
           REPORTS: ${{ runner.temp }}/reports
         run: python3 tools/ci/daily_summary.py
-
-  # The SDK of the daily-green commit, from the sdk leg's assets in this run (no rebuild), signed and published as
-  # sdk-<sha> (sdk-publish.yml) before the nightly that needs it. A dry run moved no tag and publishes nothing: it
-  # stops at the summary, which says what it would do. The sdk leg skips its build when sdk-<sha> already exists:
-  # then there is nothing to publish.
-  sdk-publish:
-    needs: [resolve, summary, sdk]
-    if: needs.summary.outputs.green == 'true' && needs.resolve.outputs.dry_run == 'false' && needs.sdk.outputs.needed == 'true'
-    permissions:
-      contents: write  # the sdk-<sha> release
-    uses: ./.github/workflows/sdk-publish.yml
-    with:
-      commit: ${{ needs.resolve.outputs.commit }}
-      publish: true
-    secrets: inherit
-
-  # A failed publish files (or comments on) one issue, `Daily: sdk-publish did not complete`; the next success
-  # closes it. The summary ran before the publish, so it cannot see it.
-  sdk-publish-report:
-    needs: [resolve, summary, sdk-publish]
-    if: always() && needs.summary.outputs.green == 'true' && needs.resolve.outputs.dry_run == 'false' && contains(fromJSON('["success", "failure", "cancelled"]'), needs.sdk-publish.result)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      issues: write
-      actions: read
-      pull-requests: read  # as the summary: whether this commit holds the fix that closed the leg's last issue
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # the commit's whole history, for that check
-          persist-credentials: false
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          COMMIT: ${{ needs.resolve.outputs.commit }}
-          DRY_RUN: ${{ needs.resolve.outputs.dry_run }}
-          RESULT: ${{ needs.sdk-publish.result }}
-        run: python3 tools/ci/daily_summary.py --after sdk-publish "$RESULT"
-
-  # The nightly: the daily-green commit, published through the release train (release.yml, kind nightly), after its
-  # SDK.
-  nightly:
-    needs: [resolve, summary, sdk-publish]
-    # After the SDK, which a Nightly carries the index of: published now, or already (its leg skipped the build).
-    if: always() && needs.summary.outputs.green == 'true' && needs.resolve.outputs.dry_run == 'false' && (needs.sdk-publish.result == 'success' || needs.sdk-publish.result == 'skipped')
-    # GitHub checks what every called job asks for at startup, skipped ones too (tests/test_ci_call_permissions.py).
-    permissions:
-      # Only because release.yml holds the snapshot's SDK publish (sdk-publish.yml), which asks for it and never
-      # runs in this call (kind nightly). release.yml's nightly path writes nothing: its jobs declare read, and the
-      # Nightly is written by `nightly build`, which this only starts.
-      contents: write
-      issues: read
-      actions: write  # release.yml starts `nightly build`
-    uses: ./.github/workflows/release.yml
-    with:
-      kind: nightly
-      commit: ${{ needs.resolve.outputs.commit }}
-      dry_run: false
-      daily: true

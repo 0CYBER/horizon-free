@@ -6,13 +6,11 @@
 # but this file, which calls only the runner's sha256sum and OpenSSL; the publish job then checks the result
 # with horizon-release-sign, as launchers do.
 # EPHEMERAL=yes (dry runs) signs with a throwaway key instead and writes its public key to ephemeral.pub.
-# ALSO_FOR=<version> (Nightlies and snapshots) signs the same SHA256SUMS a second time, for
-# "horizon release <ALSO_FOR>\n", into SHA256SUMS.v2.sig, with the same key(s): the build's own version
-# (nightly-<date>-<commit> on the nightly channel, snapshot-<date>-<commit> on the snapshot channel), which current
+# ALSO_FOR=<tag> (Nightlies) signs the same SHA256SUMS a second time, for "horizon release <ALSO_FOR>\n", into
+# SHA256SUMS.v2.sig, with the same key(s): the Nightly's own version (nightly-<date>-<commit>), which current
 # launchers require, while SHA256SUMS.sig stays signed for the channel for launchers from before (docs/security.md).
 #   tools/ci/sign_release.sh v2026.10.19 dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip ...
 #   ALSO_FOR=nightly-2026-10-28-0c02067 tools/ci/sign_release.sh nightly dist/...
-#   ALSO_FOR=snapshot-2026-11-13-0c02067 tools/ci/sign_release.sh snapshot dist/...
 set -euo pipefail
 tag=$1; shift
 dir=$(dirname "$1")
@@ -28,10 +26,8 @@ for file in "$@"; do
   names+=("$(basename "$file")")
 done
 also=${ALSO_FOR:-}
-# A build's version is <channel>-<date>-<commit> for the channel signed above it (nightly or snapshot), so a
-# snapshot's version is never signed beside the nightly channel, nor the reverse.
-if [[ -n "$also" && ! ( "$tag" =~ ^(nightly|snapshot)$ && "$also" =~ ^$tag-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{7,40}$ ) ]]; then
-  echo "ALSO_FOR=$also: not a $tag-<date>-<commit> build of the nightly or snapshot channel" >&2; exit 1
+if [[ -n "$also" && ! "$also" =~ ^nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{7,40}$ ]]; then
+  echo "ALSO_FOR=$also: not a Nightly's nightly-<date>-<commit>" >&2; exit 1
 fi
 (cd "$dir" && "${sha[@]}" -- "${names[@]}") > "$dir/SHA256SUMS"
 { printf 'horizon release %s\n' "$tag"; cat "$dir/SHA256SUMS"; } > "$work/message"

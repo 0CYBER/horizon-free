@@ -44,12 +44,10 @@ the branch.
 
 Everything below runs by itself on GitHub; you only step in when something is wrong.
 
-- **The Nightly** is the only build players get. On the fork the daily run starts it when every leg is green,
-  whenever a player-facing pull request merged since the published one, with no batch or age rule, and only from the
-  commit `daily-green` points to ([release-flow](release-flow.md#daily-run)). A hand dispatch of the train
-  (`release.yml`) keeps the batch rules: one after 5 player-facing merges, or when the oldest has waited 6 hours, or
-  at once for a pull request labelled `release-now`; upstream ships only a commit where both `checks` and
-  `parity-main` passed. Who may add `release-now` is the
+- **The Nightly** is the only build players get. The train (`release.yml`, every 10 minutes) starts one after 5
+  player-facing merges, or when the oldest has waited 6 hours, or at once for a pull request labelled
+  `release-now`. Only a commit where both `checks` and `parity-main` passed ships. Its build also builds and
+  publishes the mod SDK of that commit ([release-flow](release-flow.md#mod-sdk)). Who may add `release-now` is the
   council's choice; until it decides, leave the label to the maintainer.
 - **Stopping Nightlies:** open an issue about the problem and label it `release-blocker`. Nothing is published
   while it is open, forced builds included. Close it when the fix is on main.

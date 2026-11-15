@@ -32,15 +32,15 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   they would change the vanilla look.
 - One concern per PR, at whatever size it needs; no line limit on the fork. Labels: `feature` (players get something new), `skip-release` (they see no
   change), none for a fix. Agents never add `release-now`: the maintainer decides it. Merges reach players through the
-  nightly, published by the daily run when every leg is green ([docs/release-flow.md](docs/release-flow.md#daily-run)).
+  nightly ([docs/release-flow.md](docs/release-flow.md#game-releases)).
 - **CI tiers** ([CONTRIBUTING.md](CONTRIBUTING.md#ci-tiers)): every PR push and main push runs `checks`
   (`verify`: format, lint and unit tests only; `launcher`); the ignored-test shards, the wasm
-  fixture, `fn-replace-check`, the SDK build and its linkage probe run once a day (`daily.yml`). A new test that needs prepared
+  fixture, `fn-replace-check` and the linkage probe run once a day (`daily.yml`). A new test that needs prepared
   resources, boots the game, starts a child process, uses the network or a compiled wasm fixture, or takes 2 s or
   more is `#[ignore]`d with a row in `tools/ci/ignored-tests/`; say in the PR when you could not run it. A daily red
   becomes an issue listing the suspect PRs, fixed by an ordinary PR. Existing tests still in `verify` that need
-  resources, a child process or the network are being moved by the next change of #4022. Builds: snapshot (a commit of main, gate green; published as
-  `snapshot-<date>-<short>`, which no launcher offers), nightly (published by a fully green daily run), release (cut from a nightly).
+  resources, a child process or the network are being moved by the next change of #4022. Builds: nightly (a commit of main with checks and parity-main green,
+  published with its mod SDK), release (cut from a nightly).
 - **No hardcoded user-facing strings.** Keep UI translation-ready from the start. In the launcher (`launcher/`), wrap visible text with `tr("...")` or `trf("... {arg} ...", &[("arg", &val)])` from `crate::i18n` instead of raw string literals or `format!`. In the game, use translation keys (`Text::tr`, `lang::get`), never hardcoded English strings.
 - **Claim before you start**: comment `/claim` on the issue (no issue yet: open one, then claim it). An assigned
   issue is taken, and so is one labelled `in progress` (claimed on Discord): pick another. `/unclaim` when you stop;

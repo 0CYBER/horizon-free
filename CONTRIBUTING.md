@@ -128,7 +128,7 @@ network and are still in `verify` are being moved by the next change of #4022.
 | Tier | Runs on | What |
 | --- | --- | --- |
 | Push | every pull request push, pushes to main | `checks`: `verify` (format, lint, unit tests only, the test-tier and mod API surface checks), `launcher` |
-| Daily | once a day on main's head | every test that boots the game or needs prepared resources, the wasm fixture, `fn-replace-check`, the SDK build and its linkage probe |
+| Daily | once a day on main's head | every test that boots the game or needs prepared resources, the wasm fixture, `fn-replace-check` and the linkage probe |
 
 **A unit test** uses no prepared resources, boots no game, starts no child process, uses no network and no compiled
 wasm fixture, and finishes in under 2 seconds. Any other test is a daily test: it carries `#[ignore]` and a row in
@@ -146,12 +146,11 @@ still fails by binary name. Move a network test with `tools/ci/move_to_daily.py`
   welcome: mark it `#[ignore]` with its policy row, and say in the pull request that it has not run if you could not
   run it.
 - If a daily run fails on a test your pull request added or touched, an issue is filed that names the test, where it
-  panicked and the pull requests merged since the last green daily run. The fix is an ordinary pull request.
+  panicked. The fix is an ordinary pull request.
 
-Three kinds of build: a **snapshot**, from main's head on request, needs only the gate tier and no in-game tests
-(it is published as `snapshot-<date>-<short>`, which no launcher offers, to test packages and platforms after a
-merge); the **nightly** is published by the daily run when every part of it is green; a **release** is cut from a
-nightly.
+Two kinds of build: the **nightly** is built from a commit of main whose checks and parity-main passed, together with
+the mod SDK of that commit, and is published at once; a **release** is cut from a nightly. The daily run does not
+hold either back.
 
 Reviews on this fork read the diff, the design and CI; they do not run your change. So for anything a player or a
 mod author can see, please start the game once and try it (single player is enough:
@@ -209,8 +208,7 @@ it (edited on every push, never repeated): talk to its author in the thread befo
 Who reviews and merges: the Horizon Team, on CI for ordinary pull requests; risky ones (saves, network, world
 generation, the launcher's updates) wait for a local proof first ([merging](docs/release-flow.md#merging)).
 
-Merges reach players through the nightly, which the daily run publishes only when every in-game test passed
-([release flow](docs/release-flow.md)).
+Merges reach players through the nightly ([release flow](docs/release-flow.md)).
 How agents, checks, releases and signed updates keep this safe: [security](docs/security.md).
 
 ### Large pull requests

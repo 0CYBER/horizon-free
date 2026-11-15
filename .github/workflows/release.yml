@@ -1,57 +1,21 @@
 name: release
-# Game builds (docs/release-flow.md). Two kinds go through here (CI tiers, owner 2026-11-13):
-# - nightly: the daily run (daily.yml) calls this when every leg is green, with that commit, and then publishes
-#   whenever a player-facing pull request merged since the published Nightly (no batch-size or age rule); by hand it
-#   defaults to `daily-green` and keeps the batch rules. It refuses any commit but the one `daily-green` points to.
-# - snapshot: a maintainer's dispatch on main, for main's head or an explicit commit of main; it needs only the checks
-#   workflow's gate (verify, launcher) passed on that exact commit (pending is not passed). It builds that
-#   commit's SDK (prebuilt-game-build.yml), publishes it as sdk-<sha> (sdk-publish.yml, skipped when it exists),
-#   then starts `nightly build` with kind=snapshot, which builds, signs and publishes the game as the pre-release
-#   snapshot-<date>-<short> on its own tag: never the `nightly` tag or channel, never `daily-green`, no daily tests.
-# tools/release_train.py decides (`--channel`): a Nightly when a pull request merged since the published Nightly
-# changed what players run (and the batch rules below), and `nightly build` (nightly-build.yml) builds, signs and
-# publishes it under the `nightly` tag and channel. RELEASES_PAUSED=1 (repository variable) stops it; so does an
-# open issue labelled release-blocker, forced runs too (nightly-build.yml checks again before publishing). One
-# Nightly build at a time, at most 12 a day (release-now and force=true pass the cap). No `vX.Y.Z` game release is
-# made any more. Only a run on main with dry_run false publishes; a snapshot's dry run builds the SDK and the game
-# (a `nightly build` dry run, throwaway key) and publishes nothing.
-#   gh workflow run release --ref <branch> -f kind=nightly            # dry run: checks and decides, starts nothing
-#   gh workflow run release -f kind=nightly -f dry_run=false          # on main: the Nightly of daily-green
-#   gh workflow run release -f kind=snapshot -f dry_run=false         # on main: a snapshot of main's head
+# Automatic game releases (docs/release-flow.md). Horizon ships only the Nightly since 2026-10-28 (Ludovic): this
+# workflow is the batch train that decides when a new Nightly goes out, and `nightly build` (nightly-build.yml) builds,
+# signs and publishes it. After every green `checks` run on main, every 10 minutes (so a batch waiting for merges to
+# settle goes out without another merge) and by hand, tools/release_train.py decides, for a commit whose checks and
+# parity-main (the vanilla harnesses on main) both passed: a Nightly when 5 pull requests merged since the published
+# Nightly changed what players run and the newest merged 5 minutes ago, or when the oldest has waited 6 hours, or at
+# once for a pull request labelled release-now. RELEASES_PAUSED=1 (repository variable) stops it; so does an open issue
+# labelled release-blocker, forced runs too (nightly-build.yml checks again before publishing). One Nightly build at a
+# time, at most 12 a day (release-now and force=true pass the cap). No `vX.Y.Z` game release is made any more.
+#   gh workflow run release --ref <branch>                       # dry run: decides, starts nothing
+#   gh workflow run release -f dry_run=false -f force=true       # on main: a Nightly now, whatever the rules say
+# Since 2026-11-15 the train runs only by hand: no Nightly goes out on its own after merges or on a timer.
 on:
-  workflow_call:
-    inputs:
-      kind:
-        type: string
-        default: nightly
-      commit:
-        type: string
-        default: ''
-      dry_run:
-        type: boolean
-        default: true
-      force:
-        type: boolean
-        default: false
-      daily:
-        description: The daily run's call for its daily-green commit (no batch-size or age rule)
-        type: boolean
-        default: false
   workflow_dispatch:
     inputs:
-      kind:
-        description: snapshot (main's head, gate green) or nightly (the daily-green commit only)
-        type: choice
-        options: [snapshot, nightly]
-        default: snapshot
-      commit:
-        description: The commit to build (default main's head for a snapshot, daily-green for a nightly)
-        type: string
-        default: ''
       dry_run:
-        description: >-
-          Publish nothing. A nightly checks and decides only and starts no build; a snapshot also builds the SDK and
-          the game (a nightly build dry run, throwaway key) and says what it would publish
+        description: Decide only; start no Nightly build
         type: boolean
         default: true
       force:
@@ -62,23 +26,24 @@ permissions:
   contents: read
   # The open release-blocker issues (decide).
   issues: read
-  # The checks workflow's gate jobs and the nightly build runs (decide).
+  # The checks, parity-main and nightly build runs (decide).
   actions: read
 concurrency:
-  # One release at a time. A dry run publishes nothing, so it can't race a real release: it gets a group of its own.
-  # In the shared group, a release queued behind it replaced it as the pending run and GitHub cancelled it (#2779's
-  # dry run, 2026-10-27).
-  # Snapshots queue among themselves, never ahead of or behind a nightly.
-  group: game-release${{ inputs.kind == 'snapshot' && '-snapshot' || '' }}${{ (inputs.dry_run || github.ref != 'refs/heads/main') && '-dry-run' || '' }}
+  # One release at a time. A hand-started dry run publishes nothing, so it can't race a real release: it gets a
+  # group of its own. In the shared group, a release queued behind it replaced it as the pending run and GitHub
+  # cancelled it (#2779's dry run, 2026-10-27), which happens all day while releases go out in batches.
+  group: game-release${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '-dry-run' || '' }}
   cancel-in-progress: false
 jobs:
   decide:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       release: ${{ steps.decide.outputs.release }}
       head: ${{ steps.decide.outputs.head }}
-      tag: ${{ steps.decide.outputs.tag }}
       urgent: ${{ steps.decide.outputs.urgent }}
       dry_run: ${{ steps.mode.outputs.dry_run }}
     steps:
@@ -86,27 +51,25 @@ jobs:
         with:
           fetch-depth: 0
       - id: mode
-        # A dry run never publishes; a run off main is always one, whatever its input says.
-        run: echo "dry_run=${{ inputs.dry_run || github.ref != 'refs/heads/main' }}" >> "$GITHUB_OUTPUT"
+        # A dry run never publishes; a hand-started run off main is always one.
+        run: echo "dry_run=${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main') }}" >> "$GITHUB_OUTPUT"
       - id: decide
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASES_PAUSED: ${{ vars.RELEASES_PAUSED }}
-          KIND: ${{ inputs.kind }}
-          # Empty: daily-green for a nightly, main's head for a snapshot (release_train.py --channel).
-          HEAD_SHA: ${{ inputs.commit }}
+          # The commit whose checks or parity-main just passed; a dry run builds the branch it was started on;
+          # otherwise main's newest commit with green checks and parity-main.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || (steps.mode.outputs.dry_run == 'true' && github.sha) || '' }}
           FORCE: ${{ inputs.force && 'yes' || '' }}
-          DAILY: ${{ inputs.daily && 'yes' || '' }}
         run: |
-          python3 tools/release_train.py decide --kind game --channel "$KIND" ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} ${DAILY:+--daily} | tee decision.json
-          echo "### $KIND: $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/release_train.py decide --kind game ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} | tee decision.json
+          echo "### $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
 
   nightly:
     # The Nightly is the release: nightly-build.yml builds the decided commit plus the reviewers' picks, signs it for
     # the Nightly channel and publishes it once its smoke test passed and no release-blocker is open.
     needs: decide
-    if: inputs.kind == 'nightly' && needs.decide.outputs.release == 'true' && needs.decide.outputs.dry_run != 'true'
+    if: needs.decide.outputs.release == 'true' && needs.decide.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -119,51 +82,3 @@ jobs:
         run: |
           gh workflow run nightly-build.yml --repo "$GITHUB_REPOSITORY" --ref main -f base="$HEAD_SHA" -f urgent="$URGENT"
           echo "### Started \`nightly build\` on ${HEAD_SHA:0:9}" >> "$GITHUB_STEP_SUMMARY"
-
-  # A snapshot: the commit's SDK, built in this run by prebuilt-game-build.yml's legs and signed and published as
-  # sdk-<sha> by sdk-publish.yml from their artifacts (a dry run: throwaway key, nothing published), then the game,
-  # built and published by `nightly build` (kind snapshot) once the SDK is out.
-  snapshot-sdk:
-    needs: decide
-    if: inputs.kind == 'snapshot' && needs.decide.outputs.release == 'true'
-    uses: ./.github/workflows/prebuilt-game-build.yml
-    with:
-      commit: ${{ needs.decide.outputs.head }}
-
-  snapshot-sdk-publish:
-    needs: [decide, snapshot-sdk]
-    # Not when sdk-<sha> exists already: then the legs built nothing (output `needed` false).
-    if: inputs.kind == 'snapshot' && needs.decide.outputs.release == 'true' && needs.snapshot-sdk.outputs.needed == 'true'
-    permissions:
-      contents: write  # the sdk-<sha> release (its publish job; a dry run writes nothing)
-    uses: ./.github/workflows/sdk-publish.yml
-    with:
-      commit: ${{ needs.decide.outputs.head }}
-      publish: ${{ needs.decide.outputs.dry_run != 'true' }}
-    secrets: inherit
-
-  snapshot:
-    needs: [decide, snapshot-sdk, snapshot-sdk-publish]
-    # The SDK built, and its publish (or dry run) passed, or was skipped because sdk-<sha> exists.
-    if: >-
-      always() && inputs.kind == 'snapshot' && needs.decide.outputs.release == 'true' &&
-      needs.snapshot-sdk.result == 'success' &&
-      (needs.snapshot-sdk-publish.result == 'success' || needs.snapshot-sdk-publish.result == 'skipped')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: write  # starts `nightly build`
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ needs.decide.outputs.head }}
-          TAG: ${{ needs.decide.outputs.tag }}
-          DRY_RUN: ${{ needs.decide.outputs.dry_run }}
-        run: |
-          gh workflow run nightly-build.yml --repo "$GITHUB_REPOSITORY" --ref main -f kind=snapshot -f base="$HEAD_SHA" \
-            -f dry_run="$DRY_RUN"
-          if [ "$DRY_RUN" = true ]; then
-            echo "### Dry run: started \`nightly build\` (kind snapshot, dry run) on ${HEAD_SHA:0:9}; a real run would publish sdk-$HEAD_SHA (unless it exists) and the pre-release $TAG" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "### Published sdk-$HEAD_SHA (or it existed); started \`nightly build\` (kind snapshot) for $TAG" >> "$GITHUB_STEP_SUMMARY"
-          fi

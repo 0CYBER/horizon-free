@@ -1,12 +1,11 @@
 name: nightly build
-# A snapshot's run is named `snapshot build <commit>`: release_train.nightly_building tells the kinds apart by it.
-run-name: ${{ inputs.kind == 'snapshot' && format('snapshot build {0}', inputs.base) || format('nightly build{0}', inputs.request && format(' (request {0})', inputs.request) || '') }}
+run-name: nightly build${{ inputs.request && format(' (request {0})', inputs.request) || '' }}
 # The Nightly, the only build Horizon ships since 2026-10-28 (docs/release-flow.md "Nightly"; Ludovic). When the batch
-# train decides (release.yml, with the commit as `base`; the daily run calls it when every leg is green), and when a
-# trusted reviewer asks (`/nightly 2640 2642`, nightly-command.yml), it builds main plus the pull requests the
-# reviewers picked, merged in order (tools/ci/nightly_set.py), or main alone with none picked. Main is its newest
-# commit where checks passed (or the `base` input), on the fork the commit `daily-green` points to, and no
-# Nightly is published while a release-blocker is open. It publishes the result as the `nightly` pre-release, which every launcher and
+# train decides (release.yml, with the commit as `base`), once a night, and when a trusted
+# reviewer asks (`/nightly 2640 2642`, nightly-command.yml), it builds main plus the pull requests the reviewers
+# picked, merged in order (tools/ci/nightly_set.py), or main alone with none picked. Main is its newest commit where
+# checks and parity-main passed (or the `base` input), as for a release, and no Nightly is published while a
+# release-blocker is open. It publishes the result as the `nightly` pre-release, which every launcher and
 # `horizon-server update` install. The previous nightly stays a week as nightly-<date>.
 #
 # Why the signing key never meets the pull requests' code:
@@ -14,7 +13,7 @@ run-name: ${{ inputs.kind == 'snapshot' && format('snapshot build {0}', inputs.b
 #   so none of their files reaches the disk and no hook, filter or script of theirs runs. It refuses any pull
 #   request that changes a path CODEOWNERS gives to Ludovic (this folder, tools/ci/, the signing and update code),
 #   pushes the merge as nightly/build-<date>-<n> and saves the set on the nightly-state branch.
-# - This file, game-build.yml and every script below run from main's copy: every dispatch names --ref main, and
+# - This file, game-build.yml and every script below run from main's copy: a schedule runs the default branch, and
 #   `uses: ./…` takes the caller's commit. A picked pull request's own .github/ is never read.
 # - `build` (game-build.yml, `trusted: false`) never reaches a release's tools: its macOS jobs run on the runner
 #   that already runs pull requests' parity jobs, never the release runner; its Rust cache has its own key and is
@@ -27,28 +26,20 @@ run-name: ${{ inputs.kind == 'snapshot' && format('snapshot build {0}', inputs.b
 #   names the channel ("horizon release nightly"), so a nightly's signature can't pass for a release's.
 # - `publish` verifies the signature with main's horizon-release-sign, checks the smoke test, and only then moves
 #   the tag. Like sign, it never executes what build produced.
+# - The mod SDK of the Nightly's commit is built by `sdk` (prebuilt-game-build.yml, no secret) and released as
+#   `sdk-<sha>` by `sdk-publish` (sdk-publish.yml) with the same signing keys, before the Nightly. `sdk-index` fetches
+#   its sdk.json, checked against the release's signed SHA256SUMS, and `sign` signs it in the Nightly's sums, so the
+#   Nightly and its SDK name each other. `publish` refuses to go on without the SDK (nightly.py require-sdk).
 # - The source ships with the build: `pick` writes horizon-source.tar.gz with `git archive` (git objects again, nothing
 #   run), `sign` signs it with the builds, and `publish` attaches it and tags the commit nightly-source/<date>-<short>
 #   for good (the dated release and the build branch go after 7 days; native mods pin the commit: docs/native-mods.md).
 #   gh workflow run "nightly build"                     # now (skips when the pick is the same commit as last night's)
 #   gh workflow run "nightly build" -f force=true       # build and publish even if unchanged
 #   gh workflow run "nightly build" -f dry_run=true     # build and sign with a throwaway key, publish nothing
-# Dry picks use only nightly/dry-run-<run>-<attempt>, removed by always-run cleanup; nightly-state and real build
-# numbering/quota stay untouched, including on a failed build. A hard-killed cleanup may leave only that isolated ref.
-# By dispatch only: the daily run starts it through release.yml when every leg is green (CI tiers, owner 2026-11-13).
-# kind=snapshot (release.yml kind snapshot, after it published the commit's SDK): the same build and signing for one
-# commit of main with the gate green, alone (no picks, no build branch, no nightly-state, no daily cap, no
-# release-blocker hold), signed for the `snapshot` channel and its version, and published as the pre-release
-# snapshot-<date>-<short> ("Snapshot <date> · <short>"); never the `nightly` tag, its rotation or nightly-source tags.
-# The newest snapshot, and every snapshot of the last 7 days, stay (nightly.py prune-snapshots).
+# Since 2026-11-15 only by hand (release.yml, `/nightly`, or a dispatch): no scheduled build.
 on:
   workflow_dispatch:
     inputs:
-      kind:
-        description: nightly (the `nightly` channel) or snapshot (a commit of main, its own tag; release.yml starts it)
-        type: choice
-        options: [nightly, snapshot]
-        default: nightly
       force:
         description: Build and publish even if tonight's pick is the commit already published
         type: boolean
@@ -70,7 +61,7 @@ on:
         type: string
         default: ''
       base:
-        description: The commit of main to build on (default main's newest with green checks; on the fork the daily-green commit, and only it)
+        description: The commit of main to build on (default main's newest with green checks and parity-main)
         type: string
         default: ''
       urgent:
@@ -82,8 +73,7 @@ permissions:
 concurrency:
   # One build at a time. A newer request replaces one still waiting: it builds the set as it is by then, so no pick
   # is lost.
-  # Snapshots have groups of their own (real and dry apart), so one never replaces a waiting Nightly.
-  group: ${{ inputs.kind == 'snapshot' && format('snapshot-build{0}', inputs.dry_run && '-dry-run' || '') || 'nightly-build' }}
+  group: nightly-build
   cancel-in-progress: false
 jobs:
   pick:
@@ -103,7 +93,6 @@ jobs:
       version: ${{ steps.pick.outputs.version }}
       nightly: ${{ steps.pick.outputs.nightly }}
       source_tag: ${{ steps.pick.outputs.source_tag }}
-      tag: ${{ steps.pick.outputs.tag }}
       dry_run: ${{ steps.mode.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
@@ -122,18 +111,15 @@ jobs:
           NIGHTLY_PRS: ${{ inputs.prs }}
           NIGHTLY_BASE: ${{ inputs.base }}
           NIGHTLY_URGENT: ${{ inputs.urgent }}
-          KIND: ${{ inputs.kind }}
         run: |
-          set -euo pipefail
-          python3 tools/ci/nightly.py pick --kind "$KIND" ${FORCE:+--force} | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 tools/ci/nightly.py pick ${FORCE:+--force} | tee -a "$GITHUB_STEP_SUMMARY"
           { echo; cat nightly-notes.md; } >> "$GITHUB_STEP_SUMMARY"
-      - name: Old nightly/build-* branches deleted (real runs only)
+      - name: Old nightly/build-* branches deleted (scheduled runs only)
         # Ludovic, 2026-10-27: older than 7 days, but never the newest build or one a published nightly points to;
         # nothing but nightly/build-* (nightly.py stale_builds, tests/test_nightly.py).
-        if: steps.mode.outputs.dry_run != 'true' && inputs.kind == 'nightly'
+        if: github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           { echo "### nightly/build-* branches"; python3 tools/ci/nightly.py prune-builds --days 7; } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: The source of the build (horizon-source.tar.gz)
@@ -153,21 +139,6 @@ jobs:
           name: nightly-notes
           path: nightly-notes.md
           retention-days: 3
-      # The fork's Nightly is exactly an SDK's build, and carries that SDK's index in its signed sums, so a game's build
-      # id and SDK come from the game release itself (checked against sdk-<sha>'s SHA256SUMS here).
-      - name: The SDK index the Nightly carries (sdk.json of sdk-<sha>)
-        if: steps.pick.outputs.build == 'true' && github.repository == 'arismoko/horizon' && steps.pick.outputs.sdk != 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.pick.outputs.sha }}
-        run: python3 tools/ci/nightly.py sdk-index "$SHA" sdk.json
-      - uses: actions/upload-artifact@v7
-        if: steps.pick.outputs.build == 'true' && github.repository == 'arismoko/horizon' && steps.pick.outputs.sdk != 'false'
-        with:
-          name: horizon-sdk-index
-          path: sdk.json
-          if-no-files-found: error
-          retention-days: 3
 
   build:
     needs: pick
@@ -177,12 +148,58 @@ jobs:
       ref: ${{ needs.pick.outputs.sha }}
       version: ${{ needs.pick.outputs.version }}
       nightly: ${{ needs.pick.outputs.nightly }}
-      kind: ${{ inputs.kind }}
       developer_id: false
       trusted: false  # it can hold unreviewed pull requests: their own cache key, never saved, not the release runner
 
+  # The mod SDK of this commit, built and smoked on every OS; sdk-publish releases it once the game's build is green.
+  sdk:
+    needs: pick
+    if: needs.pick.outputs.build == 'true'
+    uses: ./.github/workflows/prebuilt-game-build.yml
+    with:
+      commit: ${{ needs.pick.outputs.sha }}
+
+  # Signed with the release key and created as sdk-<sha>, before the Nightly that carries its index. A dry run signs
+  # with a throwaway key and publishes nothing; a commit whose sdk-<sha> exists is not built or released again.
+  sdk-publish:
+    needs: [pick, build, sdk]
+    if: needs.sdk.outputs.needed == 'true'
+    permissions:
+      contents: write  # the sdk-<sha> release
+    uses: ./.github/workflows/sdk-publish.yml
+    with:
+      commit: ${{ needs.pick.outputs.sha }}
+      publish: ${{ needs.pick.outputs.dry_run != 'true' }}
+    secrets: inherit
+
+  sdk-index:
+    needs: [pick, sdk-publish]
+    if: always() && needs.pick.outputs.build == 'true' && needs.pick.outputs.dry_run != 'true' && contains(fromJSON('["success", "skipped"]'), needs.sdk-publish.result)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The SDK index the Nightly carries (sdk.json of sdk-<sha>)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.pick.outputs.sha }}
+        run: python3 tools/ci/nightly.py sdk-index "$SHA" sdk.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: horizon-sdk-index
+          path: sdk.json
+          if-no-files-found: error
+          retention-days: 3
+
   sign:
-    needs: [pick, build]
+    needs: [pick, build, sdk-index]
+    # A dry run has no sdk-index (nothing is published for it to read).
+    if: always() && needs.build.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.sdk-index.result)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The key's only job: main's sign_release.sh hashes the archives and signs with the runner's OpenSSL.
@@ -203,29 +220,20 @@ jobs:
         # nightly-<date>-<commit>, the version the release title names, which current launchers and servers
         # require (docs/security.md, "Nightly signatures"). The publish step titles the release from the same values.
         env:
-          RELEASE_SIGNING_KEY: ${{ needs.pick.outputs.dry_run != 'true' && secrets.RELEASE_SIGNING_KEY || '' }}
-          RELEASE_SIGNING_KEY_NEXT: ${{ needs.pick.outputs.dry_run != 'true' && secrets.RELEASE_SIGNING_KEY_NEXT || '' }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
           EPHEMERAL: ${{ needs.pick.outputs.dry_run == 'true' && 'yes' || '' }}
-          # The channel (nightly or snapshot) and the build's version on it: sign_release.sh refuses a mismatch.
-          KIND: ${{ inputs.kind }}
-          ALSO_FOR: ${{ inputs.kind }}-${{ needs.pick.outputs.date }}-${{ needs.pick.outputs.short }}
+          ALSO_FOR: nightly-${{ needs.pick.outputs.date }}-${{ needs.pick.outputs.short }}
         run: |
           # Windows ARM64's build may fail without holding the Nightly (game-build.yml): then it is left out.
           arm64=(); if [[ -f dist/horizon-windows-arm64.zip ]]; then arm64=(dist/horizon-windows-arm64.zip)
           else echo "::warning::horizon-windows-arm64.zip is missing: SHA256SUMS goes out without it"; fi
           musl=(); if [[ -f dist/horizon-linux-musl-x86_64.tar.gz ]]; then musl=(dist/horizon-linux-musl-x86_64.tar.gz)
           else echo "::warning::horizon-linux-musl-x86_64.tar.gz is missing: SHA256SUMS goes out without it"; fi
-          macos_x64=(dist/horizon-macos-x64.zip)
-          if [[ "$KIND" == snapshot && ! -f dist/horizon-macos-x64.zip ]]; then
-            macos_x64=()
-            echo "::warning::horizon-macos-x64.zip is missing: the snapshot goes out without it"
-          fi
-          # The fork's Nightly carries its SDK's index (the pick job fetched it); upstream's has no SDK.
-          # A snapshot's dry run of a commit whose SDK is not published yet has none (nightly.py pick_snapshot warns).
-          sdk=(); if [[ "$GITHUB_REPOSITORY" == arismoko/horizon && ( "$KIND" == nightly || -f dist/sdk.json ) ]]; then sdk=(dist/sdk.json); fi
-          bash tools/ci/sign_release.sh "$KIND" dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
+          sdk=(); [[ -f dist/sdk.json ]] && sdk=(dist/sdk.json)
+          bash tools/ci/sign_release.sh nightly dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
             ${arm64[@]+"${arm64[@]}"} ${musl[@]+"${musl[@]}"} ${sdk[@]+"${sdk[@]}"} \
-            dist/horizon-macos-arm64.zip ${macos_x64[@]+"${macos_x64[@]}"} dist/horizon-server-linux-x86_64.tar.gz \
+            dist/horizon-macos-arm64.zip dist/horizon-macos-x64.zip dist/horizon-server-linux-x86_64.tar.gz \
             dist/horizon-source.tar.gz
       - uses: actions/upload-artifact@v7
         with:
@@ -254,18 +262,19 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          # Not the SDK's artifacts (sdk-leg-*, sdk-release, sdk-signature): their SHA256SUMS is not the Nightly's.
+          pattern: '!sdk-*'
           merge-multiple: true
       - name: The signatures, checked as launchers check them
         env:
           EPHEMERAL: ${{ needs.pick.outputs.dry_run == 'true' && 'yes' || '' }}
           DATE: ${{ needs.pick.outputs.date }}
           SHORT: ${{ needs.pick.outputs.short }}
-          KIND: ${{ inputs.kind }}
         run: |
           key=(); [[ -n "$EPHEMERAL" ]] && key=(--key "$(cat dist/ephemeral.pub)")
-          cargo run --locked --quiet -p horizon-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag "$KIND" --publishing "${key[@]}" dist
+          cargo run --locked --quiet -p horizon-release-sign -- verify --tag nightly --publishing "${key[@]}" dist
           # The version's own signature, which current launchers require: the title below names the same version.
-          cargo run --locked --quiet -p horizon-release-sign -- verify --repository "$GITHUB_REPOSITORY" --tag "${KIND}-${DATE}-${SHORT}" \
+          cargo run --locked --quiet -p horizon-release-sign -- verify --tag "nightly-${DATE}-${SHORT}" \
             --signature SHA256SUMS.v2.sig --publishing "${key[@]}" dist
       - name: Ready to publish (the smoke test drew a world, no release-blocker is open)
         # Right before publishing, as for a release: an issue labelled while the builds ran still holds it. A dry run
@@ -273,17 +282,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ needs.pick.outputs.dry_run }}
-          # A release-blocker holds the Nightly players get, not a snapshot built to test main.
-          BLOCKERS: ${{ inputs.kind == 'nightly' && 'yes' || '' }}
         run: |
-          if ! python3 tools/release_train.py gate --kind game --smoke dist/smoke-test.json ${BLOCKERS:+--blockers}; then
-            # The fork uses a dry run as release-readiness evidence: a missing/failed smoke
-            # report must fail it, not produce a misleading green workflow.
-            [[ "$DRY_RUN" == true && "$GITHUB_REPOSITORY" != arismoko/horizon ]] || { echo "::error::Nothing published"; exit 1; }
+          if ! python3 tools/release_train.py gate --kind game --smoke dist/smoke-test.json --blockers; then
+            [[ "$DRY_RUN" == true ]] || { echo "::error::Nothing published"; exit 1; }
             echo "::warning::A real run would publish nothing"
           fi
       - name: Publish as the `nightly` pre-release
-        if: needs.pick.outputs.dry_run != 'true' && inputs.kind == 'nightly'
+        if: needs.pick.outputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ needs.pick.outputs.sha }}
@@ -305,7 +310,7 @@ jobs:
           else
             echo "::warning::horizon-windows-arm64.zip is missing: the Nightly goes out without it (ARM64 launchers install the x64 build)"
           fi
-          sdk=(); if [[ "$GITHUB_REPOSITORY" == arismoko/horizon ]]; then sdk=("dist/sdk.json#The mod SDK of this build (sdk.json; its files are the release sdk-$SHA)"); fi
+          sdk=(); [[ -f dist/sdk.json ]] && sdk=("dist/sdk.json#The mod SDK of this build (sdk.json; its files are the release sdk-$SHA)")
           musl=()
           if [[ -f dist/horizon-linux-musl-x86_64.tar.gz ]]; then
             musl=("dist/horizon-linux-musl-x86_64.tar.gz#Game files for musl Linux (horizon-linux-musl-x86_64.tar.gz)")
@@ -314,7 +319,6 @@ jobs:
           fi
           # A pre-release, never GitHub's latest: the latest stays the last vX.Y.Z, which launchers and servers from
           # before the Nightly-only switch keep (they don't read Nightlies).
-          python3 tools/ci/nightly.py require-sdk "$SHA"
           gh release create nightly --prerelease --latest=false --target "$SHA" \
             --title "Nightly $DATE · ${SHA:0:7}" --notes-file dist/nightly-notes.md \
             "dist/horizon-linux-x86_64.tar.gz#Game files the launcher installs (Nightly): Linux (horizon-linux-x86_64.tar.gz)" \
@@ -328,70 +332,11 @@ jobs:
             dist/SHA256SUMS "${signature[@]}" dist/smoke-test.json
           python3 tools/ci/nightly.py keep-source "$SHA" "$DATE"
           python3 tools/ci/nightly.py prune --days 7
-      - name: Publish as the snapshot-<date>-<short> pre-release
-        if: needs.pick.outputs.dry_run != 'true' && inputs.kind == 'snapshot'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ needs.pick.outputs.sha }}
-          SHORT: ${{ needs.pick.outputs.short }}
-          DATE: ${{ needs.pick.outputs.date }}
-          TAG: ${{ needs.pick.outputs.tag }}
-        run: |
-          set -euo pipefail
-          python3 tools/ci/nightly.py require-sdk "$SHA"
-          # The title is what launchers parse (strictly) into the version SHA256SUMS.v2.sig is signed for: the tag.
-          [[ "${SHA:0:7}" == "$SHORT" && "$TAG" == "snapshot-$DATE-$SHORT" ]] || { echo "::error::the build's commit isn't the one signed"; exit 1; }
-          # Archive presence records what was actually built, not an unsupported platform promise.
-          printf '\n## Platform build results\n\n' >> dist/nightly-notes.md
-          for archive in horizon-linux-x86_64.tar.gz horizon-server-linux-x86_64.tar.gz horizon-windows-x64.zip \
-              horizon-macos-arm64.zip horizon-linux-musl-x86_64.tar.gz horizon-windows-arm64.zip horizon-macos-x64.zip; do
-            if [[ -f "dist/$archive" ]]; then
-              printf -- '- Built: `%s`.\n' "$archive"
-            else
-              printf -- '- Failed or unavailable; not published: `%s`.\n' "$archive"
-            fi
-          done >> dist/nightly-notes.md
-          # Exactly the files SHA256SUMS lists (the sign job left out a missing optional archive), and the signatures.
-          files=(); while read -r _ name; do files+=("dist/${name#\*}"); done < dist/SHA256SUMS
-          # A pre-release, never GitHub's latest, under its own tag: no launcher lists or updates to it.
-          gh release create "$TAG" --prerelease --latest=false --target "$SHA" \
-            --title "Snapshot $DATE · $SHORT" --notes-file dist/nightly-notes.md \
-            "${files[@]}" dist/SHA256SUMS dist/SHA256SUMS.sig dist/SHA256SUMS.v2.sig dist/smoke-test.json
-          python3 tools/ci/nightly.py prune-snapshots --days 7
       - name: Dry run, the nightly that would be published
         if: needs.pick.outputs.dry_run == 'true'
         run: |
-          echo "Would publish ${{ inputs.kind == 'snapshot' && needs.pick.outputs.tag || 'nightly' }} at ${{ needs.pick.outputs.sha }} (${{ needs.pick.outputs.source }})"
+          echo "Would publish nightly at ${{ needs.pick.outputs.sha }} (${{ needs.pick.outputs.source }})"
           ls -l dist
-
-  cleanup-dry-run:
-    # No consumer needs the temporary checkout ref after build/sign/publish finish.
-    # Derive it independently of pick's outputs: pick may fail after pushing it.
-    needs: [pick, build, sign, publish]
-    if: always() && github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main')
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    steps:
-      - name: Remove this dry run's temporary checkout ref
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Re-run failed jobs increments the attempt without rerunning a successful pick.
-          # Earlier attempts of this same run have no remaining consumers either.
-          for ((attempt=1; attempt<=GITHUB_RUN_ATTEMPT; attempt++)); do
-            ref="nightly/dry-run-${GITHUB_RUN_ID}-${attempt}"
-            status=$(curl --silent --show-error --request DELETE \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header 'Accept: application/vnd.github+json' \
-              --output "$RUNNER_TEMP/dry-ref-cleanup.json" --write-out '%{http_code}' \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/git/refs/heads/$ref")
-            case "$status" in
-              204|404) echo "Temporary ref $ref removed or already absent" ;;
-              *) echo "Temporary ref cleanup failed: HTTP $status"; exit 1 ;;
-            esac
-          done
 
   answer:
     # Tells the thread that asked for this build how it ended. A conflict `pick` already explained there.

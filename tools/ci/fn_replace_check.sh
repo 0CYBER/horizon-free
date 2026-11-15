@@ -8,7 +8,7 @@
 # its exported layout fingerprint is changed to zero, and its integrity hash is updated.
 # SDK_BASE is a folder holding one `sdk-<commit>/` release folder (the SDK's archives, `sdk.json`, `SHA256SUMS` and its
 # signature) of this checkout's HEAD: the launcher reads its SDK from there (HORIZON_SDK_BASE), checking the signature
-# as it does a release's. The daily run signs its own SDK with a throwaway key and passes the public key in
+# as it does a release's. The daily run signs the SDK it builds with a throwaway key and passes the public key in
 # HORIZON_SDK_TRUSTED_KEY, which only a launcher built with debug_assertions trusts (horizon_release_sign::sdk_keys_for);
 # a published release needs no key. With RESOURCES (a prepared `horizon-client/26.3` folder), the server starts, takes `/tick` commands
 # and stops; every mixin helper prints a line starting `fnr:`.

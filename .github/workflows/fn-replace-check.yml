@@ -5,13 +5,12 @@ name: fn-replace-check
 # a mod with registry dependencies, and the refusals by name. So a change that breaks native mods
 # fails here and not on a player's machine (#1102). Build and link only: no game runs and no vanilla
 # data is read. Checked by the daily run and by dispatch, never on pull requests or main pushes.
-# The launcher takes its SDK from an SDK release folder and checks its signature, so the check gets one: the
-# daily run's own SDK (its `sdk-leg-*` artifacts), gathered and indexed as sdk-publish.yml does and signed with a
-# throwaway key made for this run, whose public half the launcher trusts through HORIZON_SDK_TRUSTED_KEY. Only a
-# launcher built with debug_assertions reads that variable (horizon_release_sign::sdk_keys_for), so the launcher
-# here is built that way, and no release key enters this workflow. A commit whose sdk-<commit> is already released
-# (the daily run's sdk job then built nothing) is checked against that release, which needs no key; a hand dispatch
-# of anything else builds the server SDK itself.
+# The launcher takes its SDK from an SDK release folder and checks its signature, so the check gets one: the server
+# SDK of the commit, built here, gathered and indexed as sdk-publish.yml does and signed with a throwaway key made
+# for this run, whose public half the launcher trusts through HORIZON_SDK_TRUSTED_KEY. Only a launcher built with
+# debug_assertions reads that variable (horizon_release_sign::sdk_keys_for), so the launcher here is built that way,
+# and no release key enters this workflow. A commit whose sdk-<commit> is already released (a Nightly's) is checked
+# against that release, which needs no key.
 on:
   # The daily run (daily.yml) calls it with the commit to check; a maintainer dispatches it on a branch that changes
   # what it builds.
@@ -104,15 +103,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          COMMIT_INPUT: ${{ inputs.commit }}
         run: |
-          # `published`: sdk-<commit> is released (the daily run's sdk job built nothing). `legs`: the daily run's own
-          # sdk-leg-* artifacts. `build`: a hand dispatch builds the server SDK here.
+          # `published`: sdk-<commit> is released. `build`: the server SDK is built here.
           if gh release view "sdk-$(git rev-parse HEAD)" > /dev/null 2>&1; then source=published
-          elif [ -n "$COMMIT_INPUT" ]; then source=legs
           else source=build; fi
           echo "source=$source" | tee -a "$GITHUB_OUTPUT"
-      - name: Server SDK, warnings denied (hand dispatch)
+      - name: Server SDK, warnings denied
         if: steps.sdk.outputs.source == 'build'
         # Release with ThinLTO as published, but 16 codegen units instead of 1: the same features,
         # flags, exports and link, built in parallel. A fault only one unit's inlining shows first
@@ -122,12 +118,6 @@ jobs:
         run: |
           python3 tools/prebuilt_game.py build "$FNR_SCRATCH/prebuilt" --server
           python3 tools/prebuilt_game.py pack "$FNR_SCRATCH/prebuilt" "$FNR_SCRATCH/legs/sdk-leg-server"
-      # The daily run's SDK: the Linux legs only, the ones this check reads (sdk-publish.yml gathers every leg).
-      - uses: actions/download-artifact@v4
-        if: steps.sdk.outputs.source == 'legs'
-        with:
-          pattern: sdk-leg-linux*
-          path: ${{ env.FNR_SCRATCH }}/legs
       - name: The API source's wasm32 check
         if: steps.sdk.outputs.source != 'published'
         run: rustup target add wasm32-unknown-unknown

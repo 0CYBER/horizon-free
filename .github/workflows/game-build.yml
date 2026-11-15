@@ -17,10 +17,6 @@ on:
         description: The version built in (HORIZON_VERSION), e.g. 0.2.81 or nightly-2026-10-28
         type: string
         required: true
-      kind:
-        description: Build channel; snapshots require only SDK-supported platforms
-        type: string
-        default: release
       nightly:
         description: A nightly's "<date> <short sha>" (HORIZON_NIGHTLY), shown by the game; empty for a release
         type: string
@@ -127,10 +123,10 @@ jobs:
   build:
     needs: [runner-configuration, exporters]
     name: build ${{ matrix.name }}
-    # Windows ARM64 and musl stay optional. Snapshots also leave Intel macOS optional: only the SDK's
-    # platforms are required there. Nightlies and releases retain their existing Intel macOS requirement.
-    # Optional failed legs still run; signing omits their absent archives, and snapshot notes name them.
-    continue-on-error: ${{ matrix.name == 'windows-arm64' || matrix.name == 'linux-musl' || (inputs.kind == 'snapshot' && matrix.name == 'macos-x64') }}
+    # Windows ARM64 and musl are new: a failure never holds the other platforms' release (the signing job
+    # needs this job, and a failed entry of it would fail it). The release steps leave the missing
+    # optional archives out with a warning.
+    continue-on-error: ${{ matrix.name == 'windows-arm64' || matrix.name == 'linux-musl' }}
     strategy:
       fail-fast: false
       matrix:

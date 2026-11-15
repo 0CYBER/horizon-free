@@ -107,21 +107,6 @@ console.log(JSON.stringify(eval(expression)));
                 expression = condition.replace("runner.environment", repr(environment))
                 self.assertEqual(eval(expression, {"__builtins__": {}}), environment == "self-hosted")
 
-    @unittest.skipUnless(os.name == "posix", "The pick step runs in Bash on Linux")
-    def test_pick_failure_preserves_its_error_without_missing_notes_noise(self):
-        block = NIGHTLY.read_text().split("      - id: pick\n", 1)[1].split("      - name:", 1)[0]
-        shell = textwrap.dedent(block.split("        run: |\n", 1)[1])
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            python = root / "python3"
-            python.write_text("#!/bin/sh\necho 'no green checks main base'\nexit 23\n")
-            python.chmod(0o755)
-            summary = root / "summary"
-            result = subprocess.run(["bash", "-c", shell], cwd=root, env={**os.environ, "FORCE": "", "KIND": "nightly", "GITHUB_STEP_SUMMARY": str(summary), "PATH": str(root) + os.pathsep + os.environ["PATH"]}, text=True, capture_output=True)
-            self.assertEqual(result.returncode, 23)
-            self.assertIn("no green checks main base", summary.read_text())
-            self.assertNotIn("nightly-notes.md", result.stderr)
-
     @unittest.skipUnless(shutil.which("bash"), "The runner guard executes in Bash")
     def test_missing_release_runner_guard_fails_clearly(self):
         guard = dict(jobs(GAME.read_text()))["runner-configuration"]
@@ -169,22 +154,6 @@ console.log(JSON.stringify(eval(expression)));
             self.assertEqual(report["frames"], 1500)
             self.assertRegex(report["display"], r"^:[0-9]+$")
             self.assertIsNone(report["wayland"])
-
-    @unittest.skipUnless(os.name == "posix", "The signing gate runs in Bash on Linux")
-    def test_fork_dry_run_cannot_pass_without_real_smoke_report(self):
-        text = NIGHTLY.read_text().split("      - name: Ready to publish", 1)[1].split("      - name:", 1)[0]
-        shell = text.split("        run: |\n", 1)[1]
-        shell = "\n".join(line[10:] for line in shell.splitlines())
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / "tools").symlink_to(ROOT / "tools", target_is_directory=True)
-            # No gh request is needed to prove a missing smoke report fails even in dry-run mode.
-            stub = root / "gh"
-            stub.write_text("#!/bin/sh\nprintf '[]'\n")
-            stub.chmod(0o755)
-            result = subprocess.run(["bash", "-c", shell], cwd=root, env={**os.environ, "DRY_RUN": "true", "GITHUB_REPOSITORY": "arismoko/horizon", "PATH": str(root) + os.pathsep + os.environ["PATH"]}, text=True, capture_output=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("smoke", result.stdout.lower())
 
 
 if __name__ == "__main__":

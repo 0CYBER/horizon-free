@@ -3,8 +3,8 @@ name: prebuilt game
 # mods against it with rustc alone, in seconds, instead of rebuilding the game. Built with the pinned Rust
 # (tools/ci/rust-version, which the launcher builds native mods with), because rustc reads only metadata from its own
 # version. Only compiler outputs go in: tools/prebuilt_game.py refuses anything else, and nothing here reads vanilla
-# data. The build is prebuilt-game-build.yml, which the daily run calls for its commit and publishes once every leg is
-# green (daily.yml, sdk-publish); this workflow is the hand dispatch of the same two steps for main's head. The mod
+# data. The build is prebuilt-game-build.yml, which nightly-build.yml calls for the Nightly's commit and publishes with it
+# (sdk-publish.yml); this workflow is the hand dispatch of the same two steps for main's head. The mod
 # SDK is published as the signed release sdk-<sha> (sdk-publish.yml), a prerelease never marked latest; exact-SHA
 # SDKs are retained, as Nightlies and installed games keep referencing older builds. A commit whose sdk-<sha> exists
 # stops early. A run on another branch builds, smokes, packs and signs with a throwaway key, and publishes nothing.
