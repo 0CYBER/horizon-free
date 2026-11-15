@@ -16,6 +16,11 @@ macro_rules! particle_types {
                 let name = name.strip_prefix("minecraft:").unwrap_or(name);
                 match name { $($name => Some(ParticleType::$variant),)* _ => None }
             }
+            /// The registry id (`minecraft:<name>`), which `commands.particle.success`
+            /// names (`BuiltInRegistries.PARTICLE_TYPE.getKey`).
+            pub fn id(self) -> String {
+                format!("minecraft:{}", self.name())
+            }
         }
     };
 }

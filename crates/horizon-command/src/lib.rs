@@ -1254,4 +1254,6 @@ impl Dispatcher {
 }
 
 #[cfg(test)]
+mod particle_option_tests;
+#[cfg(test)]
 mod tests;

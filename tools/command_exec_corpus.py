@@ -2546,6 +2546,31 @@ def world_misc():
         cmd('/particle minecraft:flame 4 300 4 0 0 0 0 1 force @e[type=minecraft:pig]'),
         cmd('/particle minecraft:dust{color:[1.0,0.0,0.0],scale:1.0} 4 210 4 0 0 0 0 5 force @s'),
         cmd('/particle minecraft:block{block_state:"minecraft:stone"} 4 210 4 1 1 1 0.1 10 normal @a'),
+        # ParticleArgument decodes the options through the type's codec: a scale
+        # outside [0.01;4.0], a colour that is neither an int nor three floats and
+        # an item id the registry does not hold all fail before the particle is
+        # made; the success line names the type's registry key, not the typed text.
+        cmd('/particle flame 4 210 4'),
+        cmd('/particle minecraft:dust{color:0,scale:10} 4 210 4'),
+        cmd('/particle minecraft:dust{color:0,scale:0.01} 4 210 4'),
+        cmd('/particle minecraft:dust{color:"red",scale:1} 4 210 4'),
+        cmd('/particle minecraft:item{item:"minecraft:not_an_item"} 4 210 4'),
+        cmd('/particle minecraft:item{item:{}} 4 210 4'),
+        cmd('/particle minecraft:item{item:"minecraft:stone"} 4 210 4'),
+        cmd('/particle minecraft:item{item:{id:"minecraft:stone"}} 4 210 4'),
+        cmd('/particle minecraft:dust{color:[1,"a",2],scale:1} 4 210 4'),
+        cmd('/particle minecraft:dust{color:[1,2,3,4],scale:1} 4 210 4'),
+        cmd('/particle minecraft:dust{color:0} 4 210 4'),
+        cmd('/particle minecraft:dust{color:0,scale:"x"} 4 210 4'),
+        cmd('/particle minecraft:dust_color_transition{from_color:0,to_color:0,scale:10} 4 210 4'),
+        cmd('/particle minecraft:item{item:{id:"minecraft:air"}} 4 210 4'),
+        cmd('/particle minecraft:item 4 210 4'),
+        cmd('/particle minecraft:item{item:{id:"minecraft:stone",count:0}} 4 210 4'),
+        # Every field's error, joined last to first.
+        cmd('/particle minecraft:dust{color:"red",scale:10} 4 210 4'),
+        cmd('/particle minecraft:dust{color:"red"} 4 210 4'),
+        cmd('/particle minecraft:item{item:{id:"minecraft:not_an_item",count:0}} 4 210 4'),
+        cmd('/particle minecraft:item{item:{id:"minecraft:stone",count:"x"}} 4 210 4'),
         cmd('/playsound minecraft:block.note_block.harp master @s'),
         cmd('/playsound minecraft:block.note_block.harp record @s 4 210 4 1 2 0'),
         cmd('/playsound minecraft:block.note_block.harp master @a 1000 210 1000'),

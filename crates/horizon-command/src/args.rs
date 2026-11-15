@@ -1,6 +1,7 @@
 //! Argument types (Brigadier's and Minecraft's `ArgumentType`s): parsing with
 //! the vanilla error messages and completion suggestions.
 use super::{CmdResult, CommandError, Context, Reader, SuggestionsBuilder};
+use horizon_world::nbt::Tag;
 
 pub use horizon_client_core::registries::{
     CustomCompletionAction, Registries, RegistryIds, modify_custom_completions,
@@ -993,36 +994,191 @@ fn particle_fields(id: &str) -> &'static [&'static str] {
         _ => &[],
     }
 }
-/// The particle type's codec over the options (MapCodec field errors, newest first).
-fn particle_options(id: &str, t: &horizon_world::nbt::Tag) -> Result<(), String> {
-    use super::codec::{get, no_key, not_map, snbt};
+/// The particle type's codec over the options (`RecordCodecBuilder` decodes
+/// the fields last to first, and every field's error joins with `; `).
+fn particle_options(id: &str, t: &horizon_world::nbt::Tag, reg: &Registries) -> Result<(), String> {
+    use super::codec::{get, no_key, not_map};
     let horizon_world::nbt::Tag::Compound(map) = t else {
         return Err(not_map(t));
     };
-    let missing: Vec<String> = particle_fields(id)
-        .iter()
-        .rev()
-        .filter(|f| get(map, f).is_none())
-        .map(|f| no_key(f, t))
-        .collect();
-    if !missing.is_empty() {
-        return Err(missing.join("; "));
-    }
-    if particle_fields(id) == ["block_state"]
-        && let Some(state) = get(map, "block_state")
-        && !matches!(state, horizon_world::nbt::Tag::String(_))
-    {
-        // withAlternative(BlockState.CODEC, the block id codec).
-        let first = match state {
-            horizon_world::nbt::Tag::Compound(_) => {
-                super::codec::either("Not a string".into(), no_key("id", state))
-            }
-            _ => not_map(state),
+    let checks = particle_value_checks(id);
+    let mut errors: Vec<String> = Vec::new();
+    for field in particle_fields(id).iter().rev() {
+        let Some(value) = get(map, field) else {
+            errors.push(no_key(field, t));
+            continue;
         };
-        let _ = snbt;
-        return Err(super::codec::either(first, "Not a string".into()));
+        // The option class's own codec: a value it refuses fails the argument
+        // before the particle is made.
+        if let Some((_, check)) = checks.iter().find(|(name, _)| name == field)
+            && let Err(message) = check(value, reg)
+        {
+            errors.push(message);
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+/// How one option field's codec reads its value.
+type OptionCheck = fn(&Tag, &Registries) -> Result<(), String>;
+/// The option fields whose codec validates the value (declaration order).
+fn particle_value_checks(id: &str) -> &'static [(&'static str, OptionCheck)] {
+    const SCALE: (&str, OptionCheck) = ("scale", scale_option);
+    const ITEM: (&str, OptionCheck) = ("item", item_stack_option);
+    const BLOCK_STATE: (&str, OptionCheck) = ("block_state", block_state_option);
+    match id.trim_start_matches("minecraft:") {
+        "block" | "block_marker" | "falling_dust" | "dust_pillar" | "block_crumble" => {
+            &[BLOCK_STATE]
+        }
+        "dust" => &[("color", rgb_color_option), SCALE],
+        "dust_color_transition" => &[
+            ("from_color", rgb_color_option),
+            ("to_color", rgb_color_option),
+            SCALE,
+        ],
+        "item" => &[ITEM],
+        _ => &[],
+    }
+}
+/// `BlockParticleOption.CODEC`: `BlockState.CODEC`, or a block id.
+fn block_state_option(t: &Tag, _reg: &Registries) -> Result<(), String> {
+    use super::codec::{either, no_key, not_map};
+    if matches!(t, Tag::String(_)) {
+        return Ok(());
+    }
+    let first = match t {
+        Tag::Compound(_) => either("Not a string".into(), no_key("id", t)),
+        _ => not_map(t),
+    };
+    Err(either(first, "Not a string".into()))
+}
+/// `Codec.FLOAT`'s value for an option (`getNumberValue().floatValue()`).
+fn float_option(t: &Tag) -> Option<f32> {
+    Some(match t {
+        Tag::Byte(v) => f32::from(*v),
+        Tag::Short(v) => f32::from(*v),
+        Tag::Int(v) => *v as f32,
+        Tag::Long(v) => *v as f32,
+        Tag::Float(v) => f32::from_bits(*v),
+        Tag::Double(v) => f64::from_bits(*v) as f32,
+        _ => return None,
+    })
+}
+/// `Codec.INT`'s value for an option (`getNumberValue().intValue()`).
+fn int_option(t: &Tag) -> Option<i32> {
+    Some(match t {
+        Tag::Byte(v) => i32::from(*v),
+        Tag::Short(v) => i32::from(*v),
+        Tag::Int(v) => *v,
+        Tag::Long(v) => *v as i32,
+        Tag::Float(v) => f32::from_bits(*v) as i32,
+        Tag::Double(v) => f64::from_bits(*v) as i32,
+        _ => return None,
+    })
+}
+/// `ScalableParticleOptionsBase.SCALE`.
+fn scale_option(t: &Tag, _reg: &Registries) -> Result<(), String> {
+    let Some(v) = float_option(t) else {
+        return Err("Not a number".into());
+    };
+    if (0.01..=4.0).contains(&v) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Value must be within range [0.01;4.0]: {}",
+            horizon_client_core::snbt::java_float(v)
+        ))
+    }
+}
+/// `ExtraCodecs.RGB_COLOR_CODEC`: an int, or `VECTOR3F` (three floats).
+fn rgb_color_option(t: &Tag, _reg: &Registries) -> Result<(), String> {
+    use super::codec::{either, is_number, not_list};
+    if is_number(t) {
+        return Ok(());
+    }
+    let Tag::List(items) = t else {
+        return Err(either("Not a number".into(), not_list(t)));
+    };
+    // Codec.FLOAT.listOf(): the elements that parse, and one error for each
+    // that does not; then Util.fixedSize(list, 3).
+    let bad = items.iter().filter(|i| !is_number(i)).count();
+    let parsed = items.len() - bad;
+    let mut message: Vec<String> = std::iter::repeat_n("Not a number".to_owned(), bad).collect();
+    if parsed != 3 {
+        message.push("Input is not a list of 3 elements".into());
+        let message = message.join("; ");
+        // fixedSize keeps the first three floats when it has them: that error
+        // carries a value, so the alternative reports it alone.
+        return Err(if parsed > 3 {
+            message
+        } else {
+            either("Not a number".into(), message)
+        });
+    }
+    if message.is_empty() {
+        Ok(())
+    } else {
+        Err(message.join("; "))
+    }
+}
+/// `Item.CODEC` (`BuiltInRegistries.ITEM.holderByNameCodec`, never air).
+fn item_option(t: &Tag, reg: &Registries) -> Result<(), String> {
+    let Tag::String(raw) = t else {
+        return Err("Not a string".into());
+    };
+    let raw = raw.to_string_lossy();
+    let Some(id) = parse_identifier(&raw) else {
+        return Err(format!("Not a valid resource location: {raw}"));
+    };
+    if !reg.ids("minecraft:item").contains(&id) {
+        return Err(format!(
+            "Unknown registry key in ResourceKey[minecraft:root / minecraft:item]: {id}"
+        ));
+    }
+    if id == "minecraft:air" {
+        return Err("Item must not be minecraft:air".into());
     }
     Ok(())
+}
+/// `ItemStackTemplate.CODEC`: `{id, count, components}` or a bare item id.
+fn item_stack_option(t: &Tag, reg: &Registries) -> Result<(), String> {
+    use super::codec::{either, get, no_key, not_map};
+    let Tag::Compound(map) = t else {
+        // Not a map, then Item.CODEC over the value itself.
+        let first = not_map(t);
+        return match item_option(t, reg) {
+            Ok(()) => Ok(()),
+            Err(second) => Err(either(first, second)),
+        };
+    };
+    // The fields decode last to first, so `count` (ExtraCodecs.intRange(1, 99))
+    // reports before `id` (Item.CODEC). Only a `count` error on its own keeps
+    // the record's partial value: then the alternative reports it alone, and
+    // every other failure joins both branches.
+    let count_error = match get(map, "count") {
+        None => None,
+        Some(count) => match int_option(count) {
+            Some(n) if (1..=99).contains(&n) => None,
+            Some(n) => Some(format!("Value must be within range [1;99]: {n}")),
+            None => Some("Not a number".to_owned()),
+        },
+    };
+    let id_error = match get(map, "id") {
+        None => Some(no_key("id", t)),
+        Some(id) => item_option(id, reg).err(),
+    };
+    match (count_error, id_error) {
+        (None, None) => Ok(()),
+        (Some(count), None) => Err(count),
+        (count, id) => {
+            let first: Vec<String> = count.into_iter().chain(id).collect();
+            let second = item_option(t, reg).expect_err("a compound is not an item id");
+            Err(either(first.join("; "), second))
+        }
+    }
 }
 /// TimeArgument units.
 fn time_unit(unit: &str) -> Option<i32> {
@@ -1605,7 +1761,7 @@ impl ArgType {
                 } else {
                     horizon_world::nbt::Tag::Compound(Default::default())
                 };
-                if let Err(m) = particle_options(&id, &options) {
+                if let Err(m) = particle_options(&id, &options, reg) {
                     return Err(CommandError::tr("particle.invalidOptions", &[&m]));
                 }
                 Arg::Str(reader.string[start..reader.cursor].to_owned())
