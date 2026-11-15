@@ -143,7 +143,8 @@ fn guest_tick_brackets_sleep_cooldowns_pickups_and_death() {
             );
             assert_eq!(observations[2].diamonds, 0);
             drop(observations);
-            assert_eq!(game.lan.as_ref().unwrap().hub.guests[0].sleep_timer, 100);
+            // The missing bed is a living-entity continuation failure: immediate wake.
+            assert_eq!(game.lan.as_ref().unwrap().hub.guests[0].sleep_timer, 0);
             assert!(game.lan.as_ref().unwrap().hub.guests[0].bed.is_none());
             assert!(game.inventory.iter().all(Option::is_none));
             heard.lock().unwrap().clear();
