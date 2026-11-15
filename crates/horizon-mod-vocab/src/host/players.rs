@@ -405,18 +405,21 @@ pub trait PlayersBackend {
     #[access(WorldOnly)]
     fn player_may_fly(&self, player: PlayerRef) -> Option<bool>;
     /// Side: server.
-    /// `IPlayerExtension.isCloseEnough(entity, distance)` (NeoForge): whether the point where
-    /// the ray from the player's eyes to the middle of the entity's box enters the box lies
-    /// within `distance` of the eyes, or, when the ray misses (the eyes inside the box), whether
-    /// the player's position lies within `distance` of the entity's. For checking a menu, a use
-    /// or a ranged interaction the way the game does. None for a stale player or entity, one
-    /// whose box Horizon doesn't keep, or one in another level.
+    /// Whether `entity` is within the player's reach by the server's rule
+    /// `reach` ([`EntityReach`]): from the player's eyes to the closest point
+    /// of the entity's box, with the rule's own buffer, the range from the
+    /// player's `minecraft:entity_interaction_range` (3.0, 5.0 in creative)
+    /// and, for an attack, the main hand's `attack_range` component. With the
+    /// eyes inside the box the distance is 0; there is no ray and no other
+    /// fallback. This is the server's check, not the client's pick. None for a
+    /// stale player or entity, one whose box Horizon doesn't keep, or one in
+    /// another level.
     #[access(WorldOnly)]
-    fn player_is_close_enough(
+    fn player_within_entity_reach(
         &self,
         player: PlayerRef,
         entity: EntityRef,
-        distance: f64,
+        reach: EntityReach,
     ) -> Option<bool>;
     /// Side: server.
     /// The value of statistic `stat_type` for `key` (`minecraft:stone`,
