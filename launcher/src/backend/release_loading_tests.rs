@@ -38,6 +38,7 @@ fn baseline(load: impl Fn() -> Result<serde_json::Value, String>) -> (Vec<Releas
             &installed_fixture(),
         ),
         launcher: launcher_update(&parse_releases(&list, LAUNCHER_ASSET, is_launcher_tag)),
+        launcher_error: None,
     };
     (releases, updates)
 }
@@ -47,7 +48,7 @@ fn shared(load: impl FnOnce() -> Result<serde_json::Value, String>) -> (Vec<Rele
     let updates = releases_and_updates_with(
         load,
         installed_fixture,
-        |list| parse_releases(list, LAUNCHER_ASSET, is_launcher_tag),
+        |list| Ok(parse_releases(list, LAUNCHER_ASSET, is_launcher_tag)),
         |r| releases = Some(r.unwrap()),
     )
     .unwrap();
@@ -98,7 +99,7 @@ fn publish_games_before_older_launcher_fallback() {
         || Ok(serde_json::json!([{"tag_name": "v2026.10.14", "assets": []}])),
         Vec::new,
         |list| {
-            launcher_releases_in_with(list, |url| {
+            Ok(launcher_releases_in_with(list, |url| {
                 assert_eq!(events.borrow().first(), Some(&"releases"));
                 events.borrow_mut().push("fallback");
                 if url.contains("matching-refs") {
@@ -111,7 +112,7 @@ fn publish_games_before_older_launcher_fallback() {
                         }]}),
                     )
                 }
-            })
+            }))
         },
         |r| {
             assert_eq!(r.unwrap()[0].tag, "v2026.10.14");
@@ -134,7 +135,7 @@ fn failed_launcher_fallback_keeps_game_result_and_checks_stay_fresh() {
                 Ok(serde_json::json!([{"tag_name": format!("v2026.10.{day}")}]))
             },
             Vec::new,
-            |list| launcher_releases_in_with(list, |_| Err("offline".into())),
+            |list| Ok(launcher_releases_in_with(list, |_| Err("offline".into()))),
             |r| published = Some(r.unwrap()),
         )
         .unwrap();
@@ -179,6 +180,7 @@ fn benchmark_shared_startup_response() {
                         LAUNCHER_ASSET,
                         is_launcher_tag,
                     )),
+                    launcher_error: None,
                 }
             });
             (releases.join().unwrap(), updates.join().unwrap())
