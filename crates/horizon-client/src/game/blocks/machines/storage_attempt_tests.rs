@@ -1183,7 +1183,7 @@ fn dropper_reserves_source_across_writable_insertion_notices() {
                 if replacement {
                     let view = game.containers().view(HOPPER, false).unwrap();
                     assert_eq!(
-                        game.containers().get(&view, 0).unwrap().item,
+                        game.containers().get(&view, 0).unwrap().item.as_ref(),
                         "minecraft:stick"
                     );
                 }
