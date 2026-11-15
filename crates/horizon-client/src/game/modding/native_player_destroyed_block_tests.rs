@@ -514,7 +514,7 @@ fn put_chest(game: &mut super::Game<'_>, pos: [i32; 3]) {
 /// `block_entity` reads the chest the removal took out of the world; the handle is stale once
 /// the break completes.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::new(Mutex::new(None));
@@ -598,7 +598,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
 /// A ravager's break (a mob's, not a player's) names the ravager as `breaker_entity` and no
 /// `breaker` UUID; a break the level makes (no entity) names neither.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_drops_names_the_mob_that_broke_the_block() {
     use horizon_client::mobs::Mob;
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -644,7 +644,7 @@ fn block_drops_names_the_mob_that_broke_the_block() {
 /// A listener that panics inside the event leaves nothing held: the handle it was given is stale
 /// after the break unwinds.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_drops_holds_nothing_after_a_listener_panics() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::new(Mutex::new(None));
