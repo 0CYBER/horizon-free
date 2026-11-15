@@ -17,6 +17,7 @@ fn sniffer(types: &super::super::MobTypes) -> Mob {
 }
 
 #[test]
+#[ignore = "daily"]
 fn silent_sniffer_mutes_the_state_and_seed_sounds() {
     let ran = with_test_world(&[], |w, types| {
         let states = [
@@ -70,5 +71,5 @@ fn silent_sniffer_mutes_the_state_and_seed_sounds() {
             );
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

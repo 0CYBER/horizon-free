@@ -3427,6 +3427,7 @@ mod eat_block_tests {
     /// goal still runs (`EntityEvent` 10) and still shears the coat, and the
     /// grass stays.
     #[test]
+    #[ignore = "daily"]
     fn the_eat_goal_turns_grass_to_dirt_only_with_mob_griefing() {
         let Some(on) = sheep_events(true, false) else {
             return;
@@ -3471,6 +3472,7 @@ mod eat_block_tests {
     /// NeoForge's `canEntityGrief`: with the rule off, a mod's yes for this
     /// sheep lets it eat the grass (and only through `MobWorld::can_grief`).
     #[test]
+    #[ignore = "daily"]
     fn a_mods_grief_answer_overrides_the_rule_for_its_mob() {
         let Some(off) = sheep_events_hooked(false, false, Some(&GriefFor1)) else {
             return;
@@ -3489,6 +3491,7 @@ mod eat_block_tests {
     /// disappears with the rule on and stays with it off, while the goal eats
     /// either way.
     #[test]
+    #[ignore = "daily"]
     fn the_eat_goal_breaks_short_grass_only_with_mob_griefing() {
         let Some(on) = sheep_events(true, true) else {
             return;
@@ -3712,6 +3715,7 @@ mod avoid_entity_targeting_tests {
     /// 20 block range, but the wall is between them, so the goal must not pick
     /// them (it did before: only the distance was checked).
     #[test]
+    #[ignore = "daily"]
     fn a_rabbit_does_not_flee_a_player_behind_a_wall() {
         if let Some((in_range, picked)) = target(2, true) {
             assert!(in_range, "the player is inside the plain distance range");
@@ -3722,6 +3726,7 @@ mod avoid_entity_targeting_tests {
     /// `LivingEntity.canAttack`: in Peaceful no player is a target at all, so
     /// the goal does not pick them even in plain sight.
     #[test]
+    #[ignore = "daily"]
     fn a_rabbit_does_not_flee_in_peaceful() {
         if let Some((in_range, picked)) = target(0, false) {
             assert!(in_range, "the player is inside the plain distance range");
@@ -3732,6 +3737,7 @@ mod avoid_entity_targeting_tests {
     /// The control: the same world on normal difficulty with nothing in the way
     /// still picks the player.
     #[test]
+    #[ignore = "daily"]
     fn a_rabbit_flees_a_player_it_can_see() {
         if let Some((in_range, picked)) = target(2, false) {
             assert!(in_range, "the player is inside the plain distance range");
@@ -3741,6 +3747,7 @@ mod avoid_entity_targeting_tests {
 
     /// Upstream's visibility regression, also through the selected-guest path.
     #[test]
+    #[ignore = "daily"]
     fn an_invisible_player_tempts_only_within_two_blocks() {
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, types| {
@@ -3793,6 +3800,7 @@ mod avoid_entity_targeting_tests {
     /// which never picks a spectator: a spectator holding wheat does not tempt
     /// an animal.
     #[test]
+    #[ignore = "daily"]
     fn a_spectator_does_not_tempt_an_animal() {
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, types| {
@@ -3840,84 +3848,95 @@ mod peaceful_targets_tests {
     /// hurt wolf neither takes its attacker (a player) as target nor picks one
     /// by sight, while at Normal it does.
     #[test]
+    #[ignore = "daily"]
     fn peaceful_mobs_never_target_the_player() {
-        with_test_world(&[], |w, types| {
-            let mut w = w.clone();
-            w.player = Some(test_player(Vec3::new(2.5, 64.0, 0.5)));
-            let kind = Arc::new(types.types["minecraft:wolf"].clone());
-            let mut wolf = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            wolf.ai.last_hurt_by = Some(Who::Player);
-            wolf.ai.last_hurt_by_time = 5;
-            let mut test_level = crate::health::TestLevel::new(0);
-            let level = &mut test_level.level();
-            let mut events = Vec::new();
-            let mut cx = Cx {
-                w: &w,
-                level,
-                events: &mut events,
-            };
-            assert!(
-                HurtByTarget::default().can_use(&mut wolf, &mut cx),
-                "normal"
-            );
-            assert!(wolf.can_target_player(&w, 16.0, false), "normal");
+        assert!(
+            with_test_world(&[], |w, types| {
+                let mut w = w.clone();
+                w.player = Some(test_player(Vec3::new(2.5, 64.0, 0.5)));
+                let kind = Arc::new(types.types["minecraft:wolf"].clone());
+                let mut wolf = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                wolf.ai.last_hurt_by = Some(Who::Player);
+                wolf.ai.last_hurt_by_time = 5;
+                let mut test_level = crate::health::TestLevel::new(0);
+                let level = &mut test_level.level();
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w: &w,
+                    level,
+                    events: &mut events,
+                };
+                assert!(
+                    HurtByTarget::default().can_use(&mut wolf, &mut cx),
+                    "normal"
+                );
+                assert!(wolf.can_target_player(&w, 16.0, false), "normal");
 
-            let mut peaceful = w.clone();
-            peaceful.difficulty = crate::mobs::spawning::LocalDifficulty::new(0, 18000, 0, 0.0);
-            let mut cx = Cx {
-                w: &peaceful,
-                level,
-                events: &mut events,
-            };
-            assert!(
-                !HurtByTarget::default().can_use(&mut wolf, &mut cx),
-                "peaceful"
-            );
-            assert!(!wolf.can_target_player(&peaceful, 16.0, false), "peaceful");
-            assert!(!wolf.can_keep_target_player(&peaceful, 16.0), "peaceful");
-        });
+                let mut peaceful = w.clone();
+                peaceful.difficulty = crate::mobs::spawning::LocalDifficulty::new(0, 18000, 0, 0.0);
+                let mut cx = Cx {
+                    w: &peaceful,
+                    level,
+                    events: &mut events,
+                };
+                assert!(
+                    !HurtByTarget::default().can_use(&mut wolf, &mut cx),
+                    "peaceful"
+                );
+                assert!(!wolf.can_target_player(&peaceful, 16.0, false), "peaceful");
+                assert!(!wolf.can_keep_target_player(&peaceful, 16.0), "peaceful");
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `Mob.canAttack` refuses a Ghast, and `HurtByTargetGoal.canUse` ends
     /// with `canAttack(lastHurtByMob)`: a ghast's fireball is not retaliated.
     #[test]
+    #[ignore = "daily"]
     fn a_hurt_mob_does_not_retaliate_against_a_ghast() {
         let mut seen = None;
-        with_test_world(&[], |_, types| {
-            let mob = |id: u32, name: &str, at: Vec3| {
-                Mob::new(id, Arc::new(types.types[name].clone()), at, 0.0)
-            };
-            let ghast = mob(2, "minecraft:ghast", Vec3::new(2.5, 64.0, 0.5));
-            let zombie = mob(3, "minecraft:zombie", Vec3::new(3.5, 64.0, 0.5));
-            seen = Some([
-                ghast.seen(None, &crate::items::Items::empty()),
-                zombie.seen(None, &crate::items::Items::empty()),
-            ]);
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let mob = |id: u32, name: &str, at: Vec3| {
+                    Mob::new(id, Arc::new(types.types[name].clone()), at, 0.0)
+                };
+                let ghast = mob(2, "minecraft:ghast", Vec3::new(2.5, 64.0, 0.5));
+                let zombie = mob(3, "minecraft:zombie", Vec3::new(3.5, 64.0, 0.5));
+                seen = Some([
+                    ghast.seen(None, &crate::items::Items::empty()),
+                    zombie.seen(None, &crate::items::Items::empty()),
+                ]);
+            }),
+            "vanilla data is missing"
+        );
         let Some(seen) = seen else { return };
-        with_test_world(&seen, |w, types| {
-            let kind = Arc::new(types.types["minecraft:cow"].clone());
-            let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            let mut lr = crate::health::TestLevel::new(0);
-            let mut events = Vec::new();
-            let mut cx = Cx {
-                w,
-                level: &mut lr.level(),
-                events: &mut events,
-            };
-            m.ai.last_hurt_by = Some(Who::Mob(2));
-            m.ai.last_hurt_by_time = 5;
-            assert!(
-                !HurtByTarget::default().can_use(&mut m, &mut cx),
-                "a ghast is not a valid attacker to retaliate against"
-            );
-            m.ai.last_hurt_by = Some(Who::Mob(3));
-            m.ai.last_hurt_by_time = 6;
-            assert!(
-                HurtByTarget::default().can_use(&mut m, &mut cx),
-                "a zombie attacker is retaliated against"
-            );
-        });
+        assert!(
+            with_test_world(&seen, |w, types| {
+                let kind = Arc::new(types.types["minecraft:cow"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                let mut lr = crate::health::TestLevel::new(0);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w,
+                    level: &mut lr.level(),
+                    events: &mut events,
+                };
+                m.ai.last_hurt_by = Some(Who::Mob(2));
+                m.ai.last_hurt_by_time = 5;
+                assert!(
+                    !HurtByTarget::default().can_use(&mut m, &mut cx),
+                    "a ghast is not a valid attacker to retaliate against"
+                );
+                m.ai.last_hurt_by = Some(Who::Mob(3));
+                m.ai.last_hurt_by_time = 6;
+                assert!(
+                    HurtByTarget::default().can_use(&mut m, &mut cx),
+                    "a zombie attacker is retaliated against"
+                );
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 #[cfg(test)]
@@ -3994,62 +4013,70 @@ mod visibility_hook_tests {
     /// NeoForge's `LivingVisibilityEvent` scales the range a targeting check
     /// sees the player from, and `getVisibilityPercent` clamps it to 10.
     #[test]
+    #[ignore = "daily"]
     fn a_mods_visibility_scales_the_targeting_range() {
-        with_test_world(&[], |w, types| {
-            let mut w = w.clone();
-            let kind = Arc::new(types.types["minecraft:zombie"].clone());
-            let mut near = Mob::new(1, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
-            let mut far = Mob::new(2, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            w.player = Some(test_player(Vec3::new(10.5, 64.0, 0.5)));
-            assert!(near.can_see_player_through_walls(&w, 16.0));
-            w.mob_hooks = Some(&Scale);
-            assert!(
-                !near.can_see_player_through_walls(&w, 16.0),
-                "16 x 0.25 = 4 blocks"
-            );
-            // x100 clamps to 10: 160 blocks.
-            w.player = Some(test_player(Vec3::new(150.5, 64.0, 0.5)));
-            assert!(far.can_see_player_through_walls(&w, 16.0));
-            w.player = Some(test_player(Vec3::new(170.5, 64.0, 0.5)));
-            assert!(!far.can_see_player_through_walls(&w, 16.0));
-        });
+        assert!(
+            with_test_world(&[], |w, types| {
+                let mut w = w.clone();
+                let kind = Arc::new(types.types["minecraft:zombie"].clone());
+                let mut near = Mob::new(1, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
+                let mut far = Mob::new(2, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                w.player = Some(test_player(Vec3::new(10.5, 64.0, 0.5)));
+                assert!(near.can_see_player_through_walls(&w, 16.0));
+                w.mob_hooks = Some(&Scale);
+                assert!(
+                    !near.can_see_player_through_walls(&w, 16.0),
+                    "16 x 0.25 = 4 blocks"
+                );
+                // x100 clamps to 10: 160 blocks.
+                w.player = Some(test_player(Vec3::new(150.5, 64.0, 0.5)));
+                assert!(far.can_see_player_through_walls(&w, 16.0));
+                w.player = Some(test_player(Vec3::new(170.5, 64.0, 0.5)));
+                assert!(!far.can_see_player_through_walls(&w, 16.0));
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// A worn head's `mob_visibility` halves the range only for the types
     /// vanilla names: a zombie head fools a zombie, not a husk, and a
     /// skeleton skull a skeleton, not a stray.
     #[test]
+    #[ignore = "daily"]
     fn a_worn_head_hides_the_player_only_from_its_own_type() {
-        with_test_world(&[], |w, types| {
-            let mut w = w.clone();
-            let mob = |id, name: &str| {
-                let kind = Arc::new(types.types[name].clone());
-                Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
-            };
-            let wearing = |head: &str| {
-                let mut p = test_player(Vec3::new(10.5, 64.0, 0.5));
-                p.head = Some(head.into());
-                p
-            };
-            // 16 blocks, halved to 8: the player 10 blocks away is unseen.
-            for (looking, head, hidden) in [
-                ("minecraft:zombie", "minecraft:zombie_head", true),
-                ("minecraft:husk", "minecraft:zombie_head", false),
-                ("minecraft:skeleton", "minecraft:skeleton_skull", true),
-                ("minecraft:stray", "minecraft:skeleton_skull", false),
-                ("minecraft:creeper", "minecraft:creeper_head", true),
-                ("minecraft:piglin_brute", "minecraft:piglin_head", true),
-                ("minecraft:zombie", "minecraft:skeleton_skull", false),
-            ] {
-                w.player = Some(wearing(head));
-                let mut m = mob(1, looking);
-                assert_eq!(
-                    m.can_see_player_through_walls(&w, 16.0),
-                    !hidden,
-                    "{looking} looking at {head}"
-                );
-            }
-        });
+        assert!(
+            with_test_world(&[], |w, types| {
+                let mut w = w.clone();
+                let mob = |id, name: &str| {
+                    let kind = Arc::new(types.types[name].clone());
+                    Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
+                };
+                let wearing = |head: &str| {
+                    let mut p = test_player(Vec3::new(10.5, 64.0, 0.5));
+                    p.head = Some(head.into());
+                    p
+                };
+                // 16 blocks, halved to 8: the player 10 blocks away is unseen.
+                for (looking, head, hidden) in [
+                    ("minecraft:zombie", "minecraft:zombie_head", true),
+                    ("minecraft:husk", "minecraft:zombie_head", false),
+                    ("minecraft:skeleton", "minecraft:skeleton_skull", true),
+                    ("minecraft:stray", "minecraft:skeleton_skull", false),
+                    ("minecraft:creeper", "minecraft:creeper_head", true),
+                    ("minecraft:piglin_brute", "minecraft:piglin_head", true),
+                    ("minecraft:zombie", "minecraft:skeleton_skull", false),
+                ] {
+                    w.player = Some(wearing(head));
+                    let mut m = mob(1, looking);
+                    assert_eq!(
+                        m.can_see_player_through_walls(&w, 16.0),
+                        !hidden,
+                        "{looking} looking at {head}"
+                    );
+                }
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 
@@ -4189,6 +4216,7 @@ mod breed_xp_tests {
     /// breed goal carries one 1-7 orb with the rule on, no orb with it off,
     /// and the pair breeds either way.
     #[test]
+    #[ignore = "daily"]
     fn the_breed_xp_follows_the_mob_drops_rule() {
         let Some(on) = llama_events(true) else {
             return;
@@ -4375,6 +4403,7 @@ mod melee_continue_tests {
     /// `MeleeAttackGoal.canContinueToUse`'s follow branch refuses a target
     /// outside the mob's home (`isWithinHome(target.blockPosition())`).
     #[test]
+    #[ignore = "daily"]
     fn a_chase_stops_outside_the_mobs_home() {
         let mut outcomes = None;
         let ran = with_test_world(&[], |w, types| {
@@ -4404,6 +4433,7 @@ mod melee_continue_tests {
 
     /// The same branch refuses a spectator (`!(player.isSpectator() || player.isCreative())`).
     #[test]
+    #[ignore = "daily"]
     fn a_chase_stops_when_the_target_is_a_spectator() {
         let mut outcomes = None;
         let ran = with_test_world(&[], |w, types| {
@@ -4465,6 +4495,7 @@ mod hurt_by_anger_tests {
     /// `HurtByTargetGoal.canUse` refuses a player when the `universal_anger`
     /// game rule is on: the anger target goals handle that hit instead.
     #[test]
+    #[ignore = "daily"]
     fn universal_anger_leaves_the_players_hit_to_the_anger_goals() {
         let mut outcomes = None;
         if !with_test_world(&[], |w, types| {
@@ -4526,6 +4557,7 @@ mod breed_continue_tests {
     /// `BreedGoal.canContinueToUse` refuses a partner that is panicking. The
     /// goal starts with a calm partner and must stop when the partner panics.
     #[test]
+    #[ignore = "daily"]
     fn a_breed_goal_stops_when_the_partner_panics() {
         let mut kind = None;
         if !with_test_world(&[], |_, types| {

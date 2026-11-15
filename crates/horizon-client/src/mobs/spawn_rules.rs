@@ -681,6 +681,7 @@ mod underwater_sky_tests {
     /// `liquid()`) makes it false. A bubble column is `liquid()`, so the scan
     /// continues and the roll is still required.
     #[test]
+    #[ignore = "daily"]
     fn kelp_hides_the_sky_from_a_guardian_and_a_bubble_column_does_not() {
         let ran = with_built_test_world(
             &[],
@@ -736,7 +737,7 @@ mod underwater_sky_tests {
         );
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 
@@ -750,47 +751,51 @@ mod light_draw_tests {
     /// dimension type's light level draws as its provider does (uniform 0..=7 one
     /// bound-8 int, a constant none).
     #[test]
+    #[ignore = "daily"]
     fn dark_enough_draws_follow_the_dimension_type_provider() {
-        with_built_test_world(
-            &[],
-            |world, _| {
-                world.chunks.insert(
-                    (0, 0),
-                    std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
-                );
-            },
-            |w, _| {
-                for (type_id, draws) in [
-                    ("minecraft:overworld", &[32, 8][..]),
-                    ("minecraft:the_nether", &[32][..]),
-                    ("minecraft:the_end", &[32][..]),
-                ] {
-                    let level = MobWorld {
-                        dimension_type: DimensionFacts::vanilla(type_id).unwrap(),
-                        ..w.clone()
-                    };
-                    let mut random = LegacyRandom::new(42);
-                    let dark = is_dark_enough(&level, &mut random, 0, 70, 0);
-                    let mut expected = LegacyRandom::new(42);
-                    let rolls: Vec<i32> = draws
-                        .iter()
-                        .map(|bound| expected.next_int_bound(*bound).unwrap())
-                        .collect();
-                    assert_eq!(random.next_int(), expected.next_int(), "{type_id}");
-                    let light = level
-                        .block_light(0, 70, 0)
-                        .max(level.sky_light(0, 70, 0) - level.sky_darken());
-                    let test = rolls.get(1).copied().unwrap_or(match type_id {
-                        "minecraft:the_nether" => 7,
-                        _ => 15,
-                    });
-                    assert_eq!(
-                        dark,
-                        rolls[0] >= level.sky_light(0, 70, 0) && light <= test,
-                        "{type_id}"
+        assert!(
+            with_built_test_world(
+                &[],
+                |world, _| {
+                    world.chunks.insert(
+                        (0, 0),
+                        std::sync::Arc::new(crate::chunk::Chunk::empty(0, 0)),
                     );
-                }
-            },
+                },
+                |w, _| {
+                    for (type_id, draws) in [
+                        ("minecraft:overworld", &[32, 8][..]),
+                        ("minecraft:the_nether", &[32][..]),
+                        ("minecraft:the_end", &[32][..]),
+                    ] {
+                        let level = MobWorld {
+                            dimension_type: DimensionFacts::vanilla(type_id).unwrap(),
+                            ..w.clone()
+                        };
+                        let mut random = LegacyRandom::new(42);
+                        let dark = is_dark_enough(&level, &mut random, 0, 70, 0);
+                        let mut expected = LegacyRandom::new(42);
+                        let rolls: Vec<i32> = draws
+                            .iter()
+                            .map(|bound| expected.next_int_bound(*bound).unwrap())
+                            .collect();
+                        assert_eq!(random.next_int(), expected.next_int(), "{type_id}");
+                        let light = level
+                            .block_light(0, 70, 0)
+                            .max(level.sky_light(0, 70, 0) - level.sky_darken());
+                        let test = rolls.get(1).copied().unwrap_or(match type_id {
+                            "minecraft:the_nether" => 7,
+                            _ => 15,
+                        });
+                        assert_eq!(
+                            dark,
+                            rolls[0] >= level.sky_light(0, 70, 0) && light <= test,
+                            "{type_id}"
+                        );
+                    }
+                },
+            ),
+            "vanilla data is missing"
         );
     }
 }

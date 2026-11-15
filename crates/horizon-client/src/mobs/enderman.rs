@@ -642,6 +642,7 @@ mod tests {
     /// `repeatedlyTryToTeleport` returns before drawing; `teleport()` still
     /// draws its three values first.
     #[test]
+    #[ignore = "daily"]
     fn a_seated_enderman_never_teleports() {
         let build = |world: &mut crate::world::World, registry: &BlockRegistry| {
             let stone = registry.default_state("minecraft:stone").unwrap();
@@ -706,6 +707,7 @@ mod tests {
     /// (`WorldBorder.clampVec3ToBound`), so an enderman never lands outside
     /// it (#7080). A border of size 10 around the origin ends at x = 5.
     #[test]
+    #[ignore = "daily"]
     fn an_enderman_teleports_inside_the_world_border() {
         let build = |world: &mut crate::world::World, registry: &BlockRegistry| {
             let stone = registry.default_state("minecraft:stone").unwrap();
@@ -832,6 +834,7 @@ mod tests {
     /// `TargetingConditions.forCombat()`, which never picks a spectator: a
     /// spectator staring at an enderman does not start the anger goal.
     #[test]
+    #[ignore = "daily"]
     fn a_spectator_staring_does_not_anger_an_enderman() {
         use crate::mobs::world::{test_player, with_test_world};
         let mut outcomes = Vec::new();

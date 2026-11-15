@@ -286,6 +286,7 @@ mod defend_trader_tests {
     /// through `TargetingConditions.DEFAULT`, which never accepts a
     /// spectator.
     #[test]
+    #[ignore = "daily"]
     fn a_trader_llama_does_not_defend_the_trader_from_a_spectator() {
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, _| {

@@ -129,6 +129,7 @@ mod tests {
     /// raised box still measures from the passenger's bottom. Its eyes (y + 1.74) are in lava
     /// at y 1, and in air at y 2.5 while its feet stay in.
     #[test]
+    #[ignore = "daily"]
     fn a_mob_measures_fluids_from_its_bottom_and_tracks_lava_at_its_eyes() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {

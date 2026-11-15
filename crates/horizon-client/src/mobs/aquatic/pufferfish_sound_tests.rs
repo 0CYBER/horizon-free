@@ -40,6 +40,7 @@ fn sounds(events: &[MobEvent]) -> Vec<(&'static str, [f64; 3], f32, f32)> {
 /// `Pufferfish.tick` blows up and out with `makeSound`, so a silent fish puffs in
 /// silence while its pitch is still drawn.
 #[test]
+#[ignore = "daily"]
 fn a_pufferfish_puffs_with_its_voice_pitch_or_in_silence() {
     let ran = with_test_world(&[], |_, types| {
         for (counter, counter2, puff, puffed, event) in [
@@ -70,12 +71,13 @@ fn a_pufferfish_puffs_with_its_voice_pitch_or_in_silence() {
             }
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `AbstractFish.aiStep` flops with `makeSound` after the two floats of its hop:
 /// a silent cod hops in silence and still draws its pitch.
 #[test]
+#[ignore = "daily"]
 fn a_flopping_fish_plays_at_its_voice_pitch_or_in_silence() {
     let ran = with_test_world(&[], |w, types| {
         for (name, event) in [
@@ -109,13 +111,14 @@ fn a_flopping_fish_plays_at_its_voice_pitch_or_in_silence() {
             }
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `Pufferfish.aiStep` plays no sting of its own for the player: `playerTouch`
 /// runs in the player's tick, and its sting is the game event, not a sound of
 /// the fish, so the fish's AI tick count cannot make it play.
 #[test]
+#[ignore = "daily"]
 fn the_fish_ai_never_plays_the_players_sting() {
     let ran = with_test_world(&[], |w, types| {
         let p = crate::mobs::world::test_player(Vec3::new(0.5, 64.0, 0.5));
@@ -138,5 +141,5 @@ fn the_fish_ai_never_plays_the_players_sting() {
             );
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
