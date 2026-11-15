@@ -120,8 +120,6 @@ horizon-client game::native_menus::tests::each_menu_items_refusal_has_its_own_na
 horizon-client game::native_passage_cross::tests::a_crossing_into_another_level_is_refused_far_level lib daily resources
 horizon-client game::native_passages::tests::a_destination_level_must_be_open_and_another_level lib daily resources
 horizon-client game::native_passages::tests::a_passage_into_another_level_is_not_sent_to_the_clients lib daily resources
-horizon-client game::native_player_break::tests::a_vein_miner_sets_a_veins_drops_and_experience_down_at_the_origin lib daily resources
-horizon-client game::native_player_break::tests::an_unguarded_listener_is_cut_off_at_the_nesting_limit lib daily resources
 horizon-client game::native_player_ender_chest_tests::a_write_while_the_local_ender_chest_is_open_survives_closing_it lib daily resources
 horizon-client game::native_player_ender_chest_tests::a_written_slot_is_what_the_open_ender_chest_menu_shows_and_clicks lib daily resources
 horizon-client game::native_player_ender_chest_tests::each_ender_chest_refusal_has_its_own_name_and_writes_nothing lib daily resources
