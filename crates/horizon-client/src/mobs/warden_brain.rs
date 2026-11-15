@@ -1688,6 +1688,6 @@ mod tests {
                 [MobEvent::EjectPassengers { mob: 1, .. }]
             ));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

@@ -510,7 +510,7 @@ mod ground_particle_tests {
         );
         // Without the vanilla data under .local/horizon-client there is no world
         // to crumble: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 

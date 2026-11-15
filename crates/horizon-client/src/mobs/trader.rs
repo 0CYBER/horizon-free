@@ -354,21 +354,24 @@ mod tests {
         use crate::mobs::world::with_test_world;
         use horizon_core::geometry::Vec3;
         use std::sync::Arc;
-        let _ = with_test_world(&[], |w, types| {
-            let kind = Arc::new(types.types["minecraft:wandering_trader"].clone());
-            let mut m = Mob::new(1, kind, Vec3::new(0.5, 80.0, 0.5), 0.0);
-            let mut potion = DrinkItem {
-                item: "minecraft:potion",
-                finish_sound: "entity.wandering_trader.disappeared",
-                dark: true,
-            };
-            let mut milk = DrinkItem {
-                item: "minecraft:milk_bucket",
-                finish_sound: "entity.wandering_trader.reappeared",
-                dark: false,
-            };
-            let decide =
-                |world: &MobWorld, m: &mut Mob, potion: &mut DrinkItem, milk: &mut DrinkItem| {
+        assert!(
+            with_test_world(&[], |w, types| {
+                let kind = Arc::new(types.types["minecraft:wandering_trader"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 80.0, 0.5), 0.0);
+                let mut potion = DrinkItem {
+                    item: "minecraft:potion",
+                    finish_sound: "entity.wandering_trader.disappeared",
+                    dark: true,
+                };
+                let mut milk = DrinkItem {
+                    item: "minecraft:milk_bucket",
+                    finish_sound: "entity.wandering_trader.reappeared",
+                    dark: false,
+                };
+                let decide = |world: &MobWorld,
+                              m: &mut Mob,
+                              potion: &mut DrinkItem,
+                              milk: &mut DrinkItem| {
                     let mut test_level = crate::health::TestLevel::new(1);
                     let mut events = Vec::new();
                     let mut cx = Cx {
@@ -380,33 +383,35 @@ mod tests {
                     let day = milk.can_use(m, &mut cx);
                     (dark, day)
                 };
-            let mut night = w.clone();
-            night.daylight = false;
-            night.dimension_type = DimensionFacts::overworld();
-            assert_eq!(
-                decide(&night, &mut m, &mut potion, &mut milk),
-                (true, false)
-            );
-            let mut end_dark = night.clone();
-            end_dark.dimension_type = DimensionFacts::vanilla("minecraft:the_end").unwrap();
-            assert_eq!(
-                decide(&end_dark, &mut m, &mut potion, &mut milk),
-                (false, false)
-            );
-            m.extra
-                .effects
-                .push(crate::mobs::StoredEffect::new(INVISIBILITY, 3600, 0));
-            let mut day = w.clone();
-            day.daylight = true;
-            day.dimension_type = DimensionFacts::overworld();
-            assert_eq!(decide(&day, &mut m, &mut potion, &mut milk), (false, true));
-            let mut end_bright = day.clone();
-            end_bright.dimension_type = DimensionFacts::vanilla("minecraft:the_end").unwrap();
-            assert_eq!(
-                decide(&end_bright, &mut m, &mut potion, &mut milk),
-                (false, false)
-            );
-        });
+                let mut night = w.clone();
+                night.daylight = false;
+                night.dimension_type = DimensionFacts::overworld();
+                assert_eq!(
+                    decide(&night, &mut m, &mut potion, &mut milk),
+                    (true, false)
+                );
+                let mut end_dark = night.clone();
+                end_dark.dimension_type = DimensionFacts::vanilla("minecraft:the_end").unwrap();
+                assert_eq!(
+                    decide(&end_dark, &mut m, &mut potion, &mut milk),
+                    (false, false)
+                );
+                m.extra
+                    .effects
+                    .push(crate::mobs::StoredEffect::new(INVISIBILITY, 3600, 0));
+                let mut day = w.clone();
+                day.daylight = true;
+                day.dimension_type = DimensionFacts::overworld();
+                assert_eq!(decide(&day, &mut m, &mut potion, &mut milk), (false, true));
+                let mut end_bright = day.clone();
+                end_bright.dimension_type = DimensionFacts::vanilla("minecraft:the_end").unwrap();
+                assert_eq!(
+                    decide(&end_bright, &mut m, &mut potion, &mut milk),
+                    (false, false)
+                );
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 

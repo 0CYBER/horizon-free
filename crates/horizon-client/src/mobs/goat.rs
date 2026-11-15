@@ -774,7 +774,7 @@ mod ram_tests {
             stone.player = Some(p);
             assert!(due(&mut goat, &stone));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `RamTarget.tick` posts the hit (`noAggroMobAttack`) and then its push,
@@ -826,7 +826,7 @@ mod ram_tests {
             // victim's second `applyItemBlocking`.
             assert_eq!(push, (7.5, 0.0, 1.0, Some(2.0)));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 

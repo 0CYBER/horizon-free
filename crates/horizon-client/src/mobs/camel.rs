@@ -564,15 +564,18 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn the_second_passenger_sits_behind() {
-        with_test_world(&[], |_, types| {
-            let kind = std::sync::Arc::new(types.types["minecraft:camel_husk"].clone());
-            let m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            assert_eq!(passenger_attachment_at(&m, 0, 2, false)[2], 0.5);
-            assert!((passenger_attachment_at(&m, 1, 2, false)[2] + 0.7).abs() < 1e-6);
-            assert!((passenger_attachment_at(&m, 1, 2, true)[2] + 0.5).abs() < 1e-6);
-            assert!((passenger_attachment_at(&m, 0, 2, true)[2] - 0.7).abs() < 1e-6);
-            assert_eq!(passenger_attachment_at(&m, 0, 1, true)[2], 0.5);
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let kind = std::sync::Arc::new(types.types["minecraft:camel_husk"].clone());
+                let m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                assert_eq!(passenger_attachment_at(&m, 0, 2, false)[2], 0.5);
+                assert!((passenger_attachment_at(&m, 1, 2, false)[2] + 0.7).abs() < 1e-6);
+                assert!((passenger_attachment_at(&m, 1, 2, true)[2] + 0.5).abs() < 1e-6);
+                assert!((passenger_attachment_at(&m, 0, 2, true)[2] - 0.7).abs() < 1e-6);
+                assert_eq!(passenger_attachment_at(&m, 0, 1, true)[2], 0.5);
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `CamelAi.RandomSitting.checkExtraStartConditions`: a camel sits down
@@ -587,39 +590,45 @@ mod tests {
         let sits = |rider: Option<&str>, leashed: bool| {
             let mut seen = Vec::new();
             let mut camel = None;
-            with_test_world(&[], |_, types| {
-                let mob = |id: u32, name: &str| {
-                    let kind = std::sync::Arc::new(types.types[name].clone());
-                    Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
-                };
-                let mut m = mob(1, "minecraft:camel");
-                if let Some(name) = rider {
-                    let mut r = mob(2, name);
-                    r.extra.mount = Some(m.id);
-                    m.extra.rider = Some(r.id);
-                    seen.push(r.seen(None, &crate::items::Items::empty()));
-                }
-                if leashed {
-                    m.extra.leash = Some(Holder::Mob(3));
-                }
-                camel = Some(m);
-            });
+            assert!(
+                with_test_world(&[], |_, types| {
+                    let mob = |id: u32, name: &str| {
+                        let kind = std::sync::Arc::new(types.types[name].clone());
+                        Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
+                    };
+                    let mut m = mob(1, "minecraft:camel");
+                    if let Some(name) = rider {
+                        let mut r = mob(2, name);
+                        r.extra.mount = Some(m.id);
+                        m.extra.rider = Some(r.id);
+                        seen.push(r.seen(None, &crate::items::Items::empty()));
+                    }
+                    if leashed {
+                        m.extra.leash = Some(Holder::Mob(3));
+                    }
+                    camel = Some(m);
+                }),
+                "vanilla data is missing"
+            );
             let mut m = camel?;
             m.age = 1000;
             m.extra.egg_time = 0;
             m.on_ground = true;
             let mut started = false;
-            with_test_world(&seen, |w, _| {
-                let mut test_level = crate::health::TestLevel::new(0);
-                let level = &mut test_level.level();
-                let mut events = Vec::new();
-                let mut cx = Cx {
-                    w,
-                    level,
-                    events: &mut events,
-                };
-                started = (0..64).any(|_| RandomSitting.can_use(&mut m, &mut cx));
-            });
+            assert!(
+                with_test_world(&seen, |w, _| {
+                    let mut test_level = crate::health::TestLevel::new(0);
+                    let level = &mut test_level.level();
+                    let mut events = Vec::new();
+                    let mut cx = Cx {
+                        w,
+                        level,
+                        events: &mut events,
+                    };
+                    started = (0..64).any(|_| RandomSitting.can_use(&mut m, &mut cx));
+                }),
+                "vanilla data is missing"
+            );
             Some(started)
         };
         let Some(alone) = sits(None, false) else {
@@ -804,7 +813,7 @@ mod tests {
             };
             pair = Some((make(1, 0.5), make(2, 2.5)));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
         let Some((mut a, b)) = pair else {
             return;
         };
@@ -835,7 +844,7 @@ mod tests {
                 "a ridden camel should not breed"
             );
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `CamelAi.RandomSitting.checkExtraStartConditions` ends with
@@ -903,6 +912,6 @@ mod tests {
                 );
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

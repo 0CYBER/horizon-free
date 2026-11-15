@@ -108,7 +108,7 @@ fn an_equine_and_a_flying_monster_are_never_on_a_climbable() {
     );
     // Without the vanilla data under .local/horizon-client the world cannot
     // be built: the test has nothing to check.
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `LivingEntity.isPushable` vetoes a mob that is `onClimbable`. A horse
@@ -141,7 +141,7 @@ fn a_horse_in_vines_is_still_pushable() {
             }
         },
     );
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// A horse dropped through a column of vines falls exactly as it does through
@@ -237,5 +237,5 @@ fn a_horse_pressed_into_a_ladder_gains_no_height() {
             }
         },
     );
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

@@ -1358,21 +1358,24 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn peaceful_ends_a_bees_anger_at_the_player() {
-        with_test_world(&[], |w, _| {
-            for (difficulty, still_angry) in [(2, true), (0, false)] {
-                let mut w = w.clone();
-                w.player = Some(crate::mobs::world::test_player(Vec3::new(1.0, 0.0, 0.0)));
-                w.difficulty =
-                    crate::mobs::spawning::LocalDifficulty::new(difficulty, 18000, 0, 0.0);
-                let mut m = bee();
-                let b = super::st(&mut m);
-                b.angry_at = Some(Who::Player);
-                b.anger_end = w.game_time + 400;
-                super::update_persistent_anger(&mut m, &w);
-                let angry = super::get(&m).is_some_and(|b| b.angry_at.is_some());
-                assert_eq!(angry, still_angry, "difficulty {difficulty}");
-            }
-        });
+        assert!(
+            with_test_world(&[], |w, _| {
+                for (difficulty, still_angry) in [(2, true), (0, false)] {
+                    let mut w = w.clone();
+                    w.player = Some(crate::mobs::world::test_player(Vec3::new(1.0, 0.0, 0.0)));
+                    w.difficulty =
+                        crate::mobs::spawning::LocalDifficulty::new(difficulty, 18000, 0, 0.0);
+                    let mut m = bee();
+                    let b = super::st(&mut m);
+                    b.angry_at = Some(Who::Player);
+                    b.anger_end = w.game_time + 400;
+                    super::update_persistent_anger(&mut m, &w);
+                    let angry = super::get(&m).is_some_and(|b| b.angry_at.is_some());
+                    assert_eq!(angry, still_angry, "difficulty {difficulty}");
+                }
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `BeeGrowCropGoal.tick`: level event 2011 (data 15) comes before the
@@ -1433,25 +1436,28 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_bee_sting_asks_for_ten_seconds_of_poison_on_normal() {
-        with_test_world(&[], |w, _| {
-            let mut m = bee();
-            let mut events = Vec::new();
-            let mut test_level = crate::health::TestLevel::new(1);
-            let mut cx = Cx {
-                w,
-                level: &mut test_level.level(),
-                events: &mut events,
-            };
-            sting(&mut m, Who::Mob(9), &mut cx);
-            assert!(events.iter().any(|e| matches!(
-                e,
-                MobEvent::Sting {
-                    target: Who::Mob(9),
-                    poison_ticks: 200,
-                    ..
-                }
-            )));
-        });
+        assert!(
+            with_test_world(&[], |w, _| {
+                let mut m = bee();
+                let mut events = Vec::new();
+                let mut test_level = crate::health::TestLevel::new(1);
+                let mut cx = Cx {
+                    w,
+                    level: &mut test_level.level(),
+                    events: &mut events,
+                };
+                sting(&mut m, Who::Mob(9), &mut cx);
+                assert!(events.iter().any(|e| matches!(
+                    e,
+                    MobEvent::Sting {
+                        target: Who::Mob(9),
+                        poison_ticks: 200,
+                        ..
+                    }
+                )));
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `NeutralMob.isAngryAtAllPlayers`: with `universal_anger` on and no
@@ -1460,32 +1466,35 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn universal_anger_lets_an_angry_bee_pick_the_player() {
-        with_test_world(&[], |w, _| {
-            for rule in [false, true] {
-                let mut w = w.clone();
-                w.player = Some(crate::mobs::world::test_player(Vec3::new(1.0, 0.0, 0.0)));
-                w.universal_anger = rule;
-                let mut m = bee();
-                let b = super::st(&mut m);
-                b.angry_at = None;
-                b.anger_end = w.game_time + 400;
-                m.ai.goals.add(1, super::BecomeAngryTarget::new());
-                let mut random = crate::health::TestLevel::new(1);
-                let mut events = Vec::new();
-                let mut cx = Cx {
-                    w: &w,
-                    level: &mut random.level(),
-                    events: &mut events,
-                };
-                let mut goals = std::mem::take(&mut m.ai.goals);
-                for _ in 0..200 {
-                    goals.tick(&mut m, &mut cx);
+        assert!(
+            with_test_world(&[], |w, _| {
+                for rule in [false, true] {
+                    let mut w = w.clone();
+                    w.player = Some(crate::mobs::world::test_player(Vec3::new(1.0, 0.0, 0.0)));
+                    w.universal_anger = rule;
+                    let mut m = bee();
+                    let b = super::st(&mut m);
+                    b.angry_at = None;
+                    b.anger_end = w.game_time + 400;
+                    m.ai.goals.add(1, super::BecomeAngryTarget::new());
+                    let mut random = crate::health::TestLevel::new(1);
+                    let mut events = Vec::new();
+                    let mut cx = Cx {
+                        w: &w,
+                        level: &mut random.level(),
+                        events: &mut events,
+                    };
+                    let mut goals = std::mem::take(&mut m.ai.goals);
+                    for _ in 0..200 {
+                        goals.tick(&mut m, &mut cx);
+                    }
+                    let targeted = m.ai.target == Some(Who::Player);
+                    m.ai.goals = goals;
+                    assert_eq!(targeted, rule, "universal_anger {rule}");
                 }
-                let targeted = m.ai.target == Some(Who::Player);
-                m.ai.goals = goals;
-                assert_eq!(targeted, rule, "universal_anger {rule}");
-            }
-        });
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `NeutralMob.addPersistentAngerSaveData` and

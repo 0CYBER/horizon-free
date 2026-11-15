@@ -79,7 +79,7 @@ fn the_difficulty_bonus_makes_bigger_slimes_and_magma_cubes() {
             }
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 #[test]
@@ -120,5 +120,5 @@ fn the_bonus_float_is_drawn_once_at_the_end_and_only_below_scale_two() {
         }
         assert!((8..32).contains(&bumped), "bumped {bumped} of 64");
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

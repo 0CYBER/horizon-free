@@ -1003,7 +1003,7 @@ mod tests {
         });
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     fn pillager() -> Mob {
@@ -1083,7 +1083,7 @@ mod tests {
             // the first sturdy block and the fang sits at 65.
             assert_eq!(fang_floor(w, 0.5, 0.5, 64.0, 65.875), Some(65.0));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Vindicator.setCustomName` latches `isJohnny` the first time the name is

@@ -789,20 +789,23 @@ mod tests {
             .map(|m| m.seen(None, &crate::items::Items::empty()))
             .collect();
         let grid = SeenGrid::new(seen.iter().map(|s| s.bounds));
-        with_test_world(&seen, |w, _| {
-            let indexed = MobWorld {
-                others_grid: Some(&grid),
-                ..w.clone()
-            };
-            let mut found = 0;
-            for m in mobs.iter().filter(|m| is_raider(m.species())) {
-                let scan = companions(m, w);
-                assert_eq!(companions(m, &indexed), scan);
-                assert_eq!(shout_range(m, &indexed), shout_range(m, w));
-                found += scan.len();
-            }
-            assert!(found > 0);
-        });
+        assert!(
+            with_test_world(&seen, |w, _| {
+                let indexed = MobWorld {
+                    others_grid: Some(&grid),
+                    ..w.clone()
+                };
+                let mut found = 0;
+                for m in mobs.iter().filter(|m| is_raider(m.species())) {
+                    let scan = companions(m, w);
+                    assert_eq!(companions(m, &indexed), scan);
+                    assert_eq!(shout_range(m, &indexed), shout_range(m, w));
+                    found += scan.len();
+                }
+                assert!(found > 0);
+            }),
+            "vanilla data is missing"
+        );
     }
     #[test]
     fn raiders_and_leaders() {
@@ -869,34 +872,37 @@ mod tests {
     fn a_celebrating_raider_does_not_jump_while_riding() {
         use crate::mobs::world::with_test_world;
         use std::sync::Arc;
-        let _ = with_test_world(&[], |w, _| {
-            let jumped = |seed: i64, riding: bool| {
-                let mut k = (*crate::mobs::sensor_scan_tests::kind()).clone();
-                k.id = "minecraft:pillager".into();
-                k.species = Species::Pillager;
-                let mut m = Mob::new(1, Arc::new(k), Vec3::ZERO, 0.0);
-                m.random.set_seed(seed);
-                m.extra.raider = Some(Box::default());
-                if riding {
-                    m.extra.mount = Some(9);
-                }
-                let mut goal = Celebration;
-                let mut test_level = crate::health::TestLevel::new(1);
-                let mut events = Vec::new();
-                let mut cx = Cx {
-                    w,
-                    level: &mut test_level.level(),
-                    events: &mut events,
+        assert!(
+            with_test_world(&[], |w, _| {
+                let jumped = |seed: i64, riding: bool| {
+                    let mut k = (*crate::mobs::sensor_scan_tests::kind()).clone();
+                    k.id = "minecraft:pillager".into();
+                    k.species = Species::Pillager;
+                    let mut m = Mob::new(1, Arc::new(k), Vec3::ZERO, 0.0);
+                    m.random.set_seed(seed);
+                    m.extra.raider = Some(Box::default());
+                    if riding {
+                        m.extra.mount = Some(9);
+                    }
+                    let mut goal = Celebration;
+                    let mut test_level = crate::health::TestLevel::new(1);
+                    let mut events = Vec::new();
+                    let mut cx = Cx {
+                        w,
+                        level: &mut test_level.level(),
+                        events: &mut events,
+                    };
+                    goal.tick(&mut m, &mut cx);
+                    m.ai.jumping
                 };
-                goal.tick(&mut m, &mut cx);
-                m.ai.jumping
-            };
-            let seed = (1..500)
-                .find(|seed| jumped(*seed, false))
-                .expect("some seed celebrates with a jump");
-            assert!(jumped(seed, false));
-            assert!(!jumped(seed, true));
-        });
+                let seed = (1..500)
+                    .find(|seed| jumped(*seed, false))
+                    .expect("some seed celebrates with a jump");
+                assert!(jumped(seed, false));
+                assert!(!jumped(seed, true));
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `ObtainRaidLeaderBannerGoal.canContinueToUse` ends with

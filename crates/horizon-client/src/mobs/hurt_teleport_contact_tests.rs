@@ -48,28 +48,31 @@ fn enderman(types: &crate::mobs::MobTypes, seed: i64) -> Mob {
 #[test]
 #[ignore = "daily"]
 fn a_magma_teleport_leaves_the_block_scan_on_the_old_path() {
-    with_built_test_world(
-        &[],
-        build("minecraft:magma_block", "minecraft:cobweb"),
-        |w, types| {
-            let mut teleported = 0;
-            for seed in 0..40 {
-                let mut m = enderman(types, seed);
-                let mut test_level = crate::health::TestLevel::new(42);
-                let mut random = test_level.level();
-                let mut events = Vec::new();
-                effects_from_blocks(&mut m, w, &mut random, &mut events);
-                if m.position != Vec3::new(0.5, 64.0, 0.5) {
-                    teleported += 1;
-                    assert_eq!(
-                        m.stuck_multiplier,
-                        Vec3::new(0.25, f64::from(0.05_f32), 0.25),
-                        "seed {seed}: the cobweb on the old path"
-                    );
+    assert!(
+        with_built_test_world(
+            &[],
+            build("minecraft:magma_block", "minecraft:cobweb"),
+            |w, types| {
+                let mut teleported = 0;
+                for seed in 0..40 {
+                    let mut m = enderman(types, seed);
+                    let mut test_level = crate::health::TestLevel::new(42);
+                    let mut random = test_level.level();
+                    let mut events = Vec::new();
+                    effects_from_blocks(&mut m, w, &mut random, &mut events);
+                    if m.position != Vec3::new(0.5, 64.0, 0.5) {
+                        teleported += 1;
+                        assert_eq!(
+                            m.stuck_multiplier,
+                            Vec3::new(0.25, f64::from(0.05_f32), 0.25),
+                            "seed {seed}: the cobweb on the old path"
+                        );
+                    }
                 }
-            }
-            assert!(teleported > 0, "some seed teleports");
-        },
+                assert!(teleported > 0, "some seed teleports");
+            },
+        ),
+        "vanilla data is missing"
     );
 }
 
@@ -79,39 +82,42 @@ fn a_magma_teleport_leaves_the_block_scan_on_the_old_path() {
 #[test]
 #[ignore = "daily"]
 fn a_burning_teleport_does_not_take_the_old_spots_fire_along() {
-    with_built_test_world(
-        &[],
-        build("minecraft:stone", "minecraft:fire"),
-        |w, types| {
-            let mut teleported = 0;
-            for seed in 0..40 {
-                let mut m = enderman(types, seed);
-                m.fire_ticks = 20;
-                // Whether the burning hurt's own teleport lands (one in ten
-                // draws none, and a try can find no ground: the old spot's
-                // fire then ignites it before the second hurt teleports it).
-                let mut first = m.clone();
-                let mut events = Vec::new();
-                hurt(
-                    &mut first,
-                    w,
-                    &mut events,
-                    1.0,
-                    Damage::of(DamageKind::OnFire),
-                );
-                base_tick(
-                    &mut m,
-                    w,
-                    &mut crate::health::TestLevel::new(0).level(),
-                    &mut events,
-                );
-                if first.position != Vec3::new(0.5, 64.0, 0.5) {
-                    assert_eq!(m.position, first.position, "seed {seed}: the same teleport");
-                    teleported += 1;
-                    assert_eq!(m.fire_ticks, 19, "seed {seed}: no fire where it landed");
+    assert!(
+        with_built_test_world(
+            &[],
+            build("minecraft:stone", "minecraft:fire"),
+            |w, types| {
+                let mut teleported = 0;
+                for seed in 0..40 {
+                    let mut m = enderman(types, seed);
+                    m.fire_ticks = 20;
+                    // Whether the burning hurt's own teleport lands (one in ten
+                    // draws none, and a try can find no ground: the old spot's
+                    // fire then ignites it before the second hurt teleports it).
+                    let mut first = m.clone();
+                    let mut events = Vec::new();
+                    hurt(
+                        &mut first,
+                        w,
+                        &mut events,
+                        1.0,
+                        Damage::of(DamageKind::OnFire),
+                    );
+                    base_tick(
+                        &mut m,
+                        w,
+                        &mut crate::health::TestLevel::new(0).level(),
+                        &mut events,
+                    );
+                    if first.position != Vec3::new(0.5, 64.0, 0.5) {
+                        assert_eq!(m.position, first.position, "seed {seed}: the same teleport");
+                        teleported += 1;
+                        assert_eq!(m.fire_ticks, 19, "seed {seed}: no fire where it landed");
+                    }
                 }
-            }
-            assert!(teleported > 0, "some seed teleports");
-        },
+                assert!(teleported > 0, "some seed teleports");
+            },
+        ),
+        "vanilla data is missing"
     );
 }

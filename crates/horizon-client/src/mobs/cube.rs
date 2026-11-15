@@ -495,46 +495,52 @@ mod golem_touch_tests {
     #[test]
     #[ignore = "daily"]
     fn split_uses_parent_random_and_width_for_both_cube_types() {
-        with_test_world(&[], |_, types| {
-            for kind in ["minecraft:slime", "minecraft:magma_cube"] {
-                let ty = Arc::new(types.types[kind].clone());
-                let mut parent = Mob::new(1, ty.clone(), Vec3::new(10.0, 64.0, 20.0), 0.0);
-                set_size(&mut parent, 4);
-                parent.random = horizon_core::random::LegacyRandom::new(0);
-                assert_eq!(split_count(&mut parent), 2);
-                for (i, bits) in [(0, 13_949_265), (1, 4_035_531)] {
-                    let mut child = Mob::new(i + 2, ty.clone(), parent.position, 0.0);
-                    split_child(&mut parent, &mut child, i);
-                    let x = if i == 0 { -0.52_f32 } else { 0.52_f32 };
-                    assert_eq!(
-                        child.position,
-                        Vec3::new(10.0 + f64::from(x), 64.5, 20.0 - f64::from(0.52_f32))
-                    );
-                    assert_eq!(child.yaw, (bits as f32 / 16_777_216.0) * 360.0);
-                    assert_eq!(child.extra.size, 2);
+        assert!(
+            with_test_world(&[], |_, types| {
+                for kind in ["minecraft:slime", "minecraft:magma_cube"] {
+                    let ty = Arc::new(types.types[kind].clone());
+                    let mut parent = Mob::new(1, ty.clone(), Vec3::new(10.0, 64.0, 20.0), 0.0);
+                    set_size(&mut parent, 4);
+                    parent.random = horizon_core::random::LegacyRandom::new(0);
+                    assert_eq!(split_count(&mut parent), 2);
+                    for (i, bits) in [(0, 13_949_265), (1, 4_035_531)] {
+                        let mut child = Mob::new(i + 2, ty.clone(), parent.position, 0.0);
+                        split_child(&mut parent, &mut child, i);
+                        let x = if i == 0 { -0.52_f32 } else { 0.52_f32 };
+                        assert_eq!(
+                            child.position,
+                            Vec3::new(10.0 + f64::from(x), 64.5, 20.0 - f64::from(0.52_f32))
+                        );
+                        assert_eq!(child.yaw, (bits as f32 / 16_777_216.0) * 360.0);
+                        assert_eq!(child.extra.size, 2);
+                    }
+                    assert_eq!(parent.random.state(), 67_704_983_304_270);
                 }
-                assert_eq!(parent.random.state(), 67_704_983_304_270);
-            }
-        });
+            }),
+            "vanilla data is missing"
+        );
     }
 
     #[test]
     #[ignore = "daily"]
     fn sulfur_split_has_fixed_count_and_draws_only_yaws() {
-        with_test_world(&[], |_, types| {
-            let ty = Arc::new(types.types["minecraft:sulfur_cube"].clone());
-            let mut parent = Mob::new(1, ty.clone(), Vec3::ZERO, 0.0);
-            super::super::sulfur_cube::set_size(&mut parent, 2, true);
-            parent.random = horizon_core::random::LegacyRandom::new(0);
-            assert_eq!(split_count(&mut parent), 2);
-            assert_eq!(parent.random.state(), 25_214_903_917);
-            let mut child = Mob::new(2, ty, parent.position, 0.0);
-            split_child(&mut parent, &mut child, 0);
-            assert_eq!(child.yaw, (12_263_604_f32 / 16_777_216.0) * 360.0);
-            assert_eq!(parent.random.state(), 205_749_139_540_596);
-            assert_eq!(child.extra.size, 1);
-            assert!(child.is_baby());
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let ty = Arc::new(types.types["minecraft:sulfur_cube"].clone());
+                let mut parent = Mob::new(1, ty.clone(), Vec3::ZERO, 0.0);
+                super::super::sulfur_cube::set_size(&mut parent, 2, true);
+                parent.random = horizon_core::random::LegacyRandom::new(0);
+                assert_eq!(split_count(&mut parent), 2);
+                assert_eq!(parent.random.state(), 25_214_903_917);
+                let mut child = Mob::new(2, ty, parent.position, 0.0);
+                split_child(&mut parent, &mut child, 0);
+                assert_eq!(child.yaw, (12_263_604_f32 / 16_777_216.0) * 360.0);
+                assert_eq!(parent.random.state(), 205_749_139_540_596);
+                assert_eq!(child.extra.size, 1);
+                assert!(child.is_baby());
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// The golems a cube of this kind and size, `x` blocks east of an iron

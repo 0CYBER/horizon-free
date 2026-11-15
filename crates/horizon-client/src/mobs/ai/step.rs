@@ -140,6 +140,6 @@ mod tests {
                 assert_eq!(empty.unwrap().1, 0.15, "the block's 15%");
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

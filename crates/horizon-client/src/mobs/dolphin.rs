@@ -590,7 +590,7 @@ mod target_tests {
                 "an adult dolphin takes its attacker"
             );
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 
@@ -690,6 +690,6 @@ mod treasure_play_tests {
                 }
             }
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

@@ -1078,7 +1078,7 @@ mod scaffolding_sight_tests {
                 assert!(!w.line_of_sight_for(Some(66.0), above, below));
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 

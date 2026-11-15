@@ -164,139 +164,149 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn absorption_is_clamped_then_restarted_by_a_copied_absorption_effect() {
-        with_test_world(&[], |_, types| {
-            let mob =
-                |id, kind: &str| Mob::new(id, Arc::new(types.types[kind].clone()), Vec3::ZERO, 0.0);
-            let mut s = mob(1, "minecraft:skeleton");
-            s.absorption = 3.5;
-            let mut plain = mob(2, "minecraft:stray");
-            single(&s, &mut plain, Params::KEEP_ALL);
-            assert_eq!(plain.absorption, 0.0);
-            // AbsorptionMobEffect.onEffectStarted: 4 per level, amplifier 1.
-            s.extra.effects.push(crate::mobs::StoredEffect::new(
-                "minecraft:absorption",
-                600,
-                1,
-            ));
-            let mut boosted = mob(3, "minecraft:stray");
-            single(&s, &mut boosted, Params::KEEP_ALL);
-            assert_eq!(boosted.absorption, 8.0);
-            assert_eq!(
-                boosted.extra.effects,
-                vec![crate::mobs::StoredEffect::new(
+        assert!(
+            with_test_world(&[], |_, types| {
+                let mob = |id, kind: &str| {
+                    Mob::new(id, Arc::new(types.types[kind].clone()), Vec3::ZERO, 0.0)
+                };
+                let mut s = mob(1, "minecraft:skeleton");
+                s.absorption = 3.5;
+                let mut plain = mob(2, "minecraft:stray");
+                single(&s, &mut plain, Params::KEEP_ALL);
+                assert_eq!(plain.absorption, 0.0);
+                // AbsorptionMobEffect.onEffectStarted: 4 per level, amplifier 1.
+                s.extra.effects.push(crate::mobs::StoredEffect::new(
                     "minecraft:absorption",
                     600,
-                    1
-                )]
-            );
-        });
+                    1,
+                ));
+                let mut boosted = mob(3, "minecraft:stray");
+                single(&s, &mut boosted, Params::KEEP_ALL);
+                assert_eq!(boosted.absorption, 8.0);
+                assert_eq!(
+                    boosted.extra.effects,
+                    vec![crate::mobs::StoredEffect::new(
+                        "minecraft:absorption",
+                        600,
+                        1
+                    )]
+                );
+            }),
+            "vanilla data is missing"
+        );
     }
     #[test]
     #[ignore = "daily"]
     fn a_frozen_skeleton_becomes_a_stray_that_keeps_its_bow_and_name() {
-        with_test_world(&[], |_, types| {
-            let mob = |id, kind: &str| {
-                Mob::new(
-                    id,
-                    Arc::new(types.types[kind].clone()),
-                    Vec3::new(3.5, 70.0, -2.5),
-                    0.0,
-                )
-            };
-            let mut s = mob(1, "minecraft:skeleton");
-            s.yaw = 90.0;
-            s.custom_name = Some("Frosty".into());
-            s.no_ai = true;
-            s.absorption = 3.5;
-            s.extra
-                .set_main_hand_stack(Some(ItemStack::new("minecraft:bow", 1)));
-            s.extra.set_slot_id(
-                horizon_items::equipment::CHEST,
-                Some("minecraft:chainmail_chestplate".into()),
-            );
-            let mut offhand = ItemStack::new("minecraft:shield", 2);
-            offhand.damage = 5;
-            crate::mobs::finalize::set_item_stack(
-                &mut s,
-                crate::mobs::finalize::OFFHAND,
-                offhand.clone(),
-            );
-            let mut armor = ItemStack::new("minecraft:wolf_armor", 1);
-            armor.damage = 7;
-            armor.data_mut().custom_name = Some(horizon_core::nbt::Tag::String("kept".into()));
-            s.extra.set_body_stack(Some(armor));
-            s.extra.leash = Some(crate::mobs::leash::Holder::Knot([3, 71, -3]));
-            s.extra.mount = Some(7);
-            s.extra.passenger = true;
-            let mut st = mob(2, "minecraft:stray");
-            single(&s, &mut st, Params::KEEP_ALL);
-            assert_eq!(st.custom_name.as_deref(), Some("Frosty"));
-            assert!(st.no_ai);
-            assert_eq!(st.absorption, 0.0);
-            assert_eq!(st.yaw, 90.0);
-            assert_eq!(
-                st.extra.main_hand_stack().map(|s| &*s.item),
-                Some("minecraft:bow")
-            );
-            assert_eq!(
-                st.extra.slot_id(horizon_items::equipment::CHEST),
-                Some("minecraft:chainmail_chestplate")
-            );
-            assert_eq!(
-                st.extra.leash,
-                Some(crate::mobs::leash::Holder::Knot([3, 71, -3]))
-            );
-            assert_eq!(st.extra.mount, Some(7));
-            assert_eq!(st.extra.body_id(), Some("minecraft:wolf_armor"));
-            assert_eq!(st.extra.body_damage(), 7);
-            assert_eq!(st.equipment_stacks()[1], Some(offhand));
-            assert_eq!(st.extra.body_stack(), s.extra.body_stack());
-            // Health is the new type's own, not copied.
-            assert_eq!(st.health, mob(3, "minecraft:stray").health);
-            // Without keepEquipment the gear stays behind.
-            let mut bare = mob(4, "minecraft:stray");
-            single(
-                &s,
-                &mut bare,
-                Params {
-                    keep_equipment: false,
-                    preserve_can_pick_up_loot: false,
-                },
-            );
-            assert!(
-                bare.extra.main_hand_id().is_none()
-                    && bare
-                        .extra
-                        .slot_stack(horizon_items::equipment::CHEST)
-                        .is_none()
-                    && bare.extra.body_id().is_none()
-            );
-            assert_eq!(bare.custom_name.as_deref(), Some("Frosty"));
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let mob = |id, kind: &str| {
+                    Mob::new(
+                        id,
+                        Arc::new(types.types[kind].clone()),
+                        Vec3::new(3.5, 70.0, -2.5),
+                        0.0,
+                    )
+                };
+                let mut s = mob(1, "minecraft:skeleton");
+                s.yaw = 90.0;
+                s.custom_name = Some("Frosty".into());
+                s.no_ai = true;
+                s.absorption = 3.5;
+                s.extra
+                    .set_main_hand_stack(Some(ItemStack::new("minecraft:bow", 1)));
+                s.extra.set_slot_id(
+                    horizon_items::equipment::CHEST,
+                    Some("minecraft:chainmail_chestplate".into()),
+                );
+                let mut offhand = ItemStack::new("minecraft:shield", 2);
+                offhand.damage = 5;
+                crate::mobs::finalize::set_item_stack(
+                    &mut s,
+                    crate::mobs::finalize::OFFHAND,
+                    offhand.clone(),
+                );
+                let mut armor = ItemStack::new("minecraft:wolf_armor", 1);
+                armor.damage = 7;
+                armor.data_mut().custom_name = Some(horizon_core::nbt::Tag::String("kept".into()));
+                s.extra.set_body_stack(Some(armor));
+                s.extra.leash = Some(crate::mobs::leash::Holder::Knot([3, 71, -3]));
+                s.extra.mount = Some(7);
+                s.extra.passenger = true;
+                let mut st = mob(2, "minecraft:stray");
+                single(&s, &mut st, Params::KEEP_ALL);
+                assert_eq!(st.custom_name.as_deref(), Some("Frosty"));
+                assert!(st.no_ai);
+                assert_eq!(st.absorption, 0.0);
+                assert_eq!(st.yaw, 90.0);
+                assert_eq!(
+                    st.extra.main_hand_stack().map(|s| &*s.item),
+                    Some("minecraft:bow")
+                );
+                assert_eq!(
+                    st.extra.slot_id(horizon_items::equipment::CHEST),
+                    Some("minecraft:chainmail_chestplate")
+                );
+                assert_eq!(
+                    st.extra.leash,
+                    Some(crate::mobs::leash::Holder::Knot([3, 71, -3]))
+                );
+                assert_eq!(st.extra.mount, Some(7));
+                assert_eq!(st.extra.body_id(), Some("minecraft:wolf_armor"));
+                assert_eq!(st.extra.body_damage(), 7);
+                assert_eq!(st.equipment_stacks()[1], Some(offhand));
+                assert_eq!(st.extra.body_stack(), s.extra.body_stack());
+                // Health is the new type's own, not copied.
+                assert_eq!(st.health, mob(3, "minecraft:stray").health);
+                // Without keepEquipment the gear stays behind.
+                let mut bare = mob(4, "minecraft:stray");
+                single(
+                    &s,
+                    &mut bare,
+                    Params {
+                        keep_equipment: false,
+                        preserve_can_pick_up_loot: false,
+                    },
+                );
+                assert!(
+                    bare.extra.main_hand_id().is_none()
+                        && bare
+                            .extra
+                            .slot_stack(horizon_items::equipment::CHEST)
+                            .is_none()
+                        && bare.extra.body_id().is_none()
+                );
+                assert_eq!(bare.custom_name.as_deref(), Some("Frosty"));
+            }),
+            "vanilla data is missing"
+        );
     }
     /// `ConversionType.convertCommon` copies absorption through the target's
     /// setter, so it survives when the target's max absorption permits it.
     #[test]
     #[ignore = "daily"]
     fn a_converting_mob_keeps_its_absorption() {
-        with_test_world(&[], |_, types| {
-            let mob = |id, kind: &str| {
-                Mob::new(
-                    id,
-                    Arc::new(types.types[kind].clone()),
-                    Vec3::new(3.5, 70.0, -2.5),
-                    0.0,
-                )
-            };
-            let mut z = mob(1, "minecraft:zombie");
-            z.absorption = 3.0;
-            let mut d = mob(2, "minecraft:drowned");
-            // LivingEntity.setAbsorptionAmount clamps to the new mob's maximum
-            // before effects are copied. An unmodified drowned has maximum 0.
-            Arc::make_mut(&mut Arc::make_mut(&mut d.kind).attributes)
-                .insert("minecraft:max_absorption".into(), 3.0);
-            single(&z, &mut d, Params::KEEP_ALL);
-            assert_eq!(d.absorption, 3.0, "the absorption crosses the conversion");
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let mob = |id, kind: &str| {
+                    Mob::new(
+                        id,
+                        Arc::new(types.types[kind].clone()),
+                        Vec3::new(3.5, 70.0, -2.5),
+                        0.0,
+                    )
+                };
+                let mut z = mob(1, "minecraft:zombie");
+                z.absorption = 3.0;
+                let mut d = mob(2, "minecraft:drowned");
+                // LivingEntity.setAbsorptionAmount clamps to the new mob's maximum
+                // before effects are copied. An unmodified drowned has maximum 0.
+                Arc::make_mut(&mut Arc::make_mut(&mut d.kind).attributes)
+                    .insert("minecraft:max_absorption".into(), 3.0);
+                single(&z, &mut d, Params::KEEP_ALL);
+                assert_eq!(d.absorption, 3.0, "the absorption crosses the conversion");
+            }),
+            "vanilla data is missing"
+        );
     }
 }

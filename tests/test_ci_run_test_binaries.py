@@ -238,6 +238,21 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
         self.assertEqual(len(errors), 1)
         self.assertIn("network guard: socket", errors[0])
 
+    def test_a_rerun_that_skips_for_missing_data_reaches_the_verdict(self):
+        binary = {"label": "horizon-world lib.rs"}
+
+        def rerun(invocation, env, args, timed=False):
+            return {"binary": invocation, "seconds": 0.1, "max_rss_kib": 0, "status": "ok",
+                    "output": io.StringIO("skipped: no vanilla data; test=a::slow; skipped tests=1\n"),
+                    "log": {"a::slow": ("ok", 0.1)}}
+
+        skips = []
+        with unittest.mock.patch.object(runner, "run_one", rerun), contextlib.redirect_stdout(io.StringIO()):
+            errors = runner.confirm_slow_tests([(7.5, "a::slow", binary["label"])], [binary], {}, [], 5.0,
+                                               data_skips=skips)
+        self.assertEqual(errors, [])
+        self.assertEqual(skips, [(binary["label"], "a::slow")])
+
     @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires a POSIX shell")
     def test_a_test_that_skips_for_missing_data_fails_only_with_the_flag(self):
         with tempfile.TemporaryDirectory() as directory:

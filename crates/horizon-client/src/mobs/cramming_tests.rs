@@ -82,5 +82,5 @@ fn a_ridden_horse_is_not_counted_for_cramming() {
     });
     // Without the vanilla data under .local/horizon-client there is no world
     // to push in: the test has nothing to check.
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

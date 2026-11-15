@@ -1514,23 +1514,26 @@ mod creative_target_tests {
     #[test]
     #[ignore = "daily"]
     fn an_angry_zombified_piglin_drops_a_creative_player() {
-        with_test_world(&[], |w, types| {
-            let mut w = w.clone();
-            let mut player = test_player(Vec3::new(3.5, 64.0, 0.5));
-            player.creative = true;
-            w.player = Some(player);
-            let kind = Arc::new(types.types["minecraft:zombified_piglin"].clone());
-            let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            m.ai.target = Some(Who::Player);
-            m.extra.anger = 300;
-            let mut test_level = crate::health::TestLevel::new(0);
-            let level = &mut test_level.level();
-            for _ in 0..40 {
-                let mut events = Vec::new();
-                m.tick(&w, level, &mut events);
-            }
-            assert_eq!(m.ai.target, None, "anger {}", m.extra.anger);
-        });
+        assert!(
+            with_test_world(&[], |w, types| {
+                let mut w = w.clone();
+                let mut player = test_player(Vec3::new(3.5, 64.0, 0.5));
+                player.creative = true;
+                w.player = Some(player);
+                let kind = Arc::new(types.types["minecraft:zombified_piglin"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.ai.target = Some(Who::Player);
+                m.extra.anger = 300;
+                let mut test_level = crate::health::TestLevel::new(0);
+                let level = &mut test_level.level();
+                for _ in 0..40 {
+                    let mut events = Vec::new();
+                    m.tick(&w, level, &mut events);
+                }
+                assert_eq!(m.ai.target, None, "anger {}", m.extra.anger);
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 
@@ -1583,7 +1586,7 @@ mod go_to_water_tests {
                 };
                 assert_eq!(goal.can_use(&mut m, &mut cx), expect, "{block}");
             });
-            let _ = ran;
+            assert!(ran, "vanilla data is missing");
         }
     }
 }
@@ -1741,7 +1744,7 @@ mod wither_arrow_tests {
                 assert_eq!(arrow.fire_ticks, fire_ticks, "{name}");
             }
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// #9808: a zombified piglin angry at another mob (a skeleton's arrow
@@ -1749,33 +1752,36 @@ mod wither_arrow_tests {
     #[test]
     #[ignore = "daily"]
     fn a_piglin_angry_at_a_mob_does_not_target_the_player() {
-        with_test_world(&[], |w, types| {
-            let mut w = w.clone();
-            w.player = Some(test_player(Vec3::new(3.5, 64.0, 0.5)));
-            let kind = Arc::new(types.types["minecraft:zombified_piglin"].clone());
-            let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            m.extra.anger = 300;
-            m.extra.angry_at = Some(Who::Mob(99));
-            let mut test_level = crate::health::TestLevel::new(0);
-            let level = &mut test_level.level();
-            for _ in 0..40 {
-                let mut events = Vec::new();
-                m.tick(&w, level, &mut events);
-                assert_ne!(m.ai.target, Some(Who::Player));
-            }
-            // Fresh piglin, angry at the player: it does take the player.
-            let kind = Arc::new(types.types["minecraft:zombified_piglin"].clone());
-            let mut m = Mob::new(2, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            m.extra.anger = 300;
-            m.extra.angry_at = Some(Who::Player);
-            let mut hit = false;
-            for _ in 0..60 {
-                let mut events = Vec::new();
-                m.tick(&w, level, &mut events);
-                hit |= m.ai.target == Some(Who::Player);
-            }
-            assert!(hit, "angry at the player targets the player");
-        });
+        assert!(
+            with_test_world(&[], |w, types| {
+                let mut w = w.clone();
+                w.player = Some(test_player(Vec3::new(3.5, 64.0, 0.5)));
+                let kind = Arc::new(types.types["minecraft:zombified_piglin"].clone());
+                let mut m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.extra.anger = 300;
+                m.extra.angry_at = Some(Who::Mob(99));
+                let mut test_level = crate::health::TestLevel::new(0);
+                let level = &mut test_level.level();
+                for _ in 0..40 {
+                    let mut events = Vec::new();
+                    m.tick(&w, level, &mut events);
+                    assert_ne!(m.ai.target, Some(Who::Player));
+                }
+                // Fresh piglin, angry at the player: it does take the player.
+                let kind = Arc::new(types.types["minecraft:zombified_piglin"].clone());
+                let mut m = Mob::new(2, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                m.extra.anger = 300;
+                m.extra.angry_at = Some(Who::Player);
+                let mut hit = false;
+                for _ in 0..60 {
+                    let mut events = Vec::new();
+                    m.tick(&w, level, &mut events);
+                    hit |= m.ai.target == Some(Who::Player);
+                }
+                assert!(hit, "angry at the player targets the player");
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 
@@ -1879,7 +1885,7 @@ mod trident_continue_tests {
                 "conversion should trigger on tick 301"
             );
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 

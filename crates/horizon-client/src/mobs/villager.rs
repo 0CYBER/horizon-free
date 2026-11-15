@@ -1511,7 +1511,7 @@ mod tests {
             );
             assert_eq!(own.random.next_long(), shared.random.next_long());
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     fn villager() -> Mob {

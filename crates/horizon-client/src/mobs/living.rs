@@ -3590,7 +3590,7 @@ mod tests {
         );
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Entity.applyMovementEmissionAndPlaySound` asks `getMovementEmission`:
@@ -3864,7 +3864,7 @@ mod farmland_event_tests {
         );
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 

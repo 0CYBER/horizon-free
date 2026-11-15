@@ -769,6 +769,6 @@ mod tests {
             assert_eq!(lr.random().state(), level.state());
             assert_eq!(m.random.state(), own.state());
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

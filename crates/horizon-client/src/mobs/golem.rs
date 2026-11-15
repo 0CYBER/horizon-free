@@ -782,7 +782,7 @@ mod tests {
             },
         );
         // Without the vanilla data under .local/horizon-client the world cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `SnowGolem.aiStep` tests `isAir` (cave and void air too) and
@@ -964,37 +964,40 @@ mod tests {
     #[ignore = "daily"]
     fn a_golem_hurt_by_a_player_forgets_its_target_once_under_universal_anger() {
         for rule in [true, false] {
-            with_test_world(&[], |w, _| {
-                let mut w = w.clone();
-                w.universal_anger = rule;
-                let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
-                golem.age = 50;
-                golem.ai.target = Some(Who::Mob(2));
-                golem.extra.anger = 5;
-                golem.ai.last_hurt_by = Some(Who::Player);
-                golem.ai.last_hurt_by_time = 10;
-                let mut goal = ResetUniversalAnger::default();
-                let mut events = Vec::new();
-                let mut test_level = crate::health::TestLevel::new(0);
-                let mut cx = Cx {
-                    w: &w,
-                    level: &mut test_level.level(),
-                    events: &mut events,
-                };
-                assert_eq!(goal.can_use(&mut golem, &mut cx), rule);
-                if !rule {
-                    return;
-                }
-                goal.start(&mut golem, &mut cx);
-                assert_eq!(golem.ai.target, None);
-                assert_eq!(golem.ai.last_hurt_by, None);
-                assert!((400..=780).contains(&golem.extra.anger));
-                assert!(!goal.can_use(&mut golem, &mut cx), "not again");
-                // Hurt again: a newer hit by the player.
-                golem.ai.last_hurt_by = Some(Who::Player);
-                golem.ai.last_hurt_by_time = 60;
-                assert!(goal.can_use(&mut golem, &mut cx));
-            });
+            assert!(
+                with_test_world(&[], |w, _| {
+                    let mut w = w.clone();
+                    w.universal_anger = rule;
+                    let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
+                    golem.age = 50;
+                    golem.ai.target = Some(Who::Mob(2));
+                    golem.extra.anger = 5;
+                    golem.ai.last_hurt_by = Some(Who::Player);
+                    golem.ai.last_hurt_by_time = 10;
+                    let mut goal = ResetUniversalAnger::default();
+                    let mut events = Vec::new();
+                    let mut test_level = crate::health::TestLevel::new(0);
+                    let mut cx = Cx {
+                        w: &w,
+                        level: &mut test_level.level(),
+                        events: &mut events,
+                    };
+                    assert_eq!(goal.can_use(&mut golem, &mut cx), rule);
+                    if !rule {
+                        return;
+                    }
+                    goal.start(&mut golem, &mut cx);
+                    assert_eq!(golem.ai.target, None);
+                    assert_eq!(golem.ai.last_hurt_by, None);
+                    assert!((400..=780).contains(&golem.extra.anger));
+                    assert!(!goal.can_use(&mut golem, &mut cx), "not again");
+                    // Hurt again: a newer hit by the player.
+                    golem.ai.last_hurt_by = Some(Who::Player);
+                    golem.ai.last_hurt_by_time = 60;
+                    assert!(goal.can_use(&mut golem, &mut cx));
+                }),
+                "vanilla data is missing"
+            );
         }
     }
 
@@ -1023,34 +1026,37 @@ mod tests {
     fn a_creeper_that_hurts_an_iron_golem_is_never_fought_back() {
         let creeper = mob(2, Species::Creeper, Vec3::new(1.5, 64.0, 0.5));
         let zombie = mob(3, Species::Zombie, Vec3::new(1.5, 64.0, 0.5));
-        with_test_world(
-            &[
-                creeper.seen(None, &crate::items::Items::empty()),
-                zombie.seen(None, &crate::items::Items::empty()),
-            ],
-            |w, _| {
-                let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
-                let mut goal = HurtByTarget::new();
-                let mut events = Vec::new();
-                let mut test_level = crate::health::TestLevel::new(0);
-                let level = &mut test_level.level();
-                let mut cx = Cx {
-                    w,
-                    level,
-                    events: &mut events,
-                };
+        assert!(
+            with_test_world(
+                &[
+                    creeper.seen(None, &crate::items::Items::empty()),
+                    zombie.seen(None, &crate::items::Items::empty()),
+                ],
+                |w, _| {
+                    let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
+                    let mut goal = HurtByTarget::new();
+                    let mut events = Vec::new();
+                    let mut test_level = crate::health::TestLevel::new(0);
+                    let level = &mut test_level.level();
+                    let mut cx = Cx {
+                        w,
+                        level,
+                        events: &mut events,
+                    };
 
-                golem.ai.last_hurt_by = Some(Who::Mob(2));
-                golem.ai.last_hurt_by_time = 1;
-                assert!(!goal.can_use(&mut golem, &mut cx));
-                assert_eq!(golem.ai.target, None, "a creeper is refused");
+                    golem.ai.last_hurt_by = Some(Who::Mob(2));
+                    golem.ai.last_hurt_by_time = 1;
+                    assert!(!goal.can_use(&mut golem, &mut cx));
+                    assert_eq!(golem.ai.target, None, "a creeper is refused");
 
-                golem.ai.last_hurt_by = Some(Who::Mob(3));
-                golem.ai.last_hurt_by_time = 2;
-                assert!(goal.can_use(&mut golem, &mut cx));
-                goal.start(&mut golem, &mut cx);
-                assert_eq!(golem.ai.target, Some(Who::Mob(3)));
-            },
+                    golem.ai.last_hurt_by = Some(Who::Mob(3));
+                    golem.ai.last_hurt_by_time = 2;
+                    assert!(goal.can_use(&mut golem, &mut cx));
+                    goal.start(&mut golem, &mut cx);
+                    assert_eq!(golem.ai.target, Some(Who::Mob(3)));
+                },
+            ),
+            "vanilla data is missing"
         );
     }
 
@@ -1059,27 +1065,30 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_village_golem_still_targets_the_player_who_angered_it() {
-        with_test_world(&[], |w, _| {
-            let mut w = w.clone();
-            w.player = Some(test_player(Vec3::new(3.5, 64.0, 0.5)));
-            let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
-            golem.extra.anger = 100;
-            golem.extra.angry_at = Some(Who::Player);
-            let mut events = Vec::new();
-            let mut test_level = crate::health::TestLevel::new(0);
-            let level = &mut test_level.level();
-            let mut cx = Cx {
-                w: &w,
-                level,
-                events: &mut events,
-            };
-            let mut goal = NearestTarget::player(true)
-                .interval(0)
-                .when(super::super::tame::angry_at_player);
-            assert!(goal.can_use(&mut golem, &mut cx));
-            goal.start(&mut golem, &mut cx);
-            assert_eq!(golem.ai.target, Some(Who::Player));
-        });
+        assert!(
+            with_test_world(&[], |w, _| {
+                let mut w = w.clone();
+                w.player = Some(test_player(Vec3::new(3.5, 64.0, 0.5)));
+                let mut golem = mob(1, Species::IronGolem, Vec3::new(0.5, 64.0, 0.5));
+                golem.extra.anger = 100;
+                golem.extra.angry_at = Some(Who::Player);
+                let mut events = Vec::new();
+                let mut test_level = crate::health::TestLevel::new(0);
+                let level = &mut test_level.level();
+                let mut cx = Cx {
+                    w: &w,
+                    level,
+                    events: &mut events,
+                };
+                let mut goal = NearestTarget::player(true)
+                    .interval(0)
+                    .when(super::super::tame::angry_at_player);
+                assert!(goal.can_use(&mut golem, &mut cx));
+                goal.start(&mut golem, &mut cx);
+                assert_eq!(golem.ai.target, Some(Who::Player));
+            }),
+            "vanilla data is missing"
+        );
     }
     /// `DefendVillageTargetGoal` finds players with
     /// `TargetingConditions.forCombat().range(64)`, whose range is scaled by
@@ -1197,27 +1206,33 @@ mod created_golem_tests {
         let Some((mut built, mut village, zombie)) = angry_golems() else {
             return;
         };
-        with_test_world(&[], |w, _| {
-            let mut w = w.clone();
-            w.player = Some(test_player(Vec3::new(2.5, 64.0, 0.5)));
-            assert_eq!(
-                target(&mut built, &w, 200),
-                None,
-                "a golem a player built turned on its builder"
-            );
-            assert_eq!(
-                target(&mut village, &w, 200),
-                Some(Who::Player),
-                "a village golem goes after the player"
-            );
-        });
-        with_test_world(&[zombie], |w, _| {
-            assert_eq!(
-                target(&mut built, w, 200),
-                Some(Who::Mob(3)),
-                "a golem a player built still fights monsters"
-            );
-        });
+        assert!(
+            with_test_world(&[], |w, _| {
+                let mut w = w.clone();
+                w.player = Some(test_player(Vec3::new(2.5, 64.0, 0.5)));
+                assert_eq!(
+                    target(&mut built, &w, 200),
+                    None,
+                    "a golem a player built turned on its builder"
+                );
+                assert_eq!(
+                    target(&mut village, &w, 200),
+                    Some(Who::Player),
+                    "a village golem goes after the player"
+                );
+            }),
+            "vanilla data is missing"
+        );
+        assert!(
+            with_test_world(&[zombie], |w, _| {
+                assert_eq!(
+                    target(&mut built, w, 200),
+                    Some(Who::Mob(3)),
+                    "a golem a player built still fights monsters"
+                );
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 

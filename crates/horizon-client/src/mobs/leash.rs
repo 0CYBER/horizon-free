@@ -1019,7 +1019,7 @@ mod tests {
             ridden.extra.rider = Some(2);
             assert!(can_be_leashed(&ridden), "a plain nautilus has no check");
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `CamelHusk.canBeLeashed` is `!isMobControlled()` and
@@ -1052,7 +1052,7 @@ mod tests {
             wild.extra.rider = Some(2);
             assert!(!can_be_leashed(&wild), "a mob rides the wild horse");
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     #[test]

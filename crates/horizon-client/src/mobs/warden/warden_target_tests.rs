@@ -58,7 +58,7 @@ fn only_a_persistent_or_leashed_warden_keeps_its_dig_cooldown() {
             assert_eq!(dig_cooldown(&mut m), ttl, "{what} warden");
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `Warden.canTargetEntity`: `!isAlliedTo(entity) && !entity.isInvulnerable()`.
@@ -114,7 +114,7 @@ fn the_warden_leaves_its_allies_and_invulnerable_mobs_alone() {
                 "an invulnerable mob"
             );
         });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `Warden.VibrationUser.canReceiveVibration` through `isAlliedTo`: a team
@@ -152,5 +152,5 @@ fn an_allied_vibration_is_not_heard() {
         let none = heard_by(ctx, &Teams::default(), m.id);
         assert!(can_receive_vibration(&m, 0, &none));
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

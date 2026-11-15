@@ -165,33 +165,36 @@ fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
         ("minecraft:lectern", 2, 3_000, false),
         ("minecraft:lectern", -4, 3_000, false),
     ] {
-        with_built_test_world(
-            &[],
-            |world, registry| {
-                build(world, registry, true, None, None);
-                if block != "minecraft:air" {
-                    world
-                        .set(x, 64, 0, registry.default_state(block).unwrap())
-                        .unwrap();
-                }
-            },
-            |w, types| {
-                let mut w = w.clone();
-                // Villager 1's turn to restock: (game_time + 1) is a multiple of 300.
-                w.game_time = 3_299;
-                w.day_time = day_time;
-                let mut m = villager(types, 1);
-                m.extra.variant2 = 9; // librarian
-                m.extra.home = Some([x, 64, 0]);
-                m.extra.trade = Some(Box::new(used_librarian_offer()));
-                assert!(step(&mut m, &w, 100), "stuck, so the brain is skipped");
-                let uses = m.extra.trade.as_ref().unwrap().offers[0].uses;
-                assert_eq!(
-                    uses == 0,
-                    restocked,
-                    "{block} at x {x}, day time {day_time}"
-                );
-            },
+        assert!(
+            with_built_test_world(
+                &[],
+                |world, registry| {
+                    build(world, registry, true, None, None);
+                    if block != "minecraft:air" {
+                        world
+                            .set(x, 64, 0, registry.default_state(block).unwrap())
+                            .unwrap();
+                    }
+                },
+                |w, types| {
+                    let mut w = w.clone();
+                    // Villager 1's turn to restock: (game_time + 1) is a multiple of 300.
+                    w.game_time = 3_299;
+                    w.day_time = day_time;
+                    let mut m = villager(types, 1);
+                    m.extra.variant2 = 9; // librarian
+                    m.extra.home = Some([x, 64, 0]);
+                    m.extra.trade = Some(Box::new(used_librarian_offer()));
+                    assert!(step(&mut m, &w, 100), "stuck, so the brain is skipped");
+                    let uses = m.extra.trade.as_ref().unwrap().offers[0].uses;
+                    assert_eq!(
+                        uses == 0,
+                        restocked,
+                        "{block} at x {x}, day time {day_time}"
+                    );
+                },
+            ),
+            "vanilla data is missing"
         );
     }
 }
@@ -199,21 +202,24 @@ fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
 #[test]
 #[ignore = "daily"]
 fn a_released_villager_gets_its_brain_back_at_its_next_check() {
-    with_built_test_world(
-        &[],
-        |world, registry| build(world, registry, true, None, None),
-        |w, types| {
-            let mut w = w.clone();
-            let mut m = villager(types, 1);
-            w.game_time = 50;
-            assert!(step(&mut m, &w, 100), "walled in");
-            // It leaves the cell; the answer stands until the villager's turn (game time + 1 a multiple of 100).
-            m.position = Vec3::new(3.5, 64.0, 3.5);
-            w.game_time = 60;
-            assert!(step(&mut m, &w, 100), "no recheck before its turn");
-            w.game_time = 99;
-            assert!(!step(&mut m, &w, 100), "free at its recheck");
-        },
+    assert!(
+        with_built_test_world(
+            &[],
+            |world, registry| build(world, registry, true, None, None),
+            |w, types| {
+                let mut w = w.clone();
+                let mut m = villager(types, 1);
+                w.game_time = 50;
+                assert!(step(&mut m, &w, 100), "walled in");
+                // It leaves the cell; the answer stands until the villager's turn (game time + 1 a multiple of 100).
+                m.position = Vec3::new(3.5, 64.0, 3.5);
+                w.game_time = 60;
+                assert!(step(&mut m, &w, 100), "no recheck before its turn");
+                w.game_time = 99;
+                assert!(!step(&mut m, &w, 100), "free at its recheck");
+            },
+        ),
+        "vanilla data is missing"
     );
 }
 

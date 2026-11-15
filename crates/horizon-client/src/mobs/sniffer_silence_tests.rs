@@ -71,5 +71,5 @@ fn silent_sniffer_mutes_the_state_and_seed_sounds() {
             );
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

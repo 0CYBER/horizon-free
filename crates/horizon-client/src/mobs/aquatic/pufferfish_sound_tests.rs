@@ -71,7 +71,7 @@ fn a_pufferfish_puffs_with_its_voice_pitch_or_in_silence() {
             }
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `AbstractFish.aiStep` flops with `makeSound` after the two floats of its hop:
@@ -111,7 +111,7 @@ fn a_flopping_fish_plays_at_its_voice_pitch_or_in_silence() {
             }
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `Pufferfish.aiStep` plays no sting of its own for the player: `playerTouch`
@@ -141,5 +141,5 @@ fn the_fish_ai_never_plays_the_players_sting() {
             );
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

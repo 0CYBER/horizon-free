@@ -606,7 +606,7 @@ mod sight_tests {
                 "only a ravager is blind"
             );
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     fn blind_of_other_species(world: &MobWorld, types: &crate::mobs::MobTypes) -> bool {

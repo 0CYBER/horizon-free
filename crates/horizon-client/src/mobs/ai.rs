@@ -4793,47 +4793,50 @@ mod same_vehicle_push_tests {
     #[test]
     #[ignore = "daily"]
     fn a_mobs_equipment_is_listed_by_slot() {
-        with_test_world(&[], |_, types| {
-            let mob = |name: &str| {
-                Mob::new(
-                    1,
-                    std::sync::Arc::new(types.types[name].clone()),
-                    Vec3::new(0.5, 64.0, 0.5),
-                    0.0,
-                )
-            };
-            let mut zombie = mob("minecraft:zombie");
-            assert!(zombie.equipment_stacks().iter().all(Option::is_none));
-            zombie
-                .extra
-                .set_main_hand(Some(std::sync::Arc::from("minecraft:iron_sword")));
-            zombie.extra.set_slot_id(
-                horizon_items::equipment::FEET,
-                Some(std::sync::Arc::from("minecraft:iron_boots")),
-            );
-            let worn = zombie.equipment_stacks();
-            assert_eq!(
-                worn[0].as_ref().unwrap().item.as_ref(),
-                "minecraft:iron_sword"
-            );
-            assert_eq!(
-                worn[2].as_ref().unwrap().item.as_ref(),
-                "minecraft:iron_boots"
-            );
-            assert_eq!(worn.iter().flatten().count(), 2);
-            let mut horse = mob("minecraft:horse");
-            horse
-                .extra
-                .set_body(Some(std::sync::Arc::from("minecraft:iron_horse_armor")));
-            horse.set_saddle(Some(crate::items::ItemStack::new("minecraft:saddle", 1)));
-            let gear = horse.equipment_stacks();
-            assert_eq!(
-                gear[6].as_ref().unwrap().item.as_ref(),
-                "minecraft:iron_horse_armor"
-            );
-            assert_eq!(gear[7].as_ref().unwrap().item.as_ref(), "minecraft:saddle");
-            assert!(gear[5].is_none());
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let mob = |name: &str| {
+                    Mob::new(
+                        1,
+                        std::sync::Arc::new(types.types[name].clone()),
+                        Vec3::new(0.5, 64.0, 0.5),
+                        0.0,
+                    )
+                };
+                let mut zombie = mob("minecraft:zombie");
+                assert!(zombie.equipment_stacks().iter().all(Option::is_none));
+                zombie
+                    .extra
+                    .set_main_hand(Some(std::sync::Arc::from("minecraft:iron_sword")));
+                zombie.extra.set_slot_id(
+                    horizon_items::equipment::FEET,
+                    Some(std::sync::Arc::from("minecraft:iron_boots")),
+                );
+                let worn = zombie.equipment_stacks();
+                assert_eq!(
+                    worn[0].as_ref().unwrap().item.as_ref(),
+                    "minecraft:iron_sword"
+                );
+                assert_eq!(
+                    worn[2].as_ref().unwrap().item.as_ref(),
+                    "minecraft:iron_boots"
+                );
+                assert_eq!(worn.iter().flatten().count(), 2);
+                let mut horse = mob("minecraft:horse");
+                horse
+                    .extra
+                    .set_body(Some(std::sync::Arc::from("minecraft:iron_horse_armor")));
+                horse.set_saddle(Some(crate::items::ItemStack::new("minecraft:saddle", 1)));
+                let gear = horse.equipment_stacks();
+                assert_eq!(
+                    gear[6].as_ref().unwrap().item.as_ref(),
+                    "minecraft:iron_horse_armor"
+                );
+                assert_eq!(gear[7].as_ref().unwrap().item.as_ref(), "minecraft:saddle");
+                assert!(gear[5].is_none());
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `Entity.push(Entity)` returns at once for `isPassengerOfSameVehicle`
@@ -4850,28 +4853,34 @@ mod same_vehicle_push_tests {
         let mut push = |zombie_too: bool| {
             let mut out = None;
             let mut riders = Vec::new();
-            with_test_world(&[], |_, types| {
-                let mob = |id: u32, name: &str, at: Vec3| {
-                    Mob::new(id, std::sync::Arc::new(types.types[name].clone()), at, 0.0)
-                };
-                let mut camel = mob(1, "minecraft:camel", Vec3::new(0.5, 64.0, 0.5));
-                let mut husk = mob(2, "minecraft:husk", Vec3::new(0.5, 65.5, 1.0));
-                camel.extra.rider = Some(husk.id);
-                husk.extra.mount = Some(camel.id);
-                riders.push(husk.seen(None, &crate::items::Items::empty()));
-                if zombie_too {
-                    riders.push(
-                        mob(3, "minecraft:zombie", Vec3::new(0.5, 64.0, 0.0))
-                            .seen(None, &crate::items::Items::empty()),
-                    );
-                }
-                out = Some(camel);
-            });
+            assert!(
+                with_test_world(&[], |_, types| {
+                    let mob = |id: u32, name: &str, at: Vec3| {
+                        Mob::new(id, std::sync::Arc::new(types.types[name].clone()), at, 0.0)
+                    };
+                    let mut camel = mob(1, "minecraft:camel", Vec3::new(0.5, 64.0, 0.5));
+                    let mut husk = mob(2, "minecraft:husk", Vec3::new(0.5, 65.5, 1.0));
+                    camel.extra.rider = Some(husk.id);
+                    husk.extra.mount = Some(camel.id);
+                    riders.push(husk.seen(None, &crate::items::Items::empty()));
+                    if zombie_too {
+                        riders.push(
+                            mob(3, "minecraft:zombie", Vec3::new(0.5, 64.0, 0.0))
+                                .seen(None, &crate::items::Items::empty()),
+                        );
+                    }
+                    out = Some(camel);
+                }),
+                "vanilla data is missing"
+            );
             let mut camel = out?;
             let mut events = Vec::new();
-            with_test_world(&riders, |w, _| {
-                push_entities(&mut camel, w, level, &mut events)
-            });
+            assert!(
+                with_test_world(&riders, |w, _| {
+                    push_entities(&mut camel, w, level, &mut events)
+                }),
+                "vanilla data is missing"
+            );
             let pushed: Vec<u32> = events
                 .iter()
                 .filter_map(|e| match e {
@@ -4900,19 +4909,22 @@ mod same_vehicle_push_tests {
     #[ignore = "daily"]
     fn a_mob_in_a_crowded_pen_pushes_at_most_the_cap() {
         let mut pen = None;
-        with_test_world(&[], |_, types| {
-            let chicken = |id: u32| {
-                // All inside one another's boxes, none exactly on the pusher.
-                let at = Vec3::new(0.5 + f64::from(id) * 0.02, 64.0, 0.5);
-                Mob::new(
-                    id,
-                    std::sync::Arc::new(types.types["minecraft:chicken"].clone()),
-                    at,
-                    0.0,
-                )
-            };
-            pen = Some((0..12).map(chicken).collect::<Vec<_>>());
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let chicken = |id: u32| {
+                    // All inside one another's boxes, none exactly on the pusher.
+                    let at = Vec3::new(0.5 + f64::from(id) * 0.02, 64.0, 0.5);
+                    Mob::new(
+                        id,
+                        std::sync::Arc::new(types.types["minecraft:chicken"].clone()),
+                        at,
+                        0.0,
+                    )
+                };
+                pen = Some((0..12).map(chicken).collect::<Vec<_>>());
+            }),
+            "vanilla data is missing"
+        );
         let Some(pen) = pen else {
             return;
         };
@@ -5028,7 +5040,7 @@ mod same_vehicle_push_tests {
         });
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
         let Some((mut villager, mut cow)) = pair else {
             return;
         };
@@ -5046,7 +5058,7 @@ mod same_vehicle_push_tests {
         );
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
         assert!(events.is_empty());
         assert_eq!(cow.velocity, Vec3::ZERO);
 
@@ -5060,7 +5072,7 @@ mod same_vehicle_push_tests {
         });
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
         assert!(events.iter().any(|e| matches!(
             e,
             MobEvent::Push {
@@ -5090,7 +5102,7 @@ mod same_vehicle_push_tests {
         });
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
         let Some((mut fox, mut cow)) = pair else {
             return;
         };
@@ -5105,7 +5117,7 @@ mod same_vehicle_push_tests {
         });
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
         assert!(events.is_empty());
         assert_eq!(cow.velocity, Vec3::ZERO);
 
@@ -5120,7 +5132,7 @@ mod same_vehicle_push_tests {
         });
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
         assert!(events.iter().any(|e| matches!(
             e,
             MobEvent::Push {
@@ -5137,17 +5149,20 @@ mod same_vehicle_push_tests {
         let level = &mut test_level.level();
         let pair = |ridden: bool| {
             let mut out = None;
-            with_test_world(&[], |_, types| {
-                let mob = |id: u32, name: &str, at: Vec3| {
-                    Mob::new(id, std::sync::Arc::new(types.types[name].clone()), at, 0.0)
-                };
-                let mut horse = mob(1, "minecraft:horse", Vec3::new(0.5, 64.0, 0.5));
-                if ridden {
-                    horse.extra.rider = Some(3);
-                }
-                let cow = mob(2, "minecraft:cow", Vec3::new(1.4, 64.0, 0.5));
-                out = Some((horse, cow));
-            });
+            assert!(
+                with_test_world(&[], |_, types| {
+                    let mob = |id: u32, name: &str, at: Vec3| {
+                        Mob::new(id, std::sync::Arc::new(types.types[name].clone()), at, 0.0)
+                    };
+                    let mut horse = mob(1, "minecraft:horse", Vec3::new(0.5, 64.0, 0.5));
+                    if ridden {
+                        horse.extra.rider = Some(3);
+                    }
+                    let cow = mob(2, "minecraft:cow", Vec3::new(1.4, 64.0, 0.5));
+                    out = Some((horse, cow));
+                }),
+                "vanilla data is missing"
+            );
             out
         };
         let pushed = |events: &[MobEvent]| -> Vec<u32> {
@@ -5166,9 +5181,12 @@ mod same_vehicle_push_tests {
             return;
         };
         let mut events = Vec::new();
-        with_test_world(&[cow.seen(None, &crate::items::Items::empty())], |w, _| {
-            push_entities(&mut horse, w, level, &mut events)
-        });
+        assert!(
+            with_test_world(&[cow.seen(None, &crate::items::Items::empty())], |w, _| {
+                push_entities(&mut horse, w, level, &mut events)
+            }),
+            "vanilla data is missing"
+        );
         assert_eq!(pushed(&events), vec![2], "the ridden horse pushes the cow");
         assert_eq!(
             horse.velocity,
@@ -5178,9 +5196,12 @@ mod same_vehicle_push_tests {
 
         let (horse, mut cow) = pair(true).unwrap();
         let mut events = Vec::new();
-        with_test_world(
-            &[horse.seen(None, &crate::items::Items::empty())],
-            |w, _| push_entities(&mut cow, w, level, &mut events),
+        assert!(
+            with_test_world(
+                &[horse.seen(None, &crate::items::Items::empty())],
+                |w, _| push_entities(&mut cow, w, level, &mut events),
+            ),
+            "vanilla data is missing"
         );
         assert_eq!(
             pushed(&events),
@@ -5191,9 +5212,12 @@ mod same_vehicle_push_tests {
 
         let (horse, mut cow) = pair(false).unwrap();
         let mut events = Vec::new();
-        with_test_world(
-            &[horse.seen(None, &crate::items::Items::empty())],
-            |w, _| push_entities(&mut cow, w, level, &mut events),
+        assert!(
+            with_test_world(
+                &[horse.seen(None, &crate::items::Items::empty())],
+                |w, _| push_entities(&mut cow, w, level, &mut events),
+            ),
+            "vanilla data is missing"
         );
         assert_eq!(
             pushed(&events),
@@ -5214,68 +5238,71 @@ mod warden_push_tests {
     fn a_warden_in_the_ground_does_not_take_collision_pushes() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
-        with_test_world(&[], |world, types| {
-            let mob = |id, kind: &str, x| {
-                Mob::new(
-                    id,
-                    std::sync::Arc::new(types.types[kind].clone()),
-                    Vec3::new(x, 64.0, 0.5),
-                    0.0,
-                )
-            };
-            for pose in [Pose::Emerging, Pose::Digging, Pose::Standing] {
-                let mut warden = mob(1, "minecraft:warden", 0.5);
-                set_pose(&mut warden, pose);
-                let standing = pose == Pose::Standing;
-                assert_eq!(warden.pushable(), standing, "{pose:?}");
-                assert_eq!(
-                    warden.seen(None, &crate::items::Items::empty()).pushable,
-                    standing,
-                    "{pose:?}"
-                );
+        assert!(
+            with_test_world(&[], |world, types| {
+                let mob = |id, kind: &str, x| {
+                    Mob::new(
+                        id,
+                        std::sync::Arc::new(types.types[kind].clone()),
+                        Vec3::new(x, 64.0, 0.5),
+                        0.0,
+                    )
+                };
+                for pose in [Pose::Emerging, Pose::Digging, Pose::Standing] {
+                    let mut warden = mob(1, "minecraft:warden", 0.5);
+                    set_pose(&mut warden, pose);
+                    let standing = pose == Pose::Standing;
+                    assert_eq!(warden.pushable(), standing, "{pose:?}");
+                    assert_eq!(
+                        warden.seen(None, &crate::items::Items::empty()).pushable,
+                        standing,
+                        "{pose:?}"
+                    );
 
-                // The warden's tick: an overlapping mob must not move it.
-                let mut cow = mob(2, "minecraft:cow", 1.0);
-                let others = [cow.seen(None, &crate::items::Items::empty())];
-                let mut w = world.clone();
-                w.others = &others;
-                let mut events = Vec::new();
-                push_entities(&mut warden, &w, level, &mut events);
-                assert_eq!(warden.velocity.x != 0.0, standing, "mob: {pose:?}");
-                // Non-pushable is not an early return: it still pushes others.
-                assert!(events.iter().any(|e| matches!(
-                    e,
-                    MobEvent::Push {
-                        target: Who::Mob(2),
-                        ..
-                    }
-                )));
-
-                // The other mob's tick: the warden's Seen must exclude it.
-                let others = [warden.seen(None, &crate::items::Items::empty())];
-                w.others = &others;
-                events.clear();
-                push_entities(&mut cow, &w, level, &mut events);
-                let pushes_warden = events.iter().any(|e| {
-                    matches!(
+                    // The warden's tick: an overlapping mob must not move it.
+                    let mut cow = mob(2, "minecraft:cow", 1.0);
+                    let others = [cow.seen(None, &crate::items::Items::empty())];
+                    let mut w = world.clone();
+                    w.others = &others;
+                    let mut events = Vec::new();
+                    push_entities(&mut warden, &w, level, &mut events);
+                    assert_eq!(warden.velocity.x != 0.0, standing, "mob: {pose:?}");
+                    // Non-pushable is not an early return: it still pushes others.
+                    assert!(events.iter().any(|e| matches!(
                         e,
                         MobEvent::Push {
-                            target: Who::Mob(1),
+                            target: Who::Mob(2),
                             ..
                         }
-                    )
-                });
-                assert_eq!(pushes_warden, standing, "other tick: {pose:?}");
+                    )));
 
-                // The player branch of the warden's tick has its own target path.
-                w.others = &[];
-                w.player = Some(test_player(Vec3::new(1.0, 64.0, 0.5)));
-                warden.velocity = Vec3::ZERO;
-                events.clear();
-                push_entities(&mut warden, &w, level, &mut events);
-                assert_eq!(warden.velocity.x != 0.0, standing, "player: {pose:?}");
-            }
-        });
+                    // The other mob's tick: the warden's Seen must exclude it.
+                    let others = [warden.seen(None, &crate::items::Items::empty())];
+                    w.others = &others;
+                    events.clear();
+                    push_entities(&mut cow, &w, level, &mut events);
+                    let pushes_warden = events.iter().any(|e| {
+                        matches!(
+                            e,
+                            MobEvent::Push {
+                                target: Who::Mob(1),
+                                ..
+                            }
+                        )
+                    });
+                    assert_eq!(pushes_warden, standing, "other tick: {pose:?}");
+
+                    // The player branch of the warden's tick has its own target path.
+                    w.others = &[];
+                    w.player = Some(test_player(Vec3::new(1.0, 64.0, 0.5)));
+                    warden.velocity = Vec3::ZERO;
+                    events.clear();
+                    push_entities(&mut warden, &w, level, &mut events);
+                    assert_eq!(warden.velocity.x != 0.0, standing, "player: {pose:?}");
+                }
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 
@@ -5756,7 +5783,7 @@ mod endermite_goal_tests {
             assert!(m.ai.targets.has("HurtByTarget"));
             assert!(m.ai.targets.has("NearestTarget"));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 
@@ -5793,34 +5820,37 @@ mod villager_ambient_tests {
     #[test]
     #[ignore = "daily"]
     fn a_villager_is_silent_asleep_and_noisy_while_trading() {
-        with_test_world(&[], |w, types| {
-            assert_eq!(
-                sound(w, types, "minecraft:villager", |_| {}),
-                Some("entity.villager.ambient")
-            );
-            assert_eq!(
-                sound(w, types, "minecraft:villager", |m| m.extra.flag2 = true),
-                Some("entity.villager.trade")
-            );
-            assert_eq!(
-                sound(w, types, "minecraft:villager", |m| m.extra.ints[1] = 1),
-                None,
-                "asleep"
-            );
-            assert_eq!(
-                sound(w, types, "minecraft:villager", |m| {
-                    m.extra.ints[1] = 1;
-                    m.extra.flag2 = true;
-                }),
-                None,
-                "sleeping wins over trading"
-            );
-            let trading = |m: &mut Mob| m.extra.flag2 = true;
-            assert_eq!(
-                sound(w, types, "minecraft:wandering_trader", trading),
-                Some("entity.wandering_trader.trade")
-            );
-        });
+        assert!(
+            with_test_world(&[], |w, types| {
+                assert_eq!(
+                    sound(w, types, "minecraft:villager", |_| {}),
+                    Some("entity.villager.ambient")
+                );
+                assert_eq!(
+                    sound(w, types, "minecraft:villager", |m| m.extra.flag2 = true),
+                    Some("entity.villager.trade")
+                );
+                assert_eq!(
+                    sound(w, types, "minecraft:villager", |m| m.extra.ints[1] = 1),
+                    None,
+                    "asleep"
+                );
+                assert_eq!(
+                    sound(w, types, "minecraft:villager", |m| {
+                        m.extra.ints[1] = 1;
+                        m.extra.flag2 = true;
+                    }),
+                    None,
+                    "sleeping wins over trading"
+                );
+                let trading = |m: &mut Mob| m.extra.flag2 = true;
+                assert_eq!(
+                    sound(w, types, "minecraft:wandering_trader", trading),
+                    Some("entity.wandering_trader.trade")
+                );
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 
@@ -5857,67 +5887,70 @@ mod fox_screech_tests {
     #[test]
     #[ignore = "daily"]
     fn a_fox_screeches_only_at_night_with_no_player_near() {
-        with_test_world(&[], |w, types| {
-            let mut night = w.clone();
-            night.daylight = false;
-            let alone = sounds(&night, types);
-            assert_eq!(alone.len(), 200);
-            let screeches: Vec<_> = alone
-                .iter()
-                .filter(|s| s.0 == "entity.fox.screech")
-                .collect();
-            assert!(!screeches.is_empty(), "no screech in 200 night calls");
-            assert!(screeches.len() < 60, "{} screeches", screeches.len());
-            // Played by playAmbientSound itself at volume 2...
-            assert!(screeches.iter().any(|s| s.1 == 2.0));
-            // ...or picked again through Mob.playAmbientSound (makeSound, volume 1).
-            assert!(screeches.iter().all(|s| s.1 == 2.0 || s.1 == 1.0));
-            assert!(
-                alone
+        assert!(
+            with_test_world(&[], |w, types| {
+                let mut night = w.clone();
+                night.daylight = false;
+                let alone = sounds(&night, types);
+                assert_eq!(alone.len(), 200);
+                let screeches: Vec<_> = alone
                     .iter()
-                    .all(|s| s.0 == "entity.fox.screech" || s.0 == "entity.fox.ambient")
-            );
+                    .filter(|s| s.0 == "entity.fox.screech")
+                    .collect();
+                assert!(!screeches.is_empty(), "no screech in 200 night calls");
+                assert!(screeches.len() < 60, "{} screeches", screeches.len());
+                // Played by playAmbientSound itself at volume 2...
+                assert!(screeches.iter().any(|s| s.1 == 2.0));
+                // ...or picked again through Mob.playAmbientSound (makeSound, volume 1).
+                assert!(screeches.iter().all(|s| s.1 == 2.0 || s.1 == 1.0));
+                assert!(
+                    alone
+                        .iter()
+                        .all(|s| s.0 == "entity.fox.screech" || s.0 == "entity.fox.ambient")
+                );
 
-            let by_day = sounds(w, types);
-            assert!(by_day.iter().all(|s| s.0 == "entity.fox.ambient"));
+                let by_day = sounds(w, types);
+                assert!(by_day.iter().all(|s| s.0 == "entity.fox.ambient"));
 
-            let mut end = night.clone();
-            end.daylight = true;
-            end.dimension_type =
-                horizon_world::dimension_type::DimensionFacts::vanilla("minecraft:the_end")
-                    .unwrap();
-            assert!(
-                sounds(&end, types)
-                    .iter()
-                    .any(|s| s.0 == "entity.fox.screech")
-            );
+                let mut end = night.clone();
+                end.daylight = true;
+                end.dimension_type =
+                    horizon_world::dimension_type::DimensionFacts::vanilla("minecraft:the_end")
+                        .unwrap();
+                assert!(
+                    sounds(&end, types)
+                        .iter()
+                        .any(|s| s.0 == "entity.fox.screech")
+                );
 
-            let mut near = night.clone();
-            near.player = Some(player_at(16.0));
-            assert!(
-                sounds(&near, types)
-                    .iter()
-                    .all(|s| s.0 == "entity.fox.ambient")
-            );
+                let mut near = night.clone();
+                near.player = Some(player_at(16.0));
+                assert!(
+                    sounds(&near, types)
+                        .iter()
+                        .all(|s| s.0 == "entity.fox.ambient")
+                );
 
-            let mut far = night.clone();
-            far.player = Some(player_at(18.0));
-            assert!(
-                sounds(&far, types)
-                    .iter()
-                    .any(|s| s.0 == "entity.fox.screech")
-            );
+                let mut far = night.clone();
+                far.player = Some(player_at(18.0));
+                assert!(
+                    sounds(&far, types)
+                        .iter()
+                        .any(|s| s.0 == "entity.fox.screech")
+                );
 
-            let mut spectator = night.clone();
-            let mut p = player_at(2.0);
-            p.spectator = true;
-            spectator.player = Some(p);
-            assert!(
-                sounds(&spectator, types)
-                    .iter()
-                    .any(|s| s.0 == "entity.fox.screech")
-            );
-        });
+                let mut spectator = night.clone();
+                let mut p = player_at(2.0);
+                p.spectator = true;
+                spectator.player = Some(p);
+                assert!(
+                    sounds(&spectator, types)
+                        .iter()
+                        .any(|s| s.0 == "entity.fox.screech")
+                );
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 
@@ -6209,7 +6242,7 @@ mod burn_and_rose_tests {
                 assert!(burns(&mut m), "the tick after it stepped out");
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `PowderSnowBlock.entityInside`: a mob that is already burning destroys
@@ -6252,7 +6285,7 @@ mod burn_and_rose_tests {
                 );
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `WitherRoseBlock.entityInside` tests the world difficulty and
@@ -6278,7 +6311,7 @@ mod burn_and_rose_tests {
                 assert!(!m.has_effect("minecraft:wither"), "peaceful");
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Entity.checkInsideBlocks` runs `WitherRoseBlock.entityInside` for every
@@ -6310,7 +6343,7 @@ mod burn_and_rose_tests {
                 assert!(!beside.has_effect("minecraft:wither"), "beside it");
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `applyEffectsFromBlocks` runs after `baseTick` counted the fire and
@@ -6399,7 +6432,7 @@ mod wither_block_slowdown_tests {
                     "cow stuck multiplier applied"
                 );
             });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `PowderSnowBlock.entityInside` -> `makeStuckInBlock`: a regular mob
@@ -6422,7 +6455,7 @@ mod wither_block_slowdown_tests {
                 "cow powder snow stuck multiplier applied"
             );
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `WitherBoss.makeStuckInBlock` is a NO-OP: a wither inside sweet berry bush
@@ -6442,7 +6475,7 @@ mod wither_block_slowdown_tests {
                 assert_eq!(m.fall_distance, 4.5, "wither fall distance preserved");
                 assert_eq!(m.stuck_multiplier, Vec3::ZERO, "wither not slowed");
             });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `WitherBoss.makeStuckInBlock` is a NO-OP: a wither inside powder snow
@@ -6461,7 +6494,7 @@ mod wither_block_slowdown_tests {
             assert_eq!(m.fall_distance, 4.5, "wither fall distance preserved");
             assert_eq!(m.stuck_multiplier, Vec3::ZERO, "wither not slowed");
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `SweetBerryBushBlock.entityInside`: Wither is NOT exempt from damage
@@ -6514,7 +6547,7 @@ mod wither_block_slowdown_tests {
                 assert_eq!(m.stuck_multiplier, Vec3::ZERO, "wither still not slowed");
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 
@@ -6564,7 +6597,7 @@ mod silverfish_walk_target_tests {
             let dirt = walk_target_value(&m, w, [2, 65, 0]);
             assert!(dirt < 10.0, "standing on dirt falls through, got {dirt}");
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 
@@ -6878,7 +6911,7 @@ mod air_tests {
             );
         });
         // Without the extracted vanilla data the world cannot be built.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Dolphin.handleAirSupply` is empty and the dolphin isn't in
@@ -6935,7 +6968,7 @@ mod air_tests {
             assert_eq!(after("minecraft:zombie", 299, true).0, 300);
             assert_eq!(after("minecraft:cod", 100, false).0, 300);
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `WaterAnimal.handleAirSupply` asks `shouldTakeDrowningDamage`, which is
@@ -6958,7 +6991,7 @@ mod air_tests {
             assert_eq!(drowned(-25), (2.0, 0));
             assert_eq!(drowned(-20), (2.0, 0));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// A copper golem is in `#can_breathe_under_water`: its air stays full.
@@ -7904,6 +7937,6 @@ mod walk_target_tests {
             },
         );
         // Without the extracted vanilla data the world cannot be built.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

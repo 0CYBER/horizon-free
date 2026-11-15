@@ -392,52 +392,13 @@ mod elder_home_tests {
     #[test]
     #[ignore = "daily"]
     fn an_elder_guardian_homes_where_it_stands() {
-        with_test_world(&[], |w, types| {
-            let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
-            let mut test_level = crate::health::TestLevel::new(0);
-            let mut level = test_level.level();
-            let mut events = Vec::new();
-            let mut m = Mob::new(1, kind.clone(), Vec3::new(10.7, 64.2, -20.9), 0.0);
-            elder_server_ai_step(
-                &mut m,
-                &mut Cx {
-                    w,
-                    level: &mut level,
-                    events: &mut events,
-                },
-            );
-            assert_eq!(m.ai.home, Some(([10, 64, -21], 16)));
-            assert!(!m.restricted(0.0, [20, 64, -21]));
-            assert!(m.restricted(0.0, [27, 64, -21]));
-
-            let mut kept = Mob::new(2, kind, Vec3::new(10.0, 64.0, 20.0), 0.0);
-            kept.ai.home = Some(([100, 50, 100], 24));
-            elder_server_ai_step(
-                &mut kept,
-                &mut Cx {
-                    w,
-                    level: &mut level,
-                    events: &mut events,
-                },
-            );
-            assert_eq!(kept.ai.home, Some(([100, 50, 100], 24)));
-        });
-    }
-
-    /// `ElderGuardian.customServerAiStep`: on its minute (`(tickCount + getId()) % 1200 == 0`)
-    /// the curse goes out with `isSilent() ? 0.0F : 1.0F`, and
-    /// `ClientPacketListener.handleGameEvent` plays the curse sound only for 1.
-    #[test]
-    #[ignore = "daily"]
-    fn a_silent_elder_guardian_curses_without_the_sound() {
-        with_test_world(&[], |w, types| {
-            let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
-            let mut fixture = crate::health::TestLevel::new(0);
-            let mut level = fixture.level();
-            for silent in [false, true] {
+        assert!(
+            with_test_world(&[], |w, types| {
+                let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
+                let mut test_level = crate::health::TestLevel::new(0);
+                let mut level = test_level.level();
                 let mut events = Vec::new();
-                let mut m = Mob::new(1200, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
-                m.silent = silent;
+                let mut m = Mob::new(1, kind.clone(), Vec3::new(10.7, 64.2, -20.9), 0.0);
                 elder_server_ai_step(
                     &mut m,
                     &mut Cx {
@@ -446,16 +407,61 @@ mod elder_home_tests {
                         events: &mut events,
                     },
                 );
-                let curses: Vec<_> = events
-                    .iter()
-                    .filter_map(|e| match e {
-                        MobEvent::ElderCurse { silent, .. } => Some(*silent),
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(curses, [silent]);
-            }
-        });
+                assert_eq!(m.ai.home, Some(([10, 64, -21], 16)));
+                assert!(!m.restricted(0.0, [20, 64, -21]));
+                assert!(m.restricted(0.0, [27, 64, -21]));
+
+                let mut kept = Mob::new(2, kind, Vec3::new(10.0, 64.0, 20.0), 0.0);
+                kept.ai.home = Some(([100, 50, 100], 24));
+                elder_server_ai_step(
+                    &mut kept,
+                    &mut Cx {
+                        w,
+                        level: &mut level,
+                        events: &mut events,
+                    },
+                );
+                assert_eq!(kept.ai.home, Some(([100, 50, 100], 24)));
+            }),
+            "vanilla data is missing"
+        );
+    }
+
+    /// `ElderGuardian.customServerAiStep`: on its minute (`(tickCount + getId()) % 1200 == 0`)
+    /// the curse goes out with `isSilent() ? 0.0F : 1.0F`, and
+    /// `ClientPacketListener.handleGameEvent` plays the curse sound only for 1.
+    #[test]
+    #[ignore = "daily"]
+    fn a_silent_elder_guardian_curses_without_the_sound() {
+        assert!(
+            with_test_world(&[], |w, types| {
+                let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
+                let mut fixture = crate::health::TestLevel::new(0);
+                let mut level = fixture.level();
+                for silent in [false, true] {
+                    let mut events = Vec::new();
+                    let mut m = Mob::new(1200, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
+                    m.silent = silent;
+                    elder_server_ai_step(
+                        &mut m,
+                        &mut Cx {
+                            w,
+                            level: &mut level,
+                            events: &mut events,
+                        },
+                    );
+                    let curses: Vec<_> = events
+                        .iter()
+                        .filter_map(|e| match e {
+                            MobEvent::ElderCurse { silent, .. } => Some(*silent),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(curses, [silent]);
+                }
+            }),
+            "vanilla data is missing"
+        );
         assert_eq!(elder_curse_param(false), 1.0);
         assert_eq!(elder_curse_param(true), 0.0);
     }

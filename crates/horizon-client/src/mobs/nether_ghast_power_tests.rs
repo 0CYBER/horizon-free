@@ -118,5 +118,5 @@ fn ghast_explosion_power_sizes_the_fireball_it_shoots() {
             );
         },
     );
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

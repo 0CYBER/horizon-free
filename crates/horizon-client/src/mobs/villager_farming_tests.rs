@@ -429,5 +429,5 @@ fn planting_posts_block_place_with_villager_and_crop_state() {
         },
     );
     // Without the vanilla data under .local/horizon-client the world cannot be built: the test has nothing to check.
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

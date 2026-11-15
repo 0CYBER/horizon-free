@@ -1238,7 +1238,7 @@ mod tests {
             assert!((m.velocity.z - 0.3375).abs() < 1.0e-9, "{}", m.velocity.z);
         });
         // Without a test world the closure does not run; there is nothing else to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Frog.updateWalkAnimation`: target `min(distance * 25, 1)`, 0 while
@@ -1409,7 +1409,7 @@ mod tests {
                 assert_eq!(m.ai.nav.speed_modifier, 2.0);
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Frog` keeps its pregnancy as the `IS_PREGNANT` brain memory, and
@@ -1502,6 +1502,6 @@ mod tests {
                 assert!(!is_pregnant(&m), "laying erases the pregnancy");
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
