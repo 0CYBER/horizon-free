@@ -396,8 +396,9 @@ struct Globals {
     /// HDR output's tier windows, low to very bright: where the lift starts, where it is
     /// full (`hdr::Hdr::windows`); zero without HDR.
     hdr_windows: [[f32; 4]; 2],
+    /// x and y unused; z 1 with HDR output on; w the world's writers write light (terrain.wgsl).
     hdr_light: [f32; 4],
-    /// The sun's disc's peak, HDR lighting's gain, world/look and debug; then the tiers' gains
+    /// The sun's disc's peak, an unused lane, world/look and debug; then the tiers' gains
     /// (`Hdr::draw_params`).
     hdr_settings: [f32; 4],
     hdr_gains: [f32; 4],
@@ -5084,7 +5085,7 @@ impl Renderer {
             pass.draw_indexed(0..quads * 6, (first * 4) as i32, 0..1);
         }
     }
-    /// HDR lighting on the clouds just drawn: the sky's value (`fs_hdr_cloud_mark`).
+    /// Unmarks the clouds just drawn (`fs_hdr_cloud_mark`).
     fn mark_clouds(&self, pass: &mut wgpu::RenderPass<'_>, quads: u32) {
         if !light_marks(self.output.frame.format, self.hdr.is_some())
             || self.hdr.as_ref().is_none_or(|h| !h.lighting)
@@ -5099,7 +5100,7 @@ impl Renderer {
         pass.draw_indexed(0..quads * 6, 0, 0..1);
         pass.set_bind_group(0, &self.group, &[]);
     }
-    /// HDR lighting on translucent terrain, over the draws that just blended it.
+    /// Unmarks translucent terrain, over the draws that just blended it (`fs_translucent_mark`).
     fn mark_translucent_terrain(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -8158,13 +8159,8 @@ impl Renderer {
             ],
             hdr_windows: self.hdr.as_ref().map_or([[0.0; 4]; 2], hdr::Hdr::windows),
             hdr_light: [
-                frame.sky.sky_light_factor,
-                // The underwater overlay: the sky and fog are the water's own colour there.
-                if frame.screen.iter().any(|q| q.world_tint) {
-                    0.0
-                } else {
-                    frame.sky.sky_light_factor
-                },
+                0.0,
+                0.0,
                 // Only HDR output reads the solid terrain's lighting alpha.
                 if self.hdr.is_some() { 1.0 } else { 0.0 },
                 f32::from(u8::from(hdr_gain)),
@@ -10092,12 +10088,7 @@ impl Renderer {
                     view_proj: mirror_view_projection(view_proj, plane).to_cols_array_2d(),
                     inverse_view,
                     fog_ends,
-                    hdr_light: [
-                        globals.hdr_light[0],
-                        globals.hdr_light[1],
-                        globals.hdr_light[2],
-                        0.0,
-                    ],
+                    hdr_light: [0.0, 0.0, globals.hdr_light[2], 0.0],
                     ..globals
                 };
                 self.uploads.buffer(

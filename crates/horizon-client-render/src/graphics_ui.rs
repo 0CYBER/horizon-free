@@ -596,7 +596,7 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         h(
                             H::Hdr,
                             None,
-                            "Lava, fire and sunlight shine brighter than white. Needs an HDR display.",
+                            "Lava, fire and the sun shine brighter than white. Needs an HDR display.",
                         ),
                         h(
                             H::HdrSmoothGradients,
@@ -636,7 +636,7 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         h(
                             H::HdrLighting,
                             None,
-                            "Light sources, the sun and sunlight shine past white. Off: just as SDR.",
+                            "Light sources and the sun shine past white. Off: just as SDR.",
                         ),
                     ],
                 ),

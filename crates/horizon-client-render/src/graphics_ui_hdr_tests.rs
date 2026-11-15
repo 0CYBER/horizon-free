@@ -326,7 +326,7 @@ fn a_held_hdr_start_is_said_on_the_page_and_a_mode_change_tries_again() {
     let setting = h(
         H::Hdr,
         Cost::None,
-        "Lava, fire and sunlight shine brighter than white.",
+        "Lava, fire and the sun shine brighter than white.",
     );
     let held = super::row(setting, &s, &out);
     assert_eq!(held.chosen.as_deref(), Some(HDR_HELD));

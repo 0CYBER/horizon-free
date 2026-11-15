@@ -6,10 +6,11 @@
 //! highlights towards their peak brightness. The world is copied aside before
 //! the hand and HUD so only it is expanded.
 //!
-//! On the float frame Horizon's world light is the same on every display (`TIERS`,
-//! `SUNLIT_GAIN`, up to `SCENE_PEAK`), and the tone curve alone fits it to the display's
-//! peak (docs/design/hdr-linear-light.md, step 6a). The sun's disc alone follows the display
-//! past the scene's peak (`SUN_CAP`).
+//! On the float frame Horizon's world light is the same on every display (`TIERS`, up to
+//! `SCENE_PEAK`), and the tone curve alone fits it to the display's peak
+//! (docs/design/hdr-linear-light.md, step 6a). Lit surfaces get no gain: diffuse white stays at
+//! paper white, and HDR's range above it is the light sources' and the sun's. The sun's disc
+//! alone follows the display past the scene's peak (`SUN_CAP`).
 
 /// The swapchain HDR output presents to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -160,8 +161,6 @@ pub const TIERS: [Tier; 4] = [
 /// into its peak (BT.2390's EETF), and a brighter one shows it as at 1000, but for the sun's
 /// disc (`SUN_CAP`).
 pub const SCENE_PEAK: f32 = 1000.0 / 203.0;
-/// HDR lighting: what the strongest light multiplies a surface by (`hdr_light.wgsl`).
-pub const SUNLIT_GAIN: f32 = 3.0;
 /// How far the sun's disc may pass the scene's peak, in multiples of paper white: on a display
 /// above `SCENE_PEAK` its white is the display's peak, up to this, 2000 nits at a paper white of
 /// 203. Nothing else the world writes passes the scene's peak, so a brighter display shows a
@@ -992,14 +991,13 @@ impl Hdr {
     }
 
     /// What the world's writers read (`hdr_written`): the sun's disc's peak (`fs_sky_sun`, the
-    /// only writer that reads a peak: the others leave theirs to the tone curve), HDR lighting's
-    /// gain, world/look and debug, then the tiers' gains. Of the display only the sun's peak
+    /// only writer that reads a peak: the others leave theirs to the tone curve), an unused
+    /// lane, world/look and debug, then the tiers' gains. Of the display only the sun's peak
     /// reaches them.
     pub(super) fn draw_params(&self, world: bool) -> ([f32; 4], [f32; 4]) {
         let p = self.params(world, false);
-        let sunlit = if self.lighting { SUNLIT_GAIN } else { 1.0 };
         (
-            [self.sun_peak(), sunlit, p[2], p[3]],
+            [self.sun_peak(), 0.0, p[2], p[3]],
             self.tiers.map(|t| t.gain),
         )
     }
@@ -1018,11 +1016,7 @@ impl Hdr {
         ]);
         params[5] = self.black.clamp(0.0, paper);
         params[6] = self.ui;
-        params[7] = if self.lighting {
-            scene_gain(self.peak, self.paper_white)
-        } else {
-            1.0
-        };
+        // [7] pads `share` to its 16-byte alignment.
         params[8..12].copy_from_slice(&COMPAT_SHARES);
         params[12] = c.map_or(0.0, |c| c.step as f32);
         params[13] = c.map_or(0.0, |c| c.nits);
@@ -1109,13 +1103,6 @@ fn logo_mask(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
         .create_view(&Default::default())
 }
 
-/// The compatibility frame's HDR lighting (`fs_hdr`): what the strongest light multiplies a
-/// surface by, 4, which looked right across biomes; less only where there is little headroom
-/// to ease into. The float frame's is `SUNLIT_GAIN`.
-fn scene_gain(peak: f32, paper_white: f32) -> f32 {
-    (peak / paper_white.max(1.0) * 1.75).clamp(1.0, 4.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Hdr, Output, named, pick};
@@ -1129,11 +1116,11 @@ mod tests {
             return;
         };
         // All 8-bit marks, both easing policies, non-grey and over-white colours, look,
-        // debug, headroom and tier shares; half-float neighbours straddle mark boundaries. The
-        // writers take the gain that a share gives.
+        // debug, headroom, tier shares and the unused lane; half-float neighbours straddle mark
+        // boundaries. The writers take the gain that a share gives.
         let source = include_str!("../hdr_light.wgsl").to_owned()
             + r#"
-struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: vec4<f32> }
+struct ReferenceParams { peak: f32, unused: f32, world: f32, debug: f32, share: vec4<f32> }
 var<private> params: ReferenceParams;
 @group(0) @binding(0) var<storage, read_write> errors: array<u32>;
 "# + include_str!("hdr_light_reference.txt")
@@ -1151,18 +1138,17 @@ var<private> params: ReferenceParams;
     let expected = reference_lit(color, mark, shows, eased);
     let gains = 1.0 + (params.peak - 1.0) * params.share;
     let actual = hdr_mark_light(color, mark, shows, eased,
-        vec4(params.peak, params.scene, params.world, params.debug), (params.peak - 1.0) * params.share);
+        vec4(params.peak, params.unused, params.world, params.debug), (params.peak - 1.0) * params.share);
     errors[i] = select(0u, 1u, any(abs(expected.light - actual.light) > vec3(1e-6)) || expected.lifted != actual.lifted);
-    // Gain stays above the tone knee until the separate tone curve runs.
-    let gain = 1.0 + 3.0 * (1.0 - 194.0 / 255.0) / 0.24;
+    // From 0.75 up nothing is lifted: a lit surface's white stays white.
     let white = hdr_written(vec3(1.0), 0.76, vec4(5.0, 4.0, 1.0, 0.0), gains);
-    errors[i] |= select(0u, 4u, any(abs(pow(white, vec3(2.2)) - vec3(gain)) > vec3(1e-5)));
+    errors[i] |= select(0u, 4u, any(white != vec3(1.0)));
     let boundary = (f32(i % 255u) + 0.5) / 255.0;
     for (var step = -1; step <= 1; step++) {
         let stored = unpack2x16float(pack2x16float(vec2(boundary + f32(step) / 65536.0))).x;
         let quantized = round(saturate(stored) * 255.0) / 255.0;
         let want = pow(reference_lit(color, quantized, params.world > 0.5, false).light, vec3(1.0 / 2.2));
-        let got = hdr_written(color, stored, vec4(params.peak, params.scene, params.world, params.debug), gains);
+        let got = hdr_written(color, stored, vec4(params.peak, params.unused, params.world, params.debug), gains);
         errors[i] |= select(0u, 2u, any(abs(want - got) > vec3(1e-6)));
     }
 }
@@ -1381,7 +1367,7 @@ var<private> params: ReferenceParams;
 
     // Independent pre-refactor light arithmetic applied to a compatibility attachment.
     // Float targets in these tests only receive the resulting colour and coverage.
-    // `lift`: the reference's peak, HDR lighting gain, world and debug, then the tiers' shares
+    // `lift`: the reference's peak, an unused lane, world and debug, then the tiers' shares
     // of the headroom up to that peak (`writers_lift`, `display_lift`).
     pub(super) fn legacy_light(
         device: &wgpu::Device,
@@ -1396,7 +1382,7 @@ var<private> params: ReferenceParams;
             label: Some("legacy non-float light oracle"),
             source: wgpu::ShaderSource::Wgsl(
                 (r#"
-struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: vec4<f32> }
+struct ReferenceParams { peak: f32, unused: f32, world: f32, debug: f32, share: vec4<f32> }
 @group(0) @binding(0) var<uniform> params: ReferenceParams;
 @group(0) @binding(1) var source: texture_2d<f32>;
 "#
@@ -1477,7 +1463,7 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
     /// The compatibility frame's display pass's light (`fs_hdr`) as `legacy_light` takes it.
     fn display_lift(hdr: &Hdr) -> [[f32; 4]; 2] {
         let p = hdr.params(true, false);
-        [[p[1], p[7], p[2], p[3]], p[8..12].try_into().unwrap()]
+        [[p[1], 0.0, p[2], p[3]], p[8..12].try_into().unwrap()]
     }
 
     #[test]
@@ -1538,8 +1524,8 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
             let capture = hdr.capture(&device, &queue, &mut encoder, true).unwrap();
             texel(&device, &queue, encoder, &capture)
         };
-        // Unmarked, HDR lighting and light sources of each tier: all up to
-        // the tone curve's knee, which the curve leaves as they are.
+        // Unmarked, a mark from 0.75 up and light sources of each tier: all up to the tone
+        // curve's knee, which the curve leaves as they are.
         for world in [
             [0.5, 0.4, 0.3, 1.0],
             [0.8, 0.7, 0.6, 0.88],
@@ -1554,8 +1540,12 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
                 today.iter().zip(layered).all(|(a, b)| (a - b).abs() <= 1.0),
                 "{world:?}: {today:?} {layered:?}"
             );
-            if world[3] < 1.0 {
-                assert!(layered[0] > shown(true, [world[0], world[1], world[2], 1.0])[0]);
+            let unmarked = [world[0], world[1], world[2], 1.0];
+            if world[3] < 0.75 {
+                assert!(layered[0] > shown(true, unmarked)[0]);
+            } else {
+                // From 0.75 up `fs_hdr` lifts nothing: a lit surface shows as if unmarked.
+                assert_eq!(today, shown(false, unmarked), "{world:?}");
             }
         }
         // Above-white unmarked colour belongs to float storage, not the UNORM oracle.
@@ -1589,7 +1579,7 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
             (hdr.paper_white, hdr.peak) = (paper, peak);
             assert_eq!(
                 hdr.draw_params(true),
-                ([sun, super::SUNLIT_GAIN, 1.0, 0.0], [1.6, 2.4, 2.8, 4.0]),
+                ([sun, 0.0, 1.0, 0.0], [1.6, 2.4, 2.8, 4.0]),
                 "{paper}/{peak}"
             );
             let params = hdr.params(true, false);
@@ -1599,7 +1589,6 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
         // nothing says where their light ends, so the curve's source follows the display.
         assert_eq!(hdr.params(false, false)[16], 0.0);
         hdr.lighting = false;
-        assert_eq!(hdr.draw_params(true).0[1], 1.0);
         assert_eq!(hdr.params(true, false)[16], 0.0);
     }
 
@@ -2338,21 +2327,6 @@ struct ReferenceParams { peak: f32, scene: f32, world: f32, debug: f32, share: v
         assert_eq!(named(Some("scrgb")), Some(Output::ScRgb));
         assert_eq!(named(Some("hdr10")), None);
         assert_eq!(named(None), None);
-    }
-}
-
-#[cfg(test)]
-mod lighting_tests {
-    use super::scene_gain;
-
-    #[test]
-    fn the_lighting_scales_with_the_headroom() {
-        // Enough headroom: the full strength, whatever the paper white.
-        assert_eq!(scene_gain(1000.0, 430.0), 4.0);
-        assert_eq!(scene_gain(1060.0, 203.0), 4.0);
-        // Little headroom, and none.
-        assert_eq!(scene_gain(600.0, 400.0), 2.625);
-        assert_eq!(scene_gain(200.0, 480.0), 1.0);
     }
 }
 

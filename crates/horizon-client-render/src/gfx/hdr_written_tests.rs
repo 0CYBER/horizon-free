@@ -37,7 +37,6 @@ override TEST_OVERLAY: u32 = 0u;
     o.back_color = o.color;
     o.light_color = vec4(0.7, 0.8, 0.9, 1.0);
     o.overlay_color = vec4(1.0);
-    o.scene = 0.8;
     o.tier = TEST_TIER;
     o.overlay = TEST_OVERLAY;
     o.wrap = vec2(0.0, 1.0);
@@ -732,7 +731,7 @@ fn float_plain_fragments_keep_rgb_and_write_only_coverage() {
             misc: [0.0, 1.0, 0.0, 0.0],
             filtering: [0.0, 1.0, 0.0, 0.0],
             hdr_windows: hdr.windows(),
-            hdr_light: [0.8, 0.8, f32::from(u8::from(hdr_on)), 0.0],
+            hdr_light: [0.0, 0.0, f32::from(u8::from(hdr_on)), 0.0],
             hdr_settings: settings,
             hdr_gains: gains,
             ..bytemuck::Zeroable::zeroed()
@@ -1046,7 +1045,7 @@ fn actual_opaque_writers_match_the_legacy_non_float_oracle() {
         misc: [fog, visibility, 0.0, 0.0],
         filtering: [0.0, 1.0, 0.0, 0.0],
         hdr_windows: windows,
-        hdr_light: [0.8, 0.8, 1.0, 1.0],
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
         hdr_settings: settings,
         hdr_gains: gains,
         ..bytemuck::Zeroable::zeroed()
@@ -1114,7 +1113,7 @@ fn actual_translucent_writers_blend_their_own_light() {
         misc: [0.0, 1.0, 0.0, 0.0],
         filtering: [0.0, 1.0, 0.0, 0.0],
         hdr_windows: hdr.windows(),
-        hdr_light: [0.8, 0.8, 1.0, 1.0],
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
         hdr_settings: settings,
         hdr_gains: gains,
         ..bytemuck::Zeroable::zeroed()
@@ -1140,10 +1139,9 @@ fn actual_translucent_writers_blend_their_own_light() {
             "{entry}: {src:?}, coverage {alpha}"
         );
         if terrain {
-            // Full block light leaves mark 194/255 whatever the texel's alpha, even when
+            // Full block and sky light give no gain, whatever the texel's alpha, even when
             // vertex coverage is halved.
-            let gain = (1.0 + (settings[1] - 1.0) * (1.0 - 194.0 / 255.0) / 0.24).powf(1.0 / 2.2);
-            let expected = 200.0 / 255.0 * 0.8 * gain * alpha;
+            let expected = 200.0 / 255.0 * 0.8 * alpha;
             assert!(
                 (src[0] - expected).abs() < 0.002,
                 "coverage {tint_alpha}: {src:?}, expected {expected}"
@@ -1159,6 +1157,71 @@ fn actual_translucent_writers_blend_their_own_light() {
         assert!(got[0] > 1.0);
     }
     eprintln!("HDR actual blend GPU ran terrain, particle and cloud equations");
+}
+
+/// HDR Lighting lifts light sources and the sun, not what they light: under full block and sky
+/// light, the sun straight on the face, a surface writes the light of its colour as drawn, on the
+/// float frame and through the compatibility frame's marks alike; a light source's tier still
+/// gains.
+#[test]
+fn lit_surfaces_stay_at_their_sdr_light() {
+    let Some((device, queue)) = gpu() else {
+        eprintln!("HDR lit surface GPU unavailable");
+        return;
+    };
+    if !device.features().contains(
+        wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+    ) {
+        eprintln!("lit surface GPU skipped: 16-bit UNORM unavailable");
+        return;
+    }
+    let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
+    let (settings, gains) = hdr.draw_params(true);
+    let globals = super::super::Globals {
+        fog: [0.0, 100.0, 0.0, 100.0],
+        fog_ends: [100.0, 100.0, 0.0, 0.0],
+        misc: [0.0, 1.0, 0.0, 0.0],
+        filtering: [0.0, 1.0, 0.0, 0.0],
+        // The test face lies flat (`TERRAIN_VERTEX`, at light level 15): a noon sun meets it
+        // straight on.
+        sun: [0.0, 1.0, 0.0, 0.0],
+        hdr_windows: hdr.windows(),
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
+        hdr_settings: settings,
+        hdr_gains: gains,
+        ..bytemuck::Zeroable::zeroed()
+    };
+    // The texel (200, 100, 50) times the test vertex's colour, and an entity's light, in gamma.
+    let terrain = [200.0 / 255.0 * 0.8, 100.0 / 255.0 * 0.9, 50.0 / 255.0 * 0.7];
+    let entity = [terrain[0] * 0.7, terrain[1] * 0.8, terrain[2] * 0.9];
+    for (is_terrain, entry, overlay, colour) in [
+        (true, "fs_opaque", 0, terrain),
+        (true, "fs_solid", 0, terrain),
+        (true, "fs_translucent", 0, terrain),
+        (false, "fs_entity", 0, entity),
+    ] {
+        let draw = Draw::new(&device, &queue, is_terrain, &globals, 255);
+        for written in [true, false] {
+            let got = draw.render(&mut hdr, written, entry, 0, overlay, [0.0; 4]);
+            for i in 0..3 {
+                assert!(
+                    (got[i] - colour[i]).abs() < 0.002,
+                    "{entry} written {written}: {got:?}, drawn {colour:?}"
+                );
+            }
+        }
+    }
+    // The very bright tier all over (emission 8), bright enough to be fully lifted: its gain.
+    let draw = Draw::new(&device, &queue, true, &globals, 255);
+    let lifted = draw.render(&mut hdr, true, "fs_opaque", 8, 0, [0.0; 4]);
+    for i in 0..3 {
+        let want = terrain[i] * gains[3].powf(1.0 / 2.2);
+        assert!(
+            (lifted[i] - want).abs() < 0.003,
+            "{lifted:?}: expected {want}"
+        );
+    }
 }
 
 #[test]
@@ -1179,7 +1242,7 @@ fn unmarked_entity_users_keep_their_source_gain() {
         fog: [0.0, 100.0, 0.0, 100.0],
         fog_ends: [100.0, 100.0, 0.0, 0.0],
         hdr_windows: hdr.windows(),
-        hdr_light: [1.0, 1.0, 1.0, 1.0],
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
         hdr_settings: settings,
         hdr_gains: gains,
         ..bytemuck::Zeroable::zeroed()
@@ -1222,7 +1285,7 @@ fn additive_texels_below_the_mark_cutoff_keep_their_gain() {
     let globals = super::super::Globals {
         fog: [0.0, 100.0, 0.0, 100.0],
         hdr_windows: hdr.windows(),
-        hdr_light: [1.0, 1.0, 1.0, 1.0],
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
         hdr_settings: settings,
         hdr_gains: gains,
         ..bytemuck::Zeroable::zeroed()
@@ -1275,7 +1338,7 @@ fn check_oit_writer(terrain: bool, kind: &str, overlay: u32, tier: u32, alphas: 
         misc: [0.0, 1.0, 0.0, 0.0],
         filtering: [0.0, 1.0, 0.0, 0.0],
         hdr_windows: hdr.windows(),
-        hdr_light: [0.8, 0.8, 1.0, 1.0],
+        hdr_light: [0.0, 0.0, 1.0, 1.0],
         hdr_settings: settings,
         hdr_gains: gains,
         ..bytemuck::Zeroable::zeroed()
@@ -1316,9 +1379,11 @@ fn check_oit_writer(terrain: bool, kind: &str, overlay: u32, tier: u32, alphas: 
         }
         assert_eq!(got[3], 1.0);
         assert!(got[0] > 1.0, "OIT clipped light: {got:?}");
-        assert!(
+        // A light source's conversion lifts it; a surface's or a cloud's leaves it as drawn.
+        assert_eq!(
             (got[0] - unconverted[0]).abs() > 0.01,
-            "test must distinguish missing conversion: {got:?} {unconverted:?}"
+            tier > 0,
+            "{kind}: {got:?} unconverted {unconverted:?}"
         );
     }
 }

@@ -31,9 +31,8 @@ struct Globals {
     // HDR output's tier windows (hdr.rs `Hdr::windows`): x..w low to very bright,
     // [0] where the lift starts, [1] where it is full.
     hdr_windows: array<vec4<f32>, 2>,
-    // HDR lighting: x how strongly the sky lights the world now (`Sky::sky_light_factor`),
-    // y what the sky and fog get: the same, but none under water.
-    // w: apply the no-pack HDR gain; HDR_WRITE_LIGHT independently keeps float alpha as coverage.
+    // HDR output: z 1 with it on; w: apply the no-pack HDR gain; HDR_WRITE_LIGHT independently
+    // keeps float alpha as coverage. x and y are unused.
     hdr_light: vec4<f32>,
     hdr_settings: vec4<f32>,
     hdr_gains: vec4<f32>,
@@ -76,8 +75,6 @@ struct Out {
     // HDR tier of a light-giving particle (mesher::hdr_tier), from the overlay's
     // high bits (particles.rs): fs_hdr_mark marks the frame with it.
     @location(13) @interpolate(flat) tier: u32,
-    // HDR lighting (`hdr_scene`), 0 for what isn't lit.
-    @location(14) scene: f32,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
 fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
@@ -120,16 +117,6 @@ fn native_colored_light(pos: vec3<f32>) -> vec3<f32> {
     }
     return min(rgb, vec3(1.0));
 }
-// HDR lighting: how far an entity's light carries it above paper white, 0 to 1, as terrain's.
-fn hdr_scene(block: f32, sky: f32) -> f32 {
-    let b = smoothstep(11.0, 15.0, block);
-    let s = smoothstep(11.0, 15.0, sky) * globals.hdr_light.x;
-    return max(b, s);
-}
-// The frame's alpha for it, between 1 (none) and the light sources' marks below 0.75.
-fn hdr_scene_alpha(scene: f32) -> f32 {
-    return 1.0 - 0.24 * scene;
-}
 fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     overlay: u32, color: vec4<f32>, light: vec4<u32>, normal: vec4<f32>) -> Out {
     var out: Out;
@@ -143,7 +130,6 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     let unlit = overlay == 2u || overlay == 4u || overlay == 6u || overlay == 9u || overlay == 10u
         || overlay == 11u || overlay == 12u;
     out.light_color = select(lm, vec4(1.0), unlit);
-    out.scene = select(hdr_scene(l.x / 16.0, l.y / 16.0), 0.0, unlit);
     if globals.colored_count.x > 0u && !unlit {
         out.light_color = vec4(min(out.light_color.rgb + native_colored_light(position), vec3(1.0)), out.light_color.a);
     }
@@ -290,9 +276,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
 // unrelated predicate" when entity_color's discards sit a function call below the entry point.
 fn entity_written_color(in: Out, color: vec4<f32>) -> vec4<f32> {
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 && in.overlay != 11u && in.overlay != 12u {
-        var mark = hdr_entity_mark(in);
-        if in.overlay == 4u { mark = hdr_scene_alpha(globals.hdr_light.y); }
-        return vec4(hdr_written(color.rgb, mark, globals.hdr_settings, globals.hdr_gains), color.a);
+        return vec4(hdr_written(color.rgb, hdr_entity_mark(in), globals.hdr_settings, globals.hdr_gains), color.a);
     }
     if FRAME_LINEAR && (in.overlay == 11u || in.overlay == 12u) {
         // The cracks scale what is under them by twice their colour (CRUMBLING_BLEND). Vanilla's
@@ -390,14 +374,12 @@ fn hdr_entity_mark(in: Out) -> f32 {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     let texel = textureSample(atlas, atlas_sampler, uv);
-    // Additive and procedural colour draws can survive where the legacy mark pass skips.
-    if texel.a < 0.1 { return 1.0; }
-    // Fog hides a light source and the light on a surface as it hides everything else.
+    // Additive and procedural colour draws can survive where the legacy mark pass skips. What
+    // gives no light stays unmarked.
+    if texel.a < 0.1 || in.tier == 0u { return 1.0; }
+    // Fog hides a light source as it hides everything else.
     let fogged = max(linear_fog(in.fog_distance.x, globals.fog.x, globals.fog.y),
         linear_fog(in.fog_distance.y, globals.fog.z, globals.fog.w)) * globals.fog_color.a;
-    if in.tier == 0u {
-        return hdr_scene_alpha(mix(in.scene, globals.hdr_light.y, fogged));
-    }
     // A layer that fades (the warden's) shines by what's left of it.
     let y = brightness(texel.rgb * in.color.rgb) * in.color.a * (1.0 - fogged);
     return hdr_mark(in.tier, y);
@@ -419,15 +401,15 @@ fn hdr_mark(tier: u32, y: f32) -> f32 {
 // no longer shines; fs_hdr_mark then marks the light sources it holds.
 @fragment fn fs_hdr_hand_unmark(in: Out) -> @location(0) vec4<f32> {
     if textureSample(atlas, atlas_sampler, in.uv).a < 0.1 { discard; }
-    return vec4(0.0, 0.0, 0.0, hdr_scene_alpha(in.scene));
+    return vec4(0.0, 0.0, 0.0, 1.0);
 }
 
-// HDR lighting on clouds, drawn again after them with only alpha written: they're lit by the
-// sky, so they take its value, which their blending would otherwise cover.
+// Clouds, drawn again after them with only alpha written: their blending leaves the sun's and
+// moon's marks behind them partly showing. Unmarked, they lift nothing there.
 @fragment fn fs_hdr_cloud_mark(in: Out) -> @location(0) vec4<f32> {
     let a = in.color.a * (1.0 - linear_fog(in.fog_distance.x, 0.0, globals.fog_ends.y));
     if a < 0.1 { discard; }
-    return vec4(0.0, 0.0, 0.0, hdr_scene_alpha(globals.hdr_light.y));
+    return vec4(0.0, 0.0, 0.0, 1.0);
 }
 
 fn celestial_color(in: Out) -> vec4<f32> {

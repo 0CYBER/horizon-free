@@ -20,10 +20,6 @@ struct Params {
     black: f32,
     // The HUD and menus' brightness as a share of paper white.
     ui: f32,
-    // The compatibility frame's lift (`lit`; the float frame's writers have theirs from
-    // Hdr::draw_params). HDR lighting: what the strongest light multiplies a surface by, 1 for
-    // none.
-    scene: f32,
     // Per tier, low to very bright (hdr.rs `COMPAT_SHARES`): the share of the headroom
     // its fully lifted pixels get.
     share: vec4<f32>,
@@ -172,7 +168,7 @@ fn calibration_nits(p: vec2<f32>, size: vec2<f32>) -> f32 {
 }
 
 fn lit(f: vec3<f32>, a: f32, shows: bool, eased: bool) -> Lit {
-    return hdr_mark_light(f, a, shows, eased, vec4(params.peak, params.scene, params.world, params.debug), (params.peak - 1.0) * params.share);
+    return hdr_mark_light(f, a, shows, eased, vec4(params.peak, 0.0, params.world, params.debug), (params.peak - 1.0) * params.share);
 }
 
 // Calibration: above its controls the test picture, straight in nits, past

@@ -15,7 +15,7 @@ alpha:
 | Alpha | Means |
 | --- | --- |
 | below 0.75 | a light source: its tier and how much it is lifted |
-| 0.76 to 1 | HDR lighting's gain on a surface |
+| 0.75 and above | nothing lifted |
 | 1/255 | the first-person hand |
 | what the HUD and menus leave | how much they cover the world |
 
@@ -82,7 +82,7 @@ below); where HDR's settings live (a later note).
   in HDR a roll-off into the headroom (ITU-R BT.2390's EETF in PQ; HDR's black level already uses the same
   recommendation's lift), in SDR a clip at white, as vanilla. A pack that only grades keeps Horizon's tone curve;
   one that only tone maps needs no post chain. Horizon's curve keeps light as it is up to its knee, 60% of the peak
-  and at least paper white, where HDR lighting eased into the peak before it. The source's peak is where the EETF
+  and at least paper white. The source's peak is where the EETF
   puts its knee there (13.7 times paper white at 203 and 1000 nits, PQ's 10 000 nits at most), and light past it
   shows at the peak. The curve acts on the brightest channel and scales the others with it, so light keeps its hue
   as it eases and no channel passes the peak.
@@ -147,8 +147,8 @@ Each shader that marks the frame today writes the light instead:
 
 - **Light sources** (`mesher` `EMISSION_BITS`, `hdr_tier`, `gfx/hdr.rs` `TIERS`): the face's colour times its tier's
   gain, in units of paper white. Easing into the peak moves to the tone curve.
-- **HDR lighting** (light levels 11 to 15, up to 4 times): the lightmap going past 1, which is what its alpha means
-  now.
+- **Lit surfaces** get no gain, however strongly the sun or a torch lights them: diffuse white stays at paper white,
+  where ITU-R BT.2408 puts it, and HDR's range above it is the light sources' and the sun's.
 - **Where:** terrain and fluids (`terrain.wgsl`, `mesher/fluid.rs`, distant terrain in `lod/mesh.rs`, the visibility
   buffer), particles (`particles.rs`), the sun and moon (`fs_sky_celestial`, `fs_sky_sun`), entities, dropped and held items
   (`entity.wgsl`, `dynamic_light.rs`) and lightning (`gfx/lightning.rs`).
@@ -310,10 +310,10 @@ Behind `HORIZON_HDR_FRAME=float` until the last step, each a small pull request:
      derived from the same headroom. The rule: the scene's peak S sits just above the brightest light the world
      writes, and the world is mastered for a 1000-nit display at ITU-R BT.2408's 203-nit reference white, as HDR10
      content usually is: S = 1000/203 (4.93). The tiers multiply their brightest pixels by 1.6 (low), 2.4
-     (incandescent), 2.8 (bright) and 4.0 (very bright), and HDR lighting the strongest-lit surfaces by 3.0
-     (`gfx/hdr.rs` `TIERS`, `SUNLIT_GAIN`, `SCENE_PEAK`). The sun's disc shows vanilla's colour, sky plus sun
+     (incandescent), 2.8 (bright) and 4.0 (very bright), and lit surfaces stay at their SDR light, diffuse
+     white at paper white (`gfx/hdr.rs` `TIERS`, `SCENE_PEAK`). The sun's disc shows vanilla's colour, sky plus sun
      clipped at white channel by channel, with white at S (`gfx/celestial.rs`, `fs_sky_sun`). The sky under it is
-     vanilla's times one gain (HDR lighting's), so a blend of the frame by a weight and a min at S give it exactly;
+     vanilla's, at paper white, so a blend of the frame by a weight and a min at S give it exactly;
      added in the frame's gamma instead, sky and sun passed S and the hold flattened the disc in the sky's hue. The
      very bright tier's lift weight takes both from the plain add, so the texture's faint halo and the moon add onto
      the sky as before. The curve holds light above S at S, keeping its hue (where something adds onto the disc, or the moon

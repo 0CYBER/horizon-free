@@ -35,9 +35,6 @@ fn warp_fragment(in: TerrainOut, front: bool) -> Fragment {
     let in = from_wire(wire);
     let dx = dpdx(in.local);
     let dy = dpdy(in.local);
-    if HDR_LIGHTING && globals.hdr_light.z != 0.0 {
-        hdr_normal = normalize(cross(dy, dx));
-    }
     // (far terrain's tiles and the sections replacing them still cross-fade)
     if faded(in.fade, in.local, dx, dy) { discard; }
     let p = world_fragment(warp_fragment(in, front));
@@ -51,9 +48,6 @@ fn warp_fragment(in: TerrainOut, front: bool) -> Fragment {
 // As `fs_translucent`.
 @fragment fn fs_warp_translucent(wire: TerrainWire, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let in = from_wire(wire);
-    if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
-        hdr_normal = normalize(cross(dpdy(in.local), dpdx(in.local)));
-    }
     let p = world_fragment(warp_fragment(in, front));
     if p.color.a < 0.0 { discard; }
     let color = mix(globals.fog_color * vec4(1.0, 1.0, 1.0, p.color.a), p.color, in.visibility);
@@ -61,10 +55,7 @@ fn warp_fragment(in: TerrainOut, front: bool) -> Fragment {
     let fogged = apply_fog(color, in.spherical, in.cylindrical);
     let finished = vec4(mix(color.rgb, fogged.rgb, p.fog), color.a);
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
-        let fog = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
-            linear_fog(in.cylindrical, globals.fog.z, globals.fog.w)) * globals.fog_color.a;
-        let mark = hdr_scene_alpha(mix(hdr_scene(in.scene.x, in.scene.y, hdr_facing()), globals.hdr_light.y, fog));
-        return vec4(hdr_written(finished.rgb, mark, globals.hdr_settings, globals.hdr_gains), finished.a);
+        return vec4(hdr_written(finished.rgb, 1.0, globals.hdr_settings, globals.hdr_gains), finished.a);
     }
     return frame_stored(finished);
 }
