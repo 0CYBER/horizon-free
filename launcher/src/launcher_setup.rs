@@ -422,7 +422,6 @@ impl Launcher {
         // A Turn off question left open isn't still asked the next time Settings opens.
         self.storage_revoke = None;
         self.storage_counting = None;
-        self.storage_revoke_error = None;
         self.storage_visit += 1;
         self.wardrobe_reload |= matches!(page, Page::Wardrobe | Page::Shop);
         // The glass look's Settings is a dialog over the page: opening or closing it keeps the

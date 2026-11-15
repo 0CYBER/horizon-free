@@ -224,17 +224,19 @@ impl Launcher {
                                       the permission back; Horizon asks again before the next \
                                       build.")
                         .to_string(),
-                        (1, _) => tr("This switches off your one native mod. Turn it back on \
-                                      from its instance's Installed mods.")
+                        (1, _) => tr("This takes the permission back and switches off your \
+                                      one native mod. Turn it back on from its instance's \
+                                      Installed mods.")
                         .to_string(),
                         (_, 1) => trf(
-                            "This switches off {mods} native mods. Turn them back on from the \
-                             instance's Installed mods.",
+                            "This takes the permission back and switches off {mods} native \
+                             mods. Turn them back on from the instance's Installed mods.",
                             &[("mods", &mods.to_string())],
                         ),
                         _ => trf(
-                            "This switches off {mods} native mods in {instances} instances. \
-                             Turn them back on from each instance's Installed mods.",
+                            "This takes the permission back and switches off {mods} native \
+                             mods in {instances} instances. Turn them back on from each \
+                             instance's Installed mods.",
                             &[
                                 ("mods", &mods.to_string()),
                                 ("instances", &instances_.to_string()),
@@ -254,10 +256,10 @@ impl Launcher {
                             button(
                                 "storage-revoke-cancel",
                                 // With nothing switched on, what stays is the permission.
-                                if mods == 0 {
-                                    "Keep the permission"
-                                } else {
-                                    "Keep them"
+                                match mods {
+                                    0 => "Keep the permission",
+                                    1 => "Keep it",
+                                    _ => "Keep them",
                                 },
                                 Kind::Primary,
                                 &t,
@@ -365,7 +367,7 @@ impl Launcher {
             let _ = this.update(cx, |this, cx| {
                 this.storage_revoke_error = failure.map(|error| {
                     trf(
-                        "The permission is off, but a native mod couldn't be switched off: {error}",
+                        "The permission is off, but a native mod couldn't be switched off: {error}. Switch it off in its instance's Installed mods.",
                         &[("error", &error)],
                     )
                 });

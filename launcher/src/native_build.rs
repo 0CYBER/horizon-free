@@ -27,9 +27,8 @@ impl Launcher {
         }
         // Every way to a build asks first while native mods aren't allowed (permission taken
         // back in Storage, say, with a card still open): the question, never a refusal.
+        // The card stays under the question: Cancel goes back to it.
         if self.settings.native_mods_allowed_at.is_none() {
-            self.native_error = None;
-            self.native_worlds = None;
             self.request_native_build_consent();
             self.native_consent_build = Some((base, back_up));
             return;
