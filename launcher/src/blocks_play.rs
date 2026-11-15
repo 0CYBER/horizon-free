@@ -64,18 +64,36 @@ impl Launcher {
                     }),
                 ),
             );
-            let mut middle = centered(&waiting, &t);
-            if let Some((_, why, _)) = &failed {
-                middle = middle.child(
-                    text(theme::CAPTION)
-                        .text_color(t.muted)
-                        .max_w(px(520.))
-                        .child(trf(
-                        "Check your internet connection, then try again. What went wrong: {error}",
-                        &[("error", why)],
-                    )),
-                );
-            }
+            // A failure is a card: what happened as its title, the plain reason, the actions.
+            let middle = match &failed {
+                Some((what, why, _)) => div().pt(px(24.)).child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(12.))
+                        .max_w(px(560.))
+                        .p(px(20.))
+                        .rounded(px(16.))
+                        .border_1()
+                        .border_color(t.danger.opacity(0.45))
+                        .bg(t.danger.opacity(0.08))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(blocks::icon("info-box", 18., t.danger))
+                                .child(text(theme::UI).text_color(t.ink).child(what.clone())),
+                        )
+                        .child(
+                            text(theme::CAPTION)
+                                .text_color(t.muted)
+                                .child(download_error(why)),
+                        )
+                        .child(actions),
+                ),
+                None => centered(&waiting, &t).child(actions),
+            };
             return div()
                 .flex()
                 .flex_col()
@@ -86,7 +104,7 @@ impl Launcher {
                     "Start the game, or run a server for others to join.",
                     &t,
                 ))
-                .child(middle.child(actions))
+                .child(middle)
                 .children(memory);
         };
         let prepared = backend::is_prepared(&tag);
