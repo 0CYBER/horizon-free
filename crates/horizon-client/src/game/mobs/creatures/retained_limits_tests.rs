@@ -96,6 +96,9 @@ fn same_mob_guest_attack_survives_movement_panic() {
                 mob.ai.speed = 0.2;
                 mob.ai.target = Some(horizon_client::mobs::Who::Player);
                 game.mobs.push(mob);
+                // Who::Player names the selected player; retain its guest binding
+                // instead of targeting the faraway host for this attack.
+                game.lan.as_mut().unwrap().mob_players.insert(71, 12);
                 let host_before = game.player.as_ref().unwrap().health.health();
                 let guest_before = game.lan.as_ref().unwrap().hub.guests[0].health;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

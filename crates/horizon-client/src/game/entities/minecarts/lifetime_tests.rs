@@ -491,15 +491,20 @@ fn a_bound_ticked_cart_publishes_its_moved_position_before_pushing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-fn a_bound_cart_commits_the_tnt_interaction() {
+#[ignore = "daily"]
+fn a_bound_tnt_cart_passes_interaction_without_priming() {
     bound_cart_case(CartKind::Tnt, |game| {
         game.inventory[game.selected] = Some(ItemStack::new("minecraft:fire_charge", 1));
-        assert!(game.interact_cart(Some(InteractTarget {
+        // MinecartTNT inherits Entity.interact (PASS), even with a fire charge.
+        assert!(!game.interact_cart(Some(InteractTarget {
             id: 71,
             location: [0.5, 70.0, 0.5],
         })));
-        assert_eq!(game.carts[0].fuse, 80);
+        assert_eq!(game.carts[0].fuse, -1);
+        assert_eq!(
+            game.inventory[game.selected],
+            Some(ItemStack::new("minecraft:fire_charge", 1))
+        );
     });
 }
 

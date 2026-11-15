@@ -1,0 +1,2 @@
+ids = ["method:prelude::ClientNarratorClientHost::narrate", "type:Narration", "type:NarrateError"]
+why = "Adds ClientNarratorClientHost::narrate (#4532): a client mod's line for the player's narrator through the game's own GameNarrator, Narration::Now as saySystemNow (interrupts) and Narration::Queued as saySystemQueued, honouring the Narrator option, the voice volume and the recent-lines log, as Jade's Narrate Target does in Java. No length cap beyond the component's own form limits. Each refusal is named and says nothing: Text, Empty, Off (Off or Chat only), Unavailable."

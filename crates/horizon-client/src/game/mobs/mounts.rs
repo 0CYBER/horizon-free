@@ -1773,6 +1773,9 @@ mod tests {
             None,
         )
         .ok()?;
+        game.reset_entity_residency();
+        game.native_lifecycle
+            .begin_open(mod_api::Authority::IntegratedServer);
         game.creative = false;
         game.options.dedicated = Some(Vec::new());
         game.world.chunks.insert(

@@ -15,14 +15,18 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 GOLDENS = ROOT / "tools/fixtures/wire_enum_layouts.json"
 OUTPUT = ROOT / "crates/horizon-mod-vocab/src/wire/fieldless_enum_goldens.rs"
+# Rust literals whose contents are not syntax: raw strings, strings (an escape may be a
+# line continuation) and char literals, so a quote or brace inside one ('"', '{') stays inside.
+LITERAL = (r'r(?P<hashes>#*)"[\s\S]*?"(?P=hashes)|"(?:\\[\s\S]|[^"\\])*"'
+           r"|'(?:\\(?:u\{[0-9a-fA-F]+\}|x[0-9a-fA-F]{2}|[\s\S])|[^'\\\n])'")
 
 
 def discover(source, required=None):
     """Find unit-variant enums with Wire impls; no dependence on layout body."""
     # rustc retains doc comments in expansion; their punctuation is not syntax.
-    source = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*[\s\S]*?\*/',
+    source = re.sub(LITERAL + r'|//[^\n]*|/\*[\s\S]*?\*/',
                     lambda match: "" if match[0].startswith(("//", "/*")) else match[0], source)
-    token_matches = list(re.finditer(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])\'|[A-Za-z_][A-Za-z_0-9]*|::|[^\s]' , source))
+    token_matches = list(re.finditer(LITERAL + r'|[A-Za-z_][A-Za-z_0-9]*|::|[^\s]', source))
     tokens = [match[0] for match in token_matches]
     stack, pairs = [], {}
     for i, token in enumerate(tokens):
@@ -40,7 +44,7 @@ def discover(source, required=None):
         parents = [name for start, end, name in modules
                    if token_matches[start].start() < position < token_matches[end].end()]
         return "::".join(["crate", *parents, name])
-    headers = re.sub(r'"(?:\\.|[^"\\])*"', lambda match: ' ' * len(match[0]), source)
+    headers = re.sub(LITERAL, lambda match: ' ' * len(match[0]), source)
     supported = r"impl\s+(?:::)?[\w:]*wire::Wire\s+for\s+(\w+)\s*\{"
     derived_headers = [
         (match[2], identity(match.start(), match[3]))

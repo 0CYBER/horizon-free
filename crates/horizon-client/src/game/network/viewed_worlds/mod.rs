@@ -9,10 +9,11 @@
 //! The client views at most `viewed_levels_net::MAX_LEVELS` levels besides its own, the number
 //! its capability answer gives. A travel into one of them swaps it with the player's world
 //! (`switch`); a Login, any other Respawn or a new configuration phase drops every viewed world,
-//! and the server opens again what it still views. Nothing of a viewed level is drawn yet:
-//! drawing is gap 13's world view. Its entities live in its world (`entities`), apart from the
-//! player's own.
+//! and the server opens again what it still views. A level a world view names is meshed into a
+//! set of its own (`meshing`); nothing of a viewed level is drawn yet: drawing is gap 13's world
+//! view. Its entities live in its world (`entities`), apart from the player's own.
 mod entities;
+mod meshing;
 mod routing;
 mod sounds;
 mod switch;

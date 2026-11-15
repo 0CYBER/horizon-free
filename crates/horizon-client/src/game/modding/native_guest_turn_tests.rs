@@ -648,8 +648,9 @@ fn another_guest_follows_a_vehicle_teleported_during_a_turn() {
         game.guest_boarded(13, None);
         let vehicle = game.entity(42).unwrap();
         let rider = game.entity(13).unwrap();
-        let before = [3.0, 64.0 + (1.44375 - 0.6), 5.0];
-        let after = [10.0, 70.0 + (1.44375 - 0.6), -4.0];
+        // EntityTypes stores the horse's passenger attachment as a float.
+        let before = [3.0, 64.0 + (f64::from(1.44375_f32) - 0.6), 5.0];
+        let after = [10.0, 70.0 + (f64::from(1.44375_f32) - 0.6), -4.0];
         game.as_guest(12, |game| {
             assert_eq!(rider.position(game), Some(before));
             assert!(vehicle.teleport_to(game, [10.0, 70.0, -4.0], None));

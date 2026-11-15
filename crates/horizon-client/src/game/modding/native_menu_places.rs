@@ -46,6 +46,7 @@ fn held_identity(stack: &ItemStack) -> ItemStack {
         data.container.clear();
         data.bundle_contents.clear();
     }
+    stack.tidy();
     stack
 }
 
@@ -490,12 +491,31 @@ fn click_quick_move(
 
 #[cfg(test)]
 mod tests {
-    use super::super::native_entity_refs::tests::with_game;
+    use super::super::native_entity_refs::tests::with_game as with_base_game;
     use super::super::native_item_places::tests::{guest, open_to_lan};
     use super::*;
     use horizon_client::items::ItemStack;
     use horizon_client::lan::menu::Slots;
     use mod_api::{MenuReplace, MenuSlotBacking};
+
+    struct Backpack;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Backpack {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            let item = r.item_key("minecraft:shulker_box");
+            r.item_container(&item, |_: &dyn mod_api::Host| Some(27));
+        }
+    }
+
+    fn with_game(test: impl FnOnce(&mut Game<'_>)) {
+        let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+            "backpack_fixture",
+            Box::new(Backpack),
+        )]
+        .into();
+        crate::game::api_values::install_parts(&mods).unwrap();
+        mod_platform::testing::with_mods(mods, || with_base_game(test));
+    }
 
     /// Guest 1 (UUID 123) holding a shulker box in hotbar slot 0 with 64 stone in inventory
     /// slot 9, and a 27-slot mod chest menu open: its window.
@@ -609,7 +629,11 @@ mod tests {
         let host: &mut dyn ServerHost = game;
         let boxed: u32 = (0..27).map(|n| held_slot(n).amount(host)).sum();
         let own: u32 = (0..27)
-            .map(|slot| ItemPlace::MenuSlot { menu, slot }.amount(host))
+            .map(|slot| match menu.slot_backing(host, slot) {
+                // A backed slot is a view of the box, already counted above.
+                Some(MenuSlotBacking::Native(_)) => ItemPlace::MenuSlot { menu, slot }.amount(host),
+                _ => 0,
+            })
             .sum();
         let carried = ItemPlace::PlayerSlot {
             player: 123,

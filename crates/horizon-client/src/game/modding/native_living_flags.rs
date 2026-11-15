@@ -836,7 +836,8 @@ pub(in crate::game) mod tests {
                 .unwrap();
                 let g = game.command_guest(12).unwrap();
                 assert!(!g.sleeping && g.bed.is_none());
-                assert_eq!(g.sleep_timer, 100);
+                // Generic LivingEntity.stopSleeping uses stopSleepInBed(true, true).
+                assert_eq!(g.sleep_timer, 0);
                 assert_eq!(g.pose(), Pose::Standing);
                 assert_ne!(g.position, [at.x, at.y, at.z]);
                 sync_guests(game);

@@ -42,6 +42,7 @@ pub(crate) mod model_loader;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod music;
+pub(crate) mod narration;
 pub(crate) mod pack_finders;
 pub(crate) mod particle_keys;
 pub(crate) mod particle_providers;
