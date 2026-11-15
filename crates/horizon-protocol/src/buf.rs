@@ -191,7 +191,10 @@ impl<'a> Reader<'a> {
     }
     /// A network NBT tag (NbtIo.readAnyTag without a root name); `End` means none.
     pub fn nbt(&mut self) -> Result<Tag> {
-        let limits = nbt::Limits::network();
+        self.nbt_within(nbt::Limits::network())
+    }
+    /// [`Self::nbt`] within `limits`, for a codec whose writer uses the same ones.
+    pub fn nbt_within(&mut self, limits: nbt::Limits) -> Result<Tag> {
         let (tag, used) = nbt::read_network(&self.data[self.pos..], limits)
             .map_err(|e| Error::new(format!("NBT: {e}")))?;
         self.pos += used;

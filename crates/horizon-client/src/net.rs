@@ -1346,7 +1346,11 @@ fn configure(
             None => Err(Reason::plain("Disconnected")),
         }
     };
-    if let Some(control) = negotiation.initial() {
+    // With only engine declarations the client waits for the server's query, so a vanilla
+    // server is sent nothing new.
+    if payloads.local.has_mod_declarations()
+        && let Some(control) = negotiation.initial()
+    {
         reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
             channel: horizon_protocol::payload_negotiation::CHANNEL.into(),
             data: control
@@ -2223,10 +2227,16 @@ mod tests {
                     cfg::Serverbound::CustomPayload(p) => {
                         assert_ne!(p.channel, "minecraft:brand");
                         if p.channel == horizon_protocol::payload_negotiation::CHANNEL {
-                            use horizon_protocol::payload_negotiation::{Control, Manifest};
+                            use horizon_protocol::payload_negotiation::Control;
+                            // A client with no mods offers the engine's declarations.
+                            let local = crate::raw_payloads::Local::capture(
+                                crate::raw_payloads::Side::Client,
+                            )
+                            .unwrap();
+                            assert!(!local.has_mod_declarations());
                             assert_eq!(
                                 Control::decode(&p.data).unwrap(),
-                                Control::Offer(Manifest::default())
+                                Control::Offer(local.manifest.clone())
                             );
                             assert!(!saw_protocol_offer, "duplicate protocol offer");
                             saw_protocol_offer = true;

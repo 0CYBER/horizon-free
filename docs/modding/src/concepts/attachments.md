@@ -116,8 +116,16 @@ when it starts seeing it: a chunk sent (with its block entities), a level joined
 re-entered, an entity tracked, and its own player. The wire form is the codec's compound, so `sync` requires
 a codec.
 
-Only Horizon clients are sent values. A message with a namespace or name over 256
-UTF-16 code units, a value that cannot be written or a payload past 1 MiB is not sent.
+Values travel on `horizon:attachment_sync`, an engine declaration in the negotiated
+payload table (play, to the client, version 1, optional): only a client whose connection
+offered it is sent values, so a vanilla client is sent none. A message is prepared against
+the player's current connection epoch and published at the root commit, in order with the
+player's other packets; a rolled-back edit sends nothing, and a message prepared before a
+reconfiguration never reaches the new one. Its size is bounded by the connection's frame
+limits, not by a cap of its own. A message with a namespace or name over 256 UTF-16 code
+units, a value that cannot be written, or one past the frame limits is not sent, and the
+refusal is logged by name once per connection; the player stays joined. A full outgoing
+queue closes that player's connection.
 
 On a client, `Host::attachments` returns a copy of what the server synced, which `get`
 decodes; `set` and `remove` change only that copy, which is dropped when the chunk,

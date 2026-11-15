@@ -62,6 +62,7 @@ fn horse(seed: i64, types: &crate::mobs::MobTypes) -> Mob {
 /// `RandomPos.generateRandomDirection`'s x, y, z draws, ten times: no further
 /// and no fewer, so a horse never bolts into the hill or onto the pond.
 #[test]
+#[ignore = "daily"]
 fn a_bucking_horse_bolts_only_where_the_filters_allow() {
     use crate::mobs::world::with_built_test_world;
     let mut out = None;

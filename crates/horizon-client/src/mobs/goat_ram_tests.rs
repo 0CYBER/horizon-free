@@ -62,6 +62,7 @@ fn hit(victim: &mut Mob, w: &MobWorld, amount: f32, source: Damage) -> Hurt {
 /// lose health and blame nobody, so `HurtByTargetGoal` leaves them alone,
 /// while the same creeper hit by a zombie's `mob_attack` turns on the zombie.
 #[test]
+#[ignore = "daily"]
 fn a_ram_angers_no_mob_but_a_plain_mob_attack_does() {
     let mut outcomes = None;
     let ran = with_test_world(&[], |w, types| {

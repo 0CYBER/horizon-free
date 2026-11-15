@@ -106,6 +106,10 @@ impl Incoming {
                 packet,
             ));
         }
+        // A negotiated engine message goes on to the engine's own decoder.
+        if epoch.peer.engine_receives(phase, &packet.channel) {
+            return Ok(Classified::Other(packet));
+        }
         let receiver = match epoch.peer.receiver(phase, &packet.channel) {
             Ok(receiver) => receiver.clone(),
             Err(PayloadSendError::UnknownPayload(_)) => {

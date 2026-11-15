@@ -164,7 +164,8 @@ impl Game<'_> {
             horizon_client::join_seq::residency::table::EntityLookup::Found {
                 value: super::commands::Target::Mob(_)
                     | super::commands::Target::Painting(_)
-                    | super::commands::Target::DragonPart(_),
+                    | super::commands::Target::DragonPart(_)
+                    | super::commands::Target::General(_),
                 ..
             }
         ) {

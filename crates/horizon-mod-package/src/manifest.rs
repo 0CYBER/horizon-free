@@ -720,10 +720,15 @@ impl Package {
 
     /// The package's `mod.wasm`, checked against its `[wasm]` section.
     pub fn read_wasm(path: &Path) -> Result<Vec<u8>, String> {
-        let package = Self::read(path)?;
-        let wasm = package
+        Self::read(path)?.wasm(path)
+    }
+
+    /// The `mod.wasm` of this package, read from `path`, checked against its `[wasm]` section.
+    pub fn wasm(&self, path: &Path) -> Result<Vec<u8>, String> {
+        let wasm = self
             .manifest
             .wasm
+            .as_ref()
             .ok_or(WasmError::Undeclared.to_string())?;
         // Read at most one byte past the cap, so an oversized file is refused unread.
         let mut bytes = Vec::new();

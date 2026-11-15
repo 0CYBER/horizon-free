@@ -36,7 +36,7 @@ use std::collections::HashMap;
 pub(in crate::game) mod decision;
 #[path = "transactions/entities.rs"]
 mod entities;
-pub(in crate::game) use entities::Announcement;
+pub(in crate::game) use entities::{Announcement, ArrivalRollback};
 #[path = "transactions/scratch.rs"]
 mod scratch;
 
@@ -148,6 +148,14 @@ pub(super) struct Level {
     scratch_kept: HashMap<u64, Option<scratch::Scratch>>,
     /// The entities it added and removed, and the announcements it holds.
     lifetimes: entities::EntityJournal,
+    /// Each attachment map that went with an entity to another level after this transaction
+    /// first reached it, by the id it arrived under, as it was then.
+    travelled: HashMap<u32, KeptAttachments>,
+    /// The index rows of the entities that left this level, kept until the root closes.
+    departed: Vec<entities::Departure>,
+    /// The entities taken for a transfer whose arrival is not adopted yet, by source id, each
+    /// with the slot its arrival reads an abort's way back from.
+    in_flight: HashMap<u32, entities::ArrivalRollback>,
 }
 
 /// A slot's stack before a transaction first wrote it, and the generation of the block entity
@@ -435,6 +443,7 @@ impl Game<'_> {
     }
     /// What closing `level` does, with the closing phase already set.
     fn close_level(&mut self, mut level: Level, commit: bool) {
+        let departed = std::mem::take(&mut level.departed);
         if let Some(scope) = &mut self.block_entity_tick_items {
             scope.close_transaction(commit);
         }
@@ -503,6 +512,12 @@ impl Game<'_> {
                 for (holder, kept) in level.attachments {
                     outer.attachments.entry(holder).or_insert(kept);
                 }
+                for (id, kept) in level.travelled {
+                    outer.travelled.entry(id).or_insert(kept);
+                }
+                for (id, slot) in level.in_flight {
+                    outer.in_flight.entry(id).or_insert(slot);
+                }
                 for (id, kept) in level.scratch_kept {
                     outer.scratch_kept.entry(id).or_insert(kept);
                 }
@@ -537,6 +552,7 @@ impl Game<'_> {
                 }
             }
         }
+        self.close_departures(departed);
     }
     /// Closes every transaction left open, as aborted. Run before each tick, as a backstop:
     /// `host.transaction` is the only way in, and its drop guard closes each one it opens, so
@@ -1057,6 +1073,7 @@ impl Game<'_> {
         }
     }
     fn roll_back(&mut self, mut level: Level) {
+        self.roll_back_in_flight(&mut level);
         self.scratch_roll_back(std::mem::take(&mut level.scratch_kept));
         // Discard deferred effects before undoing tentative action storage.
         level.after.clear();
@@ -1193,6 +1210,7 @@ impl Game<'_> {
                 });
             }
         }
+        self.restore_travelled(std::mem::take(&mut level.travelled));
         // After the maps: putting a chunk's map back marks it again.
         for (chunk, mark) in level.chunk_marks {
             self.world.modified.restore(chunk, mark);

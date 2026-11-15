@@ -27,6 +27,7 @@ fn spikes(events: &[MobEvent]) -> Vec<&MobEvent> {
 /// blow it refuses draws the spikes too. Thorns, magic and a projectile's
 /// arrow (a direct entity that is not living) are exempt.
 #[test]
+#[ignore = "daily"]
 fn a_still_guardian_spikes_whoever_hits_it() {
     let by_mob = |kind| Damage {
         kind,
@@ -175,6 +176,7 @@ fn displaced_elders(xs: &[f64]) -> Option<Vec<(bool, Option<[i32; 3]>)>> {
 /// outside its 16-block home the goal starts and picks a spot toward it;
 /// inside it the goal does not run at all.
 #[test]
+#[ignore = "daily"]
 fn a_displaced_elder_guardian_swims_back_toward_its_home() {
     let Some(out) = displaced_elders(&[60.5, 5.5]) else {
         return;
