@@ -162,7 +162,8 @@ pub(super) fn tile_image(image: Arc<gpui::RenderImage>, size: f32) -> AnyElement
         .into_any_element()
 }
 
-/// An icon choice (52 px, round at 15): white at 16 % when chosen, 7 % under the pointer.
+/// An icon choice (52 px, round at 15): white at 16 % in the accent's ring when chosen, 7 % under
+/// the pointer.
 fn icon_choice(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div> {
     keyboard(
         div()
@@ -175,7 +176,11 @@ fn icon_choice(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div
             .size(px(52.))
             .rounded(px(15.))
             .cursor_pointer()
-            .when(on, |d| d.bg(white(0.16)))
+            .when(on, |d| {
+                d.bg(white(0.16))
+                    .border_2()
+                    .border_color(ui::color(ui::look().accent_soft))
+            })
             .when(!on, |d| d.child(ui::back_tint(15., white(0.07)))),
         t,
     )
@@ -1431,9 +1436,9 @@ impl Launcher {
             );
         if self.selected().is_none_or(|t| !backend::is_prepared(t)) {
             body = body.child(
-                ui::text(13., FontWeight::NORMAL, ink::FAINT).mt(px(12.)).child(tr(
-                    "Block and item icons come from your prepared game files once a version is prepared.",
-                )),
+                ui::text(13., FontWeight::NORMAL, ink::FAINT)
+                    .mt(px(12.))
+                    .child(tr("More icons appear after the game is installed.")),
             );
         }
         section(tr("Icon").into(), None, body)

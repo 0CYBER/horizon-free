@@ -1,8 +1,8 @@
 //! Instance settings as a dialog centred over the page, drawn as Settings is (the glass look):
 //! its icon, "Instance settings", the instance's name and version at the top; Settings' list of
 //! sections on the left (General, Installation, Launch, Hooks, Storage) and the open one on the
-//! right, under its name and what it is for, its rows in groups; the instance's folder, size and
-//! play time along the foot. The page behind is frosted and dimmed, as under Settings.
+//! right, under its name and what it is for, its rows in groups; Save and Cancel and the
+//! instance's folder along the foot. The page behind is frosted and dimmed, as under Settings.
 use super::*;
 use crate::glass_instance::section;
 use crate::glass_ui::{self as ui, white};
@@ -45,7 +45,7 @@ impl SheetTab {
             SheetTab::General => (
                 "General",
                 "pencil-edit-02",
-                "Name, icon and where it sits on the rail.",
+                "Name, icon and where it shows in the sidebar.",
             ),
             SheetTab::Installation => (
                 "Installation",
@@ -58,9 +58,9 @@ impl SheetTab {
                 "How the game starts and how much it may use.",
             ),
             SheetTab::Hooks => (
-                "Hooks",
+                "Before and after launch",
                 "computer-terminal-01",
-                "Commands that run around the game. Most people never need these.",
+                "Commands that run before and after the game. Most people never need these.",
             ),
             SheetTab::Storage => (
                 "Storage",
@@ -227,7 +227,7 @@ impl Launcher {
             cx.notify();
         });
         let what = match kind {
-            NewKind::Horizon => tr("Rust Edition"),
+            NewKind::Horizon => tr("Horizon"),
             NewKind::Vanilla => tr("Vanilla"),
             NewKind::Modded => tr("Modded"),
         };
@@ -365,8 +365,8 @@ impl Launcher {
                     .field(Field::InstanceName, tr("My instance"), 300., cx)
                     .w_full();
                 let group_field = self
-                    .field(Field::InstanceGroup, tr("No group"), 300., cx)
-                    .w(px(170.));
+                    .field(Field::InstanceGroup, tr("For example Survival"), 300., cx)
+                    .w(px(230.));
                 pane = pane
                     .child(
                         div()
@@ -375,10 +375,10 @@ impl Launcher {
                             .gap(px(14.))
                             .child(self.glass_instance_icon(&editing, 56.))
                             .child(section(tr("Name").into(), None, name).flex_1().min_w_0())
-                            .child(section(tr("Group").into(), None, group_field)),
+                            .child(section(tr("Group (optional)").into(), None, group_field)),
                     )
                     .child(self.icon_choice(Some(&editing), kind, cx))
-                    .child(self.sheet_actions(&editing, &version, cx))
+                    .child(self.sheet_actions(&editing, cx))
                     .children(self.sheet_danger(&editing, cx));
             }
             SheetTab::Installation => {
@@ -625,25 +625,13 @@ impl Launcher {
             )
     }
 
-    /// General's rows: the version it plays (Installation changes it), a copy, a desktop shortcut
-    /// and the folder.
-    fn sheet_actions(&mut self, editing: &Instance, version: &str, cx: &mut Context<Self>) -> Div {
+    /// General's rows: a copy, a desktop shortcut and the folder.
+    fn sheet_actions(&mut self, editing: &Instance, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let home = editing.home.clone();
         let (id, name) = (editing.id.clone(), editing.name.clone());
         let own = matches!(editing.kind, InstanceKind::Default | InstanceKind::Own);
-        let mut rows = div().child(ui::setting_row(
-            tr("Version"),
-            Some(div().child(version.to_string()).into_any_element()),
-            Some(
-                button("sheet-version", "Change", Kind::Secondary, &t)
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.sheet_tab = SheetTab::Installation;
-                        cx.notify();
-                    }))
-                    .into_any_element(),
-            ),
-        ));
+        let mut rows = div();
         if own && editing.java.is_none() {
             let (from, copy_name) = (id.clone(), trf("{name} copy", &[("name", &name)]));
             rows = rows.child(ui::setting_row(
