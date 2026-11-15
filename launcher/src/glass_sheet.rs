@@ -690,19 +690,29 @@ impl Launcher {
         let mut rows = div();
         if own && editing.java.is_none() {
             let (from, copy_name) = (id.clone(), trf("{name} copy", &[("name", &name)]));
+            // The copy is made from the saved instance: edits not saved yet would be left out of
+            // it, so they are settled first.
+            let unsaved = self.sheet_changed();
+            let busy = self.instances.dialog.as_ref().is_some_and(|d| d.busy);
+            let duplicate = button("sheet-duplicate", "Duplicate", Kind::Secondary, &t);
             rows = rows.child(ui::setting_row(
                 tr("Duplicate"),
                 Some(
                     div()
-                        .child(tr("A copy with the same worlds, options and packs."))
+                        .child(match unsaved {
+                            true => tr("Save or discard your edits first: the copy is made from the saved instance."),
+                            false => tr("A copy with the same worlds, options and packs."),
+                        })
                         .into_any_element(),
                 ),
                 Some(
-                    button("sheet-duplicate", "Duplicate", Kind::Secondary, &t)
-                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    match unsaved || busy {
+                        true => disabled(duplicate),
+                        false => duplicate.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.duplicate_instance(from.clone(), copy_name.to_string(), cx);
-                        }))
-                        .into_any_element(),
+                        })),
+                    }
+                    .into_any_element(),
                 ),
             ));
         }
@@ -888,6 +898,10 @@ impl Launcher {
 
     /// Copies `from` into a new instance named `name` on a thread, then selects it.
     fn duplicate_instance(&mut self, from: String, name: String, cx: &mut Context<Self>) {
+        if let Some(d) = &mut self.instances.dialog {
+            d.busy = true;
+        }
+        let source = from.clone();
         let task = cx.background_spawn(async move {
             let made = instances::create(&name, Some(&from))?;
             instances::edit(&made.id, |m| m.name = Some(name))
@@ -901,11 +915,38 @@ impl Launcher {
                             "Created {name}",
                             &[("name", instance.name.as_str())],
                         ));
-                        this.instances.dialog = None;
+                        // The sheet closes onto the copy unless it holds edits made meanwhile
+                        // (or is another instance's now): those stay open.
+                        let left_alone = this
+                            .instances
+                            .dialog
+                            .as_ref()
+                            .is_some_and(|d| d.editing.as_deref() != Some(source.as_str()))
+                            || this.sheet_changed();
                         this.reload_instances();
-                        this.select_instance(&instance);
+                        match (left_alone, &mut this.instances.dialog) {
+                            (true, Some(d)) => {
+                                if d.editing.as_deref() == Some(source.as_str()) {
+                                    d.busy = false;
+                                }
+                            }
+                            _ => {
+                                this.instances.dialog = None;
+                                this.select_instance(&instance);
+                            }
+                        }
                     }
-                    Err(e) => crate::glass_toast::say(e),
+                    Err(e) => {
+                        if let Some(d) = this
+                            .instances
+                            .dialog
+                            .as_mut()
+                            .filter(|d| d.editing.as_deref() == Some(source.as_str()))
+                        {
+                            d.busy = false;
+                        }
+                        crate::glass_toast::say(e)
+                    }
                 }
                 cx.notify();
             });
