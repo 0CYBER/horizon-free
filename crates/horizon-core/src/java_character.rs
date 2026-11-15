@@ -470,3 +470,71 @@ const DIGITS: &[(u16, u16, u8)] = &[
     (0xFF21, 0xFF3A, 10),
     (0xFF41, 0xFF5A, 10),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::process::Command;
+
+    #[test]
+    fn known_units_have_java_outcomes() {
+        assert_eq!(digit(0x0661, 10), Some(1));
+        assert_eq!(digit(0xFF12, 10), Some(2));
+        assert_eq!(digit(0xD800, 10), None);
+        assert_eq!(digit(u16::from(b'z'), 36), Some(35));
+        assert_eq!(digit(u16::from(b'z'), 35), None);
+        assert_eq!(digit(u16::from(b'7'), 1), None);
+        assert_eq!(digit(u16::from(b'7'), u32::MAX), None);
+        assert!(is_letter_or_digit(0x0661));
+        assert!(!is_letter_or_digit(0x00B2));
+        assert!(!is_letter_or_digit(0xD800));
+    }
+
+    /// Compares every unit and radix with `tools/JavaCharacterTables.java dump`, which asks the JDK.
+    #[test]
+    #[ignore = "daily"]
+    fn matches_java_character() {
+        let dump = Command::new("java")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tools/JavaCharacterTables.java"
+            ))
+            .arg("dump")
+            .output()
+            .expect("java starts");
+        assert!(
+            dump.status.success(),
+            "{}",
+            String::from_utf8_lossy(&dump.stderr)
+        );
+        let dump = String::from_utf8(dump.stdout).expect("utf-8 dump");
+        let mut java = HashMap::new();
+        for line in dump.lines() {
+            let mut fields = line.split(' ');
+            let unit: u16 = fields.next().unwrap().parse().unwrap();
+            let letter_or_digit = fields.next().unwrap() == "true";
+            let digits: Vec<i32> = fields.map(|value| value.parse().unwrap()).collect();
+            java.insert(unit, (letter_or_digit, digits));
+        }
+        let radices = (0..=37).chain([u32::MAX]).collect::<Vec<_>>();
+        for unit in 0..=u16::MAX {
+            let (letter_or_digit, digits) = java.get(&unit).cloned().unwrap_or_default();
+            assert_eq!(
+                is_letter_or_digit(unit),
+                letter_or_digit,
+                "unit {unit:#06x}"
+            );
+            for (index, &radix) in radices.iter().enumerate() {
+                let expected = digits
+                    .get(index)
+                    .and_then(|&value| u32::try_from(value).ok());
+                assert_eq!(
+                    digit(unit, radix),
+                    expected,
+                    "unit {unit:#06x} radix {radix}"
+                );
+            }
+        }
+    }
+}
