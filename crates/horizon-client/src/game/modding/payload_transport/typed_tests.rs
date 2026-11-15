@@ -33,7 +33,7 @@ impl PayloadCodec for Counted {
         DECODES.fetch_add(1, Ordering::SeqCst);
         input.var_int().map(Self)
     }
-    fn schema(_: &mut Vec<&'static str>) -> u64 {
+    fn schema(_: &mut Vec<std::any::TypeId>) -> u64 {
         mod_api::payload_schema_leaf("var_int")
     }
 }
@@ -110,9 +110,15 @@ fn up(value: Probe, context: &mut dyn IPayloadContext) -> Result<(), String> {
     }
 }
 
-fn other(value: Probe, _: &mut dyn IPayloadContext) -> Result<(), String> {
-    SERVER.lock().unwrap().push((OTHER, value.counter.0, None));
-    Ok(())
+/// A healthy observer on its own callback: records the witness's health and echoes the counter.
+fn other(value: Probe, context: &mut dyn IPayloadContext) -> Result<(), String> {
+    let counter = value.counter.0;
+    let health = witness_health(context);
+    SERVER.lock().unwrap().push((OTHER, counter, health));
+    down()
+        .reply(context, &probe(counter))
+        .map(drop)
+        .map_err(|e| format!("reply: {e:?}"))
 }
 
 fn client(value: Probe, _: &mut dyn IPayloadContext) -> Result<(), String> {
@@ -231,7 +237,7 @@ fn integrated(game: &mut super::Game<'_>) {
         );
     }
     let deadline = Instant::now() + Duration::from_secs(60);
-    while CLIENT.lock().unwrap().is_empty() {
+    while CLIENT.lock().unwrap().len() < 2 {
         game.poll_remote().unwrap();
         assert!(Instant::now() < deadline, "typed reply");
         std::thread::yield_now();
@@ -243,7 +249,7 @@ fn integrated(game: &mut super::Game<'_>) {
         .map(|(id, counter, _)| (*id, *counter))
         .collect();
     assert_eq!(seen, [(UP, 1), (OTHER, 2), (UP, 3), (UP, 7)]);
-    assert_eq!(*CLIENT.lock().unwrap(), [8]);
+    assert_eq!(*CLIENT.lock().unwrap(), [2, 8]);
 }
 
 fn lan(game: &mut super::Game<'_>) {
@@ -287,7 +293,8 @@ fn lan(game: &mut super::Game<'_>) {
     await_disconnect(&mut forged, DOWN);
     assert!(SERVER.lock().unwrap().is_empty());
     assert!(CLIENT.lock().unwrap().is_empty());
-    // An independent session is accepted: 7, then the order A=1, B=2, A=3, then 7 again.
+    // An independent session is accepted: 7, then the order A=1, B=2, A=3, then 7 again,
+    // whose reply orders them before any other connection's message.
     let mut witness = super::sender_tests::connect_peer(port, "TypedWitness");
     send(&mut witness, UP, vec![7, 0, 0]);
     assert_eq!(await_reply(&mut witness, DOWN), [8, 0, 0]);
@@ -295,13 +302,17 @@ fn lan(game: &mut super::Game<'_>) {
     send(&mut witness, UP, vec![1, 0, 0]);
     send(&mut witness, OTHER, vec![2, 0, 0]);
     send(&mut witness, UP, vec![3, 0, 0]);
-    // A reply staged before a panic is never sent; the staged write is rolled back.
+    send(&mut witness, UP, vec![7, 0, 0]);
+    assert_eq!(await_reply(&mut witness, DOWN), [2, 0, 0]);
+    assert_eq!(await_reply(&mut witness, DOWN), [8, 0, 0]);
+    // A reply staged before a panic is never sent, and the session closes.
     let mut failing = super::sender_tests::connect_peer(port, "TypedPanic");
     send(&mut failing, UP, vec![13, 0, 0]);
     let reason = await_disconnect(&mut failing, DOWN);
     assert!(reason.contains("typed_probe"), "{reason}");
-    send(&mut witness, UP, vec![7, 0, 0]);
-    assert_eq!(await_reply(&mut witness, DOWN), [8, 0, 0]);
+    // The staged write to the witness was rolled back, as a healthy callback sees it.
+    send(&mut witness, OTHER, vec![4, 0, 0]);
+    assert_eq!(await_reply(&mut witness, DOWN), [4, 0, 0]);
     let seen: Vec<_> = SERVER
         .lock()
         .unwrap()
@@ -310,7 +321,15 @@ fn lan(game: &mut super::Game<'_>) {
         .collect();
     assert_eq!(
         seen,
-        [(UP, 7), (UP, 1), (OTHER, 2), (UP, 3), (UP, 13), (UP, 7)]
+        [
+            (UP, 7),
+            (UP, 1),
+            (OTHER, 2),
+            (UP, 3),
+            (UP, 7),
+            (UP, 13),
+            (OTHER, 4)
+        ]
     );
     let last = SERVER.lock().unwrap().last().unwrap().2;
     assert_eq!(
@@ -318,6 +337,12 @@ fn lan(game: &mut super::Game<'_>) {
         Some(full),
         "the failed handler's write was rolled back"
     );
+    // The panicked callback is disabled: a later message on it is refused at ingress, as for
+    // a disabled owner, and the session ends without running it.
+    let mut later = super::sender_tests::connect_peer(port, "TypedLater");
+    send(&mut later, UP, vec![7, 0, 0]);
+    await_disconnect(&mut later, DOWN);
+    assert_eq!(SERVER.lock().unwrap().len(), seen.len());
 }
 
 /// Send `data` on `channel` from a TCP peer in play.

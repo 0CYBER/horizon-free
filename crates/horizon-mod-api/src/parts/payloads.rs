@@ -69,6 +69,20 @@ impl PartRegistrar {
                         ));
                     }
                 }
+                // One id has one value type: a typed id lives in one declaration, whose
+                // protocol a token names, so no other protocol may declare it.
+                let typed =
+                    schema.is_some() || payloads.typed.iter().any(|slot| slot.id == declaration.id);
+                if typed {
+                    for (index, phase) in payloads.phases.iter().enumerate() {
+                        if let Some(owner) = phase.get(&declaration.id.0) {
+                            return Err(format!(
+                                "a typed payload has one declaration, and {} is already registered in protocol {index} by {}",
+                                declaration.id.0, owner.owner
+                            ));
+                        }
+                    }
+                }
             }
             Ok(())
         })();
@@ -79,14 +93,8 @@ impl PartRegistrar {
             ));
             return None;
         }
-        let payloads = Arc::make_mut(self.parts.payloads.get_or_insert_with(|| {
-            // Each registry is a load of its own: a token of an earlier one is stale.
-            static NEXT_LOAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-            Arc::new(Payloads {
-                load: NEXT_LOAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                ..Payloads::default()
-            })
-        }));
+        let (owner, owner_index) = (self.mod_id, self.mod_index);
+        let payloads = self.payloads_table();
         let slot = schema.map(|schema| {
             declaration.version = crate::typed_payload_version(&declaration.version, schema);
             payloads.typed.push(TypedSlot {
@@ -94,7 +102,7 @@ impl PartRegistrar {
                 protocol: declaration.protocol,
                 direction: declaration.direction,
                 schema,
-                owner_index: self.mod_index,
+                owner_index,
             });
             (
                 declaration.id.clone(),
@@ -102,6 +110,8 @@ impl PartRegistrar {
                     .expect("fewer typed payloads than u32::MAX"),
             )
         });
+        let server_panicked = Arc::default();
+        let client_panicked = Arc::default();
         for &index in indices(declaration.protocol) {
             let mut normalized = declaration.clone();
             normalized.protocol = if index == 0 {
@@ -113,15 +123,29 @@ impl PartRegistrar {
                 declaration.id.0.clone(),
                 Registered {
                     declaration: normalized,
-                    owner: self.mod_id,
-                    owner_index: self.mod_index,
+                    owner,
+                    owner_index,
                     server: server.clone(),
                     client: client.clone(),
                     client_thread: declaration.thread,
+                    server_panicked: Arc::clone(&server_panicked),
+                    client_panicked: Arc::clone(&client_panicked),
                 },
             );
         }
         slot
+    }
+
+    /// This load's payload table, made on first use: the one place a table is created, so
+    /// every table has a nonzero load of its own and a token of another load is stale.
+    fn payloads_table(&mut self) -> &mut Payloads {
+        static NEXT_LOAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Arc::make_mut(self.parts.payloads.get_or_insert_with(|| {
+            Arc::new(Payloads {
+                load: NEXT_LOAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                ..Payloads::default()
+            })
+        }))
     }
 }
 
@@ -201,12 +225,14 @@ impl PayloadsRegistrar for PartRegistrar {
             ));
             return;
         }
+        let panicked = Arc::default();
         for phase in &mut Arc::make_mut(payloads).phases {
             if let Some(entry) = phase.get_mut(&id.0)
                 && entry.declaration.direction != PayloadDirection::ToServer
             {
                 entry.client = Some(handler.clone());
                 entry.client_thread = thread;
+                entry.client_panicked = Arc::clone(&panicked);
             }
         }
     }
@@ -248,15 +274,16 @@ impl PayloadsRegistrar for PartRegistrar {
             ));
             return;
         }
-        let payloads = Arc::make_mut(
-            self.parts
-                .payloads
-                .get_or_insert_with(|| Arc::new(Payloads::default())),
-        );
-        payloads.raw.entry(id.0).or_default().push(RawRegistered {
-            owner: self.mod_id,
-            owner_index: self.mod_index,
-            server,
-        });
+        let (owner, owner_index) = (self.mod_id, self.mod_index);
+        self.payloads_table()
+            .raw
+            .entry(id.0)
+            .or_default()
+            .push(RawRegistered {
+                owner,
+                owner_index,
+                server,
+                panicked: Arc::default(),
+            });
     }
 }

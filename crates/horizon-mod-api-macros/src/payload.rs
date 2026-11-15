@@ -218,7 +218,10 @@ pub(crate) fn expand(mut input: DeriveInput) -> syn::Result<TokenStream> {
             ) -> ::core::result::Result<Self, #c::PayloadDecodeError> {
                 #decode
             }
-            fn schema(visiting: &mut ::std::vec::Vec<&'static str>) -> u64 {
+            fn schema(visiting: &mut ::std::vec::Vec<::core::any::TypeId>) -> u64
+            where
+                Self: 'static,
+            {
                 #c::payload_schema_named::<Self>(visiting, |visiting| { #shape })
             }
         }

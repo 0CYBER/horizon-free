@@ -236,3 +236,82 @@ fn a_malformed_body_is_refused_by_name_before_the_handler_runs() {
         .unwrap();
     assert_eq!(*SEEN.lock().unwrap(), [7, 7]);
 }
+
+#[test]
+fn a_table_made_by_a_raw_channel_is_still_a_load_of_its_own() {
+    let register = || {
+        let mut registrar = PartRegistrar::new("test");
+        let r = &mut registrar as &mut dyn Registrar;
+        let mut payloads = r.payload_handlers();
+        let mut view = payloads.registrar("1");
+        view.play_raw(PayloadId("test:raw".into()), None);
+        let token = view.play_to_server_typed::<Counter>(PayloadId("test:up".into()), ignore);
+        (registrar, token)
+    };
+    let (first, first_token) = register();
+    let (second, second_token) = register();
+    assert_ne!(first_token.token().load, 0);
+    assert_eq!(frozen(&first).check_token(first_token.token()), Ok(()));
+    assert_eq!(frozen(&second).check_token(second_token.token()), Ok(()));
+    for (table, token) in [(&first, &second_token), (&second, &first_token)] {
+        assert_eq!(
+            frozen(table).check_token(token.token()),
+            Err(PayloadSendError::StaleToken(token.token().id.clone()))
+        );
+    }
+}
+
+#[test]
+fn a_typed_id_has_one_declaration_in_one_protocol() {
+    let mut registrar = PartRegistrar::new("test");
+    let r = &mut registrar as &mut dyn Registrar;
+    let mut payloads = r.payload_handlers();
+    let mut view = payloads.registrar("1");
+    view.configuration_to_server_typed::<Other>(PayloadId("test:phased".into()), ignore);
+    let play = view.play_to_server_typed::<Counter>(PayloadId("test:phased".into()), ignore);
+    // A raw declaration in another protocol of a typed id is refused too.
+    view.play_to_server(PayloadId("test:phased".into()), Arc::new(Ignore));
+    assert_eq!(registrar.refused.len(), 2, "{:?}", registrar.refused);
+    for refusal in &registrar.refused {
+        assert!(refusal.contains("one declaration"), "{refusal}");
+    }
+    assert_eq!(play.token().load, 0);
+}
+
+#[test]
+fn a_callback_that_panicked_is_never_invoked_again() {
+    static CALLS: Mutex<u32> = Mutex::new(0);
+    let mut registrar = PartRegistrar::new("test");
+    (&mut registrar as &mut dyn Registrar)
+        .payload_handlers()
+        .registrar("1")
+        .play_to_server_typed::<Counter>(PayloadId("test:panics".into()), |_, _| {
+            *CALLS.lock().unwrap() += 1;
+            panic!("the handler panics");
+        });
+    let table = frozen(&registrar);
+    let receiver = || {
+        table
+            .handler(
+                "test:panics",
+                PayloadProtocol::Play,
+                PayloadDirection::ToServer,
+            )
+            .unwrap()
+    };
+    let first = receiver();
+    assert!(first.enabled());
+    let error = first
+        .handle(PayloadBytes(vec![7]), &mut Unreached)
+        .unwrap_err();
+    assert!(error.contains("panicked"), "{error}");
+    // Disabled for this connection and for one that resolves the callback later.
+    for receiver in [first, receiver()] {
+        assert!(!receiver.enabled());
+        assert_eq!(
+            receiver.handle(PayloadBytes(vec![7]), &mut Unreached),
+            Err("payload owner is disabled".into())
+        );
+    }
+    assert_eq!(*CALLS.lock().unwrap(), 1);
+}

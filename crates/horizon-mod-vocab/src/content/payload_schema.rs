@@ -3,7 +3,7 @@
 //! and bound, a struct's field schemas in declaration order, an enum's variants by position and
 //! their fields. `#[derive(PayloadCodec)]` writes it from the fields; a hand-written codec names
 //! its own leaf. A type that holds itself, directly or through others, is marked by how far up
-//! the walk it was entered, so the walk ends and the result does not depend on Rust type names.
+//! the walk it was entered, so the walk ends and the result does not depend on Rust names.
 //! The fingerprint is part of a typed declaration's negotiated version (see
 //! [`typed_payload_version`]), so two peers with the same id and another schema are told apart
 //! at admission. It is the same on native and wasm targets.
@@ -43,26 +43,26 @@ pub const fn payload_schema_mix(mut hash: u64, child: u64) -> u64 {
 
 /// Walks one named type: `shape` gives its fingerprint, unless the type is already being walked
 /// further up (it holds itself), when the result is a back reference to that level. What a
-/// derived codec's `schema` calls; `visiting` is the walk's stack of type names.
+/// derived codec's `schema` calls; `visiting` is the walk's stack of types, by `TypeId`.
 // hidden: the derive's recursion guard; hand-written codecs name a leaf instead.
 #[doc(hidden)]
-pub fn payload_schema_named<T: ?Sized>(
-    visiting: &mut Vec<&'static str>,
-    shape: impl FnOnce(&mut Vec<&'static str>) -> u64,
+pub fn payload_schema_named<T: ?Sized + 'static>(
+    visiting: &mut Vec<std::any::TypeId>,
+    shape: impl FnOnce(&mut Vec<std::any::TypeId>) -> u64,
 ) -> u64 {
-    let name = std::any::type_name::<T>();
-    if let Some(level) = visiting.iter().rposition(|entered| *entered == name) {
+    let id = std::any::TypeId::of::<T>();
+    if let Some(level) = visiting.iter().rposition(|entered| *entered == id) {
         let up = (visiting.len() - level) as u64;
         return payload_schema_mix(payload_schema_leaf("recursive"), up);
     }
-    visiting.push(name);
+    visiting.push(id);
     let hash = shape(visiting);
     visiting.pop();
     hash
 }
 
 /// The schema fingerprint of `T`.
-pub fn payload_schema<T: PayloadCodec>() -> u64 {
+pub fn payload_schema<T: PayloadCodec + 'static>() -> u64 {
     T::schema(&mut Vec::new())
 }
 

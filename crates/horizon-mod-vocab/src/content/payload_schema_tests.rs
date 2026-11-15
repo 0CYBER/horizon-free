@@ -87,19 +87,10 @@ fn a_type_that_holds_itself_has_a_finite_schema() {
 #[test]
 fn the_fingerprint_is_pinned_for_every_build_and_target() {
     // Two peers compare this number at admission: a native and a wasm build of the same type, and
-    // builds of different game versions, must agree. FNV-1a 64 over leaf names and little-endian
-    // counts, computed by hand for `struct { counter: VarInt }`.
-    let fnv = |bytes: &[u8], mut hash: u64| {
-        for byte in bytes {
-            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
-        }
-        hash
-    };
-    let start = 0xcbf29ce484222325;
-    let field = fnv(b"var_int", start);
-    let hash = fnv(&1u64.to_le_bytes(), fnv(b"struct", start));
-    let hash = fnv(&field.to_le_bytes(), hash);
-    assert_eq!(payload_schema::<Counter>(), hash);
+    // builds of different game versions, must agree. FNV-1a 64 of `struct { counter: VarInt }`:
+    // "struct", then the field count 1 and the hash of "var_int" as little-endian u64s, computed
+    // outside Rust (Python) from that definition.
+    assert_eq!(payload_schema::<Counter>(), 0xf0f2_25e6_8e40_be70);
     assert_eq!(
         typed_payload_version("2", 0xab),
         "2+payload-schema.00000000000000ab"

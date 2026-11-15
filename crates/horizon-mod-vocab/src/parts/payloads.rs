@@ -14,6 +14,10 @@ pub(crate) struct Registered {
     pub(crate) server: Option<Arc<dyn IPayloadHandler>>,
     pub(crate) client: Option<Arc<dyn IPayloadHandler>>,
     pub(crate) client_thread: HandlerThread,
+    /// Set once the server callback panicked: it is never invoked again, on any connection.
+    pub(crate) server_panicked: Arc<std::sync::atomic::AtomicBool>,
+    /// The same for the client callback.
+    pub(crate) client_panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // no wire: frozen process-local registration storage contains callback trait objects and owning-mod identities.
@@ -47,6 +51,8 @@ pub(crate) struct RawRegistered {
     pub(crate) owner: &'static str,
     pub(crate) owner_index: usize,
     pub(crate) server: Option<Arc<dyn IPayloadHandler>>,
+    /// Set once the server callback panicked: it is never invoked again.
+    pub(crate) panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // no wire: resolved process-local callback and its owning mod's live enable guard.
@@ -60,6 +66,8 @@ pub struct PayloadReceiver {
     /// Its chosen executor.
     pub thread: HandlerThread,
     owner_index: usize,
+    /// Shared by every connection's receiver of this callback.
+    panicked: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl PayloadReceiver {
@@ -67,12 +75,15 @@ impl PayloadReceiver {
     pub fn owner(&self) -> &'static str {
         self.owner
     }
-    /// Recheck the owner without scanning registrations or resolving the id again.
+    /// Recheck the owner without scanning registrations or resolving the id again: off when
+    /// its mod is off or this callback panicked.
     pub fn enabled(&self) -> bool {
         crate::mod_index_on(self.owner_index)
+            && !self.panicked.load(std::sync::atomic::Ordering::Acquire)
     }
-    /// Invoke only this owner. The caller owns the root transaction and handles
-    /// a native panic exactly like an explicit application decoding error.
+    /// Invoke only this owner. The caller owns the root transaction and handles a native
+    /// panic as an explicit error, after which this callback is disabled for every
+    /// connection: a later call is refused without running it.
     pub fn handle(
         &self,
         bytes: crate::PayloadBytes,
@@ -97,8 +108,11 @@ impl PayloadReceiver {
             return Err("payload owner is disabled".into());
         }
         let _guard = crate::mark_mod(self.owner, operation);
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(call))
-            .unwrap_or_else(|_| Err("payload callback panicked".into()))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).unwrap_or_else(|_| {
+            self.panicked
+                .store(true, std::sync::atomic::Ordering::Release);
+            Err("payload callback panicked; it is disabled".into())
+        })
     }
 }
 
@@ -134,12 +148,14 @@ impl Payloads {
                 thread: entry.client_thread,
                 owner_index: entry.owner_index,
                 owner: entry.owner,
+                panicked: entry.client_panicked.clone(),
             }),
             PayloadDirection::ToServer => entry.server.clone().map(|handler| PayloadReceiver {
                 handler,
                 thread: entry.declaration.thread,
                 owner_index: entry.owner_index,
                 owner: entry.owner,
+                panicked: entry.server_panicked.clone(),
             }),
             PayloadDirection::Bidirectional => None,
         }
@@ -190,6 +206,7 @@ impl Payloads {
                         owner: owner.owner,
                         thread: HandlerThread::Main,
                         owner_index: owner.owner_index,
+                        panicked: owner.panicked.clone(),
                     })
                 })
                 .collect()

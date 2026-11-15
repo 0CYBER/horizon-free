@@ -90,7 +90,7 @@ macro_rules! token {
             value_schema: u64,
             value: PhantomData<fn() -> T>,
         }
-        impl<T: PayloadCodec> $name<T> {
+        impl<T: PayloadCodec + 'static> $name<T> {
             fn new(token: PayloadToken) -> Self {
                 Self {
                     token,
@@ -136,7 +136,7 @@ macro_rules! token {
         }
         /// The token's own claim; the value type is only its parameter. Reading one as `T`
         /// (the only way to retype a token) walks `T`'s schema once.
-        impl<T: PayloadCodec> Wire for $name<T> {
+        impl<T: PayloadCodec + 'static> Wire for $name<T> {
             const LAYOUT_SEED: u64 = crate::wire::layout_mix(
                 crate::wire::layout_name(stringify!($name)),
                 <PayloadToken as Wire>::LAYOUT_SEED,
@@ -282,11 +282,14 @@ macro_rules! typed_methods {
             /// Register a typed clientbound payload with its client handler, which receives
             /// each body decoded as one `T`. The declaration is an ordinary raw one, with
             /// `T`'s schema fingerprint after this view's version.
-            pub fn $to_client<T, F>(&mut self, id: PayloadId, client: F) -> ToClient<T>
-            where
-                T: PayloadCodec + 'static,
-                F: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
-            {
+            pub fn $to_client<T: PayloadCodec + 'static>(
+                &mut self,
+                id: PayloadId,
+                client: impl Fn(T, &mut dyn IPayloadContext) -> Result<(), String>
+                + Send
+                + Sync
+                + 'static,
+            ) -> ToClient<T> {
                 let client = typed(&id, client);
                 ToClient::new(self.register_typed::<T>(
                     id,
@@ -297,12 +300,28 @@ macro_rules! typed_methods {
                 ))
             }
             /// Register a typed serverbound payload with its server handler, which receives
-            /// each body decoded as one `T`, as the clientbound form does.
-            pub fn $to_server<T, F>(&mut self, id: PayloadId, server: F) -> ToServer<T>
-            where
-                T: PayloadCodec + 'static,
-                F: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
-            {
+            /// each body decoded as one `T`, as the clientbound form does. `T` is the only
+            /// generic, so it can be named:
+            ///
+            /// ```
+            /// # use mod_api::*;
+            /// fn register(r: &mut dyn Registrar) -> ToServer<VarInt> {
+            ///     r.payload_handlers()
+            ///         .registrar("1")
+            ///         .play_to_server_typed::<VarInt>(
+            ///             PayloadId("example:counter".into()),
+            ///             |value, _| if value.0 >= 0 { Ok(()) } else { Err("negative".into()) },
+            ///         )
+            /// }
+            /// ```
+            pub fn $to_server<T: PayloadCodec + 'static>(
+                &mut self,
+                id: PayloadId,
+                server: impl Fn(T, &mut dyn IPayloadContext) -> Result<(), String>
+                + Send
+                + Sync
+                + 'static,
+            ) -> ToServer<T> {
                 let server = typed(&id, server);
                 ToServer::new(self.register_typed::<T>(
                     id,
@@ -314,17 +333,18 @@ macro_rules! typed_methods {
             }
             /// Register a typed payload in both directions, with both handlers: one
             /// declaration, and a token for each direction.
-            pub fn $both<T, S, C>(
+            pub fn $both<T: PayloadCodec + 'static>(
                 &mut self,
                 id: PayloadId,
-                server: S,
-                client: C,
-            ) -> (ToServer<T>, ToClient<T>)
-            where
-                T: PayloadCodec + 'static,
-                S: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
-                C: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
-            {
+                server: impl Fn(T, &mut dyn IPayloadContext) -> Result<(), String>
+                + Send
+                + Sync
+                + 'static,
+                client: impl Fn(T, &mut dyn IPayloadContext) -> Result<(), String>
+                + Send
+                + Sync
+                + 'static,
+            ) -> (ToServer<T>, ToClient<T>) {
                 let server = typed(&id, server);
                 let client = typed(&id, client);
                 let token = self.register_typed::<T>(

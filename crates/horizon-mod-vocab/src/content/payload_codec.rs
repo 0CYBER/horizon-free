@@ -6,6 +6,7 @@
 //! checked before anything is reserved or copied, and nothing here panics on
 //! any input. The codec touches no `Host` and no world, so it runs the same
 //! in a native mod and in a wasm guest. Registration and delivery are separate from encoding.
+use super::payload_budget::Budget;
 // The helpers a derived codec's schema calls, beside the codec it names as its crate.
 pub use super::payload_schema::{payload_schema_leaf, payload_schema_mix, payload_schema_named};
 
@@ -17,10 +18,11 @@ pub const PAYLOAD_MAX_STRING_BYTES: usize = 4096;
 /// The most entries of a list read through [`PayloadCodec`] for `Vec<T>`.
 pub const PAYLOAD_MAX_LIST_ENTRIES: usize = 4096;
 /// The most bytes one payload value may make its decoder allocate: lists
-/// reserve against it by their decoded size, strings and byte arrays by
-/// their length, and boxes by the size of their inner value. The budget equals
-/// the largest uncompressed packet; structured values can require more allocation
-/// than their encoded body and are refused when they exhaust it.
+/// reserve against it by their decoded size, owned strings by their length, and
+/// boxes by the size of their inner value, each size as a 64-bit target has it. The
+/// budget equals the largest uncompressed packet; structured values can require more
+/// allocation than their encoded body and are refused when they exhaust it. A writer
+/// charges the same budget, so it refuses what the peer's reader would.
 pub const PAYLOAD_DECODE_BUDGET: usize = 8_388_608;
 
 /// Why a payload body is not a value of its type. The value is dropped and
@@ -88,6 +90,8 @@ pub enum PayloadEncodeError {
     TooDeep,
     /// A number that must be finite is NaN or infinite.
     NonFinite,
+    /// The value would make the peer's decoder allocate past [`PAYLOAD_DECODE_BUDGET`].
+    BudgetExhausted,
 }
 
 /// A value with a payload form: the pure codec of a typed payload. Both
@@ -100,9 +104,11 @@ pub trait PayloadCodec: Sized {
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError>;
     /// The type's schema fingerprint: the shape of what `encode` writes (see
     /// [`payload_schema`](crate::payload_schema)). `visiting` holds the named types the walk is
-    /// inside; a hand-written codec returns a leaf of its own name and version,
+    /// inside, by `TypeId`; a hand-written codec returns a leaf of its own name and version,
     /// `payload_schema_leaf("example:position/1")`.
-    fn schema(visiting: &mut Vec<&'static str>) -> u64;
+    fn schema(visiting: &mut Vec<std::any::TypeId>) -> u64
+    where
+        Self: 'static;
 }
 
 /// Encodes `value` as a whole payload body of at most `limit` bytes.
@@ -131,7 +137,7 @@ pub fn decode_payload<T: PayloadCodec>(body: &[u8]) -> Result<T, PayloadDecodeEr
 pub struct PayloadReader<'a> {
     data: &'a [u8],
     depth: u16,
-    budget: usize,
+    budget: Budget,
 }
 
 macro_rules! read_numbers {
@@ -154,7 +160,7 @@ impl<'a> PayloadReader<'a> {
         Self {
             data: body,
             depth: 0,
-            budget,
+            budget: Budget::new(budget as u64),
         }
     }
 
@@ -191,12 +197,10 @@ impl<'a> PayloadReader<'a> {
         Ok(head)
     }
 
-    /// Takes `bytes` from the allocation budget before they are reserved.
-    fn charge(&mut self, bytes: Option<usize>) -> Result<(), PayloadDecodeError> {
-        self.budget = bytes
-            .and_then(|bytes| self.budget.checked_sub(bytes))
-            .ok_or(PayloadDecodeError::BudgetExhausted)?;
-        Ok(())
+    /// Refuses with `BudgetExhausted` when a charge does not fit.
+    fn charged(fits: bool) -> Result<(), PayloadDecodeError> {
+        fits.then_some(())
+            .ok_or(PayloadDecodeError::BudgetExhausted)
     }
 
     read_numbers! {
@@ -296,7 +300,7 @@ impl<'a> PayloadReader<'a> {
     /// An owned string of at most [`PAYLOAD_MAX_STRING_BYTES`] UTF-8 bytes.
     pub fn string(&mut self) -> Result<String, PayloadDecodeError> {
         let text = self.str_within(PAYLOAD_MAX_STRING_BYTES)?;
-        self.charge(Some(text.len()))?;
+        Self::charged(self.budget.string(text.len()))?;
         Ok(text.to_owned())
     }
 
@@ -324,7 +328,7 @@ impl<'a> PayloadReader<'a> {
         mut read: impl FnMut(&mut Self) -> Result<T, PayloadDecodeError>,
     ) -> Result<Vec<T>, PayloadDecodeError> {
         let count = self.length(limit)?;
-        self.charge(count.checked_mul(std::mem::size_of::<T>()))?;
+        Self::charged(self.budget.list::<T>(count))?;
         self.nested(|input| {
             let mut items = Vec::with_capacity(count);
             for _ in 0..count {
@@ -356,6 +360,7 @@ pub struct PayloadWriter {
     bytes: Vec<u8>,
     limit: usize,
     depth: u16,
+    budget: Budget,
     error: Option<PayloadEncodeError>,
 }
 
@@ -375,8 +380,17 @@ impl PayloadWriter {
             bytes: Vec::new(),
             limit,
             depth: 0,
+            budget: Budget::new(PAYLOAD_DECODE_BUDGET as u64),
             error: None,
         }
+    }
+
+    /// Records `BudgetExhausted` when a charge does not fit; whether it did.
+    fn charged(&mut self, fits: bool) -> bool {
+        if !fits {
+            self.fail(PayloadEncodeError::BudgetExhausted);
+        }
+        fits
     }
 
     /// The encoded body, or the first failure.
@@ -498,6 +512,8 @@ impl PayloadWriter {
     /// A string of at most [`PAYLOAD_MAX_STRING_BYTES`] UTF-8 bytes.
     pub fn string(&mut self, text: &str) {
         self.str_within(text, PAYLOAD_MAX_STRING_BYTES);
+        let fits = self.budget.string(text.len());
+        self.charged(fits);
     }
 
     /// Writes one level down, refusing past [`PAYLOAD_MAX_DEPTH`].
@@ -515,14 +531,17 @@ impl PayloadWriter {
     }
 
     /// A list of at most `limit` entries: its VarInt count, then each entry
-    /// written by `write`, one level down.
+    /// written by `write`, one level down, charged to the budget as its reader charges it.
     pub fn list<T>(&mut self, items: &[T], limit: usize, mut write: impl FnMut(&mut Self, &T)) {
         if self.length(items.len(), limit) {
-            self.nested(|out| {
-                for item in items {
-                    write(out, item);
-                }
-            });
+            let fits = self.budget.list::<T>(items.len());
+            if self.charged(fits) {
+                self.nested(|out| {
+                    for item in items {
+                        write(out, item);
+                    }
+                });
+            }
         }
     }
 
@@ -545,7 +564,7 @@ macro_rules! number_codecs {
             fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
                 input.$name()
             }
-            fn schema(_: &mut Vec<&'static str>) -> u64 {
+            fn schema(_: &mut Vec<std::any::TypeId>) -> u64 {
                 payload_schema_leaf(stringify!($name))
             }
         }
@@ -570,7 +589,7 @@ impl PayloadCodec for VarInt {
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.var_int().map(Self)
     }
-    fn schema(_: &mut Vec<&'static str>) -> u64 {
+    fn schema(_: &mut Vec<std::any::TypeId>) -> u64 {
         payload_schema_leaf("var_int")
     }
 }
@@ -582,7 +601,7 @@ impl PayloadCodec for VarLong {
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.var_long().map(Self)
     }
-    fn schema(_: &mut Vec<&'static str>) -> u64 {
+    fn schema(_: &mut Vec<std::any::TypeId>) -> u64 {
         payload_schema_leaf("var_long")
     }
 }
@@ -595,7 +614,7 @@ impl PayloadCodec for String {
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.string()
     }
-    fn schema(_: &mut Vec<&'static str>) -> u64 {
+    fn schema(_: &mut Vec<std::any::TypeId>) -> u64 {
         payload_schema_mix(
             payload_schema_leaf("string"),
             PAYLOAD_MAX_STRING_BYTES as u64,
@@ -612,7 +631,10 @@ impl<T: PayloadCodec> PayloadCodec for Vec<T> {
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.list(PAYLOAD_MAX_LIST_ENTRIES, T::decode)
     }
-    fn schema(visiting: &mut Vec<&'static str>) -> u64 {
+    fn schema(visiting: &mut Vec<std::any::TypeId>) -> u64
+    where
+        Self: 'static,
+    {
         let list = payload_schema_mix(payload_schema_leaf("list"), PAYLOAD_MAX_LIST_ENTRIES as u64);
         payload_schema_mix(list, T::schema(visiting))
     }
@@ -625,7 +647,10 @@ impl<T: PayloadCodec> PayloadCodec for Option<T> {
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.option(T::decode)
     }
-    fn schema(visiting: &mut Vec<&'static str>) -> u64 {
+    fn schema(visiting: &mut Vec<std::any::TypeId>) -> u64
+    where
+        Self: 'static,
+    {
         payload_schema_mix(payload_schema_leaf("option"), T::schema(visiting))
     }
 }
@@ -633,15 +658,23 @@ impl<T: PayloadCodec> PayloadCodec for Option<T> {
 /// The boxed value's own form: what lets a type hold itself.
 impl<T: PayloadCodec> PayloadCodec for Box<T> {
     fn encode(&self, out: &mut PayloadWriter) {
-        out.nested(|out| T::encode(self, out));
+        out.nested(|out| {
+            let fits = out.budget.boxed::<T>();
+            if out.charged(fits) {
+                T::encode(self, out);
+            }
+        });
     }
     fn decode(input: &mut PayloadReader<'_>) -> Result<Self, PayloadDecodeError> {
         input.nested(|input| {
-            input.charge(Some(std::mem::size_of::<T>()))?;
+            PayloadReader::charged(input.budget.boxed::<T>())?;
             T::decode(input).map(Box::new)
         })
     }
-    fn schema(visiting: &mut Vec<&'static str>) -> u64 {
+    fn schema(visiting: &mut Vec<std::any::TypeId>) -> u64
+    where
+        Self: 'static,
+    {
         payload_schema_mix(payload_schema_leaf("box"), T::schema(visiting))
     }
 }
