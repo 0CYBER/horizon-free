@@ -61,9 +61,12 @@ fn chicken_variant_decodes_registry_holders_and_matches_borrowed_values() {
 
     items.component_defaults = std::sync::Arc::new(std::collections::HashMap::from([(
         "minecraft:paper".into(),
-        [("minecraft:chicken/variant".into(), Tag::String("temperate".into()))]
-            .into_iter()
-            .collect(),
+        [(
+            "minecraft:chicken/variant".into(),
+            Tag::String("temperate".into()),
+        )]
+        .into_iter()
+        .collect(),
     )]));
     let inherited = Ingredient::parse(&source(json!("temperate")), &items).unwrap();
     let mut plain = ItemStack::new("minecraft:paper", 1);
