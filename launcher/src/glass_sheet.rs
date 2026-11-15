@@ -700,23 +700,33 @@ impl Launcher {
             // it, so they are settled first.
             let unsaved = self.sheet_changed();
             let busy = self.instances.dialog.as_ref().is_some_and(|d| d.busy);
-            let duplicate = button("sheet-duplicate", "Duplicate", Kind::Secondary, &t);
+            let duplicate = button(
+                "sheet-duplicate",
+                if busy { "Copying…" } else { "Duplicate" },
+                Kind::Secondary,
+                &t,
+            );
             rows = rows.child(ui::setting_row(
                 tr("Duplicate"),
                 Some(
                     div()
-                        .child(match unsaved {
-                            true => tr("Save or discard your edits first: the copy is made from the saved instance."),
-                            false => tr("A copy with the same worlds, options and packs."),
+                        .child(match (busy, unsaved) {
+                            (true, _) => tr("Making the copy: this closes onto it when it's done."),
+                            (false, true) => tr(
+                                "Save your edits first: the copy is made from the saved instance.",
+                            ),
+                            (false, false) => tr("A copy with the same worlds, options and packs."),
                         })
                         .into_any_element(),
                 ),
                 Some(
                     match unsaved || busy {
                         true => disabled(duplicate),
-                        false => duplicate.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.duplicate_instance(from.clone(), copy_name.to_string(), cx);
-                        })),
+                        false => {
+                            duplicate.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                this.duplicate_instance(from.clone(), copy_name.to_string(), cx);
+                            }))
+                        }
                     }
                     .into_any_element(),
                 ),
