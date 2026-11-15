@@ -53,13 +53,19 @@ fn asks(
 ) -> Vec<([f32; 4], Scene, SceneView, Result<(), SceneError>)> {
     let rect = [12.0, 20.0, 140.0, 110.0];
     let view = SceneView::new([1.0, 0.5, 0.5], 225.0, 30.0, 18.0);
-    let blocks = vec![SceneBlock::new([0, 0, 0], block, None), SceneBlock::new([1, 0, -2], block, None)];
+    let blocks = vec![
+        SceneBlock::new([0, 0, 0], block, None),
+        SceneBlock::new([1, 0, -2], block, None),
+    ];
     let mut data = Compound::new();
     data.insert("IsBaby".into(), mod_api::Tag::Byte(1));
     let entities = vec![
         SceneEntity::new(GuiEntity::with_data("minecraft:cow", data), [1.5, 0.0, 0.5])
             .turned(135.0, 150.0, -12.5),
-        SceneEntity::new(GuiEntity::existing(EntityRef::new(mod_api::WorldEpoch::new(3), 42)), [-0.5, 1.0, 0.25]),
+        SceneEntity::new(
+            GuiEntity::existing(EntityRef::new(mod_api::WorldEpoch::new(3), 42)),
+            [-0.5, 1.0, 0.25],
+        ),
     ];
     let particles = vec![SceneParticle::new(
         mod_api::ParticleOptions::simple(smoke),
@@ -103,7 +109,10 @@ fn keys(mods: &mod_api::Mods) -> (BlockState, mod_api::ParticleKey) {
     let metadata = mod_api::__private::block_definitions().unwrap();
     let block = BlockState::from(
         metadata
-            .of(mod_api::__private::part_tests::block_key("wire_test:stone"), &[])
+            .of(
+                mod_api::__private::part_tests::block_key("wire_test:stone"),
+                &[],
+            )
             .unwrap(),
     );
     let smoke = mod_api::__private::particle_named_key("minecraft:smoke").expect("smoke's key");
@@ -146,7 +155,10 @@ fn a_native_mods_screen_draw_reaches_the_draw_contexts_scene() {
         let _ = KEYS.set((block, smoke));
         let mut draw = Draw::default();
         mod_api::dispatch_gui_render_post(&Client, &mut draw, false, true);
-        let sent: Vec<_> = asks(block, smoke).into_iter().map(|(r, s, v, _)| (r, s, v)).collect();
+        let sent: Vec<_> = asks(block, smoke)
+            .into_iter()
+            .map(|(r, s, v, _)| (r, s, v))
+            .collect();
         assert_eq!(draw.0, sent);
     });
 }
@@ -172,7 +184,12 @@ fn a_wasm_mods_scene_crosses_whole_with_each_part_and_each_refusal_comes_back() 
         let mut sent = Vec::new();
         let mut answers = Vec::new();
         for (rect, scene, view, answer) in asks(block, smoke) {
-            answers.push(DrawContext::draw_scene(&mut guest::Guest, rect, &scene, view));
+            answers.push(DrawContext::draw_scene(
+                &mut guest::Guest,
+                rect,
+                &scene,
+                view,
+            ));
             assert_eq!(answers.last(), Some(&answer));
             sent.push((rect, scene, view));
         }

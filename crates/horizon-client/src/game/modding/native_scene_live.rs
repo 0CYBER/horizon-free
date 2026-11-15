@@ -6,11 +6,11 @@
 //! prepared for drawing only as `DrawContext::entity` prepares them. Nothing of it reaches
 //! the client's level, its particle engine or its sounds. A scene of blocks alone never
 //! comes here.
+use super::api_values::TryIntoEngine as _;
 use super::{
     Game,
     native_scene::{SceneBlock, SceneQuad, face_shade, shaded},
 };
-use super::api_values::TryIntoEngine as _;
 use glam::{DVec3, Quat, Vec3};
 use horizon_client::{
     animate_tick::{AnimateContext, animate_scene},
@@ -125,7 +125,11 @@ pub(super) fn ticks_to_run(last: u64, tick: u64) -> Option<(bool, u64, u64)> {
         return None;
     }
     let restart = tick - last > SCENE_CATCH_UP;
-    let first = if restart { tick - SCENE_CATCH_UP + 1 } else { last + 1 };
+    let first = if restart {
+        tick - SCENE_CATCH_UP + 1
+    } else {
+        last + 1
+    };
     Some((restart, first, tick))
 }
 
@@ -169,7 +173,11 @@ pub(super) fn check(
     }
     let placed = |p: &[f64; 3]| p.iter().all(|v| v.is_finite() && v.abs() <= FAR);
     for (index, e) in (0u32..).zip(&scene.entities) {
-        if !placed(&e.pos) || ![e.yaw, e.head_yaw, e.head_pitch].iter().all(|v| v.is_finite()) {
+        if !placed(&e.pos)
+            || ![e.yaw, e.head_yaw, e.head_pitch]
+                .iter()
+                .all(|v| v.is_finite())
+        {
             return Err(SceneError::BadEntity { index });
         }
     }
@@ -249,7 +257,10 @@ impl Game<'_> {
         let same = |l: &Live| {
             l.key == key
                 && l.entities.len() == scene.entities.len()
-                && l.entities.iter().zip(&scene.entities).all(|(a, b)| *a == b.entity)
+                && l.entities
+                    .iter()
+                    .zip(&scene.entities)
+                    .all(|(a, b)| *a == b.entity)
         };
         let frame = self.frames;
         if !scenes.admit(frame, owner, clock.id) {
@@ -380,7 +391,11 @@ impl Game<'_> {
         if !picks.is_empty() {
             let n = picks.len() as f64;
             let sum = picks.iter().fold([0.0; 3], |s, p| {
-                [s[0] + f64::from(p[0]), s[1] + f64::from(p[1]), s[2] + f64::from(p[2])]
+                [
+                    s[0] + f64::from(p[0]),
+                    s[1] + f64::from(p[1]),
+                    s[2] + f64::from(p[2]),
+                ]
             });
             engine.camera = sum.map(|v| v / n + 0.5);
         }
@@ -509,12 +524,21 @@ impl Game<'_> {
             .live
             .iter()
             .find(|l| l.owner == owner && l.id == id)
-            .map(|l| l.engine.live().map(|p| (p.position, p.previous, p.age)).collect())
+            .map(|l| {
+                l.engine
+                    .live()
+                    .map(|p| (p.position, p.previous, p.age))
+                    .collect()
+            })
             .unwrap_or_default()
     }
     /// The tick the mod's scene `id` last ran, when it is kept.
     pub(super) fn scene_tick(&self, owner: &str, id: u32) -> Option<u64> {
         let scenes = self.live_scenes.borrow();
-        scenes.live.iter().find(|l| l.owner == owner && l.id == id).map(|l| l.tick)
+        scenes
+            .live
+            .iter()
+            .find(|l| l.owner == owner && l.id == id)
+            .map(|l| l.tick)
     }
 }

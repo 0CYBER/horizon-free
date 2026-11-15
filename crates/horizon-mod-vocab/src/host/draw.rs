@@ -115,7 +115,12 @@ pub trait DrawContext {
     /// entities, 512 live particles, 4 animating scenes a frame), an entity
     /// `entity` would refuse, or input that isn't drawable.
     /// API @API:scenes_in_screens@.
-    fn draw_scene(&mut self, rect: [f32; 4], scene: &Scene, view: SceneView) -> Result<(), SceneError> {
+    fn draw_scene(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+    ) -> Result<(), SceneError> {
         Err(SceneError::Unavailable)
     }
     /// `GuiGraphics.enableScissor`: what this hook call draws from now on, until the matching

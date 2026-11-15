@@ -40,8 +40,14 @@ fn a_particle_faces_the_viewer_upright_through_any_turn() {
         let right = m.transform_vector3(q * Vec3::X);
         // Flat to the screen: no depth across the quad; up the screen and to the right.
         assert!(up.z.abs() < 1e-3 && right.z.abs() < 1e-3, "{yaw} {pitch}");
-        assert!((up.y + 16.0).abs() < 1e-3 && up.x.abs() < 1e-3, "{yaw} {pitch}: {up}");
-        assert!((right.x - 16.0).abs() < 1e-3 && right.y.abs() < 1e-3, "{yaw} {pitch}");
+        assert!(
+            (up.y + 16.0).abs() < 1e-3 && up.x.abs() < 1e-3,
+            "{yaw} {pitch}: {up}"
+        );
+        assert!(
+            (right.x - 16.0).abs() < 1e-3 && right.y.abs() < 1e-3,
+            "{yaw} {pitch}"
+        );
     }
 }
 
@@ -61,7 +67,10 @@ fn the_caps_and_mod_input_are_refused_whole_and_named() {
     crowd.entities = vec![cow([0.0; 3]); 16];
     assert_eq!(check(RECT, &crowd, view()), Ok(clock));
     crowd.entities.push(cow([0.0; 3]));
-    assert_eq!(check(RECT, &crowd, view()), Err(SceneError::TooManyEntities));
+    assert_eq!(
+        check(RECT, &crowd, view()),
+        Err(SceneError::TooManyEntities)
+    );
     let mut nan_rect = RECT;
     nan_rect[2] = f32::NAN;
     assert_eq!(check(nan_rect, &ok, view()), Err(SceneError::BadView));
@@ -69,10 +78,16 @@ fn the_caps_and_mod_input_are_refused_whole_and_named() {
     assert_eq!(check(RECT, &ok, turned), Err(SceneError::BadView));
     let mut far = ok.clone();
     far.entities.push(cow([3.0e7 + 1.0, 0.0, 0.0]));
-    assert_eq!(check(RECT, &far, view()), Err(SceneError::BadEntity { index: 1 }));
+    assert_eq!(
+        check(RECT, &far, view()),
+        Err(SceneError::BadEntity { index: 1 })
+    );
     let mut spun = ok.clone();
     spun.entities[0] = cow([0.0; 3]).turned(0.0, f32::NAN, 0.0);
-    assert_eq!(check(RECT, &spun, view()), Err(SceneError::BadEntity { index: 0 }));
+    assert_eq!(
+        check(RECT, &spun, view()),
+        Err(SceneError::BadEntity { index: 0 })
+    );
     let mut clockless = ok.clone();
     clockless.clock = None;
     assert_eq!(check(RECT, &clockless, view()), Err(SceneError::NoClock));
@@ -85,8 +100,14 @@ fn the_caps_and_mod_input_are_refused_whole_and_named() {
 fn only_a_scene_with_entities_particles_or_animating_blocks_lives() {
     let blocks = Scene::new(Vec::new());
     assert!(!lives(&blocks));
-    assert!(!lives(&blocks.clone().with_clock(SceneClock::new(1, 5, 0.0).animate_blocks(false))));
-    assert!(lives(&blocks.clone().with_clock(SceneClock::new(1, 5, 0.0))));
+    assert!(!lives(
+        &blocks
+            .clone()
+            .with_clock(SceneClock::new(1, 5, 0.0).animate_blocks(false))
+    ));
+    assert!(lives(
+        &blocks.clone().with_clock(SceneClock::new(1, 5, 0.0))
+    ));
     assert!(lives(&blocks.with_entities(vec![cow([0.0; 3])])));
 }
 
@@ -111,10 +132,17 @@ fn a_clock_runs_the_ticks_between_and_a_long_jump_starts_over_from_the_last_twen
     assert_eq!(ticks_to_run(5, 5), None, "paused");
     assert_eq!(ticks_to_run(5, 4), None, "behind: the caller starts over");
     assert_eq!(ticks_to_run(5, 6), Some((false, 6, 6)), "one step");
-    assert_eq!(ticks_to_run(5, 25), Some((false, 6, 25)), "twenty, caught up");
+    assert_eq!(
+        ticks_to_run(5, 25),
+        Some((false, 6, 25)),
+        "twenty, caught up"
+    );
     assert_eq!(ticks_to_run(5, 26), Some((true, 7, 26)), "twenty-one: over");
     assert_eq!(ticks_to_run(5, 1000), Some((true, 981, 1000)));
-    assert_eq!(ticks_to_run(0, u64::MAX), Some((true, u64::MAX - 19, u64::MAX)));
+    assert_eq!(
+        ticks_to_run(0, u64::MAX),
+        Some((true, u64::MAX - 19, u64::MAX))
+    );
 }
 
 #[test]
@@ -137,12 +165,16 @@ fn a_scene_starts_over_when_its_blocks_change() {
 fn lit_furnace(game: &super::Game<'_>) -> mod_api::BlockState {
     use crate::game::api_values::TryIntoApi as _;
     let registry = game.pack.assets.registry;
-    let first = registry.default_state("minecraft:furnace").expect("a furnace").0;
+    let first = registry
+        .default_state("minecraft:furnace")
+        .expect("a furnace")
+        .0;
     let lit = (first.saturating_sub(8)..first + 8)
         .map(BlockStateId)
         .find(|&id| {
             registry.state(id).is_some_and(|s| {
-                s.name == "minecraft:furnace" && s.properties.get("lit").is_some_and(|v| v == "true")
+                s.name == "minecraft:furnace"
+                    && s.properties.get("lit").is_some_and(|v| v == "true")
             })
         })
         .expect("a lit furnace");
@@ -177,10 +209,65 @@ fn a_scene_of_blocks_alone_keeps_no_state_and_reads_no_clock() {
         assert_eq!(result, Ok(()));
         assert!(drawn > 0, "the furnace is drawn");
         assert_eq!(game.live_scenes.borrow().len(), 0);
-        let still = Scene::new(blocks).with_clock(SceneClock::new(3, 40, 0.5).animate_blocks(false));
+        let still =
+            Scene::new(blocks).with_clock(SceneClock::new(3, 40, 0.5).animate_blocks(false));
         assert_eq!(draw(game, &still, view()), (Ok(()), drawn));
-        assert_eq!(game.live_scenes.borrow().len(), 0, "a clock that animates nothing");
+        assert_eq!(
+            game.live_scenes.borrow().len(),
+            0,
+            "a clock that animates nothing"
+        );
         assert_eq!(game.scene_tick("", 3), None);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_scene_accepts_4096_blocks_and_refuses_4097_without_drawing_or_changing_state() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let furnace = mod_api::SceneBlock::new([0, 0, 0], lit_furnace(game), None);
+        // Literal boundary counts keep the expectation independent of the cap constant.
+        let blocks = (0..4096)
+            .map(|i| {
+                mod_api::SceneBlock::new([i % 16, i / 256, (i / 16) % 16], furnace.state, None)
+            })
+            .collect();
+        let accepted = Scene::new(blocks);
+        let (result, drawn) = draw(game, &accepted, view());
+        assert_eq!(result, Ok(()), "4096 blocks are accepted");
+        assert!(drawn > 0, "the accepted scene actually draws its blocks");
+
+        // Keep a running scene so refusal must preserve existing state, not just
+        // leave an already empty cache empty.
+        let live = Scene::new(vec![furnace.clone()]).with_clock(SceneClock::new(41, 0, 0.0));
+        run(game, &live, 0..=30);
+        let particles = game.scene_particles("", 41);
+        assert!(!particles.is_empty(), "the running furnace has particles");
+        let kept = game.live_scenes.borrow().len();
+        assert_eq!(game.scene_tick("", 41), Some(30));
+
+        let mut refused = accepted.with_clock(SceneClock::new(41, 31, 0.0));
+        refused.blocks.push(furnace);
+        assert_eq!(refused.blocks.len(), 4097);
+        assert_eq!(
+            draw(game, &refused, view()),
+            (Err(SceneError::TooManyBlocks), 0)
+        );
+        assert_eq!(
+            game.live_scenes.borrow().len(),
+            kept,
+            "no scene added or removed"
+        );
+        assert_eq!(
+            game.scene_tick("", 41),
+            Some(30),
+            "no clock advance or replacement"
+        );
+        assert_eq!(
+            game.scene_particles("", 41),
+            particles,
+            "no particle mutation"
+        );
     });
 }
 
@@ -193,11 +280,18 @@ fn a_furnaces_particles_replay_pause_step_and_start_over_from_the_last_twenty_ti
         // Forty ticks of flames and smoke, then the same forty from a fresh start.
         run(game, &scene, 0..=40);
         let first = game.scene_particles("", 11);
-        assert!(!first.is_empty(), "a lit furnace's animate ticks make particles");
+        assert!(
+            !first.is_empty(),
+            "a lit furnace's animate ticks make particles"
+        );
         assert_eq!(game.scene_tick("", 11), Some(40));
         game.live_scenes.borrow_mut().clear();
         run(game, &scene, 0..=40);
-        assert_eq!(game.scene_particles("", 11), first, "the same ticks, the same particles");
+        assert_eq!(
+            game.scene_particles("", 11),
+            first,
+            "the same ticks, the same particles"
+        );
         // Paused: the same tick again moves nothing, a later frame too.
         run(game, &scene, [40, 40]);
         assert_eq!(game.scene_particles("", 11), first);
@@ -239,7 +333,10 @@ fn a_scene_holds_at_most_512_live_particles_the_blocks_own_counted() {
         let puffs = |n| vec![smoke([0.5, 1.5, 0.5], [0.0; 3]); n];
         let scene = Scene::new(blocks).with_clock(SceneClock::new(21, 0, 0.0));
         let too_many = scene.clone().with_particles(puffs(513));
-        assert_eq!(draw(game, &too_many, view()).0, Err(SceneError::TooManyParticles));
+        assert_eq!(
+            draw(game, &too_many, view()).0,
+            Err(SceneError::TooManyParticles)
+        );
         assert_eq!(game.scene_tick("", 21), None, "nothing kept");
         run(game, &scene.clone().with_particles(puffs(512)), [0, 1]);
         assert_eq!(game.scene_particles("", 21).len(), 512);
@@ -268,7 +365,11 @@ fn a_fifth_animating_scene_draws_its_last_state_and_is_refused_by_name() {
         let (result, drawn) = draw(game, &fifth, view());
         assert_eq!(result, Err(SceneError::TooManyScenes));
         assert!(drawn > 0, "its blocks and last state are drawn");
-        assert_eq!(game.scene_tick("", 4), Some(30), "its clock did not advance");
+        assert_eq!(
+            game.scene_tick("", 4),
+            Some(30),
+            "its clock did not advance"
+        );
         assert_eq!(game.scene_particles("", 4), last);
         game.frames += 1;
         assert_eq!(draw(game, &fifth, view()).0, Ok(()));
@@ -290,11 +391,16 @@ fn scene_entities_are_drawn_and_refused_as_draw_context_entity_refuses_them() {
         assert_eq!(result, Ok(()));
         assert!(drawn > bare, "the cow's model is drawn");
         let refused = |entities: Vec<SceneEntity>| {
-            let scene = Scene::new(blocks.clone()).with_clock(clock).with_entities(entities);
+            let scene = Scene::new(blocks.clone())
+                .with_clock(clock)
+                .with_entities(entities);
             draw(game, &scene, view())
         };
         let arrow = SceneEntity::new(GuiEntity::kind("minecraft:arrow"), [0.0; 3]);
-        assert_eq!(refused(vec![arrow]), (Err(SceneError::UnknownType { index: 0 }), 0));
+        assert_eq!(
+            refused(vec![arrow]),
+            (Err(SceneError::UnknownType { index: 0 }), 0)
+        );
         let mut pig = Compound::new();
         pig.insert("id".into(), mod_api::Tag::String("minecraft:pig".into()));
         let not_a_cow = SceneEntity::new(GuiEntity::with_data("minecraft:cow", pig), [0.0; 3]);
@@ -304,7 +410,10 @@ fn scene_entities_are_drawn_and_refused_as_draw_context_entity_refuses_them() {
         );
         let gone = mod_api::EntityRef::new(mod_api::WorldEpoch::new(0), u32::MAX);
         let stale = SceneEntity::new(GuiEntity::existing(gone), [0.0; 3]);
-        assert_eq!(refused(vec![stale]), (Err(SceneError::NoEntity { index: 0 }), 0));
+        assert_eq!(
+            refused(vec![stale]),
+            (Err(SceneError::NoEntity { index: 0 }), 0)
+        );
     });
 }
 

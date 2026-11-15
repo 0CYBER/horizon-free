@@ -226,7 +226,9 @@ impl Game<'_> {
             })
             .collect();
         // Mod-chosen views and positions may overflow: refuse before any vertex.
-        let finite = |q: &ProjectedQuad| q.depth.is_finite() && q.corners.iter().flatten().all(|v| v.is_finite());
+        let finite = |q: &ProjectedQuad| {
+            q.depth.is_finite() && q.corners.iter().flatten().all(|v| v.is_finite())
+        };
         if !seen.iter().all(finite) {
             return Err(mod_api::SceneError::BadView);
         }
