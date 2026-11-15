@@ -3469,16 +3469,24 @@ mod tests {
                         })
                         .unwrap();
                     game.register_native_commands();
-                    let horizon_client::lan::Out::Packet(body) = received.try_recv().unwrap()
-                    else {
-                        panic!("reload must deliver a command tree");
-                    };
-                    let mut reader = horizon_protocol::buf::Reader::new(&body);
-                    let id = reader.varint().unwrap();
-                    let C::Commands(packet) = C::decode(id, &body[reader.position()..]).unwrap()
-                    else {
-                        panic!("reload must deliver a command tree");
-                    };
+                    let packet = received
+                        .try_iter()
+                        .flat_map(|out| match out {
+                            horizon_client::lan::Out::Packet(body) => vec![body],
+                            horizon_client::lan::Out::Packets(bodies) => bodies,
+                            horizon_client::lan::Out::Disconnect(_) => {
+                                panic!("reload disconnected guest")
+                            }
+                        })
+                        .find_map(|body| {
+                            let mut reader = horizon_protocol::buf::Reader::new(&body);
+                            let id = reader.varint().unwrap();
+                            match C::decode(id, &body[reader.position()..]).unwrap() {
+                                C::Commands(packet) => Some(packet),
+                                _ => None,
+                            }
+                        })
+                        .expect("reload must deliver a command tree");
                     let names: Vec<_> = packet.nodes[packet.root as usize]
                         .children
                         .iter()
