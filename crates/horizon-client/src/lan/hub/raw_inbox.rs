@@ -1,6 +1,5 @@
 //! Ordered raw/ordinary receiving turns and physical input ownership.
 use super::*;
-use std::collections::VecDeque;
 
 pub(super) struct PacketDrain {
     pub(super) conns: Vec<u32>,
@@ -8,8 +7,12 @@ pub(super) struct PacketDrain {
     pub(super) started: bool,
     // Ordinary action deferral survives raw yields until this guest turn ends.
     pub(super) movement_held: bool,
-    deferred: VecDeque<Box<crate::raw_payloads::Delivery>>,
+}
+
+pub(super) struct DeferredPayload {
+    delivery: Option<Box<crate::raw_payloads::Delivery>>,
     retrying: bool,
+    movement_held: bool,
 }
 
 impl Hub {
@@ -20,9 +23,6 @@ impl Hub {
     /// changed.
     pub fn drain_packets(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         let mut events = Vec::new();
-        if self.payload_deferred() {
-            return events;
-        }
         let mut pass = self.packet_drain.take().unwrap_or_else(|| PacketDrain {
             conns: self
                 .guests
@@ -33,10 +33,19 @@ impl Hub {
             next: 0,
             started: false,
             movement_held: false,
-            deferred: VecDeque::new(),
-            retrying: false,
         });
         while let Some(&conn) = pass.conns.get(pass.next) {
+            if let Some(held) = self.deferred_payloads.get(&Some(conn)) {
+                if held.retrying || held.delivery.is_some() {
+                    pass.next += 1;
+                    pass.started = false;
+                    pass.movement_held = false;
+                    continue;
+                }
+                pass.started = true;
+                pass.movement_held = held.movement_held;
+                self.deferred_payloads.remove(&Some(conn));
+            }
             let Some(i) = self.guests.iter().position(|g| g.conn == conn) else {
                 pass.next += 1;
                 pass.started = false;
@@ -87,40 +96,41 @@ impl Hub {
 
     /// A refused guest call retains the same receiving root at the queue head.
     pub fn defer_raw_payload(&mut self, delivery: Box<crate::raw_payloads::Delivery>) {
-        let pass = self.packet_drain.get_or_insert_with(|| PacketDrain {
-            conns: Vec::new(),
-            next: 0,
-            started: false,
-            movement_held: false,
-            deferred: VecDeque::new(),
-            retrying: false,
-        });
-        if std::mem::take(&mut pass.retrying) {
-            pass.deferred.push_front(delivery);
-        } else {
-            pass.deferred.push_back(delivery);
-        }
+        let movement_held = self
+            .packet_drain
+            .as_ref()
+            .is_some_and(|pass| pass.movement_held);
+        let held = self
+            .deferred_payloads
+            .entry(delivery.conn)
+            .or_insert(DeferredPayload {
+                delivery: None,
+                retrying: false,
+                movement_held,
+            });
+        held.retrying = false;
+        held.delivery = Some(delivery);
     }
 
     pub fn payload_deferred(&self) -> bool {
-        self.packet_drain
-            .as_ref()
-            .is_some_and(|pass| pass.retrying || !pass.deferred.is_empty())
+        self.deferred_payloads
+            .values()
+            .any(|held| held.retrying || held.delivery.is_some())
     }
 
-    pub fn finish_raw_payload(&mut self) {
-        if let Some(pass) = self.packet_drain.as_mut() {
-            pass.retrying = false;
+    pub fn finish_raw_payload(&mut self, conn: Option<u32>) {
+        if let Some(held) = self.deferred_payloads.get_mut(&conn) {
+            held.retrying = false;
         }
     }
 
     pub(super) fn begin_payload_poll(&mut self) -> Vec<HostEvent> {
         let mut events = std::mem::take(&mut self.pending_kicks);
-        if let Some(pass) = self.packet_drain.as_mut()
-            && let Some(delivery) = pass.deferred.pop_front()
-        {
-            pass.retrying = true;
-            events.push(HostEvent::RawPayload(delivery));
+        for held in self.deferred_payloads.values_mut() {
+            if let Some(delivery) = held.delivery.take() {
+                held.retrying = true;
+                events.push(HostEvent::RawPayload(delivery));
+            }
         }
         events
     }

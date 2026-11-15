@@ -56,7 +56,7 @@ mod spawn_info;
 use advancements::AdvancementOwners;
 use chat::yellow_names;
 pub use pending_move::{Accepted, Hearing, PendingMove};
-use raw_inbox::{PacketDrain, yield_raw};
+use raw_inbox::{DeferredPayload, PacketDrain, yield_raw};
 pub mod game_event {
     pub const NO_RESPAWN_BLOCK_AVAILABLE: u8 = 0;
     pub const START_RAINING: u8 = 1;
@@ -328,6 +328,7 @@ fn take_tracking(
 
 pub struct Hub {
     packet_drain: Option<PacketDrain>,
+    deferred_payloads: std::collections::HashMap<Option<u32>, DeferredPayload>,
     /// Main-thread world identity used to bind typed network-context player handles.
     pub payload_player_epoch: Option<mod_api::WorldEpoch>,
     /// Clicks on and closings of native mods' menus, for the game.
@@ -834,6 +835,7 @@ impl Hub {
             native_menu_events: Vec::new(),
             chunk_watches: ChunkWatchLog::default(),
             packet_drain: None,
+            deferred_payloads: Default::default(),
             pending_kicks: Vec::new(),
             moves_listened: false,
             transfers: None,

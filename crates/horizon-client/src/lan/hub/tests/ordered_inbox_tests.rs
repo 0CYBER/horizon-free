@@ -455,6 +455,53 @@ fn raw_never_overtakes_deferred_movement_and_cannot_reset_its_next_tick_deferral
 }
 
 #[test]
+fn busy_raw_root_does_not_block_another_connections_same_pass() {
+    crate::raw_payloads::test_support::with_peer(|transport| {
+        let (mut hub, _out) = raw_hub(transport);
+        let (mut other, _other_out) = hub_with_a_guest();
+        let mut guest = other.guests.remove(0);
+        guest.conn = 99;
+        guest.uuid = 99;
+        guest.loaded = true;
+        guest.load_timeout = 0;
+        hub.guests.push(guest);
+        publish_raw(&hub, vec![1]);
+        publish_packet(&hub, rotation(30.0));
+        assert!(hub.guests[1].sender.undrained.handed(0));
+        hub.lan
+            .shared
+            .events
+            .send(NetEvent::Packet(99, Box::new(rotation(60.0)), 0))
+            .unwrap();
+        with_input_context(|ctx| {
+            drop(hub.poll(ctx));
+            for event in hub.drain_packets(ctx) {
+                if let HostEvent::RawPayload(delivery) = event {
+                    hub.defer_raw_payload(delivery);
+                }
+            }
+            drop(hub.drain_packets(ctx));
+            assert_eq!(hub.guests[1].yaw, 60.0);
+            assert_ne!(hub.guests[0].yaw, 30.0);
+            assert!(!hub.packets_paused());
+            assert!(hub.payload_deferred());
+            let retry = hub.poll(ctx);
+            assert_eq!(
+                retry
+                    .iter()
+                    .filter(|e| matches!(e, HostEvent::RawPayload(_)))
+                    .count(),
+                1
+            );
+            hub.finish_raw_payload(Some(hub.guests[0].conn));
+            drop(retry);
+            drop(hub.drain_packets(ctx));
+            assert_eq!(hub.guests[0].yaw, 30.0);
+        });
+    });
+}
+
+#[test]
 fn busy_raw_root_keeps_the_head_and_yields_until_the_next_receiving_turn() {
     crate::raw_payloads::test_support::with_peer(|transport| {
         let (mut hub, _out) = raw_hub(transport);
@@ -500,7 +547,7 @@ fn busy_raw_root_keeps_the_head_and_yields_until_the_next_receiving_turn() {
                 "later movement waits for the retried root to finish"
             );
             drop(retried);
-            hub.finish_raw_payload();
+            hub.finish_raw_payload(Some(hub.guests[0].conn));
             let next: Vec<_> = hub
                 .drain_packets(ctx)
                 .into_iter()
