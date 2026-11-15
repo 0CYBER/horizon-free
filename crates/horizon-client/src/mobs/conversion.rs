@@ -108,15 +108,32 @@ pub fn single(from: &Mob, to: &mut Mob, params: Params) {
     to.extra.leash_pending = from.extra.leash_pending;
     to.extra.leash_player = from.extra.leash_player;
     common(from, to, params.preserve_can_pick_up_loot);
+    // A zombie that turns into another zombie keeps canBreakDoors.
+    if super::doors::is_zombie(from.species()) && super::doors::is_zombie(to.species()) {
+        super::doors::set_can_break_doors(to, from.extra.can_break_doors);
+    }
 }
 
 /// `ConversionType.convertCommon`, what every conversion carries over (`SINGLE` and `SPLIT_ON_DEATH`):
 /// absorption, effects, babyhood and age, the flags, the custom name. `preserve_can_pick_up_loot`
 /// is the params' `preserveCanPickUpLoot`.
 pub fn common(from: &Mob, to: &mut Mob, preserve_can_pick_up_loot: bool) {
-    // convertCommon, in its order: the absorption first, then the effects.
-    to.absorption = from.absorption;
-    to.extra.effects = from.extra.effects.clone();
+    // convertCommon, in its order: the absorption first, then the effects. setAbsorptionAmount clamps to
+    // the fresh mob's max_absorption.
+    let maximum = *to
+        .kind
+        .attributes
+        .get("minecraft:max_absorption")
+        .unwrap_or(&0.0) as f32;
+    to.absorption = from.absorption.clamp(0.0, maximum);
+    // addEffect for each: Absorption's onEffectStarted raises it again.
+    for effect in &from.extra.effects {
+        to.add_effect(effect.id, effect.duration, effect.amplifier);
+        // `new MobEffectInstance(effect)` copies its icon flag too.
+        if let Some(copy) = to.extra.effects.iter_mut().find(|e| e.id == effect.id) {
+            copy.show_icon = effect.show_icon;
+        }
+    }
     to.extra.hidden_effects = from.extra.hidden_effects.clone();
     to.extra.effect_chains = from.extra.effect_chains.clone();
     to.extra.ambient_effects = from.extra.ambient_effects.clone();
