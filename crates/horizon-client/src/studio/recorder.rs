@@ -103,7 +103,7 @@ impl StudioRecorder {
                 }
                 worker_active.store(false, Ordering::SeqCst);
                 writer.finish(duration_ms)?;
-                if let Some(error) = worker_failure.lock().unwrap().take() {
+                if let Some(error) = worker_failure.lock().unwrap().clone() {
                     return Err(io::Error::other(format!(
                         "recording stopped with an error: {error}"
                     )));
@@ -468,6 +468,51 @@ mod tests {
         assert_eq!(recorded.yaw, original.yaw);
         assert_eq!(recorded.head_yaw, original.head_yaw);
         assert_eq!(recorded.data, original.data);
+    }
+
+    #[test]
+    fn queue_failure_stops_both_packet_entry_points() {
+        for timestamped in [false, true] {
+            for disconnected in [false, true] {
+                let (sender, receiver) = sync_channel(1);
+                let recorder = StudioRecorder {
+                    active: Arc::new(AtomicBool::new(true)),
+                    packet_count: Arc::new(AtomicU64::new(0)),
+                    bytes_written: Arc::new(AtomicU64::new(0)),
+                    sender,
+                    failure: Arc::new(std::sync::Mutex::new(None)),
+                    worker: None,
+                    start_time: Instant::now(),
+                    dest_path: PathBuf::from("unused.mcpr"),
+                };
+                // Disconnect before the recorder's blocking Drop, including on assertion failure.
+                let mut receiver = Some(receiver);
+                if disconnected {
+                    drop(receiver.take());
+                } else {
+                    assert!(recorder.sender.try_send(RecordCommand::Stop).is_ok());
+                }
+                if timestamped {
+                    recorder.record_packet_at(0, 1, &[2]);
+                } else {
+                    recorder.record_packet(1, &[2]);
+                }
+                let status = recorder.status();
+                assert!(!status.active);
+                assert_eq!(
+                    status.error.as_deref(),
+                    Some(if disconnected {
+                        "recorder worker stopped unexpectedly"
+                    } else {
+                        "recorder queue is full; capture stopped"
+                    })
+                );
+                recorder.record_packet(1, &[2]);
+                recorder.record_packet_at(0, 1, &[2]);
+                assert_eq!(recorder.status().error, status.error);
+                assert_eq!(recorder.status().packet_count, 0);
+            }
+        }
     }
 
     #[test]
