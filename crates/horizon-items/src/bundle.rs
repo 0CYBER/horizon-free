@@ -101,11 +101,6 @@ fn contents_weight(items: &Items, inside: &[ItemStack]) -> Weight {
     })
 }
 
-/// `BundleContents.canItemBeInBundle`: shulker boxes don't fit.
-pub fn can_be_in_bundle(stack: &ItemStack) -> bool {
-    stack.count > 0 && !stack.item.ends_with("shulker_box")
-}
-
 /// `BundleItem.onDestroyed` (`ItemStack.onDestroyed` for a bundle): the stack
 /// is emptied and every stack it held comes back as its own item copy, which
 /// `ItemUtils.onContainerDestroyed` drops where the entity lay.
@@ -172,9 +167,11 @@ impl Contents {
             .how_many(item_weight(items, stack))
     }
 
-    /// `tryInsert`: what fits moves to the front, merged with its kind.
-    pub fn try_insert(&mut self, items: &Items, stack: &mut ItemStack) -> u32 {
-        if !can_be_in_bundle(stack) {
+    /// `tryInsert`: what fits moves to the front, merged with its kind. `fits` is the stack's
+    /// `canFitInsideContainerItems` answer, which `canItemBeInBundle` asks and the caller
+    /// gives, since the parts of the stack's item may change it; an empty stack never goes in.
+    pub fn try_insert(&mut self, items: &Items, stack: &mut ItemStack, fits: bool) -> u32 {
+        if stack.count == 0 || !fits {
             return 0;
         }
         let weight = item_weight(items, stack);

@@ -171,3 +171,27 @@ lookup.
   text the part leaves is drawn at the same place and fade. It is asked once a client tick while the name shows. The
   name's timer still restarts only when the item or its hover name changes, so a tip that changes every tick doesn't
   keep it up.
+
+## Grindstone, repair combining and container items
+
+Three methods answer item questions that vanilla asks inside its menus and recipe matching. They run on both
+sides, the server's menus and the client's own result display, so they take the loop `context` and no `Host`:
+answer from `event.stack` and `context` alone, and fast. Each `event` field arrives holding vanilla's answer, which
+the part may set either way, and an item with no such part costs one table lookup.
+
+- `ItemPart::can_grindstone_repair` is `IItemExtension.canGrindstoneRepair`. `event.can_repair` starts with
+  whether the stack is damageable. It is asked for the top input when both grindstone inputs are single stacks of
+  the same item. `true` gives one item with the enchantments of both merged and only the curses kept (durability is
+  merged only when the item has some); `false` gives two of an item that stacks, when the inputs match, and nothing
+  otherwise. The input slots ask it too: a granted stack can be placed. A single enchanted input is never asked.
+- `ItemPart::is_combine_repairable` is `IItemExtension.isCombineRepairable`. `event.repairable` starts with
+  whether the stack has durability. Two single stacks of the same item in a crafting grid repair each other when
+  both answer `true`. A `true` for a stack with no maximum damage is refused, with one warning per item, because the
+  result needs one. The anvil keeps vanilla's test.
+- `ItemPart::can_fit_inside_container_items` is `IItemExtension.canFitInsideContainerItems`. `event.fits` starts
+  `true` for everything but a shulker box. It is asked by a shulker box's slots, a bundle (clicks and the `/item`
+  contents) and the item slots a mod gives an item. A hopper filling a shulker box doesn't ask. A `true` for a
+  shulker box lets shulker boxes nest: that is the mod's choice, bounded by the NBT readers' depth limit.
+
+Global events cover the rest of these menus: `grindstone_place` and `grindstone_take` change a grindstone's result
+after it is made, and `MenuPart::menu_slot_rules` answers per menu type and slot.

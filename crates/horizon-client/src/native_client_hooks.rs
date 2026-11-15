@@ -1,4 +1,5 @@
 //! Callbacks into the executable for native trait mods' client-library hooks.
+use crate::items::ItemStack;
 use horizon_core::position::BlockPos;
 use horizon_world::native_load_context::LoopContext;
 use horizon_world::registry::BlockStateId;
@@ -39,9 +40,21 @@ pub struct NativeClientHooks {
         BlockSoundCause,
         &mut BlockSoundType,
     ),
+    /// `ItemPart::can_grindstone_repair` of the stack's item; `can_repair` arrives with
+    /// vanilla's.
+    pub can_grindstone_repair: fn(&LoopContext, &ItemStack, &mut bool),
+    /// `ItemPart::is_combine_repairable` of the stack's item; `repairable` arrives with vanilla's.
+    pub is_combine_repairable: fn(&LoopContext, &ItemStack, &mut bool),
+    /// `ItemPart::can_fit_inside_container_items` of the stack's item; `fits` arrives with
+    /// vanilla's.
+    pub can_fit_inside_container_items: fn(&LoopContext, &ItemStack, &mut bool),
 }
 
 static HOOKS: OnceLock<NativeClientHooks> = OnceLock::new();
+
+#[cfg(test)]
+#[path = "native_client_hooks_tests.rs"]
+pub(crate) mod test_hooks;
 
 /// Install the process-wide callbacks once; a second installation keeps the first and answers false.
 pub fn install(hooks: NativeClientHooks) -> bool {
@@ -284,5 +297,41 @@ pub(crate) fn sound_type(
 ) {
     if let Some(hooks) = HOOKS.get() {
         (hooks.sound_type)(context, pos, state, entity, cause, sound);
+    }
+}
+
+/// Ask the installed adapter for the parts of `stack`'s item (`can_grindstone_repair`); with none
+/// installed, `can_repair` keeps vanilla's answer.
+pub(crate) fn can_grindstone_repair(
+    context: &LoopContext,
+    stack: &ItemStack,
+    can_repair: &mut bool,
+) {
+    if let Some(hooks) = HOOKS.get() {
+        (hooks.can_grindstone_repair)(context, stack, can_repair);
+    }
+}
+
+/// Ask the installed adapter for the parts of `stack`'s item (`is_combine_repairable`); with none
+/// installed, `repairable` keeps vanilla's answer.
+pub(crate) fn is_combine_repairable(
+    context: &LoopContext,
+    stack: &ItemStack,
+    repairable: &mut bool,
+) {
+    if let Some(hooks) = HOOKS.get() {
+        (hooks.is_combine_repairable)(context, stack, repairable);
+    }
+}
+
+/// Ask the installed adapter for the parts of `stack`'s item (`can_fit_inside_container_items`);
+/// with none installed, `fits` keeps vanilla's answer.
+pub(crate) fn can_fit_inside_container_items(
+    context: &LoopContext,
+    stack: &ItemStack,
+    fits: &mut bool,
+) {
+    if let Some(hooks) = HOOKS.get() {
+        (hooks.can_fit_inside_container_items)(context, stack, fits);
     }
 }

@@ -721,6 +721,7 @@ impl Game<'_> {
             }
             Kind::Grindstone => {
                 s.result = stations::grindstone_result(
+                    &self.loop_context,
                     &enchantments,
                     items,
                     s.inputs[0].as_ref(),

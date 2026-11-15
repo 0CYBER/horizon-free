@@ -30,7 +30,8 @@ pub use slot_context::{SlotSnapshot, apply_menu_slot_rules, lan_container};
 use std::sync::Arc;
 
 mod bundle;
-pub use bundle::fits_inside_container_items;
+pub mod container_items;
+pub use container_items::fits_inside_container_items;
 mod click;
 mod storage;
 pub use storage::{MutationStamp, Snapshot};
@@ -1175,6 +1176,7 @@ impl Menu {
             // GrindstoneMenu.createResult.
             Kind::Grindstone => {
                 self.state.containers[RESULT][0] = crate::stations::grindstone_result(
+                    env.loop_context,
                     env.enchantments,
                     env.items,
                     self.state.containers[MAIN][0].as_ref(),
@@ -1629,7 +1631,7 @@ impl Menu {
             Role::Plain | Role::CreativeDisplay => true,
             Role::Armor(eq) => Self::armor_may_place(env, eq, stack),
             Role::MountEquip(slot) => self.mount_may_place(env, slot, stack),
-            Role::Shulker => fits_inside_container_items(stack),
+            Role::Shulker => fits_inside_container_items(env.loop_context, stack),
             Role::Mod | Role::ModResult => self.state.slots[s].role == Role::Mod,
             Role::Hidden => false,
             Role::Fuel => Self::is_fuel(env, stack) || Self::is_bucket(stack),
@@ -1648,7 +1650,9 @@ impl Menu {
             Role::LoomBanner => Self::is_banner(stack),
             Role::LoomDye => env.banners.loom_dye(env.items, stack).is_some(),
             Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
-            Role::GrindInput => crate::stations::grindstone_accepts(env.items, stack),
+            Role::GrindInput => {
+                crate::stations::grindstone_accepts(env.loop_context, env.items, stack)
+            }
             Role::SmithInput(i) => env
                 .station_recipes
                 .smithing_accepts(env.loop_context, i, stack),
@@ -3480,7 +3484,7 @@ pub(crate) mod tests {
         bare_env_in(&crate::test_resources::loop_context(LoopSide::Server), test)
     }
 
-    fn bare_env_in(loop_context: &LoopContext, test: impl FnOnce(&Env)) {
+    pub(super) fn bare_env_in(loop_context: &LoopContext, test: impl FnOnce(&Env)) {
         static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("horizon-bare-{}-{run}", std::process::id()));
@@ -4148,127 +4152,8 @@ pub(crate) mod tests {
 
     #[test]
     fn installed_slot_rules_change_mod_menu_placement() {
-        static JUMPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        static STILL_VALID_ASKED: std::sync::atomic::AtomicUsize =
-            std::sync::atomic::AtomicUsize::new(0);
-        let installed =
-            crate::native_client_hooks::install(crate::native_client_hooks::NativeClientHooks {
-                menu_still_valid: |context, player, menu, _, eye, valid| {
-                    STILL_VALID_ASKED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if menu == "test:rules" && player == 2 && eye[2] == 0.0 {
-                        *valid = context.setting("rules_mod", "stack").is_some();
-                    }
-                },
-                // A part answers on the vanilla chest menu too: the game must
-                // still never ask it, because it is not a mod menu type.
-                menu_still_valid_listens: |menu| {
-                    matches!(menu, "test:rules" | "minecraft:generic_9x3")
-                },
-                item_stacked_on_other: |context, _, canceled| {
-                    *canceled = context.setting("rules_mod", "stack").is_some();
-                },
-                living_heal: |context, _, amount, cancel| {
-                    if context.setting("rules_mod", "stack").is_some() {
-                        *cancel = true;
-                        *amount += 1.0;
-                    }
-                },
-                living_breathe: |context, _, kind, can_breathe, consume, _| {
-                    if context.setting("rules_mod", "stack").is_some() {
-                        // A cod breathes on land; a salmon loses all its air at once.
-                        *can_breathe = kind == "minecraft:cod";
-                        *consume = match kind {
-                            "minecraft:salmon" => i32::MAX,
-                            _ => *consume + 4,
-                        };
-                    }
-                },
-                farmland_trample: |context, _, _, _, _, cancel| {
-                    *cancel = context.setting("rules_mod", "stack").is_some();
-                },
-                has_mods: || false,
-                player_name_format: |context, _, displayname| {
-                    if let Some(value) = context.setting("rules_mod", "stack") {
-                        *displayname = crate::text::Text::literal(&value);
-                    }
-                },
-                player_tab_list_name_format: |context, _, _, display_name| {
-                    *display_name = context
-                        .setting("rules_mod", "stack")
-                        .map(|value| crate::text::Text::literal(&value));
-                },
-                living_drown: |context, _, _, drowning, damage, bubbles, _| {
-                    if context.setting("rules_mod", "stack").is_some() {
-                        *drowning = true;
-                        *damage += 1.0;
-                        *bubbles = 0;
-                    }
-                },
-                living_fall: |context, _, _, distance, multiplier, _| {
-                    if context.setting("rules_mod", "stack").is_some() {
-                        *distance += 1.0;
-                        *multiplier *= 2.0;
-                    }
-                },
-                living_jump: |context, _, _| {
-                    JUMPS.fetch_add(
-                        usize::from(context.side() == LoopSide::Server),
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                },
-                living_jump_power: |context, _, _, power| {
-                    *power += context.setting("rules_mod", "stack").map_or(0.0, |_| 1.0);
-                },
-                living_speed: |context, _, _, speed| {
-                    *speed += context.setting("rules_mod", "stack").map_or(0.0, |_| 2.0);
-                },
-                living_flying_speed: |context, _, _, speed| {
-                    *speed += context.setting("rules_mod", "stack").map_or(0.0, |_| 3.0);
-                },
-                block_jump_factor: |context, _, factor| {
-                    *factor += context.setting("rules_mod", "stack").map_or(0.0, |_| 4.0);
-                },
-                block_speed_factor: |context, _, factor| {
-                    *factor += context.setting("rules_mod", "stack").map_or(0.0, |_| 5.0);
-                },
-                is_ladder: |context, _, _, _, ladder| {
-                    *ladder |= context.setting("rules_mod", "stack").is_some();
-                },
-                makes_open_trapdoor_above_climbable: |context, _, _, _, climbable| {
-                    *climbable |= context.setting("rules_mod", "stack").is_some();
-                },
-                friction: |context, _, kind, _, _, friction| {
-                    if context.setting("rules_mod", "stack").is_some() {
-                        *friction = match kind {
-                            "minecraft:player" => 0.98,
-                            "minecraft:cow" => f32::NAN,
-                            _ => 3.0,
-                        };
-                    }
-                },
-                player_stays_on_ground_surface: |context, _, staying| {
-                    *staying |= context.setting("rules_mod", "stack").is_some();
-                },
-                ender_entity_teleport: |context, _, _, _, target, cancel| {
-                    if context.setting("rules_mod", "stack").is_some() {
-                        target[1] += 1.0;
-                        *cancel = true;
-                    }
-                },
-                fluid_flow: |context, _, _, flow| {
-                    flow[0] += context.setting("rules_mod", "stack").map_or(0.0, |_| 1.0);
-                },
-                sound_type: |context, _, _, entity, cause, sound| {
-                    if context.setting("rules_mod", "stack").is_some()
-                        && entity.is_some_and(|(_, kind)| kind == "minecraft:player")
-                        && cause == mod_api::BlockSoundCause::Step
-                    {
-                        sound.step = "rules_mod:block.rules.step".into();
-                        sound.volume = 2.0;
-                    }
-                },
-            });
-        assert!(installed);
+        use crate::native_client_hooks::test_hooks::{JUMPS, STILL_VALID_ASKED};
+        crate::native_client_hooks::test_hooks::install();
         let kind = Kind::Mod(Box::leak(Box::new(crate::containers::ModMenuType {
             id: "test:rules",
             slots: 1,

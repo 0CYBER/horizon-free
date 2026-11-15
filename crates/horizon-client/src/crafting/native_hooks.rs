@@ -68,3 +68,19 @@ pub fn native_ingredient_test(
         accept,
     );
 }
+/// Whether two of `stack`'s item may be combined in a crafting grid to repair it
+/// (`IItemExtension.isCombineRepairable`, which `RepairItemRecipe.canCombine` asks) is being
+/// decided: `repairable` starts with vanilla's answer, whether the stack has durability, and
+/// the parts of the stack's item may change it. Asked inside recipe matching on both sides.
+#[inline(never)]
+pub fn native_is_combine_repairable(
+    context: &horizon_world::native_load_context::LoopContext,
+    stack: &mod_api::ItemStack,
+    repairable: &mut bool,
+) {
+    mod_api::dispatch_is_combine_repairable(
+        &horizon_client_render::api_context::LoopReader(context).context(),
+        stack,
+        repairable,
+    );
+}
