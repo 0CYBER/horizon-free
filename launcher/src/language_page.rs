@@ -159,7 +159,7 @@ impl Launcher {
         let said = self.settings.language.is_none().then(|| {
             div()
                 .child(trf(
-                    "System follows your computer's language: {language} here. A string not \
+                    "System follows your computer's language: {language} here. Text not \
                      translated yet shows in English.",
                     &[("language", Language::system().name())],
                 ))

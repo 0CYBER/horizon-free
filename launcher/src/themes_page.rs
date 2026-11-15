@@ -100,7 +100,7 @@ impl Launcher {
     }
 
     /// Settings' launcher theme: a card for each, drawn in its own colours (a text sample, a
-    /// field and its main button) under the appearance on screen. Free for everyone.
+    /// field and its main button) under the appearance on screen.
     pub(super) fn launcher_theme_row(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let current = themes::theme(self.settings.theme.as_deref()).map(|th| th.id);
@@ -215,7 +215,7 @@ impl Launcher {
         let note = Some(
             div()
                 .child(tr(
-                    "Free for everyone. Each theme remembers the accent you pick under it.",
+                    "Each theme remembers the accent you pick under it.",
                 ))
                 .into_any_element(),
         );
@@ -455,7 +455,10 @@ impl Launcher {
                     "Blur",
                     "How frosted the panels are.",
                     v,
-                    trf("{value} px", &[("value", &v.to_string())]),
+                    trf(
+                        "{value}%",
+                        &[("value", &(v / knob.max() * 100.).round().to_string())],
+                    ),
                 )
             }
         };
@@ -584,7 +587,7 @@ impl Launcher {
             Some(
                 div()
                     .child(tr(
-                        "Smoother on older computers: a lower-resolution sky, a cheaper blur, window resizes baked in the background and no frame per mouse move.",
+                        "Smoother on older computers: a simpler sky and blur, and resizing the window stays smooth.",
                     ))
                     .into_any_element(),
             ),

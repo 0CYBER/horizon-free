@@ -221,8 +221,8 @@ impl Launcher {
                     .child(self.while_playing_row(n + 3, cx))
                     .child(index_row(
                         n + 3,
-                        tr("Show the opening"),
-                        Some(plain("The wordmark, while the release list loads.")),
+                        tr("Show the Horizon logo at startup"),
+                        Some(plain("Shown for a moment while the version list loads.")),
                         Some(opening.into_any_element()),
                         &t,
                     ))

@@ -223,7 +223,7 @@ pub const SUNRISE: Theme = Theme {
 pub const HYPR_NEON: Theme = Theme {
     id: "hypr_neon",
     name: "Hypr Neon",
-    description: "Handcrafted by Xmilon",
+    description: "Neon on pure black",
     sky: HYPR_DARK.sky,
     accent: ThemeAccent::Colour(0x3fe0ff),
     palette: Some(&HYPR_DARK),
