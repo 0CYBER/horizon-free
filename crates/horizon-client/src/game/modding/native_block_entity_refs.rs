@@ -1,7 +1,6 @@
-//! Block entity handles for native server mods: reads, and the writes `/data merge block`
-//! and `BlockEntity.setChanged` make. A write inside `host.transaction` is journaled
-//! (`transactions.rs`) and tells the world at the root commit.
-use super::{Game, transactions::After};
+//! Block entity handles: storage writes join the journal; explicit world notifications happen
+//! immediately and survive abort. Raw mod storage writes and restores synthesize no notice.
+use super::Game;
 use horizon_client::{
     block_entity_nbt,
     containers::{BlockEntity, ModBlockEntity},
@@ -194,8 +193,8 @@ impl Game<'_> {
         }
         self.journal_block_entity(key);
         self.world.set_block_lock(key, &Tag::Compound(tag));
-        self.after_commit(After::Updated(key));
-        self.after_commit(After::Changed(key));
+        self.block_entity_updated(key);
+        self.container_changed(key);
         Ok(true)
     }
 
@@ -234,9 +233,9 @@ impl Game<'_> {
         Some(block_entity.data.clone())
     }
 
-    /// Set a mod block entity's menu data slot in place, joining the current transaction
-    /// and its setChanged notice. Ok(false) for a vanilla entity, an invalid slot or
-    /// no change; Stale for an invalidated or unwritable handle. Does not resize slots.
+    /// Set a mod block entity's menu data slot silently in the current transaction.
+    /// Ok(false) for a vanilla entity, invalid slot or equal value; Stale for an invalidated
+    /// or unwritable handle. Notification is explicit; this does not resize slots.
     pub(super) fn block_entity_set_data_slot(
         &mut self,
         entity: BlockEntityRef,
@@ -305,8 +304,8 @@ impl Game<'_> {
         self.edit_mod_block_entity(key, edit);
     }
 
-    /// `edit` on the resolved mod holder at `key`, told at the root commit; the caller has
-    /// journaled what it changes.
+    /// `edit` on a resolved mod holder; the caller journaled the storage. Notification is the
+    /// mod's explicit responsibility, including any notice it wants while restoring storage.
     fn edit_mod_block_entity(
         &mut self,
         key: (i32, i32, i32),
@@ -317,7 +316,6 @@ impl Game<'_> {
             unreachable!("resolved mod holder replaced before its write")
         };
         edit(block_entity);
-        self.after_commit(After::Changed(key));
     }
 
     /// Read a configured mod holder's declared internal item slot, without automation policy.
@@ -464,22 +462,21 @@ impl Game<'_> {
         if !self.load_block_entity_data(key, &merged) {
             return Ok(false);
         }
-        self.after_commit(After::Updated(key));
-        self.after_commit(After::Changed(key));
+        self.block_entity_updated(key);
+        self.container_changed(key);
         Ok(true)
     }
 
-    /// `BlockEntity.setChanged`: the chunk is saved again and comparators re-read the
-    /// container (`updateNeighbourForOutputSignal`). Inside a transaction it runs once at the
-    /// root commit. Returns Stale for an invalidated handle or a level not writable here.
+    /// `BlockEntity.setChanged`: notify at once, including inside a transaction. An abort
+    /// restores storage, not notifications already delivered to observers or comparators.
     pub(super) fn block_entity_set_changed(
         &mut self,
         entity: BlockEntityRef,
     ) -> Result<bool, BlockEntityError> {
-        let (key, _) = self
-            .native_block_entity_write_target(entity)
+        let key = self
+            .native_block_entity_write_key(entity)
             .ok_or(BlockEntityError::Stale)?;
-        self.after_commit(After::Changed(key));
+        self.container_changed(key);
         Ok(true)
     }
 
@@ -581,7 +578,7 @@ impl Game<'_> {
                 };
             }
         }
-        self.after_commit(After::Updated(key));
+        self.block_entity_updated(key);
         Ok(true)
     }
 }

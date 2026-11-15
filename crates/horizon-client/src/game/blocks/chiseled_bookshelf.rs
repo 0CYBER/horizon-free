@@ -139,6 +139,7 @@ impl Game<'_> {
     /// (`setBlockAndUpdate`) and `BLOCK_CHANGE` goes out.
     pub(super) fn chiseled_bookshelf_update_state(&mut self, pos: [i32; 3], slot: usize) {
         let key = (pos[0], pos[1], pos[2]);
+        self.journal_block_entity(key);
         let Some(BlockEntity::ChiseledBookshelf(b)) = self.world.block_entities.get_mut(&key)
         else {
             return;
@@ -160,8 +161,14 @@ impl Game<'_> {
         let Some(new) = registry.id(&state) else {
             return;
         };
-        let at = BlockPos::new(pos[0], pos[1], pos[2]);
-        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, new, flags::UPDATE_ALL));
+        if self.transactions.is_empty() {
+            let at = BlockPos::new(pos[0], pos[1], pos[2]);
+            self.with_level(|b, level, ticks| {
+                b.set_block(level, ticks, at, new, flags::UPDATE_ALL)
+            });
+        } else {
+            self.journal_set_block(pos, new);
+        }
         self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
         self.post_block_game_event("minecraft:block_change", pos, None, Some(new));
     }

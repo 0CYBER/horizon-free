@@ -560,7 +560,7 @@ impl Game<'_> {
         if !self.native_level_write_allowed(level, pos) || self.dim.key() != level.dimension() {
             return false;
         }
-        self.after_commit(After::NotifyClients((pos[0], pos[1], pos[2])));
+        self.notify_block_clients((pos[0], pos[1], pos[2]));
         true
     }
     /// `LevelRenderer.destroyBlockProgress` for this client's own view only.
@@ -4233,11 +4233,11 @@ pub(super) mod tests {
             Err(())
         });
         assert!(aborted.is_err());
-        assert!(!game.world.block_log.as_ref().unwrap().contains(&(6, 64, 0)));
+        assert!(game.world.block_log.as_ref().unwrap().contains(&(6, 64, 0)));
         assert!(!game.level_send_block_updated(level, [5, 10_000, 0]));
         assert_eq!(
             game.world.block_log.as_ref().unwrap(),
-            &vec![(3, 64, 0), (4, 64, 0), (5, 64, 0)]
+            &vec![(3, 64, 0), (4, 64, 0), (5, 64, 0), (6, 64, 0)]
         );
         // A bare hand mines at the base speed; an unloaded position has none.
         assert_eq!(
