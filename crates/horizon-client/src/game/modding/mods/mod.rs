@@ -892,7 +892,7 @@ pub(super) fn content_overlay(
     })
 }
 
-fn resolve_particle_providers(
+pub(in crate::game) fn resolve_particle_providers(
     source: &horizon_assets::resource_source::ResourceSource,
 ) -> Result<(), String> {
     if mod_api::__private::particles_resolved() {
