@@ -214,9 +214,7 @@ impl Launcher {
         }
         let note = Some(
             div()
-                .child(tr(
-                    "Each theme remembers the accent you pick under it.",
-                ))
+                .child(tr("Each theme remembers the accent you pick under it."))
                 .into_any_element(),
         );
         ui::setting_row_stacked(tr("Theme"), note, cards.into_any_element())
