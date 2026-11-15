@@ -41,7 +41,7 @@ pub struct CustomArgument {
     id: Arc<str>,
     kind: CustomArgumentKind,
     parse: Arc<dyn Fn(&str) -> Result<String, Text> + Send + Sync>,
-    suggest: Arc<dyn Fn(&str) -> Vec<CustomSuggestion> + Send + Sync>,
+    suggest: Arc<dyn Fn(&Registries, &str) -> Vec<CustomSuggestion> + Send + Sync>,
 }
 
 impl fmt::Debug for CustomArgument {
@@ -55,12 +55,13 @@ impl fmt::Debug for CustomArgument {
 
 impl CustomArgument {
     /// A custom argument type `id` (such as `mymod:machine`) that reads a [`CustomArgumentKind`],
-    /// validates it with `parse` and completes it with `suggest`.
+    /// validates it with `parse` and completes it with `suggest`, which also sees the registries
+    /// the request is for (the sender and their permission).
     pub fn new(
         id: impl Into<Arc<str>>,
         kind: CustomArgumentKind,
         parse: impl Fn(&str) -> Result<String, Text> + Send + Sync + 'static,
-        suggest: impl Fn(&str) -> Vec<CustomSuggestion> + Send + Sync + 'static,
+        suggest: impl Fn(&Registries, &str) -> Vec<CustomSuggestion> + Send + Sync + 'static,
     ) -> Self {
         Self {
             id: id.into(),
@@ -1951,7 +1952,7 @@ impl ArgType {
             ArgType::Swizzle | ArgType::Message | ArgType::Nbt => {}
             ArgType::Custom(custom) => {
                 let prefix = builder.remaining().to_owned();
-                for suggestion in (custom.suggest)(&prefix) {
+                for suggestion in (custom.suggest)(reg, &prefix) {
                     // A suggestion may replace only the tail of the text argument, from its
                     // offset: a completion for the token a greedy text is typing. One that
                     // starts past the typed text or inside a character is left out rather than

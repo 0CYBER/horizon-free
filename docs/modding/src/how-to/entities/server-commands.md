@@ -125,8 +125,9 @@ argument's kind:
 
 ```rust,ignore
 use mod_api::{
-    Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType, CommandSuggestion,
-    Hooks, RegisterCommandsEvent, Registrar, RegistrationContext, ServerHost, Text,
+    Command, CommandArgumentError, CommandArgumentKind, CommandArgumentType, CommandSender,
+    CommandSuggestion, Hooks, RegisterCommandsEvent, Registrar, RegistrationContext, ServerHost,
+    Text,
 };
 
 struct Machine;
@@ -146,7 +147,12 @@ impl CommandArgumentType for Machine {
         }
     }
 
-    fn suggest(&self, prefix: &str) -> Vec<CommandSuggestion> {
+    fn suggest(
+        &self,
+        sender: Option<&CommandSender>,
+        prefix: &str,
+    ) -> Vec<CommandSuggestion> {
+        let _ = sender;
         ["press", "furnace"]
             .into_iter()
             .filter(|machine| machine.starts_with(prefix))
@@ -173,7 +179,12 @@ The server parses the argument with `parse` before calling `run_mod_command`; a
 rejected value shows the returned `Text` and no listener runs. A valid value arrives
 as `CommandArgumentValue::Custom { kind, value }`, where `kind` is `mymod:machine`
 and `value` is the canonical text `parse` returned. `suggest` is asked for the
-completions while the player types.
+completions while the player types, with the sender: a provider that completes names
+from a mod's own registry returns only the entries that sender may use, keyed by its
+UUID and compared with `sender.permission()`. The game keeps the answer as it comes
+and does not filter it, so a provider that ignores the sender offers everything to
+everyone. `sender` is `None` when no player asks: the console, and a client
+completing its own client commands before its own profile is known.
 
 For a fixed set of words, register `ChoiceArgument` (NeoForge's `EnumArgument`)
 instead of writing a type: `r.register_command_argument("mode",
@@ -231,6 +242,17 @@ server tick, every mod is asked to register again. The server rebuilds the typed
 command dispatcher and sends each player's tree after `player_commands_sent`
 filters it, as vanilla does after `/reload`. Repeated requests before that tick
 coalesce; without a world open to players, nothing is rebuilt.
+
+## Who sees a usage
+
+A usage's `level` gates its whole path, and the same test answers running, the tree
+and the completions: a player below the level neither receives that literal in their
+command tree nor is offered it, and typing the path is refused. A root with one
+public usage keeps only the children the player may run, so `/warp` stays visible
+while `/warp admin` is absent for a non-operator. An operator level change sends the
+trees again (`/op`, `/deop`) and the completions follow from then on; a provider
+whose answers depend on its own policy calls `host.commands().refresh_commands()`
+after it changes them.
 
 ## Custom selector tokens
 
