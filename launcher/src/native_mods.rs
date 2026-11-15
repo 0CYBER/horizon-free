@@ -726,7 +726,7 @@ pub fn revision_of(version: &str) -> Result<String, String> {
     sdk_cache::build_of(
         version,
         &sdk_cache::Base::from_env(),
-        &horizon_release_sign::trusted_keys_for(backend::REPO),
+        &horizon_release_sign::sdk_keys_for(backend::REPO),
     )
     .map_err(|refusal| refusal.to_string())
 }
