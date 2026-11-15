@@ -361,7 +361,6 @@ horizon-client-lib mobs::villager::tests::own_random_brain_tick_keeps_the_entity
 horizon-client-lib mobs::villager_brain::farming_tests::planting_posts_block_place_with_villager_and_crop_state lib daily resources
 horizon-client-lib mobs::villager_brain::mob_map_tests::hostile_sensor_matches_registered_ids_and_world_snapshot lib daily resources
 horizon-client-lib mobs::villager_brain::trades_tests::displayed_trade_items_have_no_drop_chance_and_clear_restores_it lib daily resources
-horizon-client-lib mobs::villager_client_visual_tests::villager_client_partial_hat_cache_refreshes lib daily resources
 horizon-client-lib mobs::visibility::tests::a_mods_visibility_scales_a_mobs_range_to_a_mob lib daily resources
 horizon-client-lib mobs::visibility::tests::an_invisible_mob_is_found_from_less_far lib daily resources
 horizon-client-lib mobs::warden::warden_target_tests::an_allied_vibration_is_not_heard lib daily resources

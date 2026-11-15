@@ -730,6 +730,14 @@
   {
     "package": "horizon-launcher",
     "target": "test:startup",
+    "test": "cli_settings_work_with_one_mib_process_stack",
+    "path": "launcher/tests/startup.rs",
+    "reason": "the Windows launcher-processes job runs it by name",
+    "rationale": "Existing explicit Windows runner launcher-processes in launcher-windows-check.yml selects this test by name; its manual row in tools/ci/ignored-tests/manual-horizon-launcher.txt preserves that routing. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-launcher",
+    "target": "test:startup",
     "test": "hardware_probes_run_hidden_after_the_first_frame",
     "path": "launcher/tests/startup.rs",
     "reason": "requires an interactive Windows desktop and graphics adapter",

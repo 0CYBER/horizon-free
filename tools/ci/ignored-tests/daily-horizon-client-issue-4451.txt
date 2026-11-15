@@ -298,7 +298,6 @@ horizon-client game::commands::summon_item_orb_tests::summon_item_succeeds_with_
 horizon-client game::commands::teleport_item_tests::an_item_teleported_into_another_level_arrives_there_still lib daily resources
 horizon-client game::commands::teleport_item_tests::portal_arrival_effects_command_items_merge_immediately lib daily resources
 horizon-client game::commands::teleport_item_tests::relative_item_teleports_keep_only_relative_horizontal_motion lib daily resources
-horizon-client game::commands::teleport_level_tests::a_mod_cannot_send_an_armor_stand_to_another_level lib daily resources
 horizon-client game::commands::teleport_level_tests::a_mod_sends_a_firework_to_another_level_with_its_owner_and_motion lib daily resources
 horizon-client game::commands::teleport_level_tests::a_mod_sends_a_minecart_to_another_level_with_its_known_movement lib daily resources
 horizon-client game::commands::teleport_level_tests::a_mod_sends_a_primed_tnt_to_another_level_with_its_fuse_and_motion lib daily resources
@@ -950,15 +949,15 @@ horizon-client game::machines::brewing_fuel_transfer_tests::hopper_brewing_fuel_
 horizon-client game::machines::brewing_fuel_transfer_tests::prepare_transfer_inventory_write_is_ejected lib daily resources
 horizon-client game::machines::can_take_tests::a_full_hopper_cannot_take_a_book_from_a_chiseled_shelf lib daily resources
 horizon-client game::machines::can_take_tests::non_container_block_entity_above_hopper_does_not_block_item_suction lib daily resources
-horizon-client game::machines::contents_changed_tests::a_contents_notice_reads_the_root_commit_and_not_aborted_writes lib daily resources
 horizon-client game::machines::contents_changed_tests::a_crafter_notices_its_source_but_not_a_vehicles_placeholder lib daily resources
 horizon-client game::machines::contents_changed_tests::a_double_container_notifies_each_backing_block_once lib daily resources
 horizon-client game::machines::contents_changed_tests::a_mod_reads_the_open_transaction_its_depth_and_the_root_commits_phase lib daily resources
-horizon-client game::machines::contents_changed_tests::a_native_types_inherited_block_part_reads_the_committed_payload lib daily resources
+horizon-client game::machines::contents_changed_tests::a_native_types_payload_notifications_observe_each_write_before_commit lib daily resources
 horizon-client game::machines::contents_changed_tests::a_notice_that_opens_a_transaction_keeps_the_root_closing_phase lib daily resources
 horizon-client game::machines::contents_changed_tests::a_panicking_part_does_not_leave_its_contents_notice_guarded lib daily resources
 horizon-client game::machines::contents_changed_tests::a_panicking_root_commit_notice_leaves_the_phase_none lib daily resources
 horizon-client game::machines::contents_changed_tests::a_self_write_does_not_reenter_but_another_backing_block_notifies lib daily resources
+horizon-client game::machines::contents_changed_tests::explicit_notices_observe_tentative_writes_and_survive_abort lib daily resources
 horizon-client game::machines::contents_changed_tests::notices_come_in_first_write_order_once_each_whatever_the_journal_keeps lib daily resources
 horizon-client game::machines::crafter::part_remainder_tests::crafter_dispense_observes_part_replaced_remainders lib daily resources
 horizon-client game::machines::crafter::tests::a_slot_toggled_in_the_menu_lands_on_the_crafter lib daily resources
@@ -1007,7 +1006,6 @@ horizon-client game::minecarts::hook_mutation_regressions::activator_does_not_sn
 horizon-client game::minecarts::hook_mutation_regressions::activator_preserves_a_later_passengers_callback_reparenting lib daily resources
 horizon-client game::minecarts::lifetime_tests::a_bound_cart_commits_the_normal_server_tick lib daily resources
 horizon-client game::minecarts::lifetime_tests::a_bound_cart_commits_the_ridden_tick lib daily resources
-horizon-client game::minecarts::lifetime_tests::a_bound_cart_commits_the_tnt_interaction lib daily resources
 horizon-client game::minecarts::lifetime_tests::a_bound_cart_commits_valid_nbt_and_refuses_an_invalid_load lib daily resources
 horizon-client game::minecarts::lifetime_tests::a_bound_cart_survives_the_parked_level_swap lib daily resources
 horizon-client game::minecarts::lifetime_tests::a_bound_ticked_cart_publishes_its_moved_position_before_pushing lib daily resources
@@ -1296,11 +1294,9 @@ horizon-client game::native_entity_renderers_tests::a_failed_renderer_draws_the_
 horizon-client game::native_entity_renderers_tests::a_registered_thrown_type_draws_the_later_renderer_and_no_item lib daily child-process
 horizon-client game::native_entity_renderers_tests::a_vanilla_boat_is_unchanged_by_a_registration_for_its_type lib daily child-process
 horizon-client game::native_entity_renderers_tests::an_unregistered_thrown_type_still_draws_its_item lib daily child-process
-horizon-client game::native_entity_riding::tests::a_mob_gets_off_where_the_query_says lib daily resources
 horizon-client game::native_entity_riding::tests::a_nested_tree_lists_passengers_depth_first_and_shares_its_root lib daily resources
 horizon-client game::native_entity_riding::tests::a_player_boards_ahead_of_a_mob_and_behind_a_player_as_add_passenger_says lib daily resources
 horizon-client game::native_entity_riding::tests::a_player_gets_off_along_their_own_yaw_on_their_turn_or_not lib daily resources
-horizon-client game::native_entity_riding::tests::a_player_gets_off_where_the_query_says lib daily resources
 horizon-client game::native_entity_riding::tests::boat_and_cart_interactions_use_shared_mount_path lib daily resources
 horizon-client game::native_entity_riding::tests::camel_admits_multiple_mob_passengers_but_not_a_fourth lib daily resources
 horizon-client game::native_entity_riding::tests::canceled_dismount_keeps_old_mount_and_mount_hook_fires_once lib daily resources
@@ -1645,7 +1641,7 @@ horizon-client game::native_level_items::tests::an_orb_awarded_in_a_merge_hook_i
 horizon-client game::native_level_notify_tests::biome_negative_min_y_and_unwind_restore_without_publication lib daily resources
 horizon-client game::native_level_notify_tests::biome_writes_roll_back_and_only_the_root_commit_notifies_clients lib daily resources
 horizon-client game::native_level_notify_tests::bone_meal_on_an_invalid_block_changes_nothing lib daily resources
-horizon-client game::native_level_notify_tests::break_progress_and_block_updates_wait_for_the_commit lib daily resources
+horizon-client game::native_level_notify_tests::break_progress_waits_for_commit_but_explicit_block_updates_survive_abort lib daily resources
 horizon-client game::native_level_notify_tests::crack_packets_wait_for_root_commit_and_preserve_fifo lib daily resources
 horizon-client game::native_level_players::tests::chunk_watchers_follow_sent_chunks_inside_the_view lib daily resources
 horizon-client game::native_level_players::tests::level_players_leave_out_fake_players lib daily resources
@@ -1856,7 +1852,7 @@ horizon-client game::native_player_destroyed_block_tests::a_target_break_block_r
 horizon-client game::native_player_destroyed_block_tests::shears_disarm_a_tripwire_and_the_hook_is_told_the_disarmed_string lib daily resources
 horizon-client game::native_player_disconnect_tests::a_second_disconnect_while_pending_is_refused lib daily resources
 horizon-client game::native_player_disconnect_tests::disconnect_reaches_acting_and_displaced_players lib daily resources
-horizon-client game::native_player_disconnect_tests::disconnect_refuses_the_owner_fakes_stale_and_offline_players lib daily resources
+horizon-client game::native_player_disconnect_tests::disconnect_refuses_the_owner_stale_and_offline_players lib daily resources
 horizon-client game::native_player_disconnect_tests::disconnect_sends_the_reason_to_that_guest_only lib daily resources
 horizon-client game::native_player_disconnect_tests::wasm_disconnect_crosses_the_generated_forwarder lib daily resources
 horizon-client game::native_player_food::tests::a_stale_handle_gives_nothing lib daily resources

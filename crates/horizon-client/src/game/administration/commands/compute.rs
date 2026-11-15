@@ -541,7 +541,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn published_predicates_and_nested_provider_shorthand_evaluate() {
         use crate::game::*;
         use horizon_assets::resource_source::{ResourceRoot, ResourceSource};
