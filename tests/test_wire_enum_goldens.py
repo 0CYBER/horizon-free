@@ -26,6 +26,19 @@ class WireEnumDiscoveryTests(unittest.TestCase):
         '''
         self.assertEqual(MODULE.discover(source), {"crate::Plain"})
 
+    def test_quotes_and_braces_inside_literals_are_not_syntax(self):
+        source = r'''
+        mod names {
+            fn portable(c: char) -> bool { matches!(c, '/' | '\\' | '"' | '{' | '\u{7f}') }
+            fn message() -> &'static str { "a mod's state crosses one link \
+                group: not { every target" }
+            #[doc = r" a raw "quote" and } brace"] fn raw() {}
+            enum Plain { A, B }
+            #[automatically_derived] impl ::mod_api::wire::Wire for Plain {}
+        }
+        '''
+        self.assertEqual(MODULE.discover(source), {"crate::names::Plain"})
+
     def test_unsupported_local_fieldless_impl_headers_fail_closed(self):
         for header in [
             "impl<const N: usize> ::mod_api::wire::Wire for Flag<N>",
