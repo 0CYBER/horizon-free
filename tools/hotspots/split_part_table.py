@@ -14,12 +14,12 @@ declared: the union traits of `parts/unions.rs.in` to `parts_unions.rs`, and the
 `installation` modules of `parts/mod.rs` to `parts.rs`, which also holds `mod parts;`. A name the script cannot
 attribute goes to `parts_shared.rs` and is printed. part_table.rs is deleted.
 
-    python3 tools/refactors/split_part_table.py            # rewrite exports/
-    python3 tools/refactors/split_part_table.py --dry-run  # print the plan only
+    python3 tools/hotspots/split_part_table.py            # rewrite exports/
+    python3 tools/hotspots/split_part_table.py --dry-run  # print the plan only
 
 Proof (read-only), run once on each tree:
 
-    python3 tools/refactors/split_part_table.py --exports-digest TREE [--target-dir DIR]
+    python3 tools/hotspots/split_part_table.py --exports-digest TREE [--target-dir DIR]
 
 builds `cargo check -p horizon-mod-vocab` in TREE, reads the generated `mod_api_exports_*.rs` from the crate's
 OUT_DIR (taken from cargo's build-script message, not guessed), turns each into its sorted list of exported paths
