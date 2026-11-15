@@ -2,7 +2,7 @@
 use crate::wire::{Reader, Wire, WireError, Writer};
 use crate::{
     BlockEntityTypeKey, BlockKey, BoolGameRuleKey, DimensionKey, EffectKey, EnchantmentKey,
-    FluidKey, IntGameRuleKey, ItemKey, MenuKey, TagKey, UnresolvedFluid,
+    EntityTypeKey, FluidKey, IntGameRuleKey, ItemKey, MenuKey, TagKey, UnresolvedFluid,
 };
 
 impl Wire for crate::InsideEffect {

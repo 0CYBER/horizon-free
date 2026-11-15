@@ -689,7 +689,7 @@ impl GeneratorData {
                         name: name.clone(),
                         inline: false,
                     };
-                    source.resolve(&self.presets).ok()?;
+                    source.resolve(&self.presets, 0).ok()?;
                     super::super::density::identifier(name).ok()
                 })
                 .collect(),
