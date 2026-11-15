@@ -23,10 +23,10 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-# The merge-base rules (--pull-request-merge) are check_file_size.py's, shared by every --base gate.
-_spec = importlib.util.spec_from_file_location("check_file_size", ROOT / "tools" / "check_file_size.py")
-check_file_size = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(check_file_size)
+# The merge-base rules (--pull-request-merge) are merge_base.py's, shared by every --base gate.
+_spec = importlib.util.spec_from_file_location("merge_base", ROOT / "tools" / "merge_base.py")
+merge_base = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(merge_base)
 
 ROOT_FILE = "crates/horizon-mod-wasm/wire-loopback/tests/wire_loopback.rs"
 FOLDER = "crates/horizon-mod-wasm/wire-loopback/tests/wire_loopback/"
@@ -85,17 +85,17 @@ def retired(root):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="the git ref the branch starts from (CI: the pull request's base)")
-    parser.add_argument("--pull-request-merge", action="store_true", help=check_file_size.PULL_REQUEST_MERGE_HELP)
+    parser.add_argument("--pull-request-merge", action="store_true", help=merge_base.PULL_REQUEST_MERGE_HELP)
     args = parser.parse_args(argv)
     before = None
     if args.base:
-        base, error = check_file_size.pull_request_base(args.base, args.pull_request_merge)
+        base, error = merge_base.pull_request_base(args.base, args.pull_request_merge)
         if error:
             print(f"wire_loopback check failed: {error}")
             return 1
-        merge_base = check_file_size.git("merge-base", base, "HEAD").strip()
+        merge_base = merge_base.git("merge-base", base, "HEAD").strip()
         # The root's path at the merge base: its own, or the one it was renamed from since.
-        renames = check_file_size.git("diff", "--name-status", "-M", "--diff-filter=R", merge_base, "HEAD")
+        renames = merge_base.git("diff", "--name-status", "-M", "--diff-filter=R", merge_base, "HEAD")
         old = next((line.split("\t")[1] for line in renames.splitlines() if line.split("\t")[-1] == ROOT_FILE),
                    ROOT_FILE)
         shown = subprocess.run(["git", "show", f"{merge_base}:{old}"], capture_output=True, encoding="utf-8", cwd=ROOT)

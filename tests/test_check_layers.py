@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tools import check_layers, check_file_size
+from tools import check_layers, merge_base
 
 CONFIG = {
     "may_depend": {"engine": ["engine"], "platform": ["engine", "platform"], "horizon": ["platform", "horizon"]},
@@ -229,7 +229,7 @@ class UpstreamLayerRestorationTests(unittest.TestCase):
         self.git("commit", "-q", "-m", "fork")
         self.git("merge", "-q", "--no-edit", "upstream")
         (self.root / "tools/file_size_baseline.txt").write_text(f"# sync-baseline: {marker}\n")
-        for patch in (mock.patch.object(check_file_size, "ROOT", self.root),
+        for patch in (mock.patch.object(merge_base, "ROOT", self.root),
                       mock.patch.dict(os.environ, {"HORIZON_UPSTREAM_URL": str(remote)})):
             patch.start()
             self.addCleanup(patch.stop)
@@ -239,7 +239,7 @@ class UpstreamLayerRestorationTests(unittest.TestCase):
                               capture_output=True, text=True).stdout
 
     def problems(self, edge, layer="horizon"):
-        upstream, errors = check_file_size.verified_sync_config(self.base, "tools/layers.json")
+        upstream, errors = merge_base.verified_sync_config(self.base, "tools/layers.json")
         self.assertEqual(errors, [])
         config = dict(self.config, allowed=[edge], crates=dict(self.config["crates"], cosmetics=layer))
         crate, dependency = edge.split(" -> ")
@@ -291,13 +291,13 @@ class PullRequestMergeTests(unittest.TestCase):
             run("commit", "-q", "-am", "main allows an exception")
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge work", "work")
-            with mock.patch.object(check_layers, "ROOT", root), mock.patch.object(check_file_size, "ROOT", root):
-                merged, error = check_file_size.pull_request_base(base, True)
+            with mock.patch.object(check_layers, "ROOT", root), mock.patch.object(merge_base, "ROOT", root):
+                merged, error = merge_base.pull_request_base(base, True)
                 self.assertIsNone(error)
                 self.assertEqual(check_layers.base_config(merged), {"allowed": ["core -> horizon"]})
                 self.assertEqual(check_layers.base_config(base), {"allowed": []})
                 run("checkout", "-q", "work")
-                self.assertEqual(check_file_size.pull_request_base(base, True)[1],
+                self.assertEqual(merge_base.pull_request_base(base, True)[1],
                                  "--pull-request-merge needs HEAD to merge the pull request into a descendant of --base.")
 
 

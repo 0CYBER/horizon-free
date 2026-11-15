@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tools import check_addresses, check_file_size
+from tools import check_addresses, merge_base
 
 
 def strings(source):
@@ -130,7 +130,7 @@ class UpstreamRestorationTests(unittest.TestCase):
         self.git("merge", "-q", "--no-edit", "upstream")
         (self.root / "tools/file_size_baseline.txt").write_text(f"# sync-baseline: {upstream}\n")
         for patch in (mock.patch.object(check_addresses, "ROOT", self.root),
-                      mock.patch.object(check_file_size, "ROOT", self.root),
+                      mock.patch.object(merge_base, "ROOT", self.root),
                       mock.patch.dict(os.environ, {"HORIZON_UPSTREAM_URL": str(remote)})):
             patch.start()
             self.addCleanup(patch.stop)
@@ -202,7 +202,7 @@ class PullRequestMergeTests(unittest.TestCase):
             run("commit", "-q", "-m", "main allows an address")
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge work", "work")
-            with mock.patch.object(check_addresses, "ROOT", root), mock.patch.object(check_file_size, "ROOT", root), \
+            with mock.patch.object(check_addresses, "ROOT", root), mock.patch.object(merge_base, "ROOT", root), \
                     mock.patch("sys.stdout", new_callable=io.StringIO) as out:
                 self.assertEqual(check_addresses.main(["--base", base, "--pull-request-merge"]), 0)
                 # Against the branch's old base, main's new entry was charged to the pull request.

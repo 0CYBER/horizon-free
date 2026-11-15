@@ -9,7 +9,28 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tools import check_file_size
+from tools import check_file_size, merge_base
+
+
+class roots:
+    """Patches the repository root of the checker and of the shared merge-base helpers together."""
+
+    def __init__(self, root):
+        self.patches = [mock.patch.object(check_file_size, "ROOT", root), mock.patch.object(merge_base, "ROOT", root)]
+
+    def start(self):
+        for patch in self.patches:
+            patch.start()
+
+    def stop(self):
+        for patch in self.patches:
+            patch.stop()
+
+    def __enter__(self):
+        self.start()
+
+    def __exit__(self, *exc):
+        self.stop()
 
 
 def entry(path, before, now, generated=False):
@@ -139,7 +160,7 @@ class GitTests(unittest.TestCase):
             run("mv", "big.rs", "moved.rs")
             run("commit", "-q", "-m", "rename")
             (root / "small.rs").write_text("y\n" * 20)
-            with mock.patch.object(check_file_size, "ROOT", root), contextlib.redirect_stdout(io.StringIO()):
+            with roots(root), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(check_file_size.main(["--base", "main"]), 0)
                 (root / "moved.rs").write_text("x\n" * 3101)
                 self.assertEqual(check_file_size.main(["--base", "main"]), 1)
@@ -164,7 +185,7 @@ class GitTests(unittest.TestCase):
             run("commit", "-q", "-m", "base")
             run("checkout", "-q", "-b", "work")
             out = io.StringIO()
-            with mock.patch.object(check_file_size, "ROOT", root), contextlib.redirect_stdout(out):
+            with roots(root), contextlib.redirect_stdout(out):
                 (root / "big.rs").write_text(source(3100, 300))
                 run("commit", "-q", "-am", "more tests")
                 self.assertEqual(check_file_size.main(["--base", "main"]), 0)
@@ -204,7 +225,7 @@ class GitTests(unittest.TestCase):
             (root / "big.rs").write_text(numbered(0, 3200))
             run("commit", "-q", "-am", "main grows the big file at its end")
             out = io.StringIO()
-            with mock.patch.object(check_file_size, "ROOT", root), contextlib.redirect_stdout(out):
+            with roots(root), contextlib.redirect_stdout(out):
                 for branch, expected in (("untouched", 0), ("grows", 1)):
                     run("checkout", "-q", "--detach", "main")
                     run("merge", "-q", "--no-ff", "-m", f"merge {branch}", branch)
@@ -214,7 +235,7 @@ class GitTests(unittest.TestCase):
                         # Against the branch's old base, main's own growth was charged to the pull request.
                         self.assertEqual(check_file_size.main(["--base", base]), 1)
             self.assertIn("big.rs: 3201 lines without test modules (3200 on the base)", out.getvalue())
-            with mock.patch.object(check_file_size, "ROOT", root), contextlib.redirect_stdout(io.StringIO()) as log:
+            with roots(root), contextlib.redirect_stdout(io.StringIO()) as log:
                 run("checkout", "-q", "grows")
                 self.assertEqual(check_file_size.main(["--base", base, "--pull-request-merge"]), 1)
             self.assertIn("--pull-request-merge needs HEAD to merge the pull request", log.getvalue())
@@ -269,7 +290,7 @@ class SyncProvenanceTests(unittest.TestCase):
         self.addCleanup(environment.stop)
         self.run_git("checkout", "-q", "-b", "work", self.base)
         self.commit("fork")
-        patch = mock.patch.object(check_file_size, "ROOT", self.root)
+        patch = roots(self.root)
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -284,36 +305,36 @@ class SyncProvenanceTests(unittest.TestCase):
 
     def test_real_sync_parent_passes(self):
         self.run_git("merge", "-q", "--no-edit", "upstream")
-        self.assertEqual(check_file_size.sync_provenance(self.upstream, self.base), [])
+        self.assertEqual(merge_base.sync_provenance(self.upstream, self.base), [])
 
     def test_fake_sha_missing_header_and_base_ancestor_fail(self):
         for marker in ["b" * 40, None, self.base]:
             with self.subTest(marker=marker):
-                self.assertTrue(check_file_size.sync_provenance(marker, self.base))
+                self.assertTrue(merge_base.sync_provenance(marker, self.base))
 
     def test_an_upstream_base_ancestor_that_is_a_merge_parent_is_rejected(self):
         # A forced merge makes the old base an exact merge parent, and it is
         # also in upstream main. Only the outside-base rule rejects this SHA.
         self.run_git("checkout", "-q", "-b", "already-based", self.base)
         self.run_git("merge", "-q", "--no-ff", "--no-edit", "upstream")
-        result = check_file_size.sync_provenance(self.base, self.base)
+        result = merge_base.sync_provenance(self.base, self.base)
         self.assertIn("already an ancestor of the base", result[0])
 
     def test_ancestor_without_merge_parent_is_not_a_sync(self):
         self.run_git("checkout", "-q", "upstream")
         self.commit("child")
-        self.assertTrue(check_file_size.sync_provenance(self.upstream, self.base))
+        self.assertTrue(merge_base.sync_provenance(self.upstream, self.base))
 
     def test_a_fork_commit_is_not_an_upstream_main_ancestor(self):
         fork = self.run_git("rev-parse", "HEAD").strip()
         self.assertIn("not an ancestor of upstream main",
-                      check_file_size.sync_provenance(fork, self.base)[0])
+                      merge_base.sync_provenance(fork, self.base)[0])
 
     def test_unreachable_upstream_fails_even_with_a_cached_ref(self):
         self.run_git("merge", "-q", "--no-edit", "upstream")
-        self.assertEqual(check_file_size.sync_provenance(self.upstream, self.base), [])
+        self.assertEqual(merge_base.sync_provenance(self.upstream, self.base), [])
         with mock.patch.dict(os.environ, {"HORIZON_UPSTREAM_URL": str(self.root / "missing.git")}):
-            result = check_file_size.sync_provenance(self.upstream, self.base)
+            result = merge_base.sync_provenance(self.upstream, self.base)
         self.assertIn("upstream main fetch failed", result[0])
 
     def test_fork_side_branch_merge_cannot_exempt_a_new_production_file(self):
@@ -323,7 +344,7 @@ class SyncProvenanceTests(unittest.TestCase):
         self.run_git("checkout", "-q", "work")
         self.run_git("merge", "-q", "--no-edit", "forgery")
         self.assertIn("not an ancestor of upstream main",
-                      check_file_size.sync_provenance(forged, self.base)[0])
+                      merge_base.sync_provenance(forged, self.base)[0])
         (self.root / "tools").mkdir()
         (self.root / "tools/file_size_baseline.txt").write_text(
             f"# sync-baseline: {forged}\nproduction.rs 3101\n")
@@ -337,6 +358,7 @@ class SyncProvenanceTests(unittest.TestCase):
         self.assertIn("baseline added or raised", output.getvalue())
         checker = self.root / "tools/check_file_size.py"
         checker.write_text(Path(check_file_size.__file__).read_text())
+        (self.root / "tools/merge_base.py").write_text(Path(merge_base.__file__).read_text())
         result = subprocess.run([sys.executable, str(checker), "--base", self.base],
                                 cwd=self.root, capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
@@ -346,8 +368,8 @@ class SyncProvenanceTests(unittest.TestCase):
         self.run_git("merge", "-q", "--no-edit", "upstream")
         with tempfile.TemporaryDirectory() as clone:
             subprocess.run(["git", "clone", "-q", "--depth", "1", self.root.as_uri(), clone], check=True)
-            with mock.patch.object(check_file_size, "ROOT", Path(clone)):
-                result = check_file_size.sync_provenance(self.upstream, self.base)
+            with roots(Path(clone)):
+                result = merge_base.sync_provenance(self.upstream, self.base)
                 self.assertIn("unshallow", result[0])
 
 SYNC_A, SYNC_B = "a" * 40, "b" * 40
@@ -371,7 +393,7 @@ class RepositoryCase(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-q", "-m", "base")
         self.git("checkout", "-q", "-b", "work")
-        patch = mock.patch.object(check_file_size, "ROOT", self.root)
+        patch = roots(self.root)
         patch.start()
         self.addCleanup(patch.stop)
 
