@@ -350,7 +350,7 @@ impl Game<'_> {
         if self.player.is_none() || self.res.rest.get().is_none() {
             return Arc::from([]);
         }
-        self.viewer_book_ids(recipe_id).into()
+        self.viewer_book_ids(recipe_id)
     }
 
     fn make_mod_recipes(&mut self) -> Recipes {

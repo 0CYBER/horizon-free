@@ -1407,19 +1407,17 @@ impl Game<'_> {
             },
         ));
     }
-    /// The display ids of `recipe_id`'s entries in the book, the ones
-    /// `transfer_viewer_recipe` and `transfer_recipe_check` find: a server
-    /// numbers the recipes it sent itself, so these can differ from the
-    /// display index's.
-    pub(in crate::game) fn viewer_book_ids(&mut self, recipe_id: &str) -> Vec<i32> {
+    /// The display ids of `recipe_id` that the server sent and this book
+    /// numbers the same way (`Book::confirmed_ids`): the entries
+    /// `transfer_viewer_recipe` and `transfer_recipe_check` find. A server
+    /// numbers the recipes it sent itself, so the display index's ids are not
+    /// evidence of its own.
+    pub(in crate::game) fn viewer_book_ids(&mut self, recipe_id: &str) -> std::sync::Arc<[i32]> {
         self.ensure_book();
-        let Some(book) = self.recipe_ui.book.as_ref() else {
-            return Vec::new();
-        };
-        (book.entries.iter())
-            .filter(|e| e.id == recipe_id && e.display_id >= 0)
-            .map(|e| e.display_id)
-            .collect()
+        self.recipe_ui
+            .book
+            .as_ref()
+            .map_or_else(Default::default, |book| book.confirmed_ids(recipe_id))
     }
     /// A viewer's transfer of one set of ingredients.
     pub(super) fn transfer_viewer_recipe(&mut self, display_id: i32) {
@@ -1784,6 +1782,9 @@ impl Game<'_> {
         for id in p.ids {
             self.recipe_ui.client.remove(id);
             self.recipe_ui.server_entries.remove(&id);
+            if let Some(book) = self.recipe_ui.book.as_mut() {
+                book.unconfirm(id);
+            }
         }
         self.recipe_ui.client_version += 1;
     }
