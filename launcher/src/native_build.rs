@@ -31,6 +31,7 @@ impl Launcher {
             self.native_error = None;
             self.native_worlds = None;
             self.request_native_build_consent();
+            self.native_consent_build = Some((base, back_up));
             return;
         }
         self.pending_consent = None;

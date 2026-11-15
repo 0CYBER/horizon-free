@@ -298,6 +298,7 @@ impl Launcher {
     }
 
     pub(crate) fn request_native_build_consent(&mut self) {
+        self.native_consent_build = None;
         self.pending_consent = Some(PendingConsent::Build(
             native_status::enabled(&self.mods.home())
                 .into_iter()
@@ -309,6 +310,7 @@ impl Launcher {
     /// Cancel and Escape share the transition; neither can execute a pending action.
     pub(crate) fn cancel_native_consent(&mut self) {
         self.play_after_build = None;
+        self.native_consent_build = None;
         if let Err(error) = native_consent::resolve(
             &mut self.pending_consent,
             false,
@@ -359,7 +361,10 @@ impl Launcher {
                         match native_consent::resolve(&mut this.pending_consent, true, true, &mut this.settings, &this.mods.home()) {
                             Err(error) => this.consent_error = Some(error),
                             Ok(Some(action)) => { this.consent_error = None; match action {
-                                PendingConsent::Build(_) => this.build_native(),
+                                PendingConsent::Build(_) => {
+                                    let (base, back_up) = this.native_consent_build.take().unwrap_or_default();
+                                    this.build_native_on(base, back_up)
+                                }
                                 PendingConsent::Toggle(entry) => this.mods_switch(&entry),
                                 PendingConsent::Install(source, id, known) => this.mods_install(source, id, known),
                                 PendingConsent::Github(found, only) => this.github_install(found, only),
