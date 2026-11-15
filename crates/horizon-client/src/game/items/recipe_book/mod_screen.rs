@@ -260,7 +260,9 @@ impl Game<'_> {
     }
     fn mod_book_button(&self, batch: &HudBatch) -> (f32, f32) {
         self.mod_book_layout(batch.width, self.mod_book_open())
-            .map_or((0.0, 0.0), |layout| layout.toggle)
+            .map_or((0.0, 0.0), |layout| {
+                layout.shifted_toggle(self.screen_room_shift(batch))
+            })
     }
     pub(super) fn draw_mod_book(&mut self, batch: &mut HudBatch) -> Option<Vec<(Text, u32)>> {
         self.refresh_mod_book();
@@ -318,9 +320,7 @@ impl Game<'_> {
         let text_width = |s: &str| HudBatch::text_width(&self.gui.atlas, s) as i32;
         let layout = Layout {
             book: BookType::Crafting,
-            width: batch.width as i32,
-            height: batch.height as i32,
-            narrow: self.mod_book_overlay(batch.width),
+            origin: (xo as i32, yo as i32),
             mouse: (self.cursor.0 as i32, self.cursor.1 as i32),
             index: self.swap_index(),
             filtering,

@@ -5,7 +5,7 @@
 use super::*;
 
 /// How far `room` right of a window `image` wide moves the window, its left edge at `left`, and
-/// the book open beside it, its left edge at `book`, on a screen `width` wide: half the room,
+/// the book open beside it, its visible left extent (including tabs) at `book`, on a screen `width` wide: half the room,
 /// rounded down, when the book, the window and the room all fit across the screen; else nothing.
 pub(super) fn room_shift(width: f32, left: f32, image: f32, book: Option<f32>, room: f32) -> f32 {
     if !room.is_finite() || room <= 0.0 {
@@ -100,16 +100,12 @@ mod tests {
     fn the_book_beside_the_window_moves_with_it_or_keeps_it_in_place() {
         // The book open beside the window (the window 77 right of centre, the book left of it):
         // at 427 the three don't fit, so nothing moves; at 640 they do.
-        let at_427 = (125.0 + 77.0, ((427.0 - 147.0) / 2.0f32).floor() - 86.0);
-        assert_eq!(
-            room_shift(427.0, at_427.0, 176.0, Some(at_427.1), 149.0),
-            0.0
-        );
-        let at_640 = (232.0 + 77.0, ((640.0 - 147.0) / 2.0f32).floor() - 86.0);
-        assert_eq!(
-            room_shift(640.0, at_640.0, 176.0, Some(at_640.1), 149.0),
-            74.0
-        );
+        assert_eq!(room_shift(427.0, 202.0, 176.0, Some(22.0), 149.0), 0.0);
+        assert_eq!(room_shift(640.0, 309.0, 176.0, Some(128.0), 149.0), 74.0);
+        // Panel at 95 would fit after a shift of 90, but its selected tab at 63 would not.
+        assert_eq!(room_shift(510.0, 244.0, 176.0, Some(63.0), 180.0), 0.0);
+        // The selected tab remains at 13 and the reservation ends at 470.
+        assert_eq!(room_shift(510.0, 244.0, 176.0, Some(63.0), 100.0), 50.0);
         // The book's left edge is what runs out first on the left.
         assert_eq!(room_shift(640.0, 300.0, 176.0, Some(60.0), 149.0), 0.0);
     }

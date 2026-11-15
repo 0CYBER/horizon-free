@@ -15,9 +15,7 @@ fn poses(cells: &[(i32, i32)]) -> Vec<[f32; 6]> {
     let search = Search::default();
     let screen = Screen {
         book: BookType::Crafting,
-        width: 320,
-        height: 240,
-        narrow: false,
+        origin: (0, 37),
         mouse: (-1, -1),
         index: 0,
         filtering: false,
@@ -88,4 +86,62 @@ fn vanilla_three_by_three_poses_are_unchanged() {
 #[test]
 fn extreme_cell_coordinates_do_not_overflow() {
     assert_inner_bounds(&poses(&[(0, 0), (i32::MAX, i32::MAX)]));
+}
+
+#[test]
+fn explicit_origin_moves_widgets_but_not_absolute_overlay_or_ghosts() {
+    let search = Search::default();
+    let tabs = [TabView {
+        icons: ("minecraft:stone".into(), None),
+        selected: true,
+        anim: 0.0,
+    }];
+    let mut screen = Screen {
+        book: BookType::Crafting,
+        origin: (110, 37),
+        mouse: (221, 50),
+        index: 0,
+        filtering: false,
+        search: &search,
+        tabs: &tabs,
+        buttons: &[],
+        page: 0,
+        pages: 1,
+        overlay: None,
+        ghost: None,
+        translate: &str::to_owned,
+        text_width: &|s| s.len() as i32,
+    };
+    let calls = draw(&screen);
+    assert!(matches!(calls[0].call, Call::Blit { x: 110, y: 37, .. }));
+    assert!(calls.iter().any(|c| matches!(&c.call, Call::Sprite { id, x: 78, y: 40, .. } if id == "recipe_book/tab_selected")));
+    assert!(calls.iter().any(|c| matches!(&c.call, Call::Sprite { id, x: 220, y: 49, .. } if id == "recipe_book/filter_disabled_highlighted")));
+    let overlay = OverlayView {
+        x: 300,
+        y: 80,
+        recipes: vec![OverlayRecipe {
+            craftable: true,
+            cells: vec![],
+        }],
+    };
+    screen.overlay = Some(&overlay);
+    let ghosts = [GhostView {
+        x: 8,
+        y: 9,
+        items: vec![ItemStack::new("minecraft:stone", 1)],
+        result: false,
+    }];
+    screen.ghost = Some((400, 100, false, &ghosts));
+    let calls = draw(&screen);
+    assert!(
+        calls
+            .iter()
+            .any(|c| matches!(&c.call, Call::Sprite { x: 300, y: 80, .. }))
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| matches!(&c.call, Call::Item { x: 8, y: 9, .. })
+                && c.pose == [1.0, 0.0, 0.0, 1.0, 400.0, 100.0])
+    );
 }

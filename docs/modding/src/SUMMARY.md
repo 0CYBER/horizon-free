@@ -38,6 +38,7 @@
 - [Publishing your mod](how-to/publish.md)
 - [Levels, dimensions and blocks](how-to/world.md)
 - [Items, recipes and loot](how-to/items.md)
+- [Room beside a container](how-to/screen-room.md)
 - [Entities, players and commands](how-to/entities.md)
 - [Client, rendering and sound](how-to/client.md)
 
