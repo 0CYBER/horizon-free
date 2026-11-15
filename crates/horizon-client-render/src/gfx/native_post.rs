@@ -1695,7 +1695,11 @@ pub fn frame_inputs(
         has_ray_tracing: 0,
         ray_distance: 0.0,
         luminance: Primaries::Bt709.luminance(),
-        padding: 0,
+        // Kept resources' epochs: no pack with `[[resource]]` runs yet.
+        view_epoch: 0,
+        world_epoch: 0,
+        reset_reasons: 0,
+        padding: [0; 2],
     }
 }
 

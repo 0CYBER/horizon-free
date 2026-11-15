@@ -248,15 +248,21 @@ fn the_0_2_wgsl_of_a_pack_without_ray_tracing_is_unchanged() {
 }
 
 /// The `Frame` struct the line's sky prelude declares (for a pack with `[ray_tracing]` or
-/// without), as (name, offset) and its span.
-fn frame_layout(api: Api, ray_tracing: bool) -> (Vec<(String, usize)>, usize) {
+/// without; with `kept`, as one with `[[resource]]` has it), as (name, offset) and its span.
+fn frame_layout(api: Api, ray_tracing: bool, kept: bool) -> (Vec<(String, usize)>, usize) {
     let tracing = if ray_tracing {
         Tracing::Stub
     } else {
         Tracing::None
     };
-    let prelude = StageKind::Sky.prelude_traced(api, tracing);
-    let text = format!("{prelude}{}", vanilla(StageKind::Sky));
+    // The prelude is the pack's (`tests/names.rs` has a kept one's): the struct alone here.
+    let text = match kept {
+        true => Frame::declared(api, ray_tracing, true).wgsl(),
+        false => {
+            let prelude = StageKind::Sky.prelude_traced(api, tracing);
+            format!("{prelude}{}", vanilla(StageKind::Sky))
+        }
+    };
     let module = validate(&text);
     let (_, ty) = module
         .types
@@ -281,17 +287,28 @@ fn the_frame_s_wgsl_layout_is_the_uploaded_struct_s() {
         .zip(Frame::OFFSETS)
         .map(|(f, &o)| (f.name.to_owned(), o))
         .collect();
-    let (wgsl, span) = frame_layout(Api::V0_2, true);
-    assert_eq!(span, std::mem::size_of::<Frame>());
+    let size = std::mem::size_of::<Frame>();
+    let (wgsl, span) = frame_layout(Api::V0_2, true, true);
+    assert_eq!(span, size);
     assert_eq!(wgsl, rust);
     // Without `[ray_tracing]` the scene's two fields are a gap: the others stay where they are.
-    let (wgsl, span) = frame_layout(Api::V0_2, false);
-    assert_eq!(span, std::mem::size_of::<Frame>());
+    let (wgsl, span) = frame_layout(Api::V0_2, false, true);
+    assert_eq!(span, size);
     let mut untraced = rust.clone();
     untraced.drain(Frame::RAY_FIELDS);
     assert_eq!(wgsl, untraced);
+    // Without `[[resource]]` the struct ends before the epochs, a prefix of the same buffer.
+    let unkept = Frame::KEPT_FIELDS.len();
+    let (wgsl, span) = frame_layout(Api::V0_2, true, false);
+    assert_eq!(
+        (span, wgsl),
+        (size - 16, rust[..rust.len() - unkept].to_vec())
+    );
+    let (wgsl, span) = frame_layout(Api::V0_2, false, false);
+    let untraced = &untraced[..untraced.len() - unkept];
+    assert_eq!((span, wgsl), (size - 16, untraced.to_vec()));
     // 0.1 declares the start of the same buffer.
-    let (wgsl, span) = frame_layout(Api::V0_1, false);
+    let (wgsl, span) = frame_layout(Api::V0_1, false, false);
     assert_eq!(wgsl, rust[..Frame::FIELDS_0_1]);
     assert_eq!(span, rust[Frame::FIELDS_0_1].1);
 }

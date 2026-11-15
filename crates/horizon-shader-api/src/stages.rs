@@ -1210,12 +1210,13 @@ impl StageKind {
     /// `hit_specular_map` (and in the post stage `block_pbr_maps`).
     pub fn prelude_traced(self, api: Api, tracing: Tracing) -> String {
         let rays = matches!(self, StageKind::Post | StageKind::Material);
-        self.prelude_rays(api, tracing, rays)
+        self.prelude_rays(api, tracing, rays, false)
     }
 
     /// `prelude_traced`, with the ray names only where `rays`: a material stage that calls
-    /// none of the trace functions is built as it was before them.
-    fn prelude_rays(self, api: Api, tracing: Tracing, rays: bool) -> String {
+    /// none of the trace functions is built as it was before them. `kept`: the frame's epochs,
+    /// for a pack with `[[resource]]`.
+    fn prelude_rays(self, api: Api, tracing: Tracing, rays: bool, kept: bool) -> String {
         let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
             Tracing::Scene if rays => String::from(RAY_ENABLE),
@@ -1225,7 +1226,10 @@ impl StageKind {
             Api::V0_1 => "// Horizon shader API prelude (docs/api/shaders-reference.md)\n",
             Api::V0_2 => "// Horizon shader API 0.2 prelude (docs/api/shaders-reference-0.2.md)\n",
         };
-        out += &Frame::declared(api, tracing != Tracing::None).wgsl();
+        out += &Frame::declared(api, tracing != Tracing::None, kept).wgsl();
+        if kept && api == Api::V0_2 {
+            out += &crate::kept::reasons_wgsl();
+        }
         out += &self.input().wgsl();
         if matches!(self, StageKind::Material | StageKind::Entity) {
             out += &SURFACE.wgsl();
@@ -1428,47 +1432,83 @@ fn motion_at(texel: vec2<i32>) -> MotionData {
 /// next; the others after, two each.
 pub const KEPT_BINDING: u32 = 64;
 
-/// The declarations of the `[[resource]]`s the pass `stage` lists, part of its prelude: a buffer
-/// as `array<element>`, read-write where written (an `atomic<u32>` read as `u32` where only
-/// read); this frame's texture a storage texture where written, else read as `texture_2d`;
-/// last frame's (`_previous`) read only.
+/// How a pass binds a kept resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeptAccess {
+    /// This frame's version, read: a read-only storage buffer, or a `texture_2d`.
+    Read,
+    /// This frame's version, written: a read-write storage buffer, or a write-only storage
+    /// texture.
+    Write,
+    /// A texture's last-frame version (`_previous`), read as a `texture_2d`.
+    Previous,
+}
+
+/// One kept resource a pass binds in group 3: `resource` indexes the manifest's
+/// `kept.resources`. A pass's kept `output` is its attachment, not a binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeptBinding {
+    pub binding: u32,
+    pub resource: usize,
+    pub access: KeptAccess,
+}
+
+/// The `[[resource]]`s the pass `stage` lists, in binding order: resource i at
+/// `KEPT_BINDING + 2i`, written where it `writes` it, else read where it `reads` it; a
+/// texture's `_previous` at the next binding where it reads that.
+pub fn kept_bindings(
+    manifest: &crate::manifest::Manifest,
+    stage: &crate::Stage,
+) -> Vec<KeptBinding> {
+    let mut out = Vec::new();
+    for (resource, r) in manifest.kept.resources.iter().enumerate() {
+        let at = |binding, access| KeptBinding {
+            binding,
+            resource,
+            access,
+        };
+        let binding = KEPT_BINDING + 2 * resource as u32;
+        if stage.writes.contains(&r.name) {
+            out.push(at(binding, KeptAccess::Write));
+        } else if stage.reads.contains(&r.name) {
+            out.push(at(binding, KeptAccess::Read));
+        }
+        if r.is_texture() && stage.reads.contains(&format!("{}_previous", r.name)) {
+            out.push(at(binding + 1, KeptAccess::Previous));
+        }
+    }
+    out
+}
+
+/// The declarations of `kept_bindings`, part of the pass's prelude: a buffer as
+/// `array<element>`, read-write where written (an `atomic<u32>` read as `u32` where only read);
+/// this frame's texture a storage texture where written, else read as `texture_2d`; last
+/// frame's (`_previous`) read only.
 pub fn kept_declarations(manifest: &crate::manifest::Manifest, stage: &crate::Stage) -> String {
     use crate::kept::{Element, Shape};
     let mut out = String::new();
-    for (i, r) in manifest.kept.resources.iter().enumerate() {
-        let (binding, name) = (KEPT_BINDING + 2 * i as u32, &r.name);
-        let (read, written) = (stage.reads.contains(name), stage.writes.contains(name));
-        let ty = match r.shape {
-            Shape::Buffer { element, .. } if written => {
+    for b in kept_bindings(manifest, stage) {
+        let r = &manifest.kept.resources[b.resource];
+        let name = &r.name;
+        let texel = r.format().map_or("f32", |f| f.texel());
+        let ty = match (r.shape, b.access) {
+            (_, KeptAccess::Previous) => format!("var {name}_previous: texture_2d<{texel}>"),
+            (Shape::Buffer { element, .. }, KeptAccess::Write) => {
                 format!("var<storage, read_write> {name}: array<{}>", element.wgsl())
             }
-            Shape::Buffer { element, .. } if read => {
+            (Shape::Buffer { element, .. }, KeptAccess::Read) => {
                 let element = match element {
                     Element::AtomicU32 => Element::U32,
                     e => e,
                 };
                 format!("var<storage, read> {name}: array<{}>", element.wgsl())
             }
-            Shape::Fixed { format, .. } | Shape::Scaled { format, .. } if written => {
+            (Shape::Fixed { format, .. } | Shape::Scaled { format, .. }, KeptAccess::Write) => {
                 format!("var {name}: texture_storage_2d<{}, write>", format.wgsl())
             }
-            Shape::Fixed { format, .. } | Shape::Scaled { format, .. } if read => {
-                format!("var {name}: texture_2d<{}>", format.texel())
-            }
-            _ => String::new(),
+            (_, KeptAccess::Read) => format!("var {name}: texture_2d<{texel}>"),
         };
-        if !ty.is_empty() {
-            out += &format!("@group({GROUP}) @binding({binding}) {ty};\n");
-        }
-        if let Some(format) = r.format()
-            && stage.reads.contains(&format!("{name}_previous"))
-        {
-            out += &format!(
-                "@group({GROUP}) @binding({}) var {name}_previous: texture_2d<{}>;\n",
-                binding + 1,
-                format.texel()
-            );
-        }
+        out += &format!("@group({GROUP}) @binding({}) {ty};\n", b.binding);
     }
     out
 }
@@ -1640,8 +1680,9 @@ pub(crate) fn compose_traced(
         StageKind::Material => tracing != Tracing::None && traces(files.iter().map(source)),
         _ => false,
     };
-    let mut prelude =
-        kind.prelude_rays(api, tracing, rays) + &texture_declarations(&pack.manifest.textures);
+    let kept = !m.kept.resources.is_empty();
+    let mut prelude = kind.prelude_rays(api, tracing, rays, kept)
+        + &texture_declarations(&pack.manifest.textures);
     if matches!(kind, StageKind::Post | StageKind::Compute) {
         prelude += &post_target_declarations(&pack.manifest);
     }

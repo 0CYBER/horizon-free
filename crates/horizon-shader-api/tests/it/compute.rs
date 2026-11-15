@@ -310,6 +310,45 @@ fn each_pass_declares_what_it_lists() {
     assert!(light.contains("@group(3) @binding(70) var radiance: texture_2d<f32>;"));
 }
 
+/// What a runtime builds its layouts from, `kept_bindings`, is what each pass's module declares:
+/// the binding, the name, and whether it is written.
+#[test]
+fn kept_bindings_are_what_each_pass_declares() {
+    use horizon_shader_api::stages::{KEPT_BINDING, KeptAccess, entry, kept_bindings};
+    let p = pack(EXAMPLE, &example_files());
+    let m = &p.manifest;
+    for stage in check(&p).unwrap().stages {
+        let listed = entry(m, stage.kind, &stage.file, None).unwrap();
+        let want: Vec<_> = (kept_bindings(m, listed).iter())
+            .map(|b| {
+                let name = &m.kept.resources[b.resource].name;
+                match b.access {
+                    KeptAccess::Previous => (b.binding, format!("{name}_previous"), false),
+                    a => (b.binding, name.clone(), a == KeptAccess::Write),
+                }
+            })
+            .collect();
+        let module = &stage.module;
+        let have: Vec<_> = (module.global_variables.iter())
+            .filter_map(|(_, g)| {
+                let b = g.binding.as_ref().filter(|b| b.binding >= KEPT_BINDING)?;
+                let written = match (g.space, &module.types[g.ty].inner) {
+                    (naga::AddressSpace::Storage { access }, _) => {
+                        access.contains(naga::StorageAccess::STORE)
+                    }
+                    (_, naga::TypeInner::Image { class, .. }) => {
+                        matches!(class, naga::ImageClass::Storage { .. })
+                    }
+                    _ => false,
+                };
+                Some((b.binding, g.name.clone()?, written))
+            })
+            .collect();
+        assert!(!have.is_empty(), "{}", stage.file);
+        assert_eq!(have, want, "{}", stage.file);
+    }
+}
+
 #[test]
 fn the_entry_runs_every_invocation_with_in_bounds() {
     let p = pack(EXAMPLE, &example_files());

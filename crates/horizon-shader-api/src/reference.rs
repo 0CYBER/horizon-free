@@ -5,7 +5,7 @@ use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, 
 use crate::kept::{
     Element, Format, MAX_BEFORE_WORLD, MAX_BUFFER_BYTES, MAX_COMPUTE_POST,
     MAX_DISPATCH_INVOCATIONS, MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES,
-    MAX_WORKGROUP, MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS,
+    MAX_WORKGROUP, MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS, REASONS,
 };
 use crate::manifest::{Api, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
@@ -222,6 +222,25 @@ fn kept() -> String {
     );
     for r in StageKind::BeforeWorld.resources() {
         out += &format!("| {} | `{}` | {} |\n", r.binding, r.ty, r.doc);
+    }
+    out += "\nA kept resource starts as zeros and is zeros again when cleared: a `keep = \"view\"` one when\n\
+            `frame.view_epoch` changes, every one when `frame.world_epoch` does (never 0, so a cleared value never\n\
+            matches). Both change before the frame that sees them draws, and `frame.reset_reasons` has a bit for each\n\
+            reason, a `const` of the prelude (`frame.reset_reasons & REASON_TELEPORT`); only a pack with `[[resource]]`\n\
+            has these fields and constants. A world cache keyed by `world_epoch` survives a camera cut. Nothing else\n\
+            says the world changed, not the camera's distance or `frame_index`.\n\n\
+            | Reason | Bit | Clears | When |\n| --- | --- | --- | --- |\n";
+    // What each clears and when, in `REASONS`' order.
+    let rows = "both | The pack was loaded or reloaded: its first frame.\n\
+                both | Horizon restarted the pack's history (a screenshot sequence's first shot).\n\
+                both | Another world or dimension, or its meshes were rebuilt (a render setting).\n\
+                both | The camera moved further than `[kept] reach` since last frame.\n\
+                view | Over half a second since last frame, as `delta_time` 0.\n\
+                view | The render size or the window's changed.\n\
+                view | The output turned HDR or SDR.\n\
+                its `resets` | The player changed an option marked `resets`.";
+    for ((name, bit), row) in REASONS.iter().zip(rows.lines()) {
+        out += &format!("| `{name}` | {bit} | {row} |\n");
     }
     out + &format!(
         "\nLimits: {MAX_RESOURCES} resources, {MAX_BEFORE_WORLD} `[[before_world]]` entries, {MAX_COMPUTE_POST} compute\n\
@@ -448,8 +467,9 @@ pub fn markdown(api: Api) -> String {
         }
     }
     out += "## The frame\n\n";
-    // Every field of the line: 0.2's with the two only a `[ray_tracing]` pack declares.
-    let frame = Frame::declared(api, true);
+    // Every field of the line: 0.2's with those only a `[ray_tracing]` or `[[resource]]` pack
+    // declares.
+    let frame = Frame::declared(api, true, true);
     out += &table(&frame, Some(&Frame::OFFSETS[..frame.fields.len()]));
     out += "## Anti-aliasing\n\n\
             While a pack's `[[post]]` chain draws the frame, the player's anti-aliasing settings do not run: `taa`, `fxaa`\n\

@@ -229,7 +229,16 @@ uniform! {
         /// The weights that give a colour's luminance in those primaries, `dot(c, frame.luminance)`:
         /// (0.2126, 0.7152, 0.0722) for BT.709, (0.2627, 0.6780, 0.0593) for BT.2020.
         luminance: [f32; 3],
-        @pad padding: u32,
+        /// Changes when the pack's `keep = "view"` resources are cleared, to zeros (`reset_reasons`
+        /// says why), and is never 0. Only a pack with `[[resource]]` has this field.
+        view_epoch: u32,
+        /// The same for its `keep = "world"` resources. `view_epoch` changes with it: what
+        /// clears the world's clears the view's too. Only a pack with `[[resource]]` has this field.
+        world_epoch: u32,
+        /// Why an epoch changed this frame: the prelude's `REASON_*` bits ("Kept resources"); 0
+        /// when neither did. Only a pack with `[[resource]]` has this field.
+        reset_reasons: u32,
+        @pad padding: [u32; 2],
     }
 }
 
@@ -242,10 +251,15 @@ impl Frame {
     /// the layout before `luminance`, so no other field moves with or without them.
     pub const RAY_FIELDS: std::ops::Range<usize> = 55..57;
 
-    /// The fields without `RAY_FIELDS`: what a 0.2 pack without `[ray_tracing]` declares.
-    const UNTRACED: [Field; 56] = {
+    /// Where `view_epoch`, `world_epoch` and `reset_reasons` are among the fields: the last,
+    /// so a pack without `[[resource]]` declares a prefix and no other field moves.
+    pub const KEPT_FIELDS: std::ops::Range<usize> = 58..61;
+
+    /// The fields without `RAY_FIELDS`: what a 0.2 pack without `[ray_tracing]` declares, less
+    /// `KEPT_FIELDS` without `[[resource]]`.
+    const UNTRACED: [Field; 59] = {
         let all = Self::WGSL.fields;
-        let mut out = [all[0]; 56];
+        let mut out = [all[0]; 59];
         let (mut from, mut to) = (0, 0);
         while from < all.len() {
             if from < Self::RAY_FIELDS.start || from >= Self::RAY_FIELDS.end {
@@ -257,18 +271,23 @@ impl Frame {
         out
     };
 
-    /// `Frame` as the line's prelude declares it for a pack without `[ray_tracing]`.
+    /// `Frame` as the line's prelude declares it for a pack without `[ray_tracing]` or
+    /// `[[resource]]`.
     pub fn line(api: crate::Api) -> Struct {
-        Self::declared(api, false)
+        Self::declared(api, false, false)
     }
 
     /// `Frame` as the line's prelude declares it, for a pack that asks for the scene
-    /// (`[ray_tracing]`, 0.2) or not.
-    pub fn declared(api: crate::Api, ray_tracing: bool) -> Struct {
+    /// (`[ray_tracing]`, 0.2) or not, and that keeps resources (`[[resource]]`, 0.2) or not.
+    pub fn declared(api: crate::Api, ray_tracing: bool, kept: bool) -> Struct {
         let fields: &'static [Field] = match (api, ray_tracing) {
             (crate::Api::V0_1, _) => &Self::WGSL.fields[..Self::FIELDS_0_1],
             (crate::Api::V0_2, false) => &Self::UNTRACED,
             (crate::Api::V0_2, true) => Self::WGSL.fields,
+        };
+        let fields = match api == crate::Api::V0_2 && !kept {
+            true => &fields[..fields.len() - Self::KEPT_FIELDS.len()],
+            false => fields,
         };
         Struct {
             fields,
@@ -456,24 +475,35 @@ mod tests {
     #[test]
     fn frame_fields_carry_their_docs() {
         let wgsl = Frame::WGSL;
-        assert_eq!(wgsl.fields.len(), 58);
+        assert_eq!(wgsl.fields.len(), 61);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
-        // 0.1's 49 fields, then 0.2's nine: `luminance` is a `vec3`, on the next 16 bytes.
+        // 0.1's 49 fields, then 0.2's twelve: `luminance` is a `vec3`, on the next 16 bytes,
+        // the epochs after it to the end of the next 16.
+        let size = std::mem::size_of::<Frame>();
+        assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 4 * 16);
         assert_eq!(
-            std::mem::size_of::<Frame>(),
-            6 * 64 + 15 * 16 + 8 * 16 + 3 * 16
+            Frame::OFFSETS[57..],
+            [size - 32, size - 20, size - 16, size - 12]
         );
-        assert_eq!(Frame::OFFSETS[57], std::mem::size_of::<Frame>() - 16);
-        // The scene's two fields are only a `[ray_tracing]` pack's.
+        // The scene's two fields are only a `[ray_tracing]` pack's, the epochs only a
+        // `[[resource]]` pack's.
         let names = |s: Struct| s.fields.iter().map(|f| f.name).collect::<Vec<_>>();
-        let traced = names(Frame::declared(crate::Api::V0_2, true));
+        let traced = names(Frame::declared(crate::Api::V0_2, true, false));
         assert_eq!(
             traced[Frame::RAY_FIELDS],
             ["has_ray_tracing", "ray_distance"]
         );
+        assert_eq!(traced.last(), Some(&"luminance"));
         let untraced = names(Frame::line(crate::Api::V0_2));
         assert_eq!(untraced.len(), 56);
         assert!(!untraced.iter().any(|n| n.contains("ray")));
+        assert_eq!(untraced.last(), Some(&"luminance"));
+        let epochs = ["view_epoch", "world_epoch", "reset_reasons"];
+        for ray_tracing in [false, true] {
+            let kept = names(Frame::declared(crate::Api::V0_2, ray_tracing, true));
+            assert_eq!(kept[kept.len() - 3..], epochs);
+        }
+        assert_eq!(names(Frame::WGSL)[Frame::KEPT_FIELDS], epochs);
         assert_eq!(Frame::OFFSETS[Frame::FIELDS_0_1], 6 * 64 + 15 * 16 + 8 * 16);
         assert_eq!(
             Frame::line(crate::Api::V0_1).fields.len(),

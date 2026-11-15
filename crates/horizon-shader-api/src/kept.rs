@@ -37,6 +37,37 @@ pub enum Keep {
     World,
 }
 
+/// `frame.reset_reasons`' bits: why `view_epoch` or `world_epoch` changed this frame
+/// (docs/api/shaders-reference-0.2.md, "Kept resources", says which and when).
+pub const REASON_LOAD: u32 = 1;
+pub const REASON_RESET: u32 = 1 << 1;
+pub const REASON_WORLD: u32 = 1 << 2;
+pub const REASON_TELEPORT: u32 = 1 << 3;
+pub const REASON_PAUSE: u32 = 1 << 4;
+pub const REASON_SIZE: u32 = 1 << 5;
+pub const REASON_DISPLAY: u32 = 1 << 6;
+pub const REASON_OPTION: u32 = 1 << 7;
+
+/// The reasons by name: a pack with `[[resource]]` has each as a WGSL `const` (`reasons_wgsl`).
+pub const REASONS: [(&str, u32); 8] = [
+    ("REASON_LOAD", REASON_LOAD),
+    ("REASON_RESET", REASON_RESET),
+    ("REASON_WORLD", REASON_WORLD),
+    ("REASON_TELEPORT", REASON_TELEPORT),
+    ("REASON_PAUSE", REASON_PAUSE),
+    ("REASON_SIZE", REASON_SIZE),
+    ("REASON_DISPLAY", REASON_DISPLAY),
+    ("REASON_OPTION", REASON_OPTION),
+];
+
+/// `REASONS` as the WGSL constants a kept pack's prelude declares.
+pub(crate) fn reasons_wgsl() -> String {
+    let consts = REASONS
+        .iter()
+        .map(|(name, bit)| format!("const {name}: u32 = {bit}u;\n"));
+    consts.collect()
+}
+
 /// A kept buffer's element type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Element {
