@@ -355,6 +355,10 @@ pub struct Guest {
     /// The shared flags (Entity.DATA_SHARED_FLAGS_ID) the player's client was
     /// last sent about itself.
     pub sent_shared: i8,
+    /// `updateFallFlying` ended the glide this tick. Vanilla's ServerPlayer.doTick ends it after the level tick's
+    /// ServerEntity.sendChanges, so the cleared flag reaches the client with the next tick's data: a landing glide
+    /// lasts one more tick on its ground, and a jump then keeps the speed (the elytra hop).
+    pub glide_end_unsent: bool,
     /// Pose last delivered to this player's own entity data, initially Standing.
     pub sent_pose: Pose,
     /// The shoulder parrots (Player.DATA_SHOULDER_PARROT_LEFT and _RIGHT) the
@@ -605,6 +609,7 @@ impl Guest {
             sent_air: (300, 0.0),
             sent_frozen: 0,
             sent_shared: 0,
+            glide_end_unsent: false,
             sent_pose: Pose::Standing,
             sent_shoulders: [None; 2],
             last_death: None,
@@ -840,6 +845,22 @@ impl Guest {
             f |= 8;
         }
         f
+    }
+    /// `updateFallFlying` ends the glide (`glide_end_unsent`: its end reaches the client a tick later).
+    pub fn end_glide(&mut self) {
+        self.fall_flying = false;
+        self.glide_end_unsent = true;
+    }
+    /// The pose this player's own data tells its client, where this sender owns it (standing,
+    /// crouching, gliding): a glide's pose goes too (vanilla's updatePlayerPose), and one ended this
+    /// tick still shows until the next tick's data, which this takes (`glide_end_unsent`).
+    pub fn own_pose(&mut self) -> Option<Pose> {
+        let pose = if std::mem::take(&mut self.glide_end_unsent) {
+            Pose::FallFlying
+        } else {
+            self.pose()
+        };
+        matches!(pose, Pose::Standing | Pose::Crouching | Pose::FallFlying).then_some(pose)
     }
     /// `Player.getDesiredPose`: sleeping, gliding, then the body's own pose
     /// (swimming, crawling, crouching) once its server tick has run.

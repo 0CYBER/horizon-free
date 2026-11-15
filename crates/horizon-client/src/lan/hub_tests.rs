@@ -74,6 +74,52 @@ fn hub_with_sync(sync: SyncData) -> (Hub, std::sync::mpsc::Receiver<crate::lan::
     (hub, rx)
 }
 
+/// A glide `updateFallFlying` ends reaches the player's client with the next tick's data, its flag and its pose
+/// together, as vanilla's ServerEntity.sendChanges runs before ServerPlayer.doTick: the landing glide lasts one more
+/// tick on the ground, and a jump then keeps its speed (the elytra hop).
+#[test]
+fn a_glide_ended_this_tick_reaches_its_client_a_tick_later() {
+    use crate::pose::Pose;
+    fn data(rx: &std::sync::mpsc::Receiver<crate::lan::Out>) -> Vec<(u8, Value)> {
+        let mut sent = Vec::new();
+        while let Ok(out) = rx.try_recv() {
+            let crate::lan::Out::Packet(body) = out else {
+                continue;
+            };
+            let mut r = horizon_protocol::buf::Reader::new(&body);
+            let id = r.varint().unwrap();
+            if let C::SetEntityData(p) = C::decode(id, r.rest()).unwrap() {
+                sent.extend(
+                    p.values
+                        .into_iter()
+                        .filter(|(i, _, _)| *i == 0 || *i == 6)
+                        .map(|(i, _, v)| (i, v)),
+                );
+            }
+        }
+        sent
+    }
+    let (mut hub, rx) = hub_with_a_guest();
+    hub.guests[0].fall_flying = true;
+    hub.sync_player_state(0);
+    assert_eq!(
+        data(&rx),
+        [
+            (0, Value::Byte(-128)),
+            (6, Value::Id(Pose::FallFlying.id()))
+        ]
+    );
+    // The landing tick: the guest's glide tick ends the glide after the data was looked at.
+    hub.guests[0].end_glide();
+    hub.sync_player_state(0);
+    assert_eq!(data(&rx), [], "the end waits for the next tick");
+    hub.sync_player_state(0);
+    assert_eq!(
+        data(&rx),
+        [(0, Value::Byte(0)), (6, Value::Id(Pose::Standing.id()))]
+    );
+}
+
 // Added after the old connected/Game pair: sender lifecycle controls only.
 #[test]
 fn self_pose_wire_lifecycle_preserves_existing_publishers() {
@@ -159,15 +205,10 @@ fn self_pose_wire_lifecycle_preserves_existing_publishers() {
             (14, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(None)),
         ]]
     );
+    // A glide's pose reaches the player too, as vanilla's server sends it.
     hub.guests[0].fall_flying = true;
     hub.sync_player_state(0);
-    assert!(
-        drain(&rx)
-            .0
-            .iter()
-            .all(|v| !v.iter().any(|(i, _, _)| *i == 6)),
-        "other normal poses stay outside this sender"
-    );
+    assert_eq!(drain(&rx).0, [flags(-128), pose(Pose::FallFlying)]);
     hub.guests[0].fall_flying = false;
     hub.guests[0].sneaking = true;
     hub.sync_player_state(0);

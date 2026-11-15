@@ -3640,12 +3640,7 @@ impl Hub {
         // ServerEntity.sendDirtyEntityData reaches the player itself too.
         // Keep the normal standing/crouching pose separate from the shared flags;
         // the existing sleep/wake publishers share this wire-state bookkeeping.
-        let pose = g.pose();
-        if matches!(
-            pose,
-            crate::pose::Pose::Standing | crate::pose::Pose::Crouching
-        ) && pose != g.sent_pose
-        {
+        if let Some(pose) = g.own_pose().filter(|p| *p != g.sent_pose) {
             g.sent_pose = pose;
             g.send(&C::SetEntityData(play::SetEntityData {
                 id: g.entity_id,
@@ -5196,7 +5191,7 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
 pub fn guest_body(g: &Guest) -> BodyFlags {
     let m = g.motion.as_deref();
     BodyFlags {
-        gliding: g.fall_flying,
+        gliding: g.fall_flying || g.glide_end_unsent,
         swimming: m.is_some_and(|m| m.swimming),
         crawling: m.is_some_and(|m| m.pose == crate::pose::Pose::Swimming && !m.swimming),
         crouching: m.is_some_and(|m| m.pose == crate::pose::Pose::Crouching),
