@@ -87,6 +87,47 @@ fn size_limit_text() -> String {
     horizon_client::java_text::double_to_string(MAX_SIZE)
 }
 
+/// Whose hand `LootCommand.getSourceHandItem` reads a `mainhand` or `offhand` tool from.
+#[derive(Debug, PartialEq)]
+enum HandSource {
+    /// A living entity: its hand (`LivingEntity.getItemBySlot`).
+    Holder(Target),
+    /// A source without an entity (a command block, a function run as the server):
+    /// `getEntityOrException`'s `permissions.requires.entity`.
+    NoEntity,
+    /// Any other entity: `commands.drop.no_held_items`.
+    CannotHold(Target),
+}
+
+/// `getSourceHandItem` for a command whose source is `source` (None: no source at all, the player in place's own
+/// command; Some(None): a source without an entity). `kind` is the type of a source kept as its saved data
+/// (`Target::Other`): the ones known not to be living entities hold nothing, and any other such kind is read as
+/// before, so no command that worked starts failing for a type Horizon doesn't simulate.
+fn hand_source(source: Option<Option<Target>>, kind: &str) -> HandSource {
+    let living = |t: Target| match t {
+        Target::Player
+        | Target::Guest(_)
+        | Target::Mob(_)
+        | Target::Stand(_)
+        | Target::Dragon(_) => true,
+        Target::Other(_) => !matches!(
+            kind,
+            "minecraft:marker"
+                | "minecraft:block_display"
+                | "minecraft:item_display"
+                | "minecraft:text_display"
+                | "minecraft:interaction"
+        ),
+        _ => false,
+    };
+    match source {
+        None => HandSource::Holder(Target::Player),
+        Some(None) => HandSource::NoEntity,
+        Some(Some(t)) if living(t) => HandSource::Holder(t),
+        Some(Some(t)) => HandSource::CannotHold(t),
+    }
+}
+
 impl Game<'_> {
     // ---- /forceload ----------------------------------------------------------
 
@@ -553,6 +594,8 @@ impl Game<'_> {
 
     // ---- /loot ---------------------------------------------------------------------------------
 
+    /// `LootCommand`'s tool for `mine` and `fish`: the item the command gives, the source's hand for `mainhand`
+    /// or `offhand` (`getSourceHandItem`), and none (`ItemStack.EMPTY`) when it names neither.
     fn tool_stack(&mut self, ctx: &Context) -> R<Option<ItemStack>> {
         if let Some(Arg::Item(p)) = ctx.get("tool") {
             let (damage, extra) = match p
@@ -571,14 +614,25 @@ impl Game<'_> {
                 extra,
             }));
         }
-        let entity = self
-            .command_source
-            .and_then(|s| s.entity)
-            .unwrap_or(Target::Player);
         let slot = if ctx.has("offhand") {
             "weapon.offhand"
-        } else {
+        } else if ctx.has("mainhand") {
             "weapon.mainhand"
+        } else {
+            return Ok(None);
+        };
+        let source = self.command_source.map(|s| s.entity);
+        let kind = match source {
+            Some(Some(t @ Target::Other(_))) => self.target_type(t),
+            _ => String::new(),
+        };
+        let entity = match hand_source(source, &kind) {
+            HandSource::Holder(t) => t,
+            HandSource::NoEntity => return Err(err("permissions.requires.entity", &[])),
+            HandSource::CannotHold(t) => {
+                let name = self.target_name(t).plain();
+                return Err(err("commands.drop.no_held_items", &[&name]));
+            }
         };
         Ok(self
             .slots_named(&Owner::Entity(entity), slot)
@@ -761,6 +815,8 @@ impl Game<'_> {
             _ => {
                 // loot mine
                 let p = self.block_pos_arg(ctx, "pos")?;
+                // getSourceHandItem runs before dropBlockLoot looks for the block's table.
+                let tool = self.tool_stack(ctx)?;
                 let state = self.world.block(p[0], p[1], p[2]);
                 let name = self.data_block_name(p);
                 let Some(table) =
@@ -768,7 +824,6 @@ impl Game<'_> {
                 else {
                     return Err(err("commands.drop.no_loot_table.block", &[&name]));
                 };
-                let tool = self.tool_stack(ctx)?;
                 // LootCommand.dropBlockLoot: optional THIS_ENTITY is the actual
                 // source entity, including non-player executors such as stands.
                 let executor_present = self.source_entity().is_some();
@@ -1016,6 +1071,57 @@ mod tests {
     fn the_too_big_message_names_the_limit_as_vanilla_prints_it() {
         assert_eq!(super::MAX_SIZE, 5.9999968E7);
         assert_eq!(super::size_limit_text(), "5.9999968E7");
+    }
+
+    /// `LootCommand.getSourceHandItem`: a living source's hand; `permissions.requires.entity` for a source
+    /// without an entity; `commands.drop.no_held_items` for any other entity. The player in place's own command
+    /// (no source) reads its own hand.
+    #[test]
+    fn only_a_living_source_has_a_hand_to_mine_or_fish_with() {
+        use super::{HandSource, Target, hand_source};
+        assert_eq!(hand_source(None, ""), HandSource::Holder(Target::Player));
+        assert_eq!(hand_source(Some(None), ""), HandSource::NoEntity);
+        for living in [
+            Target::Player,
+            Target::Guest(3),
+            Target::Mob(4),
+            Target::Stand(5),
+            Target::Dragon(6),
+        ] {
+            assert_eq!(
+                hand_source(Some(Some(living)), ""),
+                HandSource::Holder(living)
+            );
+        }
+        for thing in [
+            Target::Item(7),
+            Target::Frame(8),
+            Target::Cart(9),
+            Target::Boat(10),
+            Target::Projectile(11),
+            Target::Cushion(12),
+        ] {
+            assert_eq!(
+                hand_source(Some(Some(thing)), ""),
+                HandSource::CannotHold(thing)
+            );
+        }
+        let other = Target::Other(13);
+        for kind in [
+            "minecraft:marker",
+            "minecraft:text_display",
+            "minecraft:interaction",
+        ] {
+            assert_eq!(
+                hand_source(Some(Some(other)), kind),
+                HandSource::CannotHold(other)
+            );
+        }
+        // A type Horizon doesn't simulate and that isn't known to be lifeless keeps its hand read.
+        assert_eq!(
+            hand_source(Some(Some(other)), "example:golem"),
+            HandSource::Holder(other)
+        );
     }
 }
 
@@ -1790,5 +1896,137 @@ mod loot_location_shape_tests {
             "an unloaded counterpart fails, as Level.isLoaded does"
         );
         assert_eq!(chunks.len(), count, "no chunk is loaded as a side effect");
+    }
+}
+
+#[cfg(test)]
+mod loot_hand_tests {
+    use super::*;
+    use crate::game::{Audio, Options, Progress, Settings, load_resources};
+    use horizon_client::{chunk::Chunk, containers::BlockEntity};
+    use std::sync::Arc;
+
+    fn slot(game: &Game<'_>) -> Option<ItemStack> {
+        let Some(BlockEntity::Chest(items)) = game.world.block_entities.get(&(12, 200, 4)) else {
+            panic!("the chest the test placed");
+        };
+        items[0].clone()
+    }
+
+    /// Runs `command` and returns whether it worked and every message it printed, as JSON text.
+    fn run(game: &mut Game<'_>, command: &str) -> (bool, String) {
+        game.chat_capture = Some(Vec::new());
+        let ok = game.run_command(command);
+        let said = game.chat_capture.take().unwrap_or_default();
+        let said = said
+            .iter()
+            .map(|t| t.component().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (ok, said)
+    }
+
+    /// `LootCommand`: `mine <pos>` with no tool mines with an empty hand (`ItemStack.EMPTY`), whoever runs it;
+    /// `mainhand` reads the source's hand (`getSourceHandItem`); a source that is not a living entity gets
+    /// `commands.drop.no_held_items`, and one without an entity `permissions.requires.entity`.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    fn loot_mine_reads_a_hand_only_when_named_and_only_a_living_ones() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
+        );
+        let settings = Settings::default();
+        let loaded = load_resources(
+            root.clone(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            true,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&root),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.block_ticks
+            .add_empty_chunk(ChunkPos::new(0, 0))
+            .unwrap();
+        assert!(game.run_command("forceload add 0 0"));
+        assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
+        game.command_source = Some(crate::game::commands::execute::Source {
+            silent: false,
+            ..game.server_source()
+        });
+        assert!(game.run_command("setblock 12 200 4 chest strict"));
+        assert!(game.run_command("setblock 4 200 4 grass_block strict"));
+        assert!(
+            game.run_command("summon armor_stand 8.5 200 8.5 {UUID:[I;62,0,0,1],NoGravity:1b}")
+        );
+        assert!(game.run_command("summon marker 9.5 200 9.5 {UUID:[I;63,0,0,1]}"));
+        let stand = "execute as 0000003e-0000-0000-0000-000000000001 run ";
+        assert!(game.run_command(
+            "item replace entity 0000003e-0000-0000-0000-000000000001 weapon.mainhand with \
+             diamond_shovel[enchantments={silk_touch:1}]"
+        ));
+        let mine = "loot replace block 12 200 4 container.0 mine 4 200 4";
+        // The stand's silk touch shovel, named: the grass block itself.
+        assert!(run(&mut game, &format!("{stand}{mine} mainhand")).0);
+        assert_eq!(
+            slot(&game).map(|s| s.item.to_string()).as_deref(),
+            Some("minecraft:grass_block")
+        );
+        // No tool named: an empty hand, so dirt, though the stand holds the shovel.
+        assert!(run(&mut game, &format!("{stand}{mine}")).0);
+        assert_eq!(
+            slot(&game).map(|s| s.item.to_string()).as_deref(),
+            Some("minecraft:dirt")
+        );
+        // A marker holds nothing. The marker is made the command's source directly: run through
+        // `execute as`, the failed command prints nothing here, so its message could not be read.
+        let marker = game
+            .others
+            .iter()
+            .find(|o| o.kind == "minecraft:marker")
+            .unwrap()
+            .id;
+        let server = game.command_source;
+        game.command_source = server.map(|s| crate::game::commands::execute::Source {
+            entity: Some(Target::Other(marker)),
+            ..s
+        });
+        let (ok, said) = run(&mut game, &format!("{mine} mainhand"));
+        assert!(
+            !ok && said.contains("commands.drop.no_held_items"),
+            "{said}"
+        );
+        // The server's own source has no entity.
+        game.command_source = server;
+        let (ok, said) = run(&mut game, &format!("{mine} offhand"));
+        assert!(
+            !ok && said.contains("permissions.requires.entity"),
+            "{said}"
+        );
+        assert_eq!(
+            slot(&game).map(|s| s.item.to_string()).as_deref(),
+            Some("minecraft:dirt")
+        );
     }
 }
