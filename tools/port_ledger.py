@@ -749,7 +749,8 @@ def default_jars():
     lock = json.loads((ROOT / "research-lock.json").read_text()) if (ROOT / "research-lock.json").exists() else {}
     version = str((lock.get("minecraft") or {}).get("version") or lock.get("version") or lab.VERSION)
     home = Path.home()
-    candidates = sorted((ROOT / ".local" / "minecraft" / version).glob("*.jar")) + [
+    directory = ROOT / ".local" / "minecraft" / version
+    candidates = sorted((directory / "jars").glob("*.jar")) + sorted(directory.glob("*.jar")) + [
         home / "Library/Application Support/minecraft/versions" / version / f"{version}.jar",
         home / ".minecraft/versions" / version / f"{version}.jar",
         Path(os.environ.get("APPDATA", "")) / ".minecraft/versions" / version / f"{version}.jar",

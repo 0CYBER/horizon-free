@@ -29,6 +29,30 @@ def class_bytes(name: str, parent: str, fields: tuple[str, ...] = (), methods: t
 
 
 class PortLedgerJarOnlyTests(unittest.TestCase):
+    def test_default_build_inventories_the_lab_imported_jars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "research-lock.json").write_text(json.dumps({"minecraft": {"version": "fixture"}}),
+                                                    encoding="utf-8")
+            jars = root / ".local/minecraft/fixture/jars"
+            jars.mkdir(parents=True)
+            for filename, name, method in (("client.jar", "ClientOnly", "clientTick"),
+                                           ("server-game.jar", "ServerOnly", "serverTick")):
+                with zipfile.ZipFile(jars / filename, "w") as archive:
+                    archive.writestr(f"net/minecraft/test/{name}.class", class_bytes(
+                        f"net/minecraft/test/{name}", "java/lang/Object", methods=(method,)))
+            out = root / "output"
+            env = dict(os.environ, PORT_LEDGER_ROOT=str(root), PORT_LEDGER_OUT=str(out),
+                       HOME=str(root / "home"), APPDATA=str(root / "appdata"))
+            done = subprocess.run([sys.executable, str(SCRIPT), "build", "--jobs", "1"],
+                                  cwd=root, env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            ledger = json.loads((out / "ledger.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(ledger["methods"]), {
+                "net/minecraft/test/ClientOnly#clientTick",
+                "net/minecraft/test/ServerOnly#serverTick",
+            })
+
     def test_jar_only_and_partial_sources_preserve_field_and_stale_citations(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
