@@ -452,10 +452,13 @@ impl Render for Setup {
             self.scene.clone().into_any_element()
         } else {
             crate::sky::frost(&t.night, (viewport.width.into(), viewport.height.into()));
+            // The setup has no rail or top bar to keep particles off ([`crate::frame::keep_clear`]
+            // is the launcher's layout): they drift everywhere, as they did before areas were kept.
             let (sky, next) = self.sky.render(
                 &t.night,
                 (viewport.width.into(), viewport.height.into()),
                 window.scale_factor(),
+                crate::rain::Keep::default(),
                 window.is_window_active(),
                 Instant::now(),
             );
