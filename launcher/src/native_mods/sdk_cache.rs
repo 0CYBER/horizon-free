@@ -165,13 +165,15 @@ fn megabytes(bytes: u64) -> String {
 }
 
 /// A build as people read it: as the Versions page names its Nightly ("the Nov 13 update"),
-/// or its short commit when it has none.
+/// found from an installed version when the index has no name, else "your Horizon version"
+/// (an imported build or a snapshot), never a commit. Anything but a build id (a mod's manifest
+/// may say anything) is shown as it is, cut where a character ends.
 pub fn shown(commit: &str, nightly: Option<&str>) -> String {
-    // A commit may come from a mod's manifest: cut only where a character ends.
-    let short = commit.get(..7).unwrap_or(commit);
-    match nightly {
-        Some(name) => crate::nightly::update_name(name).unwrap_or_else(|| name.to_owned()),
-        None => short.to_owned(),
+    let name = |name: &str| crate::nightly::update_name(name).unwrap_or_else(|| name.to_owned());
+    match nightly.map(str::to_owned).or_else(|| nightly_of(commit)) {
+        Some(nightly) => name(&nightly),
+        None if super::is_revision(commit) => crate::i18n::tr("your Horizon version").to_string(),
+        None => commit.get(..7).unwrap_or(commit).to_owned(),
     }
 }
 
@@ -191,16 +193,22 @@ fn nightly_of(commit: &str) -> Option<String> {
         })
 }
 
-/// Build `commit` as players read it, for a mod's fit: as the Versions page names it when it is
-/// known here (a kept index, or an installed version), else "another Horizon version", never a
-/// commit. `commit` may come from a mod's manifest: anything but a build id is never looked up.
+/// Build `commit`'s name as the Versions page gives it, when it is known here (a kept index, or
+/// an installed version). `commit` may come from a mod's manifest: anything but a build id is
+/// never looked up.
+pub fn name_of(commit: &str) -> Option<String> {
+    nightly_of(commit).map(|name| shown(commit, Some(&name)))
+}
+
+/// Build `commit` as players read it, for a mod's fit: [`name_of`], else "another Horizon
+/// version", never a commit.
 pub fn known_name(commit: &str) -> String {
-    match nightly_of(commit) {
-        Some(name) => shown(commit, Some(&name)),
+    match name_of(commit) {
+        Some(name) => name,
         None if super::is_revision(commit) => {
             crate::i18n::tr("another Horizon version").to_string()
         }
-        None => commit.to_owned(),
+        None => commit.get(..7).unwrap_or(commit).to_owned(),
     }
 }
 

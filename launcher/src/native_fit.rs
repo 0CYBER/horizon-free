@@ -39,14 +39,13 @@ pub fn describe(fit: &Fit, plays: &Plays) -> String {
         Fit::Fits => tr("Made for the Horizon you play").to_owned(),
         Fit::OtherRevision { pin } => {
             let pin = native_mods::sdk_cache::known_name(pin);
-            let yours = native_mods::sdk_cache::known_name(&plays.revision);
             // A version not known here has no name to give: say only that it differs.
-            match yours == tr("another Horizon version") {
-                true => trf(
+            match native_mods::sdk_cache::name_of(&plays.revision) {
+                None => trf(
                     "Made for {pin}, not the Horizon you play. Building checks whether it fits your game: it does when nothing it uses changed.",
                     &[("pin", &pin)],
                 ),
-                false => trf(
+                Some(yours) => trf(
                     "Made for {pin}; you play {yours}. Building checks whether it fits your game: it does when nothing it uses changed.",
                     &[("pin", &pin), ("yours", &yours)],
                 ),

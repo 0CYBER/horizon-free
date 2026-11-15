@@ -223,7 +223,7 @@ fn every_message_names_the_mod_the_builds_and_the_worlds() {
     };
     assert_eq!(
         line("Greeter", &fits, build),
-        "Made for another Horizon version. Fits this game: nightly-2026-11-13 (afe471c)."
+        "Made for another Horizon version. Fits this game too."
     );
     assert!(fits.usable() && Verdict::MadeFor.usable() && !misfit.usable());
     assert_eq!(

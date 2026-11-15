@@ -195,10 +195,10 @@ pub fn changes(misfits: &[Misfit]) -> String {
 pub fn line(name: &str, verdict: &Verdict, build: &str) -> String {
     let made = |commit: &str| sdk_cache::known_name(commit);
     match verdict {
-        Verdict::MadeFor => trf("Made for this game ({build}).", &[("build", build)]),
+        Verdict::MadeFor => tr("Made for this game.").to_string(),
         Verdict::Fits { made_for } => trf(
-            "Made for {made_for}. Fits this game: {build}.",
-            &[("made_for", &made(made_for)), ("build", build)],
+            "Made for {made_for}. Fits this game too.",
+            &[("made_for", &made(made_for))],
         ),
         Verdict::Exact { made_for, why } if *why == "internals" => trf(
             "Made for {made_for} only: it uses the game's internals, so it works on exactly that build.",
