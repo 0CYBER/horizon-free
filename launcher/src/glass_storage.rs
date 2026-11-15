@@ -206,10 +206,17 @@ impl Launcher {
                         permission back; Horizon asks again before the next build.",
                     )
                     .to_string(),
-                    div().child(
-                        button("storage-revoke", "Turn off", Kind::Secondary, &t)
+                    div().child(match self.storage_counting {
+                        // Counting: the button waits, so a second press starts nothing.
+                        Some(_) => disabled(button(
+                            "storage-revoke",
+                            "Counting your native mods…",
+                            Kind::Secondary,
+                            &t,
+                        )),
+                        None => button("storage-revoke", "Turn off", Kind::Secondary, &t)
                             .on_click(cx.listener(|this, _, _, cx| this.storage_count_native(cx))),
-                    ),
+                    }),
                 ),
                 Some((mods, instances_)) => (
                     match (mods, instances_) {
@@ -244,17 +251,33 @@ impl Launcher {
                             ),
                         )
                         .child(
-                            button("storage-revoke-cancel", "Keep them", Kind::Primary, &t)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.storage_revoke = None;
-                                    cx.notify();
-                                })),
+                            button(
+                                "storage-revoke-cancel",
+                                // With nothing switched on, what stays is the permission.
+                                if mods == 0 {
+                                    "Keep the permission"
+                                } else {
+                                    "Keep them"
+                                },
+                                Kind::Primary,
+                                &t,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.storage_revoke = None;
+                                cx.notify();
+                            })),
                         ),
                 ),
             };
+            // A Turn off that didn't finish says so here, where it was pressed.
+            let detail = div().child(detail).children(
+                self.storage_revoke_error
+                    .clone()
+                    .map(|error| div().text_color(ui::danger()).child(error)),
+            );
             card = card.child(ui::setting_row(
                 tr("Native mods"),
-                Some(div().child(detail).into_any_element()),
+                Some(detail.into_any_element()),
                 Some(actions.into_any_element()),
             ));
         } else {
@@ -265,6 +288,11 @@ impl Launcher {
                         .child(tr(
                             "Not allowed: Horizon asks before it builds the first one.",
                         ))
+                        .children(
+                            self.storage_revoke_error
+                                .clone()
+                                .map(|error| div().text_color(ui::danger()).child(error)),
+                        )
                         .into_any_element(),
                 ),
                 None,
@@ -282,6 +310,9 @@ impl Launcher {
     /// Counts the switched-on native mods and the instances holding them, on a worker, then
     /// asks before Turn off.
     fn storage_count_native(&mut self, cx: &mut Context<Self>) {
+        let visit = self.storage_visit;
+        self.storage_counting = Some(visit);
+        self.storage_revoke_error = None;
         let task = cx.background_executor().spawn(async move {
             let counts: Vec<usize> = instances::list()
                 .iter()
@@ -293,11 +324,16 @@ impl Launcher {
         cx.spawn(async move |this, cx| {
             let counted = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.storage_revoke = Some(counted);
-                cx.notify();
+                // A count from a visit the player has left asks nothing.
+                if this.storage_counting == Some(visit) {
+                    this.storage_counting = None;
+                    this.storage_revoke = Some(counted);
+                    cx.notify();
+                }
             });
         })
         .detach();
+        cx.notify();
     }
 
     /// Takes the permission back (saved first: nothing changes if it can't be), then switches
@@ -306,7 +342,7 @@ impl Launcher {
     fn turn_off_native_mods(&mut self, cx: &mut Context<Self>) {
         self.storage_revoke = None;
         if let Err(error) = self.settings.revoke_native_mods() {
-            self.storage_error = Some(error);
+            self.storage_revoke_error = Some(error);
             cx.notify();
             return;
         }
@@ -327,7 +363,12 @@ impl Launcher {
         cx.spawn(async move |this, cx| {
             let failure = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.storage_error = failure;
+                this.storage_revoke_error = failure.map(|error| {
+                    trf(
+                        "The permission is off, but a native mod couldn't be switched off: {error}",
+                        &[("error", &error)],
+                    )
+                });
                 this.instance_mods_changed();
                 cx.notify();
             });
