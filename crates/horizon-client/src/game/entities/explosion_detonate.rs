@@ -584,7 +584,10 @@ mod tests {
                 }
             }
         }
-        for listened in [false, true] {
+        // The removed target is a boat, which leaves through the removal
+        // journal, or a mob, which stays in its storage flagged removed. A
+        // mob is walked before the boats, so then its remover is a mob too.
+        for (listened, mob) in [(false, false), (true, false), (false, true), (true, true)] {
             let heard = Arc::new(Mutex::new(Vec::new()));
             let mut mods = vec![mod_api::ModEntry::new(
                 "remove",
@@ -596,6 +599,10 @@ mod tests {
             mod_platform::testing::with_mods(mods.into(), || {
                 with_game(|game| {
                     for (id, x) in [(970, -1.0), (971, 0.0), (972, 1.0)] {
+                        if mob && id != 972 {
+                            zombie(game, id, x);
+                            continue;
+                        }
                         game.boats.push(crate::game::boats::Boat::new(
                             id,
                             "oak".into(),
@@ -609,12 +616,15 @@ mod tests {
                             .iter()
                             .all(|boat| ![970, 971, 972].contains(&boat.id))
                     );
+                    if let Some(zombie) = game.mobs.iter().find(|m| m.id == 971) {
+                        assert_eq!(zombie.health, 20.0, "the discarded zombie is not hurt");
+                    }
                 })
             });
             assert_eq!(
                 *heard.lock().unwrap(),
                 [970, 972],
-                "subscription: {listened}"
+                "subscription: {listened}, mob: {mob}"
             );
         }
     }
