@@ -15,6 +15,8 @@ use super::Frame;
 
 pub(super) const INTERMEDIATE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+#[path = "native_kept.rs"]
+mod kept;
 /// The scene the post passes of a pack with `[ray_tracing]` trace.
 #[path = "native_trace.rs"]
 pub(super) mod trace;
@@ -1116,6 +1118,13 @@ impl NativePost {
             .extend((0..targets.len() as u32).map(|j| {
                 texture_entry(horizon_shader_api::stages::POST_TARGET_BINDING + j, float)
             }));
+        let resources = &manifest.kept.resources;
+        if let Some(why) = (!resources.is_empty())
+            .then(|| kept::refusal(&device.limits(), manifest, &stages, &entries))
+            .flatten()
+        {
+            return Err(why);
+        }
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack post"),
             entries: &entries,

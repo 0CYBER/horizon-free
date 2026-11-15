@@ -151,19 +151,17 @@ fn post_pbr_entries() -> [wgpu::BindGroupLayoutEntry; 2] {
     })
 }
 
-/// What `limits` lacks for a fragment stage that reads the group `group` and the other groups'
-/// entries `others`, if anything.
-fn over_limits(
+/// What `limits` lacks for the shader stage `stage` that reads the group `group` and the other
+/// groups' entries `others`, if anything.
+pub(super) fn over_limits(
     group: &[wgpu::BindGroupLayoutEntry],
     others: &[wgpu::BindGroupLayoutEntry],
     limits: &wgpu::Limits,
+    stage: wgpu::ShaderStages,
 ) -> Option<String> {
-    let fragment = || {
-        (group.iter().chain(others)).filter(|e| e.visibility.contains(wgpu::ShaderStages::FRAGMENT))
-    };
-    let count = |wanted: fn(&wgpu::BindingType) -> bool| {
-        fragment().filter(|e| wanted(&e.ty)).count() as u32
-    };
+    let seen = || (group.iter().chain(others)).filter(|e| e.visibility.contains(stage));
+    let count =
+        |wanted: fn(&wgpu::BindingType) -> bool| seen().filter(|e| wanted(&e.ty)).count() as u32;
     use wgpu::{BindingType::Buffer, BufferBindingType as Kind};
     let needs = [
         (
@@ -198,8 +196,13 @@ fn over_limits(
             limits.max_uniform_buffers_per_shader_stage,
         ),
         (
+            "storage textures",
+            count(|t| matches!(t, wgpu::BindingType::StorageTexture { .. })),
+            limits.max_storage_textures_per_shader_stage,
+        ),
+        (
             "acceleration structures",
-            1,
+            count(|t| matches!(t, wgpu::BindingType::AccelerationStructure { .. })),
             limits.max_acceleration_structures_per_shader_stage,
         ),
         (
@@ -233,7 +236,12 @@ fn with_scene<T>(
     let refused = if shape.sprites.len() < RAY_SPRITE_ARRAYS as usize {
         Some("the terrain's sprite arrays aren't there".to_owned())
     } else {
-        over_limits(&entries, others, &device.limits())
+        over_limits(
+            &entries,
+            others,
+            &device.limits(),
+            wgpu::ShaderStages::FRAGMENT,
+        )
     };
     if let Some(why) = refused {
         log::warn!("Horizon renderer: the shader pack's rays miss everything: {why}");
@@ -480,6 +488,7 @@ impl NativeFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const FRAGMENT: wgpu::ShaderStages = wgpu::ShaderStages::FRAGMENT;
 
     #[test]
     fn a_sprite_layer_s_words_are_its_material_id_and_its_tags() {
@@ -510,22 +519,60 @@ mod tests {
             max_bindings_per_bind_group: 60,
             ..Default::default()
         };
-        assert_eq!(over_limits(&entries, &[], &fits), None);
+        assert_eq!(over_limits(&entries, &[], &fits, FRAGMENT), None);
         // OpenGL's 16 sampled textures hold the post stage's own 12 or so, not eight more.
         let few = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 8,
             ..fits.clone()
         };
-        let why = over_limits(&entries, &[], &few).unwrap();
+        let why = over_limits(&entries, &[], &few, FRAGMENT).unwrap();
         assert_eq!(why, "9 sampled textures, the device takes 8");
         let none = wgpu::Limits {
             max_acceleration_structures_per_shader_stage: 0,
             ..fits
         };
         assert!(
-            over_limits(&entries, &[], &none)
+            over_limits(&entries, &[], &none, FRAGMENT)
                 .unwrap()
                 .contains("acceleration structures")
+        );
+    }
+
+    /// Each stage counts what it sees: a compute pass's storage textures, not the fragment
+    /// stage's textures, and no acceleration structure without the scene.
+    #[test]
+    fn each_stage_counts_its_own_bindings() {
+        let (compute, both) = (
+            wgpu::ShaderStages::COMPUTE,
+            FRAGMENT | wgpu::ShaderStages::COMPUTE,
+        );
+        let at = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty,
+            count: None,
+        };
+        let storage = wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::R32Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        };
+        let entries = [
+            at(64, compute, storage),
+            at(66, compute, storage),
+            at(1, both, post_pbr_entries()[0].ty),
+        ];
+        let limits = wgpu::Limits {
+            max_storage_textures_per_shader_stage: 1,
+            max_sampled_textures_per_shader_stage: 1,
+            max_acceleration_structures_per_shader_stage: 0,
+            ..Default::default()
+        };
+        assert_eq!(over_limits(&entries, &[], &limits, FRAGMENT), None);
+        let why = over_limits(&entries, &[], &limits, compute);
+        assert_eq!(
+            why.as_deref(),
+            Some("2 storage textures, the device takes 1")
         );
     }
 
@@ -543,12 +590,12 @@ mod tests {
             max_bindings_per_bind_group: 60,
             ..Default::default()
         };
-        assert_eq!(over_limits(&entries, &[], &fits), None);
+        assert_eq!(over_limits(&entries, &[], &fits, FRAGMENT), None);
         let few = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 9,
             ..fits
         };
-        let why = over_limits(&entries, &[], &few).unwrap();
+        let why = over_limits(&entries, &[], &few, FRAGMENT).unwrap();
         assert_eq!(why, "10 sampled textures, the device takes 9");
     }
 
@@ -582,21 +629,21 @@ mod tests {
             max_bindings_per_bind_group: 60,
             ..Default::default()
         };
-        assert_eq!(over_limits(&entries, &terrain, &fits), None);
+        assert_eq!(over_limits(&entries, &terrain, &fits, FRAGMENT), None);
         let few = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 17,
             ..fits.clone()
         };
-        let why = over_limits(&entries, &terrain, &few).unwrap();
+        let why = over_limits(&entries, &terrain, &few, FRAGMENT).unwrap();
         assert_eq!(why, "18 sampled textures, the device takes 17");
         // The scene's group without the terrain's would have fitted.
-        assert_eq!(over_limits(&entries, &[], &few), None);
+        assert_eq!(over_limits(&entries, &[], &few, FRAGMENT), None);
         let one = wgpu::Limits {
             max_uniform_buffers_per_shader_stage: 1,
             ..fits
         };
         assert!(
-            over_limits(&entries, &terrain, &one)
+            over_limits(&entries, &terrain, &one, FRAGMENT)
                 .unwrap()
                 .contains("2 uniform buffers")
         );
