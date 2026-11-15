@@ -856,11 +856,10 @@ pub(super) fn content_overlay(
             return Err(e.into());
         }
         if m.side == horizon_mod_package::manifest::Side::Server
-            && let Some(hook) = mod_api::__private::client_hook(&m.id)
+            && let Some(requirement) = mod_api::__private::client_requirement(&m.id)
         {
             return Err(format!(
-                "{}: a side = \"server\" mod listens to the client hook {hook}; \
-                 declare side = \"both\"",
+                "{}: a side = \"server\" mod {requirement}; declare side = \"both\"",
                 m.id
             )
             .into());
@@ -3150,34 +3149,83 @@ mod concurrent_content_tests {
 
 #[cfg(test)]
 mod server_side_tests {
-    use mod_api::{AddClientReloadListenersEvent, ClientHost, Hooks};
+    use mod_api::*;
 
-    #[test]
-    fn a_client_hook_is_named_for_its_mod_only() {
-        struct Reloads;
-        #[mod_api::__subscriptions]
-        impl Hooks for Reloads {
-            fn add_client_reload_listeners(
-                &self,
-                _: &dyn ClientHost,
-                _: &mut AddClientReloadListenersEvent<'_>,
-            ) {
-            }
+    struct Reloads;
+    #[mod_api::__subscriptions]
+    impl Hooks for Reloads {
+        fn add_client_reload_listeners(
+            &self,
+            _: &dyn ClientHost,
+            _: &mut AddClientReloadListenersEvent<'_>,
+        ) {
         }
-        struct Quiet;
-        #[mod_api::__subscriptions]
-        impl Hooks for Quiet {}
-        let mods: mod_api::Mods = vec![
-            mod_api::ModEntry::new("reloads", Box::new(Reloads)),
-            mod_api::ModEntry::new("quiet", Box::new(Quiet)),
+    }
+    struct Hider;
+    #[mod_api::horizon_part]
+    impl BlockPart for Hider {
+        fn block_render_visibility(&self, _: &dyn ClientHost, _: &mut BlockRenderVisibilityEvent) {}
+    }
+    struct HidesLogs;
+    #[mod_api::__subscriptions]
+    impl Hooks for HidesLogs {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.block_part_tag("minecraft:logs", Hider);
+        }
+    }
+    struct Pings;
+    #[mod_api::__subscriptions]
+    impl Hooks for Pings {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            let mut payloads = r.payload_handlers();
+            let mut required = payloads.registrar("1");
+            required.play_to_client(PayloadId("pings:ping".into()), None);
+            required.play_to_client(PayloadId("pings:pong".into()), None);
+            required
+                .optional()
+                .play_to_client(PayloadId("pings:hint".into()), None);
+        }
+    }
+    struct Quiet;
+    #[mod_api::__subscriptions]
+    impl Hooks for Quiet {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.payload_handlers()
+                .registrar("1")
+                .optional()
+                .play_to_client(PayloadId("quiet:hint".into()), None);
+        }
+    }
+
+    /// What a joining client must have is named for its own mod only: a client hook, a part
+    /// listening to one, the first required clientbound payload. An optional payload is not.
+    #[test]
+    fn what_a_client_must_have_is_named_for_its_mod_only() {
+        let mods: Mods = vec![
+            ModEntry::new("reloads", Box::new(Reloads)),
+            ModEntry::new("hides_logs", Box::new(HidesLogs)),
+            ModEntry::new("pings", Box::new(Pings)),
+            ModEntry::new("quiet", Box::new(Quiet)),
         ]
         .into();
+        mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
         mod_platform::testing::with_mods(mods, || {
             assert_eq!(
-                mod_api::__private::client_hook("reloads"),
-                Some("add_client_reload_listeners")
+                mod_api::__private::client_requirement("reloads").unwrap(),
+                "listens to the client hook add_client_reload_listeners"
             );
-            assert_eq!(mod_api::__private::client_hook("quiet"), None);
+            assert_eq!(
+                mod_api::__private::client_requirement("hides_logs").unwrap(),
+                format!(
+                    "attaches the part {}, which listens to the client hook block_render_visibility",
+                    std::any::type_name::<Hider>()
+                )
+            );
+            assert_eq!(
+                mod_api::__private::client_requirement("pings").unwrap(),
+                "sends the required payload pings:ping to clients"
+            );
+            assert_eq!(mod_api::__private::client_requirement("quiet"), None);
         });
     }
 }
