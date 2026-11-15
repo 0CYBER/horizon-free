@@ -373,6 +373,13 @@ def prepare(game):
                  '{Facing:2b,Item:{id:"minecraft:diamond",count:1}}')
     game.command(f'summon minecraft:arrow {EX + 2.0} {Y + 1.5} {EZ - 1.0} {{NoGravity:1b}}')
     game.command(f'summon minecraft:end_crystal {EX - 4.5} {Y} {EZ + 2.5} {{ShowBottom:0b}}')
+    # 🤖 Agent: The water mirror's plane is scanned only when the camera enters another 8-block cell: its other
+    # trigger, the game time, stands still in a frozen world (Game::water_plane). Until then it is what the last
+    # scan found, the sea at spawn or nothing, depending on which frames came before the chunks. Stepping onto the
+    # platform's edge, out of the viewpoints' cell, once the pool is built and loaded has it found there, and the
+    # first shot steps back.
+    game.command(f'tp @s {X + 0.5} {Y} {Z + 7.5}')
+    game.settle()
 
 
 def prepare_end(game):
