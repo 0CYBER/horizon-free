@@ -4907,10 +4907,9 @@ impl Hub {
             .set_dimension(self.config.levels.get(dimension));
     }
 
-    /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
-    /// names (`set_dimension`): ClientboundRespawnPacket keeping all data,
-    /// then vanilla's packet order. Nothing tracked in the old level is
-    /// removed one by one: the client drops its whole level.
+    /// ServerPlayer.teleport(TeleportTransition) into the level the hub now names
+    /// (`set_dimension`): ClientboundRespawnPacket keeping all data, then vanilla's packet order.
+    /// Nothing tracked in the old level is removed one by one: the client drops its whole level.
     ///
     /// Through a `portal`, vanilla finds the exit (an End platform, a Nether
     /// portal, a spawn column) before the teleport; here it is found once
@@ -4929,6 +4928,7 @@ impl Hub {
     ) {
         let info = self.spawn_info(i, portal_cooldown, ctx.sea_level);
         self.close_container_for(i);
+        self.before_travel(i);
         let left = self.guests[i].dimension.clone();
         self.guests.update(i, |g| {
             // Out of the old level with its chunks (ChunkMap.removeEntity).
@@ -4951,13 +4951,13 @@ impl Hub {
                 // ClientboundRespawnPacket.KEEP_ALL_DATA.
                 keep: 3,
             }));
-            g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
-                difficulty: ctx.difficulty,
-                locked: ctx.difficulty_locked,
-            }));
         });
         // Its chunks, queues and entities left behind, or kept as a viewed level (#3716).
         self.leave_level(i, &left);
+        self.guests[i].send(&C::ChangeDifficulty(play::ChangeDifficulty {
+            difficulty: ctx.difficulty,
+            locked: ctx.difficulty_locked,
+        }));
         self.send_permission_level(i);
         if portal {
             // A teleport still pending from the old level is void: its late
@@ -5536,7 +5536,7 @@ mod tests {
             max: 0,
         };
         hub.rule_registry = Arc::new(
-            crate::gamerules::RuleRegistry::with_bool_rules(&["example:machines".into()], &[rule])
+            crate::gamerules::RuleRegistry::with_mod_rules(&["example:machines".into()], &[rule])
                 .unwrap(),
         );
         hub.guests.update(0, |guest| guest.permission = 2);

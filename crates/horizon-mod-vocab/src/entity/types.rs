@@ -1454,3 +1454,20 @@ pub struct AttributeTooltip {
 #[cfg(test)]
 #[path = "entity_type_key_tests.rs"]
 mod entity_type_key_tests;
+
+/// Why a move-control wish was refused. The previous wish stays unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum WantedPositionError {
+    /// The host has no game backend (for example, a mod test double).
+    Unavailable,
+    /// A coordinate is NaN or infinite.
+    NonFinitePosition,
+    /// The speed is NaN or infinite. Finite negative speeds are accepted.
+    NonFiniteSpeed,
+}
+impl NoBackend for WantedPositionError {
+    fn no_backend() -> Self {
+        Self::Unavailable
+    }
+}

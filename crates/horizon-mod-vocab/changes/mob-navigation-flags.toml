@@ -1,0 +1,2 @@
+ids = ["handle:MobRef::can_open_doors", "handle:MobRef::can_pass_doors", "handle:MobRef::can_float", "handle:MobRef::set_can_open_doors", "handle:MobRef::set_can_pass_doors", "handle:MobRef::set_can_float"]
+why = "Add three navigation flag reads and writes with required backend operations; setters preserve the current path."

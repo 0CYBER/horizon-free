@@ -18,19 +18,45 @@
 //! | 1 | Viewed levels, stages 9a–9d: channel and play payloads below | #3716 |
 //! | 2 ([`REVISION_2`]) | Switch into a viewed level on Respawn (keep 3), retaining the level left as viewed ([`Answer::switches`]) | #4004 |
 //! | 3 ([`REVISION_3`]) | Viewed levels' sounds ([`SOUNDS`], [`Answer::sounds`]) | #3983 |
+//! | 4 ([`REVISION_4`]) | A level is named by a slot and the epoch of its `open` ([`Level::Bound`], [`Answer::bindings`]), so a level opened after Login can be viewed; `open` carries the server's column cap; `swap` | #4152, #3894 |
 //!
-//! Pending acts (#3982) need revision 4, not revision 2 or 3. A new message kind is
+//! Pending acts (#3982) take the next free revision when they land. A new message kind is
 //! accepted only at its own revision or later; its decoder must land before any sender enables it.
 //!
 //! **Play** (clientbound only): the payload after the channel is a kind byte, then:
 //!
 //! | Kind | Bytes | Meaning |
 //! |---|---|---|
-//! | 0 `open` | VarInt level, `SpawnInfo` (Respawn's codec) | The client makes a world for the level. |
-//! | 1 `run` | VarInt level, then one or more entries: VarInt length, then one play clientbound packet as `Clientbound::encode` writes it | Packets of that level, in order. |
-//! | 2 `close` | VarInt level | Every chunk of the level was forgotten: the client drops the world. |
+//! | 0 `open` | level, from revision 4 a VarInt column cap, then `SpawnInfo` (Respawn's codec) | The client makes a world for the level. |
+//! | 1 `run` | level, then one or more entries: VarInt length, then one play clientbound packet as `Clientbound::encode` writes it | Packets of that level, in order. |
+//! | 2 `close` | level | Every chunk of the level was forgotten: the client drops the world. |
+//! | 3 `swap` | level (revision 4 only) | Right after a travel's Respawn: the level left is bound there. |
 //!
-//! The level is its index in the Login packet's `levels` list, never the player's own. Only the
+//! **The column cap** (revision 4, #3894) is the most columns the server sends of that level to
+//! that client: its per-player `Loaded` cap. The client refuses a column past it, and an `open`
+//! whose cap passes [`MAX_COLUMNS`], its own ceiling, which a server's setting never passes.
+//! Before revision 4 the cap is [`LEGACY_COLUMNS`], fixed.
+//!
+//! **The level** ([`Level`]) is never the player's own. Before revision 4 it is one VarInt, the
+//! level's index in the Login packet's `levels` list, so a level opened after Login (a runtime
+//! level) cannot be named and is never sent. From revision 4 it is two VarInts, a slot and an
+//! epoch, both nonnegative:
+//! - The slot is below the levels the client answered it can view. An `open` binds it to the level
+//!   its `SpawnInfo` names, with the `open`'s epoch, until a `close` of that binding releases it.
+//!   A second `open` of a bound slot binds it afresh.
+//! - The epoch is one counter per connection, from 0, one more for each `open` and each travel
+//!   swap below. It never wraps: a server whose counter is spent opens nothing more on that
+//!   connection.
+//! - The client routes a `run` or `close` of a slot bound with that epoch, drops one whose epoch is
+//!   no newer than the latest it was sent but is not the slot's (a packet of a level the slot no
+//!   longer holds), and closes the connection on one of an epoch newer than any it was sent.
+//! - On a travel into a viewed level (revision 2), the server sends `swap` right after the
+//!   Respawn: the slot of the level entered, now free, and the next epoch, for the level left. A
+//!   client that swapped binds the level left there; one that did not refuses the `swap` and
+//!   closes the connection, so the two sides never disagree in silence. With the counter spent,
+//!   the server closes the view of the level entered before the travel, which then swaps nothing.
+//!
+//! Only the
 //! [`LEVEL_SCOPED`] kinds and, from revision 3, the [`SOUNDS`] may be wrapped, and a run never
 //! mixes levels. A serverbound play payload on the channel is a protocol error
 //! (`custom_payload`'s codec refuses it).
@@ -47,8 +73,29 @@ pub const CHANNEL: &str = "horizon:levels";
 pub const REVISION_2: u8 = 2;
 /// Revision 3 of the exchange (#3983): see the module's list of revisions.
 pub const REVISION_3: u8 = 3;
+/// Revision 4 of the exchange (#4152): see the module's list of revisions.
+pub const REVISION_4: u8 = 4;
 /// The capability exchange's revision this build asks and answers.
-pub const REVISION: u8 = REVISION_3;
+pub const REVISION: u8 = REVISION_4;
+
+/// What names a viewed level in a play payload (the module's table).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Level {
+    /// Before [`REVISION_4`]: the level's index in the Login packet's `levels`.
+    Index(i32),
+    /// From [`REVISION_4`]: a slot and the epoch of the `open` that bound it.
+    Bound { slot: i32, epoch: i32 },
+}
+
+impl Level {
+    /// The number the client keeps the level's world under: its index, or its slot.
+    pub fn number(self) -> i32 {
+        match self {
+            Self::Index(index) => index,
+            Self::Bound { slot, .. } => slot,
+        }
+    }
+}
 /// The oldest revision a server serves.
 pub const OLDEST_REVISION: u8 = 1;
 
@@ -57,6 +104,7 @@ const ANSWER: u8 = 1;
 const OPEN: u8 = 0;
 const RUN: u8 = 1;
 const CLOSE: u8 = 2;
+const SWAP: u8 = 3;
 
 /// The play clientbound packets a `run` may carry: the ones about one level's chunks, blocks,
 /// time and weather, and its entities. Two are narrowed further by their fields: `GameEvent` only
@@ -110,6 +158,16 @@ const WEATHER_EVENTS: [u8; 4] = [1, 2, 7, 8];
 /// limit of this revision, so that a server cannot fill a client's memory through one level.
 pub const MAX_ENTITIES: usize = 8192;
 
+/// The most columns a client keeps of one viewed level from revision 4, whatever cap its `open`
+/// says: the loaded square of one area of the largest radius, (2 × 32 + 3)². A server's
+/// per-player `Loaded` cap is clamped to it, so a server never closes its clients' connections
+/// by raising its setting.
+pub const MAX_COLUMNS: u32 = 4489;
+
+/// The column cap of a viewed level before revision 4: fixed, as the client of those revisions
+/// keeps no more.
+pub const LEGACY_COLUMNS: u32 = 2048;
+
 /// Why a `horizon:levels` payload closes the connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewedLevelsError {
@@ -130,6 +188,11 @@ pub enum ViewedLevelsError {
     UnaskedAnswer,
     /// A second answer in one configuration phase.
     SecondAnswer,
+    /// From revision 4, a negative slot, epoch or column cap.
+    Negative,
+    /// An `open` whose `SpawnInfo` does not read: cut short, or a dimension that is not a level
+    /// id. The reason does not show the server's text.
+    BadOpen,
 }
 
 impl std::fmt::Display for ViewedLevelsError {
@@ -146,6 +209,8 @@ impl std::fmt::Display for ViewedLevelsError {
             Self::LeftOver => f.write_str("bytes left over"),
             Self::UnaskedAnswer => f.write_str("an answer the server did not ask for"),
             Self::SecondAnswer => f.write_str("a second answer"),
+            Self::Negative => f.write_str("a negative slot, epoch or column cap"),
+            Self::BadOpen => f.write_str("an open whose level does not read"),
         }
     }
 }
@@ -197,6 +262,12 @@ impl Answer {
     pub fn sounds(self) -> bool {
         self.revision >= REVISION_3
     }
+    /// Whether the client names a viewed level by a slot and an epoch ([`Level::Bound`],
+    /// [`REVISION_4`]), so that a level opened after its Login can be viewed; before it, by its
+    /// Login index.
+    pub fn bindings(self) -> bool {
+        self.revision >= REVISION_4
+    }
 }
 
 /// Reads a client's answer. An answer of a revision outside [`OLDEST_REVISION`] to [`REVISION`]
@@ -219,16 +290,23 @@ pub fn read_answer(data: &[u8]) -> Result<Answer, ViewedLevelsError> {
 /// A play payload, read.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message<'a> {
-    /// The client makes a world for `level`.
-    Open { level: i32, spawn: SpawnInfo },
+    /// The client makes a world for `level`, of at most `columns` columns: from revision 4 the
+    /// server's cap, before it [`LEGACY_COLUMNS`].
+    Open {
+        level: Level,
+        columns: u32,
+        spawn: SpawnInfo,
+    },
     /// Packets of `level`, in order: each its play clientbound id and the bytes after it, for
     /// `play::Clientbound::decode`. Every one is level-scoped and read exactly by its codec.
     Run {
-        level: i32,
+        level: Level,
         packets: Vec<(i32, &'a [u8])>,
     },
     /// Every chunk of `level` was forgotten: the client drops the world.
-    Close { level: i32 },
+    Close { level: Level },
+    /// From revision 4, right after a travel's Respawn: the level left is bound to `level`.
+    Swap { level: Level },
 }
 
 impl<'a> Message<'a> {
@@ -254,11 +332,25 @@ impl<'a> Message<'a> {
     ) -> Result<Self, ViewedLevelsError> {
         let mut r = Reader::new(data);
         let kind = r.u8()?;
-        let level = r.varint()?;
+        let level = if revision >= REVISION_4 {
+            let (slot, epoch) = (r.varint()?, r.varint()?);
+            if slot < 0 || epoch < 0 {
+                return Err(ViewedLevelsError::Negative);
+            }
+            Level::Bound { slot, epoch }
+        } else {
+            Level::Index(r.varint()?)
+        };
         let message = match kind {
             OPEN => Message::Open {
                 level,
-                spawn: <SpawnInfo as Codec<SpawnInfo>>::read(&mut r)?,
+                columns: if revision >= REVISION_4 {
+                    u32::try_from(r.varint()?).map_err(|_| ViewedLevelsError::Negative)?
+                } else {
+                    LEGACY_COLUMNS
+                },
+                spawn: <SpawnInfo as Codec<SpawnInfo>>::read(&mut r)
+                    .map_err(|_| ViewedLevelsError::BadOpen)?,
             },
             RUN => {
                 let mut packets = Vec::new();
@@ -285,6 +377,7 @@ impl<'a> Message<'a> {
                 Message::Run { level, packets }
             }
             CLOSE => Message::Close { level },
+            SWAP if revision >= REVISION_4 => Message::Swap { level },
             other => return Err(ViewedLevelsError::UnknownKind(other)),
         };
         end(&r)?;
@@ -293,15 +386,24 @@ impl<'a> Message<'a> {
 }
 
 /// The whole body of the play custom payload packet that opens `level` on the client, to send as
-/// it is.
-pub fn open(level: i32, spawn: &SpawnInfo) -> Vec<u8> {
+/// it is. A bound level carries `columns`, the server's column cap; a Login index does not.
+pub fn open(level: Level, columns: u32, spawn: &SpawnInfo) -> Vec<u8> {
     let mut w = head(OPEN, level);
+    if let Level::Bound { .. } = level {
+        w.varint(i32::try_from(columns).unwrap_or(i32::MAX));
+    }
     <SpawnInfo as Codec<SpawnInfo>>::write(spawn, &mut w);
     w.data
 }
 
+/// The whole body of the play custom payload packet that binds the level a travel left to
+/// `level`, the slot of the level entered with the next epoch (revision 4).
+pub fn swap(level: Level) -> Vec<u8> {
+    head(SWAP, level).data
+}
+
 /// The whole body of the play custom payload packet that closes `level` on the client.
-pub fn close(level: i32) -> Vec<u8> {
+pub fn close(level: Level) -> Vec<u8> {
     head(CLOSE, level).data
 }
 
@@ -313,7 +415,7 @@ pub struct Run {
 
 impl Run {
     /// A run of `level` that starts with `packet`.
-    pub fn new(level: i32, packet: &[u8]) -> Result<Self, ViewedLevelsError> {
+    pub fn new(level: Level, packet: &[u8]) -> Result<Self, ViewedLevelsError> {
         let mut run = Self {
             w: head(RUN, level),
         };
@@ -340,12 +442,18 @@ impl Run {
 }
 
 /// The start of a play payload: the custom payload packet's id and channel, the kind and the level.
-fn head(kind: u8, level: i32) -> Writer {
+fn head(kind: u8, level: Level) -> Writer {
     let mut w = Writer::new();
     w.varint(id::CUSTOM_PAYLOAD);
     w.string(CHANNEL);
     w.u8(kind);
-    w.varint(level);
+    match level {
+        Level::Index(index) => w.varint(index),
+        Level::Bound { slot, epoch } => {
+            w.varint(slot);
+            w.varint(epoch);
+        }
+    }
     w
 }
 
@@ -391,6 +499,11 @@ mod tests {
         play::{self, GlobalPos},
     };
 
+    /// A play payload read as a client of revision 3 reads it: levels by their Login index.
+    fn legacy(data: &[u8]) -> Result<Message<'_>, ViewedLevelsError> {
+        Message::decode_in(data, REVISION_3)
+    }
+
     fn nether() -> SpawnInfo {
         SpawnInfo {
             dimension_type: 3,
@@ -424,13 +537,15 @@ mod tests {
 
     #[test]
     fn open_run_and_close_come_back_as_sent() {
-        let open = received(&open(2, &nether()));
+        let open = received(&open(Level::Index(2), 9999, &nether()));
         assert_eq!(
-            Message::decode(&open.data).unwrap(),
+            legacy(&open.data).unwrap(),
             Message::Open {
-                level: 2,
+                level: Level::Index(2),
+                columns: LEGACY_COLUMNS,
                 spawn: nether()
-            }
+            },
+            "a Login index carries no cap"
         );
         let sent = [
             Clientbound::BlockUpdate(play::BlockUpdate {
@@ -443,24 +558,26 @@ mod tests {
             }),
             Clientbound::ForgetLevelChunk(play::ForgetLevelChunk { pos: [0, -1] }),
         ];
-        let mut run = Run::new(2, &sent[0].encode()).unwrap();
+        let mut run = Run::new(Level::Index(2), &sent[0].encode()).unwrap();
         run.push(&sent[1].encode()).unwrap();
         run.push(&sent[2].encode()).unwrap();
         let run = received(&run.finish());
-        let Message::Run { level, packets } = Message::decode(&run.data).unwrap() else {
+        let Message::Run { level, packets } = legacy(&run.data).unwrap() else {
             panic!("not a run");
         };
-        assert_eq!(level, 2);
+        assert_eq!(level, Level::Index(2));
         let decoded: Vec<_> = packets
             .into_iter()
             .map(|(packet_id, body)| Clientbound::decode(packet_id, body).unwrap())
             .collect();
         assert_eq!(decoded, sent);
-        let close = received(&close(1));
+        let close = received(&close(Level::Index(1)));
         assert_eq!(close.data, [2, 1]);
         assert_eq!(
-            Message::decode(&close.data).unwrap(),
-            Message::Close { level: 1 }
+            legacy(&close.data).unwrap(),
+            Message::Close {
+                level: Level::Index(1)
+            }
         );
     }
 
@@ -488,11 +605,11 @@ mod tests {
         let wrap = |packet: &[u8]| [&[1, 1, packet.len() as u8][..], packet].concat();
         for (packet, packet_id) in [(health, 106), (change_game_mode, 39), (global, 47)] {
             assert_eq!(
-                Message::decode(&wrap(&packet)),
+                legacy(&wrap(&packet)),
                 Err(ViewedLevelsError::NotLevelScoped(packet_id))
             );
             assert_eq!(
-                Run::new(1, &packet).err(),
+                Run::new(Level::Index(1), &packet).err(),
                 Some(ViewedLevelsError::NotLevelScoped(packet_id))
             );
         }
@@ -503,22 +620,22 @@ mod tests {
         // Run kind, level 0, then one entry: its length, the packet id, the packet's bytes.
         // A block update (8) with no position or state.
         assert_eq!(
-            Message::decode(&[1, 0, 1, 8]),
+            legacy(&[1, 0, 1, 8]),
             Err(ViewedLevelsError::MalformedPacket(8))
         );
         // A rain level change (game event 39, event 7) with no float parameter.
         assert_eq!(
-            Message::decode(&[1, 0, 2, 39, 7]),
+            legacy(&[1, 0, 2, 39, 7]),
             Err(ViewedLevelsError::MalformedPacket(39))
         );
         // A whole block update at (0, 0, 0) with state 1, then one byte left over.
         assert_eq!(
-            Message::decode(&[1, 0, 11, 8, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]),
+            legacy(&[1, 0, 11, 8, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]),
             Err(ViewedLevelsError::MalformedPacket(8))
         );
         // A whole rain level change of 0.5, then one byte left over.
         assert_eq!(
-            Message::decode(&[1, 0, 7, 39, 7, 0x3f, 0, 0, 0, 9]),
+            legacy(&[1, 0, 7, 39, 7, 0x3f, 0, 0, 0, 9]),
             Err(ViewedLevelsError::MalformedPacket(39))
         );
         for packet in [
@@ -528,7 +645,7 @@ mod tests {
             &[39, 7, 0x3f, 0, 0, 0, 9],
         ] {
             assert_eq!(
-                Run::new(0, packet).err(),
+                Run::new(Level::Index(0), packet).err(),
                 Some(ViewedLevelsError::MalformedPacket(i32::from(packet[0])))
             );
         }
@@ -553,10 +670,13 @@ mod tests {
         // SpawnInfo: type 0, the dimension's name, a zero seed, then game type, no previous
         // game type, not debug, not flat, no last death, cooldown 0 and sea level 0.
         let spawn = [&[0, 17][..], b"minecraft:the_end", &[0; 8], &[0; 7]].concat();
-        assert_eq!(open(1, &the_end), [head(0, 1), spawn].concat());
+        assert_eq!(
+            open(Level::Index(1), 2048, &the_end),
+            [head(0, 1), spawn].concat()
+        );
         let block_update = [8, 0, 0, 0, 0, 0, 0, 0, 0, 1];
         let rain = [39, 7, 0x3f, 0, 0, 0];
-        let mut run = Run::new(2, &block_update).unwrap();
+        let mut run = Run::new(Level::Index(2), &block_update).unwrap();
         run.push(&rain).unwrap();
         let wire = [
             head(1, 2),
@@ -567,25 +687,16 @@ mod tests {
         ]
         .concat();
         assert_eq!(run.finish(), wire);
-        assert_eq!(close(3), head(2, 3));
+        assert_eq!(close(Level::Index(3)), head(2, 3));
     }
 
     #[test]
     fn a_play_payload_cut_short_left_over_or_of_another_kind_is_refused() {
-        assert_eq!(Message::decode(&[]), Err(ViewedLevelsError::CutShort));
-        assert_eq!(Message::decode(&[1, 3]), Err(ViewedLevelsError::EmptyRun));
-        assert_eq!(
-            Message::decode(&[1, 3, 9, 8]),
-            Err(ViewedLevelsError::CutShort)
-        );
-        assert_eq!(
-            Message::decode(&[2, 1, 0]),
-            Err(ViewedLevelsError::LeftOver)
-        );
-        assert_eq!(
-            Message::decode(&[3, 1]),
-            Err(ViewedLevelsError::UnknownKind(3))
-        );
+        assert_eq!(legacy(&[]), Err(ViewedLevelsError::CutShort));
+        assert_eq!(legacy(&[1, 3]), Err(ViewedLevelsError::EmptyRun));
+        assert_eq!(legacy(&[1, 3, 9, 8]), Err(ViewedLevelsError::CutShort));
+        assert_eq!(legacy(&[2, 1, 0]), Err(ViewedLevelsError::LeftOver));
+        assert_eq!(legacy(&[3, 1]), Err(ViewedLevelsError::UnknownKind(3)));
     }
 
     #[test]
@@ -596,17 +707,18 @@ mod tests {
                 max_levels,
             })
         };
-        assert_eq!(query(), [0, 3]);
-        assert_eq!(read_query(&[0, 3]), Ok(()));
+        assert_eq!(query(), [0, 4]);
+        assert_eq!(read_query(&[0, 4]), Ok(()));
+        assert_eq!(read_query(&[0, 3]), Ok(()), "revision 3's query");
         assert_eq!(read_query(&[0, 2]), Ok(()), "revision 2's query");
         assert_eq!(
-            read_query(&[0, 4, 7, 7]),
+            read_query(&[0, 5, 7, 7]),
             Ok(()),
             "a later revision's query"
         );
         assert_eq!(read_query(&[0, 1]), Ok(()), "an older revision's query");
-        assert_eq!(read_query(&[0, 3, 7]), Err(ViewedLevelsError::LeftOver));
-        assert_eq!(answer(2), [1, 3, 2]);
+        assert_eq!(read_query(&[0, 4, 7]), Err(ViewedLevelsError::LeftOver));
+        assert_eq!(answer(2), [1, 4, 2]);
         assert_eq!(read_answer(&[1, 2, 2]), answered(2, 2));
         assert!(read_answer(&[1, 2, 2]).unwrap().switches());
         let older = read_answer(&[1, 1, 2]);
@@ -619,14 +731,22 @@ mod tests {
             "revision 2: no sounds"
         );
         assert!(!older.unwrap().sounds());
-        for revision in [0, 4] {
+        let handles = read_answer(&[1, 4, 2]);
+        assert_eq!(handles, answered(4, 2));
+        let handles = handles.unwrap();
+        assert!(handles.bindings() && handles.sounds() && handles.switches());
+        assert!(
+            !read_answer(&[1, 3, 2]).unwrap().bindings(),
+            "revision 3: Login indices"
+        );
+        for revision in [0, 5] {
             assert_eq!(
                 read_answer(&[1, revision, 5, 9]),
                 Ok(Answer::default()),
                 "revision {revision} views none"
             );
         }
-        assert_eq!(read_answer(&[1, 3]), Err(ViewedLevelsError::CutShort));
+        assert_eq!(read_answer(&[1, 4]), Err(ViewedLevelsError::CutShort));
         assert_eq!(read_answer(&[0, 2]), Err(ViewedLevelsError::UnknownKind(0)));
     }
 
@@ -642,11 +762,11 @@ mod tests {
             pitch: 0.5,
             seed: 7,
         });
-        let run = received(&Run::new(1, &sound.encode()).unwrap().finish());
-        let Message::Run { level, packets } = Message::decode(&run.data).unwrap() else {
+        let run = received(&Run::new(Level::Index(1), &sound.encode()).unwrap().finish());
+        let Message::Run { level, packets } = legacy(&run.data).unwrap() else {
             panic!("not a run");
         };
-        assert_eq!(level, 1);
+        assert_eq!(level, Level::Index(1));
         assert_eq!(packets.len(), 1);
         assert_eq!(packets[0].0, 119);
         assert_eq!(Clientbound::decode(119, packets[0].1).unwrap(), sound);
@@ -655,9 +775,9 @@ mod tests {
         let bound = [
             118, 6, 4, 9, 0x3f, 0x80, 0, 0, 0x3f, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
-        assert!(Run::new(1, &bound).is_ok());
+        assert!(Run::new(Level::Index(1), &bound).is_ok());
         // Below revision 3 either one is a protocol error, heard or not.
-        let bound = Run::new(1, &bound).unwrap().finish();
+        let bound = Run::new(Level::Index(1), &bound).unwrap().finish();
         for (data, id) in [(&run.data, 119), (&received(&bound).data, 118)] {
             assert!(Message::decode_in(data, 3).is_ok());
             for revision in [1, 2] {
@@ -675,7 +795,7 @@ mod tests {
         assert_eq!(
             Message::decode_with(&wire, 3, false),
             Ok(Message::Run {
-                level: 1,
+                level: Level::Index(1),
                 packets: vec![(8, &block[1..])]
             })
         );
@@ -686,9 +806,103 @@ mod tests {
         assert_eq!(
             Message::decode_with(&run.data, 3, false),
             Ok(Message::Run {
-                level: 1,
+                level: Level::Index(1),
                 packets: Vec::new()
             })
+        );
+    }
+
+    /// From revision 4 a level is a slot and an epoch, two VarInts, on `open`, `run` and `close`;
+    /// the bytes before and after them are revision 3's.
+    #[test]
+    fn the_wire_bytes_of_bound_open_run_and_close() {
+        let channel = b"horizon:levels";
+        let head = |kind: u8, binding: &[u8]| [&[24, 14][..], channel, &[kind], binding].concat();
+        let the_end = SpawnInfo {
+            dimension_type: 0,
+            dimension: "minecraft:the_end".into(),
+            seed: 0,
+            game_type: 0,
+            previous_game_type: None,
+            debug: false,
+            flat: false,
+            last_death: None,
+            portal_cooldown: 0,
+            sea_level: 0,
+        };
+        let spawn = [&[0, 17][..], b"minecraft:the_end", &[0; 8], &[0; 7]].concat();
+        let bound = |slot, epoch| Level::Bound { slot, epoch };
+        // Slot 1, epoch 300 (VarInt 0xac 0x02), a cap of 4489 columns (VarInt 0x89 0x23).
+        let opened = open(bound(1, 300), 4489, &the_end);
+        assert_eq!(
+            opened,
+            [head(0, &[1, 0xac, 0x02, 0x89, 0x23]), spawn].concat()
+        );
+        assert_eq!(
+            Message::decode_in(&received(&opened).data, REVISION_4).unwrap(),
+            Message::Open {
+                level: bound(1, 300),
+                columns: 4489,
+                spawn: the_end.clone()
+            }
+        );
+        let block_update = [8, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let run = Run::new(bound(0, 7), &block_update).unwrap().finish();
+        assert_eq!(
+            run,
+            [head(1, &[0, 7]), vec![10], block_update.to_vec()].concat()
+        );
+        let closed = close(bound(1, 300));
+        assert_eq!(closed, head(2, &[1, 0xac, 0x02]));
+        assert_eq!(
+            Message::decode_in(&received(&closed).data, REVISION_4).unwrap(),
+            Message::Close {
+                level: bound(1, 300)
+            }
+        );
+        // `swap`: kind 3, slot 0, epoch 301 (VarInt 0xad 0x02).
+        let swapped = swap(bound(0, 301));
+        assert_eq!(swapped, head(3, &[0, 0xad, 0x02]));
+        assert_eq!(
+            Message::decode_in(&received(&swapped).data, REVISION_4).unwrap(),
+            Message::Swap {
+                level: bound(0, 301)
+            }
+        );
+        // Read as revision 3: the open's level is one VarInt, then a SpawnInfo it cannot read;
+        // `swap` is no kind there.
+        assert!(legacy(&received(&opened).data).is_err());
+        assert_eq!(
+            legacy(&received(&swapped).data),
+            Err(ViewedLevelsError::UnknownKind(3))
+        );
+    }
+
+    #[test]
+    fn a_negative_slot_epoch_or_cap_is_refused_from_revision_4() {
+        // Close of slot -1 (VarInt 0xff 0xff 0xff 0xff 0x0f), epoch 0; then slot 0, epoch -1;
+        // then an open of slot 0, epoch 0 with a cap of -1.
+        let minus_one = [0xff, 0xff, 0xff, 0xff, 0x0f];
+        for data in [
+            [&[2][..], &minus_one, &[0]].concat(),
+            [&[2][..], &[0], &minus_one].concat(),
+            [&[0][..], &[0, 0], &minus_one].concat(),
+        ] {
+            assert_eq!(
+                Message::decode_in(&data, REVISION_4),
+                Err(ViewedLevelsError::Negative)
+            );
+        }
+        assert_eq!(
+            Message::decode_in(&[2, 0, 0], REVISION_4),
+            Ok(Message::Close {
+                level: Level::Bound { slot: 0, epoch: 0 }
+            })
+        );
+        // A close with no epoch is cut short from revision 4.
+        assert_eq!(
+            Message::decode_in(&[2, 1], REVISION_4),
+            Err(ViewedLevelsError::CutShort)
         );
     }
 }

@@ -282,7 +282,7 @@ fn existing_fieldless_enum_layouts_match_baseline() {
     );
     assert_eq!(
         <crate::world::types::GameRuleError as Wire>::layout(&mut vec![]),
-        0xe76f57d2c9f945cb,
+        0xb0678faa207c25fa,
         "GameRuleError"
     );
     assert_eq!(

@@ -60,7 +60,8 @@ jobs:
             os: macos-15
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    # Hosted macOS runner speed varies: 41 to 90+ minutes observed.
+    timeout-minutes: ${{ matrix.os == 'macos-15' && 120 || 90 }}
     defaults:
       run:
         shell: bash

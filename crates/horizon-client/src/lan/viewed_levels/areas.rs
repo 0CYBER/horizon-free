@@ -12,11 +12,13 @@ pub const MAX_RADIUS: u32 = 32;
 pub const MAX_CENTER: i32 = 1_875_000;
 /// The most areas a player may have, every mod together.
 pub const MAX_AREAS: usize = 32;
-/// The most `Loaded` chunks one player may hold in one level: fixed for this revision of
-/// `horizon:levels`, as a client keeps at most this many columns of a viewed level. A higher
-/// `max_viewed_loaded_chunks` is clamped to it, and no view is sent more columns than this
-/// (#3894 tracks sending the cap in `open`).
-pub const MAX_LOADED_PER_PLAYER: u32 = 2048;
+/// The most `Loaded` chunks one player may hold in one level: the ceiling a client of revision 4
+/// of `horizon:levels` keeps of a viewed level (`viewed_levels::MAX_COLUMNS`). A higher
+/// `max_viewed_loaded_chunks` is clamped to it. A client of an older revision keeps at most
+/// `viewed_levels::LEGACY_COLUMNS`, so its own cap is that ([`ViewedCaps::for_client`]).
+pub const MAX_LOADED_PER_PLAYER: u32 = horizon_protocol::viewed_levels::MAX_COLUMNS;
+/// The default per-player `Loaded` cap.
+const DEFAULT_LOADED_PER_PLAYER: u32 = 2048;
 
 /// What an area's ticket does. No default: each area names one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,9 +132,9 @@ impl Default for ViewedCaps {
     /// per-level totals 8 times those.
     fn default() -> Self {
         Self {
-            loaded_per_player: MAX_LOADED_PER_PLAYER,
+            loaded_per_player: DEFAULT_LOADED_PER_PLAYER,
             ticking_per_player: 441,
-            loaded_per_level: MAX_LOADED_PER_PLAYER * 8,
+            loaded_per_level: DEFAULT_LOADED_PER_PLAYER * 8,
             ticking_per_level: 441 * 8,
         }
     }
@@ -153,6 +155,20 @@ impl ViewedCaps {
             ChunkCap::TickingPerPlayer => &mut self.ticking_per_player,
             ChunkCap::LoadedPerLevel => &mut self.loaded_per_level,
             ChunkCap::TickingPerLevel => &mut self.ticking_per_level,
+        }
+    }
+    /// The caps for a player whose client answered `answer`: from revision 4 these, sent in each
+    /// `open`; before it, a per-player `Loaded` cap of at most `viewed_levels::LEGACY_COLUMNS`,
+    /// which such a client keeps at most.
+    pub fn for_client(self, answer: horizon_protocol::viewed_levels::Answer) -> Self {
+        if answer.bindings() {
+            return self;
+        }
+        Self {
+            loaded_per_player: self
+                .loaded_per_player
+                .min(horizon_protocol::viewed_levels::LEGACY_COLUMNS),
+            ..self
         }
     }
     /// The caps `server.properties` sets (horizon-server writes them from `server.toml`), the
@@ -322,11 +338,19 @@ mod tests {
         });
         assert_eq!((read.ticking_per_player, read.loaded_per_player), (9, 2048));
         assert_eq!(clamped, None);
-        // Fixed at 2048 for this protocol revision: a higher value is clamped, and said.
+        // At most the client's ceiling, 4489: a higher value is clamped, and said.
         let (read, clamped) = ViewedCaps::from_properties(|k| {
             (k == "horizon-max-viewed-loaded-chunks").then_some("5000")
         });
-        assert_eq!((read.loaded_per_player, clamped), (2048, Some(5000)));
+        assert_eq!((read.loaded_per_player, clamped), (4489, Some(5000)));
+        // A client of revision 4 gets it; an older one at most 2048, all it keeps.
+        let answer = |revision| horizon_protocol::viewed_levels::Answer {
+            revision,
+            max_levels: 2,
+        };
+        assert_eq!(read.for_client(answer(4)).loaded_per_player, 4489);
+        assert_eq!(read.for_client(answer(3)).loaded_per_player, 2048);
+        assert_eq!(read.for_client(answer(3)).ticking_per_player, 441);
         let (read, _) = ViewedCaps::from_properties(|k| {
             (k == "horizon-max-viewed-loaded-chunks").then_some("100")
         });

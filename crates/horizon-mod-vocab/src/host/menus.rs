@@ -110,6 +110,17 @@ pub trait MenusClientBackend {
     /// scale and the recipe book's horizontal offset.
     #[access(WorldOnly)]
     fn menu_slot_boxes(&self, menu: MenuRef) -> Option<Vec<Option<[f32; 4]>>>;
+    /// Side: client.
+    /// Slot roles from the client layout and content menu declaration, in menu order.
+    /// The length equals `slot_count`. Unknown roles are `Other`; these describe
+    /// neither server backing nor rules for accepting items. Returns `None` outside
+    /// a world, without an open menu, for stale/foreign menus or missing content types.
+    /// Game types with no known slot count return `None`; workstations without
+    /// classified layouts give all `Other` when their count is known. Creative returns the underlying inventory menu, not tab wrappers:
+    /// read the screen type to distinguish them. Stable until the menu changes.
+    /// Built per call with one Vec allocation and a table lookup; cache for the menu.
+    #[access(WorldOnly)]
+    fn menu_slot_kinds(&self, menu: MenuRef) -> Option<Vec<MenuSlotKind>>;
 }
 /// The handles' client writes of the `menus` area, implemented by the game and reached through [`ClientBackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

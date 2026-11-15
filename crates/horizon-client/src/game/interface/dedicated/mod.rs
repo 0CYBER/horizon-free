@@ -1399,8 +1399,8 @@ impl Game<'_> {
                 log(
                     "WARN",
                     &format!(
-                        "max_viewed_loaded_chunks is {asked}, but it is fixed at {max} for this \
-                         protocol revision of viewed levels: using {max}"
+                        "max_viewed_loaded_chunks is {asked}, but a client keeps at most {max} \
+                         columns of a viewed level: using {max}"
                     ),
                 );
             }

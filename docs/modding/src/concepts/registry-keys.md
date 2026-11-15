@@ -217,7 +217,8 @@ Level reads use the same store once the requested level exists.
 means the side or phase cannot read it. `level.game_rules(host)` returns the typed
 result containing every available rule, not an optional list. Use the boolean-key getter for a retained `BoolGameRuleKey`.
 
-`GameRuleDecl` records a mod's boolean rule name, category and default. Category references
+`GameRuleDecl` records a mod's rule name, category and `GameRuleDefault`: either `Bool(value)`
+or `Int { default, min, max }`. Category references
 resolve after all declarations; invalid declarations refuse installation without a partial table.
 
 ## Opaque NBT metadata

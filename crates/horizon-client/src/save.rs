@@ -5208,7 +5208,7 @@ mod tests {
             max: 0,
         };
         let registry = std::sync::Arc::new(
-            RuleRegistry::with_bool_rules(&["example:machines".into()], &[rule]).unwrap(),
+            RuleRegistry::with_mod_rules(&["example:machines".into()], &[rule]).unwrap(),
         );
         let mut level = super::Level {
             rule_registry: registry.clone(),

@@ -13,8 +13,9 @@ pub const LINGER: u64 = 52;
 
 /// A level other than its own that a player's client views.
 pub struct View {
-    /// The level's index in the Login packet's `levels` list.
-    pub level: i32,
+    /// What its client names the level by: its Login index, or its slot and epoch
+    /// (`horizon_protocol::viewed_levels`).
+    pub level: horizon_protocol::viewed_levels::Level,
     pub sent: FxHashSet<(i32, i32)>,
     /// Covered and not sent, nearest to an area's centre first.
     pub queue: Vec<(i32, i32)>,
@@ -34,7 +35,7 @@ pub struct View {
 }
 
 impl View {
-    pub fn new(level: i32) -> Self {
+    pub fn new(level: horizon_protocol::viewed_levels::Level) -> Self {
         Self {
             level,
             sent: Default::default(),
@@ -136,7 +137,7 @@ mod tests {
     #[test]
     fn the_queue_goes_ring_by_ring_from_the_centre() {
         let a = area((10, -4), 2);
-        let mut view = View::new(2);
+        let mut view = View::new(horizon_protocol::viewed_levels::Level::Index(2));
         view.sent.insert((10, -4));
         view.requeue(&[&a], 0);
         assert_eq!(view.queue.len(), 24, "a 5x5 square less the sent centre");
@@ -152,7 +153,7 @@ mod tests {
     #[test]
     fn an_uncovered_chunk_is_forgotten_after_the_delay_unless_covered_again() {
         let near = area((0, 0), 1);
-        let mut view = View::new(1);
+        let mut view = View::new(horizon_protocol::viewed_levels::Level::Index(1));
         view.sent.extend([(0, 0), (5, 5), (6, 6)]);
         view.requeue(&[&near], 100);
         assert!(view.due(151).is_empty());

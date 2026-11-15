@@ -258,7 +258,7 @@ The four caps limit what mods can ask for, counted per level:
 
 | Setting | Default | Range | What it counts |
 |---|---|---|---|
-| `max_viewed_loaded_chunks` | 2048 | 0 to 65536 | Chunks kept loaded for one player in one level, the loading ring around each area included. Fixed at 2048 for this protocol revision: a higher value is lowered to 2048 at startup, with a warning in the log |
+| `max_viewed_loaded_chunks` | 2048 | 0 to 65536 | Chunks kept loaded for one player in one level, the loading ring around each area included. A client keeps at most 4489 columns of a viewed level: a higher value is lowered to 4489 at startup, with a warning in the log. A client of an older Horizon (before revision 4 of viewed levels) gets at most 2048 |
 | `max_viewed_ticking_chunks` | 441 | 0 to 65536 | Of them, the ticking ones: 441 is one player's simulation area at distance 10 |
 | `max_viewed_loaded_chunks_per_level` | 16384 | 0 to 1048576 | Loaded chunks of every player together in one level |
 | `max_viewed_ticking_chunks_per_level` | 3528 | 0 to 1048576 | Ticking chunks of every player together in one level |

@@ -114,7 +114,7 @@ pub(in crate::game) mod tests {
     use horizon_protocol::{
         buf::Reader,
         packets::play::Clientbound as C,
-        viewed_levels::{CHANNEL, Message},
+        viewed_levels::{CHANNEL, Level::Index, Message, REVISION_3},
     };
     use std::time::{Duration, Instant};
 
@@ -174,8 +174,8 @@ pub(in crate::game) mod tests {
         game
     }
 
-    /// Opens the world to the network with one player in the Overworld whose client views 2
-    /// levels; its packets.
+    /// Opens the world to the network with one player in the Overworld whose client, of revision
+    /// 3, views 2 levels; its packets.
     pub(in crate::game) fn host_a_viewer(
         game: &mut Game<'_>,
     ) -> std::sync::mpsc::Receiver<horizon_client::lan::Out> {
@@ -206,8 +206,10 @@ pub(in crate::game) mod tests {
         game.lan_host(settings, net, hub).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let mut sender = PlayerSender::new(tx, std::sync::Arc::default());
+        // Revision 3, still served, names a viewed level by its Login index: the Overworld 0, the
+        // Nether 2.
         sender.viewed_levels = horizon_protocol::viewed_levels::Answer {
-            revision: horizon_protocol::viewed_levels::REVISION,
+            revision: horizon_protocol::viewed_levels::REVISION_3,
             max_levels: 2,
         };
         let joined = Joined {
@@ -264,10 +266,13 @@ pub(in crate::game) mod tests {
             if p.channel != CHANNEL {
                 continue;
             }
-            match Message::decode(&p.data).unwrap() {
-                Message::Open { level, .. } => sent.opened |= level == 2,
-                Message::Close { level } => sent.closed |= level == 2,
-                Message::Run { level: 2, packets } => {
+            match Message::decode_in(&p.data, REVISION_3).unwrap() {
+                Message::Open { level, .. } => sent.opened |= level == Index(2),
+                Message::Close { level } => sent.closed |= level == Index(2),
+                Message::Run {
+                    level: Index(2),
+                    packets,
+                } => {
                     for (id, body) in packets {
                         match C::decode(id, body) {
                             Ok(C::LevelChunkWithLight(c)) => sent.chunks.push((c.x, c.z)),
@@ -580,14 +585,15 @@ pub(in crate::game) mod tests {
             if p.channel != CHANNEL {
                 continue;
             }
-            match Message::decode(&p.data).unwrap() {
-                Message::Open { level, .. } => got.push(Got::Open(level)),
-                Message::Close { level } => got.push(Got::Close(level)),
+            match Message::decode_in(&p.data, REVISION_3).unwrap() {
+                Message::Open { level, .. } => got.push(Got::Open(level.number())),
+                Message::Close { level } => got.push(Got::Close(level.number())),
                 Message::Run { level, packets } => got.extend(
                     (packets.into_iter())
                         .filter_map(|(id, body)| C::decode(id, body).ok())
-                        .map(|packet| Got::Wrapped(level, packet)),
+                        .map(|packet| Got::Wrapped(level.number(), packet)),
                 ),
+                Message::Swap { .. } => unreachable!("no swap below revision 4"),
             }
         }
         got
@@ -653,7 +659,7 @@ pub(in crate::game) mod tests {
             .expect("the Overworld, viewed");
         let mut kept_sent: Vec<(i32, i32)> = kept.sent.iter().copied().collect();
         kept_sent.sort_unstable();
-        assert_eq!((kept.level, kept_sent), (0, overworld.clone()));
+        assert_eq!((kept.level, kept_sent), (Index(0), overworld.clone()));
         let mut got = every(&rx);
         for _ in 0..70 {
             game.tick_server(false).unwrap();

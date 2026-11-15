@@ -1,1 +1,1 @@
-pub use item::menu_slot::MenuSlotBacking;
+pub use item::menu_slot::{MenuSlotBacking, MenuSlotKind};

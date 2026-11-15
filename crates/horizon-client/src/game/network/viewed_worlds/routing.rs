@@ -3,7 +3,7 @@
 //! drops it. A payload the protocol refuses closes the connection with its named reason.
 use super::{
     entities::MAX_TABLE,
-    worlds::{MAX_COLUMNS, ViewedWorld, stored_state},
+    worlds::{Binding, ViewedWorld, stored_state},
 };
 use crate::game::remote_chunks::section_blocks;
 use crate::game::{Game, remote::Remote};
@@ -12,7 +12,9 @@ use horizon_client::{text::Text, viewed_levels_net::MAX_LEVELS, world::World};
 use horizon_protocol::{
     packets::play::{Clientbound as C, SpawnInfo},
     registry::DimensionType,
-    viewed_levels::{CHANNEL, MAX_ENTITIES, Message, REVISION, SOUNDS, ViewedLevelsError},
+    viewed_levels::{
+        CHANNEL, Level, MAX_COLUMNS, MAX_ENTITIES, Message, REVISION, SOUNDS, ViewedLevelsError,
+    },
 };
 use horizon_world::{dimension_type::DimensionFacts, registry::BlockStateId};
 
@@ -21,17 +23,27 @@ use horizon_world::{dimension_type::DimensionFacts, registry::BlockStateId};
 pub(in crate::game) enum RouteError {
     /// The payload's bytes, refused by the codec.
     Codec(ViewedLevelsError),
-    /// An `open` of a level that is not the one at its index in the Login packet's `levels`. The
-    /// reason names neither: the dimension is the server's text.
+    /// A level named by a Login index, which this client's revision does not use. (An `open`
+    /// whose dimension is not a level id is the codec's `BadOpen`.)
     UnknownLevel,
+    /// An `open` of a dimension type the server did not sync.
+    UnsyncedType,
+    /// An `open` of a level the client views already in another slot.
+    ViewedTwice(i32),
     /// An `open` of the player's own level.
     OwnLevel(i32),
-    /// An `open` past the levels the client answered it can view.
+    /// A slot past the levels the client answered it can view.
     OverCap { level: i32, cap: u8 },
-    /// A `run` or `close` of a level not open.
-    NotOpen(i32),
-    /// A `run`'s chunk of a new column in a world that holds `worlds::MAX_COLUMNS` already.
-    TooManyColumns,
+    /// An `open` whose epoch is not newer than every epoch given before.
+    OldEpoch(i32),
+    /// A `run` or `close` at an epoch newer than any `open` gave.
+    UnknownEpoch { level: i32, epoch: i32 },
+    /// A `run`'s chunk of a new column in a world that holds its cap of columns already.
+    TooManyColumns(u32),
+    /// An `open` whose column cap passes the client's ceiling, `viewed_levels::MAX_COLUMNS`.
+    CapPastCeiling(u32),
+    /// A `swap` the client made no travel swap for.
+    UnexpectedSwap,
     /// A `run`'s `AddEntity` of a new entity in a world that holds `MAX_ENTITIES` already.
     TooManyEntities,
     /// An entity's effect or attribute of a new kind past `entities::MAX_TABLE` of them.
@@ -45,8 +57,18 @@ impl std::fmt::Display for RouteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Codec(error) => write!(f, "{error}"),
-            Self::UnknownLevel => {
-                write!(f, "{CHANNEL}: open does not match the Login level index")
+            Self::UnknownLevel => write!(f, "{CHANNEL}: a level named by a Login index"),
+            Self::UnsyncedType => {
+                write!(
+                    f,
+                    "{CHANNEL}: open names a dimension type the server did not sync"
+                )
+            }
+            Self::ViewedTwice(level) => {
+                write!(
+                    f,
+                    "{CHANNEL}: an open in slot {level} of a level viewed already"
+                )
             }
             Self::OwnLevel(level) => write!(f, "{CHANNEL}: level {level} is the player's own"),
             Self::OverCap { level, cap } => {
@@ -55,10 +77,26 @@ impl std::fmt::Display for RouteError {
                     "{CHANNEL}: an open of level {level} past the client's {cap} levels"
                 )
             }
-            Self::NotOpen(level) => write!(f, "{CHANNEL}: level {level} is not open"),
-            Self::TooManyColumns => {
-                write!(f, "{CHANNEL}: a viewed level past {MAX_COLUMNS} columns")
+            Self::OldEpoch(epoch) => {
+                write!(
+                    f,
+                    "{CHANNEL}: an open of epoch {epoch}, not newer than the last"
+                )
             }
+            Self::UnknownEpoch { level, epoch } => {
+                write!(
+                    f,
+                    "{CHANNEL}: level {level} at epoch {epoch}, which no open gave"
+                )
+            }
+            Self::TooManyColumns(cap) => {
+                write!(f, "{CHANNEL}: a viewed level past {cap} columns")
+            }
+            Self::CapPastCeiling(cap) => write!(
+                f,
+                "{CHANNEL}: an open of {cap} columns, past the client's {MAX_COLUMNS}"
+            ),
+            Self::UnexpectedSwap => write!(f, "{CHANNEL}: a swap the client did not make"),
             Self::TooManyEntities => {
                 write!(f, "{CHANNEL}: a viewed level past {MAX_ENTITIES} entities")
             }
@@ -132,14 +170,34 @@ impl Game<'_> {
     pub(in crate::game) fn route_viewed_levels(&mut self, data: &[u8]) -> Result<(), RouteError> {
         // A run's sounds are kept only for a listener: without one they are skipped unread.
         match Message::decode_with(data, REVISION, super::sounds::listened())? {
-            Message::Open { level, spawn } => self.open_viewed_level(level, &spawn),
+            Message::Open {
+                level,
+                columns,
+                spawn,
+            } => {
+                let (slot, epoch) = bound(level)?;
+                if columns > MAX_COLUMNS {
+                    return Err(RouteError::CapPastCeiling(columns));
+                }
+                self.open_viewed_level(slot, epoch, columns, &spawn)
+            }
+            Message::Swap { level } => {
+                let (slot, epoch) = bound(level)?;
+                let Some(r) = self.remote.as_mut() else {
+                    return Ok(());
+                };
+                if !r.viewed.is_new(epoch) {
+                    return Err(RouteError::OldEpoch(epoch));
+                }
+                r.viewed
+                    .bind_left(slot, epoch)
+                    .then_some(())
+                    .ok_or(RouteError::UnexpectedSwap)
+            }
             Message::Run { level, packets } => {
-                if !self
-                    .remote
-                    .as_ref()
-                    .is_some_and(|r| r.viewed.contains(level))
-                {
-                    return Err(RouteError::NotOpen(level));
+                let (level, epoch) = bound(level)?;
+                if !self.live(level, epoch)? {
+                    return Ok(());
                 }
                 for (id, body) in packets {
                     // A sound plays in the player's level, if a mod says where.
@@ -150,7 +208,7 @@ impl Game<'_> {
                     let facts = self.res.facts();
                     let Some(world) = self.remote.as_mut().and_then(|r| r.viewed.get_mut(level))
                     else {
-                        return Err(RouteError::NotOpen(level));
+                        return Ok(());
                     };
                     // The codec read each one exactly already.
                     let packet =
@@ -172,31 +230,61 @@ impl Game<'_> {
                 Ok(())
             }
             Message::Close { level } => {
-                let closed = self.remote.as_mut().is_some_and(|r| r.viewed.remove(level));
-                closed.then_some(()).ok_or(RouteError::NotOpen(level))
+                let (level, epoch) = bound(level)?;
+                if self.live(level, epoch)?
+                    && let Some(r) = self.remote.as_mut()
+                {
+                    r.viewed.remove(level);
+                }
+                Ok(())
             }
         }
     }
 
-    /// `open`: a world for `level`, empty, with the shape and facts of the dimension type the
-    /// server synced for it. An `open` of a level open already starts it afresh.
-    fn open_viewed_level(&mut self, level: i32, spawn: &SpawnInfo) -> Result<(), RouteError> {
+    /// Whether a `run` or `close` of `slot` at `epoch` goes to its world: false for one of a level
+    /// the slot no longer holds, which is dropped (`ViewedWorlds::binding`).
+    fn live(&self, slot: i32, epoch: i32) -> Result<bool, RouteError> {
+        let Some(r) = self.remote.as_ref() else {
+            return Ok(false);
+        };
+        match r.viewed.binding(slot, epoch) {
+            Binding::Live => Ok(true),
+            Binding::Stale => Ok(false),
+            Binding::Unknown => Err(RouteError::UnknownEpoch { level: slot, epoch }),
+        }
+    }
+
+    /// `open`: a world for the level `spawn` names, empty, with the shape and facts of the
+    /// dimension type the server synced for it, bound to `slot` at `epoch`. An `open` of a slot
+    /// bound already starts it afresh.
+    fn open_viewed_level(
+        &mut self,
+        slot: i32,
+        epoch: i32,
+        columns: u32,
+        spawn: &SpawnInfo,
+    ) -> Result<(), RouteError> {
         let air = self.res.facts().air;
         let Some(r) = self.remote.as_mut() else {
             return Ok(());
         };
-        let named = usize::try_from(level).ok().and_then(|i| r.levels.get(i));
-        if named != Some(&spawn.dimension) {
-            return Err(RouteError::UnknownLevel);
+        if !r.viewed.is_new(epoch) {
+            return Err(RouteError::OldEpoch(epoch));
+        }
+        if r.registries
+            .name("minecraft:dimension_type", spawn.dimension_type)
+            .is_none()
+        {
+            return Err(RouteError::UnsyncedType);
+        }
+        if r.viewed
+            .slot_of(&spawn.dimension)
+            .is_some_and(|other| other != slot)
+        {
+            return Err(RouteError::ViewedTwice(slot));
         }
         if spawn.dimension == r.level {
-            return Err(RouteError::OwnLevel(level));
-        }
-        if !r.viewed.contains(level) && r.viewed.len() >= usize::from(MAX_LEVELS) {
-            return Err(RouteError::OverCap {
-                level,
-                cap: MAX_LEVELS,
-            });
+            return Err(RouteError::OwnLevel(slot));
         }
         let format = r.level_format(spawn, self.res.environment());
         let default_clock = default_clock(r, &format.dimension);
@@ -214,10 +302,24 @@ impl Game<'_> {
             format.chunk_format,
             default_clock,
             world,
+            columns,
         );
         if let Some(r) = self.remote.as_mut() {
-            r.viewed.insert(level, world);
+            r.viewed.insert(slot, epoch, world);
         }
         Ok(())
+    }
+}
+
+/// The slot and epoch of `level`, as this client's revision names a viewed level: a slot past
+/// the levels it can view is refused, and so is a Login index, which only older revisions use.
+fn bound(level: Level) -> Result<(i32, i32), RouteError> {
+    match level {
+        Level::Bound { slot, epoch } if slot < i32::from(MAX_LEVELS) => Ok((slot, epoch)),
+        Level::Bound { slot, .. } => Err(RouteError::OverCap {
+            level: slot,
+            cap: MAX_LEVELS,
+        }),
+        Level::Index(_) => Err(RouteError::UnknownLevel),
     }
 }

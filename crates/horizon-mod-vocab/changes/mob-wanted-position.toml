@@ -1,0 +1,2 @@
+ids = ["handle:MobRef::set_wanted_position", "handle:MobRef::wanted_position", "handle:MobRef::speed_modifier", "type:WantedPositionError"]
+why = "Add stored move-control reads and a wanted-position write with named non-finite refusals, including required backend operations."
