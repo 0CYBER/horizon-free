@@ -31,6 +31,14 @@ impl SheetTab {
         SheetTab::Storage,
     ];
 
+    /// The sections `instance` has something to set in: the Launch section is for a Java instance
+    /// (Horizon's own edition runs without Java).
+    fn shown(instance: &Instance) -> impl Iterator<Item = SheetTab> + '_ {
+        SheetTab::ALL
+            .into_iter()
+            .filter(|t| *t != SheetTab::Launch || instance.java.is_some())
+    }
+
     /// Its name, icon and the line under its name.
     fn about(self) -> (&'static str, &'static str, &'static str) {
         match self {
@@ -207,7 +215,11 @@ impl Launcher {
         let editing = self.instances.list.iter().find(|i| i.id == id).cloned()?;
         // Launch, Hooks and Storage act on the selected instance (`launch_page`, `export_page`).
         let selected = self.selected_instance().is_some_and(|s| s.id == editing.id);
-        let tab = self.sheet_tab;
+        // A section this instance doesn't have (a saved choice, or the screenshot variable) opens
+        // General.
+        let tab = SheetTab::shown(&editing)
+            .find(|t| *t == self.sheet_tab)
+            .unwrap_or_default();
         let version = self.sheet_version(&editing);
 
         let close = cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -297,7 +309,7 @@ impl Launcher {
             .w(px(CATS))
             .gap(px(4.))
             .p(px(6.))
-            .children(SheetTab::ALL.into_iter().map(|each| {
+            .children(SheetTab::shown(&editing).map(|each| {
                 let (label, icon, _) = each.about();
                 crate::glass_settings::nav_item(
                     format!("sheet-cat-{label}"),
@@ -382,15 +394,10 @@ impl Launcher {
                 }
             }
             SheetTab::Launch if selected => {
-                let memory = self.glass_memory_row(cx);
-                if memory.is_none() && editing.java.is_none() {
-                    // The Rust Edition runs without Java: no memory cap or Java to pick.
-                    pane = pane.child(ui::empty().child(tr(
-                        "This edition runs without Java, so there is nothing to set here.",
-                    )));
-                }
-                pane = pane
-                    .children(memory.map(|row| group(Some(tr("Memory").into()), div().child(row))));
+                pane = pane.children(
+                    self.glass_memory_row(cx)
+                        .map(|row| group(Some(tr("Memory").into()), div().child(row))),
+                );
                 if editing.java.is_some() {
                     pane = pane.child(self.sheet_java(cx));
                 }
