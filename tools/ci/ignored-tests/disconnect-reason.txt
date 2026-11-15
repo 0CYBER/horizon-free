@@ -1,0 +1,2 @@
+horizon-client game::native_disconnect_tests::a_too_deep_reason_is_refused_by_name_and_leaves_the_world_joined lib daily resources
+horizon-client game::native_disconnect_tests::a_translatable_reason_reads_in_the_players_language lib daily resources
