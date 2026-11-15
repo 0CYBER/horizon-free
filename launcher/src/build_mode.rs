@@ -389,7 +389,7 @@ impl Launcher {
         let needs = match state {
             State::NoMods | State::UpToDate => None,
             State::NotBuilt => Some(tr("Not built")),
-            State::Outdated => Some(tr("Needs rebuild")),
+            State::Outdated => Some(tr("Needs build")),
         };
         let can_build = self.pending_consent.is_none()
             && !(self.native_step.is_some() && mine)

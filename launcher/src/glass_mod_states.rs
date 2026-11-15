@@ -26,8 +26,9 @@ pub(super) struct Preview {
 // Values: `mod-step-<key>`, `mod-error-<key>`, `mod-worlds[-many|-unbuilt]`, `mod-update-<all-fit|some|world|worlds>`,
 // `mod-fit`, `mod-left-out`, `mod-trust[-generic|-registry]`, `mod-log` (keys: see `step` and `error`).
 
-const BUILD: &str = "nightly-2026-11-13 (afe471c)";
-const MADE_FOR: &str = "nightly-2026-11-10 (b0c1d2e)";
+/// Builds as `sdk_cache::shown` names them to players: their Nightly name, no commit.
+const BUILD: &str = "nightly-2026-11-13";
+const MADE_FOR: &str = "nightly-2026-11-10";
 
 /// The compiler's download, as the build card and the trust question say it.
 fn compiler_bytes() -> u64 {
@@ -248,6 +249,9 @@ impl Launcher {
             ("step", "done") => {
                 self.settings.native_mods_allowed_at = Some(1);
                 self.mod_preview.state = Some(native_status::State::UpToDate);
+                // Built: no mod waits for a build any more.
+                *self.mods.native_state.borrow_mut() =
+                    Some((String::new(), native_status::State::UpToDate, Vec::new()));
                 self.native_done = step("done").map(|step| step.label());
             }
             ("step", "start") => {
