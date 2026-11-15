@@ -35,8 +35,8 @@ pub(crate) mod boundary {
 pub(crate) use runtime::WeakWasmMod;
 pub use runtime::{CallClass, WasmHandler, WasmMod};
 
-#[cfg(test)]
-mod test_log;
+#[cfg(any(test, feature = "test-copy-probe"))]
+pub mod test_log;
 #[cfg(test)]
 mod test_stack;
 

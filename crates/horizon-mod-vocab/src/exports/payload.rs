@@ -5,8 +5,9 @@ pub mod __private {
     }
 }
 pub use payload::{
-    HandlerThread, IPayloadContext, IPayloadHandler, PayloadAccepted, PayloadBytes,
-    PayloadContextError, PayloadDeclaration, PayloadDirection, PayloadFrameStage, PayloadId,
-    PayloadProtocol, PayloadRegistrar, PayloadSendError, PayloadWork, PayloadWorkStatus,
-    RegisterClientPayloadHandlersEvent, RegisterPayloadHandlersEvent,
+    HandlerThread, IPayloadContext, IPayloadHandler, PayloadAccepted, PayloadBusy, PayloadBytes,
+    PayloadContextError, PayloadDeclaration, PayloadDirection, PayloadFrameStage,
+    PayloadHandleError, PayloadId, PayloadProtocol, PayloadRegistrar, PayloadSendError,
+    PayloadWork, PayloadWorkStatus, RegisterClientPayloadHandlersEvent,
+    RegisterPayloadHandlersEvent,
 };

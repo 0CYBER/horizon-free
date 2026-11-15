@@ -87,6 +87,28 @@ cannot execute inline across the connection and are received on a subsequent tur
 Single-player and split-screen use their real connect_local sessions, not direct
 callback shortcuts.
 
+`IPayloadHandler::handle` returns `Result<(), PayloadHandleError>`, with explicit
+`Failed(String)` for application and execution failures. Native panics and disabled
+owners remain failures. `PayloadWork::run` retains its `Result<(), String>` contract.
+Guest-group contention instead returns `Busy { payload, holder }` before the handler
+starts, returning the same owned body and a resolved `PayloadBusy` snapshot (shared
+owner/export/thread names and elapsed held milliseconds).
+
+The connection transport must requeue busy input at its head, preserving both
+payload and ordinary gameplay ordering, the original ingress lease and accounting,
+and the original payload deadline. Existing queue byte budgets bound retained
+memory. The deadline is 60 seconds, exceeding the largest guest execution budget;
+retries never renew it. Deadline expiry reports the held mod/export/thread/duration.
+Disconnect and protocol/epoch replacement cancel pending retries. Nested cross-group
+calls refuse immediately rather than waiting. This is the caller's contract, not
+queueing performed by the handler itself; it adds no detached retry worker.
+
+Busy retries retain the existing 16 MiB physical ingress reservations across work
+and main-thread moves. One connection-owned receiving turn spans MAIN root
+publication or rollback. Pooled server receivers retry on their existing tick;
+dedicated client and configuration receivers use timed condition-variable wakes,
+so progress requires neither another network frame nor a detached worker.
+
 ## Acceptance and the amendment to #813
 
 Replace #813's proposed 32-per-tick cap and its “33 sends” acceptance row: vanilla

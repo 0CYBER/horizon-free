@@ -45,10 +45,28 @@ impl Game<'_> {
                 self.lan_process_events(host, events, entities, spawn)
             })?;
             host = back;
-            if !host.hub.packets_paused() {
+            if host.hub.payload_deferred() || !host.hub.packets_paused() {
                 return Some(host);
             }
             events = self.resume_raw_inbox(&mut host.hub, entities, spawn);
+        }
+    }
+}
+
+impl Game<'_> {
+    pub(super) fn receive_raw_delivery(
+        &mut self,
+        mut delivery: Box<horizon_client::raw_payloads::Delivery>,
+    ) {
+        let finished =
+            self.receive_server_payload(delivery.endpoint.clone(), &mut delivery.incoming);
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        if !finished {
+            host.hub.defer_raw_payload(delivery);
+        } else {
+            host.hub.finish_raw_payload();
         }
     }
 }

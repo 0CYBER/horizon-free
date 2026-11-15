@@ -57,13 +57,14 @@ impl PayloadReceiver {
         crate::mod_index_on(self.owner_index)
     }
     /// Invoke only this owner. The caller owns the root transaction and handles
-    /// a native panic exactly like an explicit application decoding error.
+    /// a native panic as `Failed`, never as retryable contention.
     pub fn handle(
         &self,
         bytes: crate::PayloadBytes,
         context: &mut dyn crate::IPayloadContext,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::PayloadHandleError> {
         self.call("payload", || self.handler.handle(bytes, context))
+            .map_err(crate::PayloadHandleError::Failed)?
     }
     /// Scheduled work retains its original receiving owner and enable guard.
     pub fn run_work(
@@ -71,19 +72,15 @@ impl PayloadReceiver {
         work: &dyn crate::PayloadWork,
         context: &mut dyn crate::IPayloadContext,
     ) -> Result<(), String> {
-        self.call("payload work", || work.run(context))
+        self.call("payload work", || work.run(context))?
     }
-    fn call(
-        &self,
-        operation: &'static str,
-        call: impl FnOnce() -> Result<(), String>,
-    ) -> Result<(), String> {
+    fn call<T>(&self, operation: &'static str, call: impl FnOnce() -> T) -> Result<T, String> {
         if !self.enabled() {
             return Err("payload owner is disabled".into());
         }
         let _guard = crate::mark_mod(self.owner, operation);
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(call))
-            .unwrap_or_else(|_| Err("payload callback panicked".into()))
+            .map_err(|_| "payload callback panicked".into())
     }
 }
 

@@ -1,1 +1,1 @@
-Receiving raw payload callback owned by the registering mod.
+Receiving raw payload callback owned by the registering mod; returns the closed PayloadHandleError result, including unstarted contention with its original owned payload.

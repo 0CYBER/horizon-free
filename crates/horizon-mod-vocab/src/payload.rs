@@ -189,19 +189,68 @@ pub enum PayloadWorkStatus {
     Queued,
 }
 
+/// A cheap snapshot of the guest currently occupying the receiving group.
+/// Names share the resolved holder metadata; taking a snapshot does not format diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+// exhaustive: the closed diagnostic snapshot identifies the holder and its elapsed occupancy.
+pub struct PayloadBusy {
+    /// The holding mod's id.
+    pub owner: Arc<str>,
+    /// The guest export holding the group.
+    pub export: Arc<str>,
+    /// The holding thread's diagnostic identity.
+    pub thread: Arc<str>,
+    /// Elapsed occupancy when the contention was observed.
+    pub held_millis: u64,
+}
+
+impl std::fmt::Display for PayloadBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "mod {} export {} on thread {} held for {} ms",
+            self.owner, self.export, self.thread, self.held_millis
+        )
+    }
+}
+
+/// A receiving callback's closed failure or contention result.
+///
+/// `Busy` is not an application failure: the handler did not start and returns the
+/// same owned bytes. The transport, not the handler, must retain them at the head
+/// of the receiving connection's queue, preserving order and original ingress
+/// accounting. Retry is bounded by that queue's budget and the payload's original
+/// deadline, and cancelled when its connection phase or epoch ends. A nested
+/// cross-group call refuses immediately rather than waiting.
+#[derive(Clone, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+// exhaustive: callers distinguish real callback failure from unstarted, retryable contention.
+pub enum PayloadHandleError {
+    /// Application decoding, callback execution, or owner availability failed.
+    Failed(String),
+    /// The callback did not start; retain these exact bytes for an ordered retry.
+    Busy {
+        /// The original owned application buffer, never a retry copy.
+        payload: PayloadBytes,
+        /// The resolved holder at the time contention was observed.
+        holder: PayloadBusy,
+    },
+}
+
 crate::wire::wire_handlers::handler!(dyn IPayloadHandler, "IPayloadHandler");
 crate::wire::wire_handlers::handler!(dyn PayloadWork, "PayloadWork");
 
 /// One receiving owner for a registered id and direction, never an all-mod broadcast.
-/// Return an error when application decoding fails; the session names the channel
+/// Return `Failed` when application decoding fails; the session names the channel
 /// and fails instead of silently dropping the malformed application message.
+/// `Busy` returns unconsumed bytes to the transport under [`PayloadHandleError`]'s
+/// ordering and deadline contract; this callback does not itself queue a retry.
 pub trait IPayloadHandler: Send + Sync + 'static {
     /// Handle exact application bytes using connection-derived context.
     fn handle(
         &self,
         payload: PayloadBytes,
         context: &mut dyn IPayloadContext,
-    ) -> Result<(), String>;
+    ) -> Result<(), PayloadHandleError>;
 }
 
 /// Work scheduled on the logical receiving main thread.

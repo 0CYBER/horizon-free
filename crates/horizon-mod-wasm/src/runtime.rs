@@ -232,7 +232,31 @@ impl<T> Releases<T> {
     }
 }
 
-struct Busy;
+enum Busy {
+    Refused,
+    Payload(mod_api::PayloadBusy),
+}
+
+enum CallMode {
+    Ordinary(CallClass),
+    Payload,
+}
+
+// Names are resolved once, outside dispatch. A contended payload only clones Arcs.
+static EXPORT_NAMES: std::sync::LazyLock<std::collections::HashMap<u32, Arc<str>>> =
+    std::sync::LazyLock::new(|| {
+        crate::boundary::EXPORT_NAMES
+            .iter()
+            .map(|&(id, name)| (id, Arc::from(name)))
+            .collect()
+    });
+static OUTSIDE_GUEST: std::sync::LazyLock<mod_api::PayloadBusy> =
+    std::sync::LazyLock::new(|| mod_api::PayloadBusy {
+        owner: Arc::from("<outside guest>"),
+        export: Arc::from("<unknown export>"),
+        thread: Arc::from("<unknown thread>"),
+        held_millis: 0,
+    });
 
 struct Running {
     group: Mutex<Group<State>>,
@@ -246,24 +270,32 @@ struct Running {
 struct Holder {
     module: Arc<str>,
     export: u32,
-    thread: std::thread::Thread,
+    name: Arc<str>,
+    thread: Arc<str>,
     since: Instant,
+}
+
+impl Holder {
+    fn snapshot(&self) -> mod_api::PayloadBusy {
+        mod_api::PayloadBusy {
+            owner: self.module.clone(),
+            export: self.name.clone(),
+            thread: self.thread.clone(),
+            held_millis: self.since.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+        }
+    }
 }
 
 impl Running {
     /// Why a caller that waited `waited` for this group is refused, naming the call holding it.
-    fn busy(&self, waited: Duration) -> String {
-        let holder = self.holder.lock().unwrap_or_else(|e| e.into_inner());
-        match holder.as_ref() {
+    fn busy(holder: Option<&Holder>, waited: Duration) -> String {
+        match holder {
             Some(h) => format!(
                 "{}: held by mod {} export {} on thread {} for {} ms; this call waited {} ms",
                 Refusal::Busy,
                 h.module,
                 h.export,
-                h.thread.name().map_or_else(
-                    || format!("{:?}", h.thread.id()),
-                    |name| format!("'{name}'")
-                ),
+                h.thread,
                 h.since.elapsed().as_millis(),
                 waited.as_millis()
             ),
@@ -278,6 +310,14 @@ impl Running {
 thread_local! {
     /// Why this thread's last guest call answered nothing, for the caller's typed error.
     static LAST_REFUSAL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// Cache the printable identity once per calling thread, not once per retry or entry.
+    static THREAD_NAME: Arc<str> = {
+        let thread = std::thread::current();
+        thread.name().map_or_else(
+            || format!("{:?}", thread.id()),
+            |name| format!("'{name}'"),
+        ).into()
+    };
 }
 /// A test's budget for non-load calls in this process, in epoch ticks (about 1 ms each); 0 keeps
 /// a hook's 100. Process-wide: the calls it covers run on the game's own threads.
@@ -452,7 +492,7 @@ impl WeakWasmMod {
         };
         let module = self.upgrade()?;
         let result = module.try_call(
-            CallClass::Hook,
+            CallMode::Ordinary(CallClass::Hook),
             Frame::default(),
             crate::prepared::PREPARE,
             None,
@@ -471,7 +511,7 @@ impl WeakWasmMod {
         );
         match result {
             Ok(Some(())) => {}
-            Err(Busy) => {
+            Err(_) => {
                 // The guest never received the preparation.
                 let mut slots = self.prepared.lock().unwrap_or_else(|e| e.into_inner());
                 slots.release(token.0, token.1);
@@ -511,7 +551,7 @@ impl WeakWasmMod {
             return;
         }
         match module.try_call(
-            CallClass::Hook,
+            CallMode::Ordinary(CallClass::Hook),
             Frame::default(),
             crate::prepared::RELEASE,
             None,
@@ -522,7 +562,7 @@ impl WeakWasmMod {
             |r| r.take::<()>(),
         ) {
             Ok(Some(())) => module.finish_prepared_release(slot),
-            Err(Busy) => self.prepared_releases.push((slot, generation)),
+            Err(_) => self.prepared_releases.push((slot, generation)),
             Ok(None) => module.disable(),
         }
     }
@@ -537,6 +577,24 @@ impl WeakWasmMod {
         reply: impl FnOnce(&mut Reader<'_>) -> Result<R, WireError>,
     ) -> Option<R> {
         self.upgrade()?.call(class, frame, id, handler, args, reply)
+    }
+    /// Payload ingress must retain ownership instead of waiting for a busy group.
+    pub(crate) fn call_payload<R>(
+        &self,
+        frame: Frame,
+        id: u32,
+        handler: Option<Id>,
+        args: impl FnOnce(&mut Writer),
+        reply: impl FnOnce(&mut Reader<'_>) -> Result<R, WireError>,
+    ) -> Result<Option<R>, mod_api::PayloadBusy> {
+        let Some(module) = self.upgrade() else {
+            return Ok(None);
+        };
+        match module.try_call(CallMode::Payload, frame, id, handler, args, reply) {
+            Err(Busy::Payload(holder)) => Err(holder),
+            Err(Busy::Refused) => Ok(None),
+            Ok(answer) => Ok(answer),
+        }
     }
 
     fn upgrade(&self) -> Option<WasmMod> {
@@ -831,6 +889,8 @@ impl WasmMod {
         cache: Option<&crate::module_cache::ModuleCache>,
     ) -> Result<Vec<Self>, Refusal> {
         horizon_guest_stack::check_current().map_err(|error| Refusal::Runtime(error.into()))?;
+        std::sync::LazyLock::force(&EXPORT_NAMES);
+        std::sync::LazyLock::force(&OUTSIDE_GUEST);
         let group: Vec<_> = members
             .iter()
             .filter(|member| member.name != "libstd.so")
@@ -842,12 +902,12 @@ impl WasmMod {
         let limits = Limits::new(group.join("+").into(), memory_mib);
         let mut store = Store::new(engine, State::new(limits));
         store.limiter(|state| &mut state.limits);
-        store.set_epoch_deadline(30_000);
+        store.set_epoch_deadline(horizon_mod_runtime::MAX_GUEST_CALL_BUDGET_MILLIS);
         let mut armed = false;
         let mut group = Group::link_cached_with(store, members, cache, |store, module, name| {
             // Compilation is not guest execution and must not consume its load deadline.
             if !armed {
-                store.set_epoch_deadline(30_000);
+                store.set_epoch_deadline(horizon_mod_runtime::MAX_GUEST_CALL_BUDGET_MILLIS);
                 armed = true;
             }
             if module != "horizon" {
@@ -958,20 +1018,24 @@ impl WasmMod {
         args: impl FnOnce(&mut Writer),
         reply: impl FnOnce(&mut Reader<'_>) -> Result<R, WireError>,
     ) -> Option<R> {
-        self.try_call(class, frame, id, handler, args, reply)
+        self.try_call(CallMode::Ordinary(class), frame, id, handler, args, reply)
             .ok()
             .flatten()
     }
 
     fn try_call<R>(
         &self,
-        class: CallClass,
+        mode: CallMode,
         frame: Frame,
         id: u32,
         handler: Option<Id>,
         args: impl FnOnce(&mut Writer),
         reply: impl FnOnce(&mut Reader<'_>) -> Result<R, WireError>,
     ) -> Result<Option<R>, Busy> {
+        let (class, payload) = match mode {
+            CallMode::Ordinary(class) => (class, false),
+            CallMode::Payload => (CallClass::Callback, true),
+        };
         // Dispatch-owned native receivers can unwind before our outer call
         // guards. Their destructors must not reenter the still-lent guest.
         if std::thread::panicking() {
@@ -997,48 +1061,65 @@ impl WasmMod {
             // Start the busy timeout on contention, not on the uncontended hot path.
             let mut start: Option<Instant> = None;
             loop {
+                // Publish the holder under the same mutex used by contention snapshots.
+                // This closes the gap between taking the group and naming its current call.
+                let mut holder = self
+                    .running
+                    .holder
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 match self.running.group.try_lock() {
-                    Ok(group) => {
-                        locked = Some(group);
-                        break;
-                    }
+                    Ok(group) => locked = Some(group),
                     Err(std::sync::TryLockError::Poisoned(e)) => {
                         locked = Some(e.into_inner());
-                        break;
                     }
-                    Err(_)
-                        if class != CallClass::Worker
-                            && (id == crate::prepared::RELEASE
-                                // A nested cross-group call can form a lock cycle.
-                                || (!LENT.get().is_null()
-                                    && self.running.lending.load(Ordering::Relaxed) != 0)
-                                || start.get_or_insert_with(Instant::now).elapsed()
-                                    >= Duration::from_secs(5)) =>
-                    {
-                        if id != crate::prepared::RELEASE {
-                            let why = self
-                                .running
-                                .busy(start.map_or(Duration::ZERO, |start| start.elapsed()));
-                            log::warn!("wasm mod {} export {id}: {why}", self.id);
-                            note(why);
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        // A nested cross-group caller may never wait or become retryable:
+                        // doing either can retain the enclosing group's loan indefinitely.
+                        let nested = !LENT.get().is_null();
+                        if payload && !nested {
+                            return Err(Busy::Payload(
+                                holder
+                                    .as_ref()
+                                    .map_or_else(|| OUTSIDE_GUEST.clone(), Holder::snapshot),
+                            ));
                         }
-                        return Err(Busy);
+                        if (class != CallClass::Worker
+                            && nested
+                            && (payload || self.running.lending.load(Ordering::Relaxed) != 0))
+                            || (class != CallClass::Worker
+                                && (id == crate::prepared::RELEASE
+                                    || start.get_or_insert_with(Instant::now).elapsed()
+                                        >= Duration::from_secs(5)))
+                        {
+                            if id != crate::prepared::RELEASE {
+                                let why = Running::busy(
+                                    holder.as_ref(),
+                                    start.map_or(Duration::ZERO, |start| start.elapsed()),
+                                );
+                                log::warn!("wasm mod {} export {id}: {why}", self.id);
+                                note(why);
+                            }
+                            return Err(Busy::Refused);
+                        }
                     }
-                    Err(_) => std::thread::sleep(Duration::from_millis(1)),
                 }
+                if locked.is_some() {
+                    *holder = Some(Holder {
+                        module: self.id.clone(),
+                        export: id,
+                        name: EXPORT_NAMES
+                            .get(&id)
+                            .unwrap_or(&OUTSIDE_GUEST.export)
+                            .clone(),
+                        thread: THREAD_NAME.with(Arc::clone),
+                        since: Instant::now(),
+                    });
+                    break;
+                }
+                drop(holder);
+                std::thread::sleep(Duration::from_millis(1));
             }
-        }
-        if locked.is_some() {
-            *self
-                .running
-                .holder
-                .lock()
-                .unwrap_or_else(|e| e.into_inner()) = Some(Holder {
-                module: self.id.clone(),
-                export: id,
-                thread: std::thread::current(),
-                since: Instant::now(),
-            });
         }
         // Deferred releases run only on a top-level call: a resumed nested call is still
         // inside another export of the guest.
@@ -1048,7 +1129,7 @@ impl WasmMod {
             None => {
                 let store = &mut locked.as_mut().expect("group locked without a loan").store;
                 let budget = if class == CallClass::Load {
-                    30_000
+                    horizon_mod_runtime::MAX_GUEST_CALL_BUDGET_MILLIS
                 } else {
                     match CALL_BUDGET.load(Ordering::Relaxed) {
                         0 => 100,

@@ -6,6 +6,7 @@
 //! network threads ([`io_pool`]): they forward decoded packets to the game
 //! thread, frame, compress and encrypt what the game queues, and keep the
 //! keep-alive schedule on their own so a long tick never times a client out.
+mod payloads;
 use super::config_payloads::ConfigIo;
 use super::{
     Body, Joined, NetEvent, Out, Shared,
@@ -2207,13 +2208,7 @@ impl io_pool::Session for PlayConn {
     /// after the last was answered. The game thread times a client out
     /// ([`PlayerSender::timed_out`]).
     fn tick(&mut self, now: Instant) -> Option<Vec<u8>> {
-        if self.payload_transport.closed() || self.sent_at.is_some() || now < self.next_keep_alive {
-            return None;
-        }
-        let id = i64::try_from(self.watch.start.elapsed().as_millis()).unwrap_or(0);
-        self.sent_at = Some((id, now));
-        self.next_keep_alive = now + KEEP_ALIVE_EVERY;
-        Some(play::Clientbound::KeepAlive(cfg::KeepAlive { id }).encode())
+        self.payload_tick(now)
     }
     fn left(&mut self, reason: String) {
         let _ = self.shared.events.send(NetEvent::Left(self.conn, reason));

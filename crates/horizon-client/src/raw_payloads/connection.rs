@@ -1,4 +1,6 @@
 //! Connection epochs and main-executor barriers, independent of gameplay ownership.
+mod payload_queue;
+pub(super) use payload_queue::PayloadTurn;
 #[cfg(test)]
 mod tests;
 use super::{Local, Peer, Side};
@@ -9,6 +11,7 @@ use std::sync::{
     Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::{Duration, Instant};
 
 /// A frozen phase of one connection. Work carries this identity, not just a reused player id.
 pub struct Epoch {
@@ -89,6 +92,16 @@ struct Current {
 pub struct IngressLease {
     _permit: byte_channel::Permit<()>,
     pub(super) owned_bytes: usize,
+    received: Instant,
+}
+pub(super) const PAYLOAD_DEADLINE: Duration =
+    Duration::from_millis(2 * horizon_mod_runtime::MAX_GUEST_CALL_BUDGET_MILLIS);
+impl IngressLease {
+    /// A retained payload may wait longer than the VM's largest (30 s) load call,
+    /// but never extend its deadline by moving between receiving queues.
+    pub(super) fn expired(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.received) >= PAYLOAD_DEADLINE
+    }
 }
 // Four slots cover Vec's initial growth and later geometric staging. Provider
 // queue storage is separately charged by the typed ingress channel. This charge
@@ -109,6 +122,9 @@ pub struct Connection {
     current: Mutex<Current>,
     ingress: byte_channel::Sender<()>,
     _ingress_receiver: byte_channel::Receiver<()>,
+    payloads: Mutex<payload_queue::PayloadQueue>,
+    payload_ready: Condvar,
+    payload_pending: AtomicBool,
 }
 impl Connection {
     #[cfg(any(test, feature = "test-payload-probe"))]
@@ -142,6 +158,9 @@ impl Connection {
         Arc::new(Self {
             ingress,
             _ingress_receiver: receiver,
+            payloads: Mutex::default(),
+            payload_ready: Condvar::new(),
+            payload_pending: AtomicBool::new(false),
             local,
             side,
             current: Mutex::new(Current {
@@ -167,6 +186,7 @@ impl Connection {
             .map(|permit| IngressLease {
                 _permit: permit,
                 owned_bytes,
+                received: Instant::now(),
             })
             .map_err(|e| match e {
                 byte_channel::ReserveError::Full => PayloadSendError::Backpressure,
@@ -194,6 +214,7 @@ impl Connection {
         if let Some(old) = self.current.lock().unwrap().epoch.take() {
             old.invalidate();
         }
+        self.clear_payloads();
     }
     pub fn accept(&self, entries: &[Entry]) -> Result<(), String> {
         let mut peer = self.local.freeze(entries, self.side)?;
@@ -260,6 +281,8 @@ impl Connection {
         if let Some(old) = current.epoch.take() {
             old.invalidate();
         }
+        drop(current);
+        self.clear_payloads();
     }
 }
 impl Drop for Connection {

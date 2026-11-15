@@ -3,7 +3,11 @@ use super::*;
 use mod_api::{Hooks, PayloadBytes, Registrar};
 struct Receipt;
 impl mod_api::IPayloadHandler for Receipt {
-    fn handle(&self, _: PayloadBytes, _: &mut dyn mod_api::IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        _: &mut dyn mod_api::IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         panic!("receipt must remain in the physical Outbox fixture")
     }
 }
@@ -56,6 +60,7 @@ fn compiled_guest_observes_physical_provider_pressure_on_guest_stack() {
     mod_platform::testing::with_mods(mods.into(), || {
         mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
             .unwrap();
+        super::busy_wasm_tests::exercise();
         let transport = Transport::capture(Side::Server).unwrap();
         transport
             .accept(transport.local.manifest.entries())

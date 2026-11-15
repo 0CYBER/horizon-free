@@ -2300,7 +2300,7 @@ impl Hub {
     pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
         self.anticheat_tick(ctx.tick_rate);
-        let mut events = std::mem::take(&mut self.pending_kicks);
+        let mut events = self.begin_payload_poll();
         self.finish_fake_kicks(&mut events);
         self.expire_arrivals(&mut events);
         let mut credits = Vec::new();

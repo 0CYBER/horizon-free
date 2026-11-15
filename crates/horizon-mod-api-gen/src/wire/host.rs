@@ -297,6 +297,12 @@ fn fallback(
     reason: Option<&str>,
     isolate: bool,
 ) -> String {
+    if m.owner == "IPayloadHandler" && m.name == "handle" {
+        return match reason {
+            Some(reason) => format!("Err(mod_api::PayloadHandleError::Failed(format!(\"wasm call refused or trapped: {{}}\", {reason})))"),
+            None => "Err(mod_api::PayloadHandleError::Failed(String::from(\"wasm call refused or trapped\")))".into(),
+        };
+    }
     match &m.ret {
         // String-error operations can report a refused VM call directly. In particular,
         // callbacks must not turn a trap after staged effects into a successful commit.
@@ -437,6 +443,27 @@ pub(super) fn generate(
         }
     }
     code.push_str("_ => None } }\n");
+    code.push_str("pub const EXPORT_NAMES: &[(u32, &str)] = &[\n");
+    for (id, m) in surface
+        .methods
+        .iter()
+        .filter(|m| super::exports().contains(&m.owner))
+        .enumerate()
+    {
+        writeln!(code, "({id}, {:?}),", format!("{}::{}", m.owner, m.name)).unwrap();
+    }
+    for abi in super::prepared::describe(&surface.methods, prepared_hooks)? {
+        for entry in abi.entries {
+            writeln!(
+                code,
+                "({}, {:?}),",
+                entry.id,
+                format!("ItemPart::{}", entry.name)
+            )
+            .unwrap();
+        }
+    }
+    code.push_str("];\n");
     code.push_str(
         "pub fn import_id(owner: &str, name: &str) -> Option<u32> { match (owner,name) {\n",
     );
@@ -689,6 +716,7 @@ impl Cx {
                 .filter(|(_, m)| m.owner == *owner && m.via.as_deref().unwrap_or(m.owner) == group)
             {
                 let sig = rust_sig(types, m);
+                let payload_handler = m.owner == "IPayloadHandler" && m.name == "handle";
                 if super::SUBSCRIBED
                     .iter()
                     .any(|(o, n)| *o == m.owner && *n == m.name)
@@ -834,7 +862,11 @@ impl Cx {
                             }
                         }
                         _ => {
-                            put.push_str(&if matches!(
+                            put.push_str(&if payload_handler && i == 0 {
+                                // The runtime checks contention before encoding. Keep the original
+                                // allocation alive so Busy can return ownership without copying.
+                                format!("w.put(&p{i});")
+                            } else if matches!(
                                 ty,
                                 Ty::Ref(..)
                                     | Ty::Str(super::ty::Str::Borrowed)
@@ -872,7 +904,11 @@ impl Cx {
                     fallback(types, m, Some("crate::wasm_call_refusal()"), isolate)
                 };
                 let mut method = String::new();
-                writeln!(method,"{sig} {{ let mut frame = Frame::default(); {setup} match self{module}.call({class}, frame, {id}, {}, |w| {{ {put} }}, |r| {{ let answer: {} = r.take()?; {take} if !r.rest().is_empty() {{ return Err(WireError::Tag(u32::MAX)); }} Ok({tuple}) }}) {{ Some({tuple}) => {{ {apply} answer }}, None => {} }} }}",if receiver=="WasmMod" {"None"} else {"Some(self.index)"},rust_ty(types,&m.ret,true),refusal,module=if receiver=="WasmMod" {""} else {".module"}).unwrap();
+                if payload_handler {
+                    writeln!(method,"{sig} {{ let mut frame = Frame::default(); {setup} match self.module.call_payload(frame, {id}, Some(self.index), |w| {{ {put} }}, |r| {{ let answer: {} = r.take()?; {take} if !r.rest().is_empty() {{ return Err(WireError::Tag(u32::MAX)); }} Ok({tuple}) }}) {{ Ok(Some({tuple})) => {{ {apply} match answer {{ Err(mod_api::PayloadHandleError::Busy {{ holder, .. }}) => Err(mod_api::PayloadHandleError::Busy {{ payload: p0, holder }}), answer => answer }} }}, Ok(None) => {refusal}, Err(holder) => Err(mod_api::PayloadHandleError::Busy {{ payload: p0, holder }}) }} }}",rust_ty(types,&m.ret,true)).unwrap();
+                } else {
+                    writeln!(method,"{sig} {{ let mut frame = Frame::default(); {setup} match self{module}.call({class}, frame, {id}, {}, |w| {{ {put} }}, |r| {{ let answer: {} = r.take()?; {take} if !r.rest().is_empty() {{ return Err(WireError::Tag(u32::MAX)); }} Ok({tuple}) }}) {{ Some({tuple}) => {{ {apply} answer }}, None => {} }} }}",if receiver=="WasmMod" {"None"} else {"Some(self.index)"},rust_ty(types,&m.ret,true),refusal,module=if receiver=="WasmMod" {""} else {".module"}).unwrap();
+                }
                 if let Some(event) = prepared_event {
                     let name = &m.name;
                     let arguments = (0..m.params.len())

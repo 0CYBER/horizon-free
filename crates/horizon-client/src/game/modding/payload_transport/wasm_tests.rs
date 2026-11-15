@@ -50,7 +50,11 @@ pub(super) fn observe(
 }
 struct Receipt;
 impl mod_api::IPayloadHandler for Receipt {
-    fn handle(&self, bytes: PayloadBytes, context: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        context: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         RECEIPTS.fetch_add(1, Ordering::SeqCst);
         assert_eq!(context.flow(), PayloadDirection::ToClient);
         assert_eq!(bytes.0.len(), 1 << 20);
