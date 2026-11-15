@@ -140,8 +140,8 @@ mod tests {
                 "minecraft:attack_range",
                 Some(Tag::Compound(
                     [
-                        ("min_reach".to_owned(), Tag::Float(5.0_f32.to_bits())),
-                        ("max_reach".to_owned(), Tag::Float(6.0_f32.to_bits())),
+                        ("min_reach".into(), Tag::Float(5.0_f32.to_bits())),
+                        ("max_reach".into(), Tag::Float(6.0_f32.to_bits())),
                     ]
                     .into_iter()
                     .collect(),
