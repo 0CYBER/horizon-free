@@ -377,6 +377,12 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_game(|game| {
                 zombie(game, 900, 2.0);
+                game.world.chunks.insert(
+                    (0, 0),
+                    Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+                );
+                let stone = game.pack.assets.registry.default_state("minecraft:stone").unwrap();
+                game.world.set(0, 0, 0, stone).unwrap();
                 let ground = game.world.block(0, 0, 0);
                 assert!(!game.res.facts().is_air(ground), "the ground is solid");
                 explode(game);
