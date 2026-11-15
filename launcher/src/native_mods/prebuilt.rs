@@ -885,7 +885,6 @@ pub(super) fn dylib_name(krate: &str) -> String {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn library_entry(
     template: &str,
     mods: &[&horizon_mod_package::Manifest],
