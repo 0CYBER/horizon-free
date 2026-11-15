@@ -11,7 +11,7 @@ pub trait Hooks {
     #[hook(
         side = "client",
         contract = "listen",
-        neoforge = "none (vanilla ItemTintSource.calculate; RegisterColorHandlersEvent.ItemTintSources only registers the source)"
+        neoforge = "RegisterColorHandlersEvent.ItemTintSources (registration only)"
     )]
     fn item_tint_source();
 }

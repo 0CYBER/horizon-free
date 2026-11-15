@@ -9,7 +9,7 @@ pub trait Hooks {
     #[hook(
         side = "client",
         contract = "listen",
-        neoforge = "none (vanilla DebugRenderer.SimpleDebugRenderer.render; RegisterDebugRenderersEvent only registers the renderer)",
+        neoforge = "RegisterDebugRenderersEvent (registration only; no per-frame event)",
         cancellable = false
     )]
     fn debug_renderer_draw();

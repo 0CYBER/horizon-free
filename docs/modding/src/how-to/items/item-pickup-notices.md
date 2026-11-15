@@ -5,9 +5,8 @@ most one notice:
 
 - `item_picked_up_post` (NeoForge's `ItemEntityPickupEvent.Post`): the whole stack went into the
   inventory.
-- `item_picked_up_partial` (also NeoForge's `ItemEntityPickupEvent.Post`, the partial half): the
-  inventory took part of the stack and the rest stayed on the ground, as when 8 apples lie there and
-  only 5 fit.
+- `item_picked_up_partial` (Horizon only): the inventory took part of the stack and the rest stayed
+  on the ground, as when 8 apples lie there and only 5 fit.
 
 Neither fires when `item_picked_up` refused the pickup or the inventory took nothing. A creative
 player always takes the whole stack, so only `item_picked_up_post` fires for them.

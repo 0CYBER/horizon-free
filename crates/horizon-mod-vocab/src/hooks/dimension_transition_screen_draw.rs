@@ -8,7 +8,7 @@ pub trait Hooks {
     #[hook(
         side = "client",
         contract = "listen",
-        neoforge = "none (vanilla Screen.render of the screen RegisterDimensionTransitionScreenEvent's factory builds; the event only registers it)"
+        neoforge = "RegisterDimensionTransitionScreenEvent (registration only)"
     )]
     fn dimension_transition_screen_draw();
 }

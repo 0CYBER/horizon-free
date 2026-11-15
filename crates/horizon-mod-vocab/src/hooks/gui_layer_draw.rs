@@ -9,7 +9,7 @@ pub trait Hooks {
     #[hook(
         side = "client",
         contract = "listen",
-        neoforge = "GuiLayer.render",
+        neoforge = "RenderGuiLayerEvent.Pre, RenderGuiLayerEvent.Post",
         cancellable = false
     )]
     fn gui_layer_draw();
