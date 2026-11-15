@@ -82,7 +82,7 @@ mod tests {
         let (e, items) = (sample(), sample_items());
         let sharpness: Arc<str> = "minecraft:sharpness".into();
         let at_30 = |e: &crate::enchant::Enchantments, item: &str| {
-            e.available_results(&items, 30, item, &[sharpness.clone()])
+            e.available_results(&items, 30, item, std::slice::from_ref(&sharpness))
         };
         let level_3 = [(sharpness.clone(), 3)];
         // Vanilla: the probe item isn't primary for sharpness; an iron sword gets level 3,
@@ -110,7 +110,12 @@ mod tests {
         let (a, b) = (sample(), sample());
         let sharpness: Arc<str> = "minecraft:sharpness".into();
         let at_30 = |e: &crate::enchant::Enchantments| {
-            e.available_results(&items, 30, "minecraft:iron_sword", &[sharpness.clone()])
+            e.available_results(
+                &items,
+                30,
+                "minecraft:iron_sword",
+                std::slice::from_ref(&sharpness),
+            )
         };
         a.primary_answers()
             .install(answers(&sharpness, "minecraft:iron_sword", false));
