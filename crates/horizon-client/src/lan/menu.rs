@@ -5,7 +5,7 @@
 //! menu are returned for the game to drop.
 use super::guest::Guest;
 use crate::{
-    bundle::{Contents, can_be_in_bundle, toggle_selected},
+    bundle::{Contents, INSERT, INSERT_FAIL, REMOVE_ONE, can_be_in_bundle, toggle_selected},
     containers::BlockEntity,
     items::{ItemStack, Items},
     world::World,
@@ -481,6 +481,9 @@ pub struct View<'a> {
     pub shulker: bool,
     /// Container slots that do not exist in this menu (see [`Menu::hidden`]).
     pub hidden: &'a [usize],
+    /// The sounds the click played at the player (`BundleItem.playInsertSound`
+    /// and the others, `Player.playSound`), in order; the hub sends them.
+    pub sounds: Vec<&'static str>,
 }
 
 impl View<'_> {
@@ -892,6 +895,7 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
         match other {
             // tryTransfer: as much as fits, through `safeTake`.
             Some(mut other) => {
+                let mut moved = 0;
                 if can_be_in_bundle(&other) {
                     let amount = other.count.min(contents.room_for(items, &other));
                     if amount > 0 {
@@ -899,9 +903,12 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
                         taken.count = amount;
                         other.count -= amount;
                         view.set(i, (other.count > 0).then_some(other));
-                        contents.try_insert(items, &mut taken);
+                        moved = contents.try_insert(items, &mut taken);
                     }
                 }
+                // `tryTransfer(...) > 0` ? playInsertSound : playInsertFailSound.
+                view.sounds
+                    .push(if moved > 0 { INSERT } else { INSERT_FAIL });
             }
             // removeOne into the empty slot (`safeInsert`); the rest goes back.
             None => {
@@ -919,6 +926,9 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
                     }
                     if stack.count > 0 {
                         contents.try_insert(items, &mut stack);
+                    } else {
+                        // All of it went in: playRemoveOneSound.
+                        view.sounds.push(REMOVE_ONE);
                     }
                 }
             }
@@ -938,14 +948,19 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
     let allowed = view.may_pickup(i, rules) && view.may_place(i, &bundle, rules);
     match (view.guest.carried.take(), right) {
         (Some(mut carried), false) => {
-            if allowed {
-                contents.try_insert(items, &mut carried);
-            }
+            let moved = if allowed {
+                contents.try_insert(items, &mut carried)
+            } else {
+                0
+            };
+            view.sounds
+                .push(if moved > 0 { INSERT } else { INSERT_FAIL });
             view.guest.carried = (carried.count > 0).then_some(carried);
         }
         (None, true) => {
-            if allowed {
-                view.guest.carried = contents.remove_one(items);
+            if allowed && let Some(removed) = contents.remove_one(items) {
+                view.sounds.push(REMOVE_ONE);
+                view.guest.carried = Some(removed);
             }
         }
         (carried, _) => {
@@ -1233,6 +1248,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // `doClick` only starts the collect when the carried stack is not
         // empty and the clicked slot has no item or may not be taken
@@ -1273,6 +1289,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         view.guest.carried = Some(ItemStack::new("minecraft:bundle", 1));
         // Left click with the bundle: the stone goes in.
@@ -1344,6 +1361,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // Left click with stone in hand over the refused bundle: nothing goes in.
         view.guest.carried = Some(ItemStack::new("minecraft:stone", 5));
@@ -1582,6 +1600,7 @@ mod tests {
                 container: Some(&mut read),
                 shulker: false,
                 hidden: &[],
+                sounds: Vec::new(),
             };
             click(&mut view, &mut drag, 5 + 27, 0, input::QUICK_MOVE, &rules);
             assert_eq!(view.get(0).map(|s| s.item), Some("minecraft:dirt".into()));
@@ -1619,6 +1638,7 @@ mod tests {
             container: Some(&mut container),
             shulker: false,
             hidden: &hidden,
+            sounds: Vec::new(),
         };
         // The hotbar's first slot (menu slot 3 + 27) lands in the one slot shown.
         click(&mut view, &mut drag, 3 + 27, 0, input::QUICK_MOVE, &rules);
@@ -1644,6 +1664,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         view.guest.carried = Some(ItemStack::new("minecraft:stone", 64));
         // Start, two slots, end, for the two types a survival guest may not
@@ -1745,6 +1766,7 @@ mod tests {
             container: Some(&mut menu),
             shulker: false,
             hidden: &hidden,
+            sounds: Vec::new(),
         };
         // Menu slots 9 and 10 are the inventory's 9 and 10, below the menu.
         click(&mut view, &mut drag, 9, 0, input::QUICK_MOVE, &SwapRules);
@@ -1861,6 +1883,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // Key 1 over the refused slot moves neither stack.
         click(&mut view, &mut drag, 0, 0, input::SWAP, &rules);
@@ -1912,6 +1935,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         click(&mut view, &mut drag, 0, 40, input::SWAP, &rules);
         assert_eq!(
@@ -1957,6 +1981,7 @@ mod tests {
                 container: Some(&mut container),
                 shulker,
                 hidden: &[],
+                sounds: Vec::new(),
             };
             // Carried onto an empty slot, shift-clicked from the hotbar
             // (menu slot 27 + 27) and swapped in with the number key 1.
@@ -2008,6 +2033,7 @@ mod tests {
             container: None,
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // Menu slot 9 is the first main-inventory slot, 45 the off hand.
         view.guest.inventory[9] = Some(ItemStack::new("minecraft:shield", 1));
@@ -2086,6 +2112,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // The refused slot takes no click and gives nothing to the cursor.
         click(&mut view, &mut drag, 0, 0, input::PICKUP, &rules);
@@ -2126,6 +2153,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // One stone short of a full stack, over a slot that holds stone.
         view.guest.carried = Some(ItemStack::new("minecraft:stone", 63));
@@ -2162,6 +2190,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         let (drops, _) = click(&mut view, &mut drag, 0, 0, input::THROW, &rules);
         assert!(drops.is_empty());
@@ -2193,6 +2222,7 @@ mod tests {
                     container: None,
                     shulker: false,
                     hidden: &[],
+                    sounds: Vec::new(),
                 };
                 // Menu slot 6 is the chest slot.
                 click(&mut view, &mut drag, 6, 0, mode, &rules);
@@ -2224,6 +2254,7 @@ mod tests {
                     container: None,
                     shulker: false,
                     hidden: &[],
+                    sounds: Vec::new(),
                 };
                 // Menu slot 6 is the chest slot. A drop click throws the
                 // stack out; number key 1 puts it in the first hotbar slot
@@ -2270,6 +2301,7 @@ mod tests {
             container: None,
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // Menu slot 45 is the off hand; 5 to 8 are the armour slots, head first.
         view.guest.offhand = Some(ItemStack::new("minecraft:iron_helmet", 1));
@@ -2325,6 +2357,7 @@ mod tests {
             container: Some(&mut chest),
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // A container's quick move fills the inventory from its end: 16
         // snowballs in the last hotbar slot (menu slot 36), 16 in the one
@@ -2371,6 +2404,7 @@ mod tests {
             container: None,
             shulker: false,
             hidden: &[],
+            sounds: Vec::new(),
         };
         // Menu slot 9 stands for inventory index 9, 36 for the hotbar's first.
         view.guest.inventory[9] = Some(ItemStack::new("minecraft:diamond", 3));

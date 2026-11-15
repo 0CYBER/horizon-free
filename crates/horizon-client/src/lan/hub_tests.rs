@@ -1,3 +1,5 @@
+#[path = "hub/tests/bundle_sound_tests.rs"]
+mod bundle_sound_tests;
 #[path = "hub/tests/cave_air_tests.rs"]
 mod cave_air_tests;
 #[path = "hub/tests/effect_meta_tests.rs"]

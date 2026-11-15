@@ -302,6 +302,7 @@ impl Game<'_> {
         menu.merchant = Some(session);
         op(&mut menu, &env);
         let made = maps.made.take();
+        self.guest_bundle_sounds(host, gi, std::mem::take(&mut menu.player_sounds));
         let session = menu.merchant.take().expect("attached");
         let dropped = std::mem::take(&mut menu.dropped);
         let crafted_counts = std::mem::take(&mut menu.crafted_counts);

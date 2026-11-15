@@ -1884,8 +1884,13 @@ fn network_stack(
                 horizon_protocol::item::Component::Raw(w.data),
             ));
         }
-        // What a bundle holds, for its tooltip (ClientBundleTooltip).
-        if !d.bundle_contents.is_empty() {
+        // What a bundle holds, for its tooltip (ClientBundleTooltip); a
+        // bundle's removed contents stay removed (`bundle[!bundle_contents]`).
+        if d.other("!minecraft:bundle_contents").is_some() {
+            stack
+                .removed
+                .push(horizon_protocol::item::component::BUNDLE_CONTENTS);
+        } else if !d.bundle_contents.is_empty() {
             let contents = d
                 .bundle_contents
                 .iter()

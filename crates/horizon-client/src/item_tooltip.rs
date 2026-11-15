@@ -1402,7 +1402,16 @@ mod tests {
     /// with it. The draw path asks for the grid through the same function.
     #[test]
     fn a_bundle_contents_grid_follows_the_tooltip_display() {
-        let items = Items::for_tests(Default::default());
+        // The grid is `BundleItem`'s: the table knows the bundle item.
+        let mut items = Items::for_tests(Default::default());
+        items.items.insert(
+            "minecraft:bundle".into(),
+            crate::items::ItemInfo {
+                bundle: true,
+                max_stack: 1,
+                ..Default::default()
+            },
+        );
         let mut bundle = ItemStack::new("minecraft:bundle", 1);
         bundle.data_mut().bundle_contents = vec![ItemStack::new("minecraft:stone", 3)];
         assert!(bundle_tooltip(&items, &bundle, 0.0, 0.0, 96.0, 2).is_some());

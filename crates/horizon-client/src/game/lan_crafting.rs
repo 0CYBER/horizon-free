@@ -165,6 +165,7 @@ impl Game<'_> {
         };
         load_player(menu, &host.hub.guests[gi]);
         let result = op(menu, &env);
+        self.guest_bundle_sounds(host, gi, std::mem::take(&mut menu.player_sounds));
         if let Some(maps) = maps {
             self.register_made_maps(maps);
         }
@@ -229,6 +230,30 @@ impl Game<'_> {
         }
         self.drop_guest_items(host, gi, dropped);
         result
+    }
+
+    /// `BundleItem.playInsertSound` and the others on the server: the guest's
+    /// `Player.playSound`, at them in the players' source, for everyone near
+    /// but them (their client played its own prediction). The pitch draws on
+    /// the level's random as the click plays each one.
+    pub(super) fn guest_bundle_sounds(
+        &mut self,
+        host: &LanHost,
+        gi: usize,
+        sounds: Vec<&'static str>,
+    ) {
+        let g = &host.hub.guests[gi];
+        let players = horizon_client::settings::SOUND_SOURCES
+            .iter()
+            .position(|s| *s == "player")
+            .unwrap_or(0) as i32;
+        for name in sounds {
+            let (volume, pitch) = horizon_client::bundle::sound_volume_pitch(name, || {
+                horizon_core::random::RandomSource::next_float(&mut self.world.random)
+            });
+            host.hub
+                .sound(name, g.position, volume, pitch, players, Some(g.conn));
+        }
     }
 
     /// A click on the guest's inventory menu (window 0): `InventoryMenu`,

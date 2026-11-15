@@ -894,8 +894,9 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 );
             }
             // A removal the item's own prototype would otherwise provide:
-            // `totem_of_undying[!death_protection]` must not keep protecting.
-            if *id == component::DEATH_PROTECTION
+            // `totem_of_undying[!death_protection]` must not keep protecting,
+            // nor `bundle[!bundle_contents]` act as a bundle.
+            if (*id == component::DEATH_PROTECTION || *id == component::BUNDLE_CONTENTS)
                 && let Some(name) = name(*id)
             {
                 map.insert(

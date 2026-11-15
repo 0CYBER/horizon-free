@@ -61,11 +61,30 @@ fn max_stack(items: &Items, stack: &ItemStack) -> u32 {
     items.get(&stack.item).map_or(64, |i| i.max_stack).max(1)
 }
 
-/// The stack's `bundle_contents`, when it has the component.
+/// `BundleItem.playInsertSound` and `playRemoveOneSound`: volume 0.8, pitch
+/// `0.8 + level.getRandom().nextFloat() * 0.4`; `playInsertFailSound` 1, 1 and
+/// no draw.
+pub fn sound_volume_pitch(sound: &str, next_float: impl FnOnce() -> f32) -> (f32, f32) {
+    if sound == INSERT_FAIL {
+        (1.0, 1.0)
+    } else {
+        (0.8, 0.8 + next_float() * 0.4)
+    }
+}
+
+/// Whether the stack's item is a bundle (`BundleItem`): its prototype carries
+/// the component.
+fn is_bundle_item(items: &Items, stack: &ItemStack) -> bool {
+    items.get(&stack.item).is_some_and(|i| i.bundle)
+}
+
+/// `stack.get(BUNDLE_CONTENTS)`: the prototype's empty contents unless a
+/// `!minecraft:bundle_contents` patch removed them, or the stack's own.
 fn contents_of<'a>(items: &Items, stack: &'a ItemStack) -> Option<&'a [ItemStack]> {
-    let inside = stack.data().map_or(&[][..], |d| &d.bundle_contents[..]);
-    let bundle = items.get(&stack.item).is_some_and(|i| i.bundle);
-    (bundle || !inside.is_empty()).then_some(inside)
+    let data = stack.data();
+    let inside = data.map_or(&[][..], |d| &d.bundle_contents[..]);
+    let removed = data.is_some_and(|d| d.other("!minecraft:bundle_contents").is_some());
+    (!inside.is_empty() || (is_bundle_item(items, stack) && !removed)).then_some(inside)
 }
 
 /// `BundleContents.getWeight`: a nested bundle weighs its contents plus
@@ -133,8 +152,14 @@ impl Contents {
             selected: -1,
         }
     }
-    /// The bundle's contents; None when the stack is no bundle.
+    /// The bundle's contents; None when the stack is no bundle. `BundleItem`'s
+    /// overrides (`overrideStackedOnOther`, `overrideOtherStackedOnMe`,
+    /// `getTooltipImage`) need the item **and** the component: a bundle with
+    /// it removed, or another item carrying it, is a plain item.
     pub fn of(items: &Items, stack: &ItemStack) -> Option<Self> {
+        if !is_bundle_item(items, stack) {
+            return None;
+        }
         let inside = contents_of(items, stack)?.to_vec();
         let weight = contents_weight(items, &inside);
         let selected = stack.data().map_or(-1, |d| d.bundle_selected.0);
@@ -275,6 +300,10 @@ pub fn toggle_selected(bundle: &mut ItemStack, index: i32) {
     };
     data.bundle_selected = BundleSelected(selected);
 }
+
+#[cfg(test)]
+#[path = "bundle_component_tests.rs"]
+mod component_tests;
 
 #[cfg(test)]
 mod tests {

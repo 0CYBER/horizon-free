@@ -146,7 +146,7 @@ pub fn parse_consume_effect(effect: &serde_json::Value) -> Option<ConsumeEffect>
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ItemInfo {
     pub fire_resistant: bool,
     pub id: Arc<str>,

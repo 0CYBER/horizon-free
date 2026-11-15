@@ -978,11 +978,8 @@ impl Game<'_> {
             return;
         };
         let at = [p.position.x, p.position.y, p.position.z];
-        let (volume, pitch) = if sound == horizon_client::bundle::INSERT_FAIL {
-            (1.0, 1.0)
-        } else {
-            (0.8, 0.8 + self.world.random.next_float() * 0.4)
-        };
+        let (volume, pitch) =
+            horizon_client::bundle::sound_volume_pitch(sound, || self.world.random.next_float());
         self.audio.play(sound, Some(at), volume, pitch);
     }
 }

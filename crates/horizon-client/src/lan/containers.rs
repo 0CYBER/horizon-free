@@ -709,6 +709,7 @@ impl Hub {
             container: items.as_deref_mut(),
             shulker,
             hidden: &hidden,
+            sounds: Vec::new(),
         };
         let (drops, changed) = menu::click(
             &mut view,
@@ -718,6 +719,7 @@ impl Hub {
             p.input,
             rules,
         );
+        let sounds = std::mem::take(&mut view.sounds);
         if let (Some(source), Some(items)) = (source, items) {
             source.write(world, guest, items);
         }
@@ -730,6 +732,15 @@ impl Hub {
         }
         if in_menu && source == Some(Slots::Native) {
             self.store_native_click(i);
+        }
+        // BundleItem's sounds are `Player.playSound`: at the player, in the
+        // players' source, for everyone near but the clicker, whose client
+        // played its own prediction. Sent during the click, before its answer.
+        let (at, players) = (self.guests[i].position, player_source());
+        for name in sounds {
+            let (volume, pitch) =
+                crate::bundle::sound_volume_pitch(name, || world.random.next_float());
+            self.sound(name, at, volume, pitch, players, Some(conn));
         }
         self.answer_click(i, p, world, &changed);
         drops
@@ -1112,6 +1123,14 @@ fn next_sound_seed(g: &mut impl RandomSource) -> i64 {
 pub(super) fn within_range(at: [f64; 3], pos: [f64; 3], range: f64) -> bool {
     let d: f64 = (0..3).map(|k| (pos[k] - at[k]).powi(2)).sum();
     d < range * range
+}
+
+/// `SoundSource.PLAYERS`, by its index.
+fn player_source() -> i32 {
+    horizon_client_core::sound_source::SOUND_SOURCES
+        .iter()
+        .position(|s| *s == "player")
+        .unwrap_or(0) as i32
 }
 
 #[cfg(test)]
