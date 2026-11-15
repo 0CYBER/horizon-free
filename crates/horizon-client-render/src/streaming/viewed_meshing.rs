@@ -137,6 +137,8 @@ struct Meshed {
 struct Jobs {
     queue: Mutex<VecDeque<Job>>,
     running: AtomicUsize,
+    /// All queued, running and completed jobs, including superseded sequences.
+    outstanding: AtomicUsize,
     done: Mutex<VecDeque<Meshed>>,
     locals: PerWorker<(Faces, MeshScratch)>,
 }
@@ -228,6 +230,7 @@ impl ViewedMeshing {
         let jobs = Arc::new(Jobs {
             queue: Mutex::default(),
             running: AtomicUsize::new(0),
+            outstanding: AtomicUsize::new(0),
             done: Mutex::default(),
             locals: PerWorker::new(pool.threads()),
         });
@@ -258,11 +261,13 @@ impl ViewedMeshing {
     }
 
     fn free(&mut self, id: u64, set: LevelSet) {
+        let mut queue = self.jobs.queue.lock().unwrap();
+        let before = queue.len();
+        queue.retain(|job| job.level != id);
         self.jobs
-            .queue
-            .lock()
-            .unwrap()
-            .retain(|job| job.level != id);
+            .outstanding
+            .fetch_sub(before - queue.len(), Ordering::Relaxed);
+        drop(queue);
         let count = set.meshes.len();
         free_columns(set.meshes, count);
     }
@@ -324,6 +329,7 @@ impl ViewedMeshing {
         while taken < VIEWED_UPLOADS_PER_FRAME
             && let Some(meshed) = done.pop_front()
         {
+            self.jobs.outstanding.fetch_sub(1, Ordering::Relaxed);
             let Some(set) = self.sets.get_mut(&meshed.level) else {
                 continue;
             };
@@ -350,7 +356,7 @@ impl ViewedMeshing {
     /// A column whose eight neighbours are not all there waits: one arriving dirties it again.
     fn schedule(&mut self, source: &MeshSource, level: &mut ViewedLevel<'_>) {
         let world = &mut *level.world;
-        let in_flight: usize = self.sets.values().map(|set| set.meshing.len()).sum();
+        let in_flight = self.jobs.outstanding.load(Ordering::Relaxed);
         let Some(set) = self.sets.get_mut(&level.id) else {
             return;
         };
@@ -385,6 +391,7 @@ impl ViewedMeshing {
                 }
                 self.sequence += 1;
                 set.meshing.insert(section, self.sequence);
+                self.jobs.outstanding.fetch_add(1, Ordering::Relaxed);
                 queue.push_back(Job {
                     level: level.id,
                     section,
@@ -409,6 +416,45 @@ mod tests {
     use crate::chunk::Chunk;
     use horizon_world::registry::BlockStateId;
     use std::sync::mpsc;
+
+    #[test]
+    fn repeated_dirtying_bounds_jobs_and_region_snapshots() {
+        let pool = Pool::new(1, "viewed-dirty");
+        let mut meshing = ViewedMeshing::in_pool(&pool);
+        // Keep far work waiting, as it would behind the player's near work.
+        meshing.jobs.running.store(1, Ordering::SeqCst);
+        meshing.sets.insert(7, LevelSet::default());
+        let mut world = level();
+        let source = MeshSource::custom(|_, _| drawn());
+        let mut snapshots = Vec::new();
+        for _ in 0..1000 {
+            world.dirty_sections.insert((0, 0, 0));
+            meshing.schedule(
+                &source,
+                &mut ViewedLevel {
+                    id: 7,
+                    wanted: true,
+                    nether_shading: false,
+                    world: &mut world,
+                },
+            );
+            let queue = meshing.jobs.queue.lock().unwrap();
+            assert!(queue.len() <= 64);
+            if let Some(job) = queue.back() {
+                snapshots.push(Arc::downgrade(&job.region));
+            }
+        }
+        assert_eq!(meshing.jobs.queue.lock().unwrap().len(), 64);
+        assert_eq!(meshing.jobs.outstanding.load(Ordering::Relaxed), 64);
+        assert!(world.dirty_sections.columns().next().is_some());
+        meshing.forget(7);
+        assert_eq!(meshing.jobs.outstanding.load(Ordering::Relaxed), 0);
+        assert!(
+            snapshots
+                .iter()
+                .all(|snapshot| snapshot.upgrade().is_none())
+        );
+    }
 
     /// A 3x3 of columns around the origin: only the centre one has its eight neighbours.
     fn level() -> World {
