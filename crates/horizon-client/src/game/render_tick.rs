@@ -490,6 +490,13 @@ impl Game<'_> {
     }
 
     pub(super) fn tick_particles(&mut self) {
+        self.tick_particle_spawns();
+        self.tick_particle_engine();
+    }
+
+    /// The screen effects and fog, then what the level spawns around the camera
+    /// (`ClientLevel.animateTick`, rain splashes, campfire smoke).
+    pub(super) fn tick_particle_spawns(&mut self) {
         self.update_animation_inputs();
         let mut laps = horizon_client::spans::laps();
         let eye = self.eye_position();
@@ -677,6 +684,24 @@ impl Game<'_> {
             );
         }
         laps.lap("tp_rain_campfire");
+    }
+
+    /// A server's client's `ParticleEngine.tick`, while the level runs normally: in
+    /// `Minecraft.tick` it follows `ClientLevel.tickEntities`, so what the entities
+    /// spawned (the spark of a rocket boosting the moved player) is drawn from this
+    /// tick on, not the next (#16175).
+    pub(super) fn tick_remote_particle_engine(&mut self) {
+        if self.clock.runs_normally() {
+            self.tick_particle_engine();
+        }
+    }
+
+    /// `ParticleEngine.tick`: the live particles tick, then the ones added since
+    /// join them unticked.
+    fn tick_particle_engine(&mut self) {
+        let mut laps = horizon_client::spans::laps();
+        let world = &self.world;
+        let facts = self.res.facts();
         // SpellParticle.isCloseToScopingPlayer: the eye of a local player looking
         // through a spyglass in first person.
         let scope_eye = self

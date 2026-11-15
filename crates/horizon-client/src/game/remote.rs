@@ -6110,9 +6110,9 @@ impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.tick_remote_level()?;
-        // The rockets boosting this player tick after it, also while it waits
-        // for chunks.
+        // Its rockets tick after the player (even waiting for chunks), then ParticleEngine.tick.
         self.tick_own_rockets();
+        self.tick_remote_particle_engine();
         // Client mods tick on any server, single player's own included.
         self.native_net.to_server = 0;
         self.native_tick();
@@ -6228,7 +6228,7 @@ impl Game<'_> {
         }
         self.tick_hand();
         if running {
-            self.tick_particles();
+            self.tick_particle_spawns(); // ParticleEngine.tick: tick_remote, after the rockets.
         } else if self.clock.still() {
             self.settle_rain_fog();
         }
