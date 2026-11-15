@@ -1,0 +1,8 @@
+# Player visibility, acknowledgement and visual overrides need prepared resources.
+horizon-client game::native_player_visibility_tests::a_mod_acknowledges_block_changes lib daily resources
+horizon-client game::native_player_visibility_tests::each_block_ack_refusal_has_its_own_name lib daily resources
+horizon-client game::native_player_visibility_tests::a_block_is_shown_to_one_player lib daily resources
+horizon-client game::native_player_visibility_tests::each_show_block_refusal_has_its_own_name lib daily resources
+horizon-client game::native_player_visibility_tests::player_sees_follows_the_trackers_rules lib daily resources
+horizon-client game::native_player_visibility_tests::each_sees_refusal_has_its_own_name lib daily resources
+horizon-client game::native_player_visibility_tests::a_client_cannot_ack_show_or_ask_who_sees lib daily resources

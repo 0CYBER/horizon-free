@@ -27,6 +27,9 @@ pub struct RenderPipeline {
     /// fails and keeps the previous resources. An optional one is logged once by id and resolves
     /// to [`RenderPipelineError::Invalid`] while the other pipelines draw.
     pub optional: bool,
+    /// What the shader samples with `pipeline_texture(uv)`, if anything ([`Self::textured`]).
+    /// `None`, the default, binds no texture: the shader reads only its input and `frame`.
+    pub texture: Option<PipelineTexture>,
 }
 impl RenderPipeline {
     /// Describe a required pipeline that draws [`PipelineVertexFormat::PositionTexColor`]
@@ -45,6 +48,7 @@ impl RenderPipeline {
             blend,
             depth,
             optional: false,
+            texture: None,
         }
     }
     /// The owning mod, assigned by the host after registration.
@@ -58,7 +62,69 @@ impl RenderPipeline {
         self.optional = true;
         self
     }
+
+    /// Let the shader sample `texture` with `pipeline_texture(uv)` (vanilla's `Sampler0`, as
+    /// `RenderPipeline.withSampler` declares it). A texture the load refuses
+    /// ([`PipelineTextureError`]) refuses the pipeline as a missing shader does: a required one
+    /// fails the load, an optional one is logged with the named cause and resolves to
+    /// [`RenderPipelineError::Invalid`].
+    pub fn textured(mut self, texture: PipelineTexture) -> Self {
+        self.texture = Some(texture);
+        self
+    }
 }
+
+/// A texture a pipeline's shader samples ([`RenderPipeline::textured`]): always a rectangle of
+/// the atlas the host binds, never a texture of its own. `pipeline_texture(uv)` maps `fract(uv)`
+/// into that rectangle and loads one texel by integer coordinates at mip level 0 (nearest, no
+/// filtering, so no neighbouring sprite's texel enters): `uv` 0 to 1 spans it once and beyond
+/// that it repeats. It returns linear light (the mod render colour rule) with the texel's alpha.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum PipelineTexture {
+    /// A sprite of the game's block or item atlas, by its texture id: `powah:block/energy_charge`
+    /// is `assets/powah/textures/block/energy_charge.png` as the `minecraft:blocks` atlas holds
+    /// it, `minecraft:item/diamond` an item sprite. An animated sprite animates. A sprite in
+    /// neither atlas refuses the pipeline ([`PipelineTextureError::NoSuchSprite`]). A texture
+    /// file of the mod's own, packed into the runtime atlas's slot pool (#4438) and drawn the
+    /// same way, follows once that pool exists.
+    Sprite(Identifier),
+}
+
+/// Why a pipeline's texture was refused: the named cause its refusal is logged with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum PipelineTextureError {
+    /// No sprite of that id in the block or item atlas.
+    NoSuchSprite,
+    /// No texture file of that id in the mod's assets or a resource pack.
+    NoSuchTextureFile,
+    /// The id names a file (a `textures/` path or a `.png` name), not a sprite key.
+    NotASpriteKey,
+    /// A texture file over the pool's cap of 1024 x 1024 pixels.
+    OverCap,
+    /// A texture file that isn't an image the game can decode.
+    Undecodable,
+    /// No free atlas slot, or over the mod's image budget.
+    NoSlot,
+}
+
+impl std::fmt::Display for PipelineTextureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NoSuchSprite => "no such sprite in the block or item atlas",
+            Self::NoSuchTextureFile => "no such texture file",
+            Self::NotASpriteKey => "the id names a file, not a sprite key",
+            Self::OverCap => "the texture file is over 1024 x 1024 pixels",
+            Self::Undecodable => "the texture file cannot be decoded",
+            Self::NoSlot => "no free atlas slot, or over the mod's image budget",
+        })
+    }
+}
+
+impl std::error::Error for PipelineTextureError {}
 
 /// The vertex data a pipeline's draws carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

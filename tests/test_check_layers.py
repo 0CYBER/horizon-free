@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from pathlib import Path
@@ -6,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tools import check_layers, check_file_size
+from tools import check_layers, merge_base
 
 CONFIG = {
     "may_depend": {"engine": ["engine"], "platform": ["engine", "platform"], "horizon": ["platform", "horizon"]},
@@ -211,7 +212,6 @@ class UpstreamLayerRestorationTests(unittest.TestCase):
         self.base_config = dict(self.config, crates={k: v for k, v in self.config["crates"].items() if k != "cosmetics"})
         (self.root / "tools").mkdir()
         (self.root / "tools/layers.json").write_text(json.dumps(self.base_config))
-        (self.root / "tools/file_size_baseline.txt").write_text("")
         self.git("add", "tools")
         self.git("commit", "-q", "-m", "base")
         self.base = self.git("rev-parse", "HEAD").strip()
@@ -219,7 +219,6 @@ class UpstreamLayerRestorationTests(unittest.TestCase):
         upstream = dict(self.config, allowed=["game -> cosmetics"])
         (self.root / "tools/layers.json").write_text(json.dumps(upstream))
         self.git("commit", "-q", "-am", "upstream layers")
-        marker = self.git("rev-parse", "HEAD").strip()
         remote = self.root / "remote.git"
         self.git("init", "-q", "--bare", str(remote))
         self.git("push", "-q", str(remote), "HEAD:refs/heads/main")
@@ -228,8 +227,7 @@ class UpstreamLayerRestorationTests(unittest.TestCase):
         self.git("add", "fork")
         self.git("commit", "-q", "-m", "fork")
         self.git("merge", "-q", "--no-edit", "upstream")
-        (self.root / "tools/file_size_baseline.txt").write_text(f"# sync-baseline: {marker}\n")
-        for patch in (mock.patch.object(check_file_size, "ROOT", self.root),
+        for patch in (mock.patch.object(merge_base, "ROOT", self.root),
                       mock.patch.dict(os.environ, {"HORIZON_UPSTREAM_URL": str(remote)})):
             patch.start()
             self.addCleanup(patch.stop)
@@ -239,7 +237,7 @@ class UpstreamLayerRestorationTests(unittest.TestCase):
                               capture_output=True, text=True).stdout
 
     def problems(self, edge, layer="horizon"):
-        upstream, errors = check_file_size.verified_sync_config(self.base, "tools/layers.json")
+        upstream, errors = merge_base.verified_sync_config(self.base, "tools/layers.json")
         self.assertEqual(errors, [])
         config = dict(self.config, allowed=[edge], crates=dict(self.config["crates"], cosmetics=layer))
         crate, dependency = edge.split(" -> ")
@@ -249,14 +247,39 @@ class UpstreamLayerRestorationTests(unittest.TestCase):
     def test_verbatim_upstream_edge_and_assignment_pass(self):
         self.assertEqual(self.problems("game -> cosmetics"), [])
 
+    def run_main(self, allowed):
+        packages = [{"name": "game", "dependencies": [{"name": "cosmetics", "kind": None, "path": "/x/cosmetics"}]},
+                    {"name": "cosmetics", "dependencies": []}]
+        config = dict(self.config, allowed=allowed)
+        with mock.patch.object(check_layers, "load_config", return_value=config), \
+                mock.patch.object(check_layers, "base_config", return_value=self.base_config), \
+                mock.patch.object(check_layers, "workspace_packages", return_value=packages), \
+                mock.patch.object(merge_base, "verified_sync_config", wraps=merge_base.verified_sync_config) as spy, \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            return check_layers.main(["--base", self.base]), spy
+
+    def test_a_violation_the_upstream_inventory_excuses_looks_it_up_once(self):
+        code, spy = self.run_main(["game -> cosmetics"])
+        self.assertEqual(code, 0)
+        spy.assert_called_once()
+
+    def test_a_merge_without_a_violation_never_reaches_the_network(self):
+        packages = [{"name": "game", "dependencies": []}]
+        with mock.patch.object(check_layers, "load_config", return_value=self.base_config), \
+                mock.patch.object(check_layers, "base_config", return_value=self.base_config), \
+                mock.patch.object(check_layers, "workspace_packages", return_value=packages), \
+                mock.patch.object(merge_base, "fetch_upstream_main", side_effect=AssertionError("network")), \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            self.assertEqual(check_layers.main(["--base", self.base]), 0)
+
     def test_fork_only_edge_fails(self):
         self.assertTrue(self.problems("game -> mod-api"))
 
     def test_one_character_different_edge_fails(self):
         self.assertTrue(self.problems("game -> cosmetic"))
 
-    def test_upstream_edge_without_sync_declaration_fails(self):
-        (self.root / "tools/file_size_baseline.txt").write_text("")
+    def test_upstream_edge_without_a_merge_of_upstream_fails(self):
+        self.git("reset", "-q", "--hard", "HEAD^")
         self.assertTrue(self.problems("game -> cosmetics"))
 
     def test_altered_new_crate_assignment_fails(self):
@@ -291,13 +314,13 @@ class PullRequestMergeTests(unittest.TestCase):
             run("commit", "-q", "-am", "main allows an exception")
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge work", "work")
-            with mock.patch.object(check_layers, "ROOT", root), mock.patch.object(check_file_size, "ROOT", root):
-                merged, error = check_file_size.pull_request_base(base, True)
+            with mock.patch.object(check_layers, "ROOT", root), mock.patch.object(merge_base, "ROOT", root):
+                merged, error = merge_base.pull_request_base(base, True)
                 self.assertIsNone(error)
                 self.assertEqual(check_layers.base_config(merged), {"allowed": ["core -> horizon"]})
                 self.assertEqual(check_layers.base_config(base), {"allowed": []})
                 run("checkout", "-q", "work")
-                self.assertEqual(check_file_size.pull_request_base(base, True)[1],
+                self.assertEqual(merge_base.pull_request_base(base, True)[1],
                                  "--pull-request-merge needs HEAD to merge the pull request into a descendant of --base.")
 
 

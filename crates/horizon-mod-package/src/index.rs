@@ -175,8 +175,8 @@ pub struct Version {
     pub api: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub side: Option<Side>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<Capability>,
+    #[serde(default, skip_serializing_if = "Capabilities::is_empty")]
+    pub capabilities: Capabilities,
     /// The Minecraft version it is for.
     pub game: String,
     /// A modpack's mods, as its manifest lists them.
@@ -210,6 +210,68 @@ impl Version {
             .iter()
             .find(|b| b.build == build && b.target == target)
             .ok_or(NativeBinaryAbsent)
+    }
+}
+
+/// A version's capabilities as the index lists them. A name this build doesn't know (one an older
+/// or a newer Horizon defined) is kept as written: that version is not installable, and the rest
+/// of the index still loads.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "Vec<String>", into = "Vec<String>")]
+pub struct Capabilities {
+    known: Vec<Capability>,
+    unknown: Vec<String>,
+}
+
+impl Capabilities {
+    /// The capabilities this build knows, in the index's order.
+    pub fn known(&self) -> &[Capability] {
+        &self.known
+    }
+    /// The names this build doesn't know, as the index wrote them.
+    pub fn unknown(&self) -> &[String] {
+        &self.unknown
+    }
+    pub fn is_empty(&self) -> bool {
+        self.known.is_empty() && self.unknown.is_empty()
+    }
+    /// Why this build can't install a version with these capabilities, if it can't.
+    pub fn unsupported(&self) -> Option<String> {
+        (!self.unknown.is_empty()).then(|| {
+            format!(
+                "it asks for {}, which this Horizon doesn't have",
+                self.unknown.join(", ")
+            )
+        })
+    }
+}
+
+impl From<Vec<Capability>> for Capabilities {
+    fn from(known: Vec<Capability>) -> Self {
+        Self {
+            known,
+            unknown: Vec::new(),
+        }
+    }
+}
+
+impl From<Vec<String>> for Capabilities {
+    fn from(names: Vec<String>) -> Self {
+        let mut listed = Self::default();
+        for name in names {
+            match serde_json::from_value(serde_json::Value::String(name.clone())) {
+                Ok(capability) => listed.known.push(capability),
+                Err(_) => listed.unknown.push(name),
+            }
+        }
+        listed
+    }
+}
+
+impl From<Capabilities> for Vec<String> {
+    fn from(listed: Capabilities) -> Self {
+        let known = listed.known.iter().map(Capability::to_string);
+        known.chain(listed.unknown).collect()
     }
 }
 
@@ -426,12 +488,14 @@ impl Index {
         Ok(())
     }
 
-    /// A project's newest version for Minecraft `game` that wasn't taken down.
+    /// A project's newest version for Minecraft `game` that wasn't taken down and asks for no
+    /// capability this build doesn't know.
     pub fn installable<'a>(&self, project: &'a Project, game: &str) -> Option<&'a Version> {
-        project
-            .versions
-            .iter()
-            .find(|v| v.game == game && self.revoked(&project.id, &v.file.sha256).is_none())
+        project.versions.iter().find(|v| {
+            v.game == game
+                && v.capabilities.unknown().is_empty()
+                && self.revoked(&project.id, &v.file.sha256).is_none()
+        })
     }
     pub fn project(&self, id: &str) -> Option<&Project> {
         self.projects.iter().find(|p| p.id == id)
@@ -596,7 +660,10 @@ pub struct Facts {
 impl Facts {
     /// Whether the file is the one `version` of `project` describes.
     pub fn matches(&self, project: &Project, version: &Version) -> Result<(), String> {
-        let (mut caps, mut listed) = (self.capabilities.clone(), version.capabilities.clone());
+        let (mut caps, mut listed) = (
+            self.capabilities.clone(),
+            version.capabilities.known().to_vec(),
+        );
         caps.sort();
         listed.sort();
         let differs = self.id.as_ref().is_some_and(|id| *id != project.id)
@@ -604,6 +671,7 @@ impl Facts {
             || self.api != version.api
             || self.side != version.side
             || caps != listed
+            || !version.capabilities.unknown().is_empty()
             || self.game.as_ref().is_some_and(|g| *g != version.game)
             || self.requires != version.requires;
         if !differs {

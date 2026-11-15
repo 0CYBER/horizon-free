@@ -45,9 +45,10 @@ jobs:
     name: verify (tree and tools)
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && (endsWith(format('{0}', github.event.pull_request.number), '0') ||
+      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-latest' }}
+      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -101,9 +102,10 @@ jobs:
     name: verify (format and lint)
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && (endsWith(format('{0}', github.event.pull_request.number), '0') ||
+      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-latest' }}
+      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -133,7 +135,7 @@ jobs:
           fi
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       # Dependencies checked by clippy, saved from main's runs (pull requests read main's cache).
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           shared-key: verify-lint
@@ -146,9 +148,9 @@ jobs:
           find crates/horizon-client/src/game -name '*.rs' -print0 | xargs -0 rustup run stable rustfmt --edition 2024 --config skip_children=true --check
           rustup run stable rustfmt --edition 2024 --check crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/*.rs crates/horizon-mod-api-gen/dispatch-tests/src/fixtures/*/*.rs
           rustup run stable rustfmt --edition 2024 --check crates/horizon-mod-wasm/wire-loopback/tests/wire_loopback/*.rs
-          cargo +stable clippy --workspace --all-targets -- -D warnings
+          cargo +stable clippy --workspace --all-targets --locked -- -D warnings
           # The server build (released as horizon-engine): the game without sound or controllers.
-          cargo +stable clippy -p horizon-client -p horizon-game -p horizon-mod-host --all-targets --no-default-features -- -D warnings
+          cargo +stable clippy -p horizon-client -p horizon-game -p horizon-mod-host --all-targets --locked --no-default-features -- -D warnings
       - name: Check generated mod API signatures
         if: steps.rust.outputs.required != 'false'
         run: python3 tools/ci/check_api_boundary.py
@@ -156,9 +158,10 @@ jobs:
     name: verify (Rust tests)
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && (endsWith(format('{0}', github.event.pull_request.number), '0') ||
+      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-latest' }}
+      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -188,14 +191,14 @@ jobs:
           fi
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       # Dependencies and the workspace's own build, saved from main's runs (pull requests read main's cache).
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.rust.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           shared-key: verify
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which verify-lint's clippy
       # type-checks and the parity job builds and runs (they were most of this step's build and link time).
-      # cargo test, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
+      # cargo test --locked, not nextest: nextest's process per test reloads each binary's shared tables for every test, and on
       # these 4-core runners it was no faster (#4978).
       - name: Build the runtime holder test actor
         if: steps.rust.outputs.required != 'false'
@@ -215,16 +218,16 @@ jobs:
         env:
           PACKAGES: ${{ steps.scope.outputs.packages }}
         run: |
-          cargo +stable test ${PACKAGES:---workspace} --lib --bins --tests
+          cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests
           # The full content-root tests (#[ignore]d: minutes each on a laptop). The same build as above; they need the
           # prepared vanilla data, so without it they pass at once. Keep the target selection identical to avoid
           # recompiling the workspace with a different dependency graph.
-          cargo +stable test ${PACKAGES:---workspace} --lib --bins --tests mod_content::tests:: -- --ignored
-          cargo +stable test ${PACKAGES:---workspace} --doc
+          cargo +stable test --locked ${PACKAGES:---workspace} --lib --bins --tests mod_content::tests:: -- --ignored
+          cargo +stable test --locked ${PACKAGES:---workspace} --doc
   verify:
     needs: [verify-tree, verify-lint, verify-test]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every part of verify passed or had nothing to do
@@ -243,9 +246,10 @@ jobs:
   launcher:
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && (endsWith(format('{0}', github.event.pull_request.number), '0') ||
+      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+      (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1'))) &&
-      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-latest' }}
+      fromJSON('["self-hosted", "linux", "horizon-checks"]') || 'ubuntu-24.04' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -268,7 +272,7 @@ jobs:
               libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
           fi
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: steps.launcher.outputs.required != 'false' && runner.environment == 'github-hosted'
         with:
           workspaces: launcher
@@ -304,10 +308,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: windows-arm64-game
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: launcher
           shared-key: windows-arm64-launcher

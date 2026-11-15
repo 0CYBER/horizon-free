@@ -518,7 +518,7 @@ fn version_at(
         changelog: v.changelog.clone(),
         api: facts.api,
         side: facts.side,
-        capabilities: facts.capabilities,
+        capabilities: facts.capabilities.into(),
         game: v.game.clone(),
         requires: facts.requires,
         file: File {

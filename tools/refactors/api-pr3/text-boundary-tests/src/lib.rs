@@ -12,6 +12,12 @@ trait TryIntoEngine<C: ?Sized> {
     type Error;
     fn try_into_engine(&self, context: &C) -> Result<Self::Engine, Self::Error>;
 }
+// The boundary now captures through `horizon_client_lib::api_text`, whose sources live beside
+// `client_lib.rs`. Compile that module here instead of linking the whole client library, and give
+// this crate the name the boundary calls it by (as `client_lib.rs` does with `horizon_client`).
+extern crate self as horizon_client_lib;
+#[path = "../../../../../crates/horizon-client/src/api_text.rs"]
+mod api_text;
 #[path = "../../../../../crates/horizon-client/src/game/modding/api_values/text_boundary.rs"]
 mod text_boundary;
 

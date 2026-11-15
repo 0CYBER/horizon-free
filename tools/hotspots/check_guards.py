@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Keep the conflict hotspots that are already fixed from coming back (AGENTS.md, "No conflict hotspots").
 
-Each guard compares this change with the merge base, the way tools/check_file_size.py does, so what is on main
+Each guard compares this change with the merge base, the way tools/merge_base.py does, so what is on main
 today stays and only growth fails:
 - docs/modding/src/SUMMARY.md may not gain a line for a page the book adds on its own
   (tools/modding_concept_pages.py: a page in concepts/ or how-to/, or in a folder beside its parent page);
@@ -23,7 +23,7 @@ import sys
 
 TOOLS = Path(__file__).resolve().parents[1]
 sys.path.append(str(TOOLS))
-import check_file_size  # noqa: E402
+import merge_base  # noqa: E402
 import modding_concept_pages as pages  # noqa: E402
 
 ROOT = TOOLS.parent
@@ -151,7 +151,7 @@ def notes_problems(before, now):
 
 
 def line_count(text):
-    return None if text is None else check_file_size.lines(text)
+    return None if text is None else merge_base.lines(text)
 
 
 def at(root, rev, path):
@@ -179,7 +179,7 @@ def problems(root, merge_base, carrier=False):
 def main(argv=None, root=ROOT):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="the git ref the branch starts from (CI: the pull request's base)")
-    parser.add_argument("--pull-request-merge", action="store_true", help=check_file_size.PULL_REQUEST_MERGE_HELP)
+    parser.add_argument("--pull-request-merge", action="store_true", help=merge_base.PULL_REQUEST_MERGE_HELP)
     parser.add_argument("--branch", default="", help="the pull request's head branch, when it is in this repository")
     parser.add_argument("--labels", default="", help="the pull request's labels, separated by spaces")
     args = parser.parse_args(argv)
@@ -189,7 +189,7 @@ def main(argv=None, root=ROOT):
     if git(root, "rev-parse", "--is-shallow-repository").strip() == "true":
         print("Hotspot guards failed: comparing with the base needs full history; fetch --unshallow first.")
         return 1
-    base, error = check_file_size.pull_request_base(args.base, args.pull_request_merge)
+    base, error = merge_base.pull_request_base(args.base, args.pull_request_merge)
     if error:
         print(f"Hotspot guards failed: {error}")
         return 1

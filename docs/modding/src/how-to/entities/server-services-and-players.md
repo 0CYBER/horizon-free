@@ -69,6 +69,25 @@ UUID: you can use a retained handle after disconnection until its world epoch
 closes. You cannot target arbitrary offline UUIDs. Retain the handle value, not a
 borrowed service.
 
+## Chat lines and respawn
+
+Keeping a public chat line from some players (an ignore list, a chat channel, a party chat): the `chat_recipient`
+hook is asked once for each placed receiver, the sender included, before any of them is sent the line, with the
+`sender`, `sender_name`, the `message` players see and the `recipient`. Set `hidden` and that one receiver is sent
+nothing, no chat index and no pending acknowledgement; the others still get the line signed as it was sent, so its
+signature verifies for them. It covers a player's chat after `server_chat` let it through and `/say` and `/me`, signed
+or not; whispers (`/msg`) are not public and are not asked. It is not a second `server_chat`: that hook is heard once
+for a typed line and cancels it for everyone, while this one is per receiver and also covers `/say` and `/me`. With no
+listener nothing is asked or allocated. A wasm listener's fault or timeout answers nothing, so the line is sent. The
+server's log keeps every line, hidden or not.
+
+`player.respawn(host)` presses the Respawn button for a dead player, as their client's does (`PERFORM_RESPAWN`): they
+are placed at their respawn point or the world spawn and `player_respawned` is heard. Call it outside every player's
+hook (from `server_tick`, say). It returns `Result<(), RespawnRefusal>`, and each refusal changes nothing, checked in
+this order: `Client`, `InPlayerHook` (a player's state is swapped in), `Stale` (no player on this server behind the
+handle), `NoConnection` (a fake player, or the world's own player in a single-player world, which respawns through its
+own screen) and `Alive` (health above 0 and the game not won: the case the button ignores; a player who has won the game and is watching the End poem is respawned even alive, on the next server tick, as the button does).
+
 ## Player rules and sleep
 
 Reads accept `Host`; writes accept `ServerHost`.
@@ -125,6 +144,22 @@ read the distances in chunks; `host.server_set_view_distance(d)` and
 dedicated server and return `false` otherwise. `server.properties` is not
 written.
 
+## World mutation: chunks, blocks shown and placed as a player
+
+For mods that write blocks by other means (an editor's own section writes, a schematic) and then have to make the game and the client agree. Server only. Each method returns `Result` and names every refusal; a refusal changes nothing.
+
+| Method | Behavior |
+|---|---|
+| `level.relight_chunks(host, &[[cx, cz]])` | Queues the given loaded chunks of the level in place, and the loaded chunks around them, to be lit again whole at the level's next light update, as `edit_blocks` and `level.check_light` queue theirs; nothing is lit during the call. A column whose eight neighbours are not all loaded waits until they are. The light that changed goes to the players who see it. There is no completion event: read the light on a later tick (`level.brightness`), or `chunk.resend` once it is there. Returns how many columns were queued, the ring included (columns not loaded or already waiting are not counted). Refuses with `ChunkRefusal::{Stale, Client, NotInPlace, TooManyChunks { asked, max }}` when the call has more than 256 chunks or would take the level's queue past 4096 columns; `max` is what a call may take now. |
+| `chunk.resend(host)` | Queues the loaded chunk to go whole (light, block entities, biomes) to its watchers at the end of the tick, as an `edit_blocks` chunk does. `Ok` with nothing sent when nobody watches. Refuses with `ChunkRefusal::{Stale, Client, NotInPlace, NotLoaded}`. |
+| `player.sees(host, target)` | Whether the player's client is shown `target` by the tracker's rule (`ServerPlayer.broadcastToPlayer`): a spectator only to spectators watching through their own camera, a player hidden with `hide` only to players of at least that level. Distance is not part of it. Refuses with `PlayerWorldRefusal::{Client, Stale, NoConnection}` (a fake player is no viewer or target). |
+| `player.ack_block_changes(host, sequence)` | Acknowledges the player's block actions up to `sequence` for an action a mod handled on its own channel; the ack goes after the next tick's block changes, taking the maximum pending sequence. A lower value after a higher one has no effect. Any nonnegative value is accepted; a value too high can end pending client predictions early. Refuses with `Client`, `Stale`, `NoConnection` and `NegativeSequence { sequence }`. |
+| `player.show_block(host, pos, state)` | One block update to that player alone; the world is unchanged and the real block returns when it or its chunk is next sent, so a mod sends it again while it wants it shown. The override is not remembered and does not itself acknowledge or clear pending client predictions. Refuses with `Client`, `Stale`, `NoConnection`, `UnknownState` and `PositionNotSendable { pos }` (y outside -2048..=2047, x or z outside -33554432..33554432: the packet's position wraps there). |
+| `player.place_block(host, level, pos, state, update_neighbour_shapes)` | `level.set_block` with a placement's flags (neighbours told and, unless `update_neighbour_shapes` is false, their shapes updated; the block entity follows that write), then `Block.setPlacedBy` of the block standing there, in the player's turn (a bed gets its head, a door its upper half). It is not vanilla's use-on and not "as player" in the full sense: no survival, obstruction, build-permission or spawn-protection check, no `placed_block` advancement or statistic, no sound, no game event, no item used, and `setPlacedBy` gets no placer. Refuses with `Client`, `Stale`, `Dead`, `StaleLevel`, `OtherLevel` (not the level in place, where the player is), `UnknownState`, `OutOfWorld { pos }`, `NotLoaded { pos }` and `Unchanged` (that state already stands there). |
+
+Where Horizon differs from vanilla: vanilla sends and relights per edit and has no call that lights a set of chunks at once, so `relight_chunks` only queues the work (256 chunks a call, 4096 columns waiting) and never stalls the server thread; `show_block` and `place_block` check the position and the state before anything runs, where vanilla's packet and `setBlock` would wrap or ignore them.
+
+A command usage may also name `<pos:vec3>` (`Vec3Argument.vec3()`): the point typed, delivered as `CommandArgumentValue::Vec3([f64; 3])`. A whole x or z is the block's centre (`1` is `1.5`) and y is as typed; relative and local coordinates resolve against the command's source. Fewer than three numbers, or text, is a parse error and the command does not run.
 ## Console and player limit
 
 For a mod that mirrors or drives the server's console (a Discord console channel, a remote assistant) or

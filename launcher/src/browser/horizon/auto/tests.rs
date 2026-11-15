@@ -38,7 +38,7 @@ fn index_of(versions: &[(&str, &str, &Path)]) -> Index {
             version: (*version).into(),
             api: "0.2".into(),
             side: Some(mod_vocab::Side::Both),
-            capabilities: vec![horizon_mod_package::Capability::Registries],
+            capabilities: vec![horizon_mod_package::Capability::Registries].into(),
             game: (*game).into(),
             requires: Vec::new(),
             file: index::File {
