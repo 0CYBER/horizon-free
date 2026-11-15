@@ -182,6 +182,7 @@ fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
                 "minecraft:oak_boat",
                 "minecraft:minecart",
                 "minecraft:arrow",
+                "minecraft:armor_stand",
             ]
             .into_iter()
             .enumerate()
@@ -238,20 +239,6 @@ fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
                     "{kind} transferred, not constructed"
                 );
             }
-            let count = calls.lock().unwrap().len();
-            let state = game.take_transferred_entity_state(replacement);
-            // Armor stands now have a typed transfer loader, just like the
-            // listed families above. Adopting one must not initialize it again.
-            game.load_listed_transferred(
-                "minecraft:armor_stand",
-                Some([900, 2, 3, 4]),
-                None,
-                tag("minecraft:armor_stand", 900),
-                state,
-            )
-            .unwrap();
-            assert_eq!(game.armor_stands.len(), 1);
-            assert_eq!(calls.lock().unwrap().len(), count);
             // Constructor ownership is pruned by object identity before UUID cleanup.
             // Equal UUIDs must not make an unreachable object's marker erase a survivor;
             // player holders and objects belonging to parked levels stay untouched.
