@@ -402,6 +402,7 @@ mod knockback_sync_tests {
     /// `TemptGoal` scales its range by the player's visibility: an invisible
     /// player five blocks away does not tempt a sulfur cube.
     #[test]
+    #[ignore = "daily"]
     fn an_invisible_player_tempts_a_sulfur_cube_only_within_two_blocks() {
         use crate::mobs::goals::Cx;
         use crate::mobs::world::{test_player, with_test_world};
@@ -687,6 +688,7 @@ mod burning_arrow_tests {
     /// the arrow's knock, then the fuse lit: the next tick plays
     /// `entity.tnt.primed`, then the archetype's hit sound.
     #[test]
+    #[ignore = "daily"]
     fn a_knock_and_a_lit_fuse_both_sound() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -715,6 +717,7 @@ mod burning_arrow_tests {
     /// crosses the baby boundary: a loaded adult of size 1 and a big baby
     /// keep their size, and only a baby growing up becomes size 2 (#14916).
     #[test]
+    #[ignore = "daily"]
     fn only_growing_up_makes_a_cube_size_2() {
         let mut events = Vec::new();
         let ran = crate::mobs::world::with_test_world(&[], |w, _| {
@@ -1559,6 +1562,7 @@ mod tnt_rule_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn mob_tick_counts_the_fuse_but_keeps_noai_cooldowns_still() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -1619,6 +1623,7 @@ mod tnt_rule_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_fuse_running_out_while_tnt_does_not_explode_makes_no_blast() {
         // tickFuse: the blast (and its source) only with tnt_explodes, the
         // discard either way.
@@ -1892,6 +1897,7 @@ mod mob_contact_tests {
     use std::sync::Arc;
 
     #[test]
+    #[ignore = "daily"]
     fn mob_tick_contacts_only_overlapping_pushable_mobs_with_a_hot_body() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();

@@ -21,6 +21,8 @@ mod boat_load;
 pub use boat_load::boat_from_nbt;
 mod projectile_fields;
 use projectile_fields::{load_projectile_entity_fields, put_projectile_entity_fields};
+mod ai_pause;
+pub use ai_pause::write_ai_paused;
 mod mob_death;
 mod refs;
 mod saved_attributes;
@@ -595,6 +597,7 @@ pub fn mob_to_nbt(
         put(&mut tag, key, value);
     }
     mob_death::write(m, &mut tag);
+    ai_pause::write_ai_paused(m.ai.ai_paused, &mut tag);
     // Mob.addAdditionalSaveData: hasHome means radius != -1, including -2.
     // Species writers below retain their own home_pos override.
     let Tag::Compound(map) = &mut tag else {
@@ -1757,7 +1760,7 @@ fn home_block_pos(tag: Option<&Tag>) -> Option<[i32; 3]> {
     }
 }
 mod mob_load;
-pub use mob_load::{mob_from_nbt, mob_from_nbt_with_random};
+pub use mob_load::{mob_from_nbt, mob_from_nbt_remote, mob_from_nbt_with_random};
 
 fn mob_from_nbt_at(
     tag: &Tag,
@@ -1766,10 +1769,15 @@ fn mob_from_nbt_at(
     registry: Option<&BlockRegistry>,
     random: horizon_core::random::LegacyRandom,
     position: Vec3,
+    authoritative: bool,
 ) -> Option<Mob> {
     let kind = types.get(&self::kind(tag)?)?.clone();
     let [yaw, pitch] = rotation(tag);
-    let mut m = Mob::with_random(id, kind, position, yaw, random);
+    let mut m = if authoritative {
+        Mob::with_random(id, kind, position, yaw, random)
+    } else {
+        Mob::remote_with_random(id, kind, position, yaw, random)
+    };
     m.velocity = motion(tag);
     m.head_pitch = pitch;
     // LivingEntity.readAdditionalSaveData: `setSharedFlag(7, getBooleanOr(FallFlying, false))`.
@@ -1904,6 +1912,7 @@ fn mob_from_nbt_at(
         m.extra.set_main_hand(None);
     }
     mob_death::read(&mut m, tag);
+    m.ai.ai_paused = ai_pause::read(tag);
     m.impulse_grace_time =
         number(tag.get("current_impulse_context_reset_grace_time")).unwrap_or(0) as i32;
     // Mob.readAdditionalSaveData overrides what the constructor set (copper

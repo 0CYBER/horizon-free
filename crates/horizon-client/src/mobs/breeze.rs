@@ -436,6 +436,7 @@ mod ground_particle_tests {
     /// feet, of the block it stands in or else the one it stands on; none as a
     /// passenger or over a block that draws nothing (air).
     #[test]
+    #[ignore = "daily"]
     fn a_breeze_crumbles_the_block_under_its_feet() {
         use crate::mobs::world::with_built_test_world;
         let ran = with_built_test_world(
@@ -509,7 +510,7 @@ mod ground_particle_tests {
         );
         // Without the vanilla data under .local/horizon-client there is no world
         // to crumble: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 

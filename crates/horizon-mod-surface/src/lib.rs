@@ -29,6 +29,7 @@
 //! | public field or variant of a type | `type:<path>.<field or variant>` (a tuple field by position) |
 //! | Part kind | `part:<kind>` |
 //! | capability | `capability:<key>` (`registries`, `horizon:fluids`) |
+//! | behaviour | `behaviour:<name>` (`add_to_merging`) |
 //!
 //! # Hashes
 //!
@@ -52,6 +53,9 @@
 //! hand-written alike, outside its hash: one gained is additive, one lost is a change the fit
 //! test names. A type's `shape` is its full wire layout ([`shape`]) and is not hashed into its
 //! contract. The document's `hash` is [`Surface::document_hash`] over every (id, hash).
+//!
+//! A behaviour's hash covers nothing but that the record exists; its `version` is compared on its
+//! own, like a hook's, and its `doc` and `tests` are outside the hash.
 //!
 //! A trait's `role` says whether mods implement it, call it, or neither: the generator takes it
 //! from the WebAssembly boundary's lists of the traits a mod implements (its exports, with the
@@ -110,6 +114,10 @@ pub struct Surface {
     pub parts: Vec<Part>,
     #[serde(default)]
     pub capabilities: Vec<Capability>,
+    /// Promises that are no type or signature. A reader built before they existed ignores the
+    /// list, so adding it kept the schema number.
+    #[serde(default)]
+    pub behaviours: Vec<Behaviour>,
 }
 
 /// Why a document was refused.
@@ -149,7 +157,7 @@ pub fn leaf(id: &str) -> &str {
         return id;
     };
     match kind {
-        "capability" | "part" => rest,
+        "capability" | "part" | "behaviour" => rest,
         "hook" => rest.rsplit_once('.').map_or(rest, |(_, member)| member),
         "type" => match rest.rsplit_once('.') {
             Some((_, member)) => member,
@@ -361,6 +369,27 @@ impl Type {
     }
 }
 
+impl Behaviour {
+    /// The behaviour, hashed over nothing but its existence: its `version` is compared on its
+    /// own, and its `doc` and `tests` are outside the hash.
+    pub fn new(
+        id: impl Into<String>,
+        doc: impl Into<String>,
+        tests: Vec<String>,
+        contract: BehaviourContract,
+    ) -> Self {
+        #[derive(Serialize)]
+        struct Own {}
+        Self {
+            id: id.into(),
+            hash: contract_hash(&Own {}),
+            doc: doc.into(),
+            tests,
+            contract,
+        }
+    }
+}
+
 impl Part {
     pub fn new(
         id: impl Into<String>,
@@ -435,9 +464,18 @@ impl Surface {
             types,
             parts,
             capabilities,
+            behaviours: Vec::new(),
         };
         surface.hash = surface.document_hash();
         surface
+    }
+
+    /// The document with `behaviours` (sorted by id) added, and its hash.
+    pub fn with_behaviours(mut self, mut behaviours: Vec<Behaviour>) -> Self {
+        behaviours.sort_by(|a, b| a.id.cmp(&b.id));
+        self.behaviours = behaviours;
+        self.hash = self.document_hash();
+        self
     }
 
     /// Every record and member record as (id, hash), in no promised order.
@@ -471,6 +509,10 @@ impl Surface {
             .capabilities
             .iter()
             .map(|r| (r.id.as_str(), r.hash.as_str()));
+        let behaviours = self
+            .behaviours
+            .iter()
+            .map(|r| (r.id.as_str(), r.hash.as_str()));
         hooks
             .chain(traits)
             .chain(functions)
@@ -478,6 +520,7 @@ impl Surface {
             .chain(types)
             .chain(parts)
             .chain(capabilities)
+            .chain(behaviours)
     }
 
     /// The SHA-256 (first 128 bits, hex) of `<id> <hash>\n` for every entry, in byte order of id.
@@ -495,7 +538,7 @@ impl Surface {
     }
 
     /// The identifiers a mod's source may contain for each id: its [`leaf`], and a capability
-    /// key's constant.
+    /// key's constant. A behaviour has none: no mod's code uses one.
     pub fn identifiers(&self) -> impl Iterator<Item = (&str, &str)> {
         let constants = self.capabilities.iter().filter_map(|c| {
             c.contract.constant.as_deref().map(|constant| {
@@ -506,6 +549,7 @@ impl Surface {
             })
         });
         self.entries()
+            .filter(|(id, _)| !id.starts_with("behaviour:"))
             .map(|(id, _)| (leaf(id), id))
             .chain(constants)
     }

@@ -37,7 +37,7 @@ class SdkTablesTests(unittest.TestCase):
     def test_surface_records_are_counted_by_kind_with_members_apart(self):
         others = [{"id": record} for record in ("trait:Host", "method:Host::level", "assoc:Host::Side",
                                                 "handle:Pos::new", "fn:log", "macro:hook", "part:items",
-                                                "capability:net")]
+                                                "capability:net", "behaviour:pool_merging")]
         document = {"schema": 2, "hooks": [{"id": "hook:tick", "fields": [{"id": "hook:tick.phase"}]}],
                     "types": [{"id": "type:world::Pos", "fields": [{"id": "type:world::Pos.x"},
                                                                    {"id": "type:world::Pos.y"}]}],

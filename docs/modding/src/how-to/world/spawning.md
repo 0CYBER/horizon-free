@@ -173,6 +173,10 @@ fn mob_despawn(&self, _: &dyn mod_api::Host, event: &mut mod_api::MobDespawnEven
 }
 ```
 
+The hook's scoped read host resolves the ticking mob directly and peers through the tick snapshot. An already-ticked peer exposes its post-turn state; a not-yet-ticked peer exposes its pre-turn state. A mob spawned during the pass does not resolve through this scoped view until the next pass. Removed mobs do not resolve, but a dead mob still present in the level is not removed and can still resolve. `living_change_target` uses the same view when fired inside this tick pass; outside it, that hook reads the entities available in the game host, not this snapshot.
+
+This is the accepted read-host scoped-view first step of #795, not the completed in-place ownership design. Write-host callbacks and the remaining ownership work are outside this contract.
+
 The wither and the ender dragon override `checkDespawn` in vanilla, so the event is not fired for them.
 
 ## Adding or removing a custom spawner

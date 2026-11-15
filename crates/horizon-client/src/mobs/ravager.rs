@@ -562,6 +562,7 @@ mod sight_tests {
     /// `Ravager.hasLineOfSight` (`Sensing.hasLineOfSight` calls it): a stunned or roaring ravager sees nobody,
     /// a biting one still sees. The player stands ten blocks away on a flat floor with nothing between.
     #[test]
+    #[ignore = "daily"]
     fn a_stunned_or_roaring_ravager_does_not_see_the_player() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -605,7 +606,7 @@ mod sight_tests {
                 "only a ravager is blind"
             );
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     fn blind_of_other_species(world: &MobWorld, types: &crate::mobs::MobTypes) -> bool {

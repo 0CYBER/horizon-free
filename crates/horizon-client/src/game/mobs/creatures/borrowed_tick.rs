@@ -113,33 +113,22 @@ impl Game<'_> {
         // Each mob's position updates in its tick, in order, filed and told before the next mob
         // is examined. The small record remains separate from `Mob` because teleports update
         // the same position field as ordinary movement.
-        let section_table = round.sections().then(|| {
-            std::rc::Rc::new(std::cell::RefCell::new(std::mem::take(
-                &mut self.native_lifecycle.entity_sections,
-            )))
-        });
+        let section_scope = round
+            .sections()
+            .then(|| self.entity_section_scope())
+            .flatten();
+        let (section_table, live_section_observer) = if round.sections() {
+            self.native_lifecycle
+                .section_observer
+                .begin(&mut self.native_lifecycle.entity_sections, section_scope)
+        } else {
+            (None, None)
+        };
         let mut section_moves = section_table
             .as_ref()
             .map(|sections| std::mem::take(&mut sections.borrow_mut().ticked))
             .unwrap_or_default();
         crate::mobs::living::section_writes::begin(section_table.is_some());
-        let section_scope = round
-            .sections()
-            .then(|| self.entity_section_scope())
-            .flatten();
-        let live_section_observer: Option<crate::mobs::living::section_writes::Observer> =
-            section_scope
-                .zip(section_table.as_ref())
-                .map(|(scope, sections)| {
-                    let observer: crate::mobs::living::section_writes::Observer =
-                        std::rc::Rc::new(std::cell::RefCell::new(
-                            crate::game::entity_sections::LiveSectionObserver::new(
-                                std::rc::Rc::clone(sections),
-                                scope,
-                            ),
-                        ));
-                    observer
-                });
         let mut dispatch_panic = None;
         let mut pushes = std::mem::take(state.pushes);
         let original_len = snapshot.len();
@@ -214,6 +203,9 @@ impl Game<'_> {
                             let Some(&i) = positions.get(&snapshot[slot].id) else {
                                 keep[slot] = false;
                                 snapshot[slot].alive = false;
+                                // The row's mob left the list at a boundary: the
+                                // tick view must answer a removed handle with nothing.
+                                snapshot[slot].removed = true;
                                 resuming = false;
                                 resume_sampled = None;
                                 cursor += 1;
@@ -232,6 +224,9 @@ impl Game<'_> {
                     if m.removed && !resuming {
                         keep[slot] = false;
                         snapshot[slot].alive = false;
+                        // `removed` is the view's authoritative gone: a dead body
+                        // that is still in the level keeps resolving (#795).
+                        snapshot[slot].removed = true;
                         cursor += 1;
                         continue;
                     }
@@ -280,20 +275,42 @@ impl Game<'_> {
                                 | horizon_client::mobs::Species::Mannequin
                         )
                         && let Some(epoch) = self.native_lifecycle.epoch()
-                        && let Err(payload) =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                self.native_mob_despawn(
-                                    self.dim.id(),
-                                    mod_api::MobRef::new(mod_api::EntityRef::new(epoch, m.id)),
-                                    &m.kind.id,
-                                    [m.position.x, m.position.y, m.position.z],
-                                    &mut m.despawn,
-                                );
-                            }))
                     {
-                        m.despawn = mod_api::Despawn::default();
-                        dispatch_panic = Some(payload);
-                        break;
+                        let (id, kind, at) = (
+                            m.id,
+                            std::sync::Arc::clone(&m.kind),
+                            [m.position.x, m.position.y, m.position.z],
+                        );
+                        let mut result = mod_api::Despawn::default();
+                        let outcome =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                // The handle resolves through the tick's own view:
+                                // the game has lent its mob list to this pass (#795).
+                                let world = MobWorld {
+                                    others: snapshot.as_slice(),
+                                    others_grid: Some(&grid),
+                                    others_index: Some(&index),
+                                    others_villagers: Some(&villager_slots),
+                                    others_solid: Some(&solid_slots),
+                                    live_mobs: None,
+                                    ..base.clone()
+                                };
+                                self.native_mob_despawn_in_tick(
+                                    m,
+                                    &world,
+                                    self.dim.id(),
+                                    mod_api::MobRef::new(mod_api::EntityRef::new(epoch, id)),
+                                    &kind.id,
+                                    at,
+                                    &mut result,
+                                );
+                            }));
+                        m.despawn = result;
+                        if let Err(payload) = outcome {
+                            m.despawn = mod_api::Despawn::default();
+                            dispatch_panic = Some(payload);
+                            break;
+                        }
                     }
                     // ServerLevel.tick: every loaded entity checks despawning, but
                     // only those in entity-ticking chunks (within the simulation
@@ -317,6 +334,7 @@ impl Game<'_> {
                         if !kept {
                             died.remove(&m.id);
                             snapshot[slot].alive = false;
+                            snapshot[slot].removed = true;
                         }
                         keep[slot] = kept;
                         cursor += 1;
@@ -640,6 +658,7 @@ impl Game<'_> {
                     // after this mob see it as it is now.
                     snapshot[slot] = seen(m, uuid, world_items!(self));
                     snapshot[slot].alive &= kept;
+                    snapshot[slot].removed |= !kept;
                     grid.update(slot, snapshot[slot].bounds);
                     horizon_client::mobs::apply_brain_events(
                         &mut mobs,
@@ -731,8 +750,10 @@ impl Game<'_> {
                 if let Some(&i) = current.get(&s.id) {
                     *s = seen(&mobs[i], uuid, world_items!(self));
                     s.alive &= keep.get(slot).copied().unwrap_or(true);
+                    s.removed |= !keep.get(slot).copied().unwrap_or(true);
                 } else {
                     s.alive = false;
+                    s.removed = true;
                 }
             }
             for m in &mobs {
@@ -807,11 +828,9 @@ impl Game<'_> {
         // consumed every record that belonged to this family tick.
         section_moves.clear();
         if let Some(table) = section_table {
-            let mut sections = std::rc::Rc::try_unwrap(table)
-                .ok()
-                .expect("live section observer still held");
-            sections.get_mut().ticked = section_moves;
-            self.native_lifecycle.entity_sections = sections.into_inner();
+            let mut sections = table.borrow_mut();
+            sections.ticked = section_moves;
+            std::mem::swap(&mut self.native_lifecycle.entity_sections, &mut sections);
         } else {
             self.native_lifecycle.entity_sections.ticked = section_moves;
         }
@@ -981,3 +1000,7 @@ mod hoglin_routing_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mob_tick_access_tests.rs"]
+mod mob_tick_access_tests;

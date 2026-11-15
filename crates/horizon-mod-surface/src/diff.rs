@@ -19,10 +19,11 @@
 //!   `..`), or a struct's public field set changing in a field its records do not list (its
 //!   `fields_hash`); a struct that is no longer
 //!   constructible (only a mod that builds it with a literal); a public path that goes (only a
-//!   mod that names the item by it); a hook's `version` (only a mod whose manifest names it); a
+//!   mod that names the item by it); a hook's `version` (only a mod whose manifest names it) or a
+//!   behaviour's (only a mod that relies on it); a
 //!   type's wire form or wire layout (`shape`; wasm mods only); a method of a trait mods only call
 //!   that moved unchanged to a supertrait it still has (only a call written by trait path).
-//! - **Additive**: a new record (a field of a struct mods cannot build, a variant of a
+//! - **Additive**: a new record (a behaviour, a field of a struct mods cannot build, a variant of a
 //!   `#[non_exhaustive]` enum, a defaulted method), and changes that only widen an item: now on
 //!   wasm, now crossing the wasm boundary, now constructible, an impl gained, a new public path,
 //!   a marker or object-safe API supertrait gained by a trait mods only call (`Send`, `Sync`,
@@ -115,7 +116,7 @@ struct Entry {
     view: Value,
     /// What the diff compares outside the hash: public `paths`; a type's `impls`, `wire`,
     /// `wire_form`, `shape`, `constructible` and `fields_hash`; a called trait's `bounds`; a
-    /// hook's `version`.
+    /// hook's or behaviour's `version`.
     extra: Map<String, Value>,
 }
 
@@ -212,6 +213,12 @@ fn entries(surface: &Surface) -> BTreeMap<String, Entry> {
     }
     for r in &surface.capabilities {
         put(&r.id, &r.hash, json(&r.contract), Map::new());
+    }
+    for r in &surface.behaviours {
+        // A behaviour's hash holds nothing: its version is all the diff compares.
+        let mut view = json(&r.contract);
+        let extra = take(&mut view, &["version"]);
+        put(&r.id, &r.hash, view, extra);
     }
     map
 }
@@ -570,9 +577,14 @@ fn extras(
     }
     let (x, y) = (get(old, "version"), get(new, "version"));
     if x != y {
+        let affects = if id.starts_with("behaviour:") {
+            "a mod that relies on this behaviour"
+        } else {
+            "a mod that names this hook's version in its manifest"
+        };
         lines.push((
             format!(
-                "version {} → {}: affects only a mod that names this hook's version in its manifest",
+                "version {} → {}: affects only {affects}",
                 show(&x),
                 show(&y)
             ),
@@ -912,7 +924,7 @@ impl Diff {
             (Class::Breaking, "Breaking", breaking),
             (
                 Class::Conditional,
-                "Conditional: breaks only the mods the fit test names",
+                "Conditional: breaks only some mods (the fit test names them; a behaviour's version is for the mods that rely on it)",
                 conditional,
             ),
             (Class::Additive, "Additive", additive),

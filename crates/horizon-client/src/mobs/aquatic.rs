@@ -1278,57 +1278,61 @@ mod pufferfish_sting_tests {
     use std::sync::Arc;
 
     #[test]
+    #[ignore = "daily"]
     fn mob_tick_dispatches_puffed_contacts_with_or_without_ai() {
-        with_test_world(&[], |w, types| {
-            let target = Mob::new(
-                2,
-                Arc::new(types.types["minecraft:pig"].clone()),
-                Vec3::new(0.5, 64.0, 0.5),
-                0.0,
-            );
-            let others = [target.seen(None, &crate::items::Items::empty())];
-            let world = MobWorld {
-                goal_host: None,
-                others: &others,
-                ..w.clone()
-            };
-            for no_ai in [true, false] {
-                for puff in [0, 2] {
-                    let mut fish = Mob::new(
-                        1,
-                        Arc::new(types.types["minecraft:pufferfish"].clone()),
-                        Vec3::new(0.5, 64.0, 0.5),
-                        0.0,
-                    );
-                    fish.no_ai = no_ai;
-                    fish.no_gravity = true;
-                    fish.persistent = true;
-                    fish.extra.size = puff;
-                    let mut events = Vec::new();
-                    let mut test_level = crate::health::TestLevel::new(0);
-                    assert!(fish.tick(&world, &mut test_level.level(), &mut events));
-                    let stings: Vec<_> = events
-                        .iter()
-                        .filter_map(|event| match event {
-                            MobEvent::PufferfishSting {
-                                target,
-                                amount,
-                                source,
-                                poison_ticks,
-                                ..
-                            } => Some((*target, *amount, *poison_ticks, source.attacker)),
-                            _ => None,
-                        })
-                        .collect();
-                    let expected = if puff == 2 {
-                        vec![(2, 3.0, 120, Some(Who::Mob(1)))]
-                    } else {
-                        Vec::new()
-                    };
-                    assert_eq!(stings, expected, "NoAI={no_ai}, puff={puff}");
+        assert!(
+            with_test_world(&[], |w, types| {
+                let target = Mob::new(
+                    2,
+                    Arc::new(types.types["minecraft:pig"].clone()),
+                    Vec3::new(0.5, 64.0, 0.5),
+                    0.0,
+                );
+                let others = [target.seen(None, &crate::items::Items::empty())];
+                let world = MobWorld {
+                    goal_host: None,
+                    others: &others,
+                    ..w.clone()
+                };
+                for no_ai in [true, false] {
+                    for puff in [0, 2] {
+                        let mut fish = Mob::new(
+                            1,
+                            Arc::new(types.types["minecraft:pufferfish"].clone()),
+                            Vec3::new(0.5, 64.0, 0.5),
+                            0.0,
+                        );
+                        fish.no_ai = no_ai;
+                        fish.no_gravity = true;
+                        fish.persistent = true;
+                        fish.extra.size = puff;
+                        let mut events = Vec::new();
+                        let mut test_level = crate::health::TestLevel::new(0);
+                        assert!(fish.tick(&world, &mut test_level.level(), &mut events));
+                        let stings: Vec<_> = events
+                            .iter()
+                            .filter_map(|event| match event {
+                                MobEvent::PufferfishSting {
+                                    target,
+                                    amount,
+                                    source,
+                                    poison_ticks,
+                                    ..
+                                } => Some((*target, *amount, *poison_ticks, source.attacker)),
+                                _ => None,
+                            })
+                            .collect();
+                        let expected = if puff == 2 {
+                            vec![(2, 3.0, 120, Some(Who::Mob(1)))]
+                        } else {
+                            Vec::new()
+                        };
+                        assert_eq!(stings, expected, "NoAI={no_ai}, puff={puff}");
+                    }
                 }
-            }
-        });
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// What a pufferfish puffed to `puff` stings in one `ai_step`, as
@@ -1387,6 +1391,7 @@ mod pufferfish_sting_tests {
     /// meets its own (inflated by 0.3), not only the player, for
     /// `getPuffState() + 1`.
     #[test]
+    #[ignore = "daily"]
     fn a_puffed_pufferfish_stings_the_mobs_that_touch_it() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -1422,275 +1427,282 @@ mod pufferfish_sting_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn pufferfish_sting_parity_scenarios() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
-        with_test_world(&[], |w, types| {
-            let make_mob = |id: u32, name: &str, at: Vec3| {
-                Mob::new(id, Arc::new(types.types[name].clone()), at, 0.0)
-            };
-
-            // Scenario 1: Default/legacy behavior
-            // Deflated pufferfish (PuffState: 0), cod, or separated mob do not get stung or poisoned.
-            {
-                let mut deflated = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
-                deflated.extra.size = 0;
-                let pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
-                let seen = [pig.seen(None, &crate::items::Items::empty())];
-                let world = MobWorld {
-                    goal_host: None,
-                    others: &seen,
-                    ..w.clone()
+        assert!(
+            with_test_world(&[], |w, types| {
+                let make_mob = |id: u32, name: &str, at: Vec3| {
+                    Mob::new(id, Arc::new(types.types[name].clone()), at, 0.0)
                 };
-                let mut events = Vec::new();
-                deflated.tick(&world, level, &mut events);
-                assert!(
-                    !events
-                        .iter()
-                        .any(|e| matches!(e, MobEvent::PufferfishSting { .. })),
-                    "deflated pufferfish should not emit sting events"
-                );
 
-                let mut cod = make_mob(3, "minecraft:cod", Vec3::new(0.5, 64.0, 0.5));
-                let mut events = Vec::new();
-                cod.tick(&world, level, &mut events);
-                assert!(
-                    !events
-                        .iter()
-                        .any(|e| matches!(e, MobEvent::PufferfishSting { .. })),
-                    "cod should not emit sting events"
-                );
+                // Scenario 1: Default/legacy behavior
+                // Deflated pufferfish (PuffState: 0), cod, or separated mob do not get stung or poisoned.
+                {
+                    let mut deflated =
+                        make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
+                    deflated.extra.size = 0;
+                    let pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
+                    let seen = [pig.seen(None, &crate::items::Items::empty())];
+                    let world = MobWorld {
+                        goal_host: None,
+                        others: &seen,
+                        ..w.clone()
+                    };
+                    let mut events = Vec::new();
+                    deflated.tick(&world, level, &mut events);
+                    assert!(
+                        !events
+                            .iter()
+                            .any(|e| matches!(e, MobEvent::PufferfishSting { .. })),
+                        "deflated pufferfish should not emit sting events"
+                    );
 
-                let mut fish = make_mob(4, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
-                fish.extra.size = 2;
-                let far_pig = make_mob(5, "minecraft:pig", Vec3::new(5.0, 64.0, 5.0));
-                let seen_far = [far_pig.seen(None, &crate::items::Items::empty())];
-                let world_far = MobWorld {
-                    goal_host: None,
-                    others: &seen_far,
-                    ..w.clone()
-                };
-                let mut events = Vec::new();
-                fish.tick(&world_far, level, &mut events);
-                assert!(
-                    !events
-                        .iter()
-                        .any(|e| matches!(e, MobEvent::PufferfishSting { .. })),
-                    "separated mob should not be stung"
-                );
-            }
+                    let mut cod = make_mob(3, "minecraft:cod", Vec3::new(0.5, 64.0, 0.5));
+                    let mut events = Vec::new();
+                    cod.tick(&world, level, &mut events);
+                    assert!(
+                        !events
+                            .iter()
+                            .any(|e| matches!(e, MobEvent::PufferfishSting { .. })),
+                        "cod should not emit sting events"
+                    );
 
-            // Scenario 2: Negative cases (invulnerable mob or cooldown mob)
-            {
-                // Invulnerable mob
-                let mut fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
-                fish.extra.size = 2;
-                let mut invuln_pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
-                invuln_pig.invulnerable_flag = true;
-                let seen = [invuln_pig.seen(None, &crate::items::Items::empty())];
-                let world = MobWorld {
-                    goal_host: None,
-                    others: &seen,
-                    ..w.clone()
-                };
-                let mut events = Vec::new();
-                fish.tick(&world, level, &mut events);
-                assert!(
-                    events
-                        .iter()
-                        .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
-                );
-                let mut mobs: JoinList<_> = [fish, invuln_pig].into_iter().collect();
-                apply_brain_events(&mut mobs, level, &mut events, 0);
-                assert_eq!(mobs[1].health, 10.0, "invulnerable mob takes no damage");
-                assert!(
-                    mobs[1].extra.effects.is_empty(),
-                    "invulnerable mob receives no poison"
-                );
-                assert!(
+                    let mut fish = make_mob(4, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
+                    fish.extra.size = 2;
+                    let far_pig = make_mob(5, "minecraft:pig", Vec3::new(5.0, 64.0, 5.0));
+                    let seen_far = [far_pig.seen(None, &crate::items::Items::empty())];
+                    let world_far = MobWorld {
+                        goal_host: None,
+                        others: &seen_far,
+                        ..w.clone()
+                    };
+                    let mut events = Vec::new();
+                    fish.tick(&world_far, level, &mut events);
+                    assert!(
+                        !events
+                            .iter()
+                            .any(|e| matches!(e, MobEvent::PufferfishSting { .. })),
+                        "separated mob should not be stung"
+                    );
+                }
+
+                // Scenario 2: Negative cases (invulnerable mob or cooldown mob)
+                {
+                    // Invulnerable mob
+                    let mut fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
+                    fish.extra.size = 2;
+                    let mut invuln_pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
+                    invuln_pig.invulnerable_flag = true;
+                    let seen = [invuln_pig.seen(None, &crate::items::Items::empty())];
+                    let world = MobWorld {
+                        goal_host: None,
+                        others: &seen,
+                        ..w.clone()
+                    };
+                    let mut events = Vec::new();
+                    fish.tick(&world, level, &mut events);
+                    assert!(
+                        events
+                            .iter()
+                            .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
+                    );
+                    let mut mobs: JoinList<_> = [fish, invuln_pig].into_iter().collect();
+                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    assert_eq!(mobs[1].health, 10.0, "invulnerable mob takes no damage");
+                    assert!(
+                        mobs[1].extra.effects.is_empty(),
+                        "invulnerable mob receives no poison"
+                    );
+                    assert!(
                     !events.iter().any(
                         |e| matches!(e, MobEvent::Sound(s, ..) if *s == "entity.puffer_fish.sting")
                     ),
                     "no sting sound when hit refused"
                 );
 
-                // Cooldown mob (already in invulnerability timer with higher or equal last_hurt)
-                let mut fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
-                fish.extra.size = 2;
-                let mut cooldown_pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
-                cooldown_pig.invulnerable = 20;
-                cooldown_pig.last_hurt = 3.0; // Pufferfish deals 1 + 2 = 3.0 <= 3.0
-                let seen = [cooldown_pig.seen(None, &crate::items::Items::empty())];
-                let world = MobWorld {
-                    goal_host: None,
-                    others: &seen,
-                    ..w.clone()
-                };
-                let mut events = Vec::new();
-                fish.tick(&world, level, &mut events);
-                assert!(
-                    events
-                        .iter()
-                        .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
-                );
-                let mut mobs: JoinList<_> = [fish, cooldown_pig].into_iter().collect();
-                apply_brain_events(&mut mobs, level, &mut events, 0);
-                assert_eq!(mobs[1].health, 10.0, "cooldown mob takes no damage");
-                assert!(
-                    mobs[1].extra.effects.is_empty(),
-                    "cooldown mob receives no poison"
-                );
-                assert!(
+                    // Cooldown mob (already in invulnerability timer with higher or equal last_hurt)
+                    let mut fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
+                    fish.extra.size = 2;
+                    let mut cooldown_pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
+                    cooldown_pig.invulnerable = 20;
+                    cooldown_pig.last_hurt = 3.0; // Pufferfish deals 1 + 2 = 3.0 <= 3.0
+                    let seen = [cooldown_pig.seen(None, &crate::items::Items::empty())];
+                    let world = MobWorld {
+                        goal_host: None,
+                        others: &seen,
+                        ..w.clone()
+                    };
+                    let mut events = Vec::new();
+                    fish.tick(&world, level, &mut events);
+                    assert!(
+                        events
+                            .iter()
+                            .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
+                    );
+                    let mut mobs: JoinList<_> = [fish, cooldown_pig].into_iter().collect();
+                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    assert_eq!(mobs[1].health, 10.0, "cooldown mob takes no damage");
+                    assert!(
+                        mobs[1].extra.effects.is_empty(),
+                        "cooldown mob receives no poison"
+                    );
+                    assert!(
                     !events.iter().any(
                         |e| matches!(e, MobEvent::Sound(s, ..) if *s == "entity.puffer_fish.sting")
                     ),
                     "no sting sound on cooldown"
                 );
-            }
+                }
 
-            // Scenario 3: Positive case: touching mob gets stung, takes damage puff_state + 1,
-            // plays sound, receives poison, and its duration decrements in the same tick if it ticks.
-            {
-                let mut fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
-                fish.extra.size = 2;
-                let pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
-                let seen = [pig.seen(None, &crate::items::Items::empty())];
-                let world = MobWorld {
-                    goal_host: None,
-                    others: &seen,
-                    ..w.clone()
-                };
-                let mut events = Vec::new();
+                // Scenario 3: Positive case: touching mob gets stung, takes damage puff_state + 1,
+                // plays sound, receives poison, and its duration decrements in the same tick if it ticks.
+                {
+                    let mut fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
+                    fish.extra.size = 2;
+                    let pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
+                    let seen = [pig.seen(None, &crate::items::Items::empty())];
+                    let world = MobWorld {
+                        goal_host: None,
+                        others: &seen,
+                        ..w.clone()
+                    };
+                    let mut events = Vec::new();
 
-                // World Tick 1: Fish ticks first
-                fish.tick(&world, level, &mut events);
-                assert!(
-                    events
-                        .iter()
-                        .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
-                );
-                let mut mobs: JoinList<_> = [fish, pig].into_iter().collect();
-                apply_brain_events(&mut mobs, level, &mut events, 0);
+                    // World Tick 1: Fish ticks first
+                    fish.tick(&world, level, &mut events);
+                    assert!(
+                        events
+                            .iter()
+                            .any(|e| matches!(e, MobEvent::PufferfishSting { .. }))
+                    );
+                    let mut mobs: JoinList<_> = [fish, pig].into_iter().collect();
+                    apply_brain_events(&mut mobs, level, &mut events, 0);
 
-                // Assertions after fish tick and apply_brain_events:
-                assert_eq!(
-                    mobs[1].health, 7.0,
-                    "pig takes 1 + 2 = 3.0 damage (10 -> 7)"
-                );
-                assert_eq!(mobs[1].extra.effects.len(), 1);
-                assert_eq!(mobs[1].extra.effects[0].id, "minecraft:poison");
-                assert_eq!(
-                    mobs[1].extra.effects[0].duration, 120,
-                    "poison starts at 120 ticks"
-                );
-                assert_eq!(mobs[1].extra.effects[0].amplifier, 0, "poison amplifier 0");
-                assert!(
+                    // Assertions after fish tick and apply_brain_events:
+                    assert_eq!(
+                        mobs[1].health, 7.0,
+                        "pig takes 1 + 2 = 3.0 damage (10 -> 7)"
+                    );
+                    assert_eq!(mobs[1].extra.effects.len(), 1);
+                    assert_eq!(mobs[1].extra.effects[0].id, "minecraft:poison");
+                    assert_eq!(
+                        mobs[1].extra.effects[0].duration, 120,
+                        "poison starts at 120 ticks"
+                    );
+                    assert_eq!(mobs[1].extra.effects[0].amplifier, 0, "poison amplifier 0");
+                    assert!(
                     events.iter().any(
                         |e| matches!(e, MobEvent::Sound(s, ..) if *s == "entity.puffer_fish.sting")
                     ),
                     "sting sound emitted"
                 );
 
-                // World Tick 1 continued: Pig ticks later in the same level tick
-                let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
-                let world_for_pig = MobWorld {
-                    goal_host: None,
-                    others: &fish_seen,
-                    ..w.clone()
-                };
-                let mut pig_events = Vec::new();
-                mobs[1].tick(&world_for_pig, level, &mut pig_events);
-                assert_eq!(
-                    mobs[1].extra.effects[0].duration, 119,
-                    "poison duration decrements from 120 to 119 in same level tick"
-                );
+                    // World Tick 1 continued: Pig ticks later in the same level tick
+                    let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
+                    let world_for_pig = MobWorld {
+                        goal_host: None,
+                        others: &fish_seen,
+                        ..w.clone()
+                    };
+                    let mut pig_events = Vec::new();
+                    mobs[1].tick(&world_for_pig, level, &mut pig_events);
+                    assert_eq!(
+                        mobs[1].extra.effects[0].duration, 119,
+                        "poison duration decrements from 120 to 119 in same level tick"
+                    );
 
-                // World Tick 2: Pig ticks on second level tick
-                mobs[1].tick(&world_for_pig, level, &mut pig_events);
-                assert_eq!(
-                    mobs[1].extra.effects[0].duration, 118,
-                    "poison duration decrements from 119 to 118 on second level tick"
-                );
-            }
+                    // World Tick 2: Pig ticks on second level tick
+                    mobs[1].tick(&world_for_pig, level, &mut pig_events);
+                    assert_eq!(
+                        mobs[1].extra.effects[0].duration, 118,
+                        "poison duration decrements from 119 to 118 on second level tick"
+                    );
+                }
 
-            // Scenario 4: Boundary/edge cases: AI and NoAI; multiple touching mobs
-            {
-                // NoAI fish and NoAI target
-                let mut noai_fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
-                noai_fish.no_ai = true;
-                noai_fish.extra.size = 2;
-                let mut noai_pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
-                noai_pig.no_ai = true;
-                let seen = [noai_pig.seen(None, &crate::items::Items::empty())];
-                let world = MobWorld {
-                    goal_host: None,
-                    others: &seen,
-                    ..w.clone()
-                };
-                let mut events = Vec::new();
-                noai_fish.tick(&world, level, &mut events);
-                let mut mobs: JoinList<_> = [noai_fish, noai_pig].into_iter().collect();
-                apply_brain_events(&mut mobs, level, &mut events, 0);
-                assert_eq!(mobs[1].health, 7.0);
-                assert_eq!(mobs[1].extra.effects[0].duration, 120);
-                let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
-                let world_for_pig = MobWorld {
-                    goal_host: None,
-                    others: &fish_seen,
-                    ..w.clone()
-                };
-                let mut pig_events = Vec::new();
-                mobs[1].tick(&world_for_pig, level, &mut pig_events);
-                assert_eq!(
-                    mobs[1].extra.effects[0].duration, 119,
-                    "NoAI pig decrements poison duration to 119 on tick 1"
-                );
-                mobs[1].tick(&world_for_pig, level, &mut pig_events);
-                assert_eq!(
-                    mobs[1].extra.effects[0].duration, 118,
-                    "NoAI pig decrements poison duration to 118 on tick 2"
-                );
+                // Scenario 4: Boundary/edge cases: AI and NoAI; multiple touching mobs
+                {
+                    // NoAI fish and NoAI target
+                    let mut noai_fish =
+                        make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
+                    noai_fish.no_ai = true;
+                    noai_fish.extra.size = 2;
+                    let mut noai_pig = make_mob(2, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
+                    noai_pig.no_ai = true;
+                    let seen = [noai_pig.seen(None, &crate::items::Items::empty())];
+                    let world = MobWorld {
+                        goal_host: None,
+                        others: &seen,
+                        ..w.clone()
+                    };
+                    let mut events = Vec::new();
+                    noai_fish.tick(&world, level, &mut events);
+                    let mut mobs: JoinList<_> = [noai_fish, noai_pig].into_iter().collect();
+                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    assert_eq!(mobs[1].health, 7.0);
+                    assert_eq!(mobs[1].extra.effects[0].duration, 120);
+                    let fish_seen = [mobs[0].seen(None, &crate::items::Items::empty())];
+                    let world_for_pig = MobWorld {
+                        goal_host: None,
+                        others: &fish_seen,
+                        ..w.clone()
+                    };
+                    let mut pig_events = Vec::new();
+                    mobs[1].tick(&world_for_pig, level, &mut pig_events);
+                    assert_eq!(
+                        mobs[1].extra.effects[0].duration, 119,
+                        "NoAI pig decrements poison duration to 119 on tick 1"
+                    );
+                    mobs[1].tick(&world_for_pig, level, &mut pig_events);
+                    assert_eq!(
+                        mobs[1].extra.effects[0].duration, 118,
+                        "NoAI pig decrements poison duration to 118 on tick 2"
+                    );
 
-                // Multiple touching mobs: two pigs touching fish simultaneously
-                let mut fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
-                fish.extra.size = 2;
-                let pig_a = make_mob(2, "minecraft:pig", Vec3::new(0.6, 64.0, 0.5));
-                let pig_b = make_mob(3, "minecraft:pig", Vec3::new(0.4, 64.0, 0.5));
-                let seen = [
-                    pig_a.seen(None, &crate::items::Items::empty()),
-                    pig_b.seen(None, &crate::items::Items::empty()),
-                ];
-                let world = MobWorld {
-                    goal_host: None,
-                    others: &seen,
-                    ..w.clone()
-                };
-                let mut events = Vec::new();
-                fish.tick(&world, level, &mut events);
-                let stings: Vec<_> = events
-                    .iter()
-                    .filter(|e| matches!(e, MobEvent::PufferfishSting { .. }))
-                    .collect();
-                assert_eq!(stings.len(), 2, "both touching pigs stung");
-                let mut mobs: JoinList<_> = [fish, pig_a, pig_b].into_iter().collect();
-                apply_brain_events(&mut mobs, level, &mut events, 0);
-                assert_eq!(mobs[1].health, 7.0, "pig A damaged");
-                assert_eq!(mobs[2].health, 7.0, "pig B damaged");
-                assert_eq!(
-                    mobs[1].extra.effects[0].duration, 120,
-                    "pig A receives poison"
-                );
-                assert_eq!(
-                    mobs[2].extra.effects[0].duration, 120,
-                    "pig B receives poison"
-                );
-            }
-        });
+                    // Multiple touching mobs: two pigs touching fish simultaneously
+                    let mut fish = make_mob(1, "minecraft:pufferfish", Vec3::new(0.5, 64.0, 0.5));
+                    fish.extra.size = 2;
+                    let pig_a = make_mob(2, "minecraft:pig", Vec3::new(0.6, 64.0, 0.5));
+                    let pig_b = make_mob(3, "minecraft:pig", Vec3::new(0.4, 64.0, 0.5));
+                    let seen = [
+                        pig_a.seen(None, &crate::items::Items::empty()),
+                        pig_b.seen(None, &crate::items::Items::empty()),
+                    ];
+                    let world = MobWorld {
+                        goal_host: None,
+                        others: &seen,
+                        ..w.clone()
+                    };
+                    let mut events = Vec::new();
+                    fish.tick(&world, level, &mut events);
+                    let stings: Vec<_> = events
+                        .iter()
+                        .filter(|e| matches!(e, MobEvent::PufferfishSting { .. }))
+                        .collect();
+                    assert_eq!(stings.len(), 2, "both touching pigs stung");
+                    let mut mobs: JoinList<_> = [fish, pig_a, pig_b].into_iter().collect();
+                    apply_brain_events(&mut mobs, level, &mut events, 0);
+                    assert_eq!(mobs[1].health, 7.0, "pig A damaged");
+                    assert_eq!(mobs[2].health, 7.0, "pig B damaged");
+                    assert_eq!(
+                        mobs[1].extra.effects[0].duration, 120,
+                        "pig A receives poison"
+                    );
+                    assert_eq!(
+                        mobs[2].extra.effects[0].duration, 120,
+                        "pig B receives poison"
+                    );
+                }
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `Pufferfish.PufferfishPuffGoal.canUse` targets players with
     /// `TargetingConditions.forNonCombat()`, which never picks a spectator.
     #[test]
+    #[ignore = "daily"]
     fn a_spectator_does_not_puff_a_pufferfish() {
         use crate::mobs::world::{test_player, with_test_world};
         let mut outcomes = Vec::new();
@@ -1734,7 +1746,7 @@ mod squid_tests {
 
     /// `Squid.aiStep`: sinking velocity on land is applied even when NoAI skips server AI (#14467).
     #[test]
-    fn noai_squid_on_land_sets_sinking_velocity() {
+    fn noai_squid_sinks_in_squid_ai_step() {
         let mut k = crate::mobs::sensor_scan_tests::kind();
         let km = Arc::make_mut(&mut k);
         km.id = "minecraft:squid".into();
@@ -1744,19 +1756,27 @@ mod squid_tests {
         squid.no_ai = true;
         squid_ai_step(&mut squid);
         assert_eq!(squid.velocity, Vec3::new(0.0, -0.0784000015258789, 0.0));
+    }
 
+    /// The same sinking velocity through a whole mob tick in a world.
+    #[test]
+    #[ignore = "daily"]
+    fn noai_squid_on_land_sets_sinking_velocity() {
         use crate::mobs::world::with_test_world;
-        let _ = with_test_world(&[], |w, types| {
-            let kind = Arc::new(types.types["minecraft:squid"].clone());
-            let mut squid = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            squid.no_ai = true;
-            squid.tick(
-                w,
-                &mut crate::health::TestLevel::new(0).level(),
-                &mut Vec::new(),
-            );
-            assert_eq!(squid.velocity, Vec3::new(0.0, -0.0784000015258789, 0.0));
-        });
+        assert!(
+            with_test_world(&[], |w, types| {
+                let kind = Arc::new(types.types["minecraft:squid"].clone());
+                let mut squid = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                squid.no_ai = true;
+                squid.tick(
+                    w,
+                    &mut crate::health::TestLevel::new(0).level(),
+                    &mut Vec::new(),
+                );
+                assert_eq!(squid.velocity, Vec3::new(0.0, -0.0784000015258789, 0.0));
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 

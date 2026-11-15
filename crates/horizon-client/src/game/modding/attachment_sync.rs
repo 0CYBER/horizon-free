@@ -1,13 +1,27 @@
 //! Attachment sync (docs/modding/src/how-to/native-mods.md, "Server attachments"): the server
 //! sends the synced values of the holders a level pass lent to mods, and whole
 //! snapshots to the players who started seeing a holder; a client keeps them.
+//!
+//! The channel is an engine declaration in the negotiated payload table
+//! (`raw_payloads::engine`): a message goes only to a placed player whose connection
+//! offered it, is prepared against that connection's current epoch and is published
+//! at the root commit, in order with the player's other packets.
 use super::Game;
 use crate::lan::{
+    conn::PlayerSender,
     guest::Guest,
     hub::{AttachmentSnapshot, Hub},
 };
+use horizon_client::raw_payloads::Endpoint;
 use horizon_mod_runtime::attachments::{Attachments, Holder};
 use horizon_protocol::attachment_sync::{self, Message};
+use mod_api::{PayloadBytes, PayloadId, PayloadSendError};
+
+/// Whether `guest` reads attachment sync: placed, and its connection's play epoch
+/// has the channel negotiated. A vanilla client never offers it.
+fn reads_attachment_sync(guest: &Guest) -> bool {
+    guest.placed && guest.negotiated_attachment_sync()
+}
 
 /// The guests `holder`'s changes go to: those in the level in place who see it,
 /// and a player's own wherever they are.
@@ -25,9 +39,15 @@ fn recipients(hub: &Hub, holder: Holder) -> impl Iterator<Item = &Guest> {
         _ => false,
     };
     hub.guests.iter().filter(move |g| {
-        owner.is_some_and(|o| g.conn == o.conn && g.participates_online())
-            || (hub.here(g) && sees(g))
+        (owner.is_some_and(|o| g.conn == o.conn && g.participates_online())
+            || (hub.here(g) && sees(g)))
+            && reads_attachment_sync(g)
     })
+}
+
+/// The senders of `holder`'s recipients, taken out of the hub so a send may journal.
+fn recipient_senders(hub: &Hub, holder: Holder) -> Vec<PlayerSender> {
+    recipients(hub, holder).map(|g| g.sender.clone()).collect()
 }
 
 impl Game<'_> {
@@ -92,7 +112,7 @@ impl Game<'_> {
             let Some(guest) = hub.online_players().find(|g| g.uuid == player) else {
                 continue;
             };
-            if !guest.reads_attachment_sync() {
+            if !reads_attachment_sync(guest) {
                 continue;
             }
             if guest.dimension != hub.config.dimension {
@@ -109,13 +129,14 @@ impl Game<'_> {
                 _ => holder,
             };
             let messages = self.attachment_snapshot(holder);
-            if let Some(guest) = self
+            let sender = self
                 .lan
                 .as_ref()
                 .and_then(|host| host.hub.guests.iter().find(|g| g.uuid == player))
-            {
-                for message in messages {
-                    guest.send_attachment_sync(&message);
+                .map(|guest| guest.sender.clone());
+            if let Some(sender) = sender {
+                for message in &messages {
+                    self.send_attachment_sync(std::slice::from_ref(&sender), message);
                 }
             }
         }
@@ -123,12 +144,12 @@ impl Game<'_> {
         // went with their moving piston's copy.
         for holder in landings {
             let messages = self.attachment_snapshot(holder);
-            if let Some(host) = self.lan.as_ref() {
-                for guest in recipients(&host.hub, holder) {
-                    for message in &messages {
-                        guest.send_attachment_sync(message);
-                    }
-                }
+            let senders = self
+                .lan
+                .as_ref()
+                .map_or_else(Vec::new, |host| recipient_senders(&host.hub, holder));
+            for message in &messages {
+                self.send_attachment_sync(&senders, message);
             }
         }
         for holder in std::mem::take(&mut self.world.attachment_syncs) {
@@ -145,13 +166,78 @@ impl Game<'_> {
                 replace: false,
                 changes,
             };
-            if let Some(host) = self.lan.as_ref() {
-                for guest in recipients(&host.hub, holder) {
-                    guest.send_attachment_sync(&message);
-                }
+            let senders = self
+                .lan
+                .as_ref()
+                .map_or_else(Vec::new, |host| recipient_senders(&host.hub, holder));
+            self.send_attachment_sync(&senders, &message);
+        }
+    }
+
+    /// Queue `message` for each of `senders` through the negotiated transport. A peer
+    /// that has the channel absent, or is between epochs, is sent nothing and that is no
+    /// error. Any other refusal is named in the log once per connection epoch: a message
+    /// past the connection's frame limits or one that cannot be written is not sent and the
+    /// player stays joined; a full outgoing queue closes the connection, as a full queue
+    /// did before, since the replica would miss the update.
+    fn send_attachment_sync(&mut self, senders: &[PlayerSender], message: &Message) {
+        if senders.is_empty() {
+            return;
+        }
+        let body = attachment_sync::encode(message).map_err(|e| e.to_string());
+        for sender in senders {
+            let Err(error) = self.queue_attachment_sync(sender, &body) else {
+                continue;
+            };
+            if !refused(&error) {
+                continue;
+            }
+            if sender
+                .payload_transport()
+                .epoch()
+                .is_none_or(|epoch| epoch.first_engine_refusal())
+            {
+                log::warn!(
+                    "Horizon: attachment sync for {:?} not sent: {error:?}",
+                    message.holder
+                );
+            }
+            if matches!(error, PayloadSendError::Backpressure) {
+                sender.close();
             }
         }
     }
+
+    /// Queue one encoded message (or its encoding failure) for one connection: the
+    /// transport's typed answer, `FrameTooLarge` past the connection's frame limits.
+    fn queue_attachment_sync(
+        &mut self,
+        sender: &PlayerSender,
+        body: &Result<Vec<u8>, String>,
+    ) -> Result<(), PayloadSendError> {
+        let body = body
+            .as_ref()
+            .map_err(|reason| PayloadSendError::EncodeFailed(reason.clone()))?;
+        self.queue_current_payload(
+            Endpoint::server(sender.clone()),
+            &PayloadId(attachment_sync::CHANNEL.into()),
+            PayloadBytes(body.clone()),
+        )
+        .map(|_| ())
+    }
+}
+
+/// Whether a send error is a refusal to name, not a peer without the channel or a
+/// connection between epochs.
+fn refused(error: &PayloadSendError) -> bool {
+    !matches!(
+        error,
+        PayloadSendError::UnsupportedPeer(_)
+            | PayloadSendError::NotNegotiated
+            | PayloadSendError::WrongProtocol(_)
+            | PayloadSendError::StaleEpoch
+            | PayloadSendError::Disconnected
+    )
 }
 
 impl Game<'_> {
@@ -215,3 +301,10 @@ impl Game<'_> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "attachment_sync/route_cases_tests.rs"]
+mod route_cases_tests;
+#[cfg(test)]
+#[path = "attachment_sync/transport_tests.rs"]
+mod transport_tests;

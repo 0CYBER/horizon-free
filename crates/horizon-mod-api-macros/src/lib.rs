@@ -7,6 +7,8 @@ mod wire;
 ///
 /// `#[payload(crate = ::mod_vocab)]` selects the contract crate for
 /// lower-layer crates. The default is `::mod_api`.
+/// For mutually recursive types, `#[payload(bound = "T: ::mod_api::PayloadCodec")]`
+/// replaces inferred predicates; use `#[payload(bound = "")]` when none are needed.
 #[proc_macro_derive(PayloadCodec, attributes(payload))]
 pub fn derive_payload_codec(input: TokenStream) -> TokenStream {
     payload::expand(syn::parse_macro_input!(input as syn::DeriveInput))

@@ -3151,7 +3151,7 @@ impl Game<'_> {
     pub(in crate::game) fn native_player_jump(&mut self, player: u128, name: &str) {
         self.fire_player_jump(player, name);
     }
-    /// A guest was disconnected by a server kick, after the hub recorded the rendered `reason`. The guest's state is
+    /// A network or fake guest was kicked, after the hub recorded the rendered `reason`. The guest's state is
     /// swapped in unless they were already removed in the same poll.
     pub(in crate::game) fn native_player_kicked(&mut self, player: u128, name: &str, reason: &str) {
         self.fire_player_kicked(player, name, reason);
@@ -3604,7 +3604,9 @@ impl Game<'_> {
     }
     /// `player` (`name`) left the game (NeoForge's `PlayerLoggedOutEvent`), by
     /// any path: a lost connection, a kick, the server stopping or failing.
-    /// Once for each player `native_player_logged_in` told of. They've already
+    /// Once for each player `native_player_logged_in` told of, and also for a
+    /// kicked fake without a preceding login. Silent `remove_fake` sends no logout.
+    /// They've already
     /// left `native_server_players`, except when the server stops, which tells
     /// before it saves, with them still listed and able to get a last message.
     /// Server-side.

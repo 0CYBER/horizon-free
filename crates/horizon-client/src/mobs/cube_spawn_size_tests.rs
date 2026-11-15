@@ -30,6 +30,7 @@ fn none() -> LocalDifficulty {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_difficulty_bonus_makes_bigger_slimes_and_magma_cubes() {
     let ran = with_test_world(&[], |_w, types| {
         assert_eq!(full().special(), 1.0);
@@ -78,10 +79,11 @@ fn the_difficulty_bonus_makes_bigger_slimes_and_magma_cubes() {
             }
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_bonus_float_is_drawn_once_at_the_end_and_only_below_scale_two() {
     let ran = with_test_world(&[], |_w, types| {
         let mut bumped = 0;
@@ -118,5 +120,5 @@ fn the_bonus_float_is_drawn_once_at_the_end_and_only_below_scale_two() {
         }
         assert!((8..32).contains(&bumped), "bumped {bumped} of 64");
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

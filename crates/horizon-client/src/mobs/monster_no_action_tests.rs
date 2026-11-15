@@ -40,6 +40,7 @@ fn no_action_times(types: &crate::mobs::MobTypes, w: &MobWorld<'_>, name: &str) 
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_blaze_and_a_vex_keep_their_extra_no_action_time_in_the_dark() {
     let mut out = None;
     if !with_test_world(&[], |w, types| {

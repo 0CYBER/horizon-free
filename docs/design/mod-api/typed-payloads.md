@@ -1,7 +1,7 @@
 # Registered payloads and the typed-payload design
 
 The registered **raw** transport implements [#2882](https://github.com/arismoko/horizon/issues/2882).
-Typed registration/token binding, configuration snapshots, and attachment migration remain work for
+Typed registration/token binding and configuration snapshots remain work for
 [#813](https://github.com/arismoko/horizon/issues/813). They are not implemented by the raw API.
 The transport contract is detailed in [Registered raw custom payload transport](../raw-custom-payload-transport.md).
 
@@ -71,8 +71,9 @@ revision mark on `horizon:payloads`, even with empty or all-optional declaration
 Query is `[0, 1]`; Offer starts `[1, 1]` followed by the record count. A missing
 response or wrong revision refuses admission with a named raw-protocol cause.
 This is not a build authentication mechanism. Non-Horizon vanilla peers retain
-optional admission. Empty peers exchange only protocol metadata and an empty Offer;
-there is no per-tick scan of loaded mods.
+optional admission. Peers with no mod declarations exchange only protocol metadata and
+an Offer of the engine's optional declarations (below); there is no per-tick scan of
+loaded mods.
 
 Clients send through `ClientHost::send_payload_to_server`; servers use
 `PlayerRef::send_payload`. `IPayloadContext` offers `player`, `reply`, `disconnect`,
@@ -222,10 +223,36 @@ ceiling. Native arbitrary allocation/process-aborting panics cannot be sandboxed
 Errors and wasm traps must abort the active transaction and discard staged sends.
 
 Configuration snapshots still need revisioned atomic publication and acknowledgement
-before admission, without overwriting local config files. Attachment migration still
-needs #796's world/dimension, holder incarnation, residency join, schema/revision,
-tracker authorization, full-before-delta ordering, bounded assembly, and rollback
-proofs. Both use this transport; neither gets a separate networking implementation.
+before admission, without overwriting local config files. They use this transport; they
+get no separate networking implementation.
+
+## Engine declarations: attachment sync (step 4a)
+
+An engine service that sends on a registered channel declares it in the same negotiated
+table as a mod (`raw_payloads::engine` in `horizon-client`). Every installation offers
+its engine declarations, so a Horizon peer's Offer carries them even with no mods; each
+is optional, so a peer without one is admitted and a send returns `UnsupportedPeer`
+without a packet. The channel stays reserved: no mod may declare it, and the generic
+packet API refuses it. With only engine declarations a client does not open negotiation
+itself, it answers the server's Query, so a vanilla server is sent nothing new. A
+negotiated incoming engine message goes to the engine's own decoder, not a mod callback;
+an un-negotiated one, or one in the wrong direction or protocol, is a session refusal.
+
+| Item | Contract |
+| --- | --- |
+| Declaration | `horizon:attachment_sync`, play, to-client, version `1`, optional |
+| Recipients | Placed players whose play epoch has the channel negotiated, then the holder's trackers as before |
+| Send | Prepared against the connection's current epoch, published at root commit after the player's held packets; rollback publishes none, a stale epoch publishes nothing |
+| Format | Unchanged, byte for byte (holder, replace, changes) |
+| Size | The connection's frame limits (#3087); the former 1,048,576-byte body cap is removed |
+| Refusals | Past the frame limits or unencodable: the typed `PayloadSendError` logged once per connection epoch, message not sent, player stays joined. `Backpressure` closes the connection, as a full queue did before |
+| Removed | The `brand == "horizon"` gate and the direct write to the connection |
+
+Attachment sync keeps its message format. #796 stage 2 (tracked Part state) adds, on
+top of this route, scoped incarnation, schema and committed revision, authorised tracking
+snapshots, stale-update rejection, revision-gap handling and visibility-loss cleanup,
+with #796's world/dimension, residency join, full-before-delta ordering, bounded assembly
+and rollback proofs.
 
 Acceptance for those future layers must exercise native and wasm over the real
 integrated, LAN, and dedicated routes: exact typed decoding, mismatched/optional

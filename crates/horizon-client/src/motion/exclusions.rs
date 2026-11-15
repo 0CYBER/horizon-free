@@ -30,6 +30,7 @@ mod tests {
     /// (`makeStuckInBlock` forgets the fall: no damage), the excluded one at 20 doesn't, so
     /// the fall hurts for floor(10 + 1.5 + 1e-6 - 3) = 8.
     #[test]
+    #[ignore = "daily"]
     fn an_excluded_block_has_no_inside_effect_and_its_neighbour_still_does() {
         let Some(fixture) = crate::test_fixtures::vanilla() else {
             return;

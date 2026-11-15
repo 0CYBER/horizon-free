@@ -1,0 +1,3 @@
+ids = ["hook:block_drops", "type:BlockDropsEvent.breaker_entity", "type:BlockDropsEvent.block_entity"]
+why = "BlockDropsEvent gains optional breaker_entity and block_entity handles. The breaker is the player or mob whose break is running; level-side breaks and explosions have no breaker. The block entity is present when the block had one, except for explosions, and a block entity removed by a player's break exposes saved data only during the event."
+migrate = "Rebuild listeners against hook version 2 and read breaker_entity and block_entity as Options; neither handle is guaranteed to be present."

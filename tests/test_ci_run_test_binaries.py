@@ -238,6 +238,53 @@ printf 'ok a::slow <7.500s>\\nok a::fast <0.001s>\\n' > "$log"
         self.assertEqual(len(errors), 1)
         self.assertIn("network guard: socket", errors[0])
 
+    def test_a_rerun_that_skips_for_missing_data_reaches_the_verdict(self):
+        binary = {"label": "horizon-world lib.rs"}
+
+        def rerun(invocation, env, args, timed=False):
+            return {"binary": invocation, "seconds": 0.1, "max_rss_kib": 0, "status": "ok",
+                    "output": io.StringIO("skipped: no vanilla data; test=a::slow; skipped tests=1\n"),
+                    "log": {"a::slow": ("ok", 0.1)}}
+
+        skips = []
+        with unittest.mock.patch.object(runner, "run_one", rerun), contextlib.redirect_stdout(io.StringIO()):
+            errors = runner.confirm_slow_tests([(7.5, "a::slow", binary["label"])], [binary], {}, [], 5.0,
+                                               data_skips=skips)
+        self.assertEqual(errors, [])
+        self.assertEqual(skips, [(binary["label"], "a::slow")])
+
+    @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires a POSIX shell")
+    def test_a_test_that_skips_for_missing_data_fails_only_with_the_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "crates/horizon-world").mkdir(parents=True)
+            skipping, clean = root / "skipping", root / "clean"
+            # The second line is libtest's own half-written result line with the skip line inside it.
+            skipping.write_text("#!/bin/sh\necho 'skipped: no vanilla data; test=a::one; skipped tests=1'\n"
+                                "echo 'test a::two ... skipped: no vanilla data; test=a::two; skipped tests=2'\n"
+                                "echo 'skipped: no vanilla data; test=a::one; skipped tests=3'\n"
+                                "echo 'test a::three ... ok'\n")
+            clean.write_text("#!/bin/sh\necho 'test b::one ... ok'\n")
+            for binary in (skipping, clean):
+                binary.chmod(0o755)
+            cargo = self.fake_toolchain(root, [skipping, clean])
+            code, output = self.run_main("--jobs", "2", "--", str(cargo), "test")
+            self.assertEqual(code, 0)
+            code, output = self.run_main("--jobs", "2", "--no-data-skips", "--", str(cargo), "test")
+            self.assertEqual(code, 1)
+            errors = [line for line in output.splitlines() if "returns early without vanilla data" in line]
+            self.assertEqual(len(errors), 2, errors)
+            self.assertTrue(errors[0].startswith("::error::horizon-world lib.rs (skipping): a::one "), errors)
+            self.assertTrue(errors[1].startswith("::error::horizon-world lib.rs (skipping): a::two "), errors)
+            self.assertIn('#[ignore = "daily"] with a `resources` row', errors[0])
+            self.assertIn("or give it a fixture", errors[0])
+            self.assertIn("::error::2 tests skipped for missing vanilla data", output)
+            self.assertFalse(any("(clean)" in line for line in errors))
+            # A binary without the line passes the flag.
+            cargo = self.fake_toolchain(root, [clean])
+            code, _ = self.run_main("--jobs", "1", "--no-data-skips", "--", str(cargo), "test")
+            self.assertEqual(code, 0)
+
     @unittest.skipUnless(os.name == "posix" and shutil.which("sh"), "requires a POSIX shell")
     def test_a_listing_without_test_binaries_fails(self):
         with tempfile.TemporaryDirectory() as directory:

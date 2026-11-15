@@ -1194,6 +1194,8 @@ struct Game<'a> {
     glint_frame: horizon_client::item_render::GlintFrame,
     /// Mod block entities' kept geometry (game/modding/native_block_entity_draw.rs).
     kept_block_entities: std::cell::RefCell<native_block_entity_draw::KeptGeometry>,
+    /// Mod screens' living scenes, per mod and clock id (game/modding/native_scene_live.rs).
+    live_scenes: std::cell::RefCell<native_scene_live::LiveScenes>,
     /// Glyphs from `native_draw_text` (`&self`): uploaded to the font atlas with the frame.
     text_patches: std::cell::RefCell<Vec<horizon_client::font::Patch>>,
     /// Prepared block-entity copies for this frame, in entity-stream order.
@@ -4051,9 +4053,10 @@ impl Game<'_> {
         } else {
             self.loot_block_entity(pos, &facts.name)
         };
-        if let Some(entity) = self.world.block_entities.get(&key).cloned() {
+        let live = self.live_block_entity(key, &facts.name);
+        if let Some((entity, _)) = &live {
             self.pending
-                .record_from(&self.world, pos, &entity, &facts.name);
+                .record_from(&self.world, pos, entity, &facts.name);
         } else if let Some(tag) = spill::saved_entity(&self.world, pos) {
             self.pending.record_saved(pos, &tag);
         }
@@ -4087,16 +4090,11 @@ impl Game<'_> {
                 // Block.dropResources: the item entities, then spawnAfterBreak's
                 // experience, with the mods' say between the two.
                 let breaker = Some(self.native_acting_id());
-                let dropped = self.with_level(|_, level, _| {
-                    level.block_dropped(
-                        BlockPos::new(pos[0], pos[1], pos[2]),
-                        state,
-                        breaker,
-                        held.as_ref(),
-                        stacks,
-                        exp_to_drop,
-                    )
-                });
+                let dropped = self.player_block_dropped(
+                    (pos, state),
+                    (breaker, held.as_ref(), live),
+                    (stacks, exp_to_drop),
+                );
                 let canceled = dropped.canceled;
                 if let Some(kept) = self.break_collect.as_mut() {
                     kept.extend(dropped.items.into_iter().map(|item| item.stack));
@@ -10749,6 +10747,7 @@ impl<'a> Game<'a> {
             frames: 0,
             glint_frame: Default::default(),
             kept_block_entities: Default::default(),
+            live_scenes: Default::default(),
             text_patches: Default::default(),
             prepared_model_draws: Default::default(),
             world_geometry: Some(Default::default()),
@@ -11425,7 +11424,7 @@ pub(crate) fn run_with(
         &early_settings,
         started,
         false,
-        options.execution_role,
+        mods::LoadRole::startup(options.execution_role),
         &Progress::new(),
         &mut |_, _| {},
     )?;

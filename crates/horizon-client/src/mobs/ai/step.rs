@@ -111,6 +111,7 @@ mod tests {
     /// before the block's sound, so it walks silently, while an empty cube takes
     /// the block's step at 15% like any other mob.
     #[test]
+    #[ignore = "daily"]
     fn a_loaded_sulfur_cube_walks_silently() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -139,6 +140,6 @@ mod tests {
                 assert_eq!(empty.unwrap().1, 0.15, "the block's 15%");
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

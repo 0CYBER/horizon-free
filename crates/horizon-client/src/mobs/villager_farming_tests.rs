@@ -378,6 +378,7 @@ fn vanilla_farming_classification_matches_the_oracle() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn planting_posts_block_place_with_villager_and_crop_state() {
     let ran = super::super::world::with_built_test_world(
         &[],
@@ -428,5 +429,5 @@ fn planting_posts_block_place_with_villager_and_crop_state() {
         },
     );
     // Without the vanilla data under .local/horizon-client the world cannot be built: the test has nothing to check.
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

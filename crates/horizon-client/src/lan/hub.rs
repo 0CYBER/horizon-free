@@ -43,6 +43,7 @@ pub mod advancements;
 mod block_changes;
 pub mod chat;
 pub mod chat_filter;
+mod fake_kicks;
 mod item_particles;
 mod joined;
 mod move_collision;
@@ -2300,6 +2301,7 @@ impl Hub {
         self.ticks += 1;
         self.anticheat_tick(ctx.tick_rate);
         let mut events = std::mem::take(&mut self.pending_kicks);
+        self.finish_fake_kicks(&mut events);
         self.expire_arrivals(&mut events);
         let mut credits = Vec::new();
         for receipt in self.lan.poll() {
@@ -2352,9 +2354,7 @@ impl Hub {
                 }
             }
         }
-        // keepConnectionAlive's timeout, checked once a second here. Kicked,
-        // the client gets the reason; still here a second later (it reads
-        // nothing, so its disconnect waits unwritten), its connection is closed.
+        // keepConnectionAlive's timeout: close a kicked client still unread a second later.
         if self.ticks.is_multiple_of(20) {
             for g in &self.guests {
                 if g.participates_online() && !g.left_reason.is_empty() && g.sender.timed_out() {
@@ -2861,7 +2861,7 @@ impl Hub {
                 g.far_cursor -= far.iter().filter(|&&idx| idx < g.far_cursor).count();
                 seen.extend(far.into_iter().rev().map(|idx| {
                     let key = g.far_queue.remove(idx);
-                    if self.sync_attachments && g.brand == "horizon" {
+                    if self.sync_attachments && g.negotiated_attachment_sync() {
                         g.far_sent_chunks.insert(key);
                     }
                     key

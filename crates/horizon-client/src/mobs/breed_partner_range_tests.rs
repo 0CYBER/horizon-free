@@ -62,6 +62,7 @@ fn shelf(world: &mut crate::world::World, registry: &horizon_world::registry::Bl
 /// passes, and `TargetingConditions.test` rejects a target whose
 /// `distanceToSqr` is above 8 squared.
 #[test]
+#[ignore = "daily"]
 fn a_mate_outside_the_eight_block_sphere_is_ignored() {
     // 7,0,5 apart: squared 74, inside the box, outside the sphere.
     let Some((running, target)) = courtship(&[[7.5, 64.0, 5.5]]) else {
@@ -80,6 +81,7 @@ fn a_mate_outside_the_eight_block_sphere_is_ignored() {
 /// The other half of the same predicate: the sphere keeps a diagonal mate
 /// and one exactly eight blocks away, and the nearest of two still wins.
 #[test]
+#[ignore = "daily"]
 fn a_mate_inside_the_eight_block_sphere_is_courted() {
     // 5,0,5 apart: squared 50.
     let Some((running, target)) = courtship(&[[5.5, 64.0, 5.5]]) else {
