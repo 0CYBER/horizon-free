@@ -635,8 +635,12 @@ impl Chain {
         self.run(device, queue, size)
     }
 
-    /// Runs the chain at R `size`; the screen's first pixel.
+    /// Runs the chain at R `size`, its `[[before_world]]` passes first, as a frame does; the
+    /// screen's first pixel.
     fn run(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, size: [u32; 2]) -> [u8; 4] {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        self.post.before_world(device, &mut encoder);
+        queue.submit([encoder.finish()]);
         let surface = &self.frame.surface_view;
         (self.screen).show((device, queue), &mut self.post, surface, size)
     }
@@ -866,20 +870,19 @@ fn a_compute_pass_writes_an_rgba32uint_texture_a_post_pass_loads() {
     computes(manifest, &files, &frames);
 }
 
-/// The frames come from the renderer's own path: a pack built by `NativePack::new`, installed,
-/// and each frame's inputs written by `NativePack::write`, which hands the kept store its frame
-/// (`kept_frame`). Without that the store never starts a frame and the compute pass never runs.
-/// Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for each backend.
-#[test]
-fn a_pack_s_own_frames_run_its_compute_pass() {
+/// The pack of `manifest` (with the identity tone curve) and `files` through the renderer's own
+/// path: built by `NativePack::new` and installed, each frame's inputs written by
+/// `NativePack::write`, which hands the kept store its frame (`kept_frame`), its
+/// `[[before_world]]` passes recorded by `NativePack::before_world`, then its chain; the
+/// screen's first pixel each frame, red `wants`.
+fn through_pack(manifest: &str, files: &[(&str, &str)], wants: &[f32]) {
     let Some((device, queue)) = device() else {
         return;
     };
     let (globals, empty) = crate::gfx::native_pack::tests::terrain_layouts(&device);
     let terrain = crate::gfx::native_pack::tests::terrain_shape(&globals, &empty);
-    let (manifest, files) = SUMMING;
     let manifest = format!("{manifest}[tonemap]\nfile = \"t.wgsl\"\n");
-    let report = report(&manifest, &[&files[..], &[("t.wgsl", IDENTITY)]].concat());
+    let report = report(&manifest, &[files, &[("t.wgsl", IDENTITY)]].concat());
     let built = crate::gfx::native_pack::NativePack::new(
         &device,
         &queue,
@@ -894,18 +897,186 @@ fn a_pack_s_own_frames_run_its_compute_pass() {
     let hud = crate::hud::HudBatch::new([4, 4]);
     let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    for (n, want) in [(1, 0.25), (2, 0.5), (3, 0.75)] {
+    for (n, &want) in (1..).zip(wants) {
         // A scripted clock: a slow frame on a loaded machine is no pause that resets the store.
         let timing = crate::gfx::pack_uniforms::FrameTiming::nth(n, 50.0);
         frame.pack.frame_timing = Some(timing);
         let display = crate::gfx::output::DisplayValues::SDR;
         pack.write(&queue, &frame, [4, 4], display, None);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        pack.before_world(&device, &mut encoder);
+        queue.submit([encoder.finish()]);
         let post = &mut pack.post;
         let got = screen.show((&device, &queue), post, &pack.frame.surface_view, [4, 4]);
         assert!(shows(got, [want, 0.0, 0.0]), "{got:?}, {want} expected");
     }
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
+}
+
+/// A pack's own frames run its compute pass (`through_pack`): without `NativePack::write`
+/// handing the store its frame, the store never starts one and the pass never runs. Run with
+/// `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn a_pack_s_own_frames_run_its_compute_pass() {
+    let (manifest, files) = SUMMING;
+    through_pack(manifest, &files, &[0.25, 0.5, 0.75]);
+}
+
+/// `SUMMING` with its compute pass before the world (`[[before_world]]`) instead.
+const BEFORE_SUMMING: (&str, [(&str, &str); 2]) = (
+    "[[resource]]\nname = \"sum\"\nbuffer = 16\nelement = \"u32\"\nkeep = \"view\"\n\
+     [[before_world]]\nfile = \"c.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n\
+     writes = [\"sum\"]\n[[post]]\nfile = \"l.wgsl\"\nreads = [\"sum\"]\n",
+    SUMMING.1,
+);
+
+/// #16011 item 4, P5: a `[[before_world]]` pass adds one to a kept buffer once a frame, which
+/// the last pass shows; a history reset starts it over, and running the frame's passes again
+/// dispatches nothing. Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn a_before_world_pass_accumulates_in_a_buffer_and_starts_over_on_a_reset() {
+    let (manifest, files) = BEFORE_SUMMING;
+    let frames = [
+        ([1, 1], [4, 4], [0.25, 0.0, 0.0]),
+        ([1, 1], [4, 4], [0.5, 0.0, 0.0]),
+        ([2, 1], [4, 4], [0.25, 0.0, 0.0]),
+    ];
+    computes(manifest, &files, &frames);
+}
+
+/// A pack's own frames run its `[[before_world]]` pass (`through_pack`): without
+/// `NativePack::before_world`, the call the renderer makes after the shadow passes, it never
+/// runs. Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn a_pack_s_own_frames_run_its_before_world_pass() {
+    let (manifest, files) = BEFORE_SUMMING;
+    through_pack(manifest, &files, &[0.25, 0.5, 0.75]);
+}
+
+/// A `[[before_world]]` pass writes this frame's version of an R-relative kept texture (adding
+/// to `_previous`), after the frame's swap, and the post pass shows it in the same frame. Its
+/// `"pixels"` dispatch and `input.size` are R (blue: R's width / 16), and it reads the frame:
+/// `frame.headroom` (1) in green. It uses every other binding the stage has (the samplers and
+/// the shadow maps), adding nothing, so a group without one is refused. Run with `WGPU_BACKEND=vulkan` and `WGPU_BACKEND=dx12` for
+/// each backend.
+#[test]
+fn a_before_world_pass_writes_a_kept_texture_a_post_pass_shows() {
+    let manifest = "[[resource]]\nname = \"img\"\nformat = \"rgba16float\"\nscale = 1.0\n\
+                    keep = \"view\"\n[[before_world]]\nfile = \"w.wgsl\"\ndispatch = \"pixels\"\n\
+                    workgroup = [8, 8, 1]\nreads = [\"img_previous\"]\nwrites = [\"img\"]\n\
+                    [[post]]\nfile = \"l.wgsl\"\nreads = [\"img\"]\n";
+    let files = [
+        (
+            "w.wgsl",
+            "fn compute(input: ComputeInput) {\n    if input.in_bounds {\n        \
+             let last = textureLoad(img_previous, input.cell.xy, 0).r;\n        \
+             let wide = f32(input.size.x) / 16.0;\n        \
+             let p = vec2<f32>(0.5);\n        \
+             let maps = textureDimensions(shadow_map).x + textureDimensions(shadow_map_translucent).x;\n        \
+             let lit = textureSampleCompareLevel(shadow_map, shadow_sampler, p, 0.5);\n        \
+             let tints = textureSampleLevel(shadow_color, linear_sampler, p, 0.0).r\n            \
+             + textureSampleLevel(shadow_color, nearest_sampler, p, 0.0).r;\n        \
+             let none = (f32(maps) + lit + tints) * 0.0;\n        \
+             let here = vec4<f32>(last + 0.25, frame.headroom * 0.5, wide + none, 1.0);\n        \
+             textureStore(img, input.cell.xy, here);\n    }\n}\n",
+        ),
+        (
+            "l.wgsl",
+            "fn post(input: PostInput) -> vec4<f32> {\n    \
+             return vec4<f32>(textureLoad(img, vec2<i32>(input.pixel), 0).rgb, 1.0);\n}\n",
+        ),
+    ];
+    let frames = [
+        ([1, 1], [4, 4], [0.25, 0.5, 0.25]),
+        ([1, 1], [4, 4], [0.5, 0.5, 0.25]),
+        ([2, 1], [4, 4], [0.25, 0.5, 0.25]),
+    ];
+    computes(manifest, &files, &frames);
+}
+
+/// A `[[before_world]]` pass and a compute `[[post]]` pass in one pack, each adding one to its
+/// own element of a kept buffer, shown in red and green: the frame starts before the world, and
+/// the chain's compute pass still runs once in it. Run with `WGPU_BACKEND=vulkan` and
+/// `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn before_world_and_compute_post_passes_both_run_once_a_frame() {
+    let manifest = "[[resource]]\nname = \"sum\"\nbuffer = 16\nelement = \"u32\"\nkeep = \"view\"\n\
+                    [[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\n\
+                    workgroup = [1, 1, 1]\nwrites = [\"sum\"]\n\
+                    [[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\n\
+                    workgroup = [1, 1, 1]\nwrites = [\"sum\"]\n\
+                    [[post]]\nfile = \"l.wgsl\"\nreads = [\"sum\"]\n";
+    let files = [
+        (
+            "w.wgsl",
+            "fn compute(input: ComputeInput) { sum[0] = sum[0] + 1u; }\n",
+        ),
+        (
+            "c.wgsl",
+            "fn compute(input: ComputeInput) { sum[1] = sum[1] + 1u; }\n",
+        ),
+        (
+            "l.wgsl",
+            "fn post(input: PostInput) -> vec4<f32> {\n    \
+             return vec4<f32>(f32(sum[0]) * 0.25, f32(sum[1]) * 0.125, 0.0, 1.0);\n}\n",
+        ),
+    ];
+    let frames = [
+        ([1, 1], [4, 4], [0.25, 0.125, 0.0]),
+        ([1, 1], [4, 4], [0.5, 0.25, 0.0]),
+    ];
+    computes(manifest, &files, &frames);
+}
+
+/// A pack with kept resources and a `[[before_world]]` pass but no `[[post]]` pass (a 0.2 pack
+/// still has its decode and tone map) builds, and its frames run it without a validation
+/// error, the screen the world's picture (black). Run with `WGPU_BACKEND=vulkan` and
+/// `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn a_before_world_pass_runs_without_a_post_chain() {
+    let manifest = "[[resource]]\nname = \"sum\"\nbuffer = 16\nelement = \"u32\"\nkeep = \"view\"\n\
+                    [[before_world]]\nfile = \"w.wgsl\"\ndispatch = [1, 1, 1]\n\
+                    workgroup = [1, 1, 1]\nwrites = [\"sum\"]\n";
+    let files = [(
+        "w.wgsl",
+        "fn compute(input: ComputeInput) { sum[0] = sum[0] + 1u; }\n",
+    )];
+    computes(manifest, &files, &[([1, 1], [4, 4], [0.0, 0.0, 0.0])]);
+}
+
+/// The cap on compute work a frame is the API's, checked when the pack loads
+/// (`horizon_shader_api::kept::MAX_FRAME_INVOCATIONS`, over `[[before_world]]` and compute
+/// `[[post]]` passes together): a pack at it builds and runs a frame with nothing refused at
+/// run time; a workgroup more is refused at load. Run with `WGPU_BACKEND=vulkan` and
+/// `WGPU_BACKEND=dx12` for each backend.
+#[test]
+fn the_frame_s_compute_cap_is_the_api_s() {
+    use horizon_shader_api::kept::MAX_FRAME_INVOCATIONS;
+    let half = "dispatch = [8192, 4096, 1]\nworkgroup = [256, 1, 1]\nwrites = [\"sum\"]\n";
+    let manifest = |extra: &str| {
+        format!(
+            "[[resource]]\nname = \"sum\"\nbuffer = 16\nelement = \"u32\"\nkeep = \"view\"\n\
+             [[before_world]]\nfile = \"c.wgsl\"\n{half}\
+             [[post]]\nfile = \"c.wgsl\"\ncompute = true\n{half}{extra}\
+             [[post]]\nfile = \"l.wgsl\"\nreads = [\"sum\"]\n"
+        )
+    };
+    let compute = "fn compute(input: ComputeInput) { if input.cell.x == 0u { sum[0] = 1u; } }\n";
+    let files = [("c.wgsl", compute), ("l.wgsl", SUMMING.1[1].1)];
+    assert_eq!(2 * 8192 * 4096, MAX_FRAME_INVOCATIONS);
+    computes(&manifest(""), &files, &[([1, 1], [4, 4], [0.25, 0.0, 0.0])]);
+    let over = "[[post]]\nfile = \"c.wgsl\"\ncompute = true\ndispatch = [1, 1, 1]\n\
+                workgroup = [1, 1, 1]\nwrites = [\"sum\"]\n";
+    let mut all: std::collections::BTreeMap<String, Vec<u8>> = (files.iter())
+        .map(|(n, t)| ((*n).to_owned(), t.as_bytes().to_vec()))
+        .collect();
+    all.insert(
+        MANIFEST.into(),
+        format!("{HEAD}{}", manifest(over)).into_bytes(),
+    );
+    let refused = Pack::from_files(all).err().unwrap_or_default();
+    assert!(refused.contains("a pack may run 67108864"), "{refused}");
 }
 
 /// `"pixels"` dispatches R in whole workgroups: at an R of 3×5 with 2×2 workgroups, 4×6
@@ -940,7 +1111,8 @@ fn a_pixels_dispatch_covers_a_render_size_off_the_workgroup() {
 /// Kept resources cost a pack without them nothing: its chain makes one group layout, and on
 /// its first frame a bind group a pass and one for the tonemap, as before them; none on the
 /// next frame. A pack with them makes a group layout a pass besides, and its groups once for
-/// each parity, none after; one with a compute pass, its pipeline too, while it builds.
+/// each parity, none after; one with a compute or `[[before_world]]` pass, its pipeline too,
+/// while it builds.
 #[test]
 fn a_pack_without_kept_resources_makes_the_layouts_and_groups_it_made_before() {
     let Some((instance, device, queue)) = counted() else {
@@ -997,6 +1169,11 @@ fn a_pack_without_kept_resources_makes_the_layouts_and_groups_it_made_before() {
     let (manifest, files) = SUMMING;
     let computing = made(manifest, &files).unwrap();
     assert_eq!(computing, [[3, 0, 1], [0, 6, 0], [0, 0, 0]]);
+    // A `[[before_world]]` pass: its layout and pipeline while the pack builds, its groups (one a
+    // parity) on the first frame besides the chain's.
+    let (manifest, files) = BEFORE_SUMMING;
+    let before = made(manifest, &files).unwrap();
+    assert_eq!(before, [[3, 0, 1], [0, 6, 0], [0, 0, 0]]);
 }
 
 /// #16011 item 4: a pack's kept resources are made at install (`replace_native`), not while it

@@ -324,10 +324,12 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Weather)
             .map(|s| s.label.clone());
         let has_vertex = report.stages.iter().any(|s| s.kind == StageKind::Vertex);
-        let (mut post, others): (Vec<_>, Vec<_>) = report
-            .stages
-            .into_iter()
-            .partition(|s| matches!(s.kind, StageKind::Post | StageKind::Compute));
+        let (mut post, others): (Vec<_>, Vec<_>) = report.stages.into_iter().partition(|s| {
+            matches!(
+                s.kind,
+                StageKind::Post | StageKind::Compute | StageKind::BeforeWorld
+            )
+        });
         let sky = others
             .iter()
             .find(|s| s.kind == StageKind::Sky)

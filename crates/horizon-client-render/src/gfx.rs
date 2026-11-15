@@ -9723,6 +9723,7 @@ impl Renderer {
                 timing: self.own_timing.as_mut(),
                 lists,
             });
+            native.before_world(&self.device, &mut encoder);
         }
         if native_sky_pass && let Some(native) = &mut self.native {
             native.draw_sky_pass(native_sky::SkyPass {
