@@ -4699,7 +4699,7 @@ impl Renderer {
         // pack or one of Horizon's own with `[shadow]`), and the frames before it, the
         // level loading screen's among them, keep the layout the sections upload in
         // (`draw_frame`). It starts as that pack's (`pack_starts_wide`: a `shaders/` pack
-        // taken to draw terrain, or one with `[displacement]`), so the pack loading keeps it.
+        // taken to draw terrain), so the pack loading keeps it.
         let (sorted_indices, translucent_arena) = arena::Arena::translucent_arenas(
             &device,
             std::mem::size_of::<TerrainVertex>() as u64,
@@ -6457,15 +6457,12 @@ impl Renderer {
         }
     }
     /// Uploads solid quads in the compact layout (`packed_quads`) unless a pack reads the
-    /// arena's vertices as `TerrainVertex`es: some of Horizon's own packs' stages
-    /// (`NativePack::reads_terrain_vertices`), and a `shaders/` pack's terrain and shadow
+    /// arena's vertices as `TerrainVertex`es: a `shaders/` pack's terrain and shadow
     /// programs outside flat draws (flat ones unpack the records, `pack_atlas::PULL_FLAT`).
     /// Leaving it drops every section and far tile for the game to mesh again.
     fn follow_packed_layout(&mut self) {
         let pack = self.pack_post.as_ref().and_then(|p| p.1.as_ref()).is_some();
-        let native = matches!(&self.native, Some(n) if n.reads_terrain_vertices());
-        let want =
-            self.flat.is_some() && (!pack || self.pack_terrain_flat) && !native && self.packed_on;
+        let want = self.flat.is_some() && (!pack || self.pack_terrain_flat) && self.packed_on;
         if want == self.packed_quads {
             return;
         }
@@ -8616,14 +8613,14 @@ impl Renderer {
                             let s = self.sections.get(v.slot);
                             (s.solid > 0).then(|| displace::Near {
                                 buffer: self.arena.buffer(s.page),
-                                start: s.start,
+                                base: s.solid_base(),
                                 quads: s.solid,
                                 origin: v.origin,
                             })
                         })
                         .collect()
                 };
-            d.prepare(&self.queue, &mut encoder, &near, view_proj);
+            d.prepare(&self.device, &self.queue, &mut encoder, &near, view_proj);
         }
         // Solid sections front to back, then translucent ones back to front,
         // as one list of indirect draws over the section arena.

@@ -322,14 +322,6 @@ impl NativePack {
             || self.weather.is_some()
             || self.post.is_some()
     }
-
-    /// Whether a stage reads the arena's solid quads as `TerrainVertex`es, so they upload
-    /// wide (`Renderer::follow_packed_layout`): `[displacement]`'s copy of the quads. The
-    /// material's and the shadow pass's solid entries unpack compact records as the engine's
-    /// own pipelines do (`native_material::SECTION_CORNER`).
-    pub fn reads_terrain_vertices(&self) -> bool {
-        self.displacement.is_some()
-    }
 }
 
 #[cfg(test)]
@@ -414,100 +406,6 @@ file = \"material.wgsl\"
             Default::default(),
         );
         assert!(built.is_err(), "the pack should be refused");
-    }
-
-    /// A 0.2 pack whose stages read no terrain vertices (a sky, the post every 0.2 pack runs, a
-    /// material and a shadow pass, whose solid entries read the flat draws' page) leaves the
-    /// solid quads in the compact layout; one with `[displacement]`, which copies the quads'
-    /// vertices, does not (#16127).
-    #[test]
-    fn only_a_pack_with_displacement_reads_terrain_vertices() {
-        let instance = crate::gfx::test_gpu::instance();
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-            return;
-        };
-        let Ok((device, queue)) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                required_limits: adapter.limits(),
-                ..Default::default()
-            }))
-        else {
-            return;
-        };
-        let (globals, empty) = terrain_layouts(&device);
-        // The flat draws' group 1 (`Flat::new`): block slots, origins and the page.
-        let read = |binding| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let flat = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[read(0), read(1), read(super::super::flat::ARENA_BINDING)],
-        });
-        // Height maps, without which there is no `[displacement]`.
-        let pbr = [0; 2].map(|_| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: None,
-                size: wgpu::Extent3d {
-                    width: 16,
-                    height: 16,
-                    depth_or_array_layers: 2,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-        });
-        // The entities' atlas, which the shadow pass's entity draw samples.
-        let atlas = |binding, ty| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty,
-            count: None,
-        };
-        let entities = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                atlas(
-                    1,
-                    wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                ),
-                atlas(
-                    2,
-                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                ),
-            ],
-        });
-        let reads = |stages: &str| {
-            let shape = TerrainShape {
-                flat: Some(&flat),
-                pbr: Some(&pbr),
-                entities: &entities,
-                ..terrain_shape(&globals, &empty)
-            };
-            let report = pack("0.2", stages);
-            let (pack, _) =
-                NativePack::new(&device, &queue, &shape, report, &[], Default::default()).unwrap();
-            assert!(pack.post.is_some() && pack.sky.is_some());
-            pack.reads_terrain_vertices()
-        };
-        let material = "[material]\nfile = \"material.wgsl\"\n";
-        assert!(!reads(""));
-        assert!(!reads(&format!("{material}[shadow]\n")));
-        assert!(reads(&format!("{material}[displacement]\n")));
     }
 
     /// A pack of API `api` with a sky stage and the manifest's `stages` after it.

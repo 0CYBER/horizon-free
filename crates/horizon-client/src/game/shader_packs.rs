@@ -152,12 +152,11 @@ fn pack_draws_flat(path: &std::path::Path) -> bool {
         || horizon_shader_api::Pack::read_manifest(path).is_ok_and(|m| m.shadow.is_some())
 }
 
-/// Whether the pack at `path` reads the solid quads as vertices, not their compact records
-/// (`NativePack::reads_terrain_vertices`): a `shaders/` pack, taken to draw terrain, or one of
-/// Horizon's own with `[displacement]`.
+/// Whether the pack at `path` reads the solid quads as vertices, not their compact records: a
+/// `shaders/` pack, taken to draw terrain. Horizon's own read the records, `[displacement]`
+/// too (gfx/displace.rs).
 fn pack_reads_vertices(path: &std::path::Path) -> bool {
     !horizon_shader_api::package::is_pack(path)
-        || horizon_shader_api::Pack::read_manifest(path).is_ok_and(|m| m.displacement.is_some())
 }
 
 // A native mod can bundle a pack as `native-<mod-id>`; its Mods toggle controls it too.
@@ -1170,11 +1169,11 @@ mod native_pack_tests {
         assert!(pack_draws_flat(&pack("shaders_pack", None)));
         assert!(!pack_draws_flat(&pack("unshadowed", Some(""))));
         assert!(pack_draws_flat(&pack("shadowed", Some("[shadow]\n"))));
-        // Only a `shaders/` pack and `[displacement]` read the solid quads' vertices: a
-        // material and a shadow pass start in the compact layout.
+        // Only a `shaders/` pack reads the solid quads' vertices: a material, a shadow pass
+        // and `[displacement]` start in the compact layout.
         assert!(pack_reads_vertices(&root.join("shaders_pack")));
         assert!(!pack_reads_vertices(&root.join("shadowed")));
-        assert!(pack_reads_vertices(&pack(
+        assert!(!pack_reads_vertices(&pack(
             "displaced",
             Some("[displacement]\n")
         )));

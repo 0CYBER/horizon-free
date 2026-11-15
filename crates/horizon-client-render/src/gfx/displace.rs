@@ -3,11 +3,13 @@
 //! corner moved along the face's normal by the pack's `displacement`, while the flat quads
 //! leave those pixels to them (`native_material.rs`'s `horizon_displaced_layer`).
 //!
-//! Each frame the solid quads of the sections around the camera are copied out of the arena
-//! into one buffer, a compute pass picks the ones the grid draws (opaque, with relief, within
+//! Each frame the solid quads of the sections around the camera are written out of the arena
+//! into one buffer as vertices (copied, or from the compact layout's records by ray tracing's
+//! unpacking, `ray_scene::unpack_page`), a compute pass picks the ones the grid draws (opaque, with relief, within
 //! the distance, facing the eye and in view) into an indirect draw, and the material's
 //! displaced pipeline draws one instance a quad.
 
+use super::surface_setup::ray_query::ray_scene::{RtJob, unpack_page, unpack_pipeline};
 use crate::mesher::TerrainVertex;
 
 /// The solid quads the grid can draw a frame, and the sections they come from.
@@ -382,11 +384,12 @@ struct Section {
     pad: [u32; 2],
 }
 
-/// A section the grid may draw from this frame: its arena range of solid quads and its
-/// camera-relative origin.
+/// A section the grid may draw from this frame: its arena page, the base vertex of its solid
+/// draws (`SectionGpu::solid_base`: in the compact layout past `PACKED_BASE`), its solid quads
+/// and its camera-relative origin.
 pub struct Near<'a> {
     pub buffer: &'a wgpu::Buffer,
-    pub start: u64,
+    pub base: u32,
     pub quads: u32,
     pub origin: [f32; 3],
 }
@@ -411,6 +414,8 @@ pub struct Displacement {
     vertices: wgpu::Buffer,
     sections: wgpu::Buffer,
     pick: wgpu::ComputePipeline,
+    /// Writes compact sections' quads out as vertices, made on the first one.
+    unpack: Option<wgpu::ComputePipeline>,
     /// The quads the eye sees, and the ones the shadow map draws (when the pack has one).
     pub view: Picks,
     pub shadow: Option<Picks>,
@@ -473,10 +478,11 @@ impl Displacement {
             })
         };
         use wgpu::BufferUsages as U;
+        // `COPY_SRC` for the tests, which read the quads back.
         let vertices = buffer(
             "Displacement quads",
             MAX_QUADS * QUAD_BYTES,
-            U::STORAGE | U::COPY_DST,
+            U::STORAGE | U::COPY_DST | U::COPY_SRC,
         );
         let sections = buffer(
             "Displacement sections",
@@ -601,6 +607,7 @@ impl Displacement {
             vertices,
             sections,
             pick,
+            unpack: None,
             view,
             shadow,
             draw_layout,
@@ -609,9 +616,10 @@ impl Displacement {
         }
     }
 
-    /// Copies the solid quads of `near` (nearest first) and picks this frame's in `encoder`.
+    /// Writes out the solid quads of `near` (nearest first) and picks this frame's in `encoder`.
     pub fn prepare(
         &mut self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         near: &[Near<'_>],
@@ -621,19 +629,31 @@ impl Displacement {
         self.table.reserve(near.len().min(MAX_SECTIONS));
         let mut first = 0u64;
         let mut most = 0u32;
+        // Compact sections' quads, by page.
+        let mut unpacks: Vec<(&wgpu::Buffer, RtJob)> = Vec::new();
         for n in near.iter().take(MAX_SECTIONS) {
             let quads = u64::from(n.quads).min(MAX_QUADS - first);
             if quads == 0 {
                 break;
             }
-            let stride = std::mem::size_of::<TerrainVertex>() as u64;
-            encoder.copy_buffer_to_buffer(
-                n.buffer,
-                n.start * stride,
-                &self.vertices,
-                first * QUAD_BYTES,
-                quads * QUAD_BYTES,
-            );
+            if n.base >= crate::mesher::packed::PACKED_BASE {
+                let job = RtJob {
+                    base: n.base,
+                    quads: quads as u32,
+                    out: (first * 4) as u32,
+                    pad: 0,
+                };
+                unpacks.push((n.buffer, job));
+            } else {
+                let stride = std::mem::size_of::<TerrainVertex>() as u64;
+                encoder.copy_buffer_to_buffer(
+                    n.buffer,
+                    u64::from(n.base) * stride,
+                    &self.vertices,
+                    first * QUAD_BYTES,
+                    quads * QUAD_BYTES,
+                );
+            }
             self.table.push(Section {
                 origin: [
                     n.origin[0],
@@ -658,6 +678,23 @@ impl Displacement {
             label: Some("Displacement pick"),
             timestamp_writes: None,
         });
+        if !unpacks.is_empty() {
+            let pipeline = self.unpack.get_or_insert_with(|| unpack_pipeline(device));
+            let mut pages: Vec<&wgpu::Buffer> = Vec::new();
+            for (page, _) in &unpacks {
+                if !pages.contains(page) {
+                    pages.push(page);
+                }
+            }
+            for page in pages {
+                let jobs: Vec<RtJob> = unpacks
+                    .iter()
+                    .filter(|(p, _)| *p == page)
+                    .map(|(_, job)| *job)
+                    .collect();
+                unpack_page(device, &mut pass, pipeline, page, &jobs, &self.vertices);
+            }
+        }
         pass.set_pipeline(&self.pick);
         for (picks, shadow) in lists {
             let params = Params {
@@ -747,12 +784,12 @@ mod tests {
                 let quad = quad(&device, at);
                 let near = [super::Near {
                     buffer: &quad,
-                    start: 0,
+                    base: 0,
                     quads: 1,
                     origin: [0.0; 3],
                 }];
                 let mut encoder = device.create_command_encoder(&Default::default());
-                displacement.prepare(&queue, &mut encoder, &near, glam::Mat4::IDENTITY);
+                displacement.prepare(&device, &queue, &mut encoder, &near, glam::Mat4::IDENTITY);
                 queue.submit([encoder.finish()]);
                 let shadow = &displacement.shadow.as_ref().unwrap().draw;
                 assert_eq!(
@@ -764,6 +801,114 @@ mod tests {
                     read(&device, &queue, shadow),
                     [16 * 16 * 6, 1, 0, 0],
                     "shadow at {at:?} on {name}"
+                );
+            }
+            tested = true;
+        }
+        if !tested {
+            eprintln!("no GPU: skipped");
+        }
+    }
+
+    /// The grid's quads, on each device here: those of sections in the compact layout (records
+    /// and a quad spilled to its own vertices, on two pages) are written out as the very words
+    /// of their vertices, as a wide section's are copied (#16127).
+    #[test]
+    fn compact_sections_give_the_grid_the_words_of_their_vertices_on_every_backend() {
+        use crate::mesher::{TerrainVertex, packed};
+        // Whole faces of blocks on the grid, each its own layer, grey level and light: records.
+        let face = |i: u32| {
+            let (x, z) = ((i % 8) as f32, (i / 8) as f32);
+            let gray = 120 + 9 * i;
+            [[0, 0], [0, 1], [1, 1], [1, 0]].map(|[dx, dz]: [u32; 2]| TerrainVertex {
+                pos: [x + dx as f32, 9.0, z + dz as f32],
+                uv: [((dx * 16) << 10) as u16, ((dz * 16) << 10) as u16],
+                layer: crate::mesher::OPAQUE_LAYER | i as u16,
+                light: ((4 * i) | (60 - 4 * i) << 8) as u16,
+                color: gray | gray << 8 | gray << 16 | 0xFF00_0000,
+            })
+        };
+        let section = |quads: std::ops::Range<u32>, slab: bool| {
+            let mut v: Vec<TerrainVertex> = quads.flat_map(face).collect();
+            if slab {
+                // Half a block up: no record, its four vertices after the records.
+                let mut half = face(13);
+                for c in &mut half {
+                    c.pos[1] = 8.5;
+                }
+                v.extend(half);
+            }
+            v
+        };
+        let (a, b, c) = (
+            section(0..6, true),
+            section(6..9, false),
+            section(9..13, true),
+        );
+        let compact = |v: &[TerrainVertex]| {
+            let quads = v.len() / 4;
+            let layout = packed::layout(v, &vec![packed::WHITE; quads]);
+            assert_eq!(packed::packed_quads(&layout, quads), quads - 1);
+            layout
+        };
+        // Page 1: section a's records from slot 8, c's after them; page 2: b's vertices from 4.
+        let mut one = vec![[0u32; 6]; 8];
+        one.extend(compact(&a));
+        let c_at = one.len() as u32;
+        one.extend(compact(&c));
+        let mut two = vec![[0u32; 6]; 4];
+        two.extend(
+            b.iter()
+                .map(|v| bytemuck::cast::<TerrainVertex, [u32; 6]>(*v)),
+        );
+        let base = |slot: u32| packed::PACKED_BASE + 4 * slot;
+        let expected: Vec<TerrainVertex> = [&a, &b, &c].into_iter().flatten().copied().collect();
+        let mut tested = false;
+        for (adapter, name) in crate::gfx::test_gpu::each_adapter() {
+            let (device, queue) =
+                match pollster::block_on(adapter.request_device(&Default::default())) {
+                    Ok(device) => device,
+                    Err(e) => {
+                        eprintln!("no device on {name}: {e}");
+                        continue;
+                    }
+                };
+            eprintln!("displacement quads on {} ({name})", adapter.get_info().name);
+            let page = |words: &[[u32; 6]]| {
+                use wgpu::util::DeviceExt;
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(words),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                })
+            };
+            let (one, two) = (page(&one), page(&two));
+            let normals = normals(&device, &queue);
+            let mut displacement =
+                super::Displacement::new(&device, 12.0, 16, false, &normals, false);
+            let near = |buffer, base, v: &[TerrainVertex]| super::Near {
+                buffer,
+                base,
+                quads: v.len() as u32 / 4,
+                origin: [0.0; 3],
+            };
+            let near = [
+                near(&one, base(8), &a),
+                near(&two, 4, &b),
+                near(&one, base(c_at), &c),
+            ];
+            let mut encoder = device.create_command_encoder(&Default::default());
+            displacement.prepare(&device, &queue, &mut encoder, &near, glam::Mat4::IDENTITY);
+            queue.submit([encoder.finish()]);
+            let bytes = std::mem::size_of_val(expected.as_slice()) as u64;
+            let got = read_bytes(&device, &queue, &displacement.vertices.slice(..bytes));
+            let got: Vec<TerrainVertex> = bytemuck::pod_collect_to_vec(&got);
+            assert_eq!(got.len(), expected.len());
+            for (i, (got, want)) in got.iter().zip(&expected).enumerate() {
+                assert_eq!(
+                    bytemuck::bytes_of(got),
+                    bytemuck::bytes_of(want),
+                    "vertex {i} on {name}"
                 );
             }
             tested = true;
@@ -827,11 +972,19 @@ mod tests {
 
     /// An indirect draw's arguments.
     fn read(device: &wgpu::Device, queue: &wgpu::Queue, draw: &wgpu::Buffer) -> [u32; 4] {
+        bytemuck::pod_read_unaligned(&read_bytes(device, queue, &draw.slice(..)))
+    }
+
+    fn read_bytes(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        slice: &wgpu::BufferSlice<'_>,
+    ) -> Vec<u8> {
         let (tx, rx) = std::sync::mpsc::channel();
-        wgpu::util::DownloadBuffer::read_buffer(device, queue, &draw.slice(..), move |result| {
+        wgpu::util::DownloadBuffer::read_buffer(device, queue, slice, move |result| {
             tx.send(result.unwrap().to_vec()).unwrap()
         });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        bytemuck::pod_read_unaligned(&rx.recv().unwrap())
+        rx.recv().unwrap()
     }
 }

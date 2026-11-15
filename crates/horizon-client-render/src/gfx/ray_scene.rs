@@ -341,11 +341,11 @@ struct Build<'a> {
 /// `rt_unpack.wgsl`'s `RtJob`.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct RtJob {
-    base: u32,
-    quads: u32,
-    out: u32,
-    pad: u32,
+pub(in crate::gfx) struct RtJob {
+    pub base: u32,
+    pub quads: u32,
+    pub out: u32,
+    pub pad: u32,
 }
 
 /// The store, and the pass that writes sections' solid quads into it as vertices: BLAS builds
@@ -358,21 +358,8 @@ struct Unpacker {
 
 impl Unpacker {
     fn new(device: &wgpu::Device, capacity: u64) -> Self {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            // No colon: DXC (DirectX 12) takes the label for a file name and fails to read it.
-            label: Some("Unpack sections"),
-            source: wgpu::ShaderSource::Wgsl(unpack_shader().into()),
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Ray tracing: unpack sections"),
-            layout: None,
-            module: &module,
-            entry_point: Some("cs_rt_unpack"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
         Self {
-            pipeline,
+            pipeline: unpack_pipeline(device),
             store: store_buffer(device, capacity),
         }
     }
@@ -403,17 +390,10 @@ impl Unpacker {
         if pages.is_empty() {
             return;
         }
-        let empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.pipeline.get_bind_group_layout(0),
-            entries: &[],
-        });
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Ray tracing: unpack sections"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &empty, &[]);
         for page in pages {
             let jobs: Vec<RtJob> = builds
                 .iter()
@@ -425,42 +405,86 @@ impl Unpacker {
                     pad: 0,
                 })
                 .collect();
-            let jobs_buffer = wgpu::util::DeviceExt::create_buffer_init(
+            unpack_page(
                 device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Ray tracing: unpack jobs"),
-                    contents: bytemuck::cast_slice(&jobs),
-                    usage: wgpu::BufferUsages::STORAGE,
-                },
+                &mut pass,
+                &self.pipeline,
+                arena.buffer(page),
+                &jobs,
+                &self.store,
             );
-            let arena_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.pipeline.get_bind_group_layout(1),
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 19,
-                    resource: arena.buffer(page).as_entire_binding(),
-                }],
-            });
-            let out_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.pipeline.get_bind_group_layout(2),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: jobs_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.store.as_entire_binding(),
-                    },
-                ],
-            });
-            let most = jobs.iter().map(|j| j.quads * 4).max().unwrap_or(0);
-            pass.set_bind_group(1, &arena_group, &[]);
-            pass.set_bind_group(2, &out_group, &[]);
-            pass.dispatch_workgroups(most.div_ceil(64), jobs.len() as u32, 1);
         }
     }
+}
+
+/// The unpacking pipeline (`rt_unpack.wgsl`); `[displacement]` writes its quads with it too
+/// (gfx/displace.rs).
+pub(in crate::gfx) fn unpack_pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        // No colon: DXC (DirectX 12) takes the label for a file name and fails to read it.
+        label: Some("Unpack sections"),
+        source: wgpu::ShaderSource::Wgsl(unpack_shader().into()),
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Ray tracing: unpack sections"),
+        layout: None,
+        module: &module,
+        entry_point: Some("cs_rt_unpack"),
+        compilation_options: Default::default(),
+        cache: None,
+    })
+}
+
+/// Writes `jobs`' solid quads, in the arena page `page`, out as vertices into `out`, in `pass`.
+pub(in crate::gfx) fn unpack_page(
+    device: &wgpu::Device,
+    pass: &mut wgpu::ComputePass<'_>,
+    pipeline: &wgpu::ComputePipeline,
+    page: &wgpu::Buffer,
+    jobs: &[RtJob],
+    out: &wgpu::Buffer,
+) {
+    let empty = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[],
+    });
+    let jobs_buffer = wgpu::util::DeviceExt::create_buffer_init(
+        device,
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("Ray tracing: unpack jobs"),
+            contents: bytemuck::cast_slice(jobs),
+            usage: wgpu::BufferUsages::STORAGE,
+        },
+    );
+    let arena_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(1),
+        entries: &[wgpu::BindGroupEntry {
+            binding: 19,
+            resource: page.as_entire_binding(),
+        }],
+    });
+    let out_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(2),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: jobs_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: out.as_entire_binding(),
+            },
+        ],
+    });
+    let most = jobs.iter().map(|j| j.quads * 4).max().unwrap_or(0);
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, &empty, &[]);
+    pass.set_bind_group(1, &arena_group, &[]);
+    pass.set_bind_group(2, &out_group, &[]);
+    pass.dispatch_workgroups(most.div_ceil(64), jobs.len() as u32, 1);
 }
 
 /// terrain.wgsl with the unpacking entry point after it, which reads sections as its solid
