@@ -61,7 +61,7 @@ positive experience when picked up.
 Advancement triggers instead live on `PlayerRef::trigger_criterion`, with a mod-owned
 `CriterionTest` and the game's scoped `CriterionContext` resource. The context keeps real
 world-aware item predicates; it is not a conditions-only snapshot. See
-[advancement triggers](https://horizon-rust.github.io/horizon/reference/hook-notes.html#advancement-triggers) for the contract and
+[advancement triggers](https://github.com/horizon-rust/horizon/tree/main/crates/horizon-mod-vocab/src/hooks) for the contract and
 the wasm runtime's current same-group callback limitation.
 
 A mod that consumes a block use can run vanilla advancement predicates and rewards

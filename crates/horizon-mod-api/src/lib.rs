@@ -5,8 +5,8 @@
 //! targets use this same API; only the build differs. Add it to your mod's `Cargo.toml` as
 //! `horizon-mod-api` (the library name is `mod_api`).
 //!
-//! The [modding book](https://horizon-rust.github.io/horizon/) is the guide: start with
-//! [Your first native mod](https://horizon-rust.github.io/horizon/start/first-mod.html). This reference documents
+//! The [modding book](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/introduction.md) is the guide: start with
+//! [Your first native mod](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/start/first-mod.md). This reference documents
 //! every item of the API.
 //!
 //! # A first mod
@@ -47,13 +47,13 @@
 //!
 //! # Guides in the book
 //!
-//! - [Hooks and the Host](https://horizon-rust.github.io/horizon/concepts/hooks-and-the-host.html)
-//! - [Load phases and access](https://horizon-rust.github.io/horizon/concepts/load-phases.html)
-//! - [Parts](https://horizon-rust.github.io/horizon/concepts/parts.html),
-//!   [capabilities](https://horizon-rust.github.io/horizon/concepts/capabilities.html) and
-//!   [attachments](https://horizon-rust.github.io/horizon/concepts/attachments.html)
-//! - [Wire types](https://horizon-rust.github.io/horizon/concepts/wire-types.html)
-//! - [The manifest and the package](https://horizon-rust.github.io/horizon/reference/manifest.html)
+//! - [Hooks and the Host](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/hooks-and-the-host.md)
+//! - [Load phases and access](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/load-phases.md)
+//! - [Parts](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/parts.md),
+//!   [capabilities](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/capabilities.md) and
+//!   [attachments](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/attachments.md)
+//! - [Wire types](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/concepts/wire-types.md)
+//! - [The manifest and the package](https://github.com/horizon-rust/horizon/blob/main/docs/modding/src/reference/manifest.md)
 extern crate self as mod_api;
 mod equip_reads;
 

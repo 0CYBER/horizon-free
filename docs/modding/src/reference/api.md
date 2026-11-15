@@ -4,9 +4,7 @@ The complete reference for the mod API is the rustdoc of the `horizon-mod-api` c
 every hook of `Hooks`, every event, Part trait, handle and `Host` method, with its side, its NeoForge 26.3
 counterpart where it has one, and whether a mod may cancel it.
 
-**[Open the API reference](https://horizon-rust.github.io/horizon/api/mod_api/)**
-
-To build it locally, from a Horizon checkout:
+Build it from a Horizon checkout:
 
 ```sh
 cargo doc -p horizon-mod-api --no-deps --open
