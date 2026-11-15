@@ -1105,6 +1105,29 @@ impl Step {
             ),
         }
     }
+
+    /// The step as the window's build card says it, in a player's words: the compiler and the
+    /// mod tools by what they are, the toolchain's own steps as getting ready. The command line
+    /// and the log keep [`Self::label`].
+    pub fn shown(&self) -> String {
+        match self {
+            Self::Rust(_) => tr("Downloading the compiler (first time only)").into(),
+            Self::Tool => tr("Getting the mod tools ready (first time only)").into(),
+            Self::Source(_) | Self::Crates | Self::Plan(..) => tr("Getting ready to build").into(),
+            Self::Mixins | Self::CachedMixins | Self::PrebuiltMods => {
+                tr("Preparing your mods").into()
+            }
+            Self::Tools { done, total, .. } => trf(
+                "Downloading the mod tools: {done} of {total} MB",
+                &[
+                    ("done", &(done / 1_000_000).to_string()),
+                    ("total", &total.div_ceil(1_000_000).max(1).to_string()),
+                ],
+            ),
+            Self::Compile { .. } => tr("Building the game with your mods").into(),
+            _ => self.label(),
+        }
+    }
 }
 
 /// Runs `cmd`, its output appended to the build log; `line` sees each line of its standard error.
@@ -2579,6 +2602,21 @@ fn carried_over(name: &std::ffi::OsStr, target: Target) -> bool {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn the_window_says_build_steps_in_player_words() {
+        let rust = Step::Rust(0.42).shown();
+        assert!(!rust.contains("Rust") && !rust.contains('%'), "{rust}");
+        assert!(!Step::Tool.shown().contains("mixins"));
+        assert!(!Step::Mixins.shown().contains("mixins"));
+        // A step already in plain words reads the same in both.
+        let done = Step::Done {
+            secs: 41,
+            profile: Profile::Optimized,
+            plan: Plan::Prebuilt,
+        };
+        assert_eq!(done.shown(), done.label());
+    }
 
     #[test]
     fn source_archive_escape_is_refused_without_writing_outside() {

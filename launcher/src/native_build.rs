@@ -74,7 +74,7 @@ impl Launcher {
                 None,
                 back_up,
                 |step| {
-                    let _ = tx.send(Msg::NativeProgress(step.label(), step.progress()));
+                    let _ = tx.send(Msg::NativeProgress(step.shown(), step.progress()));
                 },
                 |inventory| {
                     let (reply, answer) = std::sync::mpsc::channel();

@@ -260,7 +260,7 @@ impl Launcher {
             }
             ("step", key) => {
                 if let Some(step) = step(key) {
-                    self.native_step = Some(step.label());
+                    self.native_step = Some(step.shown());
                     self.native_progress = Some(step.progress());
                     if matches!(step, Step::Rust(_) | Step::Tools { .. }) {
                         self.first_build = Some(compiler_bytes());
