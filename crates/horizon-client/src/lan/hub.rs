@@ -41,6 +41,7 @@ use std::sync::{Arc, Mutex, atomic::Ordering};
 
 mod accept_teleport;
 mod acknowledgements;
+mod activity;
 /// GameEvent types (ClientboundGameEventPacket).
 pub mod chat;
 pub mod chat_filter;
@@ -3899,25 +3900,12 @@ impl Hub {
             // ServerPlayer.resetLastActionTime: every handler of a player's
             // own action resets it, movement only when it moved
             // (handlePlayerKnownMovement), PlayerInput once loaded.
-            let acted = match &packet {
-                S::AcceptTeleportation(_)
-                | S::PlayerAbilities(_)
-                | S::MovePlayerStatus(_)
-                | S::MovePlayerRot(_)
-                | S::PlayerLoaded(_)
-                | S::ChunkBatchReceived(_)
-                | S::ClientInformation(_)
-                | S::RecipeBookChangeSettings(_)
-                | S::RecipeBookSeenRecipe(_)
-                | S::ClientTickEnd(_)
-                | S::KeepAlive(_)
-                | S::Pong(_)
-                | S::PingRequest(_) => false,
-                S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
-                S::MovePlayerPosRot(p) => self.moved_far(i, [p.x, p.y, p.z]),
-                S::PlayerInput(_) => self.guests[i].client_loaded(),
-                _ => true,
-            };
+            let acted = activity::counts_as_activity(
+                &packet,
+                self.guests[i].client_loaded(),
+                self.guests[i].vehicle_good,
+                |to| self.moved_far(i, to),
+            );
             if acted {
                 self.guests[i].last_action_tick = self.ticks;
             }

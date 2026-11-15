@@ -477,6 +477,151 @@ fn tick_packet(hub: &mut Hub, world: &mut World, packet: S) {
     let _ = hub.drain_packets(&mut ctx);
 }
 
+/// The packet `id` with nothing in it: the shortest all-zero body it decodes from.
+fn blank_packet(id: i32) -> S {
+    (0..=64)
+        .find_map(|n| S::decode(id, &vec![0u8; n]).ok())
+        .unwrap_or_else(|| panic!("no all-zero body decodes as packet {id}"))
+}
+
+/// Whether `packet` sets the idle timer (`ServerPlayer.resetLastActionTime`) of a guest who has
+/// or has not loaded and whose vehicle was last accepted at `vehicle_good`.
+fn resets_the_idle_timer(packet: S, loaded: bool, vehicle_good: Option<[f64; 3]>) -> bool {
+    let (mut hub, _rx) = hub_with_a_guest();
+    let mut world = floor_at(0);
+    hub.guests[0].load_timeout = if loaded { 0 } else { 60 };
+    hub.guests[0].vehicle_good = vehicle_good;
+    hub.ticks = 100;
+    hub.guests[0].last_action_tick = 5;
+    tick_packet(&mut hub, &mut world, packet);
+    hub.guests[0].last_action_tick == hub.ticks
+}
+
+/// The handlers of `ServerGamePacketListenerImpl` that do not call `resetLastActionTime` leave the
+/// idle timer alone: the answers to what the server asked, the client's settings and the
+/// requests that are not the player acting (checked one by one with `javap -c -p`).
+#[test]
+fn packets_that_vanilla_does_not_count_as_activity_leave_the_idle_timer_alone() {
+    use horizon_protocol::ids::play::serverbound as id;
+    for (name, packet) in [
+        ("ChatAck", id::CHAT_ACK),
+        ("ContainerClose", id::CONTAINER_CLOSE),
+        ("CustomPayload", id::CUSTOM_PAYLOAD),
+        ("SeenAdvancements", id::SEEN_ADVANCEMENTS),
+        ("ChatSessionUpdate", id::CHAT_SESSION_UPDATE),
+        ("CookieResponse", id::COOKIE_RESPONSE),
+        ("SetCreativeModeSlot", id::SET_CREATIVE_MODE_SLOT),
+        ("PaddleBoat", id::PADDLE_BOAT),
+        ("PickItemFromBlock", id::PICK_ITEM_FROM_BLOCK),
+        ("KeepAlive", id::KEEP_ALIVE),
+        ("ClientTickEnd", id::CLIENT_TICK_END),
+        ("AcceptTeleportation", id::ACCEPT_TELEPORTATION),
+    ] {
+        assert!(
+            !resets_the_idle_timer(blank_packet(packet), true, None),
+            "{name} reset the idle timer"
+        );
+    }
+}
+
+/// The 17 handlers that call `resetLastActionTime`, for a client that has loaded.
+#[test]
+fn the_packets_that_vanilla_counts_as_activity_reset_the_idle_timer() {
+    use horizon_protocol::ids::play::serverbound as id;
+    for (name, packet) in [
+        ("Attack", id::ATTACK),
+        ("Interact", id::INTERACT),
+        ("UseItemOn", id::USE_ITEM_ON),
+        ("UseItem", id::USE_ITEM),
+        ("PlayerAction", id::PLAYER_ACTION),
+        ("PlayerCommand", id::PLAYER_COMMAND),
+        ("SpectatorAction", id::SPECTATOR_ACTION),
+        ("Chat", id::CHAT),
+        ("ChatCommand", id::CHAT_COMMAND),
+        ("ChatCommandSigned", id::CHAT_COMMAND_SIGNED),
+        ("SignUpdate", id::SIGN_UPDATE),
+        ("SetCarriedItem", id::SET_CARRIED_ITEM),
+        ("Punch", id::PUNCH),
+        ("PlaceRecipe", id::PLACE_RECIPE),
+        ("ContainerClick", id::CONTAINER_CLICK),
+        ("ContainerButtonClick", id::CONTAINER_BUTTON_CLICK),
+        ("ClientCommand", id::CLIENT_COMMAND),
+    ] {
+        assert!(
+            resets_the_idle_timer(blank_packet(packet), true, None),
+            "{name} did not reset the idle timer"
+        );
+    }
+    // A packet Horizon does not model counts, as it always did.
+    assert!(resets_the_idle_timer(S::Unknown(250, vec![]), true, None));
+}
+
+/// `hasClientLoaded` comes before the reset in seven of them and in `handlePlayerInput`, and
+/// `handleSetCarriedItem` resets only for a slot of the hotbar.
+#[test]
+fn the_idle_timer_waits_for_a_loaded_client_and_a_slot_of_the_hotbar() {
+    use horizon_protocol::ids::play::serverbound as id;
+    for (name, packet) in [
+        ("Attack", id::ATTACK),
+        ("Interact", id::INTERACT),
+        ("UseItemOn", id::USE_ITEM_ON),
+        ("UseItem", id::USE_ITEM),
+        ("PlayerAction", id::PLAYER_ACTION),
+        ("PlayerCommand", id::PLAYER_COMMAND),
+        ("SpectatorAction", id::SPECTATOR_ACTION),
+        ("PlayerInput", id::PLAYER_INPUT),
+    ] {
+        assert!(
+            !resets_the_idle_timer(blank_packet(packet), false, None),
+            "{name} reset the idle timer of a client that has not loaded"
+        );
+        assert!(
+            resets_the_idle_timer(blank_packet(packet), true, None),
+            "{name} did not reset the idle timer of a client that has loaded"
+        );
+    }
+    let slot =
+        |slot| resets_the_idle_timer(S::SetCarriedItem(play::SetCarriedItem { slot }), true, None);
+    assert!(slot(0) && slot(8));
+    assert!(!slot(9) && !slot(12) && !slot(-1));
+}
+
+/// A vehicle's move that repeats the position the game last accepted is the client standing
+/// still (it sends one every tick for a vehicle it drives): no activity. A move away counts, and
+/// so does any move when no position was kept for the vehicle.
+#[test]
+fn a_vehicle_that_stands_still_does_not_reset_the_idle_timer() {
+    let at = [0.5, 64.0, 0.5];
+    let moves = |to: [f64; 3]| {
+        S::MoveVehicle(play::MoveVehicleRequest {
+            position: to,
+            yaw: 0.0,
+            pitch: 0.0,
+            on_ground: true,
+        })
+    };
+    // The same place, and a shift of 0.002 (squared 4.0E-6, under 1.0E-5).
+    assert!(!resets_the_idle_timer(moves(at), true, Some(at)));
+    assert!(!resets_the_idle_timer(
+        moves([0.502, 64.0, 0.5]),
+        true,
+        Some(at)
+    ));
+    // A shift of 0.004 (squared 1.6E-5) and a block away.
+    assert!(resets_the_idle_timer(
+        moves([0.504, 64.0, 0.5]),
+        true,
+        Some(at)
+    ));
+    assert!(resets_the_idle_timer(
+        moves([1.5, 64.0, 0.5]),
+        true,
+        Some(at)
+    ));
+    // No position kept for this vehicle: the move counts.
+    assert!(resets_the_idle_timer(moves(at), true, None));
+}
+
 /// One tick of the hub that handles a single position move from the guest.
 fn tick_guest_move(hub: &mut Hub, world: &mut World, to: [f64; 3], flags: u8) {
     // One position move per client tick (receivedPositionThisTick).
