@@ -1595,8 +1595,9 @@ mod tests {
         )];
         mod_platform::testing::with_mods(mods.into(), || {
             crate::game::native_entity_refs::tests::with_game(|game| {
+                let scratch = tempfile::tempdir().unwrap();
                 let folder = "functions-name-mod-commands";
-                let world = std::env::current_dir().unwrap().join("saves").join(folder);
+                let world = scratch.path().join(folder);
                 let pack = world.join("datapacks/fnmod");
                 let functions = pack.join("data/fnmod/function");
                 std::fs::create_dir_all(&functions).unwrap();
@@ -1617,7 +1618,7 @@ mod tests {
                 ] {
                     std::fs::write(functions.join(format!("{name}.mcfunction")), line).unwrap();
                 }
-                let request = crate::game::world_loading::WorldRequest::new(
+                let mut request = crate::game::world_loading::WorldRequest::new(
                     folder,
                     None,
                     Some(3042),
@@ -1626,6 +1627,7 @@ mod tests {
                     game.level.rule_registry.clone(),
                 )
                 .unwrap();
+                request.save_root = world;
                 game.load_world(request).unwrap();
                 let store = &game.fns.store;
                 assert!(
