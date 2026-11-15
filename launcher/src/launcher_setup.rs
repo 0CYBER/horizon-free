@@ -147,6 +147,7 @@ impl Launcher {
             native_log: Default::default(),
             confirm_remove: None,
             notes_open: Default::default(),
+            technical_open: Default::default(),
             picker: glass_home::PickerState::default(),
             accent_strip: false,
             look_sliders: Default::default(),

@@ -144,6 +144,25 @@ fn empty_tab(line: &str) -> AnyElement {
     ui::empty().child(line.to_string()).into_any_element()
 }
 
+/// What a release tells a player. A release body that has a `### For players` section is
+/// written for them: only that section's bullets show. Any other body is the maintainers' list
+/// of changes: it shows as a one-line summary with the list behind "Technical details".
+pub(super) enum PatchNotes {
+    ForPlayers(Vec<String>),
+    Technical(Sections),
+}
+
+pub(super) fn patch_notes(body: &str) -> Option<PatchNotes> {
+    let mut sections = patch_sections(body);
+    if let Some(i) = sections
+        .iter()
+        .position(|(name, _)| name.eq_ignore_ascii_case("For players"))
+    {
+        return Some(PatchNotes::ForPlayers(sections.swap_remove(i).1));
+    }
+    (!sections.is_empty()).then_some(PatchNotes::Technical(sections))
+}
+
 /// A release's changes by section ("### New", "### Fixed"), each line without its pull request
 /// numbers; the contributors' thanks and what follows the notes are left out.
 pub(super) fn patch_sections(body: &str) -> Sections {
@@ -183,6 +202,31 @@ fn strip_refs(item: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn player_notes_win_over_the_technical_list() {
+        let body = "Intro.\n\n### For players\n- Mods load faster (#1)\n- Fixed a crash on the title screen\n\n### Fixed\n- Rollup 3: #4, #5 stages (#6)\n\nThanks to @a.";
+        match patch_notes(body) {
+            Some(PatchNotes::ForPlayers(items)) => assert_eq!(
+                items,
+                vec!["Mods load faster", "Fixed a crash on the title screen"]
+            ),
+            _ => panic!("expected the player section"),
+        }
+    }
+
+    #[test]
+    fn a_body_without_player_notes_keeps_its_list_as_technical() {
+        let body = "A long intro paragraph.\n\n### Fixed\n- Sync upstream to 7b42678bcd (#2922)\n- Make CI failures readable (#2993)\n\nThanks to @arismoko.\n\n---\nLegal.";
+        match patch_notes(body) {
+            Some(PatchNotes::Technical(sections)) => {
+                assert_eq!(sections.len(), 1);
+                assert_eq!(sections[0].1.len(), 2);
+            }
+            _ => panic!("expected a technical list"),
+        }
+        assert!(patch_notes("Only an intro.").is_none());
+    }
 
     #[test]
     fn a_release_body_becomes_its_sections_without_refs_or_thanks() {

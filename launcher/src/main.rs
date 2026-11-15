@@ -335,6 +335,8 @@ struct Launcher {
     confirm_remove: Option<String>,
     /// The releases whose patch notes the Versions page shows open.
     notes_open: std::collections::HashSet<String>,
+    /// Versions cards whose "Technical details" are open.
+    technical_open: std::collections::HashSet<String>,
     picker: glass_home::PickerState,
     /// Settings' any-colour swatch shows the hue strip (the glass look).
     accent_strip: bool,

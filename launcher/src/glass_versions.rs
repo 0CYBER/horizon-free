@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::glass_ui::{self as ui, Tone};
+use crate::glass_home_tabs::PatchNotes;
 use horizon_theme::glass::{ink, radius};
 
 /// A release's day as the mockup writes it ("Nov 1"), with its time in UTC when known.
@@ -640,7 +641,7 @@ impl Launcher {
         let Load::Ready(list) = &self.releases else {
             return None;
         };
-        let has = |r: &&Release| !crate::glass_home_tabs::patch_sections(&r.body).is_empty();
+        let has = |r: &&Release| crate::glass_home_tabs::patch_notes(&r.body).is_some();
         let played = self
             .selected()
             .filter(|_| self.selected_instance().is_some_and(|i| i.java.is_none()));
@@ -658,15 +659,11 @@ impl Launcher {
         newest: bool,
         cx: &mut Context<Self>,
     ) -> Option<Div> {
-        let sections = crate::glass_home_tabs::patch_sections(&release.body);
-        if sections.is_empty() {
-            return None;
-        }
+        let notes = crate::glass_home_tabs::patch_notes(&release.body)?;
         let open = match &self.whats_new_open {
             Some(set) => set.contains(&release.tag),
             None => newest,
         };
-        let many = sections.len() > 1;
         let tag = release.tag.clone();
         let turn = ui::icon("arrow-down-01", 16., ui::white(ink::NOTE)).with_transformation(
             gpui::Transformation::rotate(gpui::radians(if open {
@@ -693,43 +690,99 @@ impl Launcher {
                 }
                 cx.notify();
             }));
-        let list =
-            open.then(|| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(14.))
-                    .max_w(px(640.))
-                    .children(sections.into_iter().map(|(section, items)| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .children(many.then(|| {
-                                ui::text(13., FontWeight::MEDIUM, ink::QUIET).child(section)
-                            }))
-                            .child(div().mt(px(6.)).flex().flex_col().gap(px(6.)).children(
-                                items.into_iter().map(|item| {
+        let bullets = |items: Vec<String>| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .children(items.into_iter().map(|item| {
+                    div()
+                        .flex()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .flex_none()
+                                .mt(px(9.))
+                                .size(px(5.))
+                                .rounded_full()
+                                .bg(ui::white(0.4)),
+                        )
+                        .child(
+                            ui::text(14., FontWeight::NORMAL, ink::STRONG)
+                                .line_height(px(21.))
+                                .min_w_0()
+                                .child(item),
+                        )
+                }))
+        };
+        let list = open.then(|| {
+            let column = div().flex().flex_col().gap(px(14.)).max_w(px(640.));
+            match notes {
+                PatchNotes::ForPlayers(items) => column.child(bullets(items)),
+                PatchNotes::Technical(sections) => {
+                    let count: usize = sections.iter().map(|(_, items)| items.len()).sum();
+                    let details_open = self.technical_open.contains(&release.tag);
+                    let details_tag = release.tag.clone();
+                    let many = sections.len() > 1;
+                    column
+                        .child(
+                            ui::text(14., FontWeight::NORMAL, ink::STRONG)
+                                .line_height(px(21.))
+                                .child(if count == 1 {
+                                    tr("Fixes and improvements to the game and mods: 1 change.")
+                                        .to_string()
+                                } else {
+                                    trf(
+                                        "Fixes and improvements to the game and mods: {count} changes.",
+                                        &[("count", &count.to_string())],
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("technical-{}", release.tag)))
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .cursor_pointer()
+                                .child(
+                                    ui::text(13., FontWeight::MEDIUM, ink::QUIET)
+                                        .child(tr("Technical details")),
+                                )
+                                .child(
+                                    ui::icon("arrow-down-01", 16., ui::white(ink::NOTE))
+                                        .with_transformation(gpui::Transformation::rotate(
+                                            gpui::radians(if details_open {
+                                                std::f32::consts::PI
+                                            } else {
+                                                0.
+                                            }),
+                                        )),
+                                )
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    if !this.technical_open.remove(&details_tag) {
+                                        this.technical_open.insert(details_tag.clone());
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .children(details_open.then(|| {
+                            div().flex().flex_col().gap(px(14.)).children(
+                                sections.into_iter().map(|(section, items)| {
                                     div()
                                         .flex()
-                                        .gap(px(10.))
-                                        .child(
-                                            div()
-                                                .flex_none()
-                                                .mt(px(9.))
-                                                .size(px(5.))
-                                                .rounded_full()
-                                                .bg(ui::white(0.4)),
-                                        )
-                                        .child(
-                                            ui::text(14., FontWeight::NORMAL, ink::STRONG)
-                                                .line_height(px(21.))
-                                                .min_w_0()
-                                                .child(item),
-                                        )
+                                        .flex_col()
+                                        .children(many.then(|| {
+                                            ui::text(13., FontWeight::MEDIUM, ink::QUIET)
+                                                .child(section)
+                                        }))
+                                        .child(div().mt(px(6.)).child(bullets(items)))
                                 }),
-                            ))
-                    }))
-            });
+                            )
+                        }))
+                }
+            }
+        });
         Some(
             div()
                 .flex()
