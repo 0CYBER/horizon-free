@@ -585,6 +585,9 @@ mod tests {
                 let registry = Arc::new(crate::game::api_values::game_rule_registry());
                 game.level.rule_registry = registry.clone();
                 game.ui.rules = gamerules::GameRules::with_registry(registry.clone(), &[]);
+                game.load_world_state().unwrap();
+                game.set_allow_commands(true);
+                game.build_registries();
                 let key = *KEY.get().unwrap();
                 let level = game.level("minecraft:overworld").unwrap();
                 assert_eq!(level.game_rule_int(game, key), Some(8));
