@@ -410,11 +410,6 @@ impl Manifest {
                 format!("{MANIFEST}: {e}")
             }
         })?;
-        if m.side == Side::Server {
-            return Err(format!(
-                "{MANIFEST}: top-level side = \"server\" is not a supported package side"
-            ));
-        }
         inject::Inject::check_all(&m.inject, &m.id, m.native.is_some() || m.wasm.is_some())
             .map_err(|e| e.to_string())?;
         for entry in &m.inject {
