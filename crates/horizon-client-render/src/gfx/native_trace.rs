@@ -342,7 +342,8 @@ impl NativePost {
         shape: &TraceShape<'_>,
         pbr: &[wgpu::TextureView; 2],
     ) -> bool {
-        if scenes.len() != self.passes.len() {
+        // A pass with kept resources doesn't trace yet: its layout has no scene.
+        if scenes.len() != self.passes.len() || self.kept.is_some() {
             return false;
         }
         let build = |layout: &wgpu::BindGroupLayout| {
@@ -354,10 +355,12 @@ impl NativePost {
                 bind_group_layouts: &groups,
                 ..Default::default()
             });
+            // Without kept resources every pass draws a half-float target.
+            let target = super::INTERMEDIATE;
             Ok(scenes
                 .into_iter()
                 .map(|(label, module)| {
-                    post_pipeline(device, &label, &pipeline_layout, module, constants)
+                    post_pipeline(device, &label, &pipeline_layout, module, constants, target)
                 })
                 .collect())
         };

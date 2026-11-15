@@ -240,6 +240,8 @@ enum Writes {
     Chain(usize),
     /// A pack target (`[[post]] output`).
     Target(usize),
+    /// A kept texture (`[[post]] output` naming one): this frame's version, at its size.
+    Kept(usize),
     /// The chain's picture, at the window's size: the last pass.
     Picture,
 }
@@ -252,10 +254,10 @@ struct PassPlan {
     reads: Option<usize>,
 }
 
-/// The passes' plan for `outputs` (each pass's `[[post]] output`, by target index): the chain's
+/// The passes' plan for `outputs` (where each pass's `[[post]] output` draws): the chain's
 /// passes write its targets in turn, each reading what the one before wrote; a pass with an
 /// output writes that and reads the chain's picture, which goes on past it.
-fn plan(outputs: &[Option<usize>]) -> Vec<PassPlan> {
+fn plan(outputs: &[Option<Writes>]) -> Vec<PassPlan> {
     let mut current = None;
     outputs
         .iter()
@@ -264,7 +266,7 @@ fn plan(outputs: &[Option<usize>]) -> Vec<PassPlan> {
             let reads = current;
             let writes = match output {
                 _ if i + 1 == outputs.len() => Writes::Picture,
-                Some(t) => Writes::Target(*t),
+                Some(w) => *w,
                 None => {
                     let slot = usize::from(current == Some(0));
                     current = Some(slot);
@@ -1017,13 +1019,14 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 }
 
 /// A post pass's pipeline from its checked `module`, with the option values `constants`, drawing
-/// a target of `INTERMEDIATE`.
+/// a target of `format`.
 fn post_pipeline(
     device: &wgpu::Device,
     label: &str,
     layout: &wgpu::PipelineLayout,
     module: naga::Module,
     constants: &[(String, f64)],
+    format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let present = present_constants(&module, constants);
     let present: Vec<(&str, f64)> = present.iter().map(|(id, v)| (*id, *v)).collect();
@@ -1052,7 +1055,7 @@ fn post_pipeline(
             entry_point: Some("horizon_fs_post"),
             compilation_options: options,
             targets: &[Some(wgpu::ColorTargetState {
-                format: INTERMEDIATE,
+                format,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -1076,15 +1079,7 @@ impl NativePost {
         tonemap: Option<&CheckedStage>,
     ) -> Result<Self, String> {
         let targets = manifest.post_targets();
-        let outputs: Vec<Option<usize>> = manifest
-            .post
-            .iter()
-            .map(|p| {
-                let name = p.output.as_deref()?;
-                targets.iter().position(|t| t.0 == name)
-            })
-            .collect();
-        let plan = plan(&outputs);
+        let plan = plan(&kept::outputs(manifest, &targets));
         let float = wgpu::TextureSampleType::Float { filterable: true };
         let mut entries = vec![
             frame_entry(wgpu::ShaderStages::FRAGMENT),
@@ -1105,13 +1100,7 @@ impl NativePost {
             .extend((0..targets.len() as u32).map(|j| {
                 texture_entry(horizon_shader_api::stages::POST_TARGET_BINDING + j, float)
             }));
-        let resources = &manifest.kept.resources;
-        if let Some(why) = (!resources.is_empty())
-            .then(|| kept::unmet(device, manifest, &stages, &entries))
-            .flatten()
-        {
-            return Err(why);
-        }
+        let kept = kept::chain(device, manifest, &stages, &entries)?;
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack post"),
             entries: &entries,
@@ -1124,10 +1113,12 @@ impl NativePost {
             ..Default::default()
         });
         let mut passes = Vec::with_capacity(stages.len());
-        for stage in stages {
+        for (i, stage) in stages.into_iter().enumerate() {
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let (label, layout) = (&stage.label, &pipeline_layout);
-            let pipeline = post_pipeline(device, label, layout, stage.module, constants);
+            let target = kept::target(&kept, plan[i].writes);
+            let layout = kept::pass(&kept, Some(i)).map_or(&pipeline_layout, |p| &p.pipeline);
+            let label = &stage.label;
+            let pipeline = post_pipeline(device, label, layout, stage.module, constants, target);
             if let Some(e) = pollster::block_on(scope.pop()) {
                 return Err(format!("{}: {e}", stage.file));
             }
@@ -1194,8 +1185,7 @@ impl NativePost {
             scales: targets.iter().map(|t| t.1).collect(),
             named: None,
             plan,
-            kept: (!resources.is_empty())
-                .then(|| kept::KeptStore::declared(&manifest.kept, [1, 1])),
+            kept,
             format,
             display,
         })
@@ -1232,9 +1222,6 @@ impl NativePost {
         history_reset: bool,
         scene: Option<&trace::Traced<'_>>,
     ) {
-        if let Some(kept) = &mut self.kept {
-            kept.fit(device, size);
-        }
         let d = &mut self.display;
         if d.scene.as_ref().is_none_or(|s| s.0 != size) {
             d.scene = Some((
@@ -1344,7 +1331,8 @@ impl NativePost {
         let blank = self.history_blank.create_view(&Default::default());
         // The passes read the world decoded.
         let scene = &self.display.scene.as_ref().expect("made above").1;
-        let group = |previous: &wgpu::TextureView, writes: Option<Writes>| {
+        let group = |previous: &wgpu::TextureView, pass: Option<usize>, parity| {
+            let writes = pass.map(|i| self.plan[i].writes);
             let mut entries = vec![
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1416,7 +1404,10 @@ impl NativePost {
                     entries.extend(trace.entries(scene));
                     &trace.layout
                 }
-                None => &self.layout,
+                None => {
+                    entries.extend(kept::entries(&self.kept, pass, parity));
+                    kept::pass(&self.kept, pass).map_or(&self.layout, |p| &p.layout)
+                }
             };
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Native shader pack post"),
@@ -1424,19 +1415,21 @@ impl NativePost {
                 entries: &entries,
             })
         };
-        let mut groups: Vec<_> = (0..self.passes.len())
-            .map(|i| {
+        // One set a parity of the kept textures' versions.
+        let mut groups = Vec::new();
+        for parity in 0..1 + usize::from(self.kept.is_some()) {
+            groups.extend((0..self.passes.len()).map(|i| {
                 // The chain's picture so far: the world's before its first pass.
                 let previous = match (&self.targets, self.plan[i].reads) {
                     (Some((_, t)), Some(slot)) => &t[slot],
                     _ => scene,
                 };
-                group(previous, Some(self.plan[i].writes))
-            })
-            .collect();
-        // The tonemap's, last: the chain's picture, else the decoded world.
-        let picture = self.display.picture.as_ref().map_or(scene, |p| &p.1);
-        groups.push(group(picture, None));
+                group(previous, Some(i), parity)
+            }));
+            // The tonemap's, last: the chain's picture, else the decoded world.
+            let picture = self.display.picture.as_ref().map_or(scene, |p| &p.1);
+            groups.push(group(picture, None, parity));
+        }
         self.groups = Some((
             (world.0.clone(), world.1.clone(), world.2.clone()),
             blank_history,
@@ -1464,6 +1457,7 @@ impl NativePost {
         let window = [screen.texture().width(), screen.texture().height()];
         let scene = scene.and_then(|(scene, camera)| scene.traced(camera));
         let scene = scene.as_ref();
+        self.begin_kept(device, encoder, size);
         self.prepare(device, world, size, window, history_reset, scene);
         if let Some(t) = timing.as_deref_mut() {
             t.mark(device, encoder, (world.0, self.format));
@@ -1471,6 +1465,7 @@ impl NativePost {
         let Some((_, _, groups)) = &self.groups else {
             return;
         };
+        let groups = kept::current(&self.kept, groups);
         let d = &self.display;
         let (Some((_, scene)), Some((group, passes))) = (&d.scene, groups.split_last()) else {
             return;
@@ -1480,6 +1475,7 @@ impl NativePost {
             let view = match (self.plan[i].writes, &self.targets, &self.named, &d.picture) {
                 (Writes::Chain(slot), Some((_, t)), _, _) => &t[slot],
                 (Writes::Target(j), _, Some((_, n)), _) => &n[j],
+                (Writes::Kept(r), ..) => kept::output(&self.kept, r),
                 (Writes::Picture, _, _, Some((_, picture))) => picture,
                 _ => unreachable!("`prepare` makes each pass's target"),
             };
@@ -1782,12 +1778,13 @@ mod tests {
     #[test]
     fn a_pass_with_an_output_leaves_the_chain_as_it_was() {
         use super::{Writes, plan};
-        // Bloom into a target, a pass of the chain, a second target, the picture.
-        let p = plan(&[Some(0), None, Some(1), None, None]);
+        // Bloom into a target, a pass of the chain, a kept texture, the picture.
+        let (bloom, kept) = (Some(Writes::Target(0)), Some(Writes::Kept(1)));
+        let p = plan(&[bloom, None, kept, None, None]);
         let writes: Vec<_> = p.iter().map(|p| p.writes).collect();
         assert!(writes[0] == Writes::Target(0));
         assert!(writes[1] == Writes::Chain(0));
-        assert!(writes[2] == Writes::Target(1));
+        assert!(writes[2] == Writes::Kept(1));
         assert!(writes[3] == Writes::Chain(1));
         assert!(writes[4] == Writes::Picture);
         let reads: Vec<_> = p.iter().map(|p| p.reads).collect();

@@ -935,10 +935,10 @@ struct HorizonWeatherIn {
 }
 ";
 
-/// The post stage's entry points, as the renderer builds them: a full-screen triangle, and a
-/// fragment that calls the pack's `post` for each pixel. The chain's targets hold linear light,
-/// so nothing converts, and the pass's alpha is ignored.
-const POST_ENTRIES: &str = "\
+/// The post stage's full-screen triangle, before its fragment entry.
+macro_rules! post_vertex {
+    () => {
+        "\
 struct HorizonPostOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -950,11 +950,34 @@ struct HorizonPostOut {
     out.uv = vec2<f32>(p.x, 1.0 - p.y);
     return out;
 }
+"
+    };
+}
+
+/// The post stage's entry points, as the renderer builds them: a full-screen triangle, and a
+/// fragment that calls the pack's `post` for each pixel. The chain's targets hold linear light,
+/// so nothing converts, and the pass's alpha is ignored.
+const POST_ENTRIES: &str = concat!(
+    post_vertex!(),
+    "\
 @fragment fn horizon_fs_post(in: HorizonPostOut) -> @location(0) vec4<f32> {
     let color = textureSampleLevel(previous, linear_sampler, in.uv, 0.0);
     return vec4<f32>(post(PostInput(in.uv, in.position.xy, color, depth_at(in.uv))).rgb, 1.0);
 }
-";
+"
+);
+
+/// A post pass whose `output` is a kept texture: the texture holds data, so the pass's alpha
+/// stays.
+const POST_ENTRIES_KEPT: &str = concat!(
+    post_vertex!(),
+    "\
+@fragment fn horizon_fs_post(in: HorizonPostOut) -> @location(0) vec4<f32> {
+    let color = textureSampleLevel(previous, linear_sampler, in.uv, 0.0);
+    return post(PostInput(in.uv, in.position.xy, color, depth_at(in.uv)));
+}
+"
+);
 
 /// The tonemap stage's entry points: a full-screen triangle at the window's size, and a fragment
 /// that holds the result to what the display pass takes.
@@ -1580,6 +1603,11 @@ pub(crate) fn compose_traced(
         );
     } else if let (StageKind::Compute | StageKind::BeforeWorld, Some(stage)) = (kind, stage) {
         push("<entries>", &compute_entries(stage));
+    } else if kind == StageKind::Post
+        && let Some(output) = stage.and_then(|s| s.output.as_ref())
+        && m.kept.resources.iter().any(|r| r.name == *output)
+    {
+        push("<entries>", POST_ENTRIES_KEPT);
     } else {
         push("<entries>", kind.entries());
     }
