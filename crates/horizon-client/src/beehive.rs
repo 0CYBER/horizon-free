@@ -60,7 +60,7 @@ pub trait HiveHost {
     /// `EntityType.loadEntityRecursive` (the tag has its `id` and a `Pos`):
     /// a new entity, or `None` for anything but a `#beehive_inhabitors`.
     fn load(&mut self, tag: &Tag) -> Option<Mob>;
-    /// `Level.addFreshEntity`.
+    /// `LevelWriter.addFreshEntity`.
     fn add(&mut self, m: Mob) -> bool;
     fn sound(&mut self, name: &'static str, at: [f64; 3]);
     /// `BlockEntity.setChanged`: the hive's saved bees changed.

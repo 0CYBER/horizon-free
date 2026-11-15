@@ -1393,7 +1393,7 @@ fn shrink(pattern: &[Vec<char>]) -> Vec<Vec<char>> {
         _ => Vec::new(),
     }
 }
-/// A perfect matching of the ingredients to distinct stacks (`StackedContents.canCraft`).
+/// A perfect matching of the ingredients to distinct stacks (`StackedContents.tryPick`).
 fn matches_all(ingredients: &[Ingredient], stacks: &[&ItemStack]) -> bool {
     fn augment(
         i: usize,
@@ -1448,7 +1448,7 @@ impl Recipes {
         }
     }
 
-    /// `RecipeManager.getRecipe`: look up a crafting recipe by its id name.
+    /// `RecipeManager.byKey`: look up a crafting recipe by its id name.
     pub fn recipe(&self, name: &str) -> Option<&Recipe> {
         let bare = name.strip_prefix("minecraft:").unwrap_or(name);
         self.crafting
@@ -1909,7 +1909,7 @@ impl Recipes {
             Recipe::Special(_) => Placement::default(),
         })
     }
-    /// `Recipe.getRemainingItems` placed on the `size`x`size` grid: an item's
+    /// `CraftingRecipe.getRemainingItems` placed on the `size`x`size` grid: an item's
     /// crafting remainder (buckets, bottles), the patterned banner a duplicate
     /// keeps and the written book a clone keeps.
     pub fn remainders(

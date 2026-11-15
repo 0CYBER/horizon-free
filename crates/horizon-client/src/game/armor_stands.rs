@@ -575,7 +575,7 @@ impl Game<'_> {
             _ => 0,
         }
     }
-    /// `ArmorStand.interactAt` for the stand under the crosshair, or for the
+    /// `ArmorStand.interact` for the stand under the crosshair, or for the
     /// stand a guest's interact packet named (its client's click point).
     pub(super) fn interact_armor_stand(&mut self, target: Option<InteractTarget>) -> bool {
         let Some((i, d, point)) = (match target {
@@ -632,7 +632,7 @@ impl Game<'_> {
         let slot = match &held {
             Some(h) => {
                 let slot = self.equipment_slot(h);
-                // ArmorStand.interactAt: a disabled slot, or a hand without
+                // ArmorStand.interact: a disabled slot, or a hand without
                 // arms, is FAIL.
                 if a.is_disabled(slot) {
                     return true;
@@ -1316,7 +1316,7 @@ impl Game<'_> {
             .raw
             .get(&id)
             .is_some_and(|tag| horizon_client::entity_nbt::flag(tag, "Invulnerable"));
-        // Entity.isInvulnerableTo: the flag, then EnchantmentHelper.isImmuneToDamage.
+        // Entity.isInvulnerableToBase: the flag, then EnchantmentHelper.isImmuneToDamage.
         let a = &self.armor_stands[i];
         if (invulnerable && !creative)
             || a.invisible

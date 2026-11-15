@@ -722,7 +722,7 @@ impl ItemEntity {
             } else {
                 // `Entity.collide`: the entities that `canBeCollidedWith` the item stop it
                 // too (a boat, a shulker, a happy ghast held still; not a minecart), and
-                // so does the world border (`Entity.collectColliders`).
+                // so does the world border (`Entity.collectAllColliders`).
                 crate::collisions::EntityCollisions {
                     blocks: scene,
                     entities: entity_boxes,
@@ -1338,7 +1338,7 @@ impl ExperienceOrb {
     pub fn bounds(&self) -> Aabb {
         Self::box_at(self.position)
     }
-    /// `Entity.unstuckIfPossible`, which `ExperienceOrb`'s constructor runs as
+    /// `ExperienceOrb.unstuckIfPossible`, which the orb's constructor runs as
     /// `if (!level.noCollision(box)) unstuckIfPossible(box.getSize())`: the free
     /// spot nearest the box's centre, searched in a cube of the box's size
     /// around it. `None` when the box is already free (the orb then keeps its
@@ -2347,7 +2347,7 @@ impl ArmorStand {
             ),
         }
     }
-    /// `EquipmentSlot.getFilterFlag` of an `equipment` index (main hand, off
+    /// `EquipmentSlot.getFilterBit` of an `equipment` index (main hand, off
     /// hand, feet, legs, chest, head).
     fn filter_flag(slot: usize) -> u32 {
         [0, 5, 1, 2, 3, 4][slot]

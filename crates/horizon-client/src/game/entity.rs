@@ -182,7 +182,7 @@ pub(super) trait Entity: EntityRules {
     fn fluid_eye_y(&self) -> f64 {
         self.bounds().max_position().y
     }
-    /// `Entity.updateFluidHeightAndDoFluidPushing`: its water and lava heights
+    /// `Entity.updateFluidInteraction`: its water and lava heights
     /// (`(0, 0)` for a kind that is not pushed by fluid), and the current of
     /// each fluid added to its velocity. One body for every kind.
     fn push_by_fluid(

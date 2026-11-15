@@ -3274,7 +3274,7 @@ fn ray_box(eye: [f64; 3], dir: [f64; 3], reach: f64, b: Aabb) -> Option<f64> {
     }
     (t0 <= t1).then_some(t0)
 }
-/// `Entity.calculateViewVector`, which `GameRenderer.pick` aims with: float radians through `Mth.sin` and
+/// `Entity.calculateViewVector`, which `Minecraft.pick` aims with: float radians through `Mth.sin` and
 /// `Mth.cos`, vanilla's 65536-entry table. A placement's cursor and an interaction's point come from this ray, and
 /// the exact trigonometry below moved them by up to ~1e-4 of a block.
 fn pick_view_vector(yaw: f32, pitch: f32) -> [f64; 3] {
@@ -3305,7 +3305,7 @@ fn level_can_have_weather(sky_light: bool, has_ceiling: bool, is_end: bool) -> b
     sky_light && !has_ceiling && !is_end
 }
 /// `Camera.setRotation` (`rotationYXZ(π - yaw, -pitch, 0)`) for the player's
-/// view, turned round in third-person front view (`Camera.setup`).
+/// view, turned round in third-person front view (`Camera.update`).
 fn camera_rotation(camera_type: perspective::CameraType, yaw: f32, pitch: f32) -> glam::Quat {
     let (view_yaw, view_pitch) = if camera_type == perspective::CameraType::ThirdPersonFront {
         (yaw + 180.0, -pitch)
@@ -4833,7 +4833,7 @@ impl Game<'_> {
             return;
         }
         // The game master blocks' screens open on the player's own client
-        // (`BlockEntity.usedBy`); the server has nothing to open.
+        // (`StructureBlockEntity.usedBy`); the server has nothing to open.
         if matches!(
             &*name,
             "minecraft:structure_block"

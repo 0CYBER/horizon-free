@@ -506,7 +506,7 @@ impl Game<'_> {
             self.orbs.remove(j);
         }
     }
-    /// `Entity.unstuckIfPossible`, which `ExperienceOrb`'s constructor runs on an
+    /// `ExperienceOrb.unstuckIfPossible`, which the orb's constructor runs on an
     /// orb whose box is in a block: the free spot nearest its box's centre. An
     /// orb in open air keeps its position.
     pub(super) fn unstuck_orb(&self, at: [f64; 3]) -> [f64; 3] {
