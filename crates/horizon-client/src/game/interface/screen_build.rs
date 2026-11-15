@@ -318,12 +318,23 @@ struct EffectsMemo {
     answer: EffectsLayout,
 }
 
+/// One frame's `screen_room` answer and the screen it was taken for: the
+/// layout's inputs ask it more than once a frame, the hook once.
+#[derive(Clone, Copy, PartialEq)]
+struct RoomMemo {
+    frame: u64,
+    screen: Screen,
+    room: f32,
+}
+
 /// The open screen's build and what it was made from.
 #[derive(Default)]
 pub(super) struct ScreenBuildState {
     current: Option<ScreenBuild>,
     /// The frame's effects answer, while this frame asked for one.
     effects: std::cell::Cell<Option<EffectsMemo>>,
+    /// The frame's `screen_room` answer, while this frame asked for one.
+    room: std::cell::Cell<Option<RoomMemo>>,
     #[cfg(test)]
     builds: u32,
 }
@@ -361,6 +372,23 @@ impl ScreenBuildState {
             screen,
             space,
             answer,
+        }));
+    }
+
+    /// The room the mods asked this frame for `screen`, if they were asked.
+    pub(super) fn room_answer(&self, frame: u64, screen: Screen) -> Option<f32> {
+        self.room
+            .get()
+            .filter(|memo| memo.frame == frame && memo.screen == screen)
+            .map(|memo| memo.room)
+    }
+
+    /// Keeps this frame's room for the layout's other inputs in the same frame.
+    pub(super) fn keep_room_answer(&self, frame: u64, screen: Screen, room: f32) {
+        self.room.set(Some(RoomMemo {
+            frame,
+            screen,
+            room,
         }));
     }
 
@@ -1237,6 +1265,69 @@ mod tests {
                     "the next frame asks again"
                 );
                 assert_eq!(calls.load(Ordering::Relaxed), 2, "and only once");
+            });
+        });
+    }
+    #[test]
+    fn a_mods_room_moves_the_window_and_is_asked_once_a_frame() {
+        use crate::game::Screen;
+        use horizon_client::hud::HudBatch;
+        use mod_api::{ClientHost, Hooks, ModEntry, ScreenRoomEvent};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        /// A mod asking room for a panel 147 wide and its gap of 2, counting its dispatches.
+        struct Panel(Arc<AtomicUsize>);
+        #[mod_api::__subscriptions]
+        impl Hooks for Panel {
+            /// Asks for its panel's room.
+            fn screen_room(&self, _: &dyn ClientHost, event: &mut ScreenRoomEvent<'_>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                event.right = event.right.max(149.0);
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mods: mod_api::Mods =
+            vec![ModEntry::new("panel", Box::new(Panel(Arc::clone(&calls))))].into();
+        mod_api::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_game(|game| {
+                game.options.execution_role = crate::game::execution_role::ExecutionRole::Client;
+                game.screen = Screen::Inventory;
+                game.container = None;
+                game.craft_size = 2;
+                // 1280x720 at GUI scale 3: 427 wide, as 1440p is at the automatic scale.
+                game.settings.gui_scale = 3;
+                game.frames = 11;
+                game.build_screen();
+                assert_eq!(calls.load(Ordering::Relaxed), 1, "the frame's build asks");
+                // The build's window moved left by half the room, as the layout's arithmetic
+                // says for this screen's size.
+                let (framebuffer, _) = game.gui_frame_now();
+                let batch = HudBatch::new(framebuffer, game.settings.gui_scale_inputs());
+                let height = game.screen_height();
+                let left =
+                    batch.centered_origin(176.0, height).0 + game.recipe_book_shift(batch.width);
+                let book = game.open_book_left(&batch);
+                let shift =
+                    super::super::screen_room::room_shift(batch.width, left, 176.0, book, 149.0);
+                assert_eq!(
+                    shift, 74.0,
+                    "the window moves half of 149 at {}",
+                    batch.width
+                );
+                assert_eq!(game.inventory_origin(&batch).0, left - shift);
+                game.build_screen();
+                assert_eq!(calls.load(Ordering::Relaxed), 1, "once a frame");
+                game.frames = 12;
+                game.build_screen();
+                assert_eq!(
+                    calls.load(Ordering::Relaxed),
+                    2,
+                    "the next frame asks again"
+                );
             });
         });
     }
