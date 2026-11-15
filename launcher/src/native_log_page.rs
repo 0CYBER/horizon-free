@@ -336,6 +336,13 @@ impl Launcher {
             .overflow_hidden()
             .p(px(24.))
             .child(top.relative())
+            // What the build's failure means in plain words, above the compiler's own.
+            .children(self.native_error.as_ref().map(|e| {
+                ui::text(13., FontWeight::NORMAL, 1.)
+                    .text_color(ui::danger())
+                    .relative()
+                    .child(e.clone())
+            }))
             .child(actions.relative())
             .children(
                 self.native_step

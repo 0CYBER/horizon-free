@@ -24,7 +24,7 @@ pub(super) struct Preview {
 }
 
 // Values: `mod-step-<key>`, `mod-error-<key>`, `mod-worlds[-many|-unbuilt]`, `mod-update-<all-fit|some|world|worlds>`,
-// `mod-fit`, `mod-left-out`, `mod-trust[-generic|-registry]`, `mod-log` (keys: see `step` and `error`).
+// `mod-fit`, `mod-left-out`, `mod-trust[-generic|-registry]`, `mod-log[-failed]` (keys: see `step` and `error`).
 
 /// Builds as `sdk_cache::shown` names them to players: their Nightly name, no commit.
 const BUILD: &str = "nightly-2026-11-13";
@@ -411,12 +411,22 @@ impl Launcher {
                 self.pending_consent = Some(PendingConsent::Build(Vec::new()));
             }
             ("trust", _) => {
+                // Every switched-on native mod, as the real request names them.
                 self.pending_consent = Some(PendingConsent::Build(vec![
                     "fast-ore".into(),
                     "greeter".into(),
+                    "hitbox-plus".into(),
                 ]));
             }
-            ("log", _) => self.native_log_open(),
+            ("log", key) => {
+                // `mod-log-failed`: opened from a build that did not compile.
+                if key == "failed" {
+                    if let Some(text) = error("compile") {
+                        self.native_failed(text, &["fast-ore".into()]);
+                    }
+                }
+                self.native_log_open();
+            }
             _ => {}
         }
     }
