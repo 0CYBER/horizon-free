@@ -3,6 +3,7 @@ use super::super::*;
 use super::{Hook, State};
 use crate::mod_api::{self, FishingMediumEvent, Hooks, Host, NativeFishingMedium};
 use horizon_client::chunk::Chunk;
+use horizon_core::random::EntityRandom;
 use std::sync::Mutex;
 
 /// Fishes the air east of x = 3, four blocks under its owner's feet, rolling the junk table.
@@ -147,7 +148,7 @@ fn a_bobber_floats_bites_and_rolls_the_table_of_a_mods_medium_in_own_process() {
 
     // A client draws its own bobber floating in the same medium.
     let mut state = (Vec3::new(5.5, 62.0, 0.5), Vec3::ZERO, State::Flying, false);
-    let mut random = horizon_core::random::LegacyRandom::new(7);
+    let mut random = EntityRandom::own(horizon_core::random::LegacyRandom::new(7));
     for tick in 0..100 {
         state = game.client_hook_step(1, Some(Vec3::new(0.5, 64.0, 0.5)), state, &mut random);
         if tick > 60 {

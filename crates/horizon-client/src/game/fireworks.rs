@@ -489,9 +489,9 @@ impl Game<'_> {
         at: Vec3,
         stack: &ItemStack,
         owner: Option<Who>,
-        shoot: impl FnOnce(&mut horizon_core::random::LegacyRandom) -> Vec3,
+        shoot: impl FnOnce(&mut horizon_core::random::EntityRandom) -> Vec3,
     ) {
-        let mut own = random_source::entity();
+        let mut own = horizon_core::random::EntityRandom::own(random_source::entity());
         let mut rocket = self.new_rocket(at, stack, false, &mut own);
         rocket.velocity = shoot(&mut own);
         rocket.turn_to_shot();

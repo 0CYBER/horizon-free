@@ -18,7 +18,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::{LegacyRandom, RandomSource},
+    random::{EntityRandom, LegacyRandom, RandomSource},
 };
 use serde_json::Value;
 use std::{
@@ -83,7 +83,7 @@ pub fn main() -> Result<()> {
             effect: None,
         };
         let mut arrow = Projectile::new(kind, vector(&f["position"]), None)
-            .with_arrow_random(LegacyRandom::new(seed(&f["seed"])));
+            .with_arrow_random(EntityRandom::own(LegacyRandom::new(seed(&f["seed"]))));
         arrow.velocity = vector(&f["velocity"]);
         arrow.arrow.as_mut().unwrap().no_physics = f["no_physics"].as_bool().unwrap();
         // ProjectileWeaponItem.useAmmo's stack, intangible when no ammo was used.

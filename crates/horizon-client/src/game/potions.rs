@@ -25,7 +25,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Axis, Direction, Vec3},
-    random::{LegacyRandom, RandomSource},
+    random::{EntityRandom, LegacyRandom, RandomSource},
 };
 use horizon_world::nbt::Tag;
 
@@ -74,7 +74,7 @@ pub(super) struct ThrownPotion {
     last_deflected_by: Option<u32>,
     /// `Entity.random`: `ProjectileDeflection.REVERSE` draws from the
     /// projectile's own source, not the level's.
-    random: LegacyRandom,
+    random: EntityRandom,
 }
 /// The player (not one of `skip`, the thrower and who rides with them before
 /// it has left them) whose box, grown by `margin` (`ProjectileUtil.computeMargin`),
@@ -481,7 +481,7 @@ impl PotionState {
             guest: None,
             left_owner: false,
             last_deflected_by: None,
-            random: LegacyRandom::new(i64::from(id)),
+            random: EntityRandom::own(LegacyRandom::new(i64::from(id))),
         });
     }
     /// ThrowableItemProjectile.DATA_ITEM_STACK: the potion it shows.

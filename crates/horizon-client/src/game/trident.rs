@@ -16,7 +16,7 @@ use horizon_client::{
 use horizon_core::{
     geometry::{Aabb, Vec3, traverse_blocks},
     position::BlockPos,
-    random::RandomSource,
+    random::{EntityRandom, LegacyRandom, RandomSource},
 };
 
 pub(super) struct ThrownTrident {
@@ -61,7 +61,7 @@ pub(super) struct ThrownTrident {
     /// Water membership from the preceding `baseTick` (not updated while stuck).
     was_touching_water: bool,
     /// `Entity.random`, used for the extinguishing sound and a breeze's turn.
-    random: horizon_core::random::LegacyRandom,
+    random: EntityRandom,
     /// `AbstractArrow.lastState`: the block it stuck in; not saved.
     pub(super) last_state: Option<horizon_world::registry::BlockStateId>,
     /// `Projectile.lastDeflectedBy`: the breeze that already turned this trident.
@@ -208,7 +208,7 @@ impl ThrownTrident {
             fall_distance: 0.0,
             sound_event: horizon_client::entity_nbt::TRIDENT_HIT_GROUND.to_owned(),
             was_touching_water: false,
-            random: horizon_core::random::LegacyRandom::new(i64::from(id)),
+            random: EntityRandom::own(LegacyRandom::new(i64::from(id))),
             age: 0,
             owner: 0,
             guest: None,
@@ -638,7 +638,7 @@ impl Game<'_> {
             fall_distance: 0.0,
             sound_event: horizon_client::entity_nbt::TRIDENT_HIT_GROUND.to_owned(),
             was_touching_water: false,
-            random: horizon_core::random::LegacyRandom::new(i64::from(id)),
+            random: EntityRandom::own(LegacyRandom::new(i64::from(id))),
             age: 0,
             owner: 0,
             guest: self.lan_acting,

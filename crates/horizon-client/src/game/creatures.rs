@@ -7845,7 +7845,7 @@ fn breeding_credit(
 mod shulker_arrow_tests {
     use super::*;
     use horizon_client::arrows::{ArrowEvent, deflect_reverse};
-    use horizon_core::random::LegacyRandom;
+    use horizon_core::random::{EntityRandom, LegacyRandom};
 
     /// `AbstractArrow.onHitEntity` after `hurtOrSimulate` fails and the target
     /// still takes a projectile's side effects: `deflect(REVERSE, …, 0.2)`,
@@ -7865,7 +7865,7 @@ mod shulker_arrow_tests {
             Vec3::new(0.0, 1.0, 0.0),
             Some(Who::Player),
         )
-        .with_arrow_random(LegacyRandom::new(7));
+        .with_arrow_random(EntityRandom::own(LegacyRandom::new(7)));
         arrow.velocity = Vec3::new(3.0, -1.0, 2.0);
         arrow.yaw = 15.0;
         let mut oracle = LegacyRandom::new(7);

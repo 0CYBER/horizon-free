@@ -435,7 +435,12 @@ fn air_and_stuck_arrows_leave_no_water_bubbles() {
 #[test]
 fn remote_arrow_preserves_previous_rotation_as_it_turns_and_falls() {
     let steps = run_with(&[], 30, false, |p| {
-        p.shoot(&mut LegacyRandom::new(7), [0.0, 1.0, 0.0], 0.3, 0.0);
+        p.shoot(
+            &mut EntityRandom::own(horizon_core::random::LegacyRandom::new(7)),
+            [0.0, 1.0, 0.0],
+            0.3,
+            0.0,
+        );
         assert_eq!(p.previous_pitch, p.pitch);
         assert_eq!(p.previous_yaw, p.yaw);
         assert!((p.pitch - 90.0).abs() < 1e-4);
