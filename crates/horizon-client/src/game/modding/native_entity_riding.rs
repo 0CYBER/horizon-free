@@ -790,6 +790,16 @@ mod tests {
                         mounting,
                     };
                     events.lock().unwrap().clear();
+                    if vehicle_kind == "minecraft:marker" {
+                        // Marker.couldAcceptPassenger refuses even a forced mount,
+                        // before the cancellable mount notification.
+                        assert!(!game.entity_start_riding(rider, vehicle, false));
+                        assert!(!game.entity_start_riding(rider, vehicle, true));
+                        assert_eq!(rider.vehicle(game), None);
+                        assert_eq!(vehicle.passengers(game), Some(vec![]));
+                        assert!(events.lock().unwrap().is_empty());
+                        continue;
+                    }
 
                     // A canceled handle write reports the type but changes neither side.
                     cancel.store(true, Ordering::SeqCst);
@@ -1554,16 +1564,16 @@ mod tests {
             hub.update_guest(1, |g| g.motion = Some(Box::new(motion)))
                 .unwrap();
 
-            // Beside a cow, 0.45 + 0.4 across its facing, and to the other side past a wall.
+            // Animal searches neighbouring block centres, then the other side past a wall.
             let cow = add_mob(game, 120, "minecraft:cow", at);
-            assert_near(get_off(game, player, cow), [-0.35, 64.0, 0.5]);
+            assert_near(get_off(game, player, cow), [-0.5, 64.0, 0.5]);
             let registry = game.pack.assets.registry;
             let stone = registry.default_state("minecraft:stone").unwrap();
             let air = registry.default_state("minecraft:air").unwrap();
             for y in [64, 65] {
                 game.world.set(-1, y, 0, stone).unwrap();
             }
-            assert_near(get_off(game, player, cow), [1.35, 64.0, 0.5]);
+            assert_near(get_off(game, player, cow), [1.5, 64.0, 0.5]);
             for y in [64, 65] {
                 game.world.set(-1, y, 0, air).unwrap();
             }
