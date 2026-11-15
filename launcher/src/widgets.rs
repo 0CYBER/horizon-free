@@ -821,7 +821,13 @@ pub(crate) fn download_error(error: &str) -> String {
 }
 
 pub(crate) fn megabytes(bytes: u64) -> String {
-    format!("{:.0} MB", bytes as f64 / 1_000_000.0)
+    if bytes < 1_000_000 {
+        return tr("under 1 MB").to_string();
+    }
+    trf(
+        "{count} MB",
+        &[("count", &format!("{:.0}", bytes as f64 / 1_000_000.0))],
+    )
 }
 
 /// A thin bar. A known fraction eases from its previous value; an unknown one shuttles slowly.
