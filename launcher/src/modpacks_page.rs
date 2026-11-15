@@ -133,7 +133,7 @@ impl Launcher {
             return;
         }
         self.starting_pack = Some(work);
-        self.start_client(tag);
+        self.start_client(tag, None);
     }
 
     /// Looks for other launchers' modpacks on a thread: their folders can be slow to read.

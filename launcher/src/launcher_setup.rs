@@ -214,6 +214,7 @@ impl Launcher {
             owner: None,
             owner_screen_open: false,
             starting_client: None,
+            starting_instance: None,
             play_when_prepared: None,
             friend_code: line_edit::LineEdit::new(String::new(), 256, 32),
             friend_focused: false,
@@ -315,7 +316,10 @@ impl Launcher {
         this.watch_shop(cx);
         if home::getting_ready_preview() {
             this.preparing = true;
-            this.play_when_prepared = this.selected().cloned();
+            this.play_when_prepared = this
+                .selected()
+                .cloned()
+                .zip(this.selected_instance().map(|i| i.id.clone()));
         }
         // `HORIZON_LAUNCHER_PAGE=new-instance`: the dialog open on Modded, for screenshots
         // (`new-instance-horizon`, `new-instance-vanilla`: on those).

@@ -332,10 +332,10 @@ impl Launcher {
                         Job::Prepare => {
                             self.preparing = false;
                             // Play pressed before the version was prepared plays now.
-                            if let Some(tag) = self.play_when_prepared.take() {
+                            if let Some((tag, instance)) = self.play_when_prepared.take() {
                                 if error.is_none() && backend::check_prepared(&tag) {
                                     self.starting_pack = None;
-                                    self.start_client(tag);
+                                    self.start_client(tag, Some(instance));
                                 }
                             }
                             if let (None, Some(started)) = (&error, self.prepare_started.take()) {

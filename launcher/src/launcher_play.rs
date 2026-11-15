@@ -226,7 +226,7 @@ impl Launcher {
             return;
         }
         self.starting_pack = None;
-        self.start_client(tag);
+        self.start_client(tag, self.selected_instance().map(|i| i.id.clone()));
     }
 
     /// Starts a Java instance's Minecraft, joining `server` if given: its files and Java first
@@ -278,7 +278,7 @@ impl Launcher {
 
     /// Starts the game: the session first (a network round trip when the token needs
     /// renewing), then `drain` starts the process when it arrives.
-    pub(crate) fn start_client(&mut self, tag: String) {
+    pub(crate) fn start_client(&mut self, tag: String, instance_id: Option<String>) {
         self.client_error = None;
         self.crash = None;
         self.prepare_log.clear();
@@ -289,10 +289,14 @@ impl Launcher {
         // round trip when the token needs renewing) come first; `drain` starts the game when the
         // session arrives.
         self.starting_client = Some(tag.clone());
+        self.starting_instance = instance_id.clone();
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
         let auto = self
-            .selected_instance()
+            .instances
+            .list
+            .iter()
+            .find(|i| Some(&i.id) == instance_id.as_ref())
             .filter(|_| self.starting_pack.is_none())
             .map(|i| mods_page::AutoTarget {
                 instance: i.clone(),
