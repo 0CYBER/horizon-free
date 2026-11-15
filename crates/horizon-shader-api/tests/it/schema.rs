@@ -890,7 +890,7 @@ fn the_frame_tonemap_and_entity_keys_are_checked() {
         ),
         (
             "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n".into(),
-            "or a [tonemap]",
+            "an [entity] or a [tonemap]",
         ),
     ];
     for (text, needle) in cases {

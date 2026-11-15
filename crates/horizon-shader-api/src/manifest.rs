@@ -789,7 +789,7 @@ impl Manifest {
             && raw.entity.is_none()
         {
             return Err(err(
-                "no stage: give it a [sky], a [material], a [weather], a [[post]], an [entity]                  or a [tonemap]"
+                "no stage: give it a [sky], a [material], a [weather], a [[post]], an [entity] or a [tonemap]"
                     .into(),
             ));
         }
