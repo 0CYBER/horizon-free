@@ -804,6 +804,10 @@ pub(super) fn content_overlay(
                 continue;
             }
         };
+        // What every client must have refuses a server package outright, code or content alone.
+        if let Some(e) = content.server_only_refusal(m) {
+            return Err(e.into());
+        }
         let known = match &mut known {
             Some(types) => types,
             None => match mod_content::known_components(root) {

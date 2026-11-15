@@ -1102,6 +1102,30 @@ impl Content {
         self.files.is_empty()
     }
 
+    /// The refusal of a `side = "server"` package whose files declare registry content
+    /// (`data/<owned namespace>/horizon/`), naming the mod and the first such file: every client
+    /// must have that content. Assets and data vanilla syncs itself (recipes, loot, tags) are
+    /// allowed. None for a package of any other side.
+    pub fn server_only_refusal(&self, manifest: &Manifest) -> Option<String> {
+        if manifest.side != crate::manifest::Side::Server {
+            return None;
+        }
+        let name = self.files.iter().find(|name| {
+            let mut parts = name.splitn(3, '/');
+            let (top, namespace, rest) = (parts.next(), parts.next(), parts.next());
+            top == Some("data")
+                && rest.is_some_and(|rest| rest.starts_with("horizon/"))
+                && manifest
+                    .owned_namespaces()
+                    .any(|owned| Some(owned) == namespace)
+        })?;
+        Some(format!(
+            "{}: a side = \"server\" mod carries {name}, which every client must have; \
+             declare side = \"both\"",
+            manifest.id
+        ))
+    }
+
     /// One content file's bytes.
     pub fn file(&self, name: &str) -> Result<Vec<u8>, String> {
         self.reader()?.read(name)
@@ -1132,14 +1156,6 @@ impl Content {
             );
             let owned = manifest.owned_namespaces().any(|owned| owned == namespace);
             check_namespace(name, manifest)?;
-            if manifest.side == crate::manifest::Side::Server
-                && (top == "assets" || (owned && top == "data" && rest.starts_with("horizon/")))
-            {
-                return Err(format!(
-                    "{id}: a side = \"server\" mod carries {name}, which every client must have; \
-                     declare side = \"both\""
-                ));
-            }
             let Some(decl) = (owned && top == "data")
                 .then(|| rest.strip_prefix("horizon/"))
                 .flatten()
@@ -2808,17 +2824,17 @@ capabilities = ["registries"]
     }
 
     #[test]
-    fn a_server_mod_is_refused_for_what_clients_must_have() {
+    fn a_server_mod_is_refused_for_registry_files_but_not_for_assets() {
         let server = MANIFEST_TEXT.replace("side = \"both\"", "side = \"server\"");
+        let manifest = Manifest::parse(&server).unwrap();
         let recipe: &[u8] = br#"{"type": "minecraft:crafting_shapeless"}"#;
         for (file, bytes) in [
-            ("assets/ruby/lang/en_us.json", &b"{}"[..]),
             ("data/ruby/horizon/item/gem.json", ITEM),
             ("data/ruby/horizon/block/ruby_block.json", BLOCK),
         ] {
-            let e = hmod("server-refused", &server, &[(file, bytes)]).unwrap_err();
+            let content = hmod("server-refused", &server, &[(file, bytes)]).unwrap();
             assert_eq!(
-                e,
+                content.server_only_refusal(&manifest).unwrap(),
                 format!(
                     "ruby: a side = \"server\" mod carries {file}, which every client must have; declare side = \"both\""
                 )
@@ -2827,9 +2843,17 @@ capabilities = ["registries"]
         let content = hmod(
             "server-loads",
             &server,
-            &[("data/ruby/recipe/gem.json", recipe)],
+            &[
+                ("assets/ruby/lang/en_us.json", &b"{}"[..]),
+                ("data/ruby/recipe/gem.json", recipe),
+            ],
+        )
+        .unwrap();
+        assert_eq!(content.server_only_refusal(&manifest), None);
+        assert_eq!(
+            content.files,
+            ["assets/ruby/lang/en_us.json", "data/ruby/recipe/gem.json"]
         );
-        assert_eq!(content.unwrap().files, ["data/ruby/recipe/gem.json"]);
     }
 
     #[test]
