@@ -1006,6 +1006,52 @@ def item_command_damage():
     return ops + setup('/kill @e[tag=item_hurt_actor]', '/scoreboard objectives remove item_hurt', '/tick unfreeze')
 
 
+def spawn_egg_stack_config():
+    """SpawnEggItem.useOn and the dispenser's spawn egg behaviour spawn through
+    EntityType.spawn with createDefaultStackConfig: the egg's custom name (as text, styled) and
+    custom data (Entity.applyImplicitComponent, saved as `data`), then minecraft:entity_data merged
+    over the mob."""
+    ops = setup('/forceload add 0 0 15 15', '/fill 0 199 0 15 199 15 stone', '/fill 0 200 0 15 203 15 air',
+                '/gamemode creative', '/tp @s 4.5 200 4.5 0 0')
+    ops += [{'op': 'settle'}]
+    near = '@e[type=minecraft:pig,x={x}.5,y=200,z={z}.5,distance=..1.5,limit=1]'
+    for i, (item, reads) in enumerate((
+        ('pig_spawn_egg[custom_name={text:"Egg",color:"red"},custom_data={e:1b}]', ('CustomName', 'data')),
+        ('pig_spawn_egg[custom_name="Kept",entity_data={id:"minecraft:pig",Tags:["egg"]}]', ('CustomName', 'Tags')),
+        ('pig_spawn_egg[custom_data={a:1b},entity_data={id:"minecraft:pig",data:{b:2b}}]', ('data',)),
+    )):
+        x, z = 1 + i * 3, 7
+        ops += setup(f'/item replace entity @s weapon.mainhand with minecraft:{item}')
+        ops += [{'op': 'use_block', 'pos': [x, 199, z], 'face': 1}]
+        sel = near.format(x=x, z=z)
+        ops += [cmd(f'/execute if entity {sel}')]
+        ops += [cmd(f'/data get entity {sel} {r}') for r in reads]
+    # Dispensed: no user.
+    ops += setup('/setblock 12 200 3 dispenser[facing=south]',
+                 '/item replace block 12 200 3 container.0 with minecraft:pig_spawn_egg[custom_name={text:"Disp",'
+                 'color:"blue"},custom_data={d:1b}]',
+                 '/setblock 12 201 3 redstone_block')
+    ops += [{'op': 'tick', 'n': 6}]
+    sel = near.format(x=12, z=4)
+    ops += [cmd(f'/execute if entity {sel}')]
+    ops += [cmd(f'/data get entity {sel} {r}') for r in ('CustomName', 'data')]
+    # MobBucketItem.spawn from a dispenser: the same config, the bucket's name and custom data.
+    ops += setup('/setblock 8 200 3 dispenser[facing=south]', '/setblock 8 199 4 water', '/setblock 8 200 4 water',
+                 '/item replace block 8 200 3 container.0 with minecraft:axolotl_bucket[custom_name={text:"Axo",'
+                 'color:"gold"},custom_data={b:1b}]',
+                 '/setblock 8 201 3 redstone_block')
+    ops += [{'op': 'tick', 'n': 6}]
+    sel = '@e[type=minecraft:axolotl,x=8.5,y=200,z=4.5,distance=..2,limit=1]'
+    ops += [cmd(f'/execute if entity {sel}')]
+    ops += [cmd(f'/data get entity {sel} {r}') for r in ('CustomName', 'data')]
+    # Entity.getDisplayName in a command reply: the custom name's whole text, style included.
+    ops += setup('/summon pig 13.5 200 10.5 {NoAI:1b,CustomName:{text:"Sum",color:"green",bold:true}}')
+    ops += [cmd('/data get entity @e[type=minecraft:pig,x=13.5,y=200,z=10.5,distance=..1,limit=1] NoAI')]
+    ops += setup('/kill @e[type=minecraft:pig]', '/kill @e[type=minecraft:axolotl]', '/setblock 8 199 4 stone', '/fill 0 200 0 15 203 15 air',
+                 '/gamemode survival', '/forceload remove 0 0 15 15')
+    return ops
+
+
 def vehicle_item_stack_config():
     """MinecartItem.useOn, BoatItem.use and the dispenser's MinecartDispenseItemBehavior /
     BoatDispenseItemBehavior apply EntityType.createDefaultStackConfig: the item's custom name
@@ -8648,6 +8694,7 @@ def groups():
         ('mannequin pose anchors', mannequin_pose_anchors()),
         ('item command damage', item_command_damage()),
         ('dragon command damage', dragon_command_damage()),
+        ('spawn egg stack config', spawn_egg_stack_config()),
         ('vehicle item stack config', vehicle_item_stack_config()),
         ('hanging item stack config', hanging_item_stack_config()),
         ('minecart numeric fields', minecart_numeric_fields()),

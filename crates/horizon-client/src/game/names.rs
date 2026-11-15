@@ -137,6 +137,7 @@ impl Game<'_> {
         }
         let entity_id = m.id;
         let entity_name = name.clone();
+        // NameTagItem.interactLivingEntity: setCustomName with the tag's whole name.
         m.custom_name = Some(name);
         m.custom_name_text = text;
         m.persistent = true;

@@ -2338,10 +2338,10 @@ pub struct SpawnSetup {
 }
 pub use seen::Seen;
 impl Mob {
-    /// The name used by command replies: CustomName takes precedence over the type.
+    /// The name used by command replies: CustomName, style and all, comes before the type.
     pub fn command_name(&self) -> crate::text::Text {
-        if let Some(name) = &self.custom_name {
-            return crate::text::Text::literal(name);
+        if let Some(name) = self.display_custom_name() {
+            return name;
         }
         // Villager.getTypeName returns its registered profession's name.
         if self.species() == Species::Villager {
