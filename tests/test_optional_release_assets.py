@@ -16,10 +16,11 @@ REQUIRED = {
 }
 OPTIONAL = ("horizon-windows-arm64.zip", "horizon-linux-musl-x86_64.tar.gz")
 # The bash on PATH, as in test_pr_ready: Windows' CreateProcess looks in System32 before PATH, so a bare "bash"
-# there is WSL's, which gets none of the steps' env and none of the host's paths.
+# there is WSL's, which gets none of the steps' env and none of the host's paths. WSL from the Microsoft Store puts
+# its bash on PATH as an app alias in WindowsApps instead (#16860).
 BASH = shutil.which("bash")
 POSIX_BASH = BASH is not None and not (
-    os.name == "nt" and os.path.dirname(os.path.normcase(BASH)).endswith(os.path.normcase(r"\system32")))
+    os.name == "nt" and os.path.basename(os.path.dirname(os.path.normcase(BASH))) in ("system32", "windowsapps"))
 
 
 def run_step(containing):

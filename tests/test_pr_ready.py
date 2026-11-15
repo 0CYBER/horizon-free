@@ -21,10 +21,11 @@ DEPENDENCIES = {"horizon-client": {"horizon-core"}}
 MODS = ""
 CLIPPY = pr_ready.CI_CLIPPY + " && " + pr_ready.CI_CLIPPY_SERVER
 # The bash on PATH: Windows' CreateProcess looks in System32 before PATH, so a bare "bash" there is WSL's
-# (#5383), which has none of the host's paths. Git Bash on PATH runs the launcher's snippets as on Linux.
+# (#5383), which has none of the host's paths; WSL from the Microsoft Store puts its bash on PATH as an app alias in
+# WindowsApps instead (#16860). Git Bash on PATH runs the launcher's snippets as on Linux.
 BASH = shutil.which("bash")
 POSIX_BASH = BASH is not None and not (
-    os.name == "nt" and os.path.dirname(os.path.normcase(BASH)).endswith(os.path.normcase(r"\system32")))
+    os.name == "nt" and os.path.basename(os.path.dirname(os.path.normcase(BASH))) in ("system32", "windowsapps"))
 
 
 def args(host="local", quick=False, harnesses=False):

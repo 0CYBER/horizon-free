@@ -28,10 +28,11 @@ ENV = {
        for kind, value in (("KEY", key), ("VALUE", val))},
 }
 # The bash on PATH, as in test_pr_ready: Windows' CreateProcess looks in System32 before PATH, so a bare "bash" there is
-# WSL's (#5383), which can't see the host's paths.
+# WSL's (#5383), which can't see the host's paths. WSL from the Microsoft Store puts its bash on PATH as an app alias
+# in WindowsApps instead (#16860).
 BASH = shutil.which("bash")
 POSIX_BASH = BASH is not None and not (
-    os.name == "nt" and os.path.dirname(os.path.normcase(BASH)).endswith(os.path.normcase(r"\system32")))
+    os.name == "nt" and os.path.basename(os.path.dirname(os.path.normcase(BASH))) in ("system32", "windowsapps"))
 
 
 def git(repo, *args, check=True):
