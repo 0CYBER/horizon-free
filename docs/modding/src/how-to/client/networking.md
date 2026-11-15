@@ -27,7 +27,8 @@ fn register(r: &mut dyn Registrar) {
     let mut view = payloads.registrar("1");
     // The server answers each counter with the next one.
     view.play_to_server_typed::<Counter>(PayloadId("example:count".into()), |value, cx| {
-        let next = Counter { counter: VarInt(value.counter.0 + 1) };
+        let counter = value.counter.0.checked_add(1).ok_or("counter is too large")?;
+        let next = Counter { counter: VarInt(counter) };
         REPLY.get().unwrap().reply(cx, &next).map(drop).map_err(|e| format!("{e:?}"))
     });
     let reply = view.play_to_client_typed::<Counter>(
