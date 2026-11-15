@@ -1128,7 +1128,7 @@ impl Launcher {
             .map(|tag| self.version_name(tag));
         let current = match (&pin, &held) {
             (None, Some(held)) => trf(
-                "Latest: {version}, picked on Versions",
+                "Latest ({version}, picked on Versions)",
                 &[("version", held)],
             ),
             (None, None) => tr("Latest").to_string(),
