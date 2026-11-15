@@ -80,6 +80,73 @@ impl mod_api::Hooks for Log {
 }
 
 #[test]
+#[ignore = "daily"]
+fn guest_ticks_before_player_loaded_and_after_its_timeout() {
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let mods = vec![mod_api::ModEntry::new(
+        "log",
+        Box::new(Log(Arc::clone(&heard))),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        with_game(|game| {
+            open_to_lan(game);
+            let mut g = guest(1);
+            assert!(!g.loaded);
+            assert!(!g.client_loaded());
+            g.food = 10;
+            g.saturation = 5.0;
+            g.effects
+                .add(horizon_client::effects::EffectInstance::new("speed", 10, 0));
+            let mut motion = horizon_client::motion::PlayerMotion::new(
+                game.motion,
+                horizon_core::geometry::Vec3::ZERO,
+            )
+            .unwrap();
+            motion.health.food.exhaustion = 5.0;
+            g.motion = Some(Box::new(motion));
+            let host = game.lan.as_mut().unwrap();
+            host.hub.guests.push(g);
+            host.play
+                .entry(1)
+                .or_default()
+                .cooldowns
+                .add("minecraft:ender_pearl".into(), 3);
+
+            // A new join/respawn waits 60 ticks. A dimension change preserves
+            // the connection's load timer, including an already elapsed one.
+            for (timeout, effect_ticks, cooldown) in [(60, 9, 2), (0, 8, 1)] {
+                game.lan
+                    .as_mut()
+                    .unwrap()
+                    .hub
+                    .guests
+                    .update(0, |g| g.load_timeout = timeout);
+                heard.lock().unwrap().clear();
+                game.tick_guests();
+                let observations = heard.lock().unwrap();
+                assert_eq!(
+                    observations
+                        .iter()
+                        .map(|s| (s.phase, s.uuid))
+                        .collect::<Vec<_>>(),
+                    [("pre", 123), ("post", 123)]
+                );
+                assert_eq!(observations[0].cooldown, Some(cooldown + 1));
+                assert_eq!(observations[1].cooldown, Some(cooldown));
+                let g = &game.lan.as_ref().unwrap().hub.guests[0];
+                assert!(!g.loaded);
+                assert_eq!(g.load_timeout, timeout);
+                assert_eq!(g.client_loaded(), timeout == 0);
+                assert_eq!(g.position, [0.0; 3]);
+                assert_eq!(g.effects.get("speed").unwrap().duration, effect_ticks);
+                assert_eq!((g.food, g.saturation), (10, 4.0));
+            }
+        });
+    });
+}
+
+#[test]
 #[ignore = "needs prepared resources"]
 fn guest_tick_brackets_sleep_cooldowns_pickups_and_death() {
     let heard = Arc::new(Mutex::new(Vec::new()));

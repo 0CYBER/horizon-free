@@ -95,6 +95,28 @@ fn look(hub: &Hub) -> [f32; 2] {
 }
 
 #[test]
+fn loading_blocks_movement_and_attacks_until_the_load_timeout_expires() {
+    for (timeout, accepted) in [(2, false), (0, true)] {
+        let mut hub = standing(false, vec![S::Attack(play::Attack { id: 7 }), walking(1.0)]);
+        hub.guests.update(0, |g| {
+            g.loaded = false;
+            g.load_timeout = timeout;
+        });
+        let events = drain(&mut hub);
+        assert_eq!(
+            events.iter().any(|event| matches!(event,
+            HostEvent::Packet(_, packet) if matches!(&**packet, S::Attack(_)))),
+            accepted
+        );
+        assert_eq!(
+            hub.guests[0].position,
+            [if accepted { 1.0 } else { 0.0 }, 64.0, 0.0]
+        );
+        assert!(!hub.guests[0].loaded);
+    }
+}
+
+#[test]
 fn two_reports_in_one_tick_are_heard_in_order_each_from_the_one_before_when_both_pass() {
     let mut hub = standing(true, vec![turned(10.0), turned(20.0)]);
     let conn = hub.guests[0].conn;
