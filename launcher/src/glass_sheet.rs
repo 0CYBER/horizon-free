@@ -118,7 +118,7 @@ struct Draft {
     horizon: Option<(Option<String>, Channel)>,
     plays: Plays,
     /// A Java instance's arguments and window size.
-    java: (String, Option<(u32, u32)>),
+    java: (String, (String, String)),
     /// The hook fields (before, wrapper, after, variables), once the Hooks section was opened.
     hooks: Option<[String; 4]>,
 }
@@ -141,10 +141,15 @@ impl Draft {
                 .horizon
                 .as_ref()
                 .is_some_and(|(pin, channel)| *pin != saved.version || *channel != saved.channel);
-        let launch = saved
-            .java
-            .as_ref()
-            .is_some_and(|j| self.java != (j.jvm_args.trim().to_string(), j.window));
+        let launch = saved.java.as_ref().is_some_and(|j| {
+            self.java
+                != (
+                    j.jvm_args.trim().to_string(),
+                    j.window
+                        .map(|(w, h)| (w.to_string(), h.to_string()))
+                        .unwrap_or_default(),
+                )
+        });
         let hooks = self.hooks.as_ref().is_some_and(|typed| *typed != hooks);
         [
             (general, SheetTab::General),
@@ -189,7 +194,10 @@ impl Launcher {
             plays: self.draft_plays(saved).unwrap_or_else(|| Plays::of(saved)),
             java: (
                 self.servers.value(Field::JavaArgs).trim().to_string(),
-                self.typed_window(),
+                (
+                    self.servers.value(Field::WindowWidth).to_string(),
+                    self.servers.value(Field::WindowHeight).to_string(),
+                ),
             ),
             hooks: self.hooks_typed(&saved.id),
         };
@@ -925,9 +933,32 @@ mod tests {
             picture: false,
             horizon: Some((None, Channel::Stable)),
             plays: Plays::Horizon,
-            java: (String::new(), None),
+            java: (String::new(), (String::new(), String::new())),
             hooks: None,
         }
+    }
+
+    #[test]
+    fn invalid_window_text_still_counts_as_an_unsaved_edit() {
+        let mut saved = saved();
+        saved.java = Some(instances::JavaGame::default());
+        let mut draft = untouched(&saved);
+        draft.plays = Plays::of(&saved);
+        assert!(draft.changed(&saved).is_empty());
+        for (width, height) in [
+            ("bad", ""),
+            ("0", "720"),
+            ("1280", ""),
+            ("4294967296", "720"),
+        ] {
+            draft.java.1 = (width.into(), height.into());
+            assert_eq!(draft.changed(&saved), vec![SheetTab::Launch]);
+        }
+        saved.java.as_mut().unwrap().window = Some((1280, 720));
+        draft.java.1 = ("1280".into(), "720".into());
+        assert!(draft.changed(&saved).is_empty());
+        draft.java.1 .0 = "oops".into();
+        assert_eq!(draft.changed(&saved), vec![SheetTab::Launch]);
     }
 
     #[test]

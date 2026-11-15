@@ -403,19 +403,6 @@ impl Launcher {
         }
     }
 
-    /// The game window's size as typed: both sizes or neither.
-    pub(super) fn typed_window(&self) -> Option<(u32, u32)> {
-        let size = |f: Field| {
-            self.servers
-                .value(f)
-                .trim()
-                .parse::<u32>()
-                .ok()
-                .filter(|n| *n > 0)
-        };
-        size(Field::WindowWidth).zip(size(Field::WindowHeight))
-    }
-
     /// Creates or changes the instance as the dialog says. A copy can be gigabytes of worlds, so
     /// the work runs in the background.
     pub(super) fn save_instance(&mut self, cx: &mut Context<Self>) {
@@ -446,7 +433,18 @@ impl Launcher {
         let group = Some(self.servers.value(Field::InstanceGroup).to_string());
         // A Java instance's arguments and window (the sheet's Launch): both sizes or neither.
         let jvm_args = self.servers.value(Field::JavaArgs).trim().to_string();
-        let window = self.typed_window();
+        let window = match validate_window(
+            self.servers.value(Field::WindowWidth),
+            self.servers.value(Field::WindowHeight),
+        ) {
+            Ok(window) => window,
+            Err(()) => {
+                if let Some(d) = &mut self.instances.dialog {
+                    d.error = Some(tr("Window size: enter both width and height as positive whole numbers, or leave both empty.").into());
+                }
+                return;
+            }
+        };
         // A Horizon version picked but not installed downloads once the instance is saved.
         let download = self
             .draft_horizon()
@@ -1102,4 +1100,40 @@ pub(super) fn initial(name: &str) -> String {
         .unwrap_or('?')
         .to_uppercase()
         .to_string()
+}
+
+/// Validate the two fields together, without treating an invalid edit as an empty size.
+fn validate_window(width: &str, height: &str) -> Result<Option<(u32, u32)>, ()> {
+    let (width, height) = (width.trim(), height.trim());
+    if width.is_empty() && height.is_empty() {
+        return Ok(None);
+    }
+    let width = width.parse::<u32>().map_err(|_| ())?;
+    let height = height.parse::<u32>().map_err(|_| ())?;
+    if width == 0 || height == 0 {
+        return Err(());
+    }
+    Ok(Some((width, height)))
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::validate_window;
+
+    #[test]
+    fn window_size_requires_two_positive_dimensions_or_two_empty_fields() {
+        assert_eq!(validate_window("", " "), Ok(None));
+        assert_eq!(validate_window(" 1280", "720 "), Ok(Some((1280, 720))));
+        for (width, height) in [
+            ("", "720"),
+            ("1280", ""),
+            ("0", "720"),
+            ("1280", "0"),
+            ("wide", "720"),
+            ("1280", "1.5"),
+            ("4294967296", "720"),
+        ] {
+            assert_eq!(validate_window(width, height), Err(()));
+        }
+    }
 }
