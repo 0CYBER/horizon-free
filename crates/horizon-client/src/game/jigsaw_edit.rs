@@ -63,7 +63,8 @@ impl JigsawEditor {
             vertical,
             levels: 0,
             slider: 0.0,
-            keep_jigsaws: false,
+            // `JigsawBlockEditScreen.keepJigsaws` starts on.
+            keep_jigsaws: true,
         }
     }
 
@@ -324,12 +325,32 @@ mod tests {
         ));
     }
 
+    /// `JigsawBlockEditScreen.keepJigsaws` starts true, so Generate keeps the
+    /// jigsaw blocks until the button is turned off.
+    #[test]
+    fn generate_keeps_the_jigsaws_until_turned_off() {
+        let mut e = editor();
+        let mut entity = BlockEntity::JigsawBlock(Box::default());
+        let keep = |e: &mut JigsawEditor, entity: &mut BlockEntity| {
+            let Outcome::SendAll(packets) = e.press(entity, (0, 0, 0), GENERATE, false, false)
+            else {
+                panic!("generate sends two packets");
+            };
+            let S::JigsawGenerate(g) = &packets[1] else {
+                panic!("then the generate packet");
+            };
+            g.keep_jigsaws
+        };
+        assert!(keep(&mut e, &mut entity));
+        e.press(&mut entity, (0, 0, 0), KEEP_JIGSAWS, false, false);
+        assert!(!keep(&mut e, &mut entity));
+    }
+
     #[test]
     fn generate_sends_the_block_then_the_levels() {
         let mut e = editor();
         e.slide(LEVELS, 0.5);
         let mut entity = BlockEntity::JigsawBlock(Box::default());
-        e.press(&mut entity, (0, 0, 0), KEEP_JIGSAWS, false, false);
         let Outcome::SendAll(packets) = e.press(&mut entity, (5, 6, 7), GENERATE, false, false)
         else {
             panic!("generate sends two packets");

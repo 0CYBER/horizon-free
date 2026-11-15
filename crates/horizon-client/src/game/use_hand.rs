@@ -512,7 +512,6 @@ impl Game<'_> {
                     self.command_block_placed(key, !data);
                 }
                 Some(BlockEntity::StructureBlock(_)) => self.structure_block_placed(key),
-                Some(BlockEntity::JigsawBlock(_)) => self.jigsaw_block_placed(key),
                 Some(BlockEntity::TestBlock(_)) => self.test_block_placed(key),
                 Some(BlockEntity::Jukebox(_)) => self.jukebox_placed(target, &stack),
                 Some(BlockEntity::Sign(sign)) if !sign.waxed && sign.front.has_editable_text() => {
@@ -799,3 +798,7 @@ mod scaffolding_inside_tests;
 #[cfg(test)]
 #[path = "adventure_use_on_tests.rs"]
 mod adventure_use_on_tests;
+
+#[cfg(test)]
+#[path = "jigsaw_place_tests.rs"]
+mod jigsaw_place_tests;
