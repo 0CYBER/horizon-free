@@ -1293,6 +1293,10 @@ impl Loading {
                 self.menu.win = None;
             }
         } else if self.menu.options_open {
+            let pack = (self.renderer.as_ref()).and_then(|r| r.native_pack_name());
+            if self.settings.running_pack.as_deref() != pack {
+                self.settings.running_pack = pack.map(str::to_owned);
+            }
             let output = self
                 .renderer
                 .as_ref()

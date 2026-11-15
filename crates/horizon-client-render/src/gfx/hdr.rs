@@ -219,10 +219,10 @@ pub struct Hdr {
     pub masks: Masks,
     /// HDR lighting, whether Horizon lifts this frame's world: off under a Horizon shader pack
     /// that draws, while a `shaders/` pack's post or material stage runs (the pack's own),
-    /// and with HDR Lighting (`look`) off.
+    /// and with the Vanilla look (`look` off).
     pub lighting: bool,
-    /// The HDR Lighting setting: off, nothing in the world is lifted, light sources and the
-    /// sun included, so the picture is SDR's on the HDR canvas.
+    /// The Look setting, on for Horizon's: off (Vanilla), nothing in the world is lifted, light
+    /// sources and the sun included, so the picture is SDR's on the HDR canvas.
     pub look: bool,
     /// Calibration's test picture while it runs.
     pub calibration: Option<Calibration>,
@@ -409,7 +409,7 @@ impl Hdr {
     }
 
     /// The same HDR output presenting `output` instead (`output_apply`): the same frame and
-    /// HUD layer, and the player's tuning as it is (HDR Lighting, the world's lighting, the UI
+    /// HUD layer, and the player's tuning as it is (the look, the world's lighting, the UI
     /// brightness, the masks and tiers, the debug view, calibration and the luminance). Its
     /// targets are made again on the next frame.
     pub fn retargeted(&self, device: &wgpu::Device, queue: &wgpu::Queue, output: Output) -> Self {
@@ -551,7 +551,7 @@ impl Hdr {
 
     /// The layered frame's SDR screenshot, directly in the readback's texture; the icon
     /// maps only the world. Light above white keeps its hue; where Horizon lifted nothing
-    /// (`lighting` off: HDR Lighting off, or under a shader pack) each channel clips as SDR's
+    /// (`lighting` off: the Vanilla look, or under a shader pack) each channel clips as SDR's
     /// does. Neither the display's targets nor its parameters are changed.
     pub fn sdr_screenshot(
         &mut self,
@@ -1264,7 +1264,7 @@ var<private> params: ReferenceParams;
             let params = hdr.params(true, false);
             assert_eq!((params[5], params[6]), (scene, sun), "{paper}/{peak}");
         }
-        // The title, and frames Horizon doesn't light (HDR Lighting off, a pack drawing):
+        // The title, and frames Horizon doesn't light (the Vanilla look, a pack drawing):
         // nothing says where their light ends, so the curve's source follows the display.
         assert_eq!(hdr.params(false, false)[5], 0.0);
         hdr.lighting = false;
@@ -1443,7 +1443,7 @@ var<private> params: ReferenceParams;
                 last = r;
             }
         }
-        // Light Horizon doesn't lift (HDR Lighting off, a 0.2 pack's own) has no known peak:
+        // Light Horizon doesn't lift (the Vanilla look, a 0.2 pack's own) has no known peak:
         // the curve's source follows the display, the knee at 60% of its peak and at least
         // white, as before one peak. At 300 nits the source's peak is 645 nits.
         hdr.lighting = false;
@@ -1783,7 +1783,7 @@ var<private> params: ReferenceParams;
         let stored = [191.0, 223.0, 112.0, 0.0].map(|v| v / 255.0);
         let hud = t.hud.as_ref().unwrap();
         assert_eq!(texel(&device, &queue, encoder, hud), stored);
-        // With HDR Lighting off or under a pack, Horizon lifts nothing: the screenshot is the
+        // With the Vanilla look or under a pack, Horizon lifts nothing: the screenshot is the
         // SDR picture, clipped at white.
         hdr.lighting = false;
         for gamma in [0.5f32, 0.9, 1.0] {

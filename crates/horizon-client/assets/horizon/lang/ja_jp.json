@@ -166,7 +166,6 @@
   "horizon.mods.switch.restart": "%s を適用するにはゲームを再起動してください: ブロック、アイテム、ワールド生成を追加します。",
   "GPU Culling": "GPU カリング",
   "Upscaling Sharpness": "アップスケーリングのシャープネス",
-  "HDR Lighting": "HDR ライティング",
   "FIFO": "FIFO",
   "OpenGL": "OpenGL",
   "FPS": "FPS",

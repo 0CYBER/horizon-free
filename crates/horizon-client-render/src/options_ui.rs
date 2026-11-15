@@ -3341,7 +3341,7 @@ impl OptionsUi {
         atlas: &HudAtlas,
         cursor: (f32, f32),
     ) {
-        self.output = output;
+        self.output = output.shown(self.in_world);
         let (w, h) = (batch.width, batch.height);
         if let Some(error) = &self.resource_error {
             ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);

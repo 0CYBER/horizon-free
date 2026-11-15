@@ -217,6 +217,9 @@ pub struct Settings {
     pub shader_packs: Vec<crate::shader_pack_list::Entry>,
     /// The picked pack's options while its Shader Options page is open.
     pub shader_options: Option<crate::shader_options::ShaderOptions>,
+    /// The name of the Horizon shader pack the renderer has loaded, from its manifest (set by
+    /// the game, not saved): `shader_packs` holds no titles until its page was opened.
+    pub running_pack: Option<String>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -302,6 +305,7 @@ impl Default for Settings {
             mods: Default::default(),
             shader_packs: Vec::new(),
             shader_options: None,
+            running_pack: None,
         }
     }
 }
@@ -524,6 +528,7 @@ impl Settings {
             mods: Default::default(),
             shader_packs: Vec::new(),
             shader_options: None,
+            running_pack: None,
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),

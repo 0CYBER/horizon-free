@@ -420,7 +420,7 @@ fn pack_sheet(s: &Settings) -> Sheet<Tab, Item> {
 }
 
 /// The picked pack's name, over its screens in the page list.
-fn pack_name(s: &Settings) -> &str {
+pub(crate) fn pack_name(s: &Settings) -> &str {
     match native(s) {
         Some((_, pack)) => pack.title.as_str(),
         None => (s.horizon.shader_pack)

@@ -182,7 +182,6 @@
   "horizon.mods.switch.restart": "%s을(를) 적용하려면 게임을 다시 시작하세요. 블록, 아이템 또는 월드 생성을 추가하기 때문입니다.",
   "GPU Culling": "GPU 컬링",
   "Upscaling Sharpness": "업스케일링 선명도",
-  "HDR Lighting": "HDR 조명",
   "FIFO": "FIFO",
   "Vulkan": "Vulkan",
   "DirectX 12": "DirectX 12",

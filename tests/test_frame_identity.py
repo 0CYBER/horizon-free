@@ -348,7 +348,7 @@ class HdrGateTests(unittest.TestCase):
             [4.0] * 3 if (x, y) in sun else [(v / 255) ** 2.2 for v in row[3 * x:3 * x + 3]], 203))
             for y, row in enumerate(rows)]
 
-    def test_hdr_lighting_off_must_be_sdr(self):
+    def test_the_vanilla_look_must_be_sdr(self):
         self.vanilla = picture(4, 4, 8)
         self.assertEqual(self.unlit(self.vanilla, self.hdr(self.vanilla)), [])
         # 🤖 Agent: A step of rounding apart is the float frame's.

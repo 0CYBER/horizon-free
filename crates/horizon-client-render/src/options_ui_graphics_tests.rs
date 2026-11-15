@@ -27,6 +27,63 @@ fn calibrates(ui: &mut OptionsUi, s: &mut Settings, atlas: &HudAtlas) -> bool {
     ui.page() == Page::HdrCalibration
 }
 
+/// The renderer keeps the last world's shader pack at the title, and a `shaders/` pack's frame
+/// with it, where the pack draws nothing and another pick waits for the next world: the Look
+/// row is the pack's over a world only.
+#[test]
+fn look_is_the_packs_only_over_a_world() {
+    use crate::gfx::output::tests::{snapshot, window};
+    use crate::graphics_ui::{H, Item};
+    let atlas = atlas();
+    let mut s = Settings::default();
+    s.horizon.hdr = crate::graphics::HdrMode::On;
+    s.horizon.shader_pack = "Sunny.zip".into();
+    let (caps, reading) = window(Some(crate::gfx::HdrOutput::Pq), Some(true));
+    let look = Item::Horizon(H::HdrLook);
+    let mut ui = OptionsUi::default();
+    for (shaders_pack, name, reason) in [
+        (
+            false,
+            Some("Sunny Day"),
+            "The shader pack lights the world. Pick it under Shaders.",
+        ),
+        (
+            true,
+            None,
+            "The shader pack's picture is shown at Paper White.",
+        ),
+    ] {
+        s.running_pack = name.map(str::to_owned);
+        let request = crate::gfx::FrameRequest {
+            shaders_pack,
+            ..Default::default()
+        };
+        let running = snapshot(&s.horizon, request, caps, reading).with_pack(true);
+        assert_eq!(running.frame.hud_layer, !shaders_pack);
+        ui.open(true);
+        ui.draw(
+            &s,
+            running,
+            &mut HudBatch::new([480, 480]),
+            &atlas,
+            (0.0, 0.0),
+        );
+        let label = format!("Look: {}", name.unwrap_or("Sunny"));
+        assert_eq!(look.label(&s, &ui.output).plain(), label);
+        assert_eq!(look.blocked(&s, &ui.output), Some(reason));
+        ui.open(false);
+        ui.draw(
+            &s,
+            running,
+            &mut HudBatch::new([480, 480]),
+            &atlas,
+            (0.0, 0.0),
+        );
+        assert_eq!(look.label(&s, &ui.output).plain(), "Look: Horizon");
+        assert_eq!(look.blocked(&s, &ui.output), None, "{reason}");
+    }
+}
+
 /// Opening the graphics screen keeps the offer and report of the renderer the options are
 /// drawn for: the screen opens afresh, the output doesn't go with it.
 #[test]

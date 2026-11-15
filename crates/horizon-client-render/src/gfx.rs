@@ -1500,7 +1500,7 @@ pub struct Renderer {
     hdr_marker: Option<std::path::PathBuf>,
     /// The window's graphics driver (`hdr_start`); `None` offscreen.
     hdr_driver: Option<String>,
-    /// The HDR Lighting setting, kept for the HDR output made when HDR turns on.
+    /// Whether the Look setting is Horizon's, kept for the HDR output made when HDR turns on.
     hdr_lighting_setting: bool,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
@@ -6603,7 +6603,7 @@ impl Renderer {
             None => "HDR: not offered by this display".into(),
         }
     }
-    /// The HDR Lighting setting (`Hdr::look`).
+    /// Whether the Look setting is Horizon's (`Hdr::look`).
     pub fn set_hdr_lighting(&mut self, on: bool) {
         self.hdr_lighting_setting = on;
         if let Some(hdr) = &mut self.hdr {
@@ -6819,6 +6819,10 @@ impl Renderer {
             (_, Some(_)) => Some("native"),
             _ => None,
         }
+    }
+    /// The running Horizon pack's name, from its manifest.
+    pub fn native_pack_name(&self) -> Option<&str> {
+        self.native.as_ref().map(|pack| pack.name.as_str())
     }
     /// `screenshot-sequence`: waits (30 seconds at most) for the frame just drawn to finish on
     /// the GPU, and takes the centre depth a `shaders/` pack copied in it, which its next frame

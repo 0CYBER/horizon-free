@@ -184,6 +184,10 @@ impl Game<'_> {
         if ui.controller_open() {
             ui.set_controller_context(context);
         }
+        let pack = (self.renderer.as_ref()).and_then(|r| r.native_pack_name());
+        if self.settings.running_pack.as_deref() != pack {
+            self.settings.running_pack = pack.map(str::to_owned);
+        }
         let output = self
             .renderer
             .as_ref()
@@ -594,7 +598,7 @@ impl Game<'_> {
             r.set_frame_generation(
                 s.horizon.frame_generation != horizon_client::graphics::FrameGeneration::Off,
             );
-            r.set_hdr_lighting(s.horizon.hdr_lighting);
+            r.set_hdr_lighting(s.horizon.hdr_look == horizon_client::graphics::HdrLook::Horizon);
             // Where it is offered (`Renderer::gpu_culling_offer`); unchanged, it does nothing.
             // Auto has it on while its measurements say so (`GpuCullingAuto`), and starts over
             // when the choice is another one.
