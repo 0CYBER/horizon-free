@@ -262,11 +262,10 @@ impl Launcher {
                         if let native_mods::Failed::Mods { left, .. } = &e {
                             self.native_failed_mods = left.iter().map(|l| l.id.clone()).collect();
                         }
-                        let enabled: Vec<String> = native_status::enabled(&self.mods.home())
-                            .into_iter()
-                            .map(|(id, ..)| id)
-                            .collect();
-                        self.native_failed(String::from(e), &enabled);
+                        // Read against the mods this build was given, not the instance now
+                        // selected.
+                        let built = std::mem::take(&mut self.native_built_mods);
+                        self.native_failed(String::from(e), &built);
                     }
                     let play_now = wanted.is_some()
                         && built.is_some()
