@@ -174,6 +174,26 @@ class SessionCheckTests(unittest.TestCase):
                        'INFO shader pack frame_identity_terrain 1.0.0: Terrain, Colour in 40 ms\n')
         self.assertEqual(identity.session_checks(self.dir, ['terrain_pack']), [])
 
+    def test_a_world_pack_is_held_to_the_plain_float_frame_and_its_timed_session_to_timed_passes(self):
+        # 🤖 Agent: vanilla shoots none of world_plain's scenes, so those are what shows the pack ran.
+        other = [bytes(255 - v for v in r) for r in self.rows]
+        plain = identity.SESSIONS['world_plain'][2]
+        for scene in plain:
+            self.shot(f'world_plain.{scene}.png')
+        for name in ('world_pack', 'world_pack_timed'):
+            for scene in identity.SESSIONS[name][2]:
+                self.shot(f'{name}.{scene}.png', self.rows if scene == 'night_sky' else other)
+        self.loaded('world_pack', 'world_pack_timed')
+        sessions = ['world_plain', 'world_pack', 'world_pack_timed']
+        self.assertEqual(sorted(identity.session_checks(self.dir, sessions)), [
+            "world_pack.night_sky: the same as without the pack: it didn't run",
+            "world_pack_timed.night_sky: the same as without the pack: it didn't run",
+            'world_pack_timed: no GPU pass was timed'])
+        self.shot('world_pack.night_sky.png', other)
+        self.shot('world_pack_timed.night_sky.png', other)
+        (self.dir / 'world_pack_timed.stats.json').write_text(json.dumps({'gpu_passes': {'World': 0.1}}))
+        self.assertEqual(identity.session_checks(self.dir, sessions), [])
+
     def test_float_oit_must_change_the_float_picture(self):
         for scene in identity.SESSIONS['float_hdr'][2]:
             for name in ('float_hdr', 'float_oit'):

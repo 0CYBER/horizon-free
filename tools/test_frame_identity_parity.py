@@ -28,7 +28,14 @@ Sessions, each a fresh game and world (seed 7) per build:
 - terrain_pack, terrain_pack_hdr: a shader API 0.2 test pack with a material stage, a shadow map and displacement
   (tools/fixtures/shaderpacks/frame_identity_terrain) over a resource pack of LabPBR heights the harness writes
   (relief_pack), on the float frame in SDR and with HDR on: day over water, night with light sources, and relief, a
-  stone floor near the camera with pillars casting long morning shadows over it; and entities in SDR.
+  stone floor near the camera with pillars casting long morning shadows over it; entities in SDR; and in SDR rain by
+  day and the night sky, the renderer's own under a pack with neither a sky nor a weather stage.
+- world_plain: the float frame without a pack: rain by day and by night, the night sky and the End's sky.
+- world_pack, world_pack_timed: a shader API 0.2 test pack with its own sky (clouds, stars and sun its own), weather,
+  a material stage reading the water mirror and the copies of the opaque world, and a post pass reading the surface
+  target the material writes (tools/fixtures/shaderpacks/frame_identity_world), on the float frame in SDR: day over
+  water, the sun, the night sky, rain by day and by night, and the End's sky; and with GPU pass timing on
+  (horizon-ctl gpu-passes on), which draws the sky in a pass of its own, the sun and the night sky.
 
 Shader packs are read from the change's tree for both builds (tools/fixtures/shaderpacks, else the SDK's
 crates/horizon-shader-api/packs), so a base from before a fixture was added draws it too.
@@ -41,8 +48,9 @@ Both builds draw on the same adapter: Mesa's lavapipe where its Vulkan driver is
 default. When the base and the change differ only in files no game binary is built from (tools/, tests/, .github/,
 Markdown outside crates/), the base reuses the change's binaries: the comparison is then of two runs of one build.
 Each session also checks, in each build, that it drew what it is for (the pack changes the picture, HDR shots have
-their -hdr.png, the visibility buffer's line is in the session's whole log), so a pack that fails to load, or HDR that
-stays off, in both builds doesn't pass as identical, and a change that stops one doesn't either.
+their -hdr.png, the visibility buffer's line is in the session's whole log, timed passes were timed), so a pack that
+fails to load, or HDR that stays off, in both builds doesn't pass as identical, and a change that stops one doesn't
+either.
 --build-base builds it anyway. The base builds in a worktree and target folder of its own under .local/frame-identity/,
 kept between runs so that a later base rebuilds only what changed.
 
@@ -337,9 +345,11 @@ def prepare(game):
               'setblock 3 60 3 minecraft:soul_soil', 'setblock 3 61 3 minecraft:soul_fire',
               'setblock -4 61 -1 minecraft:crimson_fungus', 'setblock 4 60 -2 minecraft:nether_quartz_ore'):
         game.command(f'execute in minecraft:the_nether run {c}')
-    # 🤖 Agent: the player still ticks in a frozen world and falls: each viewpoint stands on a block.
+    # 🤖 Agent: the player still ticks in a frozen world and falls: each viewpoint stands on a block, the End's once
+    # prepare_end has loaded it.
     for where, _, (x, y, z), _, _ in SCENES.values():
-        game.command(f'execute in minecraft:{where} run setblock {int(x // 1)} {y - 1} {int(z // 1)} minecraft:stone')
+        if where != 'the_end':
+            game.command(f'execute in minecraft:{where} run setblock {int(x // 1)} {y - 1} {int(z // 1)} minecraft:stone')
     game.command('kill @e[type=!player]')
     # 🤖 Agent: Entities, after the sweep: the world is frozen (HORIZON_STILL), so they stay as summoned. A cow
     # (shoot hurts it), a cutout texture with full-bright eyes (the spider), enchanted armour and a held enchanted
@@ -365,6 +375,14 @@ def prepare(game):
     game.command(f'summon minecraft:end_crystal {EX - 4.5} {Y} {EZ + 2.5} {{ShowBottom:0b}}')
 
 
+def prepare_end(game):
+    """The End's viewpoint and its block, for the sessions that shoot it: loading the End costs the others time."""
+    where, _, (x, y, z), _, _ = SCENES['end_sky']
+    bx, bz = int(x // 1), int(z // 1)
+    game.command(f'execute in minecraft:{where} run forceload add {bx - 8} {bz - 8} {bx + 8} {bz + 8}')
+    game.command(f'execute in minecraft:{where} run setblock {bx} {y - 1} {bz} minecraft:stone')
+
+
 # 🤖 Agent: Where the relief floor's centre block stands: 12 blocks up, nothing below it, between the lava pool and
 # x 33..43, z -27..-18, kept free for an items scene. Cast against the scenes' blocks (a 70° frame at 854x480 from
 # every viewpoint's place, yaw and pitch), no other viewpoint sees it, and past its own blocks it sees only sky. Level
@@ -388,7 +406,17 @@ SCENES = {
     # 🤖 Agent: The relief floor from its south edge, looking north and down, the sun low in the east: displaced
     # stone and sand within [displacement]'s distance, the pillars' shadows over them.
     'relief': ('overworld', 2500, (RELIEF_AT[0] + 0.5, RELIEF_AT[1], RELIEF_AT[2] + 6.5), 180, 35),
+    # 🤖 Agent: From day_water's place: rain (RAIN) over the pool and the sky by day and by night, and the night sky
+    # high in the south-west, the moon at its top edge.
+    'rain_day': ('overworld', 6000, (X + 0.5, Y + 3, Z - 9.5), 0, 10),
+    'rain_night': ('overworld', 18000, (X + 0.5, Y + 3, Z - 9.5), 0, 10),
+    'night_sky': ('overworld', 18000, (X + 0.5, Y + 3, Z - 9.5), 30, -55),
+    # 🤖 Agent: The End's sky, far out over the void and looking up: the outer islands load in some runs and not
+    # in others, and must not show.
+    'end_sky': ('the_end', 6000, (1000.5, 100, 1000.5), 0, -50),
 }
+# 🤖 Agent: The scenes shot in rain, which stops again after the shot.
+RAIN = ('rain_day', 'rain_night')
 WORLD = ['day_water', 'night_lights', 'glass', 'nether', 'entities']
 # 🤖 Agent: What each HUD scene shows over the world: chat, and the pause menu (its blur and darkening) over it.
 HUD = {'hud_sun': ('chat',), 'hud_lava': ('chat',), 'menu': ('chat', 'pause')}
@@ -410,6 +438,8 @@ def shoot(game, out, scene):
         game.command('damage @e[type=minecraft:cow,limit=1] 1')
     for option in off:
         game.ctl('options-set', option, 'false')
+    if scene in RAIN:
+        game.command('weather rain 1000000')
     if 'chat' in shows:
         # 🤖 Agent: Chat lines over a see-through background, sent now: they fade on the client's ticks.
         game.ctl('options-set', 'chatVisibility', '0')
@@ -421,6 +451,8 @@ def shoot(game, out, scene):
         game.ctl('pause')
         game.ctl('wait-for', 'screen', 'paused', '--timeout', 30)
     game.ctl('screenshot', out / f'{scene}.png')
+    if scene in RAIN:
+        game.command('weather clear 1000000')
     if 'pause' in shows:
         game.ctl('close')
     for option in off:
@@ -484,10 +516,19 @@ SESSIONS = {
     'float_unlit': ('hdr:true\nhdrLighting:false\nhdrPeak:300\n', {'HORIZON_HDR_FRAME': 'float',
                     'HORIZON_HDR_OUTPUT': 'pq'}, WORLD + list(HUD) + ['sun'], False),
     'terrain_pack': ('', {'HORIZON_SHADER_PACK': 'frame_identity_terrain', 'HORIZON_HDR_FRAME': 'float'},
-                     ['day_water', 'night_lights', 'relief', 'entities'], False),
+                     ['day_water', 'night_lights', 'relief', 'entities', 'night_sky', 'rain_day'], False),
     'terrain_pack_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'frame_identity_terrain', 'HORIZON_HDR_FRAME': 'float',
                          'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights', 'relief'], False),
+    'world_plain': ('', {'HORIZON_HDR_FRAME': 'float'}, ['night_sky', 'end_sky', 'rain_day', 'rain_night'], False),
+    'world_pack': ('', {'HORIZON_SHADER_PACK': 'frame_identity_world', 'HORIZON_HDR_FRAME': 'float'},
+                   ['day_water', 'sun', 'night_sky', 'end_sky', 'rain_day', 'rain_night'], False),
+    'world_pack_timed': ('', {'HORIZON_SHADER_PACK': 'frame_identity_world', 'HORIZON_HDR_FRAME': 'float'},
+                         ['sun', 'night_sky'], False),
 }
+# 🤖 Agent: The sessions drawn with GPU pass timing on, which draws the sky in a timed pass of its own.
+TIMED = ('world_pack_timed',)
+# 🤖 Agent: The session a pack's pictures are held against in scenes the usual one (session_checks) doesn't shoot.
+PLAIN = 'world_plain'
 # 🤖 Agent: Where shader packs are found: the harness's fixtures, then the SDK's packs.
 PACK_DIRS = (ROOT / 'tools/fixtures/shaderpacks', ROOT / 'crates/horizon-shader-api/packs')
 # 🤖 Agent: The shader packs drawn over relief_pack, whose heights their [displacement] needs.
@@ -562,8 +603,14 @@ def run_session(name, label, bin_dir, out, env_base, args):
                 raise RuntimeError(f'Improved Transparency was not requested: {option}')
             lab.write_json(out / f'{name}.option.json', option)
         prepare(game)
+        if 'end_sky' in scenes:
+            prepare_end(game)
+        if name in TIMED:
+            game.ctl('gpu-passes', 'on')
         for scene in scenes:
             shoot_named(game, out, name, scene)
+        if name in TIMED:
+            lab.write_json(out / f'{name}.stats.json', game.ctl('stats'))
         if toggle:
             set_hdr(game, False)
             for scene in scenes:
@@ -602,14 +649,21 @@ def session_checks(shots, sessions):
                 if (shots / f'{prefix}.{scene}-hdr.png').exists() != on:
                     problems.append(f'{prefix}.{scene}: HDR output was {"off" if on else "on"}')
         # 🤖 Agent: the pack's pictures against the same scenes without it: vanilla's, or with HDR on hdr_toggle's
-        # first shots (the same settings), sidecars included.
+        # first shots (the same settings), sidecars included; PLAIN's where that session doesn't shoot the scene.
         without = 'float_hdr' if name == 'float_oit' else ('hdr_toggle' if hdr else 'vanilla')
-        if 'HORIZON_SHADER_PACK' in extra and without in sessions:
-            same = [s for s in scenes if any(
-                compare(shots / f'{without}.{s}{x}', shots / f'{name}.{s}{x}', None) is None
-                for x in ('.png', '-hdr.png')
-                if (shots / f'{without}.{s}{x}').exists() and (shots / f'{name}.{s}{x}').exists())]
+        if 'HORIZON_SHADER_PACK' in extra:
+            same = []
+            for s in scenes:
+                plain = next((w for w in (without, PLAIN) if w in sessions and s in SESSIONS[w][2]), None)
+                if plain and any(compare(shots / f'{plain}.{s}{x}', shots / f'{name}.{s}{x}', None) is None
+                                 for x in ('.png', '-hdr.png')
+                                 if (shots / f'{plain}.{s}{x}').exists() and (shots / f'{name}.{s}{x}').exists()):
+                    same.append(s)
             problems += [f'{name}.{s}: the same as without the pack: it didn\'t run' for s in same]
+        # 🤖 Agent: a pack's passes aren't in the stats, but the renderer's are while timing is on.
+        stats = shots / f'{name}.stats.json'
+        if name in TIMED and not (stats.exists() and json.loads(stats.read_text(encoding='utf-8')).get('gpu_passes')):
+            problems.append(f'{name}: no GPU pass was timed')
         # 🤖 Agent: the log says whether the visibility buffer was built; with HORIZON_FLAT_DRAWS=1 it draws every frame.
         log = shots / f'{name}.log'
         text = log.read_text(encoding='utf-8') if log.exists() else ''
