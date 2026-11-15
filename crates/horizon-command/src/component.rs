@@ -22,7 +22,7 @@ fn partial(msg: impl Into<String>) -> R {
         partial: true,
     })
 }
-/// Codec.either.
+/// The DataFixerUpper either codec.
 fn either(first: R, second: impl FnOnce() -> R) -> R {
     let a = match first {
         Ok(()) => return Ok(()),
@@ -351,11 +351,11 @@ fn component(t: &Tag) -> R {
         full(t)
     })
 }
-/// ComponentSerialization.CODEC.parse: the error message on failure.
+/// `ComponentSerialization.CODEC` on failure: the error message.
 pub fn decode(t: &Tag) -> Result<(), String> {
     component(t).map_err(|e| e.msg)
 }
-/// Style.Serializer.CODEC.parse.
+/// `Style.Serializer.CODEC`.
 pub fn decode_style(t: &Tag) -> Result<(), String> {
     match t {
         Tag::Compound(map) => style_fields(map).map_err(|e| e.msg),
