@@ -23,6 +23,9 @@
 //! With no listener each boundary is one subscription check and nothing is filed. With one, a
 //! boundary is a hash lookup and the reusable crossing record is told without a per-frame scan.
 
+#[path = "entity_sections/observer_cache.rs"]
+pub(super) mod observer_cache;
+
 use super::Game;
 use crate::mobs::living::section_writes::PositionWrite;
 use mod_api::__private::game::BackendRefOf;
