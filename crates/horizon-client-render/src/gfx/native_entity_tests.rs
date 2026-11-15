@@ -170,7 +170,7 @@ fn the_entity_layer_s_quads_are_the_runs_through_the_sorting() {
         .collect();
     assert_eq!(marked, [true, false, false, false, true, true, false]);
     assert_eq!(batch.combined[12].layer & 0xffff, 32);
-    assert_eq!(batch.ray_ranges, [(0, 3), (4, 3)]);
+    assert_eq!(batch.ray_ranges, [(0, 3), (4, 3), (7, 0)]);
     // The bit keeps clear of the kind and of every bit the entity shaders read.
     let kind = batch.combined[20].layer >> super::KIND_SHIFT & 7;
     assert_eq!(kind, EntityKind::BlockEntity as u32 + 1);

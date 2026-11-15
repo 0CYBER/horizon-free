@@ -1487,7 +1487,7 @@ impl Game<'_> {
             let dragon = a.equipment[5]
                 .as_ref()
                 .is_some_and(|i| &*i.item == "minecraft:dragon_head");
-            if !self.standing_entity_in_view(
+            let Some(sight) = self.standing_entity_sight(
                 camera,
                 super::entity_culling::at(a.previous),
                 super::entity_culling::at(a.position),
@@ -1496,10 +1496,10 @@ impl Game<'_> {
                 height,
                 range,
                 if dragon { 0.5 } else { 0.0 },
-            ) {
+            ) else {
                 continue;
-            }
-            let culling = self.entity_cull_decision(a, alpha);
+            };
+            let culling = self.sighted_decision(sight, || self.entity_cull_decision(a, alpha));
             if culling.hides_entity() {
                 continue;
             }
@@ -1539,8 +1539,10 @@ impl Game<'_> {
                 self.armor_stand_vertices(a, base, packed, None, out);
                 None
             };
-            if !self.entity_glowing(a.id) {
-                self.cull_skinned(out, entity_start, skinned);
+            if culling.rays_only() {
+                self.ray_only(out, entity_start);
+            } else if !self.entity_glowing(a.id) {
+                self.culled_for_rays(|| self.cull_skinned(out, entity_start, skinned));
             }
         }
     }

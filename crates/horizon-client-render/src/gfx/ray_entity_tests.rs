@@ -1,5 +1,6 @@
-//! The entity layer (`RAY_ENTITY`): its binding's cap, and on a GPU with ray queries the layer's
-//! BLAS traced through the scene's own WGSL, as a pack that names the layer composes it.
+//! The entity layer (`RAY_ENTITY`): its binding's cap, its reach, where the batch puts the
+//! entities the camera doesn't draw, and on a GPU with ray queries the layer's BLAS traced
+//! through the scene's own WGSL, as a pack that names the layer composes it.
 
 use super::*;
 use crate::gfx::native_post::trace::space_words;
@@ -16,22 +17,123 @@ fn the_layer_s_quads_are_cut_to_what_its_binding_holds() {
     let most = largest_entity_binding(&limits);
     assert_eq!(most, 5957);
     // Within it: as they are.
-    let ranges = [(0, 5000), (5000, 900)];
+    let ranges = [(0, 5000), (5000, 900), (5900, 50)];
     assert_eq!(within_binding(ranges, most), (ranges, false));
-    // The second geometry runs past it, and one past its end starts there with none.
+    // The ray-only geometry, last in the stream, runs past it; one past its end starts there
+    // with none.
     assert_eq!(
-        within_binding([(0, 5000), (5000, 1000)], most),
-        ([(0, 5000), (5000, 957)], true)
+        within_binding([(0, 5000), (5000, 900), (5950, 100)], most),
+        ([(0, 5000), (5000, 900), (5950, 7)], true)
     );
     assert_eq!(
-        within_binding([(0, 6000), (6000, 10)], most),
-        ([(0, 5957), (5957, 0)], true)
+        within_binding([(0, 6000), (6000, 10), (6020, 5)], most),
+        ([(0, 5957), (5957, 0), (5957, 0)], true)
     );
     // An empty geometry past the end lost nothing.
     assert_eq!(
-        within_binding([(0, 10), (7000, 0)], most),
-        ([(0, 10), (5957, 0)], false)
+        within_binding([(0, 10), (20, 0), (7000, 0)], most),
+        ([(0, 10), (20, 0), (5957, 0)], false)
     );
+}
+
+/// The layer reaches the columns the TLAS spans around the camera's (`within`), camera-relative,
+/// over the world's height.
+#[test]
+fn the_layer_reaches_the_scene_s_columns() {
+    // In column (-1, 2) at 8 chunks: x from column -9 to the end of column 7, z from -6 to 10.
+    let camera = DVec3::new(-3.5, 70.0, 40.25);
+    let (lo, hi) = reach_box(camera, 8);
+    assert_eq!(lo, glam::Vec3::new(-144.0 + 3.5, -1.0e6, -96.0 - 40.25));
+    assert_eq!(hi, glam::Vec3::new(128.0 + 3.5, 1.0e6, 176.0 - 40.25));
+    let reach = crate::gfx::Frustum::boxed(lo, hi);
+    let at = |x: f32, z: f32| {
+        reach.intersects(
+            glam::Vec3::new(x, -2.0, z),
+            glam::Vec3::new(x + 1.0, 0.0, z + 1.0),
+        )
+    };
+    // Behind the camera and beside it, near and at the edge; not a block past the last column.
+    assert!(at(0.0, -5.0) && at(-40.0, 3.0) && at(130.5, 0.0));
+    assert!(!at(132.0, 0.0) && !at(0.0, -137.5) && !at(0.0, 136.0));
+    // Straight up and down: the columns' whole height.
+    assert!(reach.intersects(
+        glam::Vec3::new(0.0, 300.0, 0.0),
+        glam::Vec3::new(1.0, 301.0, 1.0)
+    ));
+}
+
+/// The entities the camera doesn't draw join the stream past everything a pass draws (the
+/// materials, which the passes count from the front, the additive, hand and see-through quads)
+/// and before the shadow-only quads, which the native shadow pass counts back from the end.
+/// They are the third geometry, marked as the drawn ones are: only the runs' quads of the
+/// ordinary material and improved transparency's, so a translucent item a mob holds, and a quad
+/// in no run, stay out. Without them the stream is what it was.
+#[test]
+fn ray_only_quads_lie_past_every_draw_and_before_the_shadow_only_ones() {
+    use crate::gfx::entity_batch::{EntityBatch, OIT_ENTITY};
+    use crate::gfx::native_entity::{EntityKind, EntityRuns};
+    let tagged = |layer, x| quad(x, 0.0, layer, 0xffff_ffff);
+    let stream: Vec<Vertex> = [tagged(0, 0.0), tagged(32, 1.0), tagged(OIT_ENTITY, 2.0)].concat();
+    let (additive, hand, see_through) = (tagged(2, 3.0), tagged(0, 4.0), tagged(0, 5.0));
+    let shadow_only = tagged(0, 6.0);
+    // Off camera: a mob (its body, a translucent item it holds, a layer of improved
+    // transparency's), then a quad no run names.
+    let ray_only: Vec<Vertex> = [
+        tagged(0, 10.0),
+        tagged(32, 11.0),
+        tagged(OIT_ENTITY, 12.0),
+        tagged(0, 13.0),
+    ]
+    .concat();
+    let batch = |ray: bool| {
+        let mut batch = EntityBatch::default();
+        let mut runs = EntityRuns::default();
+        if ray {
+            batch.ray_only = ray_only.clone();
+            runs.push(0..12, EntityKind::Entity);
+        }
+        batch.ray_kinds = runs;
+        let counts = batch.update(&stream, &additive, &hand, &see_through, true);
+        batch.append_shadow_only(&shadow_only);
+        (batch, counts)
+    };
+    let (off, counts_off) = batch(false);
+    let (on, counts_on) = batch(true);
+    assert_eq!(counts_on, counts_off);
+    // Drawn: the three materials' quads, the additive, hand and see-through ones.
+    let drawn = 6 * 4;
+    assert_eq!(off.combined.len(), drawn + 4);
+    assert_eq!(on.combined.len(), drawn + 2 * 4 + 4);
+    let bytes = |v: &[Vertex]| bytemuck::cast_slice::<Vertex, u8>(v).to_vec();
+    assert_eq!(bytes(&on.combined[..drawn]), bytes(&off.combined[..drawn]));
+    let tail = &on.combined[on.combined.len() - 4..];
+    assert_eq!(bytes(tail), bytes(&shadow_only));
+    assert_eq!(bytes(&off.combined[drawn..]), bytes(&shadow_only));
+    // The ray-only ones: the body and improved transparency's layer, marked as an entity's.
+    assert_eq!(on.ray_ranges[2], (6, 2));
+    let xs: Vec<f32> = on.combined[drawn..drawn + 8]
+        .iter()
+        .step_by(4)
+        .map(|v| v.pos[0])
+        .collect();
+    assert_eq!(xs, [10.0, 12.0]);
+    let entity = crate::gfx::native_entity::kind_bits(EntityKind::Entity) | RAY_ENTITY_QUAD;
+    assert!(
+        on.combined[drawn..drawn + 8]
+            .iter()
+            .all(|v| v.layer & entity == entity)
+    );
+    // The drawn geometries are where they were, and nothing is left for the next frame.
+    assert_eq!(on.ray_ranges[..2], off.ray_ranges[..2]);
+    assert_eq!(off.ray_ranges[2], (6, 0));
+    assert!(on.ray_only.is_empty() && on.ray_kinds.is_empty());
+    // Improved transparency off: its layer is the ordinary material's, and still the layer's.
+    let mut plain = EntityBatch::default();
+    plain.ray_only = ray_only.clone();
+    plain.ray_kinds.push(0..12, EntityKind::Entity);
+    plain.update(&stream, &[], &[], &[], false);
+    plain.append_shadow_only(&[]);
+    assert_eq!(plain.ray_ranges[2], (3, 2));
 }
 
 /// A device with ray queries, if this machine has one.
@@ -67,7 +169,7 @@ fn quad(x: f32, z: f32, layer: u32, color: u32) -> [Vertex; 4] {
 /// What the scene's WGSL makes of the layer, run on the GPU: rays over each layer mask, and
 /// `horizon_ray_entity_keeps` on cases of entity.wgsl's alpha test.
 const PROBE: &str = "
-@group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 6>;
+@group(0) @binding(0) var<storage, read_write> probe_out: array<vec4<f32>, 7>;
 @compute @workgroup_size(1) fn probe() {
     let z = vec3<f32>(0.0, 0.0, 1.0);
     let a = trace_layers(vec3<f32>(0.3, 0.6, 0.0), z, 100.0, RAY_ENTITY);
@@ -86,6 +188,8 @@ const PROBE: &str = "
     probe_out[5] = vec4<f32>(f32(horizon_ray_entity_keeps(q | 2u, 1.0, 1.0, 0.0)),
         f32(horizon_ray_entity_keeps(q | 4u, 1.0, 1.0, 0.0)), f32(horizon_ray_entity_keeps(q | 10u, 1.0, 1.0, 0.0)),
         f32(horizon_ray_entity_keeps(q | 0x2000000u | 7u, 1.0, 1.0, 0.0)));
+    let c = trace_layers(vec3<f32>(20.3, 0.6, 0.0), z, 100.0, RAY_ENTITY);
+    probe_out[6] = vec4<f32>(c.distance, f32(c.entity), c.tint.r, c.tint.b);
 }
 ";
 
@@ -108,24 +212,25 @@ fn scene_source() -> String {
     post.scene_source.clone().unwrap()
 }
 
-/// Two geometries apart in the stream, and the quads before and between them: a ray reads the
-/// quad its geometry's own base says, passes the layer's quads that aren't marked, reaches the
-/// layer only when its mask names it, and finds the vertices' colour and light. The alpha test
-/// keeps what entity.wgsl draws.
+/// Three geometries apart in the stream, and the quads before and between them: a ray reads the
+/// quad its geometry's own base says, the ray-only geometry's too, passes the layer's quads that
+/// aren't marked, reaches the layer only when its mask names it, and finds the vertices' colour
+/// and light. The alpha test keeps what entity.wgsl draws.
 #[test]
-fn rays_reach_the_entity_layer_through_its_two_bases() {
+fn rays_reach_the_entity_layer_through_its_three_bases() {
     let Some((device, queue)) = ray_device() else {
         eprintln!("no GPU with ray queries: skipped");
         return;
     };
-    let (red, green, blue) = (0xff00_00ff, 0xff00_ff00, 0xffff_0000);
+    let (red, green, blue, magenta) = (0xff00_00ff, 0xff00_ff00, 0xffff_0000, 0xffff_00ff);
     // Geometry 0: an unmarked quad, then a marked red one behind it. Then a blue quad in no
-    // geometry, and geometry 1, a green quad.
+    // geometry, geometry 1, a green quad, and the ray-only geometry 2, a magenta one.
     let stream: Vec<Vertex> = [
         quad(0.0, 2.0, 0, blue),
         quad(0.0, 4.0, RAY_ENTITY_QUAD, red),
         quad(10.0, 1.0, RAY_ENTITY_QUAD, blue),
         quad(10.0, 3.0, RAY_ENTITY_QUAD, green),
+        quad(20.0, 5.0, RAY_ENTITY_QUAD, magenta),
     ]
     .concat();
     use wgpu::util::DeviceExt;
@@ -161,11 +266,11 @@ fn rays_reach_the_entity_layer_through_its_two_bases() {
     let stream = Stream {
         buffer: &buffer,
         atlas: &atlas,
-        ranges: [(0, 2), (3, 1)],
+        ranges: [(0, 2), (3, 1), (4, 1)],
     };
     let mut entities = Entities::new(&device, &stream);
     assert!(!entities.fit(&device, &stream));
-    let indices = super::super::quad_indices(&device, 4);
+    let indices = super::super::quad_indices(&device, 5);
     let mut tlas = create_tlas(&device, 1);
     let identity = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     tlas[0] = Some(wgpu::TlasInstance::new(
@@ -210,7 +315,7 @@ fn rays_reach_the_entity_layer_through_its_two_bases() {
     });
     let out = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: 6 * 16,
+        size: 7 * 16,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
@@ -264,11 +369,11 @@ fn rays_reach_the_entity_layer_through_its_two_bases() {
     }
     let read = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: 6 * 16,
+        size: 7 * 16,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    encoder.copy_buffer_to_buffer(&out, 0, &read, 0, 6 * 16);
+    encoder.copy_buffer_to_buffer(&out, 0, &read, 0, 7 * 16);
     queue.submit([encoder.finish()]);
     read.slice(..)
         .map_async(wgpu::MapMode::Read, |r| r.unwrap());
@@ -287,4 +392,6 @@ fn rays_reach_the_entity_layer_through_its_two_bases() {
     assert_eq!(got[3], [1.0, 0.0, 0.0, 0.0]);
     assert_eq!(got[4], [1.0, 0.0, 0.0, 0.0]);
     assert_eq!(got[5], [0.0, 0.0, 0.0, 1.0]);
+    // The ray-only quad, at the third base.
+    assert_eq!(got[6], [5.0, 1.0, 1.0, 1.0]);
 }

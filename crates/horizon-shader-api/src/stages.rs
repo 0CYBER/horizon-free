@@ -487,11 +487,11 @@ pub enum Tracing {
 pub const RAY_SCENE_BINDING: u32 = 48;
 /// Every traced section's quads as the mesher's vertices (six words each, four a quad).
 pub const RAY_STORE_BINDING: u32 = 49;
-/// `horizon_RaySpace`, 32 bytes: the camera in the scene's space (three floats), how many
-/// layers a sprite array holds (a `u32`), how many of the scene's instances, its first ones,
-/// are solid terrain's (a `u32`), where the translucent terrain's end (a `u32`: the entity
-/// layer's instance is the next), then the first quad of each of that instance's two
-/// geometries (two `u32`).
+/// `horizon_RaySpace`: the camera in the scene's space (three floats), how many layers a sprite
+/// array holds (a `u32`), how many of the scene's instances, its first ones, are solid
+/// terrain's (a `u32`), where the translucent terrain's end (a `u32`: the entity layer's
+/// instance is the next), then at byte 32 the first quad of each of that instance's three
+/// geometries (three `u32`), 48 bytes in all.
 pub const RAY_SPACE_BINDING: u32 = 50;
 /// Two words per sprite layer: the pack's `[[materials]]` id, then its `[[tags]]` bits.
 pub const RAY_LAYERS_BINDING: u32 = 51;
@@ -502,7 +502,8 @@ pub const RAY_SPRITE_ARRAYS: u32 = 8;
 /// mask, which the renderer gives the layer's instances as their mask.
 pub const RAY_SOLID: u32 = 1;
 pub const RAY_TRANSLUCENT: u32 = 2;
-/// The entities the camera draws, only for a pack whose files name it (`names_ray_entity`).
+/// The entities within the scene's reach, those the camera draws and those it doesn't, only for
+/// a pack whose files name it (`names_ray_entity`).
 pub const RAY_ENTITY: u32 = 4;
 /// What the scene holds besides for such a pack: the entity stream's vertices (`Vertex`,
 /// eleven words each, four a quad), its texture atlas, and a sampler as the entities'.
@@ -534,8 +535,8 @@ const RAY_LAYERS: &str = "\
 // (cut-outs too), and what the translucent pass draws (water, stained glass, ice).
 const RAY_SOLID: u32 = 1u;
 const RAY_TRANSLUCENT: u32 = 2u;
-+|// The entities the camera draws: mobs, players, armour stands, item frames, vehicles, and the
-+|// block entities drawn with them (a chest while it opens).
++|// The entities within the scene's reach, in view or not: mobs, players, armour stands, item
++|// frames, vehicles, and the block entities the camera draws (a chest while it opens).
 +|const RAY_ENTITY: u32 = 4u;
 // The nearest solid surface from the camera-relative `origin` along the unit vector `direction`,
 // within `max_distance` blocks; `distance` is negative where there is none.
@@ -674,8 +675,8 @@ struct horizon_RaySpace {
     solid_instances: u32,
 +|    // Where translucent terrain's instances end: the entity layer's is the next.
 +|    translucent_instances: u32,
-+|    // The first quad of each of the entity layer's two geometries in `horizon_ray_entities`.
-+|    entity_bases: vec2<u32>,
++|    // The first quad of each of the entity layer's three geometries in `horizon_ray_entities`.
++|    entity_bases: vec3<u32>,
 }
 @group(3) @binding(48) var horizon_ray_scene: acceleration_structure;
 // Every traced section's quads as `TerrainVertex` (six words: the position, the uv's two u16,
@@ -903,7 +904,7 @@ fn horizon_ray_entity_texel(uv: vec2<f32>) -> vec4<f32> {
 }
 // The triangle of an entity layer hit: its geometry's first quad, plus two triangles a quad.
 fn horizon_ray_entity_triangle(c: RayIntersection) -> horizon_RayTriangle {
-    let first = horizon_ray_space.entity_bases[min(c.geometry_index, 1u)];
+    let first = horizon_ray_space.entity_bases[min(c.geometry_index, 2u)];
     return horizon_ray_triangle(first, c.primitive_index, c.barycentrics);
 }
 // Whether entity.wgsl draws the pixel of a quad whose layer word is `layer`, where its texel's

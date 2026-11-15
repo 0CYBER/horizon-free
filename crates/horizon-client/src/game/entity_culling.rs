@@ -4,6 +4,7 @@ use super::{
     entity::RenderEntityBounds,
     occlusion_culling::{QuerySource, SyncOccluder},
 };
+use horizon_client::gfx::native_entity::EntityKind;
 use horizon_client::graphics::EntityCullingMode;
 use horizon_client::mobs::Species;
 use horizon_core::geometry::{Aabb, Vec3};
@@ -61,6 +62,17 @@ pub(super) enum EntityCullDecision {
     Hidden,
     CheckVertices,
     Pending,
+    /// The camera doesn't draw the entity, out of its view or hidden, and the ray scene's entity
+    /// layer reaches it: its model goes to the layer alone (`Game::ray_only`).
+    Rays,
+}
+
+/// Who sees an entity this frame: the camera, and the ray scene's entity layer, while it is on
+/// and the entity is within its reach (`Renderer::ray_entity_reach`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Sight {
+    pub camera: bool,
+    pub rays: bool,
 }
 
 impl EntityCullDecision {
@@ -71,10 +83,19 @@ impl EntityCullDecision {
     pub(super) const fn checks_vertices(self) -> bool {
         matches!(self, Self::CheckVertices)
     }
+
+    pub(super) const fn rays_only(self) -> bool {
+        matches!(self, Self::Rays)
+    }
 }
 
 impl Game<'_> {
-    pub(super) fn prepare_entity_culling(&mut self) {
+    pub(super) fn prepare_entity_culling(&mut self, camera: glam::DVec3) {
+        // The ray scene's entity layer reads the stream's vertices: GPU-posed models have none.
+        let reach = self.renderer.as_ref().filter(|_| !self.skinning());
+        self.native_shaders.ray_reach = reach.and_then(|r| r.ray_entity_reach(camera));
+        self.native_shaders.ray_only.get_mut().clear();
+        self.native_shaders.ray_runs.get_mut().clear();
         // Spans tell the pack's passes which entities are hidden; without them, nothing changes.
         self.pack_shadow_casters = match (&self.renderer, &self.pack_ids) {
             (Some(r), Some(_)) => r.pack_shadow_casters(),
@@ -93,9 +114,77 @@ impl Game<'_> {
             {
                 culler.record_entity_vertices_culled(vertices.len().saturating_sub(start));
             }
-            vertices.truncate(start);
+            self.drop_culled(vertices, start);
         }
         hidden
+    }
+
+    /// Drops a culled model, vertices `start..`: to the ray scene's entity layer instead, when
+    /// `culled_for_rays` keeps it and the layer reaches it.
+    fn drop_culled(&self, vertices: &mut Vec<Vertex>, start: usize) {
+        if self.native_shaders.ray_keeps.get()
+            && let Some(reach) = &self.native_shaders.ray_reach
+        {
+            let corners = vertices[start..].iter().map(|v| glam::Vec3::from(v.pos));
+            let (lo, hi) = corners.fold((glam::Vec3::MAX, glam::Vec3::MIN), |(lo, hi), p| {
+                (lo.min(p), hi.max(p))
+            });
+            if reach.intersects(lo, hi) {
+                return self.ray_only(vertices, start);
+            }
+        }
+        vertices.truncate(start);
+    }
+
+    /// Runs `cull`, which culls one model of the entity layer's kinds: occlusion moves it to the
+    /// layer instead of dropping it, while the layer is on (`drop_culled`).
+    pub(super) fn culled_for_rays<R>(&self, cull: impl FnOnce() -> R) -> R {
+        let keeps = &self.native_shaders.ray_keeps;
+        keeps.set(self.native_shaders.ray_reach.is_some());
+        let culled = cull();
+        keeps.set(false);
+        culled
+    }
+
+    /// Moves vertices `start..` of `out`, one model the camera doesn't draw, to the ray scene's
+    /// entity layer alone, as an entity's run: what `lit_entity` names of the camera's.
+    pub(super) fn ray_only(&self, out: &mut Vec<Vertex>, start: usize) {
+        let mut ray = self.native_shaders.ray_only.borrow_mut();
+        let first = ray.len();
+        ray.extend(out.drain(start..));
+        let mut runs = self.native_shaders.ray_runs.borrow_mut();
+        runs.push(first..ray.len(), EntityKind::Entity);
+    }
+
+    /// The cull decision of an entity `sight` sees, `decide` while the camera does. One the
+    /// camera doesn't draw, out of its view or hidden, goes to the entity layer within its reach.
+    pub(super) fn sighted_decision(
+        &self,
+        sight: Sight,
+        decide: impl FnOnce() -> EntityCullDecision,
+    ) -> EntityCullDecision {
+        if !sight.camera {
+            return EntityCullDecision::Rays;
+        }
+        match decide() {
+            EntityCullDecision::Hidden if sight.rays => EntityCullDecision::Rays,
+            decision => decision,
+        }
+    }
+
+    /// `finish_entity_occlusion` for a model of the entity layer's kinds (`lit_entity`): one it
+    /// takes alone moves there, and so does one occlusion hides within its reach.
+    pub(super) fn finish_lit_entity<T: RenderEntityBounds>(
+        &self,
+        decision: EntityCullDecision,
+        entity: &T,
+        vertices: &mut Vec<Vertex>,
+        start: usize,
+    ) {
+        if decision.rays_only() {
+            return self.ray_only(vertices, start);
+        }
+        self.culled_for_rays(|| self.finish_entity_occlusion(decision, entity, vertices, start));
     }
 
     pub(super) fn cull_entity_camera_bounds(&self, lo: glam::Vec3, hi: glam::Vec3) -> bool {
@@ -450,24 +539,36 @@ pub(super) fn cull_box(mob: &horizon_client::mobs::Mob, alpha: f64) -> (glam::DV
 impl Game<'_> {
     /// EntityRenderer.shouldRender: the entity within `range` blocks of the
     /// camera, measured from its current `position`, and its culling box
-    /// (`lo`..`hi`, interpolated, in world space) grown by 0.5 in the view.
-    pub(super) fn entity_in_view(
+    /// (`lo`..`hi`, interpolated, in world space) grown by 0.5 in the view;
+    /// and whether the ray scene's entity layer reaches that box (`sight`).
+    /// `None` when neither sees it.
+    pub(super) fn entity_sight(
         &self,
         camera: glam::DVec3,
         position: glam::DVec3,
         range: f64,
         lo: glam::DVec3,
         hi: glam::DVec3,
-    ) -> bool {
+    ) -> Option<Sight> {
         if (position - camera).length_squared() >= range * range {
-            return false;
+            return None;
         }
-        self.view_frustum.as_ref().is_none_or(|view| {
-            view.intersects(
-                (lo - camera - glam::DVec3::splat(0.5)).as_vec3(),
-                (hi - camera + glam::DVec3::splat(0.5)).as_vec3(),
-            )
-        })
+        self.sight(
+            (lo - camera - glam::DVec3::splat(0.5)).as_vec3(),
+            (hi - camera + glam::DVec3::splat(0.5)).as_vec3(),
+        )
+    }
+
+    /// Who sees the camera-relative box `lo..hi`: the view's frustum, and the entity layer's
+    /// reach while it is on. `None` when neither does.
+    pub(super) fn sight(&self, lo: glam::Vec3, hi: glam::Vec3) -> Option<Sight> {
+        let camera = self
+            .view_frustum
+            .as_ref()
+            .is_none_or(|v| v.intersects(lo, hi));
+        let reach = self.native_shaders.ray_reach.as_ref();
+        let rays = reach.is_some_and(|r| r.intersects(lo, hi));
+        (camera || rays).then_some(Sight { camera, rays })
     }
 }
 
@@ -477,7 +578,7 @@ pub(super) fn at(p: horizon_core::geometry::Vec3) -> glam::DVec3 {
 }
 
 impl Game<'_> {
-    /// `entity_in_view` for an entity whose box stands on its position,
+    /// `entity_sight`'s camera for an entity whose box stands on its position,
     /// `width` wide and `height` tall, interpolated by `alpha` and grown by
     /// `grow` (a renderer's getBoundingBoxForCulling).
     #[allow(clippy::too_many_arguments)]
@@ -492,11 +593,31 @@ impl Game<'_> {
         range: f64,
         grow: f64,
     ) -> bool {
+        let sight = self.standing_entity_sight(
+            camera, previous, position, alpha, width, height, range, grow,
+        );
+        sight.is_some_and(|s| s.camera)
+    }
+
+    /// `standing_entity_in_view`, and whether the ray scene's entity layer reaches the entity
+    /// (`entity_sight`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn standing_entity_sight(
+        &self,
+        camera: glam::DVec3,
+        previous: glam::DVec3,
+        position: glam::DVec3,
+        alpha: f64,
+        width: f64,
+        height: f64,
+        range: f64,
+        grow: f64,
+    ) -> Option<Sight> {
         let p = previous.lerp(position, alpha);
         let half = glam::DVec3::new(width / 2.0 + grow, grow, width / 2.0 + grow);
         let lo = p - half;
         let hi = p + glam::DVec3::new(half.x, height + grow, half.z);
-        self.entity_in_view(camera, position, range, lo, hi)
+        self.entity_sight(camera, position, range, lo, hi)
     }
 }
 
@@ -689,3 +810,7 @@ mod orb_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ray_only_tests.rs"]
+mod ray_only_tests;

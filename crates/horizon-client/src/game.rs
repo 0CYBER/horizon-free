@@ -6541,7 +6541,7 @@ impl Game<'_> {
         self.maps.slots.next_frame();
         // LevelExtractor.extract: the transient blocks queued since the last frame.
         self.drain_transient_block_queue();
-        self.prepare_entity_culling();
+        self.prepare_entity_culling(camera);
         self.prepare_occlusion_culling(camera);
         self.prepare_trims();
         self.begin_skinning();
@@ -9750,7 +9750,7 @@ impl Game<'_> {
                 } else {
                     horizon_client::debug_overlay::GPU_TIMING_GAP
                 });
-                renderer.take_entity_runs(self.native_shaders.entity_runs.get_mut());
+                self.native_shaders.hand_over(renderer);
                 horizon_client::spans::time("renderer", || renderer.render(&frame))
             }
             None => Err("renderer".into()),

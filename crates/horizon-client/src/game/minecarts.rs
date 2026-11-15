@@ -2684,6 +2684,10 @@ impl Game<'_> {
             };
             // LevelExtractor.isEntityVisible: the cart the player rides always draws.
             let mut shown = None;
+            let mut sight = super::entity_culling::Sight {
+                camera: true,
+                rays: false,
+            };
             if self.riding != Some(c.id) {
                 let d = glam::DVec3::new(c.position.x, c.position.y, c.position.z) - camera;
                 if d.length_squared() >= range * range {
@@ -2694,19 +2698,18 @@ impl Game<'_> {
                 // EntityRenderer.shouldRender: the interpolated box grown by 0.5;
                 // AbstractMinecartRenderer.getBoundingBoxForCulling stretches it
                 // up by the display block's offset.
-                if let Some(view) = &self.view_frustum {
-                    let top = HEIGHT
-                        + if shown.flatten().is_none() {
-                            0.0
-                        } else {
-                            display_offset(c) * 0.75 / 16.0
-                        };
-                    let p = glam::DVec3::new(x, y, z) - camera;
-                    let lo = p - glam::DVec3::new(WIDTH / 2.0 + 0.5, 0.5, WIDTH / 2.0 + 0.5);
-                    let hi = p + glam::DVec3::new(WIDTH / 2.0 + 0.5, top + 0.5, WIDTH / 2.0 + 0.5);
-                    if !view.intersects(lo.as_vec3(), hi.as_vec3()) {
-                        continue;
-                    }
+                let top = HEIGHT
+                    + if shown.flatten().is_none() {
+                        0.0
+                    } else {
+                        display_offset(c) * 0.75 / 16.0
+                    };
+                let p = glam::DVec3::new(x, y, z) - camera;
+                let lo = p - glam::DVec3::new(WIDTH / 2.0 + 0.5, 0.5, WIDTH / 2.0 + 0.5);
+                let hi = p + glam::DVec3::new(WIDTH / 2.0 + 0.5, top + 0.5, WIDTH / 2.0 + 0.5);
+                match self.sight(lo.as_vec3(), hi.as_vec3()) {
+                    Some(seen) => sight = seen,
+                    None => continue,
                 }
             }
             let mut yaw =
@@ -2732,10 +2735,12 @@ impl Game<'_> {
             let render_position = Vec3::new(x + offset.x, y + offset.y, z + offset.z);
             let has_display = shown.as_ref().is_some_and(Option::is_some)
                 || (shown.is_none() && self.display_state(c).is_some());
-            let culling = self.entity_cull_decision_in_bounds(
-                c,
-                cart_render_bounds(render_position, display_offset(c), has_display),
-            );
+            let culling = self.sighted_decision(sight, || {
+                self.entity_cull_decision_in_bounds(
+                    c,
+                    cart_render_bounds(render_position, display_offset(c), has_display),
+                )
+            });
             if culling.hides_entity() {
                 continue;
             }
@@ -2817,7 +2822,7 @@ impl Game<'_> {
             let m = base * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
             let poses = Poses::new(model);
             horizon_client::mobs::render::draw(model, m, &poses, uv, 0xFFFF_FFFF, packed, 0, out);
-            self.finish_entity_occlusion(culling, c, out, entity_start);
+            self.finish_lit_entity(culling, c, out, entity_start);
         }
     }
     /// The model of a block drawn by its block-entity renderer, as a chest

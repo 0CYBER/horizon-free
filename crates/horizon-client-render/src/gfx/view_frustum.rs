@@ -8,6 +8,15 @@ pub struct Frustum {
     pub(super) planes: [Vec4; 6],
 }
 impl Frustum {
+    /// The camera-relative box `min..max` as six planes, each facing in.
+    pub fn boxed(min: Vec3, max: Vec3) -> Self {
+        let axis = |i: usize| Vec3::AXES[i].extend(0.0);
+        let planes = std::array::from_fn(|i| match i % 2 {
+            0 => axis(i / 2) + Vec4::W * -min[i / 2],
+            _ => -axis(i / 2) + Vec4::W * max[i / 2],
+        });
+        Self { planes }
+    }
     /// Whether the camera-relative box `min..max` is at least partly inside.
     pub fn intersects(&self, min: Vec3, max: Vec3) -> bool {
         !self.planes.iter().any(|p| {

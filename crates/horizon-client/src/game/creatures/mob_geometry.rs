@@ -81,20 +81,24 @@ impl Game<'_> {
             }
             let beam = horizon_client::mobs::guardian::beam(mob, alpha as f32);
             // EntityRenderer.shouldRender: the renderer's interpolated culling box,
-            // grown by 0.5 (GuardianRenderer also draws while its beam is out).
-            if let Some(view) = &self.view_frustum
-                && beam.is_none()
-            {
+            // grown by 0.5 (GuardianRenderer also draws while its beam is out). One only the
+            // ray scene's entity layer reaches is its alone (`ray_only`), with no outline.
+            let mut sight = super::super::entity_culling::Sight {
+                camera: true,
+                rays: false,
+            };
+            if beam.is_none() {
                 let (lo, hi) = super::super::entity_culling::cull_box(mob, alpha);
                 let (lo, hi) = (
                     (lo - camera - glam::DVec3::splat(0.5)).as_vec3(),
                     (hi - camera + glam::DVec3::splat(0.5)).as_vec3(),
                 );
-                if !view.intersects(lo, hi) {
-                    continue;
+                match self.sight(lo, hi) {
+                    Some(seen) => sight = seen,
+                    None => continue,
                 }
             }
-            let outline = self.mob_outline(mob);
+            let outline = self.mob_outline(mob).filter(|_| sight.camera);
             // Entity.DATA_SHARED_FLAGS_ID invisible (the flag the invisibility
             // effect sets): only the name tag draws (and the outline of a
             // glowing mob, LivingEntityRenderer.getRenderType). A player keeps
@@ -115,6 +119,7 @@ impl Game<'_> {
                 continue;
             }
             let culling = if PRECHECK
+                && sight.camera
                 && outline.is_none()
                 && !is_player
                 && mob.kind.id.starts_with("minecraft:")
@@ -134,13 +139,16 @@ impl Game<'_> {
             } else {
                 EntityCullDecision::CheckVertices
             };
+            let culling = self.sighted_decision(sight, || culling);
             if culling.hides_entity() {
                 continue;
             }
             let entity_start = out.len();
             self.mark_motion(entity_start, (1 << 32) | u64::from(mob.id));
             self.mark_entity(entity_start, &mob.kind.id);
-            self.rendered_mobs.set(self.rendered_mobs.get() + 1);
+            if !culling.rays_only() {
+                self.rendered_mobs.set(self.rendered_mobs.get() + 1);
+            }
             // `EntityRenderer.getPackedLightCoords`: the block the mob's light
             // probe (its eye) is in, at the position this frame draws rather
             // than this tick's.
@@ -193,8 +201,10 @@ impl Game<'_> {
                         continue;
                     }
                 }
-                if outline.is_none() {
-                    self.cull_entity_vertices(out, entity_start);
+                if culling.rays_only() {
+                    self.ray_only(out, entity_start);
+                } else if outline.is_none() {
+                    self.culled_for_rays(|| self.cull_entity_vertices(out, entity_start));
                 }
                 self.lit_entity(entity_start..out.len());
                 continue;
@@ -343,9 +353,13 @@ impl Game<'_> {
             }
             // Glowing outlines and a guardian's beam remain visible independently
             // of whether the body is hidden behind terrain.
+            if culling.rays_only() {
+                self.ray_only(out, entity_start);
+                continue;
+            }
             if outline.is_none() && culling.checks_vertices() && beam.is_none() {
                 // What the GPU draws of the mob counts by its bounds' corners.
-                self.cull_skinned(out, entity_start, skinned);
+                self.culled_for_rays(|| self.cull_skinned(out, entity_start, skinned));
             }
             // The mob with what it holds and wears, once nothing more can drop it. Its beam,
             // next, is no surface of it: Horizon's to draw.

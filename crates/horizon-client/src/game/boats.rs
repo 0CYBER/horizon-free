@@ -1945,12 +1945,12 @@ impl Game<'_> {
             }
             // EntityRenderer.shouldRender.
             let (previous, position) = (at(b.previous), at(b.position));
-            if !self.standing_entity_in_view(
+            let Some(sight) = self.standing_entity_sight(
                 camera, previous, position, alpha, WIDTH, HEIGHT, range, 0.0,
-            ) {
+            ) else {
                 continue;
-            }
-            let culling = self.entity_cull_decision(b, alpha);
+            };
+            let culling = self.sighted_decision(sight, || self.entity_cull_decision(b, alpha));
             if culling.hides_entity() {
                 continue;
             }
@@ -2057,7 +2057,7 @@ impl Game<'_> {
                     out,
                 );
             }
-            self.finish_entity_occlusion(culling, b, out, entity_start);
+            self.finish_lit_entity(culling, b, out, entity_start);
         }
     }
 }

@@ -250,12 +250,28 @@ impl Game<'_> {
         data: &TextDisplayData,
         view_scale: f64,
     ) -> bool {
+        (self.display_sight(camera, origin, data, view_scale)).is_some_and(|s| s.camera)
+    }
+
+    /// `display_in_view`, and whether the ray scene's entity layer reaches the display
+    /// (`entity_sight`).
+    fn display_sight(
+        &self,
+        camera: glam::DVec3,
+        origin: glam::DVec3,
+        data: &TextDisplayData,
+        view_scale: f64,
+    ) -> Option<super::entity_culling::Sight> {
         let range = f64::from(data.view_range) * 64.0 * view_scale;
         if text_display::no_culling(data.width, data.height) {
-            return (origin - camera).length_squared() < range * range;
+            let near = (origin - camera).length_squared() < range * range;
+            return near.then_some(super::entity_culling::Sight {
+                camera: true,
+                rays: false,
+            });
         }
         let (lo, hi) = text_display::culling_box(origin, data.width, data.height);
-        self.entity_in_view(camera, origin, range, lo, hi)
+        self.entity_sight(camera, origin, range, lo, hi)
     }
 
     /// `DisplayRenderer.BlockDisplayRenderer` and `ItemDisplayRenderer`: the
@@ -281,9 +297,11 @@ impl Game<'_> {
                 display.last_progress = display.progress(partial as f32);
                 let d = display.shown.blend(&display.from, display.last_progress);
                 let position = display.previous.lerp(display.position, partial);
-                if !self.display_in_view(camera, position, &d, scale) {
+                // An item display out of view has nothing of the ray scene's entity layer.
+                let sight = self.display_sight(camera, position, &d, scale);
+                let Some(seen) = sight.filter(|s| s.camera || display.block.is_some()) else {
                     continue;
-                }
+                };
                 let rotation = std::array::from_fn(|i| {
                     display.old_rotation[i]
                         + angle(display.rotation[i] - display.old_rotation[i]) * partial as f32
@@ -312,7 +330,11 @@ impl Game<'_> {
                             ((((light & 0xFF) / 16) << 4) | (((light >> 8) & 0xFF) / 16)) as u8;
                         self.special_block_model(state, matrix, packed, out);
                     }
-                    self.lit_entity(start..out.len());
+                    if seen.camera {
+                        self.lit_entity(start..out.len());
+                    } else {
+                        self.ray_only(out, start);
+                    }
                 } else if let Some(stack) = &display.item {
                     let context = match display.item_display {
                         1 => DisplayContext::ThirdPersonLeftHand,

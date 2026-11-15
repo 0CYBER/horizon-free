@@ -296,6 +296,9 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
   temporal passes. `horizon-shader check` takes it; the game refuses a pack with `[motion]` until it draws the guide.
   A pack without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
+- 2026-11-14: API 0.2 (experimental): `RAY_ENTITY` also holds the entities within the scene's reach that the camera
+  doesn't draw (behind or beside it, or hidden behind terrain), so they cast traced shadows and show in reflections,
+  and turning the camera doesn't change the layer. Block entities out of view are not in it yet.
 - 2026-11-14: API 0.2 (additions, experimental): under `[ray_tracing]` the scene holds the entities the camera draws in
   a third layer, only for a pack whose files name its constant, `RAY_ENTITY` (outside a comment; dead code counts).
   Such a pack's `trace_layers` and `trace_any_layers` take it, its `RayHit` gains `entity`, and on an entity hit

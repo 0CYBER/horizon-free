@@ -1,6 +1,7 @@
 //! Stable entity material grouping with renderer-owned, reusable CPU scratch.
 use super::Vertex;
 use super::native_entity::EntityRuns;
+use super::surface_setup::ray_query::ray_scene::GEOMETRIES;
 use horizon_shader_api::stages::RAY_ENTITY_QUAD;
 
 /// Entity materials by a quad's overlay (`Vertex::layer`), in draw order:
@@ -125,15 +126,46 @@ pub(super) struct EntityBatch {
     /// For a native pack's `[entity]` stage (`native_entity.rs`) and the ray scene's entity
     /// layer: the runs of the next `update`'s entities that they take.
     pub(super) kinds: EntityRuns,
-    /// The ordinary quads and the improved transparency ones in `combined`, as (first quad,
-    /// quads): the entity layer's two geometries (gfx/ray_scene.rs).
-    pub(super) ray_ranges: [(u32, u32); 2],
+    /// The ordinary quads, the improved transparency ones and the ray-only ones in `combined`,
+    /// as (first quad, quads): the entity layer's geometries (gfx/ray_scene.rs).
+    pub(super) ray_ranges: [(u32, u32); GEOMETRIES],
+    /// The entities the camera doesn't draw within the ray scene's reach, which the game moved
+    /// out of the stream (`Renderer::take_ray_only`), and their runs: what `ray_only_quads`
+    /// takes of them.
+    pub(super) ray_only: Vec<Vertex>,
+    pub(super) ray_kinds: EntityRuns,
+    /// The last `update`'s `oit`.
+    oit: bool,
 }
 
 impl EntityBatch {
-    /// After `update`: quads only a native pack's shadow pass draws, at the buffer's end.
+    /// After `update`: the ray-only quads, then the quads only a native pack's shadow pass draws,
+    /// at the buffer's end (it draws them from there).
     pub(super) fn append_shadow_only(&mut self, shadow_only: &[Vertex]) {
+        self.append_ray_only();
         self.combined.extend_from_slice(shadow_only);
+    }
+
+    /// Appends the quads of `ray_only` the entity layer takes, marked as `tag_kinds` marks the
+    /// stream's: those in a run, of the ordinary material or improved transparency's. No pass
+    /// draws them: they lie past every material, the hand and the see-through quads, and before
+    /// the shadow-only ones, which the native shadow pass counts back to from the end.
+    fn append_ray_only(&mut self) {
+        let first = self.combined.len() / 4;
+        let quads = self.ray_only.as_chunks::<4>().0;
+        let bits = self.ray_kinds.bits((0..quads.len() as u32).map(|q| q * 4));
+        for (quad, bits) in quads.iter().zip(bits) {
+            if bits != 0 && matches!(material(quad[0].layer, self.oit), 0 | 9) {
+                let layer = |v: &Vertex| v.layer | bits | RAY_ENTITY_QUAD;
+                self.combined.extend(quad.iter().map(|v| Vertex {
+                    layer: layer(v),
+                    ..*v
+                }));
+            }
+        }
+        self.ray_ranges[2] = (first as u32, (self.combined.len() / 4 - first) as u32);
+        self.ray_only.clear();
+        self.ray_kinds.clear();
     }
 
     pub(super) fn update(
@@ -227,8 +259,10 @@ impl EntityBatch {
         self.combined.extend_from_slice(hand);
         self.combined.extend_from_slice(see_through);
         let oit_first: usize = counts[..9].iter().sum();
-        self.ray_ranges = [(0, counts[0]), (oit_first, counts[9])]
+        let end = self.combined.len() / 4;
+        self.ray_ranges = [(0, counts[0]), (oit_first, counts[9]), (end, 0)]
             .map(|(first, quads)| (first as u32, quads as u32));
+        self.oit = oit;
         self.tag_kinds(oit_first);
         counts.map(|count| count as u32)
     }

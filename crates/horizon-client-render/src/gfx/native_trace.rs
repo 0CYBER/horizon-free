@@ -49,7 +49,7 @@ impl<'a> TraceShape<'a> {
 /// What a stage built against the scene reads besides the TLAS and the store.
 pub(in crate::gfx) struct Rays {
     /// The prelude's `horizon_ray_space`: the camera in the scene's space, `split`, the
-    /// scene's counts of solid and of terrain instances, and the entity layer's two bases.
+    /// scene's counts of solid and of terrain instances, and the entity layer's three bases.
     space: wgpu::Buffer,
     /// The prelude's `horizon_ray_layers`.
     layers: wgpu::Buffer,
@@ -290,7 +290,7 @@ fn with_scene<T>(
     let rays = Rays {
         space: device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Native shader pack ray space"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }),
@@ -370,21 +370,13 @@ impl Rays {
     }
 }
 
-/// `horizon_RaySpace`'s eight words for `scene`, its sprite arrays holding `split` layers each.
-pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 8] {
+/// `horizon_RaySpace`'s twelve words for `scene`, its sprite arrays holding `split` layers each:
+/// the entity layer's bases start at word 8, where WGSL aligns a `vec3<u32>`.
+pub(in crate::gfx) fn space_words(split: u32, scene: &Traced<'_>) -> [u32; 12] {
     let [x, y, z] = scene.camera.map(f32::to_bits);
-    let bases = scene.entities.as_ref().map_or([0; 2], |e| e.bases);
+    let [a, b, c] = scene.entities.as_ref().map_or([0; 3], |e| e.bases);
     let instances = [scene.solid_instances, scene.translucent_instances];
-    [
-        x,
-        y,
-        z,
-        split,
-        instances[0],
-        instances[1],
-        bases[0],
-        bases[1],
-    ]
+    [x, y, z, split, instances[0], instances[1], 0, 0, a, b, c, 0]
 }
 
 impl NativePost {

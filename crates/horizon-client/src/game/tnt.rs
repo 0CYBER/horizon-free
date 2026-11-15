@@ -678,7 +678,7 @@ impl Game<'_> {
                 continue;
             }
             // EntityRenderer.shouldRender.
-            if !self.standing_entity_in_view(
+            let Some(sight) = self.standing_entity_sight(
                 camera,
                 super::entity_culling::at(t.previous),
                 super::entity_culling::at(t.position),
@@ -687,10 +687,11 @@ impl Game<'_> {
                 PrimedTnt::SIZE,
                 range,
                 0.0,
-            ) {
+            ) else {
                 continue;
-            }
-            self.mark_motion(out.len(), Self::MOTION_OBJECT | u64::from(t.id));
+            };
+            let start = out.len();
+            self.mark_motion(start, Self::MOTION_OBJECT | u64::from(t.id));
             let fuse = t.fuse as f32 - alpha as f32 + 1.0;
             let scale = if fuse < 10.0 {
                 let g = (1.0 - fuse / 10.0).clamp(0.0, 1.0);
@@ -759,6 +760,9 @@ impl Game<'_> {
                         glint_uv: [0.0, 0.0],
                     });
                 }
+            }
+            if !sight.camera {
+                self.ray_only(out, start);
             }
         }
     }

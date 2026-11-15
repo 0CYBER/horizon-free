@@ -134,11 +134,11 @@ fn ray_tracing() -> String {
          terrain, with cut-outs (leaves, plants) and lava; and what the translucent pass draws: water, glass, stained\n  \
          glass, ice, slime and honey blocks, any block whose texture has partly see-through texels.\n\
          - `const RAY_ENTITY: u32`: a third layer, only in a pack whose files name it, anywhere outside a comment (dead\n  \
-         code too): the entities the camera draws, which are mobs, players, armour stands, item frames, vehicles,\n  \
-         projectiles, falling blocks, block displays and the block entities drawn with them (a chest while it opens). Such\n  \
-         a pack's `RayHit` also has `entity`. Not in it: particles, text, the hand, the camera's own body in first person,\n  \
-         translucent items, additive glows, beams and portals, entities the camera doesn't draw (behind it, hidden), and\n  \
-         block entities at rest (a closed chest). `trace` and `trace_any` never read it.\n\
+         code too): the entities within the scene's reach, in view or not (behind the camera, hidden), which are mobs,\n  \
+         players, armour stands, item frames, vehicles, projectiles, falling blocks, block displays, and the block entities\n  \
+         the camera draws with them (a chest while it opens). Such a pack's `RayHit` also has `entity`. Not in it:\n  \
+         particles, text, the hand, the camera's own body in first person, translucent items, additive glows, beams and\n  \
+         portals, block entities at rest (a closed chest) and out of view. `trace` and `trace_any` never read it.\n\
          - `fn trace_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> RayHit` and\n  \
          `fn trace_any_layers(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32, layers: u32) -> bool`: `trace`\n  \
          and `trace_any` over the layers `layers` names; `trace(o, d, m)` is `trace_layers(o, d, m, RAY_SOLID)`. With no\n  \

@@ -458,10 +458,10 @@ impl Game<'_> {
             let (lo, hi) = p.bounds();
             let (lo, hi) = (glam::DVec3::from(lo), glam::DVec3::from(hi));
             let range = default_range(hi - lo, self.view_scale());
-            if !self.entity_in_view(camera, (lo + hi) / 2.0, range, lo, hi) {
+            let Some(sight) = self.entity_sight(camera, (lo + hi) / 2.0, range, lo, hi) else {
                 continue;
-            }
-            let culling = self.entity_cull_decision(p, 1.0);
+            };
+            let culling = self.sighted_decision(sight, || self.entity_cull_decision(p, 1.0));
             if culling.hides_entity() {
                 continue;
             }
@@ -593,7 +593,7 @@ impl Game<'_> {
                 strip,
                 0.6,
             );
-            self.finish_entity_occlusion(culling, p, out, entity_start);
+            self.finish_lit_entity(culling, p, out, entity_start);
         }
     }
 }
