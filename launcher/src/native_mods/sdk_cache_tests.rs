@@ -154,7 +154,7 @@ fn a_signed_index_is_read_kept_and_used_offline() {
     let fixture = Fixture::new();
     let sdk = fixture.sdk(&[]).unwrap();
     assert_eq!(sdk.commit(), COMMIT);
-    assert_eq!(sdk.shown(), "nightly-2026-11-13 (0123456)");
+    assert_eq!(sdk.shown(), "nightly-2026-11-13");
     assert!(fixture.kept().join(COMMIT).join(INDEX).is_file());
     // With nothing at the base any more, the kept index serves.
     fs::remove_dir_all(fixture.scratch.path().join("base")).unwrap();
@@ -223,7 +223,7 @@ fn an_index_is_refused_by_name_when_its_signature_or_contents_do_not_hold() {
     assert_eq!(
         read().unwrap_err(),
         Refusal::OlderRust {
-            build: "nightly-2026-11-13 (0123456)".into(),
+            build: "nightly-2026-11-13".into(),
             rust: "1.0.0".into()
         }
     );
@@ -494,4 +494,35 @@ fn sizes_and_builds_read_plainly() {
     assert_eq!(shown(COMMIT, None), "0123456");
     // A pin from a mod's manifest is cut only where a character ends.
     assert_eq!(shown("ééééé", None), "ééééé");
+}
+
+#[test]
+fn a_refusal_offers_the_way_on_its_text_promises() {
+    let build = || "nightly-2026-11-13".to_owned();
+    let way = |refusal: Refusal| way_on(&format!("{refusal}"));
+    assert_eq!(
+        way(Refusal::NoSdk { build: build() }),
+        Some(WayOn::OtherBuild)
+    );
+    assert_eq!(
+        way(Refusal::OlderRust {
+            build: build(),
+            rust: "1.80.0".into()
+        }),
+        Some(WayOn::OtherBuild)
+    );
+    assert_eq!(
+        way(Refusal::Unsigned {
+            build: build(),
+            why: "checksum mismatch".into()
+        }),
+        Some(WayOn::Report)
+    );
+    assert_eq!(
+        way(Refusal::Offline {
+            build: build(),
+            bytes: None
+        }),
+        None
+    );
 }

@@ -63,6 +63,40 @@ pub enum Refusal {
     Cache(String),
 }
 
+/// What a player can do about a refusal other than waiting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WayOn {
+    /// Play another game build (instance settings, Installation).
+    OtherBuild,
+    /// The problem is Horizon's: report it.
+    Report,
+}
+
+/// The way on a refusal's `text` offers, found from the sentences it was written with (a build
+/// reaches the player as text only).
+pub fn way_on(text: &str) -> Option<WayOn> {
+    let said = |refusal: Refusal| {
+        let probe = refusal.to_string();
+        probe.split('\0').all(|piece| text.contains(piece))
+    };
+    let mark = || "\0".to_owned();
+    if said(Refusal::NoSdk { build: mark() })
+        || said(Refusal::OlderRust {
+            build: mark(),
+            rust: mark(),
+        })
+    {
+        Some(WayOn::OtherBuild)
+    } else if said(Refusal::Unsigned {
+        build: mark(),
+        why: mark(),
+    }) {
+        Some(WayOn::Report)
+    } else {
+        None
+    }
+}
+
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
@@ -114,14 +148,12 @@ fn megabytes(bytes: u64) -> String {
     )
 }
 
-/// A build as people read it: `nightly-2026-11-13 (afe471c)`, or its short commit.
+/// A build as people read it: its Nightly name (`nightly-2026-11-13`), or its short commit when
+/// it has none.
 pub fn shown(commit: &str, nightly: Option<&str>) -> String {
     // A commit may come from a mod's manifest: cut only where a character ends.
     let short = commit.get(..7).unwrap_or(commit);
-    match nightly {
-        Some(nightly) => format!("{nightly} ({short})"),
-        None => short.to_owned(),
-    }
+    nightly.unwrap_or(short).to_owned()
 }
 
 /// Build `commit` as people read it, with its Nightly name when its index is kept. `commit` may

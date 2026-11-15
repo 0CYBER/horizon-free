@@ -468,6 +468,7 @@ impl Launcher {
                                     .filter(|id| mine && !self.stop_names(id))
                                     .map(|id| self.switch_off_button(id, cx)),
                             )
+                            .children(self.refusal_button(e, cx))
                             .child(
                                 button("native-show-log", tr("Show log"), Kind::Ghost, &t)
                                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -500,6 +501,30 @@ impl Launcher {
             ))));
         }
         card
+    }
+
+    /// The button for the way on a refused build offers: another game build, or a report.
+    fn refusal_button(&self, error: &str, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let t = self.theme;
+        Some(match native_mods::sdk_cache::way_on(error)? {
+            native_mods::sdk_cache::WayOn::OtherBuild => {
+                let instance = self.selected_instance()?.clone();
+                button(
+                    "native-change-version",
+                    tr("Change version"),
+                    Kind::Secondary,
+                    &t,
+                )
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.open_instance_sheet(instance.clone(), glass_sheet::SheetTab::Installation);
+                    cx.notify();
+                }))
+            }
+            native_mods::sdk_cache::WayOn::Report => {
+                button("native-report", tr("Report"), Kind::Secondary, &t)
+                    .on_click(|_, _, cx| cx.open_url(&backend::issues_url()))
+            }
+        })
     }
 
     /// The button that switches a mod that stopped the build off, as its row's menu does.
