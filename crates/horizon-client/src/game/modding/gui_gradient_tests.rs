@@ -1,7 +1,8 @@
 #![cfg(test)]
 //! `DrawContext::fill_gradient` and `GuiDraw::FillGradient` through the game's generated
 //! dispatch: both draw with the engine's `HudBatch::fill_gradient` in vanilla's colour order,
-//! inside the hook call's clip, and an empty, reversed or non-finite rectangle draws nothing.
+//! inside the hook call's clip. Zero area, one-axis inversion and non-finite input draw nothing;
+//! both axes inverted swaps the visual top and bottom colours.
 use horizon_client::hud::HudBatch;
 use horizon_client::hud_layout::abgr;
 use horizon_client::text::{Style, Text};

@@ -44,10 +44,11 @@ pub trait DrawContext {
         unimplemented!("DrawContext::fill")
     }
     /// `GuiGraphics.fillGradient`: rectangle `rect` (`[x, y, w, h]` in GUI pixels, as
-    /// [`fill`](Self::fill) takes it) blending from ARGB `top` along its top edge to `bottom`
-    /// along its bottom edge, vanilla's colour order. It follows the current pose and clip
-    /// ([`push_clip`](Self::push_clip)) as `fill` does. An empty or reversed rectangle
-    /// (`w <= 0` or `h <= 0`), or one with a non-finite coordinate, draws nothing.
+    /// [`fill`](Self::fill) takes it) blending from ARGB `top` at `y` to `bottom` at `y + h`.
+    /// It follows the current pose and clip ([`push_clip`](Self::push_clip)) as `fill` does.
+    /// Zero area, inversion on exactly one axis, or a non-finite coordinate draws nothing.
+    /// With both `w` and `h` negative, bounds are sorted and colours flipped, keeping
+    /// `top` at `y`, now the lower edge.
     fn fill_gradient(&mut self, rect: [f32; 4], top: u32, bottom: u32) {
         unimplemented!("DrawContext::fill_gradient")
     }

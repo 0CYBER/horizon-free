@@ -16,8 +16,8 @@ impl Game<'_> {
         horizon_client::hud_layout::paint(batch, &self.gui.atlas, draws);
     }
     /// `GuiGraphics.fillGradient` for [`mod_api::DrawContext::fill_gradient`]: `rect` is
-    /// `[x, y, w, h]` and `top` / `bottom` are ARGB. An empty, reversed or non-finite rectangle
-    /// draws nothing.
+    /// `[x, y, w, h]` and `top` / `bottom` are ARGB at `y` / `y + h`. Zero area,
+    /// one-axis inversion or non-finite input draws nothing; both axes inverted flips the colours.
     pub(super) fn native_fill_gradient(
         &self,
         batch: &mut HudBatch,

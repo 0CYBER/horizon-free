@@ -1,6 +1,6 @@
-//! `GuiDraw::FillGradient` through [`paint`]: vanilla's colour order (top colour on the top
-//! edge), alpha kept per corner, the current pose and clip applied, and an empty or reversed
-//! rectangle drawing nothing.
+//! `GuiDraw::FillGradient` through [`paint`]: colours tied to their input y edges, alpha
+//! kept per corner, and the current pose and clip applied. Zero area and one-axis inversion
+//! draw nothing; both axes inverted swaps the visual top and bottom colours.
 use super::{GuiDraw, PoseOp, abgr, paint};
 use crate::hud::{HudAtlas, HudBatch};
 

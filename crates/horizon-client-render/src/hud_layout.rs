@@ -57,10 +57,10 @@ pub enum GuiDraw {
         y1: i32,
         color: u32,
     },
-    /// `fillGradient(x0, y0, x1, y1, top, bottom)`: ARGB `top` along the top edge (`y0`)
-    /// blending to `bottom` along the bottom edge (`y1`), in the current pose and clip.
-    /// Unlike `Fill` the corners are not sorted: an empty or reversed rectangle
-    /// (`x1 <= x0` or `y1 <= y0`) draws nothing.
+    /// `fillGradient(x0, y0, x1, y1, top, bottom)`: ARGB `top` along the `y0` edge
+    /// blending to `bottom` along the `y1` edge, in the current pose and clip.
+    /// Zero area or inversion on exactly one axis draws nothing. With both axes inverted,
+    /// bounds are sorted and colours flipped: `top` stays on `y0`, now the lower edge.
     FillGradient {
         x0: i32,
         y0: i32,
