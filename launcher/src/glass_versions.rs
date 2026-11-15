@@ -380,7 +380,8 @@ impl Launcher {
                 _ => trf("Used by {names}", &[("names", &players.join(", "))]),
             });
         } else if installed {
-            add(tr("installed").to_string());
+            // The Installed badge says it is here; the line says nothing plays it yet.
+            add(tr("No instance plays it").to_string());
         }
         if let Some(n) = on_disk(&tag.to_string()) {
             add(trf("{size} on disk", &[("size", &megabytes(n))]));
