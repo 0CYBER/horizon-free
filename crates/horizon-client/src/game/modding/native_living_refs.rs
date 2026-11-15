@@ -2598,12 +2598,15 @@ mod tests {
             *game.world.random = horizon_core::random::LegacyRandom::new(12345);
             let item = ItemStack::new("minecraft:apple", 1);
             game.inventory[game.selected] = Some(item.clone());
-            game.drop_held(true);
+            let (_, seeds) = horizon_client::random_source::record_seeds(|| game.drop_held(true));
             let key_velocity = game.dropped.last().unwrap().velocity;
             *game.world.random = horizon_core::random::LegacyRandom::new(12345);
             crate::game::native_entity_refs::tests::bind_local_player(game, 42, 123);
             let player = game.living(game.entity(42).unwrap()).unwrap();
-            let id = game.living_drop(player, item, false, true).unwrap().id();
+            let id = horizon_client::random_source::replay_seeds(seeds.clone(), || {
+                game.living_drop(player, item, false, true).unwrap().id()
+            });
+            assert!(seeds.complete(), "both drop routes allocate the same random streams");
             let mod_velocity = game
                 .dropped
                 .iter()
