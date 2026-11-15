@@ -126,6 +126,10 @@ impl Hub {
 
     pub(super) fn begin_payload_poll(&mut self) -> Vec<HostEvent> {
         let mut events = std::mem::take(&mut self.pending_kicks);
+        // Departed physical connections no longer own a receiving turn or its credit.
+        self.deferred_payloads.retain(|conn, _| {
+            conn.is_none_or(|conn| self.guests.iter().any(|guest| guest.conn == conn))
+        });
         for held in self.deferred_payloads.values_mut() {
             if let Some(delivery) = held.delivery.take() {
                 held.retrying = true;
