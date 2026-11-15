@@ -103,3 +103,6 @@ fn a_pig_landing_fully_on_honey_takes_a_fifth_of_the_fall() {
     assert_eq!(supporting, Some([8, 99, 8]));
     assert_eq!(health, 10.0);
 }
+
+#[path = "mob_friction_tests.rs"]
+mod mob_friction_tests;

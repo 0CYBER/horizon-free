@@ -1350,8 +1350,9 @@ impl Mob {
     pub(super) fn block_on_legacy(&self, w: &MobWorld) -> [i32; 3] {
         self.supported_on_pos(w, self.supporting, 0.2)
     }
-    /// `Entity.getOnPos(offset)` with a supporting block: its column (its
-    /// own position for fences, walls and gates up to half a block down).
+    /// `Entity.getOnPos(offset)` with a supporting block: its column, or the
+    /// supporting block itself for a wall or a fence gate at any offset and
+    /// for a fence up to half a block down.
     fn supported_on_pos(
         &self,
         w: &MobWorld,
@@ -1365,21 +1366,18 @@ impl Mob {
             return p;
         }
         let name = &w.facts.get(w.world.block(p[0], p[1], p[2])).name;
-        let tall = [
-            "minecraft:fences",
-            "minecraft:walls",
-            "minecraft:fence_gates",
-        ]
-        .iter()
-        .any(|t| w.has_tag(t, name));
-        if offset <= 0.5 && tall {
-            p
-        } else {
+        // (!(offset <= 0.5) || !FENCES) && !WALLS && !(FenceGateBlock)
+        let below = !w.has_tag("minecraft:walls", name)
+            && !w.has_tag("minecraft:fence_gates", name)
+            && (offset > 0.5 || !w.has_tag("minecraft:fences", name));
+        if below {
             [
                 p[0],
                 (self.position.y - f64::from(offset)).floor() as i32,
                 p[2],
             ]
+        } else {
+            p
         }
     }
     /// Entity.getOnPos(offset) without a supporting block record.
@@ -1757,11 +1755,33 @@ impl Mob {
         );
     }
     fn block_friction(&self, w: &MobWorld) -> f32 {
-        // Entity.getBlockPosBelowThatAffectsMyMovement: 0.500001 below.
-        let x = self.position.x.floor() as i32;
-        let z = self.position.z.floor() as i32;
-        let y = (self.position.y - 0.500_001).floor() as i32;
+        // Entity.getBlockPosBelowThatAffectsMyMovement: `Entity.getOnPos(0.500001F)`,
+        // which is the supporting block's column, not the mob's own.
+        let [x, y, z] = self.supported_on_pos(
+            w,
+            self.supporting,
+            horizon_world::movement_support::MOVEMENT_SUPPORT_OFFSET,
+        );
         w.facts.get(w.world.block(x, y, z)).friction
+    }
+    /// `getAttributeValue(Attributes.FRICTION_MODIFIER)`: the mob's own
+    /// attribute map (`/attribute`, and the body archetype modifiers a sulfur
+    /// cube carries there), else the body archetype's factor, else the
+    /// type's 1. The map sanitizes to the attribute's 0..2048 range.
+    fn friction_modifier(&self) -> f32 {
+        let archetype = super::sulfur_cube::physics(self).map(|a| a.friction_modifier);
+        let Some(map) = self.extra.armor_attributes.as_deref() else {
+            return archetype.unwrap_or(1.0);
+        };
+        let Some(instance) = map
+            .catalog()
+            .id("minecraft:friction_modifier")
+            .and_then(|key| map.instance(key))
+        else {
+            return archetype.unwrap_or(1.0);
+        };
+        let mut instance = instance.clone();
+        instance.value() as f32
     }
     /// `getAttributeValue(BOUNCINESS)`.
     fn entity_bounciness(&self) -> f64 {
@@ -1796,8 +1816,7 @@ impl Mob {
     fn travel_in_air(&mut self, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) {
         let friction = if self.on_ground {
             // FRICTION_MODIFIER scales the block's slipperiness.
-            let modifier = super::sulfur_cube::physics(self)
-                .map_or(1.0, |a| a.friction_modifier.clamp(0.0, 2048.0));
+            let modifier = self.friction_modifier();
             Self::modified_friction(self.block_friction(w), modifier)
         } else {
             1.0
@@ -2369,6 +2388,9 @@ impl RestitutionWorld for MobRestitution<'_> {
 #[cfg(test)]
 #[path = "living_climbable_tests.rs"]
 mod climbable_tests;
+#[cfg(test)]
+#[path = "ice_friction_tests.rs"]
+mod ice_friction_tests;
 #[cfg(test)]
 #[path = "name_tag_nbt_tests.rs"]
 mod name_tag_nbt_tests;

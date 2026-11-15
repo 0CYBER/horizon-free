@@ -1430,7 +1430,11 @@ impl Game<'_> {
         if let Target::Mob(id) = t
             && (matches!(
                 attribute,
-                "minecraft:armor" | "minecraft:armor_toughness" | "minecraft:max_absorption"
+                "minecraft:armor"
+                    | "minecraft:armor_toughness"
+                    | "minecraft:max_absorption"
+                    // `LivingEntity.travelInAir` reads it every tick.
+                    | "minecraft:friction_modifier"
             ) || self.sulfur_archetype_attribute(t, attribute))
         {
             let mob = self.mobs.iter_mut().find(|m| m.id == id)?;
