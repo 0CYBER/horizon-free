@@ -465,18 +465,22 @@ mod tests {
         let mut cut = batch();
         cut.fill_gradient(&atlas, (10.0, 10.0, 20.0, 8.0), top, bottom);
         cut.clip_since(0, 0.0, 12.0, 100.0, 16.0);
-        let top_cut = crate::hud_kit::shapes::mix_colour(top, bottom, 0.25);
-        let bottom_cut = crate::hud_kit::shapes::mix_colour(top, bottom, 0.75);
-        let colours: Vec<_> = cut.vertices.iter().map(|v| v.color).collect();
+        let top_cut = rgba(191, 0, 64, 255);
+        let bottom_cut = rgba(64, 0, 191, 255);
         assert!(
-            colours.contains(&top_cut),
-            "missing interpolated top colour {top_cut:#x}: {colours:?}"
+            cut.vertices
+                .iter()
+                .all(|v| v.pos[1] == 12.0 || v.pos[1] == 16.0)
         );
+        let top_vertices: Vec<_> = cut.vertices.iter().filter(|v| v.pos[1] == 12.0).collect();
+        let bottom_vertices: Vec<_> = cut.vertices.iter().filter(|v| v.pos[1] == 16.0).collect();
+        assert!(!top_vertices.is_empty(), "clip has no top edge vertices");
         assert!(
-            colours.contains(&bottom_cut),
-            "missing interpolated bottom colour {bottom_cut:#x}: {colours:?}"
+            !bottom_vertices.is_empty(),
+            "clip has no bottom edge vertices"
         );
-        assert_ne!(top_cut, bottom_cut);
+        assert!(top_vertices.iter().all(|v| v.color == top_cut));
+        assert!(bottom_vertices.iter().all(|v| v.color == bottom_cut));
     }
 
     #[test]
