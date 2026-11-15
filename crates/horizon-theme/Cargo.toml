@@ -3,7 +3,7 @@ name = "horizon-theme"
 version = "0.1.0"
 edition = "2021"
 rust-version.workspace = true
-license = "MIT"
+license = "LGPL-3.0-or-later"
 description = "Horizon's design tokens, fonts and icons, shared by the launcher, the website and the game's menus"
 
 [dependencies]

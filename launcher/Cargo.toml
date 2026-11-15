@@ -2,7 +2,7 @@
 name = "horizon-launcher"
 version = "0.2.0"
 edition = "2021"
-license = "MIT"
+license = "LGPL-3.0-or-later"
 description = "Downloads, prepares and starts Horizon builds"
 
 [workspace]
