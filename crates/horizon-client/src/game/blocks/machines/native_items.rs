@@ -72,12 +72,20 @@ impl Game<'_> {
             let (pos, index) = source.locate(slot).ok_or(())?;
             game.journal_block_entity_slot(pos, index);
             // Reserve the offered item before writable insertion notices can re-enter.
-            let mut reserved = game.take_one(source, slot).ok_or(())?;
+            let reserved = game.take_one(source, slot).ok_or(())?;
             let went = part.insert_any(game, tx, &resource, 1);
             let accepted = part.checked(went, 1, &at) == Some(1);
             if !accepted {
-                reserved.count = snapshot.count();
-                *game.slot_mut_at(source, slot).ok_or(())? = Some(reserved);
+                match game.slot_mut_at(source, slot).ok_or(())? {
+                    Some(held) if held.same_item_same_components(&reserved) => {
+                        held.count = held.count.checked_add(1).ok_or(())?;
+                    }
+                    empty @ None => *empty = Some(reserved),
+                    // A writable notice replaced the slot. Only aborting can restore the
+                    // reserved item without deleting that replacement; this exceptional
+                    // refusal rolls back the notice's storage writes with the attempt.
+                    Some(_) => return Err(()),
+                }
             }
             Ok::<_, ()>(accepted)
         })

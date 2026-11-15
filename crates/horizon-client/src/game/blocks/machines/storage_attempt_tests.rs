@@ -234,6 +234,7 @@ impl BlockPart for Probe {
                             )
                             .unwrap(),
                         );
+                        assert_eq!(sink.extract(host, tx, 0, &stick, 1), 1);
                         assert_eq!(source.insert(host, tx, 0, &stick, 1), 1);
                     }
                     Ok::<_, ()>(())
@@ -1166,9 +1167,16 @@ fn dropper_reserves_source_across_writable_insertion_notices() {
                 hopper(game, slots);
                 storage(game, BELOW, vec![None; 2]);
                 place(game, (11, 63, 8), "minecraft:chest");
-                game.world
-                    .block_entities
-                    .insert((11, 63, 8), BlockEntity::Chest(vec![None; 27]));
+                game.world.block_entities.insert(
+                    (11, 63, 8),
+                    BlockEntity::Chest({
+                        let mut slots = vec![None; 27];
+                        if replacement {
+                            slots[0] = Some(ItemStack::new("minecraft:stick", 1));
+                        }
+                        slots
+                    }),
+                );
                 {
                     let mut rules = probe.rules.lock().unwrap();
                     rules.accept = Some("minecraft:diamond");
@@ -1188,6 +1196,55 @@ fn dropper_reserves_source_across_writable_insertion_notices() {
                     );
                 }
             }
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn refused_dropper_replacement_rolls_back_without_losing_either_item() {
+    fixture(
+        "game::machines::native_items::storage_attempt_tests::refused_dropper_replacement_rolls_back_without_losing_either_item",
+        |game, _, probe| {
+            place(game, HOPPER, "minecraft:dropper");
+            let state = game.world.block(8, 64, 8);
+            let state = game.with_props(state, &[("facing", "down")]).unwrap();
+            game.world.set(8, 64, 8, state).unwrap();
+            let mut slots = vec![None; 9];
+            slots[0] = Some(ItemStack::new("minecraft:diamond", 1));
+            hopper(game, slots);
+            storage(game, BELOW, vec![None; 2]);
+            place(game, (11, 63, 8), "minecraft:chest");
+            let mut slots = vec![None; 27];
+            slots[0] = Some(ItemStack::new("minecraft:stick", 1));
+            game.world
+                .block_entities
+                .insert((11, 63, 8), BlockEntity::Chest(slots));
+            {
+                let mut rules = probe.rules.lock().unwrap();
+                rules.notify = true;
+                rules.move_source_on_notice = true;
+                rules.replace_source_on_notice = true;
+            }
+            game.dispense_from(BlockPos::new(8, 64, 8), state).unwrap();
+            assert_eq!(count(game, HOPPER, 0), 1);
+            assert_eq!(count(game, BELOW, 0), 0);
+            assert_eq!(count(game, (11, 63, 8), 0), 1);
+            let source = game.containers().view(HOPPER, false).unwrap();
+            let replacement = game.containers().view((11, 63, 8), false).unwrap();
+            assert_eq!(
+                game.containers().get(&source, 0).unwrap().item.as_ref(),
+                "minecraft:diamond"
+            );
+            assert_eq!(
+                game.containers()
+                    .get(&replacement, 0)
+                    .unwrap()
+                    .item
+                    .as_ref(),
+                "minecraft:stick"
+            );
+            assert!(trace(&probe).iter().any(|entry| entry == "abort"));
         },
     );
 }
