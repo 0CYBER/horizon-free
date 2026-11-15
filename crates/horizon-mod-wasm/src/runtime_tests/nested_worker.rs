@@ -20,7 +20,7 @@ fn contended_nested_worker_refuses_without_stopping_either_group() {
         let (release, released) = std::sync::mpsc::channel();
         let target_thread = target.clone();
         let holder = std::thread::spawn(move || {
-            crate::test_stack::on_guest_stack(|| {
+            crate::test_stack::on_guest_stack(move || {
                 let mut random = Random(|| {
                     // The real host import has installed target's loan and still owns
                     // its group mutex before source can attempt its nested Worker.
@@ -43,7 +43,7 @@ fn contended_nested_worker_refuses_without_stopping_either_group() {
         let target_thread = target.clone();
         let source_thread = source.clone();
         let contender = std::thread::spawn(move || {
-            crate::test_stack::on_guest_stack(|| {
+            crate::test_stack::on_guest_stack(move || {
                 let mut random = Random(|| {
                     // Source's actual import now owns a different group's loan.
                     // Worker dispatch must refuse rather than retain it while waiting
