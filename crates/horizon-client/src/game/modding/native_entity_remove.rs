@@ -140,6 +140,7 @@ impl Game<'_> {
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             m.removed = true;
         }
+        self.native_entity_left(id);
     }
     /// What a killed mob's effects do on removal (Oozing's slimes, Weaving's cobwebs, Wind
     /// Charged's burst).
@@ -253,7 +254,7 @@ impl Game<'_> {
 mod tests {
     use crate::game::api_values::{StackReadError, TryIntoApi, test_snapshot};
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn destroying_a_cart_spills_all_slots_after_the_removal_flush() {
         use super::super::{
             minecarts::{CartKind, Minecart},
@@ -289,7 +290,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn selectors_stop_matching_a_discarded_entity_before_the_sweep() {
         use super::super::{commands::OtherEntity, native_entity_refs::tests::with_game};
         use horizon_core::geometry::Vec3;
@@ -323,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn removal_dismounts_and_tells_mods_once_at_the_call() {
         use super::super::{boats::Boat, native_entity_refs::tests::with_game};
         use horizon_client::mobs::Mob;
@@ -386,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn discard_other_clears_nbt_and_saved_entity() {
         use super::super::{commands::OtherEntity, native_entity_refs::tests::with_game};
         use horizon_client::{chunk::Chunk, save::SaveDir};
@@ -442,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn discard_mob_and_refuse_players_and_stale_handles() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::{mobs::Mob, motion::PlayerMotion};
@@ -469,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn spawn_at_location_drops_an_item_above_the_entity() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::{items::ItemStack, mobs::Mob};
@@ -522,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn spawn_at_location_offsets_hanging_entities_out_from_the_wall() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::entities::{ItemFrame, Painting};
@@ -584,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn kill_command_forgets_other_entity_data() {
         use super::super::{commands::OtherEntity, native_entity_refs::tests::with_game};
         use horizon_core::geometry::Vec3;

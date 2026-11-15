@@ -318,12 +318,23 @@ struct EffectsMemo {
     answer: EffectsLayout,
 }
 
+/// One frame's `screen_room` answer and the screen it was taken for: the
+/// layout's inputs ask it more than once a frame, the hook once.
+#[derive(Clone, Copy, PartialEq)]
+struct RoomMemo {
+    frame: u64,
+    screen: Screen,
+    room: f32,
+}
+
 /// The open screen's build and what it was made from.
 #[derive(Default)]
 pub(super) struct ScreenBuildState {
     current: Option<ScreenBuild>,
     /// The frame's effects answer, while this frame asked for one.
     effects: std::cell::Cell<Option<EffectsMemo>>,
+    /// The frame's `screen_room` answer, while this frame asked for one.
+    room: std::cell::Cell<Option<RoomMemo>>,
     #[cfg(test)]
     builds: u32,
 }
@@ -361,6 +372,23 @@ impl ScreenBuildState {
             screen,
             space,
             answer,
+        }));
+    }
+
+    /// The room the mods asked this frame for `screen`, if they were asked.
+    pub(super) fn room_answer(&self, frame: u64, screen: Screen) -> Option<f32> {
+        self.room
+            .get()
+            .filter(|memo| memo.frame == frame && memo.screen == screen)
+            .map(|memo| memo.room)
+    }
+
+    /// Keeps this frame's room for the layout's other inputs in the same frame.
+    pub(super) fn keep_room_answer(&self, frame: u64, screen: Screen, room: f32) {
+        self.room.set(Some(RoomMemo {
+            frame,
+            screen,
+            room,
         }));
     }
 
@@ -695,7 +723,7 @@ mod tests {
     /// `ChatScreen.init` and `InBedChatScreen.init` worked by hand for the
     /// test's 1280x720 window.
     #[test]
-    #[ignore = "needs prepared resources and isolated homes"]
+    #[ignore = "daily"]
     fn the_chat_box_is_resized_by_the_build_not_the_draw() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             use horizon_client::chat::{ChatAbilities, ChatScreen, ChatVisibility, Commands};
@@ -736,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and isolated homes"]
+    #[ignore = "daily"]
     fn production_screen_build_geometry() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.screen = Screen::Inventory;
@@ -1178,7 +1206,7 @@ mod tests {
     /// then `observe_screen`): the effects hook still fires once, and the next
     /// frame fires it again. A mod's once-per-frame side effect stays once.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_effects_answer_is_taken_once_a_frame() {
         use mod_api::{ClientHost, Hooks, ModEntry, ScreenRenderInventoryMobEffectsEvent};
         use std::sync::{
@@ -1239,5 +1267,153 @@ mod tests {
                 assert_eq!(calls.load(Ordering::Relaxed), 2, "and only once");
             });
         });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn a_mods_room_moves_the_window_and_is_asked_once_a_frame() {
+        use horizon_client::hud::HudBatch;
+        use mod_api::{ClientHost, Hooks, ModEntry, ScreenRoomEvent};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        struct Panel {
+            calls: Arc<AtomicUsize>,
+            width: Arc<AtomicUsize>,
+        }
+        #[mod_api::__subscriptions]
+        impl Hooks for Panel {
+            fn screen_room(&self, _: &dyn ClientHost, event: &mut ScreenRoomEvent<'_>) {
+                // The query sees the unreserved window, not the prior frame's shifted one.
+                assert_eq!(event.screen.rect[0], 125.0);
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                event.right = event.right.max(self.width.load(Ordering::Relaxed) as f32);
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let width = Arc::new(AtomicUsize::new(149));
+        let mods: mod_api::Mods = vec![
+            ModEntry::new(
+                "small_panel",
+                Box::new(Panel {
+                    calls: calls.clone(),
+                    width: Arc::new(AtomicUsize::new(80)),
+                }),
+            ),
+            ModEntry::new(
+                "large_panel",
+                Box::new(Panel {
+                    calls: calls.clone(),
+                    width: width.clone(),
+                }),
+            ),
+        ]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                game.screen = Screen::Inventory;
+                game.container = None;
+                game.craft_size = 2;
+                game.level.recipe_book.open.fill(false);
+                game.settings.gui_scale = 3;
+                game.frames = 11;
+                game.build_screen();
+                let batch = HudBatch::new([1280, 720], game.settings.gui_scale_inputs());
+                assert_eq!(game.inventory_origin(&batch), (51.0, 37.0));
+                assert_eq!(
+                    game.screen_view(&batch, Screen::Inventory).rect,
+                    [51.0, 37.0, 176.0, 166.0]
+                );
+                let slot = game
+                    .built_container(&batch)
+                    .unwrap()
+                    .slots
+                    .iter()
+                    .find(|(id, _)| *id == 0)
+                    .unwrap()
+                    .1;
+                assert_eq!(slot, [58.0, 178.0, 18.0, 18.0]);
+                assert_eq!(game.slot_at(&batch, 59.0, 179.0), Some(0));
+                assert_eq!(game.slot_at(&batch, 133.0, 179.0), Some(4));
+                let builds = game.screen_state.build.builds;
+                assert_eq!(calls.load(Ordering::Relaxed), 2);
+                game.build_screen();
+                assert_eq!(calls.load(Ordering::Relaxed), 2);
+                assert_eq!(game.screen_state.build.builds, builds);
+                game.frames += 1;
+                game.build_screen();
+                assert_eq!(calls.load(Ordering::Relaxed), 4);
+                assert_eq!(game.screen_state.build.builds, builds);
+                width.store(100, Ordering::Relaxed);
+                game.frames += 1;
+                game.build_screen();
+                assert_eq!(game.inventory_origin(&batch), (75.0, 37.0));
+                assert_eq!(game.screen_state.build.builds, builds + 1);
+                assert_eq!(game.slot_at(&batch, 83.0, 179.0), Some(0));
+                assert_eq!(
+                    game.screen_view(&batch, Screen::Inventory).rect,
+                    [75.0, 37.0, 176.0, 166.0]
+                );
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn room_preserves_vanilla_thresholds_without_listeners_and_on_fit_refusal() {
+        use horizon_client::{hud::HudBatch, recipe_book::BookType};
+        use mod_api::{ClientHost, Hooks, ModEntry, ScreenRoomEvent};
+        struct Oversized;
+        #[mod_api::__subscriptions]
+        impl Hooks for Oversized {
+            fn screen_room(&self, _: &dyn ClientHost, event: &mut ScreenRoomEvent<'_>) {
+                event.right = event.right.max(1000.0);
+            }
+        }
+        // Both branches use the real game geometry and slots, not room_shift as an oracle.
+        for refuses in [false, true] {
+            let mods: mod_api::Mods = if refuses {
+                vec![ModEntry::new("oversized", Box::new(Oversized))].into()
+            } else {
+                Vec::<ModEntry>::new().into()
+            };
+            mod_platform::testing::with_mods(mods, || {
+                crate::game::native_entity_refs::tests::with_client_game(|game| {
+                    game.screen = Screen::Inventory;
+                    game.container = None;
+                    game.craft_size = 2;
+                    game.settings.gui_scale = 1;
+                    for (width, closed_x, open_x, book_x) in [
+                        (378, 101.0, 101.0, 115.0),
+                        (379, 101.0, 178.0, 30.0),
+                        (380, 102.0, 179.0, 30.0),
+                    ] {
+                        for open in [false, true] {
+                            game.frames += 1;
+                            game.level.recipe_book.open[BookType::Crafting.index()] = open;
+                            let batch =
+                                HudBatch::new([width, 240], game.settings.gui_scale_inputs());
+                            let layout = game.container_layout(&batch);
+                            let x = if open { open_x } else { closed_x };
+                            assert_eq!(layout.origin, (x, 37.0));
+                            assert_eq!(layout.book, open.then_some([book_x, 37.0, 147.0, 166.0]));
+                            assert_eq!(
+                                layout.slots.iter().find(|(id, _)| *id == 0).unwrap().1,
+                                [x + 7.0, 178.0, 18.0, 18.0]
+                            );
+                            assert_eq!(
+                                game.screen_view(&batch, Screen::Inventory).rect,
+                                [x, 37.0, 176.0, 166.0]
+                            );
+                            assert_eq!(
+                                game.slot_at(&batch, x + 8.0, 179.0),
+                                if open && width == 378 { None } else { Some(0) }
+                            );
+                        }
+                    }
+                });
+            });
+        }
     }
 }

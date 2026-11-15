@@ -5,6 +5,13 @@ name: fn-replace-check
 # a mod with registry dependencies, and the refusals by name. So a change that breaks native mods
 # fails here and not on a player's machine (#1102). Build and link only: no game runs and no vanilla
 # data is read. Checked by the daily run and by dispatch, never on pull requests or main pushes.
+# The launcher takes its SDK from an SDK release folder and checks its signature, so the check gets one: the
+# daily run's own SDK (its `sdk-leg-*` artifacts), gathered and indexed as sdk-publish.yml does and signed with a
+# throwaway key made for this run, whose public half the launcher trusts through HORIZON_SDK_TRUSTED_KEY. Only a
+# launcher built with debug_assertions reads that variable (horizon_release_sign::sdk_keys_for), so the launcher
+# here is built that way, and no release key enters this workflow. A commit whose sdk-<commit> is already released
+# (the daily run's sdk job then built nothing) is checked against that release, which needs no key; a hand dispatch
+# of anything else builds the server SDK itself.
 on:
   # The daily run (daily.yml) calls it with the commit to check; root dispatches it on a branch that changes
   # what it builds.
@@ -110,45 +117,102 @@ jobs:
       - name: Cap build parallelism to the runner
         run: python3 tools/ci/cargo_jobs.py --job-mib 3072 --cap
       # The SDK is built with the launcher's Rust: a mod's code is compiled against its metadata.
-      - name: Server SDK, warnings denied
+      - name: Where the SDK comes from
+        id: sdk
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT_INPUT: ${{ inputs.commit }}
+        run: |
+          # `published`: sdk-<commit> is released (the daily run's sdk job built nothing). `legs`: the daily run's own
+          # sdk-leg-* artifacts. `build`: a hand dispatch builds the server SDK here.
+          if gh release view "sdk-$(git rev-parse HEAD)" > /dev/null 2>&1; then source=published
+          elif [ -n "$COMMIT_INPUT" ]; then source=legs
+          else source=build; fi
+          echo "source=$source" | tee -a "$GITHUB_OUTPUT"
+      - name: Server SDK, warnings denied (hand dispatch)
+        if: steps.sdk.outputs.source == 'build'
         # Release with ThinLTO as published, but 16 codegen units instead of 1: the same features,
         # flags, exports and link, built in parallel. A fault only one unit's inlining shows first
         # appears at the prebuilt-game publish.
         env:
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
-        run: python3 tools/prebuilt_game.py build "$FNR_SCRATCH/prebuilt" --server
-      - name: Build the launcher
-        run: cargo build --release --locked --manifest-path launcher/Cargo.toml
+        run: |
+          python3 tools/prebuilt_game.py build "$FNR_SCRATCH/prebuilt" --server
+          python3 tools/prebuilt_game.py pack "$FNR_SCRATCH/prebuilt" "$FNR_SCRATCH/legs/sdk-leg-server"
+      # The daily run's SDK: the Linux legs only, the ones this check reads (sdk-publish.yml gathers every leg).
+      - uses: actions/download-artifact@v4
+        if: steps.sdk.outputs.source == 'legs'
+        with:
+          pattern: sdk-leg-linux*
+          path: ${{ env.FNR_SCRATCH }}/legs
+      - name: The API source's wasm32 check
+        if: steps.sdk.outputs.source != 'published'
+        run: rustup target add wasm32-unknown-unknown
+      # As sdk-publish.yml's index job: one build data and surface across the legs, the API source, sdk.json.
+      - name: Assemble the SDK release folder
+        if: steps.sdk.outputs.source != 'published'
+        run: |
+          commit=$(git rev-parse HEAD)
+          dist="$FNR_SCRATCH/dist"
+          python3 tools/prebuilt_game.py gather "$FNR_SCRATCH/legs" "$dist"
+          python3 tools/sdk_api_source.py build "$FNR_SCRATCH/api-source"
+          python3 tools/sdk_api_source.py archive "$FNR_SCRATCH/api-source" "$dist/api-source.tar.xz"
+          python3 tools/prebuilt_game.py index "$dist"
+          # A throwaway key made for this run: no release key is ever set here. Its public half goes to the launcher.
+          EPHEMERAL=yes bash tools/ci/sign_release.sh "sdk-$commit" "$dist"/*
+          key=$(cat "$dist/ephemeral.pub")
+          rm "$dist/ephemeral.pub"
+          mkdir -p "$FNR_SCRATCH/sdk-base"
+          mv "$dist" "$FNR_SCRATCH/sdk-base/sdk-$commit"
+          echo "HORIZON_SDK_TRUSTED_KEY=$key" >> "$GITHUB_ENV"
+      # Already released and signed with the release key, which every launcher trusts: no key needed.
+      - name: The published SDK release
+        if: steps.sdk.outputs.source == 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          commit=$(git rev-parse HEAD)
+          gh release download "sdk-$commit" --dir "$FNR_SCRATCH/sdk-base/sdk-$commit"
+      # The launcher trusts the run's key only if it is built with debug_assertions; the optimized build keeps
+      # everything else of the release profile. Built in a folder of its own, so the runner's normal release
+      # artifacts stay valid for other jobs. A release-profile build ignores the variable: the test says so.
+      - name: A release build does not trust the run's key
+        run: cargo test --release --locked -p horizon-release-sign sdk_key_variable_is_honoured_only_with_debug_assertions
+      - name: Build the launcher (debug assertions on)
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: true
+        run: |
+          target="${CARGO_TARGET_DIR:-launcher/target}/launcher-debug-assertions"
+          cargo build --release --locked --manifest-path launcher/Cargo.toml --target-dir "$target"
+          echo "LAUNCHER=$(realpath "$target/release/horizon-launcher")" >> "$GITHUB_ENV"
       - name: Function replacement check (build and link)
         run: |
-          launcher="${CARGO_TARGET_DIR:-launcher/target}/release/horizon-launcher"
           # api_only has no [native] row; beside alpha the mixed set still takes the engine route.
           FNR_ROUTE=prebuilt FNR_MODS="alpha beta one ten fdshape support registry lower loop loop_second api_only" \
-            tools/ci/fn_replace_check.sh "$launcher" "$FNR_SCRATCH/prebuilt" "$FNR_SCRATCH/check" 2>&1 \
+            tools/ci/fn_replace_check.sh "$LAUNCHER" "$FNR_SCRATCH/sdk-base" "$FNR_SCRATCH/check" 2>&1 \
             | tee "$FNR_SCRATCH/fnr-check.log"
           grep -E 'Function replacement:|: [0-9]+ ms$|^Mods compiled against the prebuilt game in |^Runner load:' \
             "$FNR_SCRATCH/fnr-check.log" >> "$GITHUB_STEP_SUMMARY"
       - name: An API-only set takes the API route (build and link)
         run: |
-          launcher="${CARGO_TARGET_DIR:-launcher/target}/release/horizon-launcher"
           FNR_KEEP=1 FNR_ROUTE=prebuilt-api FNR_MODS="api_only" tools/ci/fn_replace_check.sh \
-            "$launcher" "$FNR_SCRATCH/prebuilt" "$FNR_SCRATCH/check"
+            "$LAUNCHER" "$FNR_SCRATCH/sdk-base" "$FNR_SCRATCH/check"
       # It also builds horizon-mixins from source, where the runs before it download the prebuilt tool.
       # On its own: with no mod filling the loop, a mixin on the loop's function is compiled for the
       # empty slot. Beside the `loop` mod it would be compiled for that mod's slots instead.
       - name: A mixin on a published loop's function, no slot filled (build and link)
         run: |
-          launcher="${CARGO_TARGET_DIR:-launcher/target}/release/horizon-launcher"
           FNR_KEEP=1 FNR_MIXINS_FROM_SOURCE=1 FNR_MODS="loop_generic_head" tools/ci/fn_replace_check.sh \
-            "$launcher" "$FNR_SCRATCH/prebuilt" "$FNR_SCRATCH/check"
+            "$LAUNCHER" "$FNR_SCRATCH/sdk-base" "$FNR_SCRATCH/check"
       - name: Refusals by name
         run: |
-          launcher="${CARGO_TARGET_DIR:-launcher/target}/release/horizon-launcher"
           # Each set, then every code it must be refused with.
           while read -r set codes; do
             set=${set//+/ }
             log="$FNR_SCRATCH/refusal-${set// /_}.log"
-            if FNR_KEEP=1 FNR_MODS="$set" tools/ci/fn_replace_check.sh "$launcher" "$FNR_SCRATCH/prebuilt" \
+            if FNR_KEEP=1 FNR_MODS="$set" tools/ci/fn_replace_check.sh "$LAUNCHER" "$FNR_SCRATCH/sdk-base" \
               "$FNR_SCRATCH/check" > "$log" 2>&1; then
               echo "$set built, and it must be refused"
               exit 1

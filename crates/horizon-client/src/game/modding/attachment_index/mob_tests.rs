@@ -38,7 +38,7 @@ fn mob(uuid: [i32; 4]) -> Tag {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_mob_binding_survives_store_back_and_retires_at_sweep() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -90,7 +90,7 @@ fn saved_mob_binding_survives_store_back_and_retires_at_sweep() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_mob_binding_tracks_serialized_transfer_and_parked_levels() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -143,7 +143,7 @@ fn saved_mob_binding_tracks_serialized_transfer_and_parked_levels() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_mob_binding_rebinds_retained_id_with_a_new_generation() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -186,7 +186,7 @@ fn saved_mob_binding_rebinds_retained_id_with_a_new_generation() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mob_first_store_binds_and_nested_rollback_retires_authority() {
     use mod_api::{AttachmentError, HostTransaction};
     with_game(|game| {
@@ -252,7 +252,7 @@ fn mob_first_store_binds_and_nested_rollback_retires_authority() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mob_taken_store_refuses_without_writing_and_missing_store_refuses() {
     use mod_api::AttachmentError;
     with_game(|game| {
@@ -290,7 +290,7 @@ fn mob_taken_store_refuses_without_writing_and_missing_store_refuses() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn tnt_with_real_lifetime_accepts_first_store() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -304,7 +304,7 @@ fn tnt_with_real_lifetime_accepts_first_store() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mob_inner_first_binding_commit_outer_abort_invalidates_retained_row() {
     use mod_api::{AttachmentError, HostTransaction};
     with_game(|game| {

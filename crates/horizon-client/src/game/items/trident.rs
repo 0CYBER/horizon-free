@@ -1765,7 +1765,7 @@ mod tests {
     /// A stack can reach its final durability point after use began. The release
     /// guard is independent of admission, and short charges still do nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn trident_release_rechecks_stack_durability_after_charge() {
         use crate::game::{Audio, Options, PlayerMotion, Progress, Settings, load_resources};
         use horizon_core::nbt::Tag;

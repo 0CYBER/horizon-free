@@ -3675,7 +3675,7 @@ mod tests {
     use crate::assets::Assets;
     use horizon_core::nbt::Tag;
     #[test]
-    #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn entity_block_particles_and_breaking_use_exported_models() -> Result<()> {
         use crate::{models::catalog::StateModels, sprites::Sprites};
         use {

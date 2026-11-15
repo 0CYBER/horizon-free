@@ -85,17 +85,16 @@ fn with_mods(mods: Vec<ModEntry>, test: impl FnOnce()) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_click_asks_the_part_for_each_slot_and_stack_it_consults_in_order() {
     with_mods(vec![ModEntry::new("rules", Box::new(Listener))], || {
         with_game(|game| {
             reset(None, false);
             let mut menu = chest(("minecraft:stone", 8));
-            // Eight stone into an empty slot: placement is asked (`Slot.mayPlace`), then the
-            // slot's capacity (`Slot.getMaxStackSize`), each for slot 0 and the cursor's stack.
+            // Placement and capacity share one rule answer for the same slot and stack.
             assert_eq!(pickup(game, &mut menu), (8, 0));
             let stone = |_| (0, "minecraft:stone".to_owned(), 8);
-            assert_eq!(asked(), [(); 2].map(stone));
+            assert_eq!(asked(), [stone(())]);
             // Taking the stack back asks once: `Slot.allowModification` is `mayPickup` and
             // `mayPlace` of the slot's own stack, eight stone in slot 0.
             reset(None, false);
@@ -107,7 +106,7 @@ fn a_click_asks_the_part_for_each_slot_and_stack_it_consults_in_order() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_answers_are_bounded_to_one_to_ninety_nine_and_the_items_limit() {
     with_mods(vec![ModEntry::new("rules", Box::new(Listener))], || {
         with_game(|game| {
@@ -123,7 +122,7 @@ fn the_answers_are_bounded_to_one_to_ninety_nine_and_the_items_limit() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_failing_listener_leaves_the_slots_own_answers_and_the_next_click_works() {
     with_mods(vec![ModEntry::new("rules", Box::new(Listener))], || {
         with_game(|game| {
@@ -146,7 +145,7 @@ fn a_failing_listener_leaves_the_slots_own_answers_and_the_next_click_works() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn without_a_part_nothing_is_asked_and_the_click_is_the_same() {
     // The same click with no mod installed, with a mod that has no part, and with a part on
     // another menu type: the final state is identical and the part is never asked.
@@ -179,7 +178,7 @@ fn without_a_part_nothing_is_asked_and_the_click_is_the_same() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_lan_hub_click_asks_the_same_questions_in_the_same_order() {
     use horizon_client::lan::menu::Slots;
     use horizon_protocol::packets::play::{ContainerClick, Serverbound};
@@ -232,16 +231,16 @@ fn a_lan_hub_click_asks_the_same_questions_in_the_same_order() {
             // The hub's click ran with the LAN host lifted out of the game, and is back. The
             // `Host` read meanwhile answered as if no LAN were open: the guest is not found.
             assert!(game.lan.is_some());
-            assert_eq!(SAW_GUEST.with(|saw| saw.borrow().clone()), [false, false]);
+            assert_eq!(SAW_GUEST.with(|saw| saw.borrow().clone()), [false]);
             assert!(game.player(12).is_some());
             // The local click of the same state asks the same, in the same order.
             reset(None, false);
             let mut menu = chest(("minecraft:stone", 8));
             assert_eq!(pickup(game, &mut menu), (8, 0));
             assert_eq!(lan, asked());
-            assert_eq!(lan.len(), 2);
+            assert_eq!(lan.len(), 1);
             // A click made with the game whole (the local route) reaches the guest.
-            assert_eq!(SAW_GUEST.with(|saw| saw.borrow().clone()), [true, true]);
+            assert_eq!(SAW_GUEST.with(|saw| saw.borrow().clone()), [true]);
             let placed = game.world.block_entities.get(&pos).unwrap().slots()[0]
                 .as_ref()
                 .map_or(0, |s| s.count);

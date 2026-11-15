@@ -128,7 +128,7 @@ fn quads(mesh: &SectionMesh) -> (usize, usize) {
 const BASE: i32 = MIN_Y + 4;
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn off_draws_every_fancy_leaf_face() {
     let f = fixture();
     let chunk = leaf_cube(&f, 6, 8, BASE, "minecraft:oak_leaves");
@@ -139,7 +139,7 @@ fn off_draws_every_fancy_leaf_face() {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn solid_draws_the_fully_enclosed_leaf_opaque() {
     let f = fixture();
     let chunk = leaf_cube(&f, 6, 8, BASE, "minecraft:oak_leaves");
@@ -159,7 +159,7 @@ fn solid_draws_the_fully_enclosed_leaf_opaque() {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn aggressive_solidifies_the_next_shell_layer_of_a_five_cube() {
     let f = fixture();
     let chunk = leaf_cube(&f, 5, 9, BASE, "minecraft:oak_leaves");
@@ -178,7 +178,7 @@ fn aggressive_solidifies_the_next_shell_layer_of_a_five_cube() {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn hollow_drops_only_the_faces_two_leaves_share() {
     let f = fixture();
     let chunk = leaf_cube(&f, 6, 8, BASE, "minecraft:oak_leaves");
@@ -188,7 +188,7 @@ fn hollow_drops_only_the_faces_two_leaves_share() {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn mixed_species_count_as_one_leaf_volume() {
     let f = fixture();
     let oak = state(&f, "minecraft:oak_leaves");
@@ -208,7 +208,7 @@ fn mixed_species_count_as_one_leaf_volume() {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn a_cavity_keeps_its_six_faces_and_its_rim_stays_cutout() {
     let f = fixture();
     let mut chunk = leaf_cube(&f, 5, 9, BASE, "minecraft:oak_leaves");
@@ -223,7 +223,7 @@ fn a_cavity_keeps_its_six_faces_and_its_rim_stays_cutout() {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn section_boundary_faces_stay_with_a_loaded_neighbour() {
     let f = fixture();
     let leaf = state(&f, "minecraft:oak_leaves");
@@ -250,7 +250,7 @@ fn section_boundary_faces_stay_with_a_loaded_neighbour() {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn the_top_of_a_one_section_column_stays_visible() {
     let f = fixture();
     let leaf = state(&f, "minecraft:oak_leaves");
@@ -275,7 +275,7 @@ fn the_top_of_a_one_section_column_stays_visible() {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn a_world_without_leaves_meshes_identically_in_every_mode() {
     let f = fixture();
     let mut chunk = Chunk::empty(0, 0);
@@ -307,7 +307,7 @@ fn a_world_without_leaves_meshes_identically_in_every_mode() {
 /// A state a mod hides is air to the mesher: its own faces vanish and the neighbour's face
 /// toward it shows, where a solid block covered it.
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn a_hidden_state_draws_nothing_and_shows_its_neighbours_face() {
     let f = fixture();
     let (stone, dirt) = (state(&f, "minecraft:stone"), state(&f, "minecraft:dirt"));

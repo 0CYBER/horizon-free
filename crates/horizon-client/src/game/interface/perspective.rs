@@ -1461,7 +1461,7 @@ impl Game<'_> {
 /// (-0.2, -1, 0), with the 0.6 light power and 0.4 ambient. `normal` is the
 /// face's outward normal in the preview's screen space (x right, y down, z
 /// towards the viewer), where a face that looks up has a negative y.
-fn entity_in_ui_shade(normal: glam::Vec3) -> f32 {
+pub(super) fn entity_in_ui_shade(normal: glam::Vec3) -> f32 {
     const LIGHT_0: glam::Vec3 = glam::Vec3::new(0.2, -1.0, 1.0);
     const LIGHT_1: glam::Vec3 = glam::Vec3::new(-0.2, -1.0, 0.0);
     let light = LIGHT_0.normalize().dot(normal).max(0.0) + LIGHT_1.normalize().dot(normal).max(0.0);
@@ -1928,7 +1928,7 @@ mod preview_tests {
     }
 
     #[test]
-    #[ignore = "requires prepared model data in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn player_render_transform_uses_vanilla_avatar_scale() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),

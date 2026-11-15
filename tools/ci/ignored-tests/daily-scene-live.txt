@@ -1,0 +1,8 @@
+# Living screen scenes (DrawContext::draw_scene) need the game's resources: a lit furnace, a cow, smoke.
+horizon-client game::native_scene_live_tests::a_fifth_animating_scene_draws_its_last_state_and_is_refused_by_name lib daily game-boot
+horizon-client game::native_scene_live_tests::a_furnaces_particles_replay_pause_step_and_start_over_from_the_last_twenty_ticks lib daily game-boot
+horizon-client game::native_scene_live_tests::a_scene_accepts_4096_blocks_and_refuses_4097_without_drawing_or_changing_state lib daily game-boot
+horizon-client game::native_scene_live_tests::a_scene_holds_at_most_512_live_particles_the_blocks_own_counted lib daily game-boot
+horizon-client game::native_scene_live_tests::a_scene_of_blocks_alone_keeps_no_state_and_reads_no_clock lib daily game-boot
+horizon-client game::native_scene_live_tests::scene_entities_are_drawn_and_refused_as_draw_context_entity_refuses_them lib daily game-boot
+horizon-client game::native_scene_live_tests::two_mods_scenes_of_the_same_id_keep_their_own_state lib daily game-boot

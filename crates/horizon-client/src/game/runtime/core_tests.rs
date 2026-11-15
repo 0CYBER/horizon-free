@@ -1,7 +1,7 @@
 //! Core gameplay regression tests.
 use mod_api::ServerHost;
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn reload_resolves_parts_against_reloaded_tags() {
     use mod_api::{self, BlockPart, DataPackFilesEvent, Hooks, Registrar};
     struct TagPart;
@@ -82,7 +82,7 @@ fn reload_resolves_parts_against_reloaded_tags() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn client_option_snapshots_follow_settings() {
     super::native_entity_refs::tests::with_client_game(|game| {
         game.settings.fov = 90.0;
@@ -117,7 +117,7 @@ fn client_option_snapshots_follow_settings() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn client_input_options_follow_settings() {
     super::native_entity_refs::tests::with_client_game(|game| {
         game.settings.sensitivity = 0.25;
@@ -174,7 +174,7 @@ use super::*;
 use horizon_client::container_screen::{Button, Clicks, Release, Target};
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn client_modifier_snapshot_tracks_focus_loss() {
     use mod_api::ClientHost;
     use winit::{event_loop::ControlFlow, keyboard::ModifiersState};
@@ -215,7 +215,7 @@ fn the_fluid_ray_passes_through_the_hollow_of_a_torch() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn right_click_block_controls_cauldron_use() {
     use mod_api::{self, BlockUpdateFlags, Flow, Hooks, RightClickBlockEvent, TriState};
     use std::sync::{
@@ -353,7 +353,7 @@ fn right_click_block_controls_cauldron_use() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn fence_ties_without_a_lead_only_on_main_hand() {
     use horizon_client::mobs::leash::Holder;
     use mod_api::BlockUpdateFlags;
@@ -1249,7 +1249,7 @@ fn eager_saves_keep_dirty_order_cooldowns_and_writer_budget() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn eager_saves_wait_for_an_open_world_and_for_light() {
     let mut resources = None;
     let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -1367,7 +1367,7 @@ mod wind_charge_burst_tests {
     /// The same at play: a charge 44 blocks above the Nether's top, but below the
     /// Overworld's, bursts where it is and is spent.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_nether_charge_bursts_above_the_nethers_top() {
         with_game(|game| {
             game.world.shape = LevelShape::NETHER;
@@ -1402,7 +1402,7 @@ mod wind_charge_burst_tests {
     /// so a mob it kills records `minecraft:wind_charge` (message id `mob`), not
     /// `minecraft:thrown`.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_wind_charge_kill_of_a_mob_deals_the_wind_charge_damage_type() {
         with_game(|game| {
             assert!(game.run_command(

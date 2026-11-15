@@ -128,7 +128,7 @@ fn stored(game: &mut Game<'_>, entity: BlockEntityRef) -> Option<i32> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn part_state_is_per_block_entity_through_ticks_transactions_and_replacement() {
     const NAME: &str = "game::block_entity_part_state_tests::part_state_is_per_block_entity_through_ticks_transactions_and_replacement";
     with_state_mod(NAME, |game| {
@@ -270,7 +270,7 @@ fn part_state_is_per_block_entity_through_ticks_transactions_and_replacement() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn part_state_saves_with_its_chunk_and_reloads_under_a_fresh_handle() {
     const NAME: &str = "game::block_entity_part_state_tests::part_state_saves_with_its_chunk_and_reloads_under_a_fresh_handle";
     with_state_mod(NAME, |game| {
@@ -340,7 +340,7 @@ fn indexed(game: &Game<'_>, entity: BlockEntityRef) -> Option<i32> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_removal_retires_its_state_only_at_the_root_commit() {
     const NAME: &str =
         "game::block_entity_part_state_tests::a_removal_retires_its_state_only_at_the_root_commit";
@@ -383,7 +383,7 @@ fn a_removal_retires_its_state_only_at_the_root_commit() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_save_or_unload_during_a_transaction_writes_only_committed_state() {
     const NAME: &str = "game::block_entity_part_state_tests::a_save_or_unload_during_a_transaction_writes_only_committed_state";
     with_state_mod(NAME, |game| {
@@ -438,7 +438,7 @@ fn a_save_or_unload_during_a_transaction_writes_only_committed_state() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn one_position_replaced_twice_in_an_aborted_transaction_gets_its_original_back() {
     const NAME: &str = "game::block_entity_part_state_tests::one_position_replaced_twice_in_an_aborted_transaction_gets_its_original_back";
     with_state_mod(NAME, |game| {

@@ -88,7 +88,7 @@ mod item_toss_tests {
     /// the listener changes stays, and a cancel leaves no item entity. The
     /// random scatter of a death's drops is not a toss and is never asked.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn item_toss_hears_the_item_entity_and_a_cancel_leaves_none() {
         let heard = Arc::new(Mutex::new(0));
         let mods = vec![ModEntry::new("toss_probe", Box::new(Tosser(heard.clone())))];
@@ -176,13 +176,13 @@ mod item_toss_tests {
     /// but not the toss it is still deciding: a cancel then leaves the toss
     /// unannounced (no join, no leave), and the listener's item joins.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_listener_spawn_does_not_announce_the_toss_it_then_cancels() {
         check_listener_spawn(false);
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_deferred_join_veto_announces_no_item_spawn() {
         check_listener_spawn(true);
     }

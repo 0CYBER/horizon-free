@@ -69,10 +69,13 @@ pub(super) fn network_recipes(
     overlay: &horizon_world::loot::PackOverlay,
     defaults: &horizon_world::item_defaults::ItemDefaults,
     sources: &horizon_client::crafting::ResolvedSources,
+    damage: horizon_client_core::registries::RegistryIds,
 ) -> crate::Result<(BTreeMap<String, Box<str>>, HashMap<String, i32>)> {
     // The resolved copy: the load's `ingredient` answers are in place, and
     // none of them leaves it (`forget_answers` below).
-    let items = horizon_client::items::Items::catalog(resources, overlay, defaults)?;
+    let items = horizon_client::items::Items::catalog_with_damage_registry(
+        resources, overlay, defaults, damage,
+    )?;
     let accepted =
         horizon_client::crafting::Recipes::from_resolved(resources, &items, overlay, sources)?;
     let accepted: std::collections::HashSet<&str> = accepted

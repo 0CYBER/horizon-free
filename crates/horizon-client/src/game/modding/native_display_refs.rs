@@ -589,7 +589,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn displays_narrow_by_kind_and_share_the_display_state() {
         with_game(|game| {
             let text = push(game, 21, "minecraft:text_display");
@@ -674,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn display_kinds_keep_their_own_state_and_refuse_the_others() {
         with_game(|game| {
             let text = push(game, 21, "minecraft:text_display");
@@ -777,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn display_writes_reach_entity_data_and_the_saved_entity() {
         with_game(|game| {
             let text = push(game, 21, "minecraft:text_display");
@@ -809,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn each_start_delay_write_forces_a_send_even_when_equal() {
         with_game(|game| {
             let text = push(game, 21, "minecraft:text_display");
@@ -832,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn stale_removed_and_client_displays_do_nothing() {
         with_game(|game| {
             let text = push(game, 21, "minecraft:text_display");

@@ -59,7 +59,7 @@ fn intersection_filters_default_stacks_without_losing_concrete_predicate() {
     assert!(!only_damaged.test_in(&ctx, &sword));
 }
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn malformed_and_unknown_component_patches_reject_whole_recipe() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let defaults = horizon_world::item_defaults::read(&root).unwrap();

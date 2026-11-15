@@ -318,7 +318,7 @@ fn unmodified_container_nbt_has_no_stack_limit() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn generated_structure_chest_stays_pending_after_save_and_reload() {
     use crate::{
         streaming::{ChunkGenerator, Proto},

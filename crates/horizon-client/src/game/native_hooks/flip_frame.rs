@@ -33,7 +33,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a display"]
+    #[ignore = "daily"]
     fn flip_frame_follows_render_frame_post_on_presented_frames_only() {
         let name = "game::native_hooks::flip_frame::tests::flip_frame_follows_render_frame_post_on_presented_frames_only";
         if run_fresh_cases(name, "HORIZON_FLIP_FRAME_CHILD", &["frames"]) {

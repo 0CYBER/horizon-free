@@ -34,7 +34,7 @@ fn dispatch(
 }
 
 #[test]
-#[ignore = "offscreen GPU control; run explicitly with an available adapter"]
+#[ignore = "daily"]
 fn terrain_source_ownership_gpu() {
     let _gpu = crate::gfx::test_gpu::lock();
     let instance = crate::gfx::test_gpu::instance();

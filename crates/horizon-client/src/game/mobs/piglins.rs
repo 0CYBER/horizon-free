@@ -805,7 +805,7 @@ mod tests {
     /// `PiglinAi.throwItemsTowardPos` swings the off hand once when it has
     /// something to throw, so barters leave the admiring hand (#12512).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_throw_swings_the_off_hand_once() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);

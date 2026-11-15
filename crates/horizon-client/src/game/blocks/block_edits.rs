@@ -425,7 +425,7 @@ mod tests {
     use mod_api::BlockRun;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn typed_bulk_late_refusals_preserve_the_world_and_emit_no_changes() {
         use crate::game::api_values::TryIntoApi;
         use mod_api::{

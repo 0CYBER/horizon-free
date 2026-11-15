@@ -52,7 +52,7 @@ impl Hooks for Rewrite {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn rewritten_awards_update_counts_criteria_and_dirty_values_atomically() {
     let mode = Arc::new(AtomicUsize::new(0));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -115,7 +115,7 @@ fn rewritten_awards_update_counts_criteria_and_dirty_values_atomically() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn lan_guest_awards_and_leave_game_apply_the_edited_amount() {
     let mode = Arc::new(AtomicUsize::new(0));
     let mods: mod_api::Mods =
@@ -150,7 +150,7 @@ fn lan_guest_awards_and_leave_game_apply_the_edited_amount() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn deferred_award_rewrites_only_after_outer_commit_and_abort_emits_nothing() {
     use crate::game::transactions::DeferredEffect;
     let mode = Arc::new(AtomicUsize::new(0));
@@ -256,7 +256,7 @@ fn break_stone(game: &mut Game<'_>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn real_integrated_stone_break_updates_counter_score_and_dirty_award() {
     let mode = Arc::new(AtomicUsize::new(0));
     let mods = vec![mod_api::ModEntry::new(
@@ -441,7 +441,7 @@ fn lan_real_break_and_jump(mods: mod_api::Mods, custom: &str, mode: Option<&Atom
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn real_lan_break_and_jump_use_registered_rewrite_targets() {
     let mode = Arc::new(AtomicUsize::new(0));
     let mods = vec![mod_api::ModEntry::new(
@@ -453,7 +453,7 @@ fn real_lan_break_and_jump_use_registered_rewrite_targets() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn lan_noncanonical_rewrite_keeps_the_entire_original_award() {
     let mode = Arc::new(AtomicUsize::new(6));
     let mods = vec![mod_api::ModEntry::new(

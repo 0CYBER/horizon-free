@@ -25,6 +25,9 @@ impl StateProviderCatalog {
         }
         Ok(Self { resources: result })
     }
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.resources.keys().map(String::as_str)
+    }
     pub(super) fn lookup(&self, name: &str) -> Option<&str> {
         self.resources.get(name).map(|v| v.get())
     }

@@ -19,7 +19,7 @@ mod connected_advancement_save_tests {
         game.chat_capture.take().unwrap()
     }
     #[test]
-    #[ignore = "needs prepared resources and scratch homes"]
+    #[ignore = "daily"]
     fn save_commands_write_the_connected_nonowners_current_advancements() {
         // Reload consults process-wide mod registration. Other fixtures may install
         // rejecting reload listeners, so run this vanilla server in its own process.
@@ -194,7 +194,7 @@ mod connected_advancement_preservation_tests {
     }
     // Added after baseline: actual command/model preservation, not new Java breadth.
     #[test]
-    #[ignore = "needs prepared resources and scratch homes"]
+    #[ignore = "daily"]
     fn empty_progress_missing_play_and_disconnect_wrapper_stay_distinct() {
         use super::super::{execution_role::ExecutionRole, stats};
         use std::sync::{Arc, Mutex};

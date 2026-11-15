@@ -1194,6 +1194,8 @@ struct Game<'a> {
     glint_frame: horizon_client::item_render::GlintFrame,
     /// Mod block entities' kept geometry (game/modding/native_block_entity_draw.rs).
     kept_block_entities: std::cell::RefCell<native_block_entity_draw::KeptGeometry>,
+    /// Mod screens' living scenes, per mod and clock id (game/modding/native_scene_live.rs).
+    live_scenes: std::cell::RefCell<native_scene_live::LiveScenes>,
     /// Glyphs from `native_draw_text` (`&self`): uploaded to the font atlas with the frame.
     text_patches: std::cell::RefCell<Vec<horizon_client::font::Patch>>,
     /// Prepared block-entity copies for this frame, in entity-stream order.
@@ -1937,7 +1939,7 @@ struct Game<'a> {
     /// with the player excluded); the events after it are not.
     lan_break_pos: Option<[i32; 3]>,
     /// Where a player's break puts the block's own drops instead of popping
-    /// them (`native_player_break_block` with `into_inventory`).
+    /// them (`PlayerRef::destroy_block` with `into_inventory`).
     break_collect: Option<Vec<ItemStack>>,
     /// The name of the guest `lan_acting` acts for (`Player.getName`).
     lan_acting_name: Option<String>,
@@ -4051,9 +4053,10 @@ impl Game<'_> {
         } else {
             self.loot_block_entity(pos, &facts.name)
         };
-        if let Some(entity) = self.world.block_entities.get(&key).cloned() {
+        let live = self.live_block_entity(key, &facts.name);
+        if let Some((entity, _)) = &live {
             self.pending
-                .record_from(&self.world, pos, &entity, &facts.name);
+                .record_from(&self.world, pos, entity, &facts.name);
         } else if let Some(tag) = spill::saved_entity(&self.world, pos) {
             self.pending.record_saved(pos, &tag);
         }
@@ -4087,16 +4090,11 @@ impl Game<'_> {
                 // Block.dropResources: the item entities, then spawnAfterBreak's
                 // experience, with the mods' say between the two.
                 let breaker = Some(self.native_acting_id());
-                let dropped = self.with_level(|_, level, _| {
-                    level.block_dropped(
-                        BlockPos::new(pos[0], pos[1], pos[2]),
-                        state,
-                        breaker,
-                        held.as_ref(),
-                        stacks,
-                        exp_to_drop,
-                    )
-                });
+                let dropped = self.player_block_dropped(
+                    (pos, state),
+                    (breaker, held.as_ref(), live),
+                    (stacks, exp_to_drop),
+                );
                 let canceled = dropped.canceled;
                 if let Some(kept) = self.break_collect.as_mut() {
                     kept.extend(dropped.items.into_iter().map(|item| item.stack));
@@ -10749,6 +10747,7 @@ impl<'a> Game<'a> {
             frames: 0,
             glint_frame: Default::default(),
             kept_block_entities: Default::default(),
+            live_scenes: Default::default(),
             text_patches: Default::default(),
             prepared_model_draws: Default::default(),
             world_geometry: Some(Default::default()),
@@ -11642,7 +11641,7 @@ fn test_server_load() -> horizon_world::native_load_context::LoadContext {
 #[cfg(test)]
 mod nested_orb_spawn_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn experience_pickup_keeps_nested_orbs_until_the_next_ordered_pass() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.world.chunks.insert(

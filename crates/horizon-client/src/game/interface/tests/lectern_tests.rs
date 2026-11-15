@@ -70,7 +70,7 @@ fn state_at(game: &Game<'_>, pos: [i32; 3]) -> (String, i32) {
 /// (`minecraft:lectern` is in `BlockEntityTypes.OP_ONLY_CUSTOM_DATA`, so the
 /// block entity only takes the book for one too), and not for anyone else.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_placed_lectern_takes_has_book_from_its_item() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
@@ -116,7 +116,7 @@ fn block_changes() -> Vec<(&'static str, [f64; 3], Option<Who>)> {
 /// entity, and `LecternBlockEntity.onBookItemRemove` -> `resetBookState(null,
 /// ...)`: one `block_change` at the lectern each way, and `has_book` follows.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_book_going_on_or_off_posts_one_block_change() {
     let mut resources = None;
     let mut game = server_game(&mut resources);

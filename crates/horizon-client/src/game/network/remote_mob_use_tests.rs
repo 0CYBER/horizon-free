@@ -2,7 +2,7 @@ use crate::game::native_entity_refs::tests::with_game;
 use horizon_client::{first_person::Hand, items::ItemStack};
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn remote_mob_takes_only_adult_piglin_currency_with_free_offhand() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_game(|g| {

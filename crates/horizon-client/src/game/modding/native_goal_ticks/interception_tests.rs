@@ -46,7 +46,7 @@ impl mod_api::Hooks for Intercept {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn installed_native_listener_intercepts_ai_setter_and_preserves_species_effects() {
     let decision = Arc::new(Mutex::new(Decision::Cancel));
     let calls = Arc::new(Mutex::new(Vec::new()));

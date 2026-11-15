@@ -22,7 +22,7 @@ fn values(game: &Game<'_>) -> Vec<u32> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn query_snapshot_dimension_and_stale_writes() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -78,7 +78,7 @@ fn query_snapshot_dimension_and_stale_writes() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn query_writes_join_transaction_journal_without_implicit_commit() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());

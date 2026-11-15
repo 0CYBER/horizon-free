@@ -9,7 +9,7 @@ use horizon_core::geometry::Vec3;
 /// and motion (`Relative.DELTA`), gone from the source, and the old handle refused as a
 /// removed entity's is (`Entity.teleport` returns null when `isRemoved`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_sends_an_item_and_an_arrow_to_another_level_with_their_motion() {
     with_game(|game| {
         game.native_lifecycle.world_open_ready().unwrap();
@@ -75,7 +75,7 @@ fn a_mod_sends_an_item_and_an_arrow_to_another_level_with_their_motion() {
 /// A mod's minecart keeps its motion into another level as `PositionMoveRotation.of(this)`
 /// has it: `OldMinecartBehavior.getKnownMovement`, 0.4 at most along x and z.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_sends_a_minecart_to_another_level_with_its_known_movement() {
     with_game(|game| {
         game.native_lifecycle.world_open_ready().unwrap();
@@ -121,7 +121,7 @@ fn sent_to_the_nether(
 /// A primed TNT is recreated in the other level with its fuse and motion
 /// (`PrimedTnt.restoreFrom`, `Relative.DELTA`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_sends_a_primed_tnt_to_another_level_with_its_fuse_and_motion() {
     with_game(|game| {
         sent_to_the_nether(
@@ -140,7 +140,7 @@ fn a_mod_sends_a_primed_tnt_to_another_level_with_its_fuse_and_motion() {
 
 /// An experience orb is recreated in the other level with its value, count and motion.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_sends_an_experience_orb_to_another_level_with_its_value_and_motion() {
     with_game(|game| {
         sent_to_the_nether(
@@ -160,7 +160,7 @@ fn a_mod_sends_an_experience_orb_to_another_level_with_its_value_and_motion() {
 /// A firework rocket is recreated in the other level with its stack, owner and motion
 /// (`Projectile.restoreFrom`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_sends_a_firework_to_another_level_with_its_owner_and_motion() {
     with_game(|game| {
         sent_to_the_nether(
@@ -180,7 +180,7 @@ fn a_mod_sends_a_firework_to_another_level_with_its_owner_and_motion() {
 
 /// A thrown trident is recreated in the other level with its stack and motion.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_sends_a_trident_to_another_level_with_its_stack_and_motion() {
     with_game(|game| {
         sent_to_the_nether(
@@ -197,30 +197,31 @@ fn a_mod_sends_a_trident_to_another_level_with_its_stack_and_motion() {
     });
 }
 
-/// A kind this call cannot move into another level (an armor stand) answers false and stays.
+/// Armor stands use Entity.teleportCrossDimension, keeping their position on arrival.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-fn a_mod_cannot_send_an_armor_stand_to_another_level() {
+#[ignore = "daily"]
+fn a_mod_sends_an_armor_stand_to_another_level() {
     with_game(|game| {
         game.native_lifecycle.world_open_ready().unwrap();
         game.summon_with_nbt("minecraft:armor_stand", [0.5, 80.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
         let stand = game.entity(game.armor_stands[0].id).unwrap();
-        assert!(!game.entity_teleport_to_level(
+        assert!(game.entity_teleport_to_level(
             stand,
             "minecraft:the_nether",
             [3.5, 70.0, -2.5],
             None
         ));
-        assert_eq!(game.armor_stands.len(), 1);
-        game.enter_level(Dim::Nether).unwrap();
         assert!(game.armor_stands.is_empty());
+        game.enter_level(Dim::Nether).unwrap();
+        assert_eq!(game.armor_stands.len(), 1);
+        assert_eq!(game.armor_stands[0].position, Vec3::new(3.5, 70.0, -2.5));
     });
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn portal_arrival_effects_mod_items_merge_immediately() {
     with_game(|game| {
         game.native_lifecycle.world_open_ready().unwrap();
@@ -260,7 +261,7 @@ fn portal_arrival_effects_mod_items_merge_immediately() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn portal_arrival_effects_explicit_tnt_teleports_protect_portals() {
     for command in [false, true] {
         with_game(|game| {

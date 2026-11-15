@@ -5,7 +5,7 @@ use horizon_core::position::ChunkPos;
 use std::sync::Arc;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn loaded_air_is_discarded_on_first_actual_game_tick() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         game.build_registries();

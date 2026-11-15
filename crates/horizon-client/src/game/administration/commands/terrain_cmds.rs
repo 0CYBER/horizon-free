@@ -1020,7 +1020,7 @@ mod loot_mine_component_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn loot_mine_copies_actual_empty_and_right_pot_components_into_the_chest() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
@@ -1204,7 +1204,7 @@ mod loot_mine_component_tests {
         );
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn loot_mine_uses_the_actual_stand_or_server_executor_presence() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
@@ -1328,7 +1328,7 @@ mod loot_position_tests {
     use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn actual_loot_replacement_retains_the_emitted_zero_slot() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -1438,7 +1438,7 @@ mod loot_kill_target_tests {
     use horizon_client::{chunk::Chunk, containers::BlockEntity};
     use std::sync::Arc;
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn loot_kill_uses_actual_sheep_state_without_killing_the_target() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
@@ -1557,7 +1557,7 @@ mod loot_mine_location_tests {
     use std::sync::Arc;
     const TABLE: &str = r###"{"type":"minecraft:block","pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:emerald","modifier":{"type":"minecraft:set_count","count":2}}]},{"rolls":1,"condition":{"type":"minecraft:location_check","offsetX":1,"predicate":{"block":{"blocks":"minecraft:oak_log","state":{"axis":"x"}}}},"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]}"###;
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn loot_mine_location_reads_actual_offset_block_state() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.game_dir = Some(

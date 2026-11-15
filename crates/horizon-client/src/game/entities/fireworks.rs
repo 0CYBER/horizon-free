@@ -1158,7 +1158,7 @@ mod tests {
     /// upscaler's motion vectors (`Frame::entity_motion`), so the motion matched between
     /// two frames is its flight, not only the camera's.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_flying_rocket_opens_a_motion_run_of_its_own() {
         use crate::game::{Audio, Options, Progress, Settings, load_resources};
         use horizon_core::geometry::Vec3;
@@ -1227,7 +1227,7 @@ mod tests {
     /// acting player too. A lead outside that box, or held for another player,
     /// stays. Standing still does neither.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_gliding_firework_drops_leads_and_plays_lead_break() {
         use crate::game::{Audio, Options, Progress, Settings, load_resources};
         use horizon_client::mobs::{Mob, leash::Holder};

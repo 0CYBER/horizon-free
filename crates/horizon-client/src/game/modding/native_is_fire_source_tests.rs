@@ -28,7 +28,7 @@ impl Hooks for FireSourceMod {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_part_decides_whether_it_keeps_a_fire_burning() {
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
         "fire_source",

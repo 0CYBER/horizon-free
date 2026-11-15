@@ -16,6 +16,20 @@ for spawners). An explicit global override is applied as given. `block_drops` se
 Level and mob breaks use the shared resource-drop path. A canceled player break
 or a break that does not harvest produces no award.
 
+`block_drops(level, event)` hears the drops after that. Besides the breaking
+player's UUID (`breaker`) and the `tool`, it carries `breaker_entity`, the
+entity that broke the block (the player, or the mob whose own break of it is
+running: a ravager's), and `block_entity`, the block's block entity.
+`breaker_entity` is not set when no entity broke the block (a piston, water, a
+neighbour update, `/setblock destroy`) or for explosions. `block_entity` is set
+whenever the block has one at that moment, whoever broke it, and not for
+explosions, whose blocks are gone before the event. A player's break removes the
+block entity from the world first, so its saved data, taken before the removal
+(its `CustomName` too: copy a chest's name onto its drop), is held through the
+event: `level.block_entity_data(entity)` reads it and, as with `exp_drop`, a
+stale handle is refused. The data is released when the event ends, also if a
+listener panics; keep nothing from it but what you copied.
+
 ## Explosions
 
 `on_block_exploded(host, event)` runs before the engine removes each destroyed

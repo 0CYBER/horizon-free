@@ -6,7 +6,7 @@ use horizon_core::{geometry::Vec3, position::BlockPos};
 /// Added after baseline: an item-unconstrained interaction still dispatches
 /// on detach. This prevents suppressing the whole trigger to pass the lead test.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn holder_detach_still_dispatches_the_actual_interaction_criterion() {
     let mut resources = None;
     let mut game = server_game(&mut resources);

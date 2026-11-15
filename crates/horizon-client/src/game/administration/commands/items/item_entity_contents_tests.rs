@@ -6,7 +6,7 @@ use horizon_client::items::ItemStack;
 /// this::setItem)`), and `SlotRanges` maps `contents`, `container.0` and
 /// `hotbar.0` to slot 0, so a dropped item's `contents` is the stack it holds.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_dropped_item_entity_holds_its_stack_in_contents() {
     use crate::game::game_tests::tests::server_game;
     let mut resources = None;

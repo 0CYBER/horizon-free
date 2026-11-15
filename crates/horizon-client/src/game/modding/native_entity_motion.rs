@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn on_block_picks_the_support_nearest_the_entity_and_pick_clips_blocks() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::{chunk::Chunk, mobs::Mob};
@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn reset_fall_distance_forgets_a_fall_for_mobs_carts_and_players() {
         use super::super::minecarts::{CartKind, Minecart};
         use horizon_client::mobs::Mob;
@@ -532,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn only_a_mount_its_rider_controls_takes_the_riders_speed() {
         use super::super::commands::Target;
         use horizon_client::mobs::{Mob, equine::Rider};

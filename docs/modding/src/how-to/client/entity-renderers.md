@@ -113,3 +113,5 @@ routes of their own), are retained without changing their drawing.
 
 To draw over a living renderer instead of replacing it, add a layer
 ([entity layers](entity-layers.md)).
+
+To draw an entity of any type in a screen, through its renderer, see [entities in screens](entities-in-screens.md).

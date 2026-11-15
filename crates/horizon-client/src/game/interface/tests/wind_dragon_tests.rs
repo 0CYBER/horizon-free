@@ -25,7 +25,7 @@ fn end_game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_wind_burst_pushes_the_dragon_without_damage() {
     let mut resources = None;
     let mut game = end_game(&mut resources);
@@ -48,7 +48,7 @@ fn a_wind_burst_pushes_the_dragon_without_damage() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_wind_burst_scales_the_dragons_push_by_its_multiplier() {
     let mut resources = None;
     let mut game = end_game(&mut resources);

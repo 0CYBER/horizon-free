@@ -351,7 +351,7 @@ fn matrix(mods: mod_api::Mods) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn native_interaction_shared_matrix() {
     matrix(vec![mod_api::ModEntry::new("wasm_fixture", Box::new(Native))].into());
 }

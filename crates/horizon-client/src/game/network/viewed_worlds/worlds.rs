@@ -2,22 +2,39 @@
 //! chunk format, shape and facts of the dimension type the server synced for it. A wrapped
 //! packet changes only its own level's world; nothing here reaches the player's level, its
 //! renderer, its sounds or a mod's hooks.
-use super::{entities::ViewedEntities, routing::RouteError};
+use super::{
+    entities::ViewedEntities,
+    meshing::{block_changed, column_changed},
+    routing::RouteError,
+};
 use crate::game::remote_chunks::{ChunkFormat, section_blocks};
-use horizon_client::{chunk::known_block_state, fast_hash::FxHashMap, world::World};
+use horizon_client::{
+    chunk::known_block_state,
+    fast_hash::{FxHashMap, FxHashSet},
+    streaming::ViewedMeshing,
+    world::World,
+};
 use horizon_protocol::{
     chunk::BlockEntityInfo,
     packets::play::{self, Clientbound as C, ClockState},
 };
 use horizon_world::registry::BlockStateId;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 /// Another level's world, kept while the server sends it.
 pub(in crate::game) struct ViewedWorld {
+    /// This world's own id, which its meshed sections go by (`meshing`): a level opened again
+    /// has another.
+    pub(super) id: u64,
     /// The level's key (`minecraft:the_nether`).
     pub(in crate::game) level: String,
     /// Its key as a mod's `LevelRef` names it.
-    key: mod_api::DimensionKey,
+    pub(super) key: mod_api::DimensionKey,
+    /// Its dimension has the Nether's cardinal light: its sections are shaded so.
+    pub(in crate::game) nether_shading: bool,
     /// What its chunk packets decode with.
     format: Arc<ChunkFormat>,
     /// The world clock its day time follows: its dimension type's `default_clock`.
@@ -45,10 +62,13 @@ impl ViewedWorld {
         world: World,
         columns: u32,
     ) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         Self {
             columns,
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             key: mod_api::__private::dimension_key(&level),
             level,
+            nether_shading: false,
             format,
             default_clock,
             clock: None,
@@ -79,6 +99,7 @@ impl ViewedWorld {
                     self.world.chunks.insert(key, Arc::new(chunk));
                     self.unload_block_entities(key);
                     self.block_entities.insert(key, p.chunk.block_entities);
+                    column_changed(&mut self.world, key);
                 }
                 Err(e) => log::warn!("Horizon: {} chunk {} {}: {e}", self.level, p.x, p.z),
             },
@@ -86,6 +107,7 @@ impl ViewedWorld {
                 let key = (p.pos[0], p.pos[1]);
                 self.world.unload_chunk(key);
                 self.unload_block_entities(key);
+                column_changed(&mut self.world, key);
             }
             C::LightUpdate(p) => {
                 let (layers, _) = self.format.light(&p.light);
@@ -95,6 +117,7 @@ impl ViewedWorld {
                         &layers,
                         self.format.has_skylight,
                     );
+                    column_changed(&mut self.world, (p.x, p.z));
                 }
             }
             C::ChunksBiomes(p) => {
@@ -105,6 +128,7 @@ impl ViewedWorld {
                     {
                         log::warn!("Horizon: {} biomes of chunk {x} {z}: {e}", self.level);
                     }
+                    column_changed(&mut self.world, (x, z));
                 }
             }
             C::BlockUpdate(p) => self.set_block(p.pos, p.state),
@@ -148,7 +172,9 @@ impl ViewedWorld {
     /// A server's block: a state the client lacks (a server with mods it lacks) reads as air,
     /// as in its chunks.
     fn set_block(&mut self, [x, y, z]: [i32; 3], state: i32) {
-        self.world.set_stored(x, y, z, stored_state(state));
+        if self.world.set_stored(x, y, z, stored_state(state)) {
+            block_changed(&mut self.world, [x, y, z]);
+        }
     }
 
     /// `LevelChunk.setBlockState` with another block at `pos`: the block entity there goes, with
@@ -223,7 +249,9 @@ pub(super) fn stored_state(state: i32) -> BlockStateId {
 #[derive(Default)]
 pub(in crate::game) struct ViewedWorlds {
     /// Each bound slot's world, with the epoch of the `open` or travel swap that bound it.
-    worlds: FxHashMap<i32, (i32, ViewedWorld)>,
+    pub(super) worlds: FxHashMap<i32, (i32, ViewedWorld)>,
+    pub(in crate::game) wanted: FxHashSet<mod_api::DimensionKey>,
+    pub(super) meshing: Option<ViewedMeshing>,
     /// The newest epoch an `open` or a travel swap gave on this connection. Dropping every world
     /// leaves it: the server's counter goes on.
     latest: Option<i32>,
@@ -298,22 +326,28 @@ impl ViewedWorlds {
     pub(in crate::game) fn insert(&mut self, slot: i32, epoch: i32, world: ViewedWorld) {
         self.latest = Some(self.latest.map_or(epoch, |latest| latest.max(epoch)));
         if let Some((_, old)) = self.worlds.insert(slot, (epoch, world)) {
+            self.forget_sections(&old);
             free(old);
         }
     }
     /// Takes `slot`'s world out, whole: a travel into it (`switch`).
     pub(in crate::game) fn take(&mut self, slot: i32) -> Option<ViewedWorld> {
-        self.worlds.remove(&slot).map(|(_, world)| world)
+        let (_, world) = self.worlds.remove(&slot)?;
+        self.forget_sections(&world);
+        Some(world)
     }
     /// Drops `slot`'s world (`close`), releasing the slot; false when it held none.
     pub(in crate::game) fn remove(&mut self, slot: i32) -> bool {
-        self.worlds
-            .remove(&slot)
-            .map(|(_, world)| free(world))
-            .is_some()
+        let Some((_, world)) = self.worlds.remove(&slot) else {
+            return false;
+        };
+        self.forget_sections(&world);
+        free(world);
+        true
     }
     /// Drops every world: a Login, a Respawn or a new configuration phase. The epochs go on.
     pub(in crate::game) fn clear(&mut self) {
+        self.meshing = None;
         for (_, (_, world)) in self.worlds.drain() {
             free(world);
         }
@@ -325,6 +359,7 @@ impl ViewedWorlds {
     /// of the level entered.
     pub(in crate::game) fn hold_left(&mut self, slot: i32, world: ViewedWorld) {
         if let Some((_, old)) = self.left.replace((slot, world)) {
+            self.forget_sections(&old);
             free(old);
         }
     }
@@ -340,6 +375,11 @@ impl ViewedWorlds {
                 self.left = other;
                 false
             }
+        }
+    }
+    fn forget_sections(&mut self, world: &ViewedWorld) {
+        if let Some(meshing) = &mut self.meshing {
+            meshing.forget(world.id);
         }
     }
 }

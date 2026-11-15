@@ -2,13 +2,13 @@ use super::*;
 use crate::game::{Audio, Game, Options, Progress, Settings, commands::Target, load_resources};
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn live_frame_item_adoption_detaches_only_a_changed_old_stack() {
     frame_adoption(false);
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn live_glow_frame_adoption_keeps_type_without_saved_id() {
     frame_adoption(true);
 }

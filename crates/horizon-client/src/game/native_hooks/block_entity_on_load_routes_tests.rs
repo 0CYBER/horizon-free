@@ -153,7 +153,7 @@ mod tests {
         ));
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_reentrant_replacement_is_bounded() {
         const NAME: &str = "game::native_hooks::block_entity_on_load_routes_tests::tests::block_entity_on_load_reentrant_replacement_is_bounded";
         if run_fresh_cases(NAME, "HORIZON_ON_LOAD_REENTRANT", &["run"]) {
@@ -177,7 +177,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_shared_type_replacement_has_fresh_handle() {
         const NAME: &str = "game::native_hooks::block_entity_on_load_routes_tests::tests::block_entity_on_load_shared_type_replacement_has_fresh_handle";
         if run_fresh_cases(NAME, "HORIZON_ON_LOAD_SHARED_TYPE", &["run"]) {
@@ -224,7 +224,7 @@ mod tests {
         );
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_command_placement() {
         const NAME: &str = "game::native_hooks::block_entity_on_load_routes_tests::tests::block_entity_on_load_command_placement";
         if run_fresh_cases(NAME, "HORIZON_ON_LOAD_COMMAND", &["run"]) {
@@ -238,7 +238,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_dispenser_placement() {
         const NAME: &str = "game::native_hooks::block_entity_on_load_routes_tests::tests::block_entity_on_load_dispenser_placement";
         if run_fresh_cases(NAME, "HORIZON_ON_LOAD_DISPENSER", &["run"]) {
@@ -261,7 +261,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_falling_block_placement() {
         const NAME: &str = "game::native_hooks::block_entity_on_load_routes_tests::tests::block_entity_on_load_falling_block_placement";
         if run_fresh_cases(NAME, "HORIZON_ON_LOAD_FALLING", &["run"]) {
@@ -292,7 +292,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_stale_queued_identity_is_skipped() {
         const NAME: &str = "game::native_hooks::block_entity_on_load_routes_tests::tests::block_entity_on_load_stale_queued_identity_is_skipped";
         if run_fresh_cases(NAME, "HORIZON_ON_LOAD_STALE", &["run"]) {
@@ -313,7 +313,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_entity_on_load_real_client_chunk_receive() {
         use horizon_protocol::{
             chunk::{BlockEntityInfo, ChunkData, LightData, Paletted, Section, Strategy},

@@ -31,7 +31,7 @@ fn game(resources: &mut Option<std::sync::Arc<Resources>>) -> Game<'_> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn summoned_drowned_hold_shells_as_guaranteed_drops() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -76,7 +76,7 @@ fn summoned_drowned_hold_shells_as_guaranteed_drops() {
 /// expectations are comparisons between runs of the fork's funnel (`finalize_plain`), not end
 /// states read from another route.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     use horizon_client::mobs::drops::{DEFAULT_DROP_CHANCE, SLOTS, drop_chance};
     use horizon_core::random::{LegacyRandom, RandomSource};

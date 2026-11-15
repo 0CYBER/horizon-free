@@ -63,7 +63,7 @@ fn heading(p: &horizon_client::projectiles::Projectile) -> f32 {
 /// that pass through four entities. Before, only a crossbow's arrows carried
 /// a pierce level, so a piercing bow's arrow stopped at the first mob.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_piercing_bow_shoots_arrows_that_pierce_their_level() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let mut game = game_with_player(&root);
@@ -87,7 +87,7 @@ fn a_piercing_bow_shoots_arrows_that_pierce_their_level() {
 /// marks the extra ones `INTANGIBLE_PROJECTILE`, so only the first is the
 /// player's to take. Before, a multishot bow shot one arrow.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_multishot_bow_fires_three_arrows_ten_degrees_apart() {
     use horizon_client::arrows::Pickup;
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());

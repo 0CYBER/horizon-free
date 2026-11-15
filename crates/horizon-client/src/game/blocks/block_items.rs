@@ -457,7 +457,7 @@ mod tests {
     /// (`BlockItem.updateCustomBlockEntityTag`) loads it into the new block
     /// entity, and `/give` takes the declared type and refuses an unknown one.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_block_entity_rides_its_item_through_the_game() {
         use super::super::native_entity_refs::tests::{run_fresh_cases, with_game_at};
         use super::components;
@@ -595,7 +595,7 @@ mod tests {
     /// a block with an item picks another, and one that declares nothing keeps
     /// picking its own item, or nothing when it has none.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_content_blocks_pick_item_is_what_pick_block_takes() {
         use super::super::native_entity_refs::tests::{run_fresh_cases, with_game_at};
         use horizon_client::chunk::Chunk;
@@ -676,7 +676,7 @@ mod plain_name_overlay_tests {
     /// BaseContainerBlockEntity's removed external name must not be restored
     /// from the original saved source by the chunk writer.
     #[test]
-    #[ignore = "requires real prepared resources and scratch homes/cwd; must execute"]
+    #[ignore = "daily"]
     fn removed_actual_plain_name_stays_absent_in_saved_and_reloaded_model() {
         with_game(|game| {
             game.build_registries();
@@ -852,7 +852,7 @@ mod styled_name_model_tests {
     }
 
     #[test]
-    #[ignore = "requires real prepared resources and scratch homes/cwd; must execute"]
+    #[ignore = "daily"]
     fn actual_container_names_load_place_mutate_and_save_without_raw() {
         with_game(|game| {
             game.build_registries();

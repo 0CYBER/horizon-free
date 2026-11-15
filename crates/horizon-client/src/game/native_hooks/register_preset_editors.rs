@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn preset_editor_test_mod_draws_and_edits_through_real_client_hooks() {
         mod_platform::testing::with_mods(
             vec![ModEntry::new("example", Box::new(EditorMod))].into(),

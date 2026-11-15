@@ -215,7 +215,7 @@ fn host_stat(game: &Game<'_>) -> i64 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated HORIZON_HOME"]
+#[ignore = "daily"]
 fn host_pickup_tells_whole_and_partial_pickups_apart_and_keeps_listener_changes() {
     let probe = Probe::default();
     with_probe(&probe, || {
@@ -395,7 +395,7 @@ fn guest_case(game: &mut Game<'_>, probe: &Probe, case: &Case) -> Outcome {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn guest_pickup_tells_whole_and_partial_pickups_apart_and_keeps_listener_changes() {
     let probe = Probe::default();
     with_probe(&probe, || {
@@ -488,7 +488,7 @@ fn guest_pickup_tells_whole_and_partial_pickups_apart_and_keeps_listener_changes
 /// Both pickup hooks name the ground item entity, and `item_picked_up`
 /// reads its whole stack through the handle, components included.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn guest_pickup_hooks_name_the_ground_item_entity() {
     let probe = Probe::default();
     with_probe(&probe, || {

@@ -77,7 +77,7 @@ fn spawned(game: &Game<'_>) -> Vec<String> {
 /// plus the blocks that override it: a portal on glowstone (15 light) or on
 /// bedrock (`isValidSpawn(never)`) spawns nothing.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_portal_over_glowstone_or_bedrock_spawns_no_piglin() {
     let mut game = game();
     for floor in ["glowstone", "bedrock"] {
@@ -95,7 +95,7 @@ fn a_portal_over_glowstone_or_bedrock_spawns_no_piglin() {
 /// `Mob.playAmbientSound`: its ambient sound at its feet, volume 1.0, at its
 /// voice pitch 1.0 ± 0.2) and waits out its 300-tick portal cooldown.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_portal_over_obsidian_spawns_a_grunting_piglin() {
     let mut game = game();
     portal_on(&mut game, "obsidian");

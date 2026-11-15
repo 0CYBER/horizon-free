@@ -2395,7 +2395,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes"]
+    #[ignore = "daily"]
     fn region_adoption_agent_state_reports_the_actual_title_mode() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             use horizon_client::title::{Mode, Title, list_worlds};

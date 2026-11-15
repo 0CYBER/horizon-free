@@ -218,6 +218,16 @@ impl Game<'_> {
             self.streaming.complete_commit(&mut self.world, commit)
         });
         self.streaming.extra.truncate(areas);
+        // The viewed levels' meshing, queued after the player's level's (nothing while no view
+        // names one).
+        if self.streaming.mesh
+            && let Some(remote) = &mut self.remote
+        {
+            let streaming = &self.streaming;
+            remote
+                .viewed
+                .mesh_frame(|| streaming.viewed_mesh_source(), std::time::Instant::now());
+        }
         let dirty: Vec<_> = unloaded
             .iter()
             .filter(|c| self.world.modified.remove(&(c.x, c.z)))

@@ -601,8 +601,32 @@ pub fn animate_tick(
     player: [i32; 3],
 ) {
     for _ in 0..667 {
-        do_animate_tick(tables, engine, ctx, player, 16);
-        do_animate_tick(tables, engine, ctx, player, 32);
+        do_animate_tick(tables, engine, ctx, player, 16, true);
+        do_animate_tick(tables, engine, ctx, player, 32, true);
+    }
+}
+
+/// `ClientLevel.animateTick` for a screen's scene: `picks` picks among the scene's own
+/// `blocks` (not a radius around a view), each picked block's and fluid's animate tick,
+/// without what belongs to the level rather than its blocks (pack emitters, the creative
+/// marker, biome ambience). The picks come from the engine's random, which the scene
+/// seeds per tick; a scene of no blocks draws none.
+pub fn animate_scene(
+    tables: &AnimateTables,
+    engine: &mut ParticleEngine,
+    ctx: &AnimateContext,
+    blocks: &[[i32; 3]],
+    picks: u32,
+) {
+    let Ok(count) = i32::try_from(blocks.len()) else {
+        return;
+    };
+    if count == 0 {
+        return;
+    }
+    for _ in 0..picks {
+        let pos = blocks[next_int(engine.random(), count) as usize];
+        animate_at(tables, engine, ctx, pos, pos, false);
     }
 }
 fn next_int(r: &mut LegacyRandom, bound: i32) -> i32 {
@@ -614,12 +638,26 @@ fn do_animate_tick(
     ctx: &AnimateContext,
     center: [i32; 3],
     r: i32,
+    level: bool,
 ) {
     let random = engine.random();
     let x = center[0] + next_int(random, r) - next_int(random, r);
     let y = center[1] + next_int(random, r) - next_int(random, r);
     let z = center[2] + next_int(random, r) - next_int(random, r);
-    let pos = [x, y, z];
+    animate_at(tables, engine, ctx, [x, y, z], center, level);
+}
+
+/// One picked position's animate tick: its block's and fluid's, and with `level` the
+/// level's own (pack emitters, the creative marker, biome ambience).
+fn animate_at(
+    tables: &AnimateTables,
+    engine: &mut ParticleEngine,
+    ctx: &AnimateContext,
+    pos: [i32; 3],
+    center: [i32; 3],
+    level: bool,
+) {
+    let [x, y, z] = pos;
     if !ctx.world.loaded(x, z) {
         return;
     }
@@ -629,14 +667,16 @@ fn do_animate_tick(
         block_animate_tick(tables, engine, ctx, state, pos, center);
     }
     // Resource packs' Polytone block emitters (#11486): nothing without such a pack.
-    let level = ParticleLevel {
-        world: ctx.world,
-        facts: ctx.facts,
-        collision: ctx.collision,
-        player: None,
-        cached_chunk: std::cell::Cell::new(None),
-    };
-    engine.polytone_animate(&level, pos);
+    if level {
+        let level = ParticleLevel {
+            world: ctx.world,
+            facts: ctx.facts,
+            collision: ctx.collision,
+            player: None,
+            cached_chunk: std::cell::Cell::new(None),
+        };
+        engine.polytone_animate(&level, pos);
+    }
     let facts = ctx.facts.get(state);
     if facts.fluid != Fluid::None {
         fluid_animate_tick(
@@ -659,6 +699,9 @@ fn do_animate_tick(
             let top_solid = facts.sturdy_full & 1 != 0;
             try_spawn_drip(tables, engine, ctx, [x, y - 1, z], drip, top_solid);
         }
+    }
+    if !level {
+        return;
     }
     if let Some((block, options)) = ctx.marker
         && ctx.registry.state(state).is_some_and(|s| s.name == block)

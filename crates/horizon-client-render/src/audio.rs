@@ -2360,7 +2360,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires HORIZON_TEST_RESOURCES with imported vanilla sounds"]
+    #[ignore = "daily"]
     fn archive_sound_decodes_like_the_original_without_unpacking() {
         use std::io::Write;
         let prepared = std::path::PathBuf::from(

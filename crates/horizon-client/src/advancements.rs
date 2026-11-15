@@ -2043,7 +2043,7 @@ mod tests {
     /// `cargo test -p horizon-client --lib -- --ignored --nocapture index_on_vanilla_tree`
     /// with HORIZON_TEST_RESOURCES set to the prepared resources.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn index_on_vanilla_tree() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),

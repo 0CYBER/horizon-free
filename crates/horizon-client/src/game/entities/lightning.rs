@@ -882,7 +882,7 @@ mod tests {
     /// `LightningBolt.spawnFire` places nothing, and draws no extra sources,
     /// unless `canSpreadFireAround` passes at the bolt (#11376).
     #[test]
-    #[ignore = "needs prepared resources (HORIZON_TEST_RESOURCES)"]
+    #[ignore = "daily"]
     fn a_bolt_away_from_players_starts_no_fire() {
         use horizon_client::gamerules::Value;
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -938,7 +938,7 @@ mod tests {
     /// in front of the rod whether or not redstone experiments are on (#14371):
     /// a wire beside that block is strongly powered by the struck rod.
     #[test]
-    #[ignore = "needs prepared resources (HORIZON_TEST_RESOURCES)"]
+    #[ignore = "daily"]
     fn a_struck_rod_updates_the_wire_beside_the_block_behind_it() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -984,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn conversion_post_reads_original_and_lightning_outcome() {
         use mod_api::{
             EntityJoinLevelEvent, EquipmentSlot, Flow, Hooks, LivingConversionPostEvent,
@@ -1347,7 +1347,7 @@ mod tests {
     /// the spared one stays a pig, the other becomes a zombified piglin, and
     /// both still count as hit.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_mod_spares_one_pig_from_the_bolt() {
         let heard = Arc::default();
         let (spared, struck) = (900, 901);

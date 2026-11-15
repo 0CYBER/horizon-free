@@ -550,7 +550,7 @@ mod tests {
 mod nested_spawn_tests {
     use super::*;
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn lifted_heart_callback_keeps_nested_spawns_until_the_next_pass() {
         crate::game::entity::taken_pass_tests::in_both_dimensions(|game, balance| {
             let mut heart = CreakingHeart::default();

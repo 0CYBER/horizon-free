@@ -135,7 +135,7 @@ fn drawn_sprite(game: &Game<'_>, vertices: &[Vertex]) -> Option<String> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_compass_on_a_shelf_points_from_that_shelf() {
     let mut game = drawing_game();
     let compass = lodestone_compass();

@@ -33,7 +33,7 @@ fn client_on_a_server_with_a_custom_enchantment<'a>(
 /// book of a data pack's enchantment on a pickaxe shows its result, as the
 /// server computes it, instead of the red cross (#8688).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_servers_custom_enchantment_book_gives_an_anvil_result() {
     let mut resources = None;
     let mut game = client_on_a_server_with_a_custom_enchantment(&mut resources);

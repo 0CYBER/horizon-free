@@ -24,7 +24,7 @@ mod tests {
     use mod_api::{Authority, ChunkRef, DimensionKey, LevelRef};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn slime_queries_work_without_loading_and_refuse_stale_handles() {
         with_game(|game| {
             game.level.seed = 0;

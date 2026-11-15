@@ -100,7 +100,7 @@ mod tests {
     use mod_api::{LevelRef, WorldEpoch};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn weather_writes_set_the_level_in_place_and_refuse_others() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn local_difficulty_and_tick_rate_reach_the_game() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -225,7 +225,7 @@ mod tests {
     /// to the first. The outer writes stand, and a write of the value already there is heard
     /// by nobody.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_listener_calling_its_own_setter_is_refused() {
         let log = Log::default();
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -269,7 +269,7 @@ mod tests {
     /// multiplier 0.125) before day time 72 000, and 3 x (0.75 + 0.25) = 3.0 (special 0.5)
     /// once the time factor is full at 1 512 000.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn local_difficulty_matches_vanilla_values_for_an_unloaded_chunk() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();

@@ -13,7 +13,7 @@ pub(in crate::game) fn place(game: &mut Game<'_>, offset: [i32; 3], block: &str)
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_parts_answer_the_enchanting_power_and_the_beam_colour() {
     // The fixture's parts: glass is worth two bookshelves and tints a beam red, and a
     // bookshelf is worth nothing.
@@ -90,7 +90,7 @@ pub(in crate::game) fn enchant_particles(game: &Game<'_>) -> usize {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn enchant_particles_share_native_power_and_rebuild_only_on_parts_reload() {
     use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_role};
     use mod_api::{BlockPart, Hooks, ModEntry, Mods, Registrar};

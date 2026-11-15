@@ -21,7 +21,7 @@ static PROJECTILE_VALUE: AttachmentType<i32> = AttachmentType {
 };
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_spit_and_bullet_query_before_access_and_round_trip() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -107,7 +107,7 @@ static VALUE: AttachmentType<i32> = AttachmentType {
 };
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_entity_loaders_publish_and_retire_the_authoritative_owner() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());

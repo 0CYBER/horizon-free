@@ -410,11 +410,6 @@ impl Manifest {
                 format!("{MANIFEST}: {e}")
             }
         })?;
-        if m.side == Side::Server {
-            return Err(format!(
-                "{MANIFEST}: top-level side = \"server\" is not a supported package side"
-            ));
-        }
         inject::Inject::check_all(&m.inject, &m.id, m.native.is_some() || m.wasm.is_some())
             .map_err(|e| e.to_string())?;
         for entry in &m.inject {
@@ -666,6 +661,26 @@ impl Manifest {
     /// The namespaces the mod's content owns: its id, then `namespaces`.
     pub fn owned_namespaces(&self) -> impl Iterator<Item = &str> {
         std::iter::once(self.id.as_str()).chain(self.namespaces.iter().map(String::as_str))
+    }
+    /// The refusal of a `side = "server"` mod whose code declares registry content (one of
+    /// `declared`, each its registry kind and id, in a namespace it owns), naming the mod, the
+    /// kind and the id: every client must have that content.
+    pub fn server_only_declaration<'a>(
+        &self,
+        mut declared: impl Iterator<Item = (&'a str, &'a str)>,
+    ) -> Option<String> {
+        if self.side != Side::Server {
+            return None;
+        }
+        let (kind, id) = declared.find(|(_, id)| {
+            let ns = id.split_once(':').map_or("", |(ns, _)| ns);
+            self.owned_namespaces().any(|owned| owned == ns)
+        })?;
+        Some(format!(
+            "{}: a side = \"server\" mod declares the {kind} {id}, which every client must have; \
+             declare side = \"both\"",
+            self.id
+        ))
     }
 }
 
@@ -1407,7 +1422,7 @@ capabilities = ["registries"]
             let text = EXAMPLE.replace("[\"registries\"]", caps);
             assert!(Manifest::parse(&text).is_err());
         }
-        for field in ["network = true", "experimental = []", "side = \"server\""] {
+        for field in ["network = true", "experimental = []", "side = \"local\""] {
             assert!(Manifest::parse(&format!("{EXAMPLE}{field}\n")).is_err());
         }
         assert_eq!(Manifest::parse(EXAMPLE).unwrap().side, Side::Client);
@@ -1416,6 +1431,26 @@ capabilities = ["registries"]
                 .unwrap()
                 .side,
             Side::Both
+        );
+        let server = Manifest::parse(&format!("{EXAMPLE}side = \"server\"\n")).unwrap();
+        assert_eq!(server.side, Side::Server);
+        let id = &server.id;
+        assert_eq!(
+            server.server_only_declaration(
+                [
+                    ("block", "minecraft:stone"),
+                    ("item", &format!("{id}:marker")[..])
+                ]
+                .into_iter()
+            ),
+            Some(format!(
+                "{id}: a side = \"server\" mod declares the item {id}:marker, which every client \
+                 must have; declare side = \"both\""
+            ))
+        );
+        assert_eq!(
+            server.server_only_declaration([("block", "minecraft:stone")].into_iter()),
+            None
         );
     }
 

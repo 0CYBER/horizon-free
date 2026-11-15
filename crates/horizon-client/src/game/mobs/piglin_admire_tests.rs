@@ -13,7 +13,7 @@ fn stack(sword: bool) -> ItemStack {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn piglin_admire_preserves_components_on_death_and_finish() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_game(|g| {
@@ -66,7 +66,7 @@ fn piglin_admire_preserves_components_on_death_and_finish() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn piglin_admire_hit_keeps_baby_gold_and_cancels_adult_barter() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_game(|g| {

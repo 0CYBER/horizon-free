@@ -59,7 +59,7 @@ mod client_packet_send_tests {
     /// `Connection.send`: the mod hears each packet the game sends and cancels the one it
     /// filters; without a listener nothing is cancelled.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_mod_hears_and_cancels_packets_the_game_sends() {
         let slot = Serverbound::SetCarriedItem(SetCarriedItem { slot: 2 });
         crate::game::native_entity_refs::tests::with_game(|game| {

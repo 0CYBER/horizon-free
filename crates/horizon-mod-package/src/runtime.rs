@@ -149,10 +149,10 @@ mod tests {
                 "id = '{}'\nname = 'A mod'\nversion = '{}'\napi = '0.2'\nside = '{}'\ncapabilities = ['registries']\n",
                 expected.id,
                 expected.version,
-                if expected.side == Side::Both {
-                    "both"
-                } else {
-                    "client"
+                match expected.side {
+                    Side::Both => "both",
+                    Side::Server => "server",
+                    _ => "client",
                 }
             );
             if native {

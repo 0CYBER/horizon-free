@@ -1,0 +1,6 @@
+# Registry entry and tag reads against prepared resources, daily tests (README.md). Rows: PACKAGE TEST TARGET daily REASON.
+horizon-client game::native_registry_entries_tests::generic_client_entries_use_only_builtin_synced_and_negotiated_tables lib daily resources
+horizon-client game::native_registry_entries_tests::generic_entries_follow_real_server_tables_and_atomic_reload lib daily resources
+horizon-client game::native_registry_entries_tests::generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator lib daily resources
+horizon-client game::native_registry_history_tests::world_preset_availability_does_not_depend_on_shared_generator_history lib daily resources
+horizon-client game::native_registry_processor_tests::generic_processor_and_referencing_pool_accept_pillar_block_properties lib daily resources

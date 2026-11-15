@@ -79,7 +79,7 @@ fn target(id: u32) -> Option<InteractTarget> {
 /// `Mob.interact`, so a click that does nothing (an empty hand, or something
 /// a wild nautilus does not tame with) still keeps it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_click_that_does_nothing_still_keeps_the_nautilus() {
     let mut game = game();
     for (id, item) in [(7, ""), (8, "minecraft:dirt")] {
@@ -109,7 +109,7 @@ fn a_click_that_does_nothing_still_keeps_the_nautilus() {
 /// fish eats it, with its own `playEatingSound`, and falls in love for 600
 /// ticks.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_tame_zombie_nautilus_at_full_health_falls_in_love() {
     let mut game = game();
     for (id, kind, eat) in [

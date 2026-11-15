@@ -154,7 +154,7 @@ mod tests {
     use horizon_core::nbt::Tag;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_stack_names_its_cooldown_group() {
         with_game(|game| {
             let pearl = ItemStack::new("minecraft:ender_pearl", 1);
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn exp_cooldowns_reach_their_player() {
         super::super::native_guest_turn_tests::with_guests(|game| {
             let (a, b) = (game.player(12).unwrap(), game.player(13).unwrap());
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_warden_warning_cooldown_is_its_trackers_owners() {
         use horizon_client::sculk::WardenSpawnTracker;
         let tracker = |warning_level: i32| {

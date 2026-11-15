@@ -38,7 +38,7 @@ fn live_mob_ids(game: &Game<'_>, expected: usize) -> HashSet<u32> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn runtime_id_allocator_remains_unique_across_loaded_levels_and_real_transfer() {
     with_game(|game| {
         game.native_lifecycle.world_open_ready().unwrap();
@@ -92,7 +92,7 @@ fn runtime_id_allocator_remains_unique_across_loaded_levels_and_real_transfer() 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cushion_get_entity_matches_vanilla_membership_oracle() {
     with_game(|game| {
         game.summon_with_nbt("minecraft:cushion", [0.5, 70.0, 0.5], "{}")

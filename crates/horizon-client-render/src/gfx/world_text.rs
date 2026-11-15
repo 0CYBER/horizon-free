@@ -54,7 +54,7 @@ mod tests {
     use super::*;
     use wgpu::util::DeviceExt;
     #[test]
-    #[ignore = "requires a Vulkan/Metal/DX12 adapter"]
+    #[ignore = "daily"]
     fn world_text_blends_culls_and_obeys_world_depth() {
         let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();

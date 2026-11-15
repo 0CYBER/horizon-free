@@ -16,6 +16,8 @@ fn game<'a>(resources: &'a mut Option<std::sync::Arc<crate::game::Resources>>) -
         .chunks
         .insert((0, 0), Arc::new(horizon_client::chunk::Chunk::empty(0, 0)));
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)).unwrap());
+    game.reset_entity_residency();
+    crate::game::native_entity_refs::tests::bind_local_player(&mut game, 1, 1);
     game
 }
 

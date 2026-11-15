@@ -59,7 +59,7 @@ mod component_hover_tests {
     /// typed hover (text, item, and an entity whose UUID came as an int array), the default
     /// drawing is unchanged when it doesn't cancel, and a cancel draws only what the mod drew.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_sees_each_hover_and_may_draw_its_own() {
         let text = style(serde_json::json!({ "action": "show_text", "value": "hello" }));
         let secret = style(serde_json::json!({ "action": "show_text", "value": "secret" }));

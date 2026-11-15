@@ -1183,7 +1183,7 @@ mod pet_credit_tests {
     /// content mod's type copying the wolf (#4031) names its owner too, and
     /// an untamed one names no one.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_tame_mod_wolf_types_hit_is_its_owners() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let wolf = game.res.mob_types().get("minecraft:wolf").cloned().unwrap();
@@ -1216,7 +1216,7 @@ mod guest_hit_tests {
     /// A bystander stands exactly under the mob that bites, listed first: the
     /// search by position ignores height and would have named the bystander.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_effect_hit_on_a_guest_credits_the_mob_that_swung() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 100.0, 0.5)).unwrap());

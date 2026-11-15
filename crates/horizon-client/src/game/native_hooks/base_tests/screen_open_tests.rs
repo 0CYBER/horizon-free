@@ -27,7 +27,7 @@ impl Hooks for Idle {}
 /// and one below it, each as wide as the window and a tab row deep (vanilla's
 /// `CreativeModeInventoryScreen` tab buttons, 28 px outside the 195x136 window).
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn the_creative_screen_excludes_its_two_tab_rows() {
     with_mods(Vec::new().into(), || {
         crate::game::native_entity_refs::tests::with_game(|game| {
@@ -69,7 +69,7 @@ impl Hooks for KeyProbe {
 /// `swing_hand` reports no swing, a cancelled use keeps its swing, and an
 /// uncancelled pick goes on.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn an_interaction_key_reaches_a_mod_as_its_kind_and_can_be_cancelled() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let mods = vec![ModEntry::new("keys", Box::new(KeyProbe(log.clone())))].into();
@@ -127,7 +127,7 @@ impl Hooks for CancelSecondPress {
 /// A cancelled repeat keeps the hold an accepted press made, while a cancelled first press
 /// is never held, nor are its repeats.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_cancelled_repeat_keeps_the_hold_and_a_cancelled_first_press_is_never_held() {
     use winit::keyboard::KeyCode;
     let heard = Arc::new(Mutex::new(0));
@@ -177,7 +177,7 @@ fn a_cancelled_repeat_keeps_the_hold_and_a_cancelled_first_press_is_never_held()
 /// A cancelled press of a mapping is dropped while playing, and only then asked; the
 /// release of the same key is asked too but never canceled, so nothing stays held.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_cancelled_mapping_press_is_dropped_and_its_release_is_not() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let mods = vec![ModEntry::new(
@@ -263,7 +263,7 @@ fn with_game_of(mods: Arc<[ModEntry]>, test: impl FnOnce(&mut Game<'_>)) {
 /// change a hook call; a mod with neither leaves it a plain assignment, and a mod
 /// screen's entry still releases the keys.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_mod_with_no_screen_hook_leaves_set_screen_plain() {
     with_game_of(vec![ModEntry::new("idle", Box::new(Idle))].into(), |game| {
         game.keys.insert(KeyCode::KeyW);
@@ -280,7 +280,7 @@ fn take(log: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
 /// follows it (`ScreenEvent.Opening`, then `.Closing`): none for the null
 /// screen the game plays on, one for each screen it leaves.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_new_screen_fires_opening_then_closing_of_the_old_one() {
     run(|game, log, _| {
         game.set_screen(Screen::Inventory);
@@ -296,7 +296,7 @@ fn a_new_screen_fires_opening_then_closing_of_the_old_one() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn cancelling_opening_keeps_the_current_screen() {
     run(|game, log, answer| {
         game.set_screen(Screen::Paused);
@@ -309,7 +309,7 @@ fn cancelling_opening_keeps_the_current_screen() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn replacing_opening_opens_the_mods_screen_instead() {
     run(|game, log, answer| {
         game.set_screen(Screen::Paused);
@@ -330,7 +330,7 @@ fn replacing_opening_opens_the_mods_screen_instead() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn the_same_screen_again_fires_nothing() {
     run(|game, log, _| {
         game.set_screen(Screen::Playing);
@@ -360,7 +360,7 @@ fn observed(id: &'static str, overlay: bool) -> Option<ObservedScreen> {
 /// `Screen` the observer sees change was announced by `set_screen`, so it
 /// is not announced twice.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn an_overlay_fires_opening_then_closing_through_the_observer() {
     run(|game, log, _| {
         game.observe_change(observed("sign_editor", true));
@@ -384,7 +384,7 @@ fn an_overlay_fires_opening_then_closing_through_the_observer() {
 /// An overlay opens through `open_screen_overlay`: Opening fires before it is
 /// set, once, and the frame's observer does not announce it again.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn an_overlay_fires_opening_before_it_opens() {
     run(|game, log, _| {
         game.open_sign_editor((0, 64, 0), true);
@@ -399,7 +399,7 @@ fn an_overlay_fires_opening_before_it_opens() {
 /// fired `screen_opening` (then `screen_closing` for the one it leaves),
 /// and `Cancel` keeps the title screen shown.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn a_title_screen_opens_through_screen_opening() {
     use horizon_client::title::Mode;
     run(|game, log, answer| {
@@ -432,7 +432,7 @@ fn a_title_screen_opens_through_screen_opening() {
 /// change, so the frame's observer has nothing left to announce. With no
 /// world, `Cancel` doesn't keep the title shut.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn the_title_appears_and_goes_through_screen_opening() {
     run(|game, log, answer| {
         let saves = std::env::temp_dir().join("horizon-title-gate-test-no-saves");
@@ -454,7 +454,7 @@ fn the_title_appears_and_goes_through_screen_opening() {
 
 /// `screen_init_post` follows an overlay that opened, after its Opening.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn an_overlay_fires_init_post_after_it_opens() {
     use mod_api::ScreenInitPostEvent;
     /// Hears Opening and Init.Post, in one log.
@@ -489,7 +489,7 @@ fn an_overlay_fires_init_post_after_it_opens() {
 
 /// The read and the hook see the same live screen, including overlays.
 #[test]
-#[ignore = "needs prepared resources and an X11 display"]
+#[ignore = "daily"]
 fn client_gui_state_matches_screen_init_hook() {
     // Winit permits only one event loop per process, even after it is dropped.
     if crate::game::native_entity_refs::tests::run_fresh_cases(
@@ -584,7 +584,7 @@ fn client_gui_state_matches_screen_init_hook() {
 
 /// `Cancel` keeps an overlay shut, as it keeps a `Screen` shut.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn cancelling_opening_keeps_an_overlay_shut() {
     run(|game, log, answer| {
         *answer.lock().unwrap() = Some(ScreenOpening::Cancel);
@@ -602,7 +602,7 @@ fn cancelling_opening_keeps_an_overlay_shut() {
 
 /// `ModScreen` opens the answering mod's screen in place of the overlay.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn replacing_opening_of_an_overlay_opens_the_mods_screen() {
     run(|game, log, answer| {
         *answer.lock().unwrap() = Some(ScreenOpening::ModScreen);
@@ -619,7 +619,7 @@ fn replacing_opening_of_an_overlay_opens_the_mods_screen() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn no_mods_is_a_plain_assignment() {
     with_mods(Vec::new().into(), || {
         crate::game::native_entity_refs::tests::with_game(|game| {

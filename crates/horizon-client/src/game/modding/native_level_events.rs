@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_queued_block_event_runs_the_blocks_trigger_once() {
         use horizon_core::position::BlockPos;
         use mod_api::{LevelRef, WorldEpoch};
@@ -298,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn a_level_event_in_a_write_hook_joins_the_events_in_order() {
         let mods: mod_api::Mods =
             vec![mod_api::ModEntry::new("level-events", Box::new(EventsMod))].into();
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_global_level_event_reaches_every_player_or_falls_back_to_a_plain_one() {
         use horizon_client::gamerules::Value;
         use mod_api::{LevelRef, WorldEpoch};
@@ -423,7 +423,7 @@ mod tests {
     /// `levelEvent(null, ...)`: a player within 64 blocks gets the plain packet
     /// at the event's position, and one further away gets nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn with_the_rule_off_a_global_level_event_reaches_a_player_in_range_as_a_plain_one() {
         use super::super::lan::LanSettings;
         use horizon_client::gamerules::Value;

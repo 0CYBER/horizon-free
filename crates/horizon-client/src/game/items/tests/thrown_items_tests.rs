@@ -43,7 +43,7 @@ fn sound(game: &mut Game<'_>, event: &str) -> (f32, f32) {
 /// the view (level facing, so +z) and 0.1 up, scattered by the thrower's own
 /// random, which the level's draws never see.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_thrown_item_takes_the_throwers_random_not_the_levels() {
     let mut game = standing_game();
     game.yaw = 0.0;
@@ -73,7 +73,7 @@ fn a_thrown_item_takes_the_throwers_random_not_the_levels() {
 /// `Player.dropEquipment` -> `Inventory.dropAll(randomly)`: each stack a dying
 /// player lets go rises 0.2, scattered by the thrower's own random.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_death_scatter_takes_the_throwers_random_not_the_levels() {
     let mut game = standing_game();
     game.inventory[0] = Some(ItemStack::new("minecraft:stone", 2));
@@ -102,7 +102,7 @@ fn a_death_scatter_takes_the_throwers_random_not_the_levels() {
 /// client's own random; `GiveCommand.giveItem` uses the player's. Neither is
 /// the level's, which random ticks draw from.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_pickup_pitch_is_not_drawn_from_the_levels_random() {
     let mut game = standing_game();
     game.spawn_item(
@@ -181,7 +181,7 @@ fn with_remote_game<R>(f: impl FnOnce(&mut Game<'_>) -> R) -> R {
 /// pickup never draws the level's stream, which its particles and ambient
 /// sounds share.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_pickup_sound_takes_the_listeners_random() {
     with_remote_game(|game| {
         let at = Vec3::new(2.5, 64.0, 2.5);
@@ -225,7 +225,7 @@ fn a_client_pickup_sound_takes_the_listeners_random() {
 /// `Entity.lavaHurt` pitches the burn sound from the item's own random, the
 /// one its constructor drew from.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_burning_items_sound_is_not_drawn_from_the_levels_random() {
     let mut game = standing_game();
     let lava = game

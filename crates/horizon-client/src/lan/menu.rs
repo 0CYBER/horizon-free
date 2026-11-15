@@ -1074,8 +1074,15 @@ fn pickup(view: &mut View, slot: i32, button: i32, rules: &dyn Rules) {
     match (slot_item, carried) {
         (None, None) => {}
         (None, Some(mut c)) => {
-            if view.may_place(i, &c, rules) {
-                let amount = if right { 1 } else { c.count }.min(view.slot_max(i, &c, rules));
+            let (may_place, max) = view.slot_rules(i, &c, rules);
+            let max = view
+                .container_limits
+                .get(i)
+                .copied()
+                .flatten()
+                .map_or(max, |limit| max.min(limit));
+            if view.enabled(i) && may_place {
+                let amount = if right { 1 } else { c.count }.min(max);
                 view.set(
                     i,
                     Some(ItemStack {

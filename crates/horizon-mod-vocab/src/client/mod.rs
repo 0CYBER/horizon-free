@@ -23,6 +23,7 @@ pub(crate) mod fluid_draw;
 #[doc(hidden)]
 pub mod fog;
 pub(crate) mod gui_clip;
+pub(crate) mod gui_entity;
 pub(crate) mod gui_layers;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
@@ -41,6 +42,7 @@ pub(crate) mod model_loader;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod music;
+pub(crate) mod narration;
 pub(crate) mod pack_finders;
 pub(crate) mod particle_keys;
 pub(crate) mod particle_providers;

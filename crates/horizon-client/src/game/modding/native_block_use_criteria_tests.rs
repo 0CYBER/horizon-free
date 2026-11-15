@@ -77,7 +77,7 @@ fn has(game: &Game<'_>, id: &str) -> bool {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn default_block_use_awards_only_default() {
     with_guests(|g| {
         install(g);
@@ -92,7 +92,7 @@ fn default_block_use_awards_only_default() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn item_block_use_distinguishes_snapshots() {
     with_guests(|g| {
         install(g);
@@ -120,7 +120,7 @@ fn item_block_use_distinguishes_snapshots() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_use_refusals_grant_nothing() {
     with_guests(|g| {
         install(g);
@@ -181,7 +181,7 @@ fn block_use_refusals_grant_nothing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn remote_block_use_refuses() {
     crate::game::native_entity_refs::tests::with_client_game(|g| {
         let (pipe, _server) = horizon_protocol::connection::Pipe::pair();

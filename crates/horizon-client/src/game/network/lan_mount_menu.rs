@@ -249,7 +249,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn horse_inventory_click_keeps_complete_body_stack() {
         use horizon_client::{items::ItemStack, menu::Input, mobs::Mob};
         use horizon_core::geometry::Vec3;

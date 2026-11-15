@@ -135,7 +135,7 @@ fn fall(g: &Game<'_>) -> (f64, Option<[f64; 3]>, [bool; 3]) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_guest_move_that_goes_up_ends_its_fall() {
     let mut resources = None;
     let mut g = scene(&mut resources);

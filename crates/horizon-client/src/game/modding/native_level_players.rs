@@ -55,7 +55,7 @@ mod tests {
     /// The host and two guests, each named once with their own entity, in and
     /// out of guest turns; a guest in another level is that level's.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn level_players_name_host_and_guests_once_during_turns() {
         with_guests(|game| {
             park_the_nether(game);
@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn level_players_leave_out_fake_players() {
         with_guests(|game| {
             let _serving = super::super::integrated::tests::install_serving(game, false);
@@ -130,7 +130,7 @@ mod tests {
     /// A guest watches a chunk once it is sent inside its view, and stops when
     /// it moves away or the chunk falls past its view distance.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn chunk_watchers_follow_sent_chunks_inside_the_view() {
         with_guests(|game| {
             park_the_nether(game);

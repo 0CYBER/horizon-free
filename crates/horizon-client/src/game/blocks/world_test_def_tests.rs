@@ -72,7 +72,7 @@ fn game<'a>(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_test_instance_from_an_enabled_world_pack_is_found_and_runs() {
     let world = world_with_pack("found");
     let mut resources = None;
@@ -155,7 +155,7 @@ const FAILING: &str = r#"{"type":"minecraft:block_based","structure":"minecraft:
 /// cached misses and selector ids included. A pack overrides a built-in id.
 /// A game with no world opened reads the game's own data as before.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_world_keeps_the_test_instances_it_opened_with() {
     let a = world_with(
         "a",

@@ -28,7 +28,7 @@ fn capture(game: &Game<'_>) -> Vec<(AttachmentHolder, u32, AttachmentWriteToken)
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn current_dimension_capture_and_foreign_residency_validation() {
     with_game(|game| {
         VALUE

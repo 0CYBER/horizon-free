@@ -4,7 +4,7 @@ use horizon_client::{chunk::Chunk, mobs::Mob};
 use horizon_core::nbt::Tag;
 
 #[test]
-#[ignore = "requires private prepared resources and fresh Horizon homes"]
+#[ignore = "daily"]
 fn discarded_mob_leaves_selectors_and_saves_while_frozen() {
     let root = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();

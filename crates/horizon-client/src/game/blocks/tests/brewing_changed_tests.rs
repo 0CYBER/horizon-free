@@ -5,7 +5,7 @@ use horizon_client::{brewing::BrewingStand, containers::BlockEntity, items::Item
 /// (the fuel is taken and the timer begins); the block state only carries
 /// the bottle bits, so nothing else marked this start.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn starting_a_brew_marks_the_chunk() {
     let mut game_resources = None;
     let mut game = server_game(&mut game_resources);

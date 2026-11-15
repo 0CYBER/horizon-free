@@ -20,7 +20,7 @@ fn identity(game: &mut Game<'_>) -> Identity {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cancel_action_undoes_real_game_listener_block_and_deferred_drop() {
     with_game(|game| {
         let identity = identity(game);
@@ -65,7 +65,7 @@ fn cancel_action_undoes_real_game_listener_block_and_deferred_drop() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn nested_real_game_commit_then_trap_rolls_back_next_placement_succeeds() {
     with_game(|game| {
         let identity = identity(game);
@@ -120,7 +120,7 @@ fn nested_real_game_commit_then_trap_rolls_back_next_placement_succeeds() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn outer_real_game_abort_undoes_applied_menu_block_cost_rng_and_drops() {
     with_game(|game| {
         let identity = identity(game);
@@ -170,7 +170,7 @@ fn outer_real_game_abort_undoes_applied_menu_block_cost_rng_and_drops() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn real_save_gate_and_save_all_refuse_action_savepoint() {
     with_game(|game| {
         let identity = identity(game);
@@ -275,7 +275,7 @@ fn a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in_isolated(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn only_root_commit_publishes_real_listener_and_plan_drops_in_order() {
     with_game(|game| {
         let identity = identity(game);
@@ -338,7 +338,7 @@ fn only_root_commit_publishes_real_listener_and_plan_drops_in_order() {
 // drop is never published, even when the root commits. Like the others here,
 // run serially (--test-threads=1): the save gate is process-wide.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn abandoned_token_releases_real_save_gate_and_publishes_nothing() {
     with_game(|game| {
         let identity = identity(game);

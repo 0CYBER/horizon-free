@@ -169,7 +169,7 @@ fn unloaded(chunk: [i32; 2]) -> Vec<(&'static str, String, [i32; 2])> {
 /// column; an unload for a forget with the block still readable, and none for a second forget
 /// of the same column; on a dimension change, an unload naming the old dimension.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_tells_a_chunk_packet_and_its_forget_once() {
     const NAME: &str = "game::native_hooks::client_chunk_hooks_tests::a_client_tells_a_chunk_packet_and_its_forget_once";
     if run_fresh_cases(NAME, "HORIZON_CLIENT_CHUNK_PACKET", &["game"]) {
@@ -213,7 +213,7 @@ fn a_client_tells_a_chunk_packet_and_its_forget_once() {
 /// The centre-move and radius drops tell one unload per dropped column and none for the
 /// kept ones; the client level going tells the rest.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn every_route_that_frees_a_column_tells_its_unload() {
     const NAME: &str = "game::native_hooks::client_chunk_hooks_tests::every_route_that_frees_a_column_tells_its_unload";
     if run_fresh_cases(NAME, "HORIZON_CLIENT_CHUNK_ROUTES", &["game"]) {

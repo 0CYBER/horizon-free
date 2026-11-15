@@ -173,7 +173,7 @@ fn thrown(game: &super::Game<'_>) -> usize {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn a_part_makes_a_coin_currency_and_refuses_the_gold_ingot() {
     crate::game::in_own_process(
         "game::native_is_piglin_currency_tests::a_part_makes_a_coin_currency_and_refuses_the_gold_ingot",
@@ -267,7 +267,7 @@ fn a_part_makes_a_coin_currency_and_refuses_the_gold_ingot_isolated() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn without_parts_only_the_gold_ingot_is_currency() {
     crate::game::in_own_process(
         "game::native_is_piglin_currency_tests::without_parts_only_the_gold_ingot_is_currency",
@@ -365,7 +365,7 @@ fn loved_emerald_root(scratch: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn a_loved_coin_from_the_ground_is_admired_and_bartered() {
     crate::game::in_own_process(
         "game::native_is_piglin_currency_tests::a_loved_coin_from_the_ground_is_admired_and_bartered",

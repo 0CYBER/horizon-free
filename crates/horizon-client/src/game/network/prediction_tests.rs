@@ -2,7 +2,7 @@ use horizon_client::motion::PlayerMotion;
 use horizon_core::geometry::Vec3;
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn guest_replay_synchronizes_worn_boots() {
     mod_platform::testing::with_mods(Default::default(), || {
         crate::game::native_guest_turn_tests::with_guests(|game| {
@@ -204,7 +204,7 @@ fn powder_snow_walk(boots: &str) -> Vec<f64> {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn honest_powder_snow_prediction() {
     let offsets = powder_snow_walk("minecraft:leather_boots");
     assert_eq!(offsets.len(), 20);
@@ -212,7 +212,7 @@ fn honest_powder_snow_prediction() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn lying_powder_snow_prediction() {
     let offsets = powder_snow_walk("minecraft:iron_boots");
     assert_eq!(offsets.len(), 20);

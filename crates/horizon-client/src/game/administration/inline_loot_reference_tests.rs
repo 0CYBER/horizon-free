@@ -141,7 +141,7 @@ fn give(game: &mut Game<'_>, table: &str) -> (bool, Option<String>, i32, i32, i3
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_inline_reference_to_a_missing_table_fails_the_parse() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -185,7 +185,7 @@ fn an_inline_reference_to_a_missing_table_fails_the_parse() {
 /// inline is refused while the pack loads, as `CommandFunction.parseCommand`.
 /// `[fail-before]` marks the assertions the pristine source fails.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn inline_references_follow_the_codec_and_the_reloaded_registry() {
     let mut resources = None;
     let mut game = game(&mut resources);

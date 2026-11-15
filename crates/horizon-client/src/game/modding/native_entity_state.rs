@@ -579,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_setters_update_stored_state() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_core::geometry::Vec3;
@@ -630,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fire_ticks_reads_supported_entities_and_refuses_others() {
         use horizon_client::entities::ArmorStand;
         use horizon_client::items::ItemStack;
@@ -688,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn tick_count_reads_supported_entities_and_refuses_others() {
         use super::super::minecarts::{CartKind, Minecart};
         use horizon_client::entities::ExperienceOrb;
@@ -770,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_reads_simulated_kinds_and_refuses_others() {
         use super::super::native_guest_turn_tests::with_guests;
         use super::super::{
@@ -940,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_write_blocks_entry_and_counts_down() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::chunk::Chunk;
@@ -1020,7 +1020,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_write_is_refused_for_a_player() {
         with_player(|game, player| {
             game.portals.player.cooldown = 7;
@@ -1031,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_write_is_refused_for_an_acting_guest() {
         use super::super::native_guest_turn_tests::with_guests;
 
@@ -1056,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_write_is_refused_for_a_falling_block() {
         use super::super::FallingBlock;
         use super::super::native_entity_refs::tests::with_game;
@@ -1111,7 +1111,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_write_is_refused_on_a_client() {
         use super::super::execution_role::ExecutionRole;
         use super::super::native_entity_refs::tests::with_game;
@@ -1142,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_write_reaches_an_item() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::items::ItemStack;
@@ -1166,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_write_reaches_an_arrow() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::projectiles::{Projectile, ProjectileKind};
@@ -1189,7 +1189,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_cooldown_write_is_refused_for_a_non_portal_projectile() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::projectiles::{Projectile, ProjectileKind};
@@ -1208,25 +1208,25 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn player_invisibility_write_is_refused() {
         with_player(|game, player| assert!(!player.set_invisible(game, true)));
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn player_glowing_write_is_refused() {
         with_player(|game, player| assert!(!player.set_glowing(game, true)));
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn player_no_gravity_write_is_refused() {
         with_player(|game, player| assert!(!player.set_no_gravity(game, true)));
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn player_frozen_write_updates_server_state() {
         with_player(|game, player| {
             assert!(player.set_ticks_frozen(game, 53));
@@ -1235,7 +1235,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn secondary_use_reads_reachable_client_handles_and_keeps_server_flags() {
         use super::super::execution_role::ExecutionRole;
         use horizon_core::geometry::Vec3;

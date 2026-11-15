@@ -108,7 +108,7 @@ mod tests {
     /// tick in list order (the order they were added), each asked of every mod
     /// in dependency order.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn custom_spawners_tick_in_list_order_and_a_removed_one_never_ticks() {
         with_game(|game| {
             game.creatures.cat_tick = 5;

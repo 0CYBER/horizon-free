@@ -524,7 +524,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn pending_ids_keep_counter_order_and_assign_zero_only_once() {
         super::super::native_entity_refs::tests::with_game(|game| {
             for (kind, nbt) in [
@@ -585,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn native_roots_keep_the_loaded_id_and_do_not_allocate_twice() {
         use horizon_client::chunk::Chunk;
         for (kind, nbt) in [
@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn portal_ids_follow_only_the_existing_moving_entity_filters() {
         super::super::native_entity_refs::tests::with_game(|game| {
             for _ in 0..3 {
@@ -698,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn pending_assignment_refuses_a_bound_zero_owner_before_consuming_an_id() {
         use horizon_mod_runtime::attachments::{
             AttachmentType, Attachments, Holder, index::AttachmentIndex,
@@ -751,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn joins_follow_insertion_order_and_canceled_entities_never_leave() {
         use horizon_client::mobs::Mob;
         use horizon_core::geometry::Vec3;

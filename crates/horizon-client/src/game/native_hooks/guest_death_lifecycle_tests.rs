@@ -113,7 +113,7 @@ fn lifecycle(heal: bool) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and loopback sockets"]
+#[ignore = "daily"]
 fn cancelled_corpse_teleported_in_player_tick_keeps_original_removal_deadline() {
     crate::game::in_own_process(
         "game::native_hooks::guest_death_lifecycle_tests::cancelled_corpse_teleported_in_player_tick_keeps_original_removal_deadline",
@@ -122,7 +122,7 @@ fn cancelled_corpse_teleported_in_player_tick_keeps_original_removal_deadline() 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and loopback sockets"]
+#[ignore = "daily"]
 fn listener_healed_guest_stays_visible_through_player_tick_teleport() {
     crate::game::in_own_process(
         "game::native_hooks::guest_death_lifecycle_tests::listener_healed_guest_stays_visible_through_player_tick_teleport",

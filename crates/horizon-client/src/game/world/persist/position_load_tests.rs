@@ -1,6 +1,6 @@
 // Included in persist::tests to keep existing test paths stable.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn deferred_position_records_do_not_resurrect_a_rejected_duplicate_uuid() {
     super::super::native_entity_refs::tests::with_game(|game| {
         let source = (32, 48);
@@ -50,7 +50,7 @@ fn deferred_position_records_do_not_resurrect_a_rejected_duplicate_uuid() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn malformed_position_from_a_distant_chunk_survives_save_and_unload() {
     super::super::native_entity_refs::tests::with_game(|game| {
         let source = (32, 48);
@@ -79,7 +79,7 @@ fn malformed_position_from_a_distant_chunk_survives_save_and_unload() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn neutral_mob_load_notifies_target_even_without_saved_anger() {
     use std::sync::{Arc, Mutex};
 

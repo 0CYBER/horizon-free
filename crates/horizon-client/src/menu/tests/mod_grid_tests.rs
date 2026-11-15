@@ -127,7 +127,10 @@ fn slot_rules_read_a_mod_grid_slot_and_the_result() {
         assert_eq!(rules.1.get(), 1);
         station.set_slot(env, 1, None);
         station.slot_rules(env, 5, &stack("stick", 1).unwrap(), true, CONTAINER_MAX);
-        assert_eq!(rules.0.borrow()[2], (4, Grid, None, None));
+        assert_eq!(
+            rules.0.borrow()[2],
+            (4, Grid, None, Some(("minecraft:oak_button".to_owned(), 1)))
+        );
         assert_eq!(rules.1.get(), 2);
     });
 }

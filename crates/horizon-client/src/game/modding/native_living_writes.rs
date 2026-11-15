@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_item_used_in_either_hand_is_released_once() {
         with_uses(|game, uses, player| {
             uses.lock().unwrap().release_on_stop = Some(player);
@@ -476,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_start_a_mod_refuses_starts_nothing() {
         with_uses(|game, uses, player| {
             game.offhand = Some(ItemStack::new("minecraft:bow", 1));
@@ -488,7 +488,7 @@ mod tests {
 
     /// A player whose use button is up lets go on the next tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_use_with_the_button_up_is_released_on_its_next_tick() {
         with_uses(|game, uses, player| {
             game.right = false;
@@ -503,7 +503,7 @@ mod tests {
     /// A use a mod's own tick released stays released, and finishes nothing:
     /// the tick that called it has no use left to go on with.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_use_released_from_its_own_tick_stays_released() {
         with_uses(|game, uses, player| {
             let items = ["minecraft:apple", "minecraft:potion", "minecraft:shield"];
@@ -531,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mob_uses_either_hand_until_it_is_released() {
         use horizon_items::equipment::{MAINHAND, OFFHAND};
         with_uses(|game, uses, _| {
@@ -611,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mob_swings_while_its_hand_and_loot_flags_live_on_the_mob_handle() {
         with_game(|game| {
             for (id, kind) in [(12, "minecraft:zombie"), (13, "minecraft:cow")] {
@@ -670,7 +670,7 @@ mod tests {
     /// worth of `20 * (30 - count)` ticks as for a player, the timer a write set
     /// running first.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mobs_stuck_arrows_and_stingers_fall_out_in_its_ticks() {
         with_game(|game| {
             floor_and_zombies(game);
@@ -700,7 +700,7 @@ mod tests {
     /// A spear's use counts its own ticks, which a write to the ticks left
     /// moves: the next tick goes on from there.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mobs_spear_use_goes_on_from_the_ticks_a_write_left() {
         use horizon_items::equipment::MAINHAND;
         with_game(|game| {
@@ -724,7 +724,7 @@ mod tests {
     /// A waypoint write is `/waypoint modify`: what it stores is what the command
     /// stores, for the entities the command takes.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_waypoint_write_on_a_mob_is_kept_with_the_waypoint() {
         use super::super::commands::Target;
         with_game(|game| {
@@ -750,7 +750,7 @@ mod tests {
     /// style and colour, and a spin shows in the flags the players around get,
     /// counts down in the guest's ticks and ends when asked to.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_guests_waypoint_and_riptide_writes_reach_the_players_around() {
         use horizon_protocol::{
             entity_data::Value,
@@ -846,7 +846,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_player_keeps_its_stuck_arrows_and_item_use_timer() {
         use super::super::lan::LanSettings;
         use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
@@ -960,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mobs_swing_reaches_clients_with_the_hand_asked_for() {
         use super::super::lan::LanSettings;
         use horizon_client::lan::{

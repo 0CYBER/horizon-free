@@ -74,7 +74,7 @@ mod tests {
     /// its chunk storage extends lower, and spills the container's contents.
     /// Vehicles on the line or above it survive this tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_tick_discards_the_vehicles_under_the_world() {
         use horizon_client::chunk::Chunk;
         use horizon_core::position::ChunkPos;
@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn saved_deep_end_boat_loads_then_is_discarded_and_extreme_scans_terminate() {
         use super::super::Boat;
         use horizon_client::{chunk::Chunk, motion::PlayerMotion};

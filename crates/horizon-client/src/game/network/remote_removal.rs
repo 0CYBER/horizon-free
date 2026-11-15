@@ -108,7 +108,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn remove_entities_detaches_only_removed_vehicles() {
         use crate::game::{
             Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,
@@ -197,7 +197,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn add_entity_replaces_falling_block_without_removing_other_ids() {
         use crate::game::{
             Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,
@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn remove_entities_filters_mixed_entity_lists() {
         use crate::game::{
             Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,

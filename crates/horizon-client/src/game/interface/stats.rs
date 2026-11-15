@@ -642,7 +642,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fake_players_do_not_advance_phantom_rng() {
         use horizon_core::random::RandomSource;
         super::super::native_entity_refs::tests::with_game(|game| {

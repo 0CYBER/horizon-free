@@ -5,7 +5,7 @@ use crate::game::{Audio, Options, Progress, Settings, load_resources};
 use horizon_core::nbt::parse_snbt;
 
 #[test]
-#[ignore = "needs prepared resources and scratch homes/cwd"]
+#[ignore = "daily"]
 fn kill_spills_explicit_vehicle_contents_after_menu_writeback() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();

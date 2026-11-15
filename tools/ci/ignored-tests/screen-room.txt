@@ -1,0 +1,4 @@
+# Screen-room integration uses prepared game resources.
+horizon-client game::recipe_book::screen_room_tests::shifted_book_painter_and_input_share_the_absolute_origin lib daily resources
+horizon-client game::screen_build::tests::a_mods_room_moves_the_window_and_is_asked_once_a_frame lib daily resources
+horizon-client game::screen_build::tests::room_preserves_vanilla_thresholds_without_listeners_and_on_fit_refusal lib daily resources

@@ -81,7 +81,7 @@ fn store(game: &mut Game<'_>, subject: &str, kind: &str, getter: &str) -> (bool,
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_orb_stores_into_its_own_score() {
     let mut resources = None;
     let mut game = game(&mut resources);

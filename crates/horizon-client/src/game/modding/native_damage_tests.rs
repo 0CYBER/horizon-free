@@ -134,7 +134,7 @@ fn mob(game: &super::Game<'_>, id: u32, kind: &str) -> Mob {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_original_damage_is_the_hit_before_the_incoming_hook() {
     let heard = heard(|game| {
         let mut pig = mob(game, 225001, "minecraft:pig");
@@ -150,7 +150,7 @@ fn the_original_damage_is_the_hit_before_the_incoming_hook() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn pre_sets_the_health_lost_and_the_last_hurt_the_cooldown_compares() {
     let heard = heard(|game| {
         let mut pig = mob(game, 225003, "minecraft:pig");
@@ -164,7 +164,7 @@ fn pre_sets_the_health_lost_and_the_last_hurt_the_cooldown_compares() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn pre_fires_for_a_hit_its_reductions_took_to_zero() {
     let heard = heard(|game| {
         let mut witch = mob(game, 225008, "minecraft:witch");
@@ -177,7 +177,7 @@ fn pre_fires_for_a_hit_its_reductions_took_to_zero() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn pre_draws_from_the_level_random_of_the_hit() {
     heard(|game| {
         let mut expected = game.world.random.clone();
@@ -189,7 +189,7 @@ fn pre_draws_from_the_level_random_of_the_hit() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hit_on_the_dragon_fires_pre_and_post() {
     let heard = heard(|game| {
         let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
@@ -203,7 +203,7 @@ fn a_hit_on_the_dragon_fires_pre_and_post() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mob_and_dragon_post_records_fresh_hit_decision() {
     let heard = heard(|game| {
         let mut pig = mob(game, 225014, "minecraft:pig");
@@ -242,7 +242,7 @@ fn survival_player(game: &mut super::Game<'_>, id: u32) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn post_fires_for_a_player_hit_that_absorption_took_whole() {
     let heard = heard(|game| {
         survival_player(game, 227001);
@@ -266,7 +266,7 @@ fn post_fires_for_a_player_hit_that_absorption_took_whole() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn post_fires_for_a_player_hit_a_shield_blocked_whole() {
     let heard = heard(|game| {
         survival_player(game, 227002);
@@ -277,7 +277,7 @@ fn post_fires_for_a_player_hit_a_shield_blocked_whole() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_hit_inside_the_cooldown_no_stronger_than_the_last_fires_no_post() {
     let heard = heard(|game| {
         // Pre sets 225003's damage to 2, which `lastHurt` keeps.
@@ -291,7 +291,7 @@ fn a_hit_inside_the_cooldown_no_stronger_than_the_last_fires_no_post() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn post_fires_once_for_a_killing_blow_on_a_mob() {
     let heard = heard(|game| {
         let mut pig = mob(game, 225016, "minecraft:pig");
@@ -378,7 +378,7 @@ fn killing_blow(cancel: bool) -> (Vec<(&'static str, i64)>, f32) {
 /// Horizon's order, not NeoForge's (whose Post follows the death processing): a killing blow's
 /// Post fires once, then the death hooks, as the maintainers ruled on #3963.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_killing_blows_post_fires_once_before_the_death_hooks() {
     assert_eq!(
         killing_blow(false),
@@ -389,7 +389,7 @@ fn a_killing_blows_post_fires_once_before_the_death_hooks() {
 /// A death a mod cancels: the pig remains cancelled at 0 health with `death_canceled`,
 /// without a second Post or death on the next tick.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_cancelled_deaths_post_fires_once_before_the_death_hooks() {
     assert_eq!(
         killing_blow(true),
@@ -398,7 +398,7 @@ fn a_cancelled_deaths_post_fires_once_before_the_death_hooks() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_container_names_what_armor_took() {
     let heard = heard(|game| {
         let mut zombie = mob(game, 225011, "minecraft:zombie");
@@ -415,7 +415,7 @@ fn the_container_names_what_armor_took() {
 /// A level built the normal way lends the game's hooks to its hits: a path that built it
 /// without them would run no mod's damage hook.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_game_built_level_has_every_damage_hook() {
     with_game(|game| {
         let hooks = &game.damage_hooks;
@@ -427,7 +427,7 @@ fn a_game_built_level_has_every_damage_hook() {
 /// The real projectile hit routes (not hand-built HurtSources) preserve the direct
 /// entity through incoming, pre and post, independently of whether there is a shooter.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon() {
     use horizon_client::command::args::GameMode;
     use horizon_client::health::NO_ATTACK;
@@ -494,7 +494,7 @@ fn arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn snapshot_crosses_the_real_damage_hook_with_reductions() {
     let log = heard(|game| {
         let mut container = horizon_world::living_damage::DamageContainer::new(10.0);
@@ -522,7 +522,7 @@ fn snapshot_crosses_the_real_damage_hook_with_reductions() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn unsubscribed_damage_does_not_convert() {
     mod_platform::testing::with_mods(Vec::<mod_api::ModEntry>::new().into(), || {
         with_game(|game| {

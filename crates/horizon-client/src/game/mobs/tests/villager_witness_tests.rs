@@ -2,7 +2,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires explicit isolated prepared resources"]
+#[ignore = "daily"]
 fn murder_uses_only_the_victims_sensor_memory() {
     crate::game::kill_die_vibration_tests::game(|game| {
         game.mobs.clear();

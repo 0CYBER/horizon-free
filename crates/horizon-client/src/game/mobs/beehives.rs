@@ -496,7 +496,7 @@ mod honey_overflow_tests {
     /// `player.drop(stack, false, PREDICTED)`: from 0.3 below the eyes,
     /// thrown along the view, with no thrower (#11377).
     #[test]
-    #[ignore = "needs prepared resources (HORIZON_TEST_RESOURCES)"]
+    #[ignore = "daily"]
     fn a_honey_bottle_that_does_not_fit_is_thrown_ahead() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.world.chunks.insert(
@@ -552,7 +552,7 @@ mod stay_tests {
     /// and lets it out by day. All of a hive's bees get the same answer in
     /// one turn, however many ask.
     #[test]
-    #[ignore = "needs prepared resources (HORIZON_TEST_RESOURCES)"]
+    #[ignore = "daily"]
     fn every_ready_bee_of_a_hive_turn_gets_the_same_answer() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -626,7 +626,7 @@ mod changed_tests {
     /// when a bee leaves. The hive's saved `bees` list lost an entry, and
     /// nothing else in the tick changed a block state.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_released_bee_marks_the_chunk() {
         let mut game_resources = None;
         let mut game = server_game(&mut game_resources);
@@ -662,7 +662,7 @@ mod changed_tests {
     /// `BeehiveBlockEntity.addOccupant` ends with `setChanged`: the hive
     /// stored the bee and the mob is gone, which no block state shows.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_bee_going_in_marks_the_chunk() {
         let mut game_resources = None;
         let mut game = server_game(&mut game_resources);

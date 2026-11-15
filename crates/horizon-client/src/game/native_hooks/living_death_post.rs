@@ -102,7 +102,7 @@ mod tests {
     /// hook names the same last hurt `living_death` heard. A cancelled death
     /// is not told. The kill-blow hook heard before, the notice comes after.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn living_death_post_fires_once_after_each_finished_death() {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let cancel = Arc::new(AtomicBool::new(false));
@@ -219,7 +219,7 @@ mod tests {
     /// A server player's death is told at `ServerPlayer.die`'s tail too: after
     /// its death message, the inventory drops and the experience.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn living_death_post_hears_a_player_death_after_the_message_and_loot() {
         use crate::game::native_player_death::tests::add_guest;
         let heard = Arc::new(Mutex::new(Vec::new()));

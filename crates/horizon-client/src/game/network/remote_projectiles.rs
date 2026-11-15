@@ -1275,7 +1275,7 @@ mod nested_spawn_tests {
         position: fn(&Game<'_>) -> Vec3,
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn remote_lift_restores_each_nested_spawn_without_ticking_it_early() {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
             game.world.chunks.insert(
@@ -1345,7 +1345,7 @@ mod nested_spawn_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn own_rocket_lift_keeps_a_new_attachment_until_the_next_pass() {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
             let (client, _server) = horizon_protocol::connection::Pipe::pair();

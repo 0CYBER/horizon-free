@@ -2,16 +2,19 @@
 # Function replacement end to end (fn-replace): native mods' `[[native.mixin]]` rows (and API-only mods) built by the
 # launcher's normal native build against a PREBUILT game, with no game rebuild, then run on a
 # dedicated server.
-#   [FNR_MODS="alpha beta"] [FNR_MOD_ROOT=DIR] [FNR_ROUTE=prebuilt|prebuilt-api] tools/ci/fn_replace_check.sh LAUNCHER SDK SCRATCH [RESOURCES]
+#   [FNR_MODS="alpha beta"] [FNR_MOD_ROOT=DIR] [FNR_ROUTE=prebuilt|prebuilt-api] tools/ci/fn_replace_check.sh LAUNCHER SDK_BASE SCRATCH [RESOURCES]
 # FNR_WASM_LAYOUT_PACKAGE=valid.hmod FNR_WASM_STD=std.wasm adds a wasm point-layout refusal check
 # to the with-RESOURCES server run (not the build/link-only CI mode):
 # its exported layout fingerprint is changed to zero, and its integrity hash is updated.
-# SDK is a folder from `tools/prebuilt_game.py build --server` at this checkout's HEAD. With
-# RESOURCES (a prepared `horizon-client/26.3` folder), the server starts, takes `/tick` commands
+# SDK_BASE is a folder holding one `sdk-<commit>/` release folder (the SDK's archives, `sdk.json`, `SHA256SUMS` and its
+# signature) of this checkout's HEAD: the launcher reads its SDK from there (HORIZON_SDK_BASE), checking the signature
+# as it does a release's. The daily run signs its own SDK with a throwaway key and passes the public key in
+# HORIZON_SDK_TRUSTED_KEY, which only a launcher built with debug_assertions trusts (horizon_release_sign::sdk_keys_for);
+# a published release needs no key. With RESOURCES (a prepared `horizon-client/26.3` folder), the server starts, takes `/tick` commands
 # and stops; every mixin helper prints a line starting `fnr:`.
 set -euo pipefail
 launcher=$(realpath "$1")
-sdk=$(realpath "$2")
+sdk_base=$(realpath "$2")
 scratch=$3
 resources=${4:-}
 if [ -n "$resources" ]; then resources=$(realpath "$resources"); fi
@@ -19,12 +22,10 @@ side=${FNR_SIDE:-server}
 case "$side" in server|client) ;; *) echo "FNR_SIDE must be server or client" >&2; exit 2;; esac
 root=$(git rev-parse --show-toplevel)
 # The game revision is the SDK's: its source is what a patched function is copied out of.
-revision=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['commit'])" "$2/horizon-prebuilt.json")
+release=$(find "$sdk_base" -mindepth 1 -maxdepth 1 -type d -name 'sdk-*')
+test "$(echo "$release" | wc -l)" = 1 && test -n "$release" || { echo "$sdk_base must hold exactly one sdk-<commit> folder" >&2; exit 2; }
+revision=${release##*/sdk-}
 mixins=$(sed -n 's/^pub const REV: &str = "\(.*\)";$/\1/p' "$root/crates/horizon-mod-package/src/mixins_tool.rs")
-# The launcher's cache folder name: the package layout is numbered in one place.
-format=$(tr -d '[:space:]' < "$root/crates/horizon-mod-package/src/sdk/package-format")
-case $format in ''|*[!0-9]*) echo "crates/horizon-mod-package/src/sdk/package-format must hold one number, not '$format'" >&2; exit 2;; esac
-archive=horizon-prebuilt-v$format-
 
 # FNR_KEEP=1 keeps the launcher's folder (toolchain, horizon-mixins, source): a warm build.
 # FNR_MIXINS_FROM_SOURCE=1 builds horizon-mixins from its pinned source, dropping a kept tool: the
@@ -36,35 +37,11 @@ data=$scratch/launcher
 
 # The pinned source a patched function is copied out of, from this checkout.
 source=$data/native/source/$revision
-rm -rf "$source" "$data/native/prebuilt"
+rm -rf "$source"
 mkdir -p "$source"
 git -C "$root" archive "$revision" | tar -x -C "$source"
 find "$source" -type l -delete
 printf '%s' "$revision" > "$source/.horizon-revision"
-
-# The prebuilt game, where the launcher keeps a downloaded one.
-host=$(rustc -vV | sed -n 's/^host: //p')
-mkdir -p "$data/native/prebuilt"
-sdk_suffix=
-if [ "$side" = server ]; then sdk_suffix=-server; fi
-# Laid out as the launcher unpacks one: the identity's `runtime` and `api` slices in folders of
-# their own, every other file in `engine`, hard-linked where it can.
-python3 - "$sdk" "$data/native/prebuilt/$revision-$archive$host$sdk_suffix" <<'LAYOUT'
-import json, os, shutil, sys
-from pathlib import Path
-sdk, build = Path(sys.argv[1]), Path(sys.argv[2])
-slices = json.loads((sdk / "horizon-prebuilt.json").read_text())["slices"]
-placed = {name: kind for kind in ("runtime", "api") for name in slices[kind]}
-for path in sdk.rglob("*"):
-    if path.is_file():
-        name = path.relative_to(sdk).as_posix()
-        to = build / placed.get(name, "engine") / name
-        to.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.link(path, to)
-        except OSError:
-            shutil.copy2(path, to)
-LAYOUT
 
 base=$data/versions/ci
 mkdir -p "$base/.local/horizon-client/26.3"
@@ -84,14 +61,26 @@ for mod in ${FNR_MODS:-alpha beta}; do
   cp -r "${FNR_MOD_ROOT:-$root/tools/ci/fn-replace-check}/$mod" "$mods/fnr_$mod"
   sed -i "s/^horizon = \"HEAD\"$/horizon = \"$revision\"/; s/^mixins = \"MIXINS\"$/mixins = \"$mixins\"/" "$mods/fnr_$mod/horizon-mod.toml"
 done
-# The game library: libhorizon_mod_host.so / .dylib, or horizon_mod_host.dll on Windows.
-game_library() { ls "$sdk"/deps/*horizon_mod_host.so "$sdk"/deps/*horizon_mod_host.dylib "$sdk"/deps/*horizon_mod_host.dll 2>/dev/null | head -1; }
-game_hash=$(sha256sum "$(game_library)" | cut -d' ' -f1)
+# The game library (libhorizon_mod_host.so / .dylib, or horizon_mod_host.dll on Windows): its SHA-256 in the SDK's
+# runtime archive for this side, which the unpacked copy must still match once the mods are built.
+game_hash=$(python3 - "$release" "$side" <<'PYGAME'
+import hashlib, sys, tarfile
+from pathlib import Path
+release, side = Path(sys.argv[1]), sys.argv[2]
+archives = [a for a in release.glob("runtime-*.tar.xz") if a.name.endswith("-server.tar.xz") == (side == "server")]
+assert len(archives) == 1, f"one runtime archive for the {side} side, found {[a.name for a in archives]}"
+with tarfile.open(archives[0], "r:xz") as tar:
+    names = [m for m in tar.getmembers() if m.isfile() and Path(m.name).name.endswith(("horizon_mod_host.so", "horizon_mod_host.dylib", "horizon_mod_host.dll"))]
+    assert len(names) == 1, f"one game library, found {[m.name for m in names]}"
+    print(hashlib.sha256(tar.extractfile(names[0]).read()).hexdigest())
+PYGAME
+)
+game_library() { find "$data/native/prebuilt/$revision"-* -type f \( -name '*horizon_mod_host.so' -o -name '*horizon_mod_host.dylib' -o -name '*horizon_mod_host.dll' \) | head -1; }
 
 env_vars=(HORIZON_HOME="$scratch/home" HORIZON_LAUNCHER_HOME="$data" XDG_DATA_HOME="$scratch/data"
   XDG_CONFIG_HOME="$scratch/config" HORIZON_LAUNCHER_NO_SELF_UPDATE=1 HORIZON_NO_AUDIO=1
   HORIZON_LAUNCHER_TRASH="$scratch/trash" HORIZON_LAUNCHER_CLIPBOARD="$scratch/clipboard"
-  HORIZON_LAUNCHER_DESKTOP="$scratch/desktop" HORIZON_NATIVE_CARGO_TIMINGS=1)
+  HORIZON_LAUNCHER_DESKTOP="$scratch/desktop" HORIZON_NATIVE_CARGO_TIMINGS=1 HORIZON_SDK_BASE="$sdk_base")
 started=$(date +%s.%N)
 output_args=()
 if [ -n "${FNR_MIXINS_FROM_SOURCE:-}" ]; then

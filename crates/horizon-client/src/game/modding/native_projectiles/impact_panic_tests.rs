@@ -55,7 +55,7 @@ impl Hooks for PanicAfterAdmission {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn shoot_listener_panic_after_admission_preserves_owned_rows() {
     eprintln!(
         "PANIC_GUARD_ASSERTIONS_DISABLED:{}",
@@ -188,7 +188,7 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
     for dimension in [crate::game::Dim::Overworld, crate::game::Dim::Nether] {
         crate::game::native_entity_refs::tests::with_game(|game| {

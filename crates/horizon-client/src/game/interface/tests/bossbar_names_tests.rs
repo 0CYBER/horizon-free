@@ -124,7 +124,7 @@ fn guest_2_command(game: &mut Game<'_>, command: &str) -> Vec<Text> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_boss_bars_player_list_is_decorated_like_other_player_lists() {
     let mut game = game_with_two_guests();
     assert!(game.run_command("bossbar add demo:bar Demo"));

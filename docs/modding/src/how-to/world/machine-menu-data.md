@@ -36,7 +36,7 @@ handle cannot reach a writable mod holder in the server level in place.
 
 After sizing, call `entity.set_data_slot(host, index, value)` for scalar updates.
 This method does not resize: an absent index returns `Ok(false)`. Both methods use the
-same write target, journal and `setChanged` path. Nested transactions retain their
+same silent storage write target and journal; call `set_changed` explicitly if needed. Transactions retain their
 ordinary behavior; an aborted outer transaction restores the vector that existed
 before its first write, including writes committed by children. The normal menu
 broadcast delivers committed changes to viewers.
@@ -57,8 +57,8 @@ insertion; it enforces automation policy. Vanilla containers are unavailable her
 
 Indices use the current container's declared count. Lazy slots read empty; saved
 excess slots are neither exposed nor truncated. `None` clears, identical values
-return `Ok(false)`, and real changes send `Changed` at root commit. Nested abort
-restores ordinary before-images, including committed-child writes. Invalid
+return `Ok(false)`. Writes and restores are silent: issue `set_changed` explicitly when needed.
+Nested abort restores ordinary before-images, including committed-child writes. Invalid
 indices, unknown/air/zero-count stacks and counts above the registered or
 component-overridden maximum return `BlockEntityItemError`, never a partial write
 or silent count clamp. A stale handle refuses a replacement rather than accessing

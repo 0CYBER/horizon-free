@@ -905,7 +905,7 @@ mod destroyed_contents_tests {
     /// lava, fire and cactus in the item's environment tick, an explosion, and
     /// the damage command.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn spilled_stacks_rise_from_their_own_randoms() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -935,7 +935,7 @@ mod destroyed_contents_tests {
     /// The damage command is one of those callers: killing a shulker box item
     /// spills its contents with the same upward motion.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_damaged_shulker_box_spills_its_stacks_upward() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -988,7 +988,7 @@ mod escape_tests {
     /// `Entity.moveTowardsClosestSpace` uses the item's own random, never the
     /// level's random. Seeded Java values pin vanilla's float arithmetic (#13043).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_item_escapes_a_block_at_its_own_randoms_speed() {
         let mut game_resources = None;
         let mut game = server_game(&mut game_resources);

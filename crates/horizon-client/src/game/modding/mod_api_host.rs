@@ -372,7 +372,15 @@ impl mod_api::LevelHost for super::GameLevel<'_> {
         let [x, y, z] = fields.position;
         let key = (x, y, z);
         if self.world.block_entities.generation(&key) != Some(fields.generation) {
-            return None;
+            // The block entity of the break whose `block_drops` event is running: the removal
+            // took it out of the world, a read-only view of it is held until the event ends.
+            return Some(
+                self.world
+                    .block_entities
+                    .broken(&key, fields.generation)?
+                    .data
+                    .clone(),
+            );
         }
         let entity = self.world.block_entities.get(&key)?;
         let name = &self.facts.get(self.world.block(x, y, z)).name;
@@ -804,7 +812,7 @@ mod attachment_membership_tests {
         );
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attachment_off_walk_membership_matches_old_walk() {
         with_game(|game| {
             game.reset_entity_residency();
@@ -877,7 +885,7 @@ mod attachment_membership_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attachment_guest_hook_membership_matches_old_walk() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             for id in [12, 13] {
@@ -908,7 +916,7 @@ mod attachment_membership_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attachment_membership_matches_old_walk() {
         with_game(|game| {
             game.reset_entity_residency();

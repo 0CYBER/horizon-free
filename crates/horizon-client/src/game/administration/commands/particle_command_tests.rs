@@ -79,7 +79,7 @@ fn drawn(game: &mut Game<'_>, command: &str) -> ParticleOptions {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn particle_options_carry_their_codec_data() {
     let mut game = game();
     // BlockParticleOption: `block_crumble` is the crumbs of the named block.
@@ -129,7 +129,7 @@ fn particle_options_carry_their_codec_data() {
 /// The crumbs the command names are drawn: `TerrainParticle.CrumblingProvider`
 /// keeps no particle for options that carry no block.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn block_crumble_draws_the_block_it_names() {
     let mut game = game();
     game.particles.created_requests = None;

@@ -1,0 +1,2 @@
+ids = ["method:DrawContext::entity", "type:GuiEntity", "type:GuiEntityLook", "type:GuiEntityView", "type:GuiEntityError"]
+why = "Adds DrawContext::entity, vanilla's InventoryScreen.renderEntityInInventoryFollowsMouse and renderEntityInInventory for mod screens: a living entity by type (with optional saved data) or an entity of the client's level, drawn by its type's renderer, with named refusals."

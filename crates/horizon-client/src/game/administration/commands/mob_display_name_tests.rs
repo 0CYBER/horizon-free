@@ -57,7 +57,7 @@ fn game() -> Game<'static> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_summoned_mobs_name_shows_the_entity_on_hover() {
     let mut game = game();
     assert!(game.run_command("summon minecraft:pig 4.5 64 4.5 {NoAI:1b}"));

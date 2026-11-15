@@ -100,7 +100,7 @@ fn assert_progress(progress: &AdvancementProgress, obtained: [bool; 3], groups: 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn progress_events_capture_each_players_full_mutation_state() {
     if run_fresh_cases(
         "game::advancements::progress_tests::progress_events_capture_each_players_full_mutation_state",

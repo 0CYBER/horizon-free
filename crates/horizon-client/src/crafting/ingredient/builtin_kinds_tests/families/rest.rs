@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn components_removal_requires_absence_including_defaults() {
     let items = resources();
     let ingredient = parse(
@@ -28,7 +28,7 @@ fn components_removal_requires_absence_including_defaults() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn block_tag_logs_uses_block_items_and_rejects_hash() {
     let items = resources();
     let ingredient = parse(

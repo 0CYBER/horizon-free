@@ -95,7 +95,7 @@ mod tests {
     /// A mod rewrites a fluid's tooltip, with no item and no item tooltip hook: the lines the
     /// game draws are its own, a mod's edit applied.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_edits_a_fluid_tooltip() {
         // Load the real registries on the client side before resolving the fluid.
         crate::game::native_entity_refs::tests::with_client_game(|game| {

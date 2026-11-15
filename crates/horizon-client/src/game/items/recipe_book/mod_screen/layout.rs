@@ -6,6 +6,12 @@ pub(super) struct BookLayout {
     pub overlay: bool,
     pub toggle: (f32, f32),
 }
+impl BookLayout {
+    /// Keep the validated toggle anchored to the window when room moves it.
+    pub(super) fn shifted_toggle(&self, room_shift: f32) -> (f32, f32) {
+        (self.toggle.0 - room_shift, self.toggle.1)
+    }
+}
 pub(super) fn layout(
     view: [f32; 2],
     menu: [f32; 2],
@@ -55,6 +61,13 @@ pub(super) fn refusal(block: &str, menu: &str, anchored: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn closed_gutter_and_declared_anchor_follow_the_room_shift() {
+        let gutter = layout([427.0, 240.0], [176.0, 166.0], None, false).unwrap();
+        assert_eq!(gutter.shifted_toggle(74.0), (231.0, 42.0));
+        let anchor = layout([427.0, 240.0], [176.0, 166.0], Some([8.0, 6.0]), false).unwrap();
+        assert_eq!(anchor.shifted_toggle(74.0), (59.0, 43.0));
+    }
     #[test]
     fn narrow_overlay_rejects_covered_gutters() {
         // Panel spans x=76..223, y=37..203. Both side gutters overlap it;

@@ -518,7 +518,7 @@ mod tests {
     use horizon_world::loot::PackOverlay;
 
     #[test]
-    #[ignore = "requires HORIZON_TEST_RESOURCES pointing to prepared vanilla resources"]
+    #[ignore = "daily"]
     fn archive_world_override_loads_over_real_prepared_tables_without_unpacking()
     -> crate::Result<()> {
         use crate::{

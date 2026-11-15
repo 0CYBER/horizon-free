@@ -540,7 +540,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn whole_stack_component_edit_preserves_slot_and_refuses_item_or_count_changes() {
         use mod_api::Tag;
         with_game(|game| {
@@ -611,7 +611,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn whole_stack_component_edit_rolls_back_with_its_transaction() {
         use mod_api::Tag;
         with_game(|game| {
@@ -666,7 +666,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_bucket_fills_and_empties_whole_through_its_place_and_splits_off_its_stack() {
         use horizon_client::chunk::Chunk;
         use mod_api::{BlockUpdateFlags, FLUIDS, ITEM_FLUIDS, move_resources};
@@ -749,7 +749,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_guests_place_is_written_as_theirs_and_an_abort_puts_it_back() {
         with_game(|game| {
             open_to_lan(game);
@@ -797,7 +797,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn an_armour_slot_holds_one() {
         with_game(|game| {
             open_to_lan(game);
@@ -820,7 +820,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn stand_equipment_effects_wait_for_root_commit() {
         with_game(|game| {
             let mut stand = horizon_client::entities::ArmorStand::new(
@@ -914,7 +914,7 @@ pub(super) mod tests {
     /// names for that kind, the writes transactional — an abort puts the equipment back
     /// and stays quiet, a commit is `set_equipment`'s write.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn living_equipment_moves_through_the_entity_items_handler() {
         with_game(|game| {
             let id = zombie(game);
@@ -986,7 +986,7 @@ pub(super) mod tests {
     /// A committed equipment write through the handler is `set_equipment`'s: the same
     /// stacks, and the same attribute map (#941's live map reads the worn armour).
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_committed_equipment_write_matches_set_equipments() {
         use mod_api::EquipmentSlot;
         with_game(|game| {
@@ -1046,7 +1046,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_creative_players_selected_stack_takes_what_fits_and_keeps_it() {
         with_game(|game| {
             open_to_lan(game);
@@ -1077,7 +1077,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_kept_handler_reaches_nothing_once_its_cart_is_removed() {
         use super::super::{
             commands::Target,
@@ -1105,7 +1105,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn bound_armour_comes_off_only_in_creative() {
         with_game(|game| {
             open_to_lan(game);
@@ -1145,7 +1145,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn an_equippable_whose_entity_tag_holds_the_player_fits_its_slot() {
         use mod_api::{ComponentId, Tag};
         with_game(|game| {
@@ -1183,7 +1183,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_kept_handler_reaches_nothing_once_its_world_closes() {
         use super::super::minecarts::{CartKind, Minecart};
         with_game(|game| {
@@ -1237,7 +1237,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_chest_menus_slots_write_the_chest_and_the_inventory_and_an_abort_puts_them_back() {
         use horizon_client::{chunk::Chunk, lan::menu::Slots};
         use mod_api::BlockUpdateFlags;
@@ -1320,7 +1320,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_chests_menu_over_the_furnace_set_in_its_place_reaches_none_of_its_slots() {
         use horizon_client::{chunk::Chunk, lan::menu::Slots};
         use mod_api::BlockUpdateFlags;
@@ -1386,7 +1386,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn an_armour_slot_and_the_craft_result_take_only_what_the_inventory_menu_lets_them() {
         with_game(|game| {
             open_to_lan(game);
@@ -1415,7 +1415,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_crafting_grid_write_makes_its_result_at_the_commit() {
         with_game(|game| {
             open_to_lan(game);
@@ -1457,7 +1457,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_mods_chest_menu_is_written_by_slot_and_a_replaced_menu_writes_nothing() {
         with_game(|game| {
             open_to_lan(game);
@@ -1494,7 +1494,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_furnace_menus_fuel_slot_takes_one_bucket_as_its_slot_does() {
         use horizon_client::{chunk::Chunk, lan::menu::Slots};
         use mod_api::BlockUpdateFlags;
@@ -1545,7 +1545,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_stale_menus_cursor_reaches_nothing_of_the_next_ones() {
         with_game(|game| {
             open_to_lan(game);
@@ -1569,7 +1569,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_grid_written_in_and_around_an_aborted_child_makes_its_result_from_what_stays() {
         with_game(|game| {
             open_to_lan(game);
@@ -1614,7 +1614,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_players_items_go_where_inventory_add_puts_them_and_an_abort_puts_them_back() {
         with_game(|game| {
             open_to_lan(game);
@@ -1715,7 +1715,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_trade_between_two_players_moves_both_offers() {
         with_game(|game| {
             traders(game, None);
@@ -1731,7 +1731,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_trade_into_a_full_inventory_moves_nothing() {
         with_game(|game| {
             // The buyer's other slots and off hand hold stone, so only slot 0 is free once the
@@ -1745,7 +1745,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_stale_offer_moves_nothing() {
         with_game(|game| {
             traders(game, None);
@@ -1771,7 +1771,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn scoped_boat_slots_use_the_open_menu_and_refuse_a_removed_owner() {
         use super::super::boats::Boat;
         use horizon_core::geometry::Vec3;
@@ -1813,7 +1813,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_chest_minecarts_items_are_its_slots() {
         use super::super::minecarts::{CartKind, Minecart};
         with_game(|game| {
@@ -1858,7 +1858,7 @@ pub(super) mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn cart_slot_edits_prefer_the_menu_and_refuse_a_removed_owner() {
         use super::super::minecarts::{CART_KEY_Y, CartKind, Minecart};
         use horizon_core::geometry::Vec3;
@@ -2039,7 +2039,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_hopper_pushes_into_a_mod_entity_below_it_through_the_side_it_faces() {
         let bin = Bin::default();
         with_bin_pigs(&bin, |game| {
@@ -2062,7 +2062,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_hopper_pushes_into_a_block_with_no_block_entity_whose_provider_voids_the_items() {
         use mod_api::{self, Hooks, ModEntry, Mods, Registrar};
         /// A trash can's one slot: it takes anything and keeps nothing.
@@ -2150,7 +2150,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_hopper_pulls_from_a_mod_entity_above_it_through_its_bottom() {
         let bin = Bin::default();
         *bin.held.lock().unwrap() = Some(("minecraft:stick".into(), 5));
@@ -2173,7 +2173,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_hopper_still_fills_a_chest_minecart_and_a_player_is_not_reached() {
         use super::super::minecarts::{CartKind, Minecart};
         let bin = Bin::default();
@@ -2207,7 +2207,7 @@ pub(super) mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_dropper_puts_into_a_mod_entity_in_front_of_it() {
         use horizon_client::chunk::Chunk;
         let bin = Bin::default();
@@ -2250,7 +2250,7 @@ pub(super) mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_crafter_puts_into_a_mod_entity_and_dispenses_only_what_it_refuses() {
         use horizon_client::chunk::Chunk;
         use horizon_core::{position::BlockPos, random::RandomSource as _};
@@ -2319,7 +2319,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_without_an_automation_provider_leaves_hoppers_on_the_vanilla_path() {
         use horizon_core::random::RandomSource as _;
         use mod_api::{
@@ -2360,7 +2360,7 @@ pub(super) mod tests {
     /// a hopper dressing a stand — journaled like a mob's, an abort putting
     /// it back and a commit matching `set_equipment`.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn an_armor_stands_equipment_moves_through_the_handler() {
         use horizon_client::entities::ArmorStand;
         use horizon_core::geometry::Vec3;
@@ -2484,7 +2484,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_scratch_stack_lives_in_its_transaction_and_keeps_its_item() {
         use mod_api::{FLUIDS, ITEM_FLUIDS, move_resources};
         with_game(|game| {
@@ -2521,7 +2521,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_scratch_stack_merges_into_its_parent_and_ends_with_the_outermost() {
         with_game(|game| {
             open_to_lan(game);
@@ -2559,7 +2559,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_strict_slot_refuses_what_the_plain_slot_spreads() {
         use horizon_client::chunk::Chunk;
         use mod_api::BlockUpdateFlags;
@@ -2613,7 +2613,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn one_by_one_shows_one_bucket_of_sixteen_and_fills_one() {
         use mod_api::{FLUIDS, ITEM_FLUIDS, move_resources};
         with_game(|game| {

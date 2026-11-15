@@ -128,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared 26.3 models and textures in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn metadata_head_visibility_matches_exported_no_hat_models() {
         use crate::mobs::{load_model, render::draw};
         let root = std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES");

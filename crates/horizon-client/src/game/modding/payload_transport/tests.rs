@@ -341,7 +341,7 @@ impl Hooks for Probe {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; starts a real integrated server"]
+#[ignore = "daily"]
 fn integrated_memory_delivers_registered_raw_payload_and_reply() {
     super::tests::require_resources();
     if super::super::native_entity_refs::tests::run_fresh_cases(

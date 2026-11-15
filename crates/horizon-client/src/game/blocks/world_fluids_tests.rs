@@ -41,7 +41,7 @@ fn block(game: &Game<'_>) -> BlockStateId {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_second_pickup_of_one_source_in_a_transaction_gets_nothing() {
     with_level(|game, level| {
         let water = state(game, "minecraft:water");
@@ -60,7 +60,7 @@ fn a_second_pickup_of_one_source_in_a_transaction_gets_nothing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_aborted_placement_over_a_skull_leaves_it_and_drops_nothing() {
     with_level(|game, level| {
         let skull = state(game, "minecraft:skeleton_skull");
@@ -91,7 +91,7 @@ fn an_aborted_placement_over_a_skull_leaves_it_and_drops_nothing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_committed_pour_breaks_what_it_replaces_then_sends_its_events_in_order() {
     with_level(|game, level| {
         crate::game::native_item_places::tests::open_to_lan(game);
@@ -140,7 +140,7 @@ fn a_committed_pour_breaks_what_it_replaces_then_sends_its_events_in_order() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_call_time_answer_stands_when_the_block_changes_before_the_commit() {
     with_level(|game, level| {
         let poppy = state(game, "minecraft:poppy");
@@ -192,7 +192,7 @@ impl mod_api::Hooks for SeenBlocks {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_drop_listener_sees_the_old_block_and_an_abort_undoes_the_loot_it_unpacked() {
     use horizon_client::chunk::PendingContainerLoot;
     use horizon_core::nbt::Tag;
@@ -247,7 +247,7 @@ fn a_drop_listener_sees_the_old_block_and_an_abort_undoes_the_loot_it_unpacked()
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_cancelled_drop_keeps_the_replacement() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -274,7 +274,7 @@ fn a_cancelled_drop_keeps_the_replacement() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_later_write_that_puts_the_block_back_keeps_its_block_entity_at_the_commit() {
     with_level(|game, level| {
         let skull = state(game, "minecraft:skeleton_skull");

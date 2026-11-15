@@ -6,8 +6,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
-proc-macro2 = "1"
+horizon-mod-source = { path = "../horizon-mod-source" }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
+serde_json = "1"
 syn = { version = "2", features = ["full"] }
 
 [lints]

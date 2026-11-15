@@ -292,6 +292,9 @@ impl Hooks for Mod {
         tick_reply::register(registrar);
         part_state::register(registrar);
         registrar.register_custom_stat("steps").unwrap();
+        if cx.mods().get("wasm_storage_attempt_observer").is_some() {
+            storage_attempts::register(registrar);
+        }
         registrar
             .declare_datapack_registry(
                 "spell",

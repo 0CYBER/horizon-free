@@ -3629,7 +3629,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn guest_climbable_glide() {
         use crate::game::{Audio, Options, Progress, Settings, load_resources};
         use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest};
@@ -3799,7 +3799,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared vanilla resources"]
+    #[ignore = "daily"]
     fn datapack_damage_world_open_reuses_the_no_pack_preload() {
         use super::{
             SyncData,
@@ -3845,7 +3845,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared vanilla resources"]
+    #[ignore = "daily"]
     fn datapack_damage_world_open_replaces_preload_atomically() {
         use super::{
             SyncData,
@@ -3940,7 +3940,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared vanilla resources"]
+    #[ignore = "daily"]
     fn datapack_damage_unrelated_packs_do_not_load_sync_data_at_open() {
         use super::{
             SyncData,
@@ -4002,7 +4002,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared vanilla resources"]
+    #[ignore = "daily"]
     fn datapack_damage_lazy_wire_snapshot_survives_reload_before_first_hub() {
         use super::sync::{
             SyncCache, cached_sync_data, initialize_world_sync_data, prepare_sync_reload,
@@ -4107,7 +4107,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared vanilla resources"]
+    #[ignore = "daily"]
     fn datapack_damage_lazy_wire_load_caches_after_all_packs_are_removed() {
         if crate::game::native_entity_refs::tests::run_fresh_cases(
             "game::lan::tests::datapack_damage_lazy_wire_load_caches_after_all_packs_are_removed",
@@ -4266,7 +4266,7 @@ mod tests {
     /// `Enderman.setTarget` and `setBeingStaredAt` reach normal tracker data,
     /// including defaults needed to send the clear.
     #[test]
-    #[ignore = "needs prepared resources in .local/horizon-client/26.3"]
+    #[ignore = "daily"]
     fn enderman_target_flags_are_tracked_and_cleared() {
         let mut enderman = mob_of("minecraft:enderman").expect("prepared mob types");
         let hub = meta_hub("EndermanTargetMetaTest");
@@ -4331,7 +4331,7 @@ mod tests {
     /// (`Entity.DATA_CUSTOM_NAME`, `DATA_CUSTOM_NAME_VISIBLE`), and taking
     /// them away is sent as none / false.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_mods_custom_name_and_its_visibility_are_sent() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let kind = game
@@ -4478,7 +4478,7 @@ mod tests {
     /// `server_chat`'s replies reach the sender alone, as system chat, whether
     /// or not the message goes out; a canceled message reaches nobody.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn server_chat_replies_reach_the_sender_alone() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::lan::hub::{HostEvent, HubConfig, chat::ChatMessage};
@@ -4628,7 +4628,7 @@ mod tests {
     /// A guest who left takes its menu owners with it: the hub's leave event (`HostEvent::Left`)
     /// removes them with the play state, and another guest's stay.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_guest_who_left_has_no_menu_owners() {
         use super::super::transactions::decision::{
             Admission,
@@ -4669,7 +4669,7 @@ mod tests {
     /// asked when an entity's effects change, not each tick, and their last
     /// answers go out until then (a guest whose effects just changed included).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_changes_the_effect_particles_players_are_sent() {
         use super::super::api_values::{TryIntoApi, TryIntoEngine};
         use super::super::lan::LanSettings;
@@ -5122,7 +5122,7 @@ pub(crate) mod world_spawn_sync_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn join_and_respawn_contexts_use_world_spawn_not_a_personal_spawn() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.level.world_spawn = Some([100, 140, -20]);
@@ -5140,7 +5140,7 @@ pub(crate) mod world_spawn_sync_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn setworldspawn_reaches_guests_in_other_dimensions_and_keeps_compass_overrides() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.build_registries();
@@ -5245,7 +5245,7 @@ pub(crate) mod world_spawn_sync_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn guest_respawn_without_a_known_world_spawn_never_advertises_the_hosts_personal_point() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.level.world_spawn = None;
@@ -5375,7 +5375,7 @@ mod mob_pickup_sync_tests {
     /// window is a client too, so a mob's pickup has to reach it or the item
     /// just vanishes (#12493).
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn a_mob_pickup_reaches_guests_as_a_take() {
         let mut resources = None;
         let mut game = super::super::game_tests::tests::server_game(&mut resources);
@@ -5479,7 +5479,7 @@ mod mob_swing_sync_tests {
     /// `LivingEntity.swing` names the hand; the flush reads the arm the swing
     /// recorded, so an off-hand throw reaches guests as the off hand (#12512).
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn an_off_hand_mob_swing_reaches_guests_as_the_off_hand() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -5551,7 +5551,7 @@ mod owner_attachment_save_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn an_autosave_writes_the_owners_live_attachments_to_the_file_it_loads() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -5687,13 +5687,13 @@ mod connected_statistics_save_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn save_all_creates_the_connected_guests_statistics_file() {
         connected_stats_save_control(false);
     }
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn save_all_replaces_stale_connected_guest_statistics() {
         connected_stats_save_control(true);
     }
@@ -5705,7 +5705,7 @@ mod connected_statistics_save_exclusion_tests {
     /// Source controls for the bounded eligibility gates; these excluded
     /// guests are not counted as successfully saved players.
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn excluded_guest_records_are_not_invented_or_written() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -5762,7 +5762,7 @@ mod merchant_packet_tests {
     //! the last outbound offer packet. No sockets, server loop or world generation.
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn merchant_take_keeps_packet_snapshot_until_price_refresh() {
         use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest};
         use std::sync::{Arc, atomic::AtomicI32, mpsc};

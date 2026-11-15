@@ -69,7 +69,7 @@ impl Hooks for Probe {
 }
 
 #[test]
-#[ignore = "requires prepared HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn native_process_environment_in_registration_and_game_hosts() {
     run(false);
 }

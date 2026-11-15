@@ -1616,7 +1616,7 @@ mod machine_recipe_placement_tests {
     use std::sync::{Arc, atomic::AtomicI32, mpsc};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h234_registered_place_recipe_reaches_actual_furnace_and_preserves_controls() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.build_registries();
@@ -1987,7 +1987,7 @@ mod recipe_check_tests {
     /// would and changes nothing: no slot, no block entity, no chunk marked
     /// changed, no packet but its reply. The transfer after it does move.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_check_answers_and_leaves_the_world_and_the_guest_alone() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.build_registries();
@@ -2122,7 +2122,7 @@ mod recipe_check_tests {
     /// Ten checks at once are answered, the next is dropped, and one more
     /// goes through once the throttle has drained.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn checks_past_the_limit_go_unanswered() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let (tx, rx) = mpsc::channel();
@@ -2175,7 +2175,7 @@ mod empty_ingredient_placement_tests {
     use std::sync::{Arc, atomic::AtomicI32, mpsc};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn server_packet_refuses_retained_empty_ingredient_recipes() {
         mod_platform::testing::with_mods(
             vec![mod_api::ModEntry::new("empty_fixture", Box::new(Predicate))].into(),

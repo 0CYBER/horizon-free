@@ -1285,7 +1285,7 @@ mod gpu_span_tests {
     use super::*;
     use crate::gfx::entity_skin::{SkinFrame, SkinJob};
     #[test]
-    #[ignore = "requires a Vulkan/Metal/DX12 adapter"]
+    #[ignore = "daily"]
     fn native_fluid_stays_native_while_model_uses_pack() {
         let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();

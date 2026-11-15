@@ -862,7 +862,7 @@ pub(super) mod audience_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fake_players_are_not_boss_viewers() {
         super::super::native_entity_refs::tests::with_game(|game| {
             add_real_and_fake(game);

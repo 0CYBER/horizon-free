@@ -83,7 +83,7 @@ fn take_shear_events() -> Vec<(&'static str, [f64; 3], Option<Who>)> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn milk_sounds_carry_pitch_one_and_draw_no_level_random() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -122,7 +122,7 @@ fn milk_sounds_carry_pitch_one_and_draw_no_level_random() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn shearing_by_hand_posts_the_shear_game_event() {
     let mut resources = None;
     let mut game = game(&mut resources);

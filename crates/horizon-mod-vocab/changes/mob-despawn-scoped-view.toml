@@ -1,0 +1,3 @@
+ids = ["hook:mob_despawn"]
+why = "mob_despawn version 2 makes the ticking mob and snapshot peers readable through the scoped tick host. Already-ticked peers expose post-turn state and not-yet-ticked peers pre-turn state. Mid-pass spawns resolve only on the next pass; removed mobs do not resolve, unlike dead-but-present mobs."
+migrate = "Named injections request hook_version = 2. Read mob handles through the host with the scoped timing contract in mind; do not assume a full live peer view. Rebuild against this SDK."

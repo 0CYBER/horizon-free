@@ -5,7 +5,7 @@ use crate::game::{execution_role::ExecutionRole, lan::world_spawn_sync_tests::ho
 /// thread keeps the launch configuration (`options.dedicated`) too, so it cannot be what turns
 /// the protection on.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn spawn_protection_protects_only_on_the_dedicated_role() {
     let mut resources = None;
     let mut game = crate::game::game_tests::tests::server_game(&mut resources);

@@ -410,7 +410,7 @@ fn contributed_experiments_supply_the_chosen_world_flags() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn registered_data_commands_respect_flags_required_packs_and_default_priority() {
     let mut ran = 0;
     for (feature, required) in [(false, false), (false, true), (true, false)] {
@@ -478,7 +478,7 @@ fn registered_data_commands_respect_flags_required_packs_and_default_priority() 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mods_pack_is_on_the_screen_and_applies_through_client_reload() {
     // Reload publishes a language just as the other game fixtures do. Keep this
     // fixture's publications visible locally, not at the mercy of their reloads.
