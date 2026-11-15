@@ -138,6 +138,14 @@
   {
     "package": "horizon-client",
     "target": "lib",
+    "test": "game::minecarts::cart_cost_bench::tick_carts_with_many_parked_carts",
+    "path": "crates/horizon-client/src/game/entities/minecarts.rs",
+    "reason": "a timing, needs prepared resources in HORIZON_TEST_RESOURCES",
+    "rationale": "Manual wall-clock measurement, not a daily correctness check: prints tick_carts time without behavioral assertions. Run by hand on an idle machine with HORIZON_TEST_RESOURCES, exact-selecting the full test path with --ignored --exact --nocapture. CARTS_PARKED, CARTS_MOVING, MOBS and TICKS optionally control the workload; defaults include 600 parked carts, 100 moving carts and 3000 mobs. Test body remains unchanged."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
     "test": "game::mod_api_host::attachment_membership_tests::attachment_entity_read_bench",
     "path": "crates/horizon-client/src/game/modding/mod_api_host.rs",
     "reason": "manual attachment scaling benchmark; needs HORIZON_TEST_RESOURCES",

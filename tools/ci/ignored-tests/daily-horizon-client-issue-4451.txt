@@ -995,7 +995,6 @@ horizon-client game::mending_pick_tests::mending_pick_data_pack_effect lib daily
 horizon-client game::mending_pick_tests::mending_pick_head_effect_excludes_chestplate lib daily resources
 horizon-client game::mending_pick_tests::mending_pick_redefined_mending_without_effect lib daily resources
 horizon-client game::mending_pick_tests::mending_pick_uses_hook_granted_enchantment lib daily resources
-horizon-client game::minecarts::cart_cost_bench::tick_carts_with_many_parked_carts lib daily resources
 horizon-client game::minecarts::cart_push_tests::a_moving_carts_team_keeps_it_from_boarding_a_cow lib daily resources
 horizon-client game::minecarts::cart_push_tests::a_moving_carts_team_rules_which_carts_it_pushes lib daily resources
 horizon-client game::minecarts::cart_push_tests::a_pushed_chest_cart_keeps_its_pending_loot lib daily resources

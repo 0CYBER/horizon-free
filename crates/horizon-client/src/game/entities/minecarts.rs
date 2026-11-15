@@ -4086,7 +4086,7 @@ mod cart_cost_bench {
     /// `CARTS_PARKED` (default 600) carts each on its own rail piece, and
     /// `CARTS_MOVING` (default 100) on powered tracks. Prints the ms per tick.
     #[test]
-    #[ignore = "daily"]
+    #[ignore = "a timing, needs prepared resources in HORIZON_TEST_RESOURCES"]
     fn tick_carts_with_many_parked_carts() {
         let n = |key: &str, default: usize| {
             std::env::var(key)
