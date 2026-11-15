@@ -5,6 +5,7 @@
 //! everywhere.
 pub mod check;
 pub mod inputs;
+pub mod kept;
 pub mod manifest;
 pub mod package;
 pub mod reference;

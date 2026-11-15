@@ -217,6 +217,12 @@ fn not_drawn(m: &Manifest, switch: bool) -> Option<String> {
                 .into(),
         );
     }
+    if m.computes() {
+        return Some(
+            "[[resource]] entries need a later Horizon: this one checks them but doesn't run them"
+                .into(),
+        );
+    }
     (m.api != Api::V0_1 && !switch).then(|| {
         format!(
             "it is written for shader API {}, which is experimental and drawn only under \
@@ -372,6 +378,10 @@ mod tests {
             assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
             let why = not_drawn(&manifest("0.2", "[motion]\n"), switch).unwrap();
             assert!(why.contains("[motion] needs a later Horizon"), "{why}");
+            let kept =
+                "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n";
+            let why = not_drawn(&manifest("0.2", kept), switch).unwrap();
+            assert!(why.contains("need a later Horizon"), "{why}");
             let named = manifest("0.2", "[frame]\nprimaries = \"bt709\"\n");
             assert_eq!(not_drawn(&named, true), None);
         }
