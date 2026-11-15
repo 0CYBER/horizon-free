@@ -566,7 +566,7 @@ mod tests {
         }
     }
 
-    /// `Math.sin` / `Math.cos` on JDK 25, Apple M4: one argument for each way
+    /// Java's `sin` / `cos` on JDK 25, Apple M4: one argument for each way
     /// the fused versions differ from fdlibm's C, where the C's way gives
     /// another result.
     #[test]

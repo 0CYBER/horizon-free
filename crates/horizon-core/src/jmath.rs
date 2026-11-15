@@ -514,7 +514,7 @@ pub mod exact {
         (quick, log_series(s, k))
     }
 
-    /// `log(x)` rounded to nearest, as Java's `Math.log` with the platform's libm out of it: NaN
+    /// `log(x)` rounded to nearest, as Java's `log` with the platform's libm out of it: NaN
     /// for NaN and negative `x`, -infinity for 0, infinity for infinity.
     pub fn log(x: f64) -> f64 {
         if x.is_nan() || x < 0.0 {
@@ -606,7 +606,7 @@ mod tests {
         }
     }
 
-    /// Java 24's `Math.sin` and `Math.cos` on x86-64 HotSpot, for arguments
+    /// Java 24's `sin` and `cos` on x86-64 HotSpot, for arguments
     /// where Windows' libm rounds the other way.
     #[test]
     fn exact_sin_and_cos_round_like_javas_x86_intrinsics() {
@@ -647,7 +647,7 @@ mod tests {
         assert_eq!(exact::sin(3.0e6), 3.0e6f64.sin());
     }
 
-    /// Java 25's `Math.log` on x86-64 HotSpot, for arguments where Windows' libm rounds the other way.
+    /// Java 25's `log` on x86-64 HotSpot, for arguments where Windows' libm rounds the other way.
     #[test]
     fn exact_log_rounds_like_javas_x86_intrinsic() {
         for case in [
@@ -873,7 +873,7 @@ mod tests {
 
     #[test]
     fn atan2_matches_strictmath() {
-        // (y bits, x bits, StrictMath.atan2 bits) from HotSpot 25: x < 0 and
+        // (y bits, x bits, Java's `atan2` bits) from HotSpot 25: x < 0 and
         // |y/x| > 2^60, where libm::atan2 rounds one ulp lower,
         check2(
             super::atan2,

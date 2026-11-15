@@ -30,7 +30,7 @@ pub fn atan2(mut y: f64, mut x: f64) -> f64 {
         (0..257)
             .map(|i| {
                 let a = fdlibm_asin(f64::from(i) / 256.0);
-                // HotSpot's x86-64 Math.cos intrinsic rounds entry 61 one ulp
+                // HotSpot's x86-64 cosine intrinsic rounds entry 61 one ulp
                 // above the correctly rounded value the platform cos gives.
                 let c = if i == 61 {
                     f64::from_bits(0x3fef_140a_0a08_6af1)
@@ -116,7 +116,7 @@ impl Mth for f32 {
 // The notice above covers `fdlibm_asin`, `fdlibm_atan` and `fdlibm_atan2` below, Rust ports
 // of fdlibm 5.3's e_asin.c, s_atan.c and e_atan2.c (https://www.netlib.org/fdlibm/).
 
-/// fdlibm `__ieee754_asin`, as `StrictMath.asin` (and so `Math.asin`) computes it.
+/// fdlibm `__ieee754_asin`, as Java's `asin` computes it.
 #[allow(clippy::excessive_precision, clippy::approx_constant, clippy::eq_op)] // fdlibm's constants and NaN, verbatim.
 pub fn fdlibm_asin(x: f64) -> f64 {
     const PIO2_HI: f64 = 1.570_796_326_794_896_558_00e+00;
@@ -169,7 +169,7 @@ pub fn fdlibm_asin(x: f64) -> f64 {
     if hx > 0 { t } else { -t }
 }
 
-/// fdlibm `atan`, as `StrictMath.atan` computes it.
+/// fdlibm `atan`, as Java's `atan` computes it.
 #[allow(clippy::excessive_precision, clippy::approx_constant)] // fdlibm's constants, verbatim.
 pub fn fdlibm_atan(x: f64) -> f64 {
     const ATANHI: [f64; 4] = [
@@ -249,7 +249,7 @@ pub fn fdlibm_atan(x: f64) -> f64 {
     if hx < 0 { -z } else { z }
 }
 
-/// fdlibm `__ieee754_atan2`, as `StrictMath.atan2` (and so `Math.atan2`)
+/// fdlibm `__ieee754_atan2`, as Java's `atan2`
 /// computes it.
 #[allow(clippy::excessive_precision, clippy::approx_constant)] // fdlibm's constants, verbatim.
 pub fn fdlibm_atan2(y: f64, x: f64) -> f64 {
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn fdlibm_atan2_matches_java_math_atan2() {
-        // (y, x, Math.atan2(y, x)) bits from a HotSpot 25 run.
+        // (y, x, Java's `atan2(y, x)`) bits from a HotSpot 25 run.
         let cases: [(u64, u64, u64); 21] = [
             (0x4036c1a1555ddb90, 0x40b1a89b60fc338e, 0x3f749e66db543fc4),
             (0xbfc9752ac321b894, 0x3f3d80a505d0aa2b, 0xbff918b5f001ade8),

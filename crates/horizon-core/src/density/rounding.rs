@@ -20,7 +20,7 @@ impl RoundMode {
                 }
             }
             Self::Round => {
-                // Math.round(float): ties go toward positive infinity, NaNs
+                // Java's float rounding: ties go toward positive infinity, NaNs
                 // become zero, and the result saturates to Java's int domain.
                 let bits = value.to_bits() as i32;
                 let shift = 149 - ((bits >> 23) & 0xff);
