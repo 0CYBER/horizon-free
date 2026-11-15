@@ -1,11 +1,13 @@
 //! The structure types whose pieces read their own tags rather than a
-//! template: `MineshaftPieces`, `NetherFortressPieces` and
-//! `StrongholdPieces`, registered as `StructurePieceType.ContextlessType`s.
+//! template: `MineshaftPieces`, `NetherFortressPieces`, `StrongholdPieces`
+//! and `SwampHutPieces`, all registered as
+//! `StructurePieceType.ContextlessType`s.
 use super::{
     BoundingBox,
     fortress::FortressPiece,
     legacy::{LegacyPiece, PieceFrame},
     mineshaft::MineshaftPiece,
+    simple::SwampHutPiece,
     start::{StructureDef, StructureKind},
     stronghold::StrongholdPiece,
 };
@@ -57,7 +59,7 @@ pub(crate) fn read_frame(tag: &Tag) -> Option<(PieceFrame, i32)> {
     Some((PieceFrame::new(bounding_box, orientation), int(tag, "GD")))
 }
 
-/// `StructurePieceType`'s id for these three families, read as their tag
+/// `StructurePieceType`'s id for these four families, read as their tag
 /// constructors do. `None` for another id and for a piece that does not
 /// decode, which leaves its start to regeneration.
 pub(crate) fn read(id: &str, tag: &Tag, def: &StructureDef) -> Option<Box<dyn LegacyPiece>> {
@@ -72,6 +74,10 @@ pub(crate) fn read(id: &str, tag: &Tag, def: &StructureDef) -> Option<Box<dyn Le
             };
             MineshaftPiece::from_saved(id, tag, frame, depth, blocking)
                 .map(|p| Box::new(p) as Box<dyn LegacyPiece>)
+        }
+        "tesh" => {
+            let piece = SwampHutPiece::from_saved(tag, frame);
+            Some(Box::new(piece) as Box<dyn LegacyPiece>)
         }
         _ if id.starts_with("ne") => FortressPiece::from_saved(id, tag, frame, depth)
             .map(|p| Box::new(p) as Box<dyn LegacyPiece>),
@@ -93,7 +99,7 @@ mod tests {
 
     /// The defs the pieces of each family belong to, with the mineshaft's
     /// unsaved #mineshaft_blocking biomes.
-    fn defs() -> [StructureDef; 3] {
+    fn defs() -> [StructureDef; 4] {
         let blocking = Arc::new(BTreeSet::from([BiomeId(3), BiomeId(7)]));
         [
             (
@@ -105,6 +111,7 @@ mod tests {
             ),
             ("minecraft:fortress", StructureKind::Fortress),
             ("minecraft:stronghold", StructureKind::Stronghold),
+            ("minecraft:swamp_hut", StructureKind::SwampHut),
         ]
         .map(|(name, kind)| StructureDef {
             name: name.into(),
@@ -126,6 +133,7 @@ mod tests {
             MineshaftPiece::saved_test_pieces(blocking.clone()),
             FortressPiece::saved_test_pieces(),
             StrongholdPiece::saved_test_pieces(),
+            SwampHutPiece::saved_test_pieces(),
         ];
         // A fortress start's first piece is built through the `BridgeCrossing`
         // constructor, so vanilla saves it as `nebcr` and reads that id back as
@@ -158,8 +166,8 @@ mod tests {
             }
         }
         // Both woods and each kind of the mineshaft, every fortress and
-        // stronghold kind (the fortress Start writes nebcr too).
-        assert_eq!(pieces.len(), 8 + 15 + 13);
+        // stronghold kind (the fortress Start writes nebcr too), the hut.
+        assert_eq!(pieces.len(), 8 + 15 + 13 + 1);
         // The same pieces as vanilla's saved `Children`, through
         // `StructureStart.loadStaticStart`.
         let def = &defs[0];
@@ -197,6 +205,40 @@ mod tests {
                 "child {index}: {key}"
             );
         }
+    }
+
+    /// An imported Java 1.21 save's swamp hut (issue #16530): the saved
+    /// `tesh` child keeps its own box, not the regenerated hut's. The
+    /// regenerated hut would sit at Y=64, one above the saved Y=63, and the
+    /// mismatched bounds would leave the start with no pieces at all, so its
+    /// witch override would fall back to the biome's spawns.
+    #[test]
+    fn the_saved_swamp_hut_keeps_its_saved_box() {
+        let defs = defs();
+        let def = &defs[3];
+        let (resources, bindings) = world();
+        let chunk = ChunkPos::new(80, 22);
+        let child = crate::nbt::parse_snbt(
+            r#"{id:"minecraft:tesh",BB:[I;1280,63,352,1286,69,360],O:0,GD:0,Width:7,Height:7,Depth:9,HPos:63,Witch:1b,Cat:1b}"#,
+        )
+        .unwrap()
+        .0;
+        let tag = Tag::compound([
+            ("id", Tag::String(def.name.as_str().into())),
+            ("ChunkX", Tag::Int(80)),
+            ("ChunkZ", Tag::Int(22)),
+            ("references", Tag::Int(1)),
+            ("Children", Tag::List(vec![child])),
+        ]);
+        let loaded = read_saved_start(3, def, chunk, &tag, 1234, &resources, &bindings)
+            .unwrap_or_else(|| panic!("tesh decodes"));
+        assert_eq!(
+            loaded.pieces[0].bounding_box(),
+            BoundingBox::new([1280, 63, 352], [1286, 69, 360])
+        );
+        // The witch's and cat's flags share the one spawned flag this piece
+        // models, so the re-saved tag is exactly the tag it loaded.
+        assert_eq!(loaded.save(), Some(tag));
     }
 
     /// Saved NBT expectations from the vanilla tag constructors, including

@@ -450,7 +450,9 @@ impl StructureState {
     /// (`StructureStart.loadStaticStart`) so that the neighbours place the parts that cross
     /// into them and the beardifier shapes the terrain around them. A jigsaw start (villages,
     /// outposts, bastions, ancient cities, trial chambers, trail ruins) is loaded from its
-    /// saved pieces (`PoolPiece::from_saved`). Another structure's pieces have no loader yet:
+    /// saved pieces (`PoolPiece::from_saved`); a start whose pieces read their own tags (the
+    /// mineshaft, fortress and stronghold families and the swamp hut) loads them the same way
+    /// (`saved_legacy::read`). Another structure's pieces have no loader yet:
     /// it is the start this generator makes in the chunk when that one has the same name and the
     /// same pieces' box (the same layout from the same seed), else the name and box alone (found
     /// by `/locate` and maps, but not placed).
@@ -470,7 +472,7 @@ impl StructureState {
                     && let Some(pieces) = start
                         .pieces
                         .iter()
-                        .map(|piece| self.saved_pool_piece(piece))
+                        .map(|piece| self.saved_piece(piece, def))
                         .collect::<Option<Vec<_>>>()
                 {
                     return Some(Arc::new(StructureStart::new(index, def, chunk, pieces)));
@@ -521,12 +523,22 @@ impl StructureState {
             .collect();
         Arc::new(starts)
     }
-    /// A saved `minecraft:jigsaw` piece, or `None` for any other piece or one that does not decode.
-    fn saved_pool_piece(&self, piece: &crate::nbt::Tag) -> Option<Piece> {
-        saved_piece_id(piece)?;
-        PoolPiece::from_saved(&tag_json(piece), &self.resources, &self.bindings)
-            .ok()
-            .map(Piece::Pool)
+    /// A saved piece: `PoolPiece::from_saved` for the jigsaw ids,
+    /// `saved_legacy::read` for the legacy pieces that read their own tags.
+    /// `None` for any other piece or one that does not decode, which leaves
+    /// the whole start to the fallback above.
+    fn saved_piece(&self, piece: &crate::nbt::Tag, def: &StructureDef) -> Option<Piece> {
+        if saved_piece_id(piece).is_some() {
+            return PoolPiece::from_saved(&tag_json(piece), &self.resources, &self.bindings)
+                .ok()
+                .map(Piece::Pool);
+        }
+        let crate::nbt::Tag::String(id) = piece.get("id")? else {
+            return None;
+        };
+        let id = id.to_string_lossy();
+        let id = id.strip_prefix("minecraft:").unwrap_or(&id);
+        super::structure::saved_legacy::read(id, piece, def).map(Piece::Legacy)
     }
     pub(super) fn set_saved_starts(&self, source: Arc<super::generator::SavedStructureStarts>) {
         let _ = self.saved.set(source);

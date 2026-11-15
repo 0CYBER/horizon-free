@@ -536,6 +536,45 @@ impl SwampHutPiece {
             spawned: Mutex::new(false),
         }
     }
+
+    /// `ScatteredFeaturePiece(StructurePieceType, CompoundTag)` and
+    /// `SwampHutPiece(CompoundTag)`: the saved box stays as saved (the tag
+    /// constructor never re-derives the box from the dimensions), and the
+    /// witch's and the cat's flags collapse onto this piece's one spawned
+    /// flag (vanilla sets both in the same post-process call).
+    pub(crate) fn from_saved(tag: &crate::nbt::Tag, frame: PieceFrame) -> Self {
+        let int = |key| super::saved_legacy::int(tag, key);
+        let flag = |key| super::saved_legacy::flag(tag, key);
+        Self {
+            base: Scattered {
+                frame: Mutex::new(frame),
+                width: int("Width"),
+                height: int("Height"),
+                depth: int("Depth"),
+                height_position: Mutex::new(int("HPos")),
+            },
+            spawned: Mutex::new(flag("Witch") || flag("Cat")),
+        }
+    }
+
+    /// A hut with its height settled and its witch and cat already spawned,
+    /// for the saved-piece round trip.
+    #[cfg(test)]
+    pub(crate) fn saved_test_pieces() -> Vec<Box<dyn LegacyPiece>> {
+        vec![Box::new(Self {
+            base: Scattered {
+                frame: Mutex::new(PieceFrame::new(
+                    BoundingBox::new([1280, 63, 352], [1286, 69, 360]),
+                    Some(Direction::South),
+                )),
+                width: 7,
+                height: 7,
+                depth: 9,
+                height_position: Mutex::new(63),
+            },
+            spawned: Mutex::new(true),
+        })]
+    }
 }
 impl LegacyPiece for SwampHutPiece {
     fn bounding_box(&self) -> BoundingBox {
