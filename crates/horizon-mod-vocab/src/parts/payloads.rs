@@ -82,7 +82,8 @@ impl PayloadReceiver {
             && !self.panicked.load(std::sync::atomic::Ordering::Acquire)
     }
     /// Invoke only this owner. The caller owns the root transaction and handles
-    /// a native panic as `Failed`, never as retryable contention.
+    /// a native panic as `Failed`, never as retryable contention. A panic disables
+    /// this callback for every connection; later calls refuse without running it.
     pub fn handle(
         &self,
         bytes: crate::PayloadBytes,
@@ -104,8 +105,11 @@ impl PayloadReceiver {
             return Err("payload owner is disabled".into());
         }
         let _guard = crate::mark_mod(self.owner, operation);
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(call))
-            .map_err(|_| "payload callback panicked".into())
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).map_err(|_| {
+            self.panicked
+                .store(true, std::sync::atomic::Ordering::Release);
+            "payload callback panicked; it is disabled".into()
+        })
     }
 }
 

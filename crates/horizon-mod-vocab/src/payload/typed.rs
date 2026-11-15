@@ -3,7 +3,8 @@
 //! body on the wire is exactly `encode_payload(&value)`; there is no envelope and no second route.
 use super::{
     IPayloadContext, IPayloadHandler, PayloadAccepted, PayloadBytes, PayloadDeclaration,
-    PayloadDirection, PayloadId, PayloadProtocol, PayloadRegistrar, PayloadSendError,
+    PayloadDirection, PayloadHandleError, PayloadId, PayloadProtocol, PayloadRegistrar,
+    PayloadSendError,
 };
 use crate::wire::{Reader, Wire, WireError, Writer};
 use crate::{
@@ -224,10 +225,18 @@ where
     T: PayloadCodec + 'static,
     F: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
 {
-    fn handle(&self, bytes: PayloadBytes, context: &mut dyn IPayloadContext) -> Result<(), String> {
-        let value = decode_payload::<T>(&bytes.0)
-            .map_err(|error| format!("typed payload {} refused its body: {error:?}", self.id.0))?;
-        (self.handler)(value, context)
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        context: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
+        let value = decode_payload::<T>(&bytes.0).map_err(|error| {
+            PayloadHandleError::Failed(format!(
+                "typed payload {} refused its body: {error:?}",
+                self.id.0
+            ))
+        })?;
+        (self.handler)(value, context).map_err(PayloadHandleError::Failed)
     }
 }
 
