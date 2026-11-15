@@ -294,7 +294,7 @@ Where a 0.2 pack's stages, post chain and `[tonemap]` sit around them is in [sha
 
 ## Steps
 
-Behind `HORIZON_HDR_FRAME=float` until the last step, each a small pull request:
+Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
 
 1. This note.
 2. Shader API 0.2 in `horizon-shader-api`: the rule, the `Frame` fields, `[tonemap]`, `[frame] blend`, both lines
@@ -315,6 +315,12 @@ Behind `HORIZON_HDR_FRAME=float` until the last step, each a small pull request:
    goes. Without the HUD's layer, HDR without a pack keeps the compatibility frame, and its marks, until step 5.
 5. On by default and the switch removed, and 0.1 no longer served (see 0.1 packs). The shim goes with it: the
    pipeline variants that write marks and the HDR pass's lift from them, in a pull request of its own.
+   - 5a (done): the float frame is HDR's frame with no pack or a 0.2 one, and 0.2 packs are drawn, without the
+     switch, which is gone. HDR is offered only on devices that draw the float frame and keep the HUD on a layer of
+     its own: the compatibility frame no longer stands in for it there. It stays, with its marks, for HDR under a
+     0.1 or a `shaders/` pack. The HDR setting's default stays Off; Auto as the default is a change of its own.
+   - 5b: shader API 0.1 retired; the examples and the registry on 0.2.
+   - 5c: the shim, its marks and Smooth Gradients' 16-bit frame deleted.
 6. One curve from the scene to the display, its constants chosen from captures.
    - 6a, one peak (before step 5, so players see one change of look): the world's light is the same on every
      display, in multiples of paper white, and only the tone curve fits it to the display. Before, the writers'

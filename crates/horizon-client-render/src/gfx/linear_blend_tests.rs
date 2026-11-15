@@ -393,8 +393,8 @@ fn only_a_float_frame_holds_linear_light() {
             let request = FrameRequest {
                 linear_pack,
                 linear_blend,
-                hdr_float: false,
                 ray_tracing: false,
+                compatibility: false,
             };
             let frame = resolve_frame(
                 &settings,

@@ -2233,9 +2233,8 @@ fn draws_frame(format: wgpu::TextureFormatFeatures) -> bool {
     )
 }
 
-/// The frame of a renderer made under `HORIZON_HDR_FRAME=float` (docs/design/hdr-linear-light.md)
-/// with a shader API 0.2 pack picked, or with HDR on and no pack: float, so values over 1
-/// survive from the world to the tonemap and the HDR pass.
+/// The frame under a shader API 0.2 pack, or with HDR on and no pack (hdr-linear-light.md):
+/// float, so values over 1 survive from the world to the tonemap and the HDR pass.
 const LINEAR_FRAME: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Opens a device on the first of `backend_order`'s backends that gives one.
@@ -2750,6 +2749,7 @@ impl Renderer {
             hud_layer: coverage_ok,
             held: output::held(settings, hdr_driver.as_deref()),
         };
+        output_caps.log_missing_hdr_frame(previous.is_none());
         let frame = output::resolve_frame(settings, request, output_caps, display, config.format);
         let (frame_format, hud_coverage, overlay_format) =
             (frame.format, frame.hud_layer, frame.overlay_format);
@@ -12891,8 +12891,8 @@ mod tests {
             }
         }
     }
-    /// A shader API 0.2 pack picked under `HORIZON_HDR_FRAME=float` gets the float frame
-    /// wherever the device draws it, HDR on or off.
+    /// A shader API 0.2 pack picked gets the float frame wherever the device draws it, HDR on
+    /// or off.
     #[test]
     fn a_0_2_pack_gets_the_float_frame_where_the_device_draws_it() {
         use super::{LINEAR_FRAME, frame_format};
@@ -12910,9 +12910,8 @@ mod tests {
             );
         }
     }
-    /// HDR on without a pack under `HORIZON_HDR_FRAME=float` gets the float frame where the
-    /// surface offers HDR output, Smooth Gradients or not; where it doesn't, the frame is as
-    /// without the switch.
+    /// HDR on without a pack gets the float frame where the surface offers HDR output, Smooth
+    /// Gradients or not; where it doesn't, the frame is the swapchain's.
     #[test]
     fn hdr_without_a_pack_gets_the_float_frame_where_hdr_output_is_offered() {
         use super::{LINEAR_FRAME, frame_format};

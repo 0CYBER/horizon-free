@@ -47,8 +47,8 @@ pub fn path(api: Api) -> &'static str {
 
 /// 0.2's rules, after the introduction.
 const RULES_0_2: &str = "\
-**Experimental** ([stability.md](stability.md)): `horizon-shader check` takes 0.2 packs, the game draws them only
-with `HORIZON_HDR_FRAME=float` set, the registry doesn't list them, and anything here may change in any release.
+**Experimental** ([stability.md](stability.md)): `horizon-shader check` takes 0.2 packs and the game draws them,
+the registry doesn't list them yet, and anything here may change in any release.
 The design: [hdr-linear-light.md](../design/hdr-linear-light.md).
 
 ## Colour

@@ -7,5 +7,5 @@ where it does. It shows the call, not a look: one ray a pixel, hard edges, no li
 doesn't trace (`frame.has_ray_tracing` is 0: a GPU without ray queries, or `HORIZON_RAY_TRACING=1` not set), past
 `frame.ray_distance` and outside the Overworld (`frame.dimension`: the other dimensions have no sun) the picture
 stays as it is. 0.2 is experimental, so this is a test pack of the SDK: the game
-draws it only with `HORIZON_HDR_FRAME=float` set, and the registry doesn't list it. Check it with
+draws it, and the registry doesn't list it yet. Check it with
 `horizon-shader check crates/horizon-shader-api/packs/traced_shadows`.

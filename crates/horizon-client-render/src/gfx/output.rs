@@ -22,6 +22,13 @@ pub(crate) struct OutputCapabilities {
     /// HDR output showed a frame ([`held`]). The mode stays; the output is SDR.
     pub held: bool,
 }
+impl OutputCapabilities {
+    /// The device draws HDR's frame, the float one with the HUD on a layer of its own. HDR
+    /// output is for these devices only, whatever the destination offers.
+    pub(crate) fn hdr_frame(&self) -> bool {
+        self.float_frame && self.hud_layer
+    }
+}
 
 /// Whether HDR output is held back on a renderer whose window's graphics driver is `driver`
 /// (`None` offscreen, which never holds it back: only a window writes the marker).
@@ -75,16 +82,17 @@ impl DisplayReading {
 /// What the picked pack asks of the frame (`picked_pack_shape`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameRequest {
-    /// A shader API 0.2 pack is picked under `HORIZON_HDR_FRAME=float`: its frame is float.
+    /// A shader API 0.2 pack is picked: its frame is float.
     pub linear_pack: bool,
     /// That pack's `[frame] blend` is `"linear"`: its frame holds linear light where it is
     /// float (`linear_blend`).
     pub linear_blend: bool,
     /// The pack declares `[ray_tracing]`: the device asks for ray queries (`ray_query`).
     pub ray_tracing: bool,
-    /// Under `HORIZON_HDR_FRAME=float`, with no pack available or a 0.2 one: the frame is
-    /// the layered float one wherever HDR output goes.
-    pub hdr_float: bool,
+    /// A 0.1 or `shaders/` pack is picked: HDR output keeps the compatibility frame under
+    /// it. With no pack available or a 0.2 one, the frame is the layered float one wherever
+    /// HDR output goes.
+    pub compatibility: bool,
 }
 
 /// What a renderer's frame is drawn in, and what the hand, overlays and HUD draw on.
@@ -139,6 +147,8 @@ pub struct EffectiveOutput {
     /// What this renderer's display last reported (`DisplayReading`).
     pub(crate) system_hdr: Option<bool>,
     pub(crate) reported: Option<Reported>,
+    /// The device draws HDR's frame (`OutputCapabilities::hdr_frame`).
+    pub(crate) hdr_frame_supported: bool,
     /// The device draws the 16-bit frame (Smooth Gradients).
     pub(crate) wide_frame_supported: bool,
     /// HDR output is held back on this window's graphics driver (`OutputCapabilities::held`).
@@ -177,11 +187,13 @@ impl Default for EffectiveOutput {
     }
 }
 impl EffectiveOutput {
-    /// No destination yet: nothing offered or reported, SDR on an 8-bit frame.
+    /// No destination yet: nothing offered or reported, SDR on an 8-bit frame. No device has
+    /// refused HDR's frame either.
     pub(crate) const NONE: Self = Self {
         offered: None,
         system_hdr: None,
         reported: None,
+        hdr_frame_supported: true,
         wide_frame_supported: false,
         held: false,
         encoding: None,
@@ -219,10 +231,12 @@ impl EffectiveOutput {
         self.encoding.is_some()
     }
     /// Whether `mode` asks for HDR here: On always, Auto where the destination offers it and
-    /// the display reports HDR, neither while HDR output is held back. The output still needs
-    /// an offer and a frame that can take it.
+    /// the display reports HDR, neither while HDR output is held back or on a device that
+    /// can't draw HDR's frame. The output still needs an offer and a frame that can take it.
     pub fn requests_hdr(&self, mode: HdrMode) -> bool {
-        !self.held && requests_hdr(mode, self.offered.is_some(), self.system_hdr)
+        !self.held
+            && self.hdr_frame_supported
+            && requests_hdr(mode, self.offered.is_some(), self.system_hdr)
     }
     /// What a 0.2 pack's `Frame` describes: the HDR display on the layered frame, whose
     /// picture is light; SDR otherwise, where the frame holds SDR's picture, the one HDR
@@ -255,7 +269,7 @@ fn requests_hdr(mode: HdrMode, offered: bool, system: Option<bool>) -> bool {
 }
 /// Whether `settings` ask for HDR on a destination of `caps` whose display reports `reading`.
 fn wanted(settings: &Graphics, caps: OutputCapabilities, reading: DisplayReading) -> bool {
-    !caps.held && requests_hdr(settings.hdr, caps.hdr.is_some(), reading.hdr)
+    !caps.held && caps.hdr_frame() && requests_hdr(settings.hdr, caps.hdr.is_some(), reading.hdr)
 }
 
 /// The frame a renderer made now draws in, for `settings`, the pack's `request`, what the
@@ -278,7 +292,7 @@ pub(crate) fn resolve_frame(
         ),
         swapchain,
         request.linear_pack,
-        request.hdr_float && wanted,
+        !request.compatibility && wanted,
     );
     FrameConfiguration {
         format,
@@ -304,6 +318,7 @@ pub(crate) fn resolve_output(
         offered: caps.hdr,
         system_hdr: reading.hdr,
         reported: reading.luminance,
+        hdr_frame_supported: caps.hdr_frame(),
         wide_frame_supported: caps.wide_frame,
         held: caps.held,
         encoding: caps
@@ -408,21 +423,17 @@ pub(crate) mod tests {
     /// draws in, as `Renderer::new` picked it before the snapshot.
     #[test]
     fn the_resolver_picks_one_output_and_frame_for_each_combination() {
-        let no_pack = FrameRequest {
-            linear_pack: false,
-            linear_blend: false,
-            hdr_float: true,
-            ray_tracing: false,
-        };
+        // A refused, missing or disabled pick asks as no pack does (`picked_pack_shape`).
+        let no_pack = FrameRequest::default();
         let pack_0_2 = FrameRequest {
             linear_pack: true,
-            linear_blend: false,
-            hdr_float: true,
-            ray_tracing: false,
+            ..no_pack
         };
-        // A 0.1 pack, or none without the float switch; a refused, missing or disabled
-        // pick asks as no pack does (`picked_pack_shape`).
-        let legacy = FrameRequest::default();
+        // A 0.1 pack, or a `shaders/` one.
+        let legacy = FrameRequest {
+            compatibility: true,
+            ..no_pack
+        };
         for mode in HdrMode::ALL {
             for hdr in [None, Some(Output::Pq), Some(Output::ScRgb)] {
                 for system in [None, Some(false), Some(true)] {
@@ -441,16 +452,15 @@ pub(crate) mod tests {
                                 let (mut caps, reading) = window(hdr, system);
                                 (caps.float_frame, caps.hud_layer) = (float_frame, hud_layer);
                                 let out = snapshot(&settings, request, caps, reading);
-                                let wanted = match mode {
-                                    HdrMode::Off => false,
-                                    HdrMode::On => true,
-                                    HdrMode::Auto => hdr.is_some() && system == Some(true),
-                                };
-                                let layered = request.hdr_float
-                                    && wanted
-                                    && hdr.is_some()
-                                    && float_frame
-                                    && hud_layer;
+                                // HDR only where the device draws its frame.
+                                let wanted = float_frame
+                                    && hud_layer
+                                    && match mode {
+                                        HdrMode::Off => false,
+                                        HdrMode::On => true,
+                                        HdrMode::Auto => hdr.is_some() && system == Some(true),
+                                    };
+                                let layered = !request.compatibility && wanted && hdr.is_some();
                                 let format = if float_frame && (request.linear_pack || layered) {
                                     LINEAR_FRAME
                                 } else if wanted && smooth && hdr.is_some() {
@@ -528,16 +538,10 @@ pub(crate) mod tests {
                 hdr_failed_start: Some(failed.into()),
                 ..Graphics::default()
             };
-            let request = FrameRequest {
-                linear_pack: false,
-                linear_blend: false,
-                hdr_float: true,
-                ray_tracing: false,
-            };
             let on = |driver: Option<&str>| {
                 let (mut caps, reading) = window(Some(Output::Pq), Some(true));
                 caps.held = held(&settings, driver);
-                snapshot(&settings, request, caps, reading)
+                snapshot(&settings, FrameRequest::default(), caps, reading)
             };
             let out = on(Some(failed));
             assert_eq!(out.encoding, None, "{mode:?}");
@@ -765,18 +769,17 @@ pub(crate) mod tests {
     }
 
     /// A scaled screenshot of the layered frame keeps HDR, and a 0.2 pack reads the window's
-    /// display in it, not SDR's; the 16-bit and the 8-bit frames shoot SDR, as do SDR windows.
+    /// display in it, not SDR's; a 0.1 pack's 16-bit frame shoots SDR, as do SDR windows.
     #[test]
     fn a_scaled_screenshot_keeps_the_display_only_on_the_layered_frame() {
         let on = Graphics {
             hdr: HdrMode::On,
             ..Graphics::default()
         };
-        let no_pack = FrameRequest {
-            linear_pack: false,
-            linear_blend: false,
-            hdr_float: true,
-            ray_tracing: false,
+        let no_pack = FrameRequest::default();
+        let pack_0_1 = FrameRequest {
+            compatibility: true,
+            ..no_pack
         };
         let (caps, reading) = window(Some(Output::Pq), Some(true));
         let layered = snapshot(&on, no_pack, caps, reading);
@@ -785,7 +788,7 @@ pub(crate) mod tests {
         assert_eq!(shot.encoding, Some(Output::Pq));
         assert_eq!(shot.display(), layered.display());
         for out in [
-            snapshot(&on, FrameRequest::default(), caps, reading),
+            snapshot(&on, pack_0_1, caps, reading),
             snapshot(&Graphics::default(), no_pack, caps, reading),
         ] {
             let shot = out.scaled_screenshot();

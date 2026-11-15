@@ -16,15 +16,14 @@ Sessions, each a fresh game and world (seed 7) per build:
   and the HUD over light: chat over the sun, chat and the crosshair over lava, the pause
   menu over it.
 - golden_hour: the Golden Hour example pack (shader API 0.1) in SDR, the same scenes.
-- golden_hour_hdr: Golden Hour with offscreen HDR output on (HORIZON_HDR_OUTPUT=pq): each screenshot and its -hdr.png.
-- hdr_toggle: vanilla started with HDR on (the 16-bit frame), shot, HDR turned off from its settings page, shot.
-- golden_hour_0_2, golden_hour_0_2_hdr: the Golden Hour 0.2 pack (shader API 0.2) on HORIZON_HDR_FRAME=float, in SDR
-  and with HDR on; entities in SDR.
-- oit, hdr_oit: Improved Transparency with HDR off, and with HDR on the 16-bit frame.
-- visbuffer, hdr_visbuffer: the visibility buffer (HORIZON_VISBUFFER=1) with HDR off, and with HDR on the 16-bit frame.
-- float_hdr, float_oit, float_visbuffer: the float frame (HORIZON_HDR_FRAME=float) with HDR on, drawn forward, with
-  Improved Transparency and with the visibility buffer, the last on a 300-nit display with the HUD at half brightness.
-- float_unlit: the float frame with HDR on and HDR Lighting off, on that display.
+- golden_hour_hdr: Golden Hour with offscreen HDR output on (HORIZON_HDR_OUTPUT=pq), on the compatibility frame a
+  0.1 pack keeps: each screenshot and its -hdr.png.
+- hdr_toggle: vanilla started with HDR on (the float frame), shot, HDR turned off from its settings page, shot.
+- golden_hour_0_2, golden_hour_0_2_hdr: the Golden Hour 0.2 pack (shader API 0.2), in SDR and with HDR on.
+- oit, visbuffer: Improved Transparency, and the visibility buffer (HORIZON_VISBUFFER=1), with HDR off.
+- float_hdr, float_oit, float_visbuffer: HDR on, which draws the float frame: forward, with Improved Transparency
+  and with the visibility buffer, the last on a 300-nit display with the HUD at half brightness.
+- float_unlit: HDR on and HDR Lighting off, on that display.
 - terrain_pack, terrain_pack_hdr: a shader API 0.2 test pack with a material stage, a shadow map and displacement
   (tools/fixtures/shaderpacks/frame_identity_terrain) over a resource pack of LabPBR heights the harness writes
   (relief_pack), on the float frame in SDR and with HDR on: day over water, night with light sources, and relief, a
@@ -498,39 +497,34 @@ SESSIONS = {
     'golden_hour_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'golden_hour', 'HORIZON_HDR_OUTPUT': 'pq'},
                         ['day_water', 'night_lights'], False),
     'hdr_toggle': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], True),
-    'golden_hour_0_2': ('', {'HORIZON_SHADER_PACK': 'golden_hour_0_2', 'HORIZON_HDR_FRAME': 'float'},
+    'golden_hour_0_2': ('', {'HORIZON_SHADER_PACK': 'golden_hour_0_2'},
                         ['day_water', 'night_lights', 'entities'], False),
-    'golden_hour_0_2_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'golden_hour_0_2',
-                        'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], False),
+    'golden_hour_0_2_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'golden_hour_0_2', 'HORIZON_HDR_OUTPUT': 'pq'},
+                            ['day_water', 'night_lights'], False),
     'oit': ('', {}, ['day_water', 'night_lights'], False),
-    'hdr_oit': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq'},
-                        ['day_water', 'night_lights'], False),
     # 🤖 Agent: The visibility buffer draws only frames drawn flat, which frames without a pack are by default only on
     # Metal and some Intel drivers.
     'visbuffer': ('', {'HORIZON_VISBUFFER': '1', 'HORIZON_FLAT_DRAWS': '1'}, ['day_water', 'night_lights'], False),
-    'hdr_visbuffer': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq', 'HORIZON_VISBUFFER': '1', 'HORIZON_FLAT_DRAWS': '1'},
-                      ['day_water', 'night_lights'], False),
-    'float_hdr': ('hdr:true\n', {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}, WORLD + list(HUD), False),
-    'float_oit': ('hdr:true\n', {'HORIZON_HDR_FRAME': 'float', 'HORIZON_HDR_OUTPUT': 'pq'}, WORLD, False),
+    'float_hdr': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq'}, WORLD + list(HUD), False),
+    'float_oit': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq'}, WORLD, False),
     # 🤖 Agent: On a display with little headroom (300 nits), the HUD at half brightness: the tone curve and the HUD's
     # composite have the least room there (hdr_gates). An older file's 50% of a 200-nit paper white: it reads as 100
     # nits, so builds from before UI Brightness was in nits draw the same.
-    'float_visbuffer': ('hdr:true\nhdrPeak:300\nhdrPaperWhite:200\nhdrUiBrightness:50\n', {'HORIZON_HDR_FRAME': 'float',
-                        'HORIZON_HDR_OUTPUT': 'pq', 'HORIZON_VISBUFFER': '1', 'HORIZON_FLAT_DRAWS': '1'},
+    'float_visbuffer': ('hdr:true\nhdrPeak:300\nhdrPaperWhite:200\nhdrUiBrightness:50\n',
+                        {'HORIZON_HDR_OUTPUT': 'pq', 'HORIZON_VISBUFFER': '1', 'HORIZON_FLAT_DRAWS': '1'},
                         WORLD + list(HUD), False),
     # 🤖 Agent: HDR Lighting off, at that headroom too, where the tone curve's knee is at white: the picture is SDR's
     # (hdr_gates).
-    'float_unlit': ('hdr:true\nhdrLighting:false\nhdrPeak:300\n', {'HORIZON_HDR_FRAME': 'float',
-                    'HORIZON_HDR_OUTPUT': 'pq'}, WORLD + list(HUD) + ['sun'], False),
-    'terrain_pack': ('', {'HORIZON_SHADER_PACK': 'frame_identity_terrain', 'HORIZON_HDR_FRAME': 'float'},
+    'float_unlit': ('hdr:true\nhdrLighting:false\nhdrPeak:300\n', {'HORIZON_HDR_OUTPUT': 'pq'},
+                    WORLD + list(HUD) + ['sun'], False),
+    'terrain_pack': ('', {'HORIZON_SHADER_PACK': 'frame_identity_terrain'},
                      ['day_water', 'night_lights', 'relief', 'entities', 'night_sky', 'rain_day'], False),
-    'terrain_pack_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'frame_identity_terrain', 'HORIZON_HDR_FRAME': 'float',
-                         'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights', 'relief'], False),
-    'world_plain': ('', {'HORIZON_HDR_FRAME': 'float'}, ['night_sky', 'end_sky', 'rain_day', 'rain_night'], False),
-    'world_pack': ('', {'HORIZON_SHADER_PACK': 'frame_identity_world', 'HORIZON_HDR_FRAME': 'float'},
+    'terrain_pack_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'frame_identity_terrain', 'HORIZON_HDR_OUTPUT': 'pq'},
+                         ['day_water', 'night_lights', 'relief'], False),
+    'world_plain': ('', {}, ['night_sky', 'end_sky', 'rain_day', 'rain_night'], False),
+    'world_pack': ('', {'HORIZON_SHADER_PACK': 'frame_identity_world'},
                    ['day_water', 'sun', 'night_sky', 'end_sky', 'rain_day', 'rain_night'], False),
-    'world_pack_timed': ('', {'HORIZON_SHADER_PACK': 'frame_identity_world', 'HORIZON_HDR_FRAME': 'float'},
-                         ['sun', 'night_sky'], False),
+    'world_pack_timed': ('', {'HORIZON_SHADER_PACK': 'frame_identity_world'}, ['sun', 'night_sky'], False),
 }
 # 🤖 Agent: The sessions drawn with GPU pass timing on, which draws the sky in a timed pass of its own.
 TIMED = ('world_pack_timed',)
@@ -602,7 +596,7 @@ def run_session(name, label, bin_dir, out, env_base, args):
     started = time.monotonic()
     try:
         game.launch()
-        if name in ('oit', 'hdr_oit', 'float_oit'):
+        if name in ('oit', 'float_oit'):
             # 🤖 Agent: Old unversioned options run through the graphics-mode migration, which resets this switch.
             game.ctl('options-set', 'improvedTransparency', 'true')
             option = game.ctl('options-get', 'improvedTransparency')
@@ -692,7 +686,7 @@ def session_checks(shots, sessions):
         pairs = [(shots / f'{without}.{s}{x}', shots / f'{name}.{s}{x}')
                  for s in scenes for x in ('.png', '-hdr.png')]
         pairs = [(a, b) for a, b in pairs if a.exists() and b.exists()]
-        if name in ('oit', 'hdr_oit', 'float_oit') and without in sessions and pairs and all(
+        if name in ('oit', 'float_oit') and without in sessions and pairs and all(
                 compare(a, b, None) is None for a, b in pairs):
             problems.append(f'{name}: the same as without Improved Transparency: it didn\'t run')
     return problems
@@ -836,8 +830,9 @@ def hdr_gates(shots, sessions):
 
     for name in sessions:
         graphics, extra = GRAPHICS + SESSIONS[name][0], SESSIONS[name][1]
-        # 🤖 Agent: Without a pack: a 0.2 pack's [tonemap] maps its own picture for each output.
-        if 'HORIZON_HDR_FRAME' not in extra or 'HORIZON_SHADER_PACK' in extra or 'hdr:true' not in graphics:
+        # 🤖 Agent: Without a pack: a 0.2 pack's [tonemap] maps its own picture for each output, and a 0.1 pack keeps
+        # the compatibility frame.
+        if 'HORIZON_SHADER_PACK' in extra or 'hdr:true' not in graphics:
             continue
         paper, peak, ui = setting(name, 'hdrPaperWhite'), setting(name, 'hdrPeak'), setting(name, 'hdrUiBrightness', 100)
         lighting = 'hdrLighting:false' not in graphics

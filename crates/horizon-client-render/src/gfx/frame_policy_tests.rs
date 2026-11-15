@@ -18,19 +18,18 @@ fn frame_policy_keeps_compatibility_frames_and_requires_layering_for_float_hdr()
     use super::{LINEAR_FRAME, WIDE_FRAME, frame_configuration};
     use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb};
 
-    for bits in 0..128 {
+    for bits in 0..64 {
         let hdr = bits & 1 != 0;
         let offered = bits & 2 != 0;
         let wide_ok = bits & 4 != 0;
         let float_ok = bits & 8 != 0;
         let coverage_ok = bits & 16 != 0;
-        let switch = bits & 32 != 0;
-        let smooth = bits & 64 != 0;
+        let smooth = bits & 32 != 0;
         for pack in ["none", "0.1", "0.2", "shaders"] {
             let float_hdr = matches!(pack, "none" | "0.2");
-            let expected = if switch && float_ok && float_hdr && hdr && offered && coverage_ok {
+            let expected = if float_ok && float_hdr && hdr && offered && coverage_ok {
                 (LINEAR_FRAME, true)
-            } else if switch && float_ok && pack == "0.2" {
+            } else if float_ok && pack == "0.2" {
                 (LINEAR_FRAME, false)
             } else if hdr && smooth && offered && wide_ok {
                 (WIDE_FRAME, false)
@@ -42,8 +41,8 @@ fn frame_policy_keeps_compatibility_frames_and_requires_layering_for_float_hdr()
                     hdr && smooth,
                     (offered, wide_ok, float_ok, coverage_ok),
                     Bgra8UnormSrgb,
-                    switch && pack == "0.2",
-                    switch && hdr && float_hdr,
+                    pack == "0.2",
+                    hdr && float_hdr,
                 ),
                 expected,
                 "bits {bits}, pack {pack}"
@@ -52,46 +51,72 @@ fn frame_policy_keeps_compatibility_frames_and_requires_layering_for_float_hdr()
     }
 }
 
+/// A device that can't keep the HUD on a layer of its own, or can't draw the float frame,
+/// gets no HDR, under no pack and no mode: no compatibility frame stands in for HDR's.
 #[test]
-fn float_hdr_falls_back_for_each_missing_hud_layer_requirement() {
-    use super::{LINEAR_FRAME, WIDE_FRAME, frame_configuration, hud_coverage};
+fn hdr_stays_off_for_each_missing_requirement_of_its_frame() {
+    use super::output::{FrameRequest, tests};
+    use super::{LINEAR_FRAME, hdr::Output, hud_coverage};
+    use crate::graphics::{Graphics, HdrMode};
     use wgpu::{DownlevelFlags as D, TextureFormat as F, TextureFormatFeatureFlags as Fl};
     use wgpu::{TextureFormatFeatures, TextureUsages as U};
 
     let usages = U::RENDER_ATTACHMENT | U::TEXTURE_BINDING;
-    for (attachments, flags, allowed_usages, format_flags) in [
-        (1, D::INDEPENDENT_BLEND, usages, Fl::BLENDABLE),
-        (2, D::empty(), usages, Fl::BLENDABLE),
-        (2, D::INDEPENDENT_BLEND, U::TEXTURE_BINDING, Fl::BLENDABLE),
-        (2, D::INDEPENDENT_BLEND, U::RENDER_ATTACHMENT, Fl::BLENDABLE),
-        (2, D::INDEPENDENT_BLEND, usages, Fl::empty()),
-    ] {
-        let coverage = hud_coverage::supported(
-            attachments,
-            flags,
-            TextureFormatFeatures {
-                allowed_usages,
-                flags: format_flags,
-            },
-        );
-        let device = (true, true, true, coverage);
-        assert_eq!(
-            frame_configuration(true, device, F::Bgra8Unorm, false, true),
-            (WIDE_FRAME, false)
-        );
-        assert_eq!(
-            frame_configuration(false, device, F::Bgra8Unorm, false, true),
-            (F::Bgra8Unorm, false)
-        );
-        assert_eq!(
-            frame_configuration(true, device, F::Bgra8Unorm, true, false),
-            (LINEAR_FRAME, false)
-        );
-        // A 0.2 pack keeps its float frame, without the layer: SDR.
-        assert_eq!(
-            frame_configuration(true, device, F::Bgra8Unorm, true, true),
-            (LINEAR_FRAME, false)
-        );
+    let coverage = |attachments, flags, allowed_usages, format_flags| {
+        let format = TextureFormatFeatures {
+            allowed_usages,
+            flags: format_flags,
+        };
+        hud_coverage::supported(attachments, flags, format)
+    };
+    let blend = D::INDEPENDENT_BLEND;
+    // (the float frame, the HUD's layer): no float frame, then each thing the layer needs.
+    let devices = [
+        (false, true),
+        (true, coverage(1, blend, usages, Fl::BLENDABLE)),
+        (true, coverage(2, D::empty(), usages, Fl::BLENDABLE)),
+        (true, coverage(2, blend, U::TEXTURE_BINDING, Fl::BLENDABLE)),
+        (
+            true,
+            coverage(2, blend, U::RENDER_ATTACHMENT, Fl::BLENDABLE),
+        ),
+        (true, coverage(2, blend, usages, Fl::empty())),
+    ];
+    let no_pack = FrameRequest::default();
+    let pack_0_1 = FrameRequest {
+        compatibility: true,
+        ..no_pack
+    };
+    let pack_0_2 = FrameRequest {
+        linear_pack: true,
+        ..no_pack
+    };
+    for (float_frame, hud_layer) in devices {
+        for mode in [HdrMode::On, HdrMode::Auto] {
+            let settings = Graphics {
+                hdr: mode,
+                ..Graphics::default()
+            };
+            let (mut caps, reading) = tests::window(Some(Output::Pq), Some(true));
+            (caps.float_frame, caps.hud_layer) = (float_frame, hud_layer);
+            let case = format!("{mode:?}, float {float_frame}, layer {hud_layer}");
+            for request in [no_pack, pack_0_1] {
+                let out = tests::snapshot(&settings, request, caps, reading);
+                assert_eq!(out.frame.format, F::Bgra8Unorm, "{case}");
+                assert!(!out.frame.hud_layer && !out.hdr_on(), "{case}");
+                assert!(!out.requests_hdr(mode) && out.hdr_offered(), "{case}");
+            }
+            // A 0.2 pack keeps its float frame where the device draws one, without the layer: SDR.
+            let out = tests::snapshot(&settings, pack_0_2, caps, reading);
+            let format = if float_frame {
+                LINEAR_FRAME
+            } else {
+                F::Bgra8Unorm
+            };
+            assert_eq!(out.frame.format, format, "{case}");
+            assert_eq!(out.frame.overlay_format, F::Bgra8Unorm, "{case}");
+            assert!(!out.frame.hud_layer && !out.hdr_on(), "{case}");
+        }
     }
 }
 

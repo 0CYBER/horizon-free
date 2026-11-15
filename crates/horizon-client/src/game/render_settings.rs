@@ -51,15 +51,11 @@ impl Game<'_> {
             ),
         )
     }
-    /// Under `HORIZON_HDR_FRAME=float` the frame follows what draws the picture
-    /// (docs/design/hdr-linear-light.md, "When it changes"): when HDR, Smooth Gradients or the
-    /// pick (unless refused) call for another frame than the renderer's, it is made again before
-    /// this frame draws. Without the switch a frame stays until the next start, as before.
+    /// The frame follows what draws the picture (docs/design/hdr-linear-light.md, "When it
+    /// changes"): when HDR, Smooth Gradients or the pick (unless refused) call for another
+    /// frame than the renderer's, it is made again before this frame draws.
     pub(super) fn follow_frame(&mut self) {
-        if !native_shaders::linear_frame_switch()
-            || self.options.paced_by_split
-            || self.options.split_guest
-        {
+        if self.options.paced_by_split || self.options.split_guest {
             return;
         }
         let picked = shader_packs::picked_pack(&self.settings);

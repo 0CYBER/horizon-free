@@ -6,6 +6,20 @@
 //! marker or hold HDR output back.
 use super::{Renderer, output};
 
+impl output::OutputCapabilities {
+    /// Says once a start (`first`) that HDR stays off where the destination offers it and the
+    /// device can't draw its frame: the HDR page greys its rows out there.
+    pub(super) fn log_missing_hdr_frame(&self, first: bool) {
+        if first && self.hdr.is_some() && !self.hdr_frame() {
+            log::info!(
+                "Horizon renderer: HDR stays off: the device can't draw its frame (float frame: {}, a layer for the HUD: {})",
+                self.float_frame,
+                self.hud_layer
+            );
+        }
+    }
+}
+
 impl Renderer {
     /// What this renderer's destination offers for `settings`: HDR output held back on a window
     /// whose graphics driver a start failed on (`output::held`).

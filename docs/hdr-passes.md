@@ -11,9 +11,12 @@ white, and a pass written for SDR alone breaks it, mostly without any test faili
 
 | | Frame | Holds |
 | --- | --- | --- |
-| `HORIZON_HDR_FRAME=float` under a 0.2 pack, or with HDR on and no pack where the device can keep the HUD on a layer of its own (the only HDR frame once HDR is on by default) | `Rgba16Float` | light: 1.0 is paper white, more is brighter |
+| Under a 0.2 pack, or with HDR on and no pack | `Rgba16Float` | light: 1.0 is paper white, more is brighter |
 | HDR off, otherwise | the swapchain's 8-bit format | vanilla's picture, clipped at 1 |
-| HDR on, otherwise | `Rgba16Unorm`, or 8-bit | the picture clipped at 1, with HDR's marks in alpha |
+| HDR on under a 0.1 or `shaders/` pack (the compatibility frame) | `Rgba16Unorm`, or 8-bit | the picture clipped at 1; under a 0.1 pack, with HDR's marks in alpha |
+
+HDR is on only where the device draws the float frame and keeps the HUD on a layer of its own; elsewhere the HDR
+page says so and the picture is SDR's.
 
 On the float frame Horizon's own light reaches several times paper white, the sun the most, and a shader pack of
 API 0.2 may write any value half float holds. It's stored in vanilla's gamma (the 2.2 power), as the other frames are.
@@ -67,8 +70,8 @@ curve, the HUD's layer and the last pass as the real one does.
    these rules.
 5. **Write no NaN, infinity or negative values.** Half float's largest value is 65504, and a history keeps a NaN
    and spreads it.
-6. **Leave alpha alone.** Return each pixel's own alpha; a filter returns its centre pixel's. The 16-bit HDR frame
-   marks light sources in alpha, and a filtered alpha moves a pixel into another mark's band.
+6. **Leave alpha alone.** Return each pixel's own alpha; a filter returns its centre pixel's. The compatibility
+   frame marks light sources in alpha under a 0.1 pack, and a filtered alpha moves a pixel into another mark's band.
 7. **Drop history when the frame changes.** Its format and encoding change with HDR, Smooth Gradients and the
    shader pack, and blending across the change mixes two meanings.
 8. **Captures map the picture.** A screenshot, recording or stream takes the world through HDR's mapping to SDR, as
@@ -81,8 +84,8 @@ curve, the HUD's layer and the last pass as the real one does.
   ([release-flow.md](release-flow.md)). It also draws the float frame with HDR on, and holds it to SDR.
 - **Its sessions run with anti-aliasing and frame generation off,** as by default: TAA and frame generation build
   on earlier frames, which `HORIZON_STILL` doesn't repeat. Check a temporal pass by hand: offscreen with HDR on
-  (`hdr:true` in `horizon-graphics.txt`), `HORIZON_HDR_FRAME=float` and `HORIZON_HDR_OUTPUT=pq`, with the camera
-  moving over torches, lava and the sun.
+  (`hdr:true` in `horizon-graphics.txt`) and `HORIZON_HDR_OUTPUT=pq`, with the camera moving over torches, lava and
+  the sun.
 - **The `-hdr.png` beside an HDR screenshot** (F2, or `horizon-ctl screenshot`) keeps the whole picture, and its
   `cLLI` chunk gives its brightest pixel in nits. With the sun in view offscreen it is near the peak, 1000 nits; a
   pass that clips brings it down to paper white, 203.

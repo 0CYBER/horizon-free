@@ -403,6 +403,7 @@
   "Your display or system doesn't offer HDR output.": "Your display or system doesn't offer HDR output.",
   "Turn HDR on to use it.": "Turn HDR on to use it.",
   "The shader pack lights the world itself.": "The shader pack lights the world itself.",
+  "HDR's own frame is smooth without it.": "HDR's own frame is smooth without it.",
   "Your GPU or graphics API doesn't support it.": "Your GPU or graphics API doesn't support it.",
   "Not with software rendering, which runs it on the CPU.": "Not with software rendering, which runs it on the CPU.",
   "Out of video memory: off until the next start.": "Out of video memory: off until the next start.",

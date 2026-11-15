@@ -953,6 +953,9 @@ impl H {
                 labelled("Screenshot Quality", format!("{}x", g.screenshot_quality))
             }
             H::FrameGeneration => labelled("Frame Generation", g.frame_generation.label()),
+            // Off where the device can't draw HDR's frame (`Item::blocked`), as HDR is there,
+            // while the saved mode waits for a device that can.
+            H::Hdr if !out.hdr_frame_supported => labelled("HDR", HdrMode::Off.label()),
             H::Hdr => labelled("HDR", g.hdr.label()),
             H::HdrCalibrate => Text::literal(lang::get(match setup(s, out) {
                 Setup::Unknown | Setup::Guessed => "Calibrate...",
@@ -1136,18 +1139,31 @@ impl Item {
     fn available(self) -> bool {
         !matches!(self, Item::Vanilla(o) if !o.available())
     }
-    /// Why a control can't be used now: HDR's On requires an offered output, while Auto
-    /// can also be chosen on a reporting SDR display. Brightness controls need HDR output
-    /// active; saved values wait for it. Translucent Batching switches where the device can batch
+    /// Why a control can't be used now: HDR needs a device that draws its frame
+    /// (`EffectiveOutput::hdr_frame_supported`), its saved mode waiting for one that can; its
+    /// On requires an offered output, while Auto can also be chosen on a reporting SDR
+    /// display. Brightness controls need HDR output active; saved values wait for it. Translucent Batching switches where the device can batch
     /// (`graphics::translucent_batching_offered`), its saved value waiting for one that can,
     /// Smooth Gradients only where it can draw the 16-bit frame, the same way, and GPU Culling
     /// only where it is offered (`graphics::gpu_culling_offer`), with the reason it isn't. HDR
-    /// Lighting has nothing to switch where the running shader pack lights the world itself.
+    /// Lighting has nothing to switch where the running shader pack lights the world itself,
+    /// and Smooth Gradients nothing on the layered float frame, which takes the 16-bit one's
+    /// place but under a 0.1 or `shaders/` pack.
     fn blocked(self, s: &Settings, out: &EffectiveOutput) -> Option<&'static str> {
         if !self.available() {
             return Some("This feature is not yet available in Horizon.");
         }
         match self {
+            Item::Horizon(
+                H::Hdr
+                | H::HdrCalibrate
+                | H::HdrBlackLevel
+                | H::HdrPeak
+                | H::HdrPaperWhite
+                | H::HdrUiBrightness
+                | H::HdrLighting
+                | H::HdrSmoothGradients,
+            ) if !out.hdr_frame_supported => Some("Your GPU or graphics API doesn't support it."),
             Item::Horizon(
                 H::HdrCalibrate
                 | H::HdrBlackLevel
@@ -1175,6 +1191,9 @@ impl Item {
             }),
             Item::Horizon(H::HdrLighting) if out.pack_lights => {
                 Some("The shader pack lights the world itself.")
+            }
+            Item::Horizon(H::HdrSmoothGradients) if out.frame.hud_layer => {
+                Some("HDR's own frame is smooth without it.")
             }
             Item::Horizon(H::TranslucentBatching)
                 if !crate::graphics::translucent_batching_offered() =>

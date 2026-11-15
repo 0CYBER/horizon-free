@@ -928,10 +928,10 @@ pub struct Graphics {
     /// `batchTranslucent`: `translucentBatching`, which every save wrote as false while it was
     /// off by default and had no switch, stays ignored.
     pub translucent_batching: bool,
-    /// Smooth Gradients (HDR page, on by default): with HDR output on, the frame is drawn in
-    /// 16 bits, so dark gradients don't band (`Renderer::frame_format`). Read when a renderer
-    /// is made (start, resource-pack reload), like `translucent_batching`, where the renderer's
-    /// device draws it (`EffectiveOutput::wide_frame_supported`).
+    /// Smooth Gradients (HDR page, on by default): with HDR output on under a 0.1 or
+    /// `shaders/` pack, the compatibility frame is drawn in 16 bits, so dark gradients don't
+    /// band (`Renderer::frame_format`), where the renderer's device draws it
+    /// (`EffectiveOutput::wide_frame_supported`). The layered float frame has no use for it.
     pub hdr_smooth_gradients: bool,
     /// The native `horizon:<manifest-id>` or classic filename picked in `shaderpacks/`; empty: none. Its key is
     /// not `shaderPack`, which versions before the clean-room rewrite saved and which stays
