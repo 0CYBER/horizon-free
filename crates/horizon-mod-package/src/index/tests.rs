@@ -29,7 +29,10 @@ fn reads_the_sample_and_keeps_unknown_kinds() {
     assert_eq!(kinds, ["mod", "modpack", "shader", "world"]);
     assert_eq!(index.projects[3].kind, Kind::Other("world".into()));
     let hud = index.project("coords_hud").unwrap();
-    assert_eq!(hud.versions[0].capabilities, [Capability::Registries]);
+    assert_eq!(
+        hud.versions[0].capabilities.known(),
+        [Capability::Registries]
+    );
     // What CI writes reads back the same.
     let text = serde_json::to_string(&index).unwrap();
     let again = Index::parse(&text).unwrap();
@@ -44,6 +47,30 @@ fn reads_the_sample_and_keeps_unknown_kinds() {
     assert!(!text.contains("\"stars\""));
     let starred = text.replacen("\"versions\"", "\"stars\":42,\"versions\"", 1);
     assert_eq!(Index::parse(&starred).unwrap().projects[0].stars, 42);
+}
+
+#[test]
+fn a_capability_this_build_does_not_know_blocks_only_its_version() {
+    let text = std::fs::read_to_string(fixtures().join("index-v1.json")).unwrap();
+    let old = text.replacen(
+        "\"registries\"\n          ],",
+        "\"registries\", \"game-read\"\n          ],",
+        1,
+    );
+    assert_ne!(old, text, "the fixture's capability list moved");
+    let index = Index::parse(&old).unwrap();
+    assert_eq!(index.projects.len(), sample().projects.len());
+    let hud = index.project("coords_hud").unwrap();
+    let listed = &hud.versions[0].capabilities;
+    assert_eq!(listed.known(), [Capability::Registries]);
+    assert_eq!(listed.unknown(), ["game-read"]);
+    assert!(listed.unsupported().unwrap().contains("game-read"));
+    assert!(index.installable(hud, "26.3").is_none());
+    let pack = index.project("cozy").unwrap();
+    assert!(index.installable(pack, &pack.versions[0].game).is_some());
+    // Written back, the unknown name stays.
+    let again = Index::parse(&serde_json::to_string(&index).unwrap()).unwrap();
+    assert_eq!(again, index);
 }
 
 #[test]
@@ -80,7 +107,7 @@ fn a_changed_file_key_or_manifest_is_refused() {
     assert!(e.contains("key"), "{e}");
 
     let mut more_caps = index.clone();
-    more_caps.projects[0].versions[0].capabilities.pop();
+    more_caps.projects[0].versions[0].capabilities = Default::default();
     let e = check(&more_caps, "coords_hud", &hmod).unwrap_err();
     assert!(e.contains("isn't what the index lists"), "{e}");
 
