@@ -568,16 +568,23 @@ impl Launcher {
                 );
         }
         if !selected {
+            // Use changes what the selected instance plays; its label says whom that moves.
+            let follows = self.selected_instance().is_none_or(|i| {
+                i.java.is_some()
+                    || (i.version.is_none() && i.channel == instances::Channel::Nightly)
+            });
+            let tip = match (follows, self.selected_instance()) {
+                (false, Some(i)) => trf(
+                    "Play this version in {instance}. Instance settings, Installation, sets it back to the latest.",
+                    &[("instance", &i.name)],
+                ),
+                _ => tr("Play this version in every instance that follows the launcher's version.")
+                    .to_string(),
+            };
             d = d.child(
-                ui::quiet(SharedString::from(format!("use-{tag}")), tr("Use"), 36., &t).on_click(
-                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        // "In use" is what the selected instance plays: Use changes that. An
-                        // instance that follows the launcher's version follows this one; one
-                        // with its own version (or on Stable) keeps this one as its own.
-                        let follows = this.selected_instance().is_none_or(|i| {
-                            i.java.is_some()
-                                || (i.version.is_none() && i.channel == instances::Channel::Nightly)
-                        });
+                ui::quiet(SharedString::from(format!("use-{tag}")), tr("Use"), 36., &t)
+                    .tooltip(ui::tip(tip))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if follows {
                             this.settings.selected = Some(t1.clone());
                             this.save_settings();
@@ -585,8 +592,7 @@ impl Launcher {
                             this.pin_version(Some(t1.clone()));
                         }
                         cx.notify();
-                    }),
-                ),
+                    })),
             );
         }
         let bin = ui::icon_button(
