@@ -406,6 +406,81 @@ fn a_derived_generic_recursive_tree_uses_the_generic_bound() {
     );
 }
 
+mod bound_overrides {
+    use super::{NoCodec, Opaque, decode_payload, encode_payload};
+    use crate::content::payload_codec as contract;
+
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::PayloadCodec)]
+    #[payload(crate = contract, bound = "T: contract::PayloadCodec")]
+    struct A<T> {
+        value: T,
+        b: Vec<B<T>>,
+    }
+
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::PayloadCodec)]
+    #[payload(crate = contract, bound = "T: contract::PayloadCodec")]
+    struct B<T> {
+        a: Option<Box<A<T>>>,
+    }
+
+    #[derive(Debug, PartialEq, horizon_mod_api_macros::PayloadCodec)]
+    #[payload(crate = contract, bound = "")]
+    struct OpaqueTree<T> {
+        value: Opaque<T>,
+        children: Vec<OpaqueTree<T>>,
+    }
+
+    #[test]
+    fn mutual_recursion_uses_explicit_bounds_and_independent_bytes() {
+        let value = A {
+            value: 1_u8,
+            b: vec![B {
+                a: Some(Box::new(A {
+                    value: 2_u8,
+                    b: vec![],
+                })),
+            }],
+        };
+        let bytes = [1, 1, 1, 2, 0];
+        assert_eq!(encode_payload(&value, 5), Ok(bytes.to_vec()));
+        assert_eq!(
+            decode_payload::<A<u8>>(&bytes),
+            Ok(A {
+                value: 1,
+                b: vec![B {
+                    a: Some(Box::new(A {
+                        value: 2,
+                        b: vec![],
+                    })),
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn empty_bound_override_supports_recursive_opaque_values() {
+        let value = OpaqueTree {
+            value: Opaque(7, std::marker::PhantomData::<NoCodec>),
+            children: vec![OpaqueTree {
+                value: Opaque(8, std::marker::PhantomData),
+                children: vec![],
+            }],
+        };
+        let bytes = [7, 1, 8, 0];
+        assert_eq!(encode_payload(&value, 4), Ok(bytes.to_vec()));
+        assert_eq!(
+            decode_payload::<OpaqueTree<NoCodec>>(&bytes),
+            Ok(OpaqueTree {
+                value: Opaque(7, std::marker::PhantomData),
+                children: vec![OpaqueTree {
+                    value: Opaque(8, std::marker::PhantomData),
+                    children: vec![],
+                }],
+            })
+        );
+    }
+}
+
 /// A derived enum: a VarInt tag counting variants from 0, then the variant's
 /// fields.
 #[derive(Debug, PartialEq, horizon_mod_api_macros::PayloadCodec)]
