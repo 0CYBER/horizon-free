@@ -267,12 +267,13 @@ impl DimensionFacts {
     }
 
     /// Adds the dimension type of one level opened while the world runs (`set_levels` made the
-    /// table at its load). Leaked like the others: one small entry per level opened.
-    pub fn add_level(level: LevelKey, facts: Self) {
+    /// table at its load). The caller leaks `facts` once and hands the same copy to every open of
+    /// the level, so opening and closing it again and again keeps one copy.
+    pub fn add_level(level: LevelKey, facts: &'static Self) {
         LEVELS
             .write()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(level, Box::leak(Box::new(facts)));
+            .insert(level, facts);
     }
 
     /// Drops the type of a level opened while the world runs, when it closes.

@@ -78,6 +78,7 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
             max_players: 4,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

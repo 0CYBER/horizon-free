@@ -816,6 +816,7 @@ pub(super) mod audience_tests {
             max_players: 20,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         };
         game.lan_host(
             super::super::lan::LanSettings {

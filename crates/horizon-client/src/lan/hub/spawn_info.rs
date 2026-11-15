@@ -33,8 +33,9 @@ impl Hub {
             dimension: self.config.dimension.clone(),
             seed: horizon_core::biome::obfuscate_seed(
                 self.config
-                    .levels
-                    .seed_of(&self.config.dimension)
+                    .level_seeds
+                    .get(&self.config.dimension)
+                    .copied()
                     .unwrap_or(self.config.seed),
             ),
             game_type: g.game_mode,

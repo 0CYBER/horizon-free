@@ -12919,6 +12919,7 @@ mod loaded_arrow_shot_tests {
                     max_players: 2,
                     integrated: false,
                     levels: Default::default(),
+                    level_seeds: Default::default(),
                 },
             )
             .unwrap();

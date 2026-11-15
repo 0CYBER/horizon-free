@@ -47,6 +47,7 @@ fn selector_reads_independent_host_and_guest_progress() {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();

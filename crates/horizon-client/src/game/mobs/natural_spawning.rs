@@ -1460,6 +1460,7 @@ mod tests {
                 max_players: 8,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();

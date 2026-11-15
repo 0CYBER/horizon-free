@@ -55,6 +55,7 @@ fn two_guests(game: &mut super::Game<'_>) -> (mpsc::Receiver<Out>, mpsc::Receive
         max_players: 3,
         integrated: true,
         levels: game.level_shapes,
+        level_seeds: game.levels.runtime.seeds(),
     };
     let settings = super::lan::LanSettings {
         port: 0,

@@ -3700,6 +3700,7 @@ mod tests {
             max_players: 20,
             integrated: true,
             levels: Default::default(),
+            level_seeds: Default::default(),
         };
         let mut hub = horizon_client::lan::hub::Hub::new(
             lan,
@@ -4531,6 +4532,7 @@ mod tests {
                     max_players: 3,
                     integrated: true,
                     levels: game.level_shapes,
+                    level_seeds: game.levels.runtime.seeds(),
                 };
                 game.lan_host(settings, net, config).unwrap();
                 let mut join = |conn: u32| {
@@ -4798,6 +4800,7 @@ mod tests {
                 max_players: 2,
                 integrated: true,
                 levels: game.level_shapes,
+                level_seeds: game.levels.runtime.seeds(),
             };
             game.lan_host(settings, net, config).unwrap();
             let (tx, _rx) = std::sync::mpsc::channel();
@@ -5074,6 +5077,7 @@ pub(crate) mod world_spawn_sync_tests {
                 max_players: 20,
                 integrated: true,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -5325,6 +5329,7 @@ mod mob_pickup_sync_tests {
                 max_players: 20,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -5430,6 +5435,7 @@ mod mob_swing_sync_tests {
                 max_players: 20,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -5816,6 +5822,7 @@ mod merchant_packet_tests {
                 max_players: 20,
                 integrated: true,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             };
             let mut hub = horizon_client::lan::hub::Hub::new(
                 lan,

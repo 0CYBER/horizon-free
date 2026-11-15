@@ -83,6 +83,7 @@ fn a_cancelled_player_packet_sends_the_guest_a_correction() {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -220,6 +221,7 @@ fn a_cancelled_vehicle_packet_sends_the_guest_a_correction() {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();

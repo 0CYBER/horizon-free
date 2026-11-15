@@ -876,6 +876,7 @@ pub(in crate::game) mod tests {
                 max_players: 2,
                 integrated: true,
                 levels: game.level_shapes,
+                level_seeds: game.levels.runtime.seeds(),
             };
             game.lan_host(settings, net, config).unwrap();
             assert!(game.lan.as_ref().unwrap().hub.chunk_watches.recording());

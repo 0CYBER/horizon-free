@@ -79,6 +79,7 @@ fn hub_answered(uuids: &[u128], answer: Answer) -> (Hub, Vec<Receiver<Out>>) {
         max_players: 20,
         integrated: false,
         levels: Default::default(),
+        level_seeds: Default::default(),
     };
     let mut hub = Hub::new(
         lan,
@@ -971,7 +972,6 @@ fn open_levels(hub: &mut Hub, ids: &[&'static str]) {
             id,
             dimension_type: "minecraft:overworld",
             shape: crate::chunk::LevelShape::OVERWORLD,
-            seed: None,
         })
         .collect();
     hub.config.levels.extra = extra.leak();

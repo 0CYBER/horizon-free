@@ -88,6 +88,7 @@ pub(super) fn game() -> Game<'static> {
             max_players: 2,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

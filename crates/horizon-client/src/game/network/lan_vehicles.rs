@@ -885,6 +885,7 @@ mod controller_tests {
                 max_players: 3,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -1083,6 +1084,7 @@ mod controller_tests {
                 max_players: 3,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();

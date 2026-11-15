@@ -119,8 +119,6 @@ pub struct ExtraLevel {
     /// The dimension type its level stem names.
     pub dimension_type: &'static str,
     pub shape: LevelShape,
-    /// The level's own seed, for a level a mod opened with one; else the world's.
-    pub seed: Option<i64>,
 }
 impl LevelShapes {
     pub const VANILLA: Self = Self {
@@ -149,10 +147,6 @@ impl LevelShapes {
             id,
             "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
         ) || self.extra.iter().any(|level| level.id == id)
-    }
-    /// The seed of the level `id`, if it has one of its own.
-    pub fn seed_of(&self, id: &str) -> Option<i64> {
-        self.extra.iter().find(|level| level.id == id)?.seed
     }
     /// The dimension type of the level `id`: a vanilla level's is its own name.
     pub fn dimension_type<'a>(&self, id: &'a str) -> &'a str {
@@ -1101,15 +1095,12 @@ mod tests {
                 id: "test:pocket",
                 dimension_type: "test:small",
                 shape,
-                seed: Some(7),
             }]
             .leak(),
             ..super::LevelShapes::VANILLA
         };
         assert_eq!(levels.get("test:pocket"), shape);
         assert_eq!(levels.dimension_type("test:pocket"), "test:small");
-        assert_eq!(levels.seed_of("test:pocket"), Some(7));
-        assert_eq!(levels.seed_of("minecraft:overworld"), None);
         assert_eq!(
             levels.dimension_type("minecraft:the_end"),
             "minecraft:the_end"

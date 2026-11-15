@@ -869,7 +869,6 @@ fn shapes_of(
                 id: level.to_owned().leak(),
                 dimension_type: dimension_type.to_owned().leak(),
                 shape: shape?,
-                seed: None,
             })
         })
         .collect();

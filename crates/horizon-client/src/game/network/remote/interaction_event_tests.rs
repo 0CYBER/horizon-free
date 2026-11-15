@@ -1330,6 +1330,7 @@ fn setup_interaction_guest(
             max_players: 2,
             integrated: true,
             levels: game.level_shapes,
+            level_seeds: game.levels.runtime.seeds(),
         },
     )
     .unwrap();

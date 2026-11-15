@@ -642,6 +642,7 @@ pub(in crate::game) mod tests {
             max_players: 2,
             integrated: !dedicated,
             levels: game.level_shapes,
+            level_seeds: game.levels.runtime.seeds(),
         };
         game.lan_host(settings, net, config).unwrap();
         game.lan.as_mut().unwrap().hub.singleplayer_owner = owner.then_some(12);

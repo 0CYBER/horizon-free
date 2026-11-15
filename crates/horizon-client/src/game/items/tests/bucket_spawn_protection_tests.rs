@@ -74,6 +74,7 @@ fn a_guest_without_build_rights_neither_empties_nor_fills_a_bucket_under_spawn_p
             max_players: 2,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

@@ -130,6 +130,7 @@ fn crack_packets_follow_start_clock_and_strict_observer_radius() {
             max_players: 6,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

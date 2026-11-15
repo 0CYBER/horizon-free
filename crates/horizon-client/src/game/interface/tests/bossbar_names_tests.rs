@@ -79,6 +79,7 @@ fn game_with_two_guests() -> Game<'static> {
             max_players: 3,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

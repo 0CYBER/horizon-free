@@ -83,6 +83,8 @@ fn initial_recipe_book_packets(sync: &SyncData, book: &crate::recipe_book::Setti
     ]
 }
 
+// exhaustive: engine-owned configuration, constructed by the game and its network fixtures;
+// not a mod API value.
 #[derive(Clone, Debug)]
 pub struct HubConfig {
     pub default_game_mode: i32,
@@ -103,6 +105,9 @@ pub struct HubConfig {
     pub integrated: bool,
     /// The shapes of the world's levels (their dimension types).
     pub levels: crate::chunk::LevelShapes,
+    /// The own seeds of the runtime levels a mod opened with one, by id; the world's seed for
+    /// the others. Kept here, not in `levels`, whose tables are leaked.
+    pub level_seeds: std::collections::BTreeMap<String, i64>,
 }
 
 /// What the other players see of a player's body besides sneaking and
@@ -5739,6 +5744,7 @@ mod tests {
             max_players: 20,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         };
         let mut hub = Hub::new(
             lan,
