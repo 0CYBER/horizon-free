@@ -89,28 +89,18 @@ impl Game<'_> {
                 self.select_queued_hotbar();
                 // Minecraft.pickBlockOrEntity -> the server's handlePickItemFromBlock:
                 // the block's clone item, with its block entity's data on Ctrl in
-                // creative, picked from the inventory (`pick_item`).
+                // creative, picked from the inventory (`pick_into_inventory`).
                 if let Some(entity) = self.pick_entity_hit() {
                     // handlePickItemFromEntity: the entity's pick result.
                     if let Some(stack) = entity.and_then(|id| self.entity_pick_result(id)) {
                         let infinite = self.creative;
-                        horizon_client::pick_item::pick(
-                            &mut self.inventory[..36],
-                            &mut self.selected,
-                            &stack,
-                            infinite,
-                        );
+                        self.pick_into_inventory(&stack, infinite);
                     }
                 } else if let Some(hit) = self.pick() {
                     let include_data = self.creative && self.has_control_down();
                     if let Some(stack) = self.picked_stack(hit.pos, include_data) {
                         let infinite = self.creative;
-                        horizon_client::pick_item::pick(
-                            &mut self.inventory[..36],
-                            &mut self.selected,
-                            &stack,
-                            infinite,
-                        );
+                        self.pick_into_inventory(&stack, infinite);
                     }
                 }
             }

@@ -775,8 +775,9 @@ impl Game<'_> {
         self.resolve_enchant_particles();
         Ok(())
     }
-    /// Ask the parts of each block `isPathfindable` once per state and type: the answer depends
-    /// on nothing else, so path finding and spawning read it with no dispatch. A server also
+    /// Ask the parts of each block `isPathfindable` once per state and type, and of each item
+    /// `isPrimaryItemFor` once per enchantment: the answers depend on nothing else, so path
+    /// finding, spawning and enchantment selection read them with no dispatch. A server also
     /// publishes its parts for its world generation.
     pub(super) fn install_parts(&self, prepared: PreparedParts) {
         cauldron_interactions::install(prepared.cauldrons);
@@ -792,6 +793,7 @@ impl Game<'_> {
         mod_api::__private::install_resolved_parts(prepared.parts);
         self.resolve_block_paths();
         self.resolve_piston_reactions();
+        self.resolve_primary_items();
     }
     pub(super) fn resolve_block_paths(&self) {
         use horizon_client::mobs::data::PartAnswers;

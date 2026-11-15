@@ -1168,12 +1168,7 @@ impl Game<'_> {
             if cancel {
                 return None;
             }
-            horizon_client::pick_item::pick(
-                &mut g.inventory[..36],
-                &mut g.selected,
-                &stack,
-                infinite,
-            );
+            g.pick_into_inventory(&stack, infinite);
             Some(())
         });
         if picked.flatten().is_some()

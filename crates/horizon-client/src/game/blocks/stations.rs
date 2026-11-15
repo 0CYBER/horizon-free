@@ -1055,14 +1055,7 @@ impl Game<'_> {
             self.remote_station_button(button as i32);
             return;
         }
-        let Some(enchanted) = stations::apply_enchantment(
-            &self.stations().enchantments,
-            self.items(),
-            self.level.xp_seed,
-            button,
-            cost,
-            &item,
-        ) else {
+        let Some(enchanted) = self.table_enchant(self.level.xp_seed, button, cost, &item) else {
             return;
         };
         let pos = s.pos;

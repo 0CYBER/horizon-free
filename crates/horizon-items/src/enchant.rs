@@ -766,7 +766,9 @@ impl Enchantments {
             _ => selected.max(bookcases * 2),
         }
     }
-    /// `EnchantmentHelper.getAvailableEnchantmentResults`.
+    /// `EnchantmentHelper.getAvailableEnchantmentResults`. A non-book is offered an
+    /// enchantment that is primary for it: vanilla's `isPrimaryItem`, or the answer a part
+    /// gave at install (`ItemPart::is_primary_item_for`, [`crate::primary_items`]).
     pub fn available_results(
         &self,
         items: &Items,
@@ -778,7 +780,10 @@ impl Enchantments {
         let mut out = Vec::new();
         for id in pool {
             let Some(e) = self.get(id) else { continue };
-            if !(book || self.is_primary(items, e, item)) {
+            if !(book
+                || crate::primary_items::answer(item, &e.id)
+                    .unwrap_or_else(|| self.is_primary(items, e, item)))
+            {
                 continue;
             }
             for level in (1..=e.max_level).rev() {
