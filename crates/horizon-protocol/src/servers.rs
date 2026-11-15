@@ -253,6 +253,26 @@ pub fn parse_address(text: &str) -> Option<(String, u16)> {
     }
 }
 
+/// ServerAddress.isValidAddress, which the Add/Edit Server screen's Done button
+/// and the Direct Connection screen's Join Server button ask: the text parses as
+/// a host (and port) and `java.net.IDN.toASCII` accepts the host. Only a host
+/// made of ASCII is checked here (an empty label other than the last one, or a
+/// label over 63 characters, is refused); a host with a non-ASCII character is
+/// taken as valid, because the nameprep and punycode steps are not ported.
+pub fn is_valid_address(text: &str) -> bool {
+    parse_address(text).is_some_and(|(host, _)| idn_accepts(&host))
+}
+
+/// The ASCII half of `java.net.IDN.toASCII`: one trailing dot is allowed (a lone
+/// dot too), every other label must be 1 to 63 characters long.
+fn idn_accepts(host: &str) -> bool {
+    if !host.is_ascii() {
+        return true;
+    }
+    let labels = host.strip_suffix('.').unwrap_or(host);
+    labels.is_empty() || labels.split('.').all(|l| (1..=63).contains(&l.len()))
+}
+
 /// HostAndPort uses the default for an empty port, refuses a leading plus,
 /// and accepts signed zero on its non-bracketed path before checking range.
 fn parse_port(text: &str) -> Option<u16> {
@@ -379,5 +399,45 @@ mod tests {
         assert_eq!(parse_address("host:-0"), Some(("host".into(), 0)));
         assert_eq!(parse_address("host:0"), Some(("host".into(), 0)));
         assert_eq!(parse_address("[::1]:65535"), Some(("::1".into(), 65535)));
+    }
+
+    #[test]
+    fn the_server_screens_refuse_a_host_idn_refuses() {
+        let label63 = "x".repeat(63);
+        let label64 = "x".repeat(64);
+        // Each verdict was taken from java.net.IDN.toASCII on the same host.
+        for host in [
+            "localhost".to_owned(),
+            "a.b.c".to_owned(),
+            "a.b.".to_owned(),
+            ".".to_owned(),
+            "-a.a-.a_b".to_owned(),
+            "::1".to_owned(),
+            "127.0.0.1".to_owned(),
+            label63.clone(),
+            format!("{label63}.{label63}.{label63}.{label63}"),
+        ] {
+            assert!(is_valid_address(&host), "{host}");
+            assert!(is_valid_address(&format!("{host}:25570")), "{host}");
+        }
+        for host in [
+            "a..b".to_owned(),
+            ".a".to_owned(),
+            "a..".to_owned(),
+            "..".to_owned(),
+            label64.clone(),
+            format!("{label64}."),
+            format!("{label63}.{label64}"),
+        ] {
+            assert!(!is_valid_address(&host), "{host}");
+            assert!(!is_valid_address(&format!("{host}:25570")), "{host}");
+            // ServerAddress.parseString does not ask IDN, so the parser still reads it.
+            assert!(parse_address(&host).is_some(), "{host}");
+        }
+        // What parse_address refuses stays refused.
+        assert!(!is_valid_address(""));
+        assert!(!is_valid_address("host:notaport"));
+        // A non-ASCII host is not checked here.
+        assert!(is_valid_address("m\u{fc}nchen.de"));
     }
 }
