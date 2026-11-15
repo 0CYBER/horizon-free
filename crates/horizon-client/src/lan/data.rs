@@ -82,8 +82,10 @@ pub const CORE_PACK: (&str, &str, &str) = ("minecraft", "core", horizon_protocol
 
 /// Synchronized registries a world's data packs add entries to (or replace
 /// them in). The others stay the game's own: Horizon's gameplay reads them
-/// from the prepared resources only.
-const PACK_REGISTRIES: &[&str] = &["minecraft:dialog"];
+/// from the prepared resources only. An enchantment is here because the
+/// server's catalog reads a pack's (#11610): a client needs its id to be sent
+/// a stack that carries it, and its data to show it.
+const PACK_REGISTRIES: &[&str] = &["minecraft:dialog", "minecraft:enchantment"];
 
 /// A data-driven registry: entry names in network order and their NBT.
 #[derive(Clone)]
@@ -1157,6 +1159,65 @@ mod tests {
         };
         assert_eq!(data(true), [false, true]);
         assert_eq!(data(false), [true, true]);
+    }
+
+    /// RegistryDataLoader.SYNCHRONIZED_REGISTRIES holds `minecraft:enchantment`:
+    /// a world pack's enchantment reaches the client with its data, and a stack
+    /// carrying it keeps it.
+    #[test]
+    fn a_world_packs_enchantment_is_synchronized_and_kept_on_a_stack() {
+        use horizon_world::loot::PackOverlay;
+        let root = std::env::temp_dir().join(format!("horizon-pack-ench-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data/minecraft/enchantment")).unwrap();
+        std::fs::write(
+            root.join("registries.json"),
+            r#"{"minecraft:item":{"entries":{"minecraft:iron_sword":{"protocol_id":0}}}}"#,
+        )
+        .unwrap();
+        let json = r##"{"description":"x","supported_items":"#minecraft:enchantable/sword","weight":1,"max_level":1,"min_cost":{"base":1,"per_level_above_first":0},"max_cost":{"base":2,"per_level_above_first":0},"anvil_cost":1,"slots":["mainhand"]}"##;
+        std::fs::write(root.join("data/minecraft/enchantment/sharpness.json"), json).unwrap();
+        let files = vec![(
+            "enchantment/test:vorpal".to_owned(),
+            vec![json.as_bytes().to_vec()],
+        )];
+        let loaded = SyncData::load(&root, &PackOverlay { files: &files });
+        let _ = std::fs::remove_dir_all(&root);
+        let sync = loaded.unwrap();
+        let vorpal = sync
+            .id("minecraft:enchantment", "test:vorpal")
+            .expect("the pack's enchantment has a network id");
+        let sharpness = sync
+            .id("minecraft:enchantment", "minecraft:sharpness")
+            .unwrap();
+        // The registry sorts by path: `sharpness`, then `vorpal`.
+        assert_eq!((sharpness, vorpal), (0, 1));
+        let packets = sync.registry_packets(true, &LevelShapes::VANILLA);
+        let sent = packets
+            .iter()
+            .find(|p| p.registry == "minecraft:enchantment")
+            .expect("the enchantment registry is sent");
+        assert!(
+            sent.entries[sharpness as usize].data.is_none(),
+            "a known-pack entry is sent by name"
+        );
+        assert!(
+            sent.entries[vorpal as usize].data.is_some(),
+            "no client knows the pack's: its data is sent"
+        );
+        let mut sword = crate::items::ItemStack::new("minecraft:iron_sword", 1);
+        sword
+            .data_mut()
+            .enchantments
+            .push(("test:vorpal".into(), 1));
+        let network =
+            crate::lan::guest::stack_to_network(|_| 0, |r, n| sync.id(r, n), &Some(sword)).unwrap();
+        assert_eq!(
+            network.component(horizon_protocol::item::component::ENCHANTMENTS),
+            Some(&horizon_protocol::item::Component::Enchantments(vec![(
+                vorpal, 1
+            )])),
+        );
     }
 
     #[test]
