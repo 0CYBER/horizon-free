@@ -3151,7 +3151,7 @@ impl Game<'_> {
     pub(in crate::game) fn native_player_jump(&mut self, player: u128, name: &str) {
         self.fire_player_jump(player, name);
     }
-    /// A guest was disconnected by a server kick, after the hub recorded the rendered `reason`. The guest's state is
+    /// A network or fake guest was kicked, after the hub recorded the rendered `reason`. The guest's state is
     /// swapped in unless they were already removed in the same poll.
     pub(in crate::game) fn native_player_kicked(&mut self, player: u128, name: &str, reason: &str) {
         self.fire_player_kicked(player, name, reason);

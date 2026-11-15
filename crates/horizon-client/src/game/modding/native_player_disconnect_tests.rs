@@ -129,17 +129,13 @@ fn a_second_disconnect_while_pending_is_refused() {
 
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-fn disconnect_refuses_the_owner_fakes_stale_and_offline_players() {
+fn disconnect_refuses_the_owner_stale_and_offline_players() {
     with_guests(|game| {
         let players = game.players().server_players();
         let (a, b) = (players[0], players[1]);
         game.lan.as_mut().unwrap().hub.singleplayer_owner = Some(12);
         assert!(!a.disconnect(game, Text::literal("owner")).unwrap());
         game.lan.as_mut().unwrap().hub.singleplayer_owner = None;
-
-        let level = game.level("minecraft:overworld").unwrap();
-        let fake = game.fake_player(level, 100, "robot").unwrap();
-        assert!(!fake.disconnect(game, Text::literal("fake")).unwrap());
 
         let stale = mod_api::__private::game::player_ref(
             mod_api::EntityRef::new(
