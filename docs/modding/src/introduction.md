@@ -48,5 +48,5 @@ The same Rust, built to `mod.wasm` and run in the game's sandbox.
 - **Reference** lists the manifest, the package and registry formats, and links the
   [API reference](reference/api.md), which documents every hook, event and `Host` method.
 
-The complete example mod is [horizon-machine-sample](https://github.com/arismoko/horizon-machine-sample).
+An example mod lives at <https://github.com/arismoko/horizon-machine-sample>.
 A coding agent can start from [`llms.txt`](llms.txt).

@@ -28,7 +28,6 @@ GREEN_JOBS = [job("shards / plan"), job("shards / ignored-tests-shards (horizon-
               job("linkage / route"), job("linkage / linkage x86_64-unknown-linux-gnu"),
               job("windows-runtime-leases / gate"), job("windows-runtime-leases / test", "skipped"),
               job("windows-runtime-leases / runtime-leases"), job("windows-runtime-leases / launcher-processes"),
-              job("machine-sample / route"), job("machine-sample / build"),
               job("sdk / fresh"), job("sdk / build linux"), job("sdk / publish", "skipped")]
 # Every other shard of the daily matrix, green (the summary expects each by name: summary.expected_shards).
 GREEN_JOBS += [job(name) for name in summary.expected_shards() if name != "shards / ignored-tests-shards (horizon-world)"]
@@ -364,30 +363,6 @@ class DailySummaryTests(unittest.TestCase):
                 created = [body for _, path, body in api.writes if path == "issues"]
                 self.assertEqual([body["title"] for body in created], [f"Daily: {leg} did not complete"])
                 self.assertIn(f"`{helper}` failed", created[0]["body"])
-
-    def test_a_red_machine_sample_files_one_action_issue_naming_the_step_and_closes_when_green(self):
-        step = "The machine sample builds against this API"
-        jobs = [j for j in GREEN_JOBS if j["name"] != "machine-sample / build"] + [
-            job("machine-sample / build", "failure", [step])]
-        api = Api(jobs)
-        _, out = self.run_summary(api, [shard_report()], results=dict(LEGS, **{"machine-sample": {"result": "failure"}}),
-                                  merged=[4100, 4101])
-        self.assertIn("green=false", out)
-        created = [body for _, path, body in api.writes if path == "issues"]
-        self.assertEqual([body["title"] for body in created], ["Daily: update the machine sample for the mod API change"])
-        self.assertEqual(created[0]["labels"], ["bug"])
-        self.assertIn(f"`{step}`", created[0]["body"])
-        self.assertIn("#4100, #4101", created[0]["body"])
-        self.assertIn("check_machine_sample.py", created[0]["body"])
-        # Still red the next day: a comment on the same issue. Green: closed.
-        issue = [{"number": 77, "title": "Daily: update the machine sample for the mod API change", "body": "> filed"}]
-        api = Api(jobs, issues=issue)
-        self.run_summary(api, [shard_report()], results=dict(LEGS, **{"machine-sample": {"result": "failure"}}))
-        self.assertEqual([(m, p) for m, p, _ in api.writes], [("POST", "issues/77/comments")])
-        api = Api(GREEN_JOBS, issues=issue)
-        _, out = self.run_summary(api, [shard_report()])
-        self.assertIn("green=true", out)
-        self.assertIn(("PATCH", "issues/77"), [(m, p) for m, p, _ in api.writes])
 
     def test_a_skipped_sdk_build_is_green_only_when_fresh_found_the_release(self):
         jobs = [j for j in GREEN_JOBS if not j["name"].startswith("sdk / ")] + [

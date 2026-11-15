@@ -77,9 +77,8 @@ A reviewer runs your change in game at your head only when a test can't cover on
 - client-server sync: LAN guests, a dedicated server, packets;
 - when or in what order something happens compared with vanilla, such as a hook's firing point.
 
-If your PR changes or removes something mods already use, the reviewer also runs
-[horizon-machine-sample](https://github.com/arismoko/horizon-machine-sample) against it. A new item's `///` doc is its
-reference.
+If your PR changes or removes something mods already use, say so in the PR: mods built against the old API stop
+building. A new item's `///` doc is its reference.
 
 ## A catalog point and the wasm fixture
 

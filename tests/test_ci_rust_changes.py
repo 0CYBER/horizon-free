@@ -117,7 +117,7 @@ class RustChangesTests(unittest.TestCase):
             self.assertTrue(selected["rust_required"])
             self.assertTrue(selected["launcher_required"])
             self.assertTrue(selected["tooling_required"])
-        # The machine sample is a daily leg: a mod API change selects nothing extra in the checks.
+        # A documentation change in a mod API crate selects no Rust checks.
         self.assertFalse(selections([("M", "crates/horizon-mod-api/README.md")])["rust_required"])
 
     def test_git_status_and_cli_selections_for_actual_documentation_changes(self):

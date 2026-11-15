@@ -11,8 +11,7 @@ files (tools/ci/ignored_tests.py --report: test identity, kind, panic location, 
 - a leg that failed without a test name (build error, timeout, killed, cancelled, skipped, or a leg with no
   sanitised verdict): one issue per leg, `Daily: <leg> did not complete`, naming the failed steps and, for a shard,
   why each run stopped as its verdict file says (signal or exit status, memory peak and limit, wall time, the tests
-  still running past 60 s; stopped_text); a leg whose red asks for an action is titled as that action (ACTIONS:
-  `Daily: update the machine sample for the mod API change`);
+  still running past 60 s; stopped_text);
 - a test (or leg) green again: closes its open issue with a comment.
 A job it does not know, or an expected leg with no job, is a red leg ("did not report"), never green; so is a
 shard of the matrix (tools/ci/ignored_shards.py, which builds it) with no job of its name. Each comment
@@ -48,14 +47,7 @@ PREFIX = "Daily: "
 UNFINISHED = " did not complete"
 DISCLOSURE = "> 🤖 Filed by the daily run."
 # daily.yml's leg jobs (each a called workflow), and the called workflows' own routing jobs, which test nothing.
-LEGS = ("shards", "wasm-mods", "fn-replace-check", "linkage", "windows-runtime-leases", "machine-sample", "sdk")
-# Legs whose red is an action for someone, not a break: their one issue is titled as the action, and says what to do.
-ACTIONS = {
-    "machine-sample": ("update the machine sample for the mod API change",
-                       "arismoko/horizon-machine-sample, at the pin in `tools/ci/check_machine_sample.py`, no longer "
-                       "builds against this commit's mod API. Update the sample for the API change, then move the pin "
-                       "to the updated sample in a pull request here."),
-}
+LEGS = ("shards", "wasm-mods", "fn-replace-check", "linkage", "windows-runtime-leases", "sdk")
 HELPERS = ("plan", "route", "fresh", "gate")
 # Jobs of a called workflow that the daily run does not use: launcher-windows-check's push and pull-request tests.
 NOT_DAILY = ("windows-runtime-leases / test",)
@@ -332,8 +324,7 @@ def test_title(item):
 
 
 def leg_title(leg):
-    action = ACTIONS.get(leg.split(" / ", 1)[0])
-    return f"{PREFIX}{action[0]}" if action else f"{PREFIX}{leg}{UNFINISHED}"
+    return f"{PREFIX}{leg}{UNFINISHED}"
 
 
 def detail(item):
@@ -349,9 +340,7 @@ def detail(item):
 
 def leg_detail(leg, conclusion, steps, reason):
     named_steps = ", ".join(f"`{step}`" for step in steps) or "none recorded"
-    action = ACTIONS.get(leg.split(" / ", 1)[0])
-    return ((f"{action[1]}\n\n" if action else "")
-            + f"Leg `{leg}` ended `{conclusion}`: {reason}. Failed steps: {named_steps}.")
+    return f"Leg `{leg}` ended `{conclusion}`: {reason}. Failed steps: {named_steps}."
 
 
 def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_issues, numbers, fixes=None):
@@ -386,10 +375,7 @@ def plan(commit, run_url, tests, unfinished, passed, green_legs, green, open_iss
         if title in filed:
             continue
         rest = title[len(PREFIX):]
-        acted = [leg for leg, (action, _) in ACTIONS.items() if action == rest]
-        if acted:
-            back = acted[0] in green_legs or any(name.startswith(f"{acted[0]} / ") for name in green_legs)
-        elif rest.endswith(UNFINISHED):
+        if rest.endswith(UNFINISHED):
             back = rest[:-len(UNFINISHED)] in green_legs
         else:
             package, _, test = rest.partition(" ")

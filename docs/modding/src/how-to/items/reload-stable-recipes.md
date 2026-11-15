@@ -52,5 +52,5 @@ Keep capability, pipe, inventory and world reads live too. Caching definitions
 does not authorize a write or reserve output capacity. A blocked machine resets
 progress according to its existing policy.
 
-The [machine sample](https://github.com/arismoko/horizon-machine-sample) demonstrates
-the full processing and transfer path.
+An example mod showing the full processing and transfer path lives at
+<https://github.com/arismoko/horizon-machine-sample>.

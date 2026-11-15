@@ -2,8 +2,7 @@
 """Select CI checks from one fail-closed Git diff.
 
 The default answers Rust selection; --launcher uses the launcher's dependency paths.
---all emits the shared Rust, launcher and tooling decisions in one answer (the machine sample is a daily leg,
-machine-sample.yml, so nothing selects it here).
+--all emits the shared Rust, launcher and tooling decisions in one answer.
 server_build: whether verify's clippy of the server build has anything new to check (needs_server_build).
 """
 
@@ -57,12 +56,6 @@ def needs_launcher(paths):
 # Stands for "everything changed" when no diff can be computed: a root manifest every check and shard selector
 # treats as touching all of them.
 UNKNOWN_CHANGE = "Cargo.lock"
-
-
-def needs_sample(paths):
-    return any(path in ROOT_RUST or path == "tools/ci/check_machine_sample.py"
-               or path.startswith(("crates/horizon-mod-", "crates/horizon-core/",
-                                   "crates/horizon-game-discovery/")) for path in paths)
 
 
 def needs_tooling(changes):
@@ -120,5 +113,4 @@ if __name__ == "__main__":
     else:
         needs = needs_launcher if args.launcher else needs_rust
         print(f"required={str(needs(paths)).lower()}")
-        print(f"sample={str(needs_sample(paths)).lower()}")
         print(f"server_build={str(needs_server_build(paths)).lower()}")

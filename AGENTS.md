@@ -35,7 +35,7 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   nightly, published by the daily run when every leg is green ([docs/release-flow.md](docs/release-flow.md#daily-run)).
 - **CI tiers** ([CONTRIBUTING.md](CONTRIBUTING.md#ci-tiers)): every PR push and main push runs `checks`
   (`verify`: format, lint and unit tests only; `launcher`); the ignored-test shards, the wasm
-  fixture, `fn-replace-check`, the SDK build and its linkage probe and the machine-sample build run once a day (`daily.yml`). A new test that needs prepared
+  fixture, `fn-replace-check`, the SDK build and its linkage probe run once a day (`daily.yml`). A new test that needs prepared
   resources, boots the game, starts a child process, uses the network or a compiled wasm fixture, or takes 2 s or
   more is `#[ignore]`d with a row in `tools/ci/ignored-tests/`; say in the PR when you could not run it. A daily red
   becomes an issue listing the suspect PRs, fixed by an ordinary PR. Existing tests still in `verify` that need
@@ -60,7 +60,7 @@ break**, and every change to it follows these rules. Reviews block a PR that bre
 
 - **No compatibility paths.** No aliases, shims, deprecated names, migration or fallback code, version
   gates, or "kept for old mods" branches. Old mods rebuild; the compiler says what moved. Removing an old
-  path updates every caller, the catalog, docs, tests and horizon-machine-sample in the same change.
+  path updates every caller, the catalog, docs and tests in the same change.
 - **One hook per moment.** A hook with a NeoForge 26.3 counterpart takes its name, side and full contract.
   Two hooks at the same vanilla call site (including `_v1`/`_v2` pairs) merge into that one, and the old
   one is deleted, not kept beside it. A veto before an action and a notice after it are separate moments

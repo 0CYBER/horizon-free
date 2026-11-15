@@ -246,8 +246,7 @@ dispatch replaces an older waiting one. The schedule stops when main's head alre
 a hand dispatch never does, so it retries a run whose tag move, issues or nightly failed. Its legs are the workflows that left main pushes:
 the ignored-tests data shards (`ignored-tests.yml`), the wasm fixture and guest stacks (`wasm-mods.yml`),
 `fn-replace-check.yml`, the native linkage probe (`native-dylib-probe.yml`), the launcher's Windows runtime-lease
-tests (`launcher-windows-check.yml`), the machine sample built against the commit's mod API (`machine-sample.yml`)
-and the prebuilt SDK of the commit
+tests (`launcher-windows-check.yml`) and the prebuilt SDK of the commit
 (`prebuilt-game-build.yml`; each leg packs its slices, and `sdk-publish` signs and publishes them as the mod SDK's
 release `sdk-<sha>` (`sdk-publish.yml`) only after a green summary on a real run on main, before the Nightly that
 needs them; a failed publish files one issue, `Daily: sdk-publish did not complete`), each called
@@ -259,9 +258,7 @@ summary (`tools/ci/daily_summary.py`) reads each leg's result and its sanitised 
   age rule; the pause switch and release-blockers still hold it);
 - a failing test: one issue `Daily: <crate> <test>` (label `bug`) with its panic location, the first daily run that
   saw it and the pull requests merged since the last green daily as suspects; later runs comment on it, and the
-  first run where it passes closes it. A leg that failed without a test name gets one issue per leg. A red machine
-  sample is no break: its one issue, `Daily: update the machine sample for the mod API change`, asks for the sample
-  to follow the API change and its pin to move.
+  first run where it passes closes it. A leg that failed without a test name gets one issue per leg.
 
 Only a run on `main` with `dry_run` false moves the tag, files issues or publishes; any other run prints what it
 would do. A Nightly ships only the commit `daily-green` points to, with its SDK (`release.yml`, `nightly build`).
