@@ -79,8 +79,7 @@ fn cli_keeps_redirected_stdout_and_stderr() {
         .output()
         .unwrap();
     assert!(version.status.success());
-    assert!(String::from_utf8_lossy(&version.stdout)
-        .starts_with(horizon_launcher::identity::VERSION_PREFIX));
+    assert!(String::from_utf8_lossy(&version.stdout).starts_with("horizon-launcher "));
     let invalid = process::command(executable)
         .arg("--unknown-option")
         .output()

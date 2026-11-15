@@ -57,7 +57,7 @@ pub fn open(mode: Mode, cx: &mut App) {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             window_min_size: Some(size(px(760.), px(520.))),
             titlebar: Some(titlebar::options()),
-            app_id: Some(horizon_launcher::identity::APP_ID.into()),
+            app_id: Some("horizon-launcher".into()),
             ..Default::default()
         },
         |window, cx| cx.new(|cx| Setup::new(mode, window, cx)),
@@ -368,17 +368,10 @@ impl Setup {
                 if self.mode == Mode::Install {
                     body = body.child(
                         div().flex().items_center().justify_end().child(
-                            crate::button(
-                                "launch",
-                                tr(if cfg!(horizon_fork_launcher) {
-                                    "Launch Horizon Launcher"
-                                } else {
-                                    "Launch Horizon"
-                                }),
-                                Kind::Primary,
-                                &t,
-                            )
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.launch(cx))),
+                            crate::button("launch", tr("Launch Horizon"), Kind::Primary, &t)
+                                .on_click(
+                                    cx.listener(|this, _: &ClickEvent, _, cx| this.launch(cx)),
+                                ),
                         ),
                     );
                 }
@@ -403,9 +396,7 @@ impl Setup {
             .flex()
             .flex_col()
             .gap(px(18.))
-            .child(
-                text(night::DISPLAY, c(n.ink)).child(tr(horizon_launcher::identity::WINDOW_TITLE)),
-            )
+            .child(text(night::DISPLAY, c(n.ink)).child(tr("Horizon Launcher")))
             .child(body)
     }
 }

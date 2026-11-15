@@ -23,7 +23,7 @@ pub fn draws_brand(window: &Window) -> bool {
 
 pub fn options() -> TitlebarOptions {
     TitlebarOptions {
-        title: Some(horizon_launcher::identity::WINDOW_TITLE.into()),
+        title: Some("Horizon Launcher".into()),
         // macOS and Windows place the GPUI content under the native title bar. Linux uses
         // client-side decorations below, so its title bar is transparent by construction.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
@@ -84,9 +84,8 @@ pub fn render(theme: &Theme, window: &Window) -> Option<Div> {
         .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
         .child(mark(16., theme))
         .child(
-            blocks::pixel(13., FontWeight::MEDIUM).child(horizon_launcher::i18n::tr(
-                horizon_launcher::identity::WINDOW_TITLE,
-            )),
+            blocks::pixel(13., FontWeight::MEDIUM)
+                .child(horizon_launcher::i18n::tr("Horizon Launcher")),
         );
 
     let mut bar = div()
@@ -464,9 +463,8 @@ mod windows {
             .window_control_area(WindowControlArea::Drag)
             .child(mark(16., theme))
             .child(
-                blocks::pixel(13., FontWeight::MEDIUM).child(horizon_launcher::i18n::tr(
-                    horizon_launcher::identity::WINDOW_TITLE,
-                )),
+                blocks::pixel(13., FontWeight::MEDIUM)
+                    .child(horizon_launcher::i18n::tr("Horizon Launcher")),
             );
         Some(
             div()

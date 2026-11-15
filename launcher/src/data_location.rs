@@ -42,7 +42,7 @@ pub fn bootstrap_path() -> Result<PathBuf> {
         .map(|p| {
             crate::identity::folder_in(
                 &p,
-                crate::identity::LOCATION_FOLDER,
+                "horizon-launcher-location",
                 crate::identity::LEGACY_LOCATION_FOLDER,
             )
             .join("location.json")

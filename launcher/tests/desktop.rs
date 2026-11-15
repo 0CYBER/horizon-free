@@ -36,18 +36,10 @@ fn menu_registration_preserves_the_package_wrapper() {
     let _ = std::fs::remove_dir_all(&home);
     let entry = home
         .join("data/applications")
-        .join(if cfg!(horizon_fork_launcher) {
-            "io.github.arismoko.horizonfork.launcher.desktop"
-        } else {
-            "horizon-launcher.desktop"
-        });
+        .join("horizon-launcher.desktop");
     let other = home
         .join("data/applications")
-        .join(if cfg!(horizon_fork_launcher) {
-            "horizon-launcher.desktop"
-        } else {
-            "io.github.arismoko.horizonfork.launcher.desktop"
-        });
+        .join("io.github.arismoko.horizonfork.launcher.desktop");
     std::fs::create_dir_all(other.parent().unwrap()).unwrap();
     std::fs::write(&other, "other launcher registration").unwrap();
 

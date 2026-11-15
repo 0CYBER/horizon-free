@@ -105,13 +105,13 @@ use gpui::{
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
+use horizon_launcher::build_import;
 use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
 use horizon_launcher::native_mods;
 use horizon_launcher::native_status;
 use horizon_launcher::storage;
 use horizon_launcher::telemetry;
-use horizon_launcher::{build_import, identity};
 use native_consent::PendingConsent;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -620,8 +620,8 @@ fn page_after_startup(page: Page, data_folder_failed: bool) -> Page {
 fn menus() -> Vec<Menu> {
     vec![
         Menu {
-            name: identity::DISPLAY_NAME.into(),
-            items: vec![MenuItem::action(tr(identity::QUIT_LABEL), Quit)],
+            name: "Horizon Launcher".into(),
+            items: vec![MenuItem::action(tr("Quit Horizon Launcher"), Quit)],
             disabled: false,
         },
         Menu {
@@ -850,7 +850,7 @@ mod tests {
         assert_eq!(menus[0].name, "Horizon Launcher");
         assert!(matches!(
             &menus[0].items[0],
-            gpui::MenuItem::Action { name, .. } if name == horizon_launcher::identity::QUIT_LABEL
+            gpui::MenuItem::Action { name, .. } if name == "Quit Horizon Launcher"
         ));
     }
 

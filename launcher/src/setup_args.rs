@@ -48,7 +48,7 @@ pub fn other_launcher_pids(tasklist_csv: &str, own: u32) -> Vec<u32> {
         .filter_map(|line| {
             let mut fields = line.trim().trim_matches('"').split("\",\"");
             let image = fields.next()?;
-            if !image.eq_ignore_ascii_case(crate::identity::WINDOWS_EXECUTABLE) {
+            if !image.eq_ignore_ascii_case("horizon-launcher.exe") {
                 return None;
             }
             fields.next()?.trim().parse::<u32>().ok()
@@ -134,13 +134,7 @@ mod tests {
         \"horizon-launcher-setup.exe\",\"77\",\"Console\",\"1\",\"9,000 K\"\r\n";
 
     fn tasklist() -> String {
-        if cfg!(horizon_fork_launcher) {
-            TASKLIST
-                .replace("horizon-launcher", "horizon-fork-launcher")
-                .replace("Horizon-Launcher", "Horizon-Fork-Launcher")
-        } else {
-            TASKLIST.into()
-        }
+        TASKLIST.into()
     }
 
     #[test]
@@ -153,11 +147,7 @@ mod tests {
 
     #[test]
     fn another_identity_is_never_terminated() {
-        let other = if cfg!(horizon_fork_launcher) {
-            "\"horizon-launcher.exe\",\"42\""
-        } else {
-            "\"horizon-fork-launcher.exe\",\"42\""
-        };
+        let other = "\"horizon-fork-launcher.exe\",\"42\"";
         assert!(other_launcher_pids(other, 1).is_empty());
     }
 

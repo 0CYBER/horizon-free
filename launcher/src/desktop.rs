@@ -52,12 +52,8 @@ const ICONS: [(&str, &[u8]); 9] = [
     ),
 ];
 
-const LAUNCHER_ENTRY: &str = crate::identity::DESKTOP_ENTRY;
-const GAME_ENTRY: &str = if cfg!(horizon_fork_launcher) {
-    "horizon-fork-arismoko.desktop"
-} else {
-    "horizon.desktop"
-};
+const LAUNCHER_ENTRY: &str = "horizon-launcher.desktop";
+const GAME_ENTRY: &str = "horizon.desktop";
 const GAME_ENTRY_TEXT: &str = include_str!("../../packaging/linux/horizon.desktop");
 
 /// `$XDG_DATA_HOME`, or `~/.local/share` when it is unset or not absolute (as the spec says).
@@ -99,17 +95,7 @@ pub fn launcher_entry(exe: &Path) -> String {
         exe.display(),
         minecraft = horizon_platform::version::VANILLA_VERSION,
     );
-    if cfg!(horizon_fork_launcher) {
-        entry
-            .replace("Name=Horizon\n", "Name=Horizon Launcher\n")
-            .replace("Icon=horizon\n", "Icon=horizon-fork-arismoko\n")
-            .replace(
-                "StartupWMClass=horizon-launcher\n",
-                "StartupWMClass=io.github.arismoko.horizonfork.launcher\n",
-            )
-    } else {
-        entry
-    }
+    entry
 }
 
 /// Every file this module writes, with its contents, under `data`.
@@ -121,28 +107,14 @@ fn files(data: &Path, exe: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         ),
         (
             data.join("applications").join(GAME_ENTRY),
-            if cfg!(horizon_fork_launcher) {
-                GAME_ENTRY_TEXT
-                    .replace("Icon=horizon", "Icon=horizon-fork-arismoko")
-                    .into_bytes()
-            } else {
-                GAME_ENTRY_TEXT.as_bytes().to_vec()
-            },
+            GAME_ENTRY_TEXT.as_bytes().to_vec(),
         ),
     ];
     for (size, bytes) in ICONS {
         let name = if size == "scalable" {
-            if cfg!(horizon_fork_launcher) {
-                "horizon-fork-arismoko.svg"
-            } else {
-                "horizon.svg"
-            }
+            "horizon.svg"
         } else {
-            if cfg!(horizon_fork_launcher) {
-                "horizon-fork-arismoko.png"
-            } else {
-                "horizon.png"
-            }
+            "horizon.png"
         };
         out.push((
             data.join("icons/hicolor")
@@ -291,11 +263,7 @@ mod tests {
         let entry = launcher_entry(Path::new("/home/a b/Horizon \"x\"/horizon-launcher"));
         assert!(entry.contains("Exec=\"/home/a b/Horizon \\\"x\\\"/horizon-launcher\"\n"));
         assert!(entry.contains("TryExec=/home/a b/Horizon \"x\"/horizon-launcher\n"));
-        assert!(entry.contains(if cfg!(horizon_fork_launcher) {
-            "Icon=horizon-fork-arismoko\n"
-        } else {
-            "Icon=horizon\n"
-        }));
+        assert!(entry.contains("Icon=horizon\n"));
     }
 
     #[test]
@@ -304,18 +272,10 @@ mod tests {
         let _ = fs::remove_dir_all(&data);
         assert!(install_in(&data, Path::new("/opt/a/horizon-launcher")).unwrap());
         assert!(!install_in(&data, Path::new("/opt/a/horizon-launcher")).unwrap());
-        let png = data.join(if cfg!(horizon_fork_launcher) {
-            "icons/hicolor/48x48/apps/horizon-fork-arismoko.png"
-        } else {
-            "icons/hicolor/48x48/apps/horizon.png"
-        });
+        let png = data.join("icons/hicolor/48x48/apps/horizon.png");
         assert!(fs::read(&png).unwrap().starts_with(b"\x89PNG"));
         assert!(data
-            .join(if cfg!(horizon_fork_launcher) {
-                "icons/hicolor/scalable/apps/horizon-fork-arismoko.svg"
-            } else {
-                "icons/hicolor/scalable/apps/horizon.svg"
-            })
+            .join("icons/hicolor/scalable/apps/horizon.svg")
             .exists());
         assert!(install_in(&data, Path::new("/opt/b/horizon-launcher")).unwrap());
         let entry = fs::read_to_string(data.join("applications").join(LAUNCHER_ENTRY)).unwrap();
