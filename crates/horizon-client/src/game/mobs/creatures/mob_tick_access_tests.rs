@@ -248,6 +248,7 @@ struct PassObservation {
     actor: u32,
     peer_velocity: Option<[f64; 3]>,
     spawned_position: Option<[f64; 3]>,
+    spawned_handles: [bool; 3],
 }
 
 struct PassProbe {
@@ -257,10 +258,16 @@ struct PassProbe {
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for PassProbe {
     fn mob_despawn(&self, host: &dyn mod_api::Host, event: &mut mod_api::MobDespawnEvent<'_>) {
+        let spawned = mod_api::EntityRef::new(event.mob.entity().epoch(), 74);
         self.records.lock().unwrap().push(PassObservation {
             actor: event.mob.entity().id(),
             peer_velocity: host.entity(72).and_then(|peer| peer.velocity(host)),
-            spawned_position: host.entity(74).and_then(|spawned| spawned.position(host)),
+            spawned_position: spawned.position(host),
+            spawned_handles: [
+                host.entity(74).is_some(),
+                host.living(spawned).is_some(),
+                host.mob(spawned).is_some(),
+            ],
         });
         *event.result = Despawn::Deny;
     }
@@ -300,6 +307,11 @@ fn scoped_despawn_view_tracks_peer_turns_and_defers_mid_pass_spawns() {
                     spawned.no_gravity = true;
                     spawned.on_ground = true;
                     game.mobs.push(spawned);
+                    // The ordinary host can already read the spawn buffer.
+                    // Only the scoped view must keep it outside this pass.
+                    let entity = game.entity(74).expect("spawn has a resident handle");
+                    assert!(game.mob(entity).is_some());
+                    assert_eq!(entity.position(game), Some([10.0, 80.0, 0.5]));
                 },
                 || game.tick_creature_entities().unwrap(),
             );
@@ -309,17 +321,20 @@ fn scoped_despawn_view_tracks_peer_turns_and_defers_mid_pass_spawns() {
                     PassObservation {
                         actor: 71,
                         peer_velocity: Some([0.001, 0.0, 0.0]),
-                        spawned_position: None
+                        spawned_position: None,
+                        spawned_handles: [false; 3],
                     },
                     PassObservation {
                         actor: 72,
                         peer_velocity: Some([0.001, 0.0, 0.0]),
-                        spawned_position: None
+                        spawned_position: None,
+                        spawned_handles: [false; 3],
                     },
                     PassObservation {
                         actor: 73,
                         peer_velocity: Some([0.0, 0.0, 0.0]),
-                        spawned_position: None
+                        spawned_position: None,
+                        spawned_handles: [false; 3],
                     },
                 ]
             );
@@ -333,6 +348,7 @@ fn scoped_despawn_view_tracks_peer_turns_and_defers_mid_pass_spawns() {
                 let observation = records.iter().find(|record| record.actor == actor).unwrap();
                 assert_eq!(observation.peer_velocity, Some([0.0, 0.0, 0.0]));
                 assert_eq!(observation.spawned_position, Some([10.0, 80.0, 0.5]));
+                assert_eq!(observation.spawned_handles, [true; 3]);
             }
         });
     });
