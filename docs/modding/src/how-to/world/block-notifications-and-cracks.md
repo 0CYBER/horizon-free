@@ -4,8 +4,8 @@
 
 `level.send_block_updated(host, pos)` tells clients to read the current block again.
 It does not change that block or mark the chunk unsaved. Repeated notifications of
-one position are coalesced until the update log is consumed. Inside a transaction,
-notification waits for the outermost commit; aborting sends nothing. A stale,
+one position are coalesced until the update log is consumed. The request is recorded immediately,
+including inside a transaction; aborting storage does not retract it. A stale,
 parked, unloaded or out-of-height write returns `false` and queues nothing.
 
 ## Show breaking cracks

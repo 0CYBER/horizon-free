@@ -126,7 +126,15 @@ fn internal_slots_preserve_automation_limits_and_nested_transactions() {
                 ))
             );
             assert_eq!(get(game, 1), Ok(Some(diamond.clone())));
-            assert!(!game.world.modified.is_empty());
+            assert!(
+                game.world.modified.is_empty(),
+                "raw mod slot writes are silent"
+            );
+            assert!(entity.set_changed(game).unwrap());
+            assert!(
+                !game.world.modified.is_empty(),
+                "explicit notification marks the chunk"
+            );
             let BlockEntity::Mod(holder) = game.world.block_entities.get(&pos).unwrap() else {
                 panic!()
             };

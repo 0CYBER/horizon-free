@@ -1,4 +1,4 @@
-//! #968: a level's break progress and block updates wait for the outermost commit.
+//! #968/#3720: crack effects wait for commit; explicit block-update requests survive abort.
 use super::native_entity_refs::tests::with_game;
 use horizon_client::chunk::Chunk;
 use mod_api::HostTransaction;
@@ -82,7 +82,7 @@ fn crack_packets_wait_for_root_commit_and_preserve_fifo() {
 
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-fn break_progress_and_block_updates_wait_for_the_commit() {
+fn break_progress_waits_for_commit_but_explicit_block_updates_survive_abort() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
         game.world
@@ -98,7 +98,7 @@ fn break_progress_and_block_updates_wait_for_the_commit() {
         });
         assert!(aborted.is_err());
         assert!(!game.destroying.contains_key(&-7), "no crack after abort");
-        assert!(!game.world.block_log.as_ref().unwrap().contains(&(2, 64, 2)));
+        assert!(game.world.block_log.as_ref().unwrap().contains(&(2, 64, 2)));
 
         let host: &mut dyn mod_api::ServerHost = game;
         host.transaction(|host, _| {
