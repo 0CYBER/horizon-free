@@ -53,9 +53,14 @@ impl PayloadToken {
             schema,
         }
     }
-    /// `Ok` when `T` is the value type this token was handed out for and `direction` its own.
-    fn claims<T: PayloadCodec>(&self, direction: PayloadDirection) -> Result<(), PayloadSendError> {
-        if self.direction == direction && self.schema == payload_schema::<T>() {
+    /// `Ok` when `value_schema`, the schema of the value type the token is held as, is the one
+    /// it was handed out for and `direction` its own: two compares, no schema walk.
+    fn claims(
+        &self,
+        value_schema: u64,
+        direction: PayloadDirection,
+    ) -> Result<(), PayloadSendError> {
+        if self.direction == direction && self.schema == value_schema {
             Ok(())
         } else {
             Err(PayloadSendError::StaleToken(self.id.clone()))
@@ -81,15 +86,20 @@ macro_rules! token {
         // no wire: a manual codec below, the token's own; the value type is only a parameter.
         pub struct $name<T> {
             token: PayloadToken,
+            /// `T`'s schema, walked once when the token is made or read as this type.
+            value_schema: u64,
             value: PhantomData<fn() -> T>,
         }
-        impl<T> $name<T> {
+        impl<T: PayloadCodec> $name<T> {
             fn new(token: PayloadToken) -> Self {
                 Self {
                     token,
+                    value_schema: payload_schema::<T>(),
                     value: PhantomData,
                 }
             }
+        }
+        impl<T> $name<T> {
             /// The claim this token makes.
             pub fn token(&self) -> &PayloadToken {
                 &self.token
@@ -97,7 +107,11 @@ macro_rules! token {
         }
         impl<T> Clone for $name<T> {
             fn clone(&self) -> Self {
-                Self::new(self.token.clone())
+                Self {
+                    token: self.token.clone(),
+                    value_schema: self.value_schema,
+                    value: PhantomData,
+                }
             }
         }
         impl<T> std::fmt::Debug for $name<T> {
@@ -113,14 +127,16 @@ macro_rules! token {
                 context: &mut dyn IPayloadContext,
                 value: &T,
             ) -> Result<PayloadAccepted, PayloadSendError> {
-                self.token.claims::<T>(PayloadDirection::$direction)?;
+                self.token
+                    .claims(self.value_schema, PayloadDirection::$direction)?;
                 context.check_payload_token(&self.token)?;
                 let body = self.token.body(value)?;
                 context.reply(&self.token.id, body)
             }
         }
-        /// The token's own claim; the value type is only its parameter.
-        impl<T> Wire for $name<T> {
+        /// The token's own claim; the value type is only its parameter. Reading one as `T`
+        /// (the only way to retype a token) walks `T`'s schema once.
+        impl<T: PayloadCodec> Wire for $name<T> {
             const LAYOUT_SEED: u64 = crate::wire::layout_mix(
                 crate::wire::layout_name(stringify!($name)),
                 <PayloadToken as Wire>::LAYOUT_SEED,
@@ -161,7 +177,8 @@ impl<T: PayloadCodec> ToServer<T> {
         host: &mut dyn ClientHost,
         value: &T,
     ) -> Result<PayloadAccepted, PayloadSendError> {
-        self.token.claims::<T>(PayloadDirection::ToServer)?;
+        self.token
+            .claims(self.value_schema, PayloadDirection::ToServer)?;
         host.check_payload_token(&self.token)?;
         let body = self.token.body(value)?;
         host.send_payload_to_server(&self.token.id, body)
@@ -185,7 +202,8 @@ impl<T: PayloadCodec> ToClient<T> {
         player: PlayerRef,
         value: &T,
     ) -> Result<PayloadAccepted, PayloadSendError> {
-        self.token.claims::<T>(PayloadDirection::ToClient)?;
+        self.token
+            .claims(self.value_schema, PayloadDirection::ToClient)?;
         host.check_payload_token(&self.token)?;
         let body = self.token.body(value)?;
         player.send_payload(host, &self.token.id, body)
@@ -226,7 +244,7 @@ where
 }
 
 impl PayloadRegistrar<'_> {
-    fn register_typed<T: PayloadCodec + Wire + 'static>(
+    fn register_typed<T: PayloadCodec + 'static>(
         &mut self,
         id: PayloadId,
         protocol: PayloadProtocol,
@@ -234,7 +252,6 @@ impl PayloadRegistrar<'_> {
         server: Option<Arc<dyn IPayloadHandler>>,
         client: Option<Arc<dyn IPayloadHandler>>,
     ) -> PayloadToken {
-        let (_, resource) = crate::wire::resource_layout::<T>();
         let declaration = PayloadDeclaration {
             id,
             version: self.version.clone(),
@@ -246,8 +263,6 @@ impl PayloadRegistrar<'_> {
         self.registrar.borrow_mut().add_typed_payload(
             declaration,
             payload_schema::<T>(),
-            std::any::type_name::<T>(),
-            !resource,
             server,
             client,
         )
@@ -266,11 +281,10 @@ macro_rules! typed_methods {
         impl PayloadRegistrar<'_> {
             /// Register a typed clientbound payload with its client handler, which receives
             /// each body decoded as one `T`. The declaration is an ordinary raw one, with
-            /// `T`'s schema fingerprint after this view's version. A `T` whose Wire form holds
-            /// a resource handle refuses load, naming it.
+            /// `T`'s schema fingerprint after this view's version.
             pub fn $to_client<T, F>(&mut self, id: PayloadId, client: F) -> ToClient<T>
             where
-                T: PayloadCodec + Wire + 'static,
+                T: PayloadCodec + 'static,
                 F: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
             {
                 let client = typed(&id, client);
@@ -286,7 +300,7 @@ macro_rules! typed_methods {
             /// each body decoded as one `T`, as the clientbound form does.
             pub fn $to_server<T, F>(&mut self, id: PayloadId, server: F) -> ToServer<T>
             where
-                T: PayloadCodec + Wire + 'static,
+                T: PayloadCodec + 'static,
                 F: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
             {
                 let server = typed(&id, server);
@@ -307,7 +321,7 @@ macro_rules! typed_methods {
                 client: C,
             ) -> (ToServer<T>, ToClient<T>)
             where
-                T: PayloadCodec + Wire + 'static,
+                T: PayloadCodec + 'static,
                 S: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
                 C: Fn(T, &mut dyn IPayloadContext) -> Result<(), String> + Send + Sync + 'static,
             {

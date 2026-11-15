@@ -8,12 +8,12 @@ use mod_api::{
     Hooks, IPayloadContext, ModEntry, PayloadCodec, PayloadId, PayloadSendError, Registrar, VarInt,
 };
 
-#[derive(PayloadCodec, mod_api::Wire)]
+#[derive(PayloadCodec)]
 struct Counter {
     counter: VarInt,
 }
 /// What an older peer sends on the same ids: a fixed-width number.
-#[derive(PayloadCodec, mod_api::Wire)]
+#[derive(PayloadCodec)]
 struct OldCounter {
     counter: i32,
 }

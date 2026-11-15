@@ -22,7 +22,7 @@ static ENCODES: AtomicUsize = AtomicUsize::new(0);
 static DECODES: AtomicUsize = AtomicUsize::new(0);
 
 /// A VarInt that counts its codec calls.
-#[derive(Debug, PartialEq, mod_api::Wire)]
+#[derive(Debug, PartialEq)]
 struct Counted(i32);
 impl PayloadCodec for Counted {
     fn encode(&self, out: &mut PayloadWriter) {
@@ -38,17 +38,17 @@ impl PayloadCodec for Counted {
     }
 }
 
-#[derive(Debug, PartialEq, PayloadCodec, mod_api::Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 struct Probe {
     counter: Counted,
     labels: Vec<String>,
     chain: Chain,
 }
-#[derive(Debug, PartialEq, PayloadCodec, mod_api::Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 struct Chain(Option<Box<Chain>>);
 
 /// The same ids' value with another shape.
-#[derive(Debug, PartialEq, PayloadCodec, mod_api::Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 struct Other(i32);
 
 fn probe(counter: i32) -> Probe {

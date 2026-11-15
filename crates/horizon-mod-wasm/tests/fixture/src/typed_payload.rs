@@ -3,13 +3,13 @@
 use mod_api::*;
 use std::sync::Mutex;
 
-#[derive(Debug, PartialEq, PayloadCodec, Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 pub struct Counter {
     pub counter: VarInt,
 }
 
 /// The same claim read as another value type.
-#[derive(Debug, PartialEq, PayloadCodec, Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 struct Other(i32);
 
 static DOWN: Mutex<Option<ToClient<Counter>>> = Mutex::new(None);

@@ -17,29 +17,14 @@ fn frozen(registrar: &PartRegistrar) -> mod_vocab::__private::game::Payloads {
         .into()
 }
 
-#[derive(Debug, PartialEq, PayloadCodec, crate::Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 struct Counter {
     counter: VarInt,
 }
 
-#[derive(Debug, PartialEq, PayloadCodec, crate::Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 struct Other {
     counter: i32,
-}
-
-/// A value whose Wire form is a resource handle: no peer can read it.
-#[derive(crate::Wire)]
-struct Handle {
-    handler: Arc<dyn IPayloadHandler>,
-}
-impl PayloadCodec for Handle {
-    fn encode(&self, _: &mut crate::PayloadWriter) {}
-    fn decode(_: &mut crate::PayloadReader<'_>) -> Result<Self, crate::PayloadDecodeError> {
-        Err(crate::PayloadDecodeError::InvalidValue)
-    }
-    fn schema(_: &mut Vec<&'static str>) -> u64 {
-        crate::payload_schema_leaf("test:handle")
-    }
 }
 
 fn ignore<T>(_: T, _: &mut dyn IPayloadContext) -> Result<(), String> {
@@ -116,41 +101,31 @@ fn a_token_is_accepted_only_as_the_registrar_handed_it_out() {
 }
 
 #[test]
-fn typed_refusals_name_the_mod_the_id_and_the_type() {
+fn a_second_owner_of_an_id_is_refused_naming_the_first() {
     let mut registrar = PartRegistrar::new("test");
-    let token = (&mut registrar as &mut dyn Registrar)
-        .payload_handlers()
-        .registrar("1")
-        .play_to_client_typed(PayloadId("test:handle".into()), ignore::<Handle>);
-    assert_eq!(registrar.refused.len(), 1);
-    let refusal = &registrar.refused[0];
-    for name in ["test", "test:handle", "Handle", "resource handle"] {
-        assert!(refusal.contains(name), "{refusal}");
-    }
-    assert_eq!(token.token().load, 0);
-
-    // A second owner of one id refuses, naming the first.
     let r = &mut registrar as &mut dyn Registrar;
     r.payload_handlers()
         .registrar("1")
         .play_to_server_typed(PayloadId("test:up".into()), ignore::<Counter>);
-    r.payload_handlers()
+    let refused = r
+        .payload_handlers()
         .registrar("2")
         .play_to_server_typed(PayloadId("test:up".into()), ignore::<Other>);
-    assert_eq!(registrar.refused.len(), 2);
-    assert!(
-        registrar.refused[1].contains("already registered by test"),
-        "{}",
-        registrar.refused[1]
-    );
+    assert_eq!(registrar.refused.len(), 1);
+    let refusal = &registrar.refused[0];
+    for name in ["test:up", "already registered by test"] {
+        assert!(refusal.contains(name), "{refusal}");
+    }
+    // The refused registration's token is for no load, so it never sends.
+    assert_eq!(refused.token().load, 0);
 
     // A raw version cannot pose as a typed one.
     (&mut registrar as &mut dyn Registrar)
         .payload_handlers()
         .registrar("1+payload-schema.0000000000000001")
         .play_to_server(PayloadId("test:raw".into()), Arc::new(Ignore));
-    assert_eq!(registrar.refused.len(), 3);
-    assert!(registrar.refused[2].contains("typed schema"));
+    assert_eq!(registrar.refused.len(), 2);
+    assert!(registrar.refused[1].contains("typed schema"));
 }
 
 struct Ignore;
@@ -199,14 +174,14 @@ impl IPayloadContext for Unreached {
     }
 }
 
-#[derive(Debug, PartialEq, PayloadCodec, crate::Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 struct Labelled {
     counter: VarInt,
     labels: Vec<String>,
     chain: Chain,
 }
 
-#[derive(Debug, PartialEq, PayloadCodec, crate::Wire)]
+#[derive(Debug, PartialEq, PayloadCodec)]
 struct Chain(Option<Box<Chain>>);
 
 #[test]

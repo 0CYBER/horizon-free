@@ -259,16 +259,13 @@ pub trait PayloadsRegistrar {
         handler: Arc<dyn IPayloadHandler>,
     );
     /// Register a typed declaration: `declaration` carries the mod's own version, to which
-    /// the registrar appends `schema`. Refused like [`add_payload`](Self::add_payload), and
-    /// also when `portable` is false (the value type `value`'s Wire form holds a resource
-    /// handle). The token names the declaration's slot and this load; a refused one names
-    /// load 0, so every send with it is stale.
+    /// the registrar appends `schema`. Refused like [`add_payload`](Self::add_payload). The
+    /// token names the declaration's slot and this load; a refused one names load 0, so every
+    /// send with it is stale.
     fn add_typed_payload(
         &mut self,
         declaration: PayloadDeclaration,
         schema: u64,
-        value: &str,
-        portable: bool,
         server: Option<Arc<dyn IPayloadHandler>>,
         client: Option<Arc<dyn IPayloadHandler>>,
     ) -> PayloadToken;

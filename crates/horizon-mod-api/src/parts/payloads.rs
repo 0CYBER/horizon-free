@@ -20,22 +20,15 @@ fn indices(protocol: PayloadProtocol) -> &'static [usize] {
     }
 }
 
-/// A typed declaration's value type, as its registration describes it.
-struct TypedValue<'a> {
-    schema: u64,
-    name: &'a str,
-    portable: bool,
-}
-
 impl PartRegistrar {
-    /// Validate and insert one declaration; for a typed one, also its slot, whose index is
-    /// returned. A refusal joins the startup refusal list, naming the mod.
+    /// Validate and insert one declaration; for a typed one (`schema`, its value type's
+    /// fingerprint), also its slot, whose index is returned. A refusal joins the startup refusal list, naming the mod.
     fn declare_payload(
         &mut self,
         mut declaration: PayloadDeclaration,
         server: Option<Arc<dyn IPayloadHandler>>,
         client: Option<Arc<dyn IPayloadHandler>>,
-        typed: Option<TypedValue<'_>>,
+        schema: Option<u64>,
     ) -> Option<(PayloadId, u32)> {
         let refused = (|| {
             if !declaration.id.0.contains(':') {
@@ -49,14 +42,6 @@ impl PartRegistrar {
                 return Err(format!(
                     "payload version must not contain {:?}, which marks a typed schema",
                     crate::PAYLOAD_SCHEMA_MARKER
-                ));
-            }
-            if let Some(value) = &typed
-                && !value.portable
-            {
-                return Err(format!(
-                    "its value type {} has a Wire form holding a resource handle, which no peer can read",
-                    value.name
                 ));
             }
             if declaration.direction != PayloadDirection::ToClient && server.is_none() {
@@ -102,13 +87,13 @@ impl PartRegistrar {
                 ..Payloads::default()
             })
         }));
-        let slot = typed.map(|value| {
-            declaration.version = crate::typed_payload_version(&declaration.version, value.schema);
+        let slot = schema.map(|schema| {
+            declaration.version = crate::typed_payload_version(&declaration.version, schema);
             payloads.typed.push(TypedSlot {
                 id: declaration.id.clone(),
                 protocol: declaration.protocol,
                 direction: declaration.direction,
-                schema: value.schema,
+                schema,
                 owner_index: self.mod_index,
             });
             (
@@ -154,19 +139,12 @@ impl PayloadsRegistrar for PartRegistrar {
         &mut self,
         declaration: PayloadDeclaration,
         schema: u64,
-        value: &str,
-        portable: bool,
         server: Option<Arc<dyn IPayloadHandler>>,
         client: Option<Arc<dyn IPayloadHandler>>,
     ) -> PayloadToken {
         let (protocol, direction) = (declaration.protocol, declaration.direction);
         let requested = declaration.id.clone();
-        let typed = TypedValue {
-            schema,
-            name: value,
-            portable,
-        };
-        let (id, slot, load) = match self.declare_payload(declaration, server, client, Some(typed))
+        let (id, slot, load) = match self.declare_payload(declaration, server, client, Some(schema))
         {
             Some((id, slot)) => (
                 id,

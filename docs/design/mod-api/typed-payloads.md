@@ -211,7 +211,7 @@ There is no second route and no envelope: the typed layer is registration, a tok
 ```rust,ignore
 use mod_api::*;
 
-#[derive(PayloadCodec, Wire)]
+#[derive(PayloadCodec)]
 struct Counter {
     counter: VarInt,
 }
@@ -238,15 +238,15 @@ fn register(r: &mut dyn Registrar) {
 
 | Item | Contract |
 | --- | --- |
-| Registration | `play_to_server_typed::<T>(id, handler) -> ToServer<T>`, `play_to_client_typed -> ToClient<T>`, `play_bidirectional_typed -> (ToServer<T>, ToClient<T>)`, and the `configuration_*` and `common_*` forms, on the same `PayloadRegistrar` view as the raw methods: its version, `optional()` and `executes_on(...)` apply. `T: PayloadCodec + Wire`. The handler is `Fn(T, &mut dyn IPayloadContext) -> Result<(), String>`; a typed clientbound handler is given at registration |
+| Registration | `play_to_server_typed::<T>(id, handler) -> ToServer<T>`, `play_to_client_typed -> ToClient<T>`, `play_bidirectional_typed -> (ToServer<T>, ToClient<T>)`, and the `configuration_*` and `common_*` forms, on the same `PayloadRegistrar` view as the raw methods: its version, `optional()` and `executes_on(...)` apply. `T: PayloadCodec`; it needs no Wire form, because only its encoded body crosses Wire. The handler is `Fn(T, &mut dyn IPayloadContext) -> Result<(), String>`; a typed clientbound handler is given at registration |
 | Schema | `#[derive(PayloadCodec)]` writes `T`'s fingerprint: leaf kinds and bounds, field schemas in declaration order, variant positions. Field, variant and type names are not part of it; a type that holds itself has a finite one. A hand-written codec returns a leaf of its own name and version. The declaration's negotiated version is `<version>+payload-schema.<16 hex digits>`; a raw declaration's version cannot contain that marker |
 | Admission | Another schema under one application version is `Mismatch::Schema`: refused, naming both versions, when either end requires the declaration; absent when both ends are optional, so a send returns `UnsupportedPeer`. Another application version stays a version mismatch, optional or not |
-| Token | `ToServer<T>` and `ToClient<T>` carry a `PayloadToken`: the id, the declaration's slot in its load's typed table, the load, the protocol, the one direction it sends in and the schema of `T`. They have a Wire form, so a wasm mod keeps and passes them. A token grants nothing: the host checks it against the frozen table before every send (`Host::check_payload_token`, `IPayloadContext::check_payload_token`), and a forged, other-load or other-type token, or one whose owner is off, is `PayloadSendError::StaleToken` with nothing encoded or sent |
+| Token | `ToServer<T>` and `ToClient<T>` carry a `PayloadToken`: the id, the declaration's slot in its load's typed table, the load, the protocol, the one direction it sends in and the schema of `T`. They have a Wire form, so a wasm mod keeps and passes them; a token remembers the schema of the type it is held as, computed once when it is registered or read as that type. A token grants nothing: the host checks it against the frozen table before every send (`Host::check_payload_token`, `IPayloadContext::check_payload_token`), and a forged, other-load or other-type token, or one whose owner is off, is `PayloadSendError::StaleToken` with nothing encoded or sent |
 | Sending | `ToServer::send(host: &mut dyn ClientHost, &value)` goes through `ClientHost::send_payload_to_server`; `ToClient::send(host: &mut dyn ServerHost, player, &value)` through `PlayerRef::send_payload`; `reply(context, &value)` on either through `IPayloadContext::reply`. Each returns the raw send's results. The encoder refuses what the peer's decoder would refuse (`EncodeFailed` naming the id) before any bytes are queued. A wrong direction does not compile: a `ToServer` has no send to a player |
 | Receiving | The adapter runs `decode_payload::<T>(body)`. A body that is not one `T` (a negative length, a count past its bound, nesting past 64, a trailing byte) fails the session by name, as a raw handler's error does, with no callback and nothing reserved before the bound is checked |
-| Load refusals | Two owners of one id refuse load, naming the first. A `T` whose Wire form holds a resource handle (an erased handler) refuses load, naming its type: no peer can read it. The refused registration's token names load 0 and is always stale |
+| Load refusals | Two owners of one id refuse load, naming the first. The refused registration's token names load 0 and is always stale |
 | Wasm | The same declarations, adapter and tokens: the guest decodes and runs its handler; the token crosses the Wire ABI as data and the host checks it as it does a native one |
-| Cost | Registration computes the fingerprint once. A declared payload with no traffic makes no codec call; a send walks `T`'s schema once to compare it with its token |
+| Cost | Registration and reading a token as a type walk the schema. A declared payload with no traffic makes no codec call; a send or reply checks its token with two `u64` compares and one table lookup, with no schema walk and no allocation before it encodes |
 
 ## Remaining typed work in #813
 
