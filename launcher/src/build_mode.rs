@@ -398,7 +398,10 @@ impl Launcher {
             && (error.is_some() || needs.is_some());
         let mut right = div().flex().items_center().gap(px(8.));
         if self.native_step.is_none() {
-            if let Some(label) = needs {
+            // A failed build says so; its card below holds the way on.
+            if error.is_some() && mine {
+                right = right.child(blocks::badge(tr("Build failed"), pal.danger, &t));
+            } else if let Some(label) = needs {
                 right = right.child(blocks::badge(label, pal.warn, &t));
             } else if state == State::UpToDate && !asking {
                 // Not beside an open question about updating, where it would read as "no update".
@@ -411,16 +414,24 @@ impl Launcher {
                 Some(_) => tr("Build"),
                 None => tr("Allow and build"),
             };
-            right = right.child(button("native-build", label, Kind::Primary, &t).on_click(
-                cx.listener(|this, _: &ClickEvent, _, cx| {
-                    if this.settings.native_mods_allowed_at.is_some() {
-                        this.build_native();
-                    } else {
-                        this.request_native_build_consent();
-                    }
-                    cx.notify();
-                }),
-            ));
+            // Under a failure the card's own action (Switch off, Try again, Change version) is
+            // the main one: Build steps back.
+            let kind = match error.is_some() && mine {
+                true => Kind::Secondary,
+                false => Kind::Primary,
+            };
+            right = right.child(
+                button("native-build", label, kind, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        if this.settings.native_mods_allowed_at.is_some() {
+                            this.build_native();
+                        } else {
+                            this.request_native_build_consent();
+                        }
+                        cx.notify();
+                    },
+                )),
+            );
         }
         // On the list's 12 px inset, like the count and Find mods above it.
         div()
@@ -573,7 +584,7 @@ impl Launcher {
             .gap(px(8.))
             .child(text_in(13., pal.muted).child(trf(
                 "Backups go to {path}, one zip per world.",
-                &[("path", &stake.backups.display().to_string())],
+                &[("path", &short(&stake.backups))],
             )))
             .child(
                 div()
