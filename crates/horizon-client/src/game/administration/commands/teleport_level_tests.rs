@@ -197,25 +197,26 @@ fn a_mod_sends_a_trident_to_another_level_with_its_stack_and_motion() {
     });
 }
 
-/// A kind this call cannot move into another level (an armor stand) answers false and stays.
+/// Armor stands use Entity.teleportCrossDimension, keeping their position on arrival.
 #[test]
 #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-fn a_mod_cannot_send_an_armor_stand_to_another_level() {
+fn a_mod_sends_an_armor_stand_to_another_level() {
     with_game(|game| {
         game.native_lifecycle.world_open_ready().unwrap();
         game.summon_with_nbt("minecraft:armor_stand", [0.5, 80.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
         let stand = game.entity(game.armor_stands[0].id).unwrap();
-        assert!(!game.entity_teleport_to_level(
+        assert!(game.entity_teleport_to_level(
             stand,
             "minecraft:the_nether",
             [3.5, 70.0, -2.5],
             None
         ));
-        assert_eq!(game.armor_stands.len(), 1);
-        game.enter_level(Dim::Nether).unwrap();
         assert!(game.armor_stands.is_empty());
+        game.enter_level(Dim::Nether).unwrap();
+        assert_eq!(game.armor_stands.len(), 1);
+        assert_eq!(game.armor_stands[0].position, Vec3::new(3.5, 70.0, -2.5));
     });
 }
 
