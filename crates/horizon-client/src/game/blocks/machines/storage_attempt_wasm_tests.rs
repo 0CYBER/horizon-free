@@ -27,7 +27,7 @@ impl Hooks for Heard {
 }
 
 #[test]
-#[ignore = "needs prepared HORIZON_TEST_RESOURCES and matching compiled HORIZON_WASM_FIXTURE/HORIZON_WASM_STD"]
+#[ignore = "daily"]
 fn compiled_guest_storage_notifies_reentrantly_before_actual_hopper_abort() {
     horizon_guest_stack::run_on_guest_stack(|| {
         horizon_mod_wasm::copy_probe::with_load_budget(run);

@@ -1,3 +1,5 @@
+# Transactional storage attempts (hoppers, droppers, bookshelves): 18 resource-backed daily tests and 1 compiled wasm fixture daily test. Rows sorted LC_ALL=C.
+horizon-client game::machines::contents_changed_tests::bookshelf_abort_restores_items_flags_and_last_slot_but_keeps_issued_effects lib daily resources
 horizon-client game::machines::native_items::storage_attempt_tests::a_blocked_pull_slot_aborts_before_the_next_slot_commits lib daily resources
 horizon-client game::machines::native_items::storage_attempt_tests::blocked_pull_ticks_extract_abort_restore_without_hopper_mark_or_cooldown lib daily resources
 horizon-client game::machines::native_items::storage_attempt_tests::blocked_push_ticks_share_one_abort_and_restore_refused_source_slots lib daily resources
@@ -15,4 +17,4 @@ horizon-client game::machines::native_items::storage_attempt_tests::pushes_use_o
 horizon-client game::machines::native_items::storage_attempt_tests::refused_dropper_replacement_rolls_back_without_losing_either_item lib daily resources
 horizon-client game::machines::native_items::storage_attempt_tests::refused_push_callback_journals_source_without_losing_the_restored_item lib daily resources
 horizon-client game::machines::native_items::storage_attempt_tests::vanilla_container_provider_and_entity_never_ask_their_storage lib daily resources
-horizon-client game::machines::native_items::storage_attempt_wasm_tests::compiled_guest_storage_notifies_reentrantly_before_actual_hopper_abort HORIZON_WASM_FIXTURE needs
+horizon-client game::machines::native_items::storage_attempt_wasm_tests::compiled_guest_storage_notifies_reentrantly_before_actual_hopper_abort lib daily wasm-fixture

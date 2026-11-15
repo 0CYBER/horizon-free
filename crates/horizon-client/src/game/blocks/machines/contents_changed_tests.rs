@@ -736,7 +736,7 @@ fn a_panicking_root_commit_notice_leaves_the_phase_none() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bookshelf_abort_restores_items_flags_and_last_slot_but_keeps_issued_effects() {
     with_changes(
         "game::machines::contents_changed_tests::bookshelf_abort_restores_items_flags_and_last_slot_but_keeps_issued_effects",
