@@ -43,8 +43,9 @@ pub const VIEWED_MESH_WORKERS: usize = 1;
 /// The most viewed sections that enter their sets in a frame, all levels together; the rest
 /// wait for the next frames.
 pub const VIEWED_UPLOADS_PER_FRAME: usize = 4;
-/// The most viewed jobs queued or running, all levels together: each holds its column's 3x3
-/// region, and jobs past what one worker meshes in a few frames would only go stale.
+/// The most viewed jobs queued, running, or finished awaiting upload, all levels together.
+/// Queued and running jobs each hold their column's 3x3 region; finished jobs count until
+/// drained, and jobs past what one worker meshes in a few frames would only go stale.
 const MAX_IN_FLIGHT: usize = 64;
 
 /// A section: its column's x, its index from the level's bottom, its column's z.
