@@ -258,9 +258,16 @@ impl Launcher {
     ) -> Div {
         let t = self.theme;
         let current = native_mods::about(plays).map_or_else(|| plays.to_owned(), |a| a.base);
+        // Two updates of one day share a name: the button then says it keeps what is played.
+        let same_name = horizon_launcher::nightly::update_name(&current).is_some()
+            && horizon_launcher::nightly::update_name(&current)
+                == horizon_launcher::nightly::update_name(&check.to);
         let stay = button(
             "native-update-stay",
-            native_mods::fit::stay(&current),
+            match same_name {
+                true => tr("Keep the version you have").to_string(),
+                false => native_mods::fit::stay(&current),
+            },
             if check.worlds.is_empty() {
                 Kind::Secondary
             } else {
