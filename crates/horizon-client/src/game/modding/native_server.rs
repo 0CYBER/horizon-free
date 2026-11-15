@@ -3384,6 +3384,13 @@ mod tests {
                     },
                 ));
             }
+            fn player_commands_sent(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::PlayerCommandsSentEvent<'_>,
+            ) {
+                event.names.retain(|name| name != "before");
+            }
         }
         let changed = Arc::new(AtomicBool::new(false));
         let registrations = Arc::new(AtomicUsize::new(0));
@@ -3448,6 +3455,41 @@ mod tests {
                     game.register_native_commands();
                     assert_eq!(registrations.load(Ordering::Relaxed), 3);
                     assert!(game.native_commands.level("after").is_some());
+                    changed.store(false, Ordering::Relaxed);
+                    game.reload_datapacks(false, &game.level.enabled_features.clone())
+                        .unwrap();
+                    let (sent, received) = std::sync::mpsc::channel();
+                    game.lan
+                        .as_mut()
+                        .unwrap()
+                        .hub
+                        .update_guest(12, |guest| {
+                            guest.sender =
+                                horizon_client::lan::PlayerSender::new(sent, Default::default());
+                        })
+                        .unwrap();
+                    game.register_native_commands();
+                    let horizon_client::lan::Out::Packet(body) = received.try_recv().unwrap()
+                    else {
+                        panic!("reload must deliver a command tree");
+                    };
+                    let mut reader = horizon_protocol::buf::Reader::new(&body);
+                    let id = reader.varint().unwrap();
+                    let C::Commands(packet) = C::decode(id, &body[reader.position()..]).unwrap()
+                    else {
+                        panic!("reload must deliver a command tree");
+                    };
+                    let names: Vec<_> = packet.nodes[packet.root as usize]
+                        .children
+                        .iter()
+                        .map(|&i| packet.nodes[i as usize].name.as_str())
+                        .collect();
+                    assert!(!names.is_empty());
+                    assert!(
+                        !names.contains(&"before"),
+                        "new reload root must be filtered"
+                    );
+                    assert!(!names.contains(&"after"), "old root must be retired");
                 })
             },
         );

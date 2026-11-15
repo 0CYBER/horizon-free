@@ -104,10 +104,11 @@ impl Game<'_> {
             |name| host.hub.vanilla_command(name),
             &commands.arguments,
         );
+        let replacing = host.native_commands_sent.is_some();
         host.native_commands_sent = Some(self.native_commands.generation);
         host.hub
             .set_selector_tokens(super::super::native_entity_selectors::selector_tokens());
-        if refresh {
+        if refresh || replacing {
             host.hub.store_mod_commands(0, tree);
             self.resend_commands_filtered();
         } else {
