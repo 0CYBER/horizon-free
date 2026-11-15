@@ -316,11 +316,15 @@ impl horizon_client::mobs::goals::Goal for Teleports {
     fn start(
         &mut self,
         m: &mut horizon_client::mobs::Mob,
-        _: &mut horizon_client::mobs::goals::Cx<'_, '_, '_>,
+        cx: &mut horizon_client::mobs::goals::Cx<'_, '_, '_>,
     ) {
         for [x, y, z] in self.0.drain(..) {
             let at = horizon_core::geometry::Vec3::new(x, y, z);
-            horizon_client::mobs::living::teleports::snap_to(m, at);
+            horizon_client::mobs::living::teleports::snap_to_with(
+                m,
+                at,
+                cx.w.section_writer.clone(),
+            );
         }
     }
     fn box_clone(&self) -> Box<dyn horizon_client::mobs::goals::Goal> {
@@ -463,7 +467,14 @@ fn a_real_mob_tick_tells_inside_each_position_write() {
                     },
                 )
             });
-            game.tick_creature_entities().unwrap();
+            // Mob.serverAiStep only scans for new goals on alternating ticks.
+            // The first tick after installing this goal may tick running goals only.
+            for _ in 0..2 {
+                game.tick_creature_entities().unwrap();
+                if callbacks.load(Ordering::SeqCst) != 0 {
+                    break;
+                }
+            }
             assert!(!failed.load(Ordering::SeqCst));
             assert_eq!(callbacks.load(Ordering::SeqCst), 2);
         })
