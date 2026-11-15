@@ -460,7 +460,7 @@ fn nosave_riders_transfer_live_without_becoming_saved() {
 
 fn passenger_record(kind: &str, uuid: i32, passengers: Vec<Tag>) -> Tag {
     let mut tag = Tag::compound([
-        ("id", Tag::String(format!("minecraft:{kind}").into())),
+        ("id", Tag::String(format!("minecraft:{kind}").as_str().into())),
         ("UUID", Tag::IntArray(vec![161, 26, 3, uuid])),
         ("identity", Tag::Int(uuid)),
         ("NoAI", Tag::Byte(1)),
@@ -590,7 +590,10 @@ fn mixed_transfer_pairs_runtime_state_with_exact_objects_not_uuid_or_mob_vec_ord
             game.entity_attachments.insert(source, map);
         }
         // Resident storage order is deliberately unrelated to the saved graph.
-        game.mobs.reverse();
+        let count = game.mobs.len();
+        for index in 0..count / 2 {
+            game.mobs.swap(index, count - 1 - index);
+        }
         assert!(
             game.teleport_vehicle_across(
                 Target::Mob(root),
