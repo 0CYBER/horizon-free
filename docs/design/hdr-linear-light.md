@@ -146,7 +146,19 @@ The water mirror and `shadow_color` draw no blends, so they store linear in both
 Each shader that marks the frame today writes the light instead:
 
 - **Light sources** (`mesher` `EMISSION_BITS`, `hdr_tier`, `gfx/hdr.rs` `TIERS`): the face's colour times its tier's
-  gain, in units of paper white. Easing into the peak moves to the tone curve.
+  gain, in units of paper white. Easing into the peak moves to the tone curve. A placed block's texel leaves the
+  light that falls on it behind as it lifts (`hdr_unshade`, terrain.wgsl `solid_finish_at`): the face's shading,
+  ambient occlusion and its light level lose their darkening by the texel's lift, so a fully lifted texel shines
+  the same on every face and an unlifted one stays as SDR draws it. The vertex colour is tint, shade and the
+  lightmap in one, so the shader scales its brightest channel rather than dividing the shade out, and to the
+  lightmap's brightest channel at full light (sky 15, block 15), not to 1: that is 1 unless something dims all
+  light, the Darkness effect or a wither's bar, and a light source dims with the rest of the world. The hue stays
+  the shade's on purpose: it is the hue SDR and the frame before showed for that face, and this changes brightness
+  only. The scale is never below 1, since a coloured light adds past the lightmap. Sections, fluids, distant
+  terrain and the visibility buffer share the one place. Items and block entities keep their shading: their
+  vertex colour is their own colour, the diffuse light is baked in the vertex stage, and the entity fragment
+  stage has no input left to carry the two apart (#8195); and a dropped torch lights nothing, so its lightmap
+  should still darken it.
 - **Lit surfaces** get no gain, however strongly the sun or a torch lights them: diffuse white stays at paper white,
   where ITU-R BT.2408 puts it, and HDR's range above it is the light sources' and the sun's.
 - **Where:** terrain and fluids (`terrain.wgsl`, `mesher/fluid.rs`, distant terrain in `lod/mesh.rs`, the visibility

@@ -1143,6 +1143,8 @@ var<private> params: ReferenceParams;
     // From 0.75 up nothing is lifted: a lit surface's white stays white.
     let white = hdr_written(vec3(1.0), 0.76, vec4(5.0, 4.0, 1.0, 0.0), gains);
     errors[i] |= select(0u, 4u, any(white != vec3(1.0)));
+    // An unlifted texel sheds no shading: scaled by exactly 1.
+    errors[i] |= select(0u, 8u, hdr_unshade(color, 0.0, 0.3) != 1.0);
     let boundary = (f32(i % 255u) + 0.5) / 255.0;
     for (var step = -1; step <= 1; step++) {
         let stored = unpack2x16float(pack2x16float(vec2(boundary + f32(step) / 65536.0))).x;

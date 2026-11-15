@@ -71,6 +71,19 @@ fn hdr_mark_light(f: vec3<f32>, a: f32, shows: bool, eased: bool, settings: vec4
     return Lit(light, lifted);
 }
 
+// A light source's own light doesn't depend on the light that falls on it. What to scale a lit
+// texel's colour by, so that as its `lift` rises to 1 the `shade` it was multiplied by (face
+// shading, ambient occlusion, the lightmap at its light level) loses its darkening: its brightest
+// channel goes to `full`, the lightmap's brightest channel at full light. That is 1 unless
+// something dims all light (the Darkness effect, a wither's bar), and a light source keeps that.
+// A fully lifted texel then shines the same on every face and at every light level; an unlifted
+// one is scaled by exactly 1. The hue stays the shade's on purpose: it is the hue SDR shows for
+// that face, and this changes brightness only. Never below 1: coloured lights add past the
+// lightmap, so a shade can be brighter than `full`, and lifting doesn't darken.
+fn hdr_unshade(shade: vec3<f32>, lift: f32, full: f32) -> f32 {
+    return mix(1.0, max(full / max(max(shade.r, max(shade.g, shade.b)), 1e-4), 1.0), lift);
+}
+
 // Marks are decoded at the precision of the original 8-bit frame, even in a float target.
 fn hdr_quantized_mark(mark: f32) -> f32 {
     return round(saturate(mark) * 255.0) / 255.0;

@@ -354,6 +354,7 @@ fn native_colored_light(pos: vec3<f32>) -> vec3<f32> {
     }
     return min(rgb, vec3(1.0));
 }
+// `sky` and `block` are light levels, 0 to 15.
 fn sample_lightmap(sky: f32, block: f32) -> vec4<f32> {
     let uv = vec2(block, sky) * 16.0;
     return textureSampleLevel(lightmap, lightmap_sampler,
@@ -730,13 +731,17 @@ fn brightness(c: vec3<f32>) -> f32 {
     let l = pow(max(c, vec3(0.0)), vec3(2.2));
     return 0.5 * (dot(l, vec3(0.2126, 0.7152, 0.0722)) + max(l.r, max(l.g, l.b)));
 }
+// How much a light source's pixel lifts, 0 to 1: its own brightness `y` before lighting through
+// its tier's window (1 low .. 4 very bright).
+fn hdr_lift(tier: u32, y: f32) -> f32 {
+    let t = clamp(tier, 1u, 4u) - 1u;
+    return smoothstep(globals.hdr_windows[0][t], globals.hdr_windows[1][t], y);
+}
 // HDR output's mark (hdr.wgsl): the frame's alpha below 0.75, a band of 0.175 per
-// tier (1 low .. 4 very bright, from 0.525 down to 0) and in it how much the pixel
-// lifts, from its own brightness `y` before lighting through the tier's window.
+// tier (from 0.525 down to 0) and in it how much the pixel lifts (hdr_lift).
 fn hdr_mark(tier: u32, y: f32) -> f32 {
     let t = clamp(tier, 1u, 4u) - 1u;
-    let lift = smoothstep(globals.hdr_windows[0][t], globals.hdr_windows[1][t], y);
-    return 0.175 * f32(3u - t) + 0.165 * (1.0 - lift);
+    return 0.175 * f32(3u - t) + 0.165 * (1.0 - hdr_lift(tier, y));
 }
 @fragment fn fs_solid(wire: TerrainWire) -> @location(0) vec4<f32> {
     let in = from_wire(wire);
@@ -794,6 +799,7 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
     // parts, or all of it; everything else stays unmarked (1). Nothing else reads the frame's
     // alpha. Without HDR output nothing reads it, so no mark is worked out.
     var emissive = 1.0;
+    var lit = color.rgb;
     if HDR_LIGHTING && globals.hdr_light.z != 0.0 && in.emission > 0u {
         let whole = in.emission > 4u;
         let tier = select(in.emission, in.emission - 4u, whole);
@@ -806,6 +812,15 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
             let fogged = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w)) * globals.fog_color.a;
             emissive = hdr_mark(tier, y * (1.0 - fogged));
+            if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 && globals.hdr_settings.z > 0.5 {
+                // The float frame, where the world shows lifted (hdr_written): the pixel's light
+                // leaves its face's shading and its light level behind as it lifts (hdr_unshade),
+                // down to the lightmap at full light, under the section's fade-in as before.
+                let full = sample_lightmap(15.0, 15.0).rgb;
+                let unshade = hdr_unshade(in.color.rgb, hdr_lift(tier, y * (1.0 - fogged)),
+                    max(full.r, max(full.g, full.b)));
+                lit += (unshade - 1.0) * (lit - globals.fog_color.rgb * (1.0 - in.visibility));
+            }
         }
     }
     if in.emissive_layer != 0xffffffffu {
@@ -814,9 +829,9 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
         if (in.emissive_layer & 0x80000000u) != 0u {
             mask.a = select(0.0, 1.0, mask.a >= 0.1);
         }
-        return apply_fog(vec4(mix(color.rgb, mask.rgb, mask.a), mix(emissive, hdr_mark(3u, 1.0), mask.a)), in.spherical, in.cylindrical);
+        return apply_fog(vec4(mix(lit, mask.rgb, mask.a), mix(emissive, hdr_mark(3u, 1.0), mask.a)), in.spherical, in.cylindrical);
     }
-    return apply_fog(vec4(color.rgb, emissive), in.spherical, in.cylindrical);
+    return apply_fog(vec4(lit, emissive), in.spherical, in.cylindrical);
 }
 // What's mostly opaque among translucent faces (water), drawn again after them with only alpha
 // written: `fs_translucent` blends its alpha as coverage, which would leave a light source's mark
