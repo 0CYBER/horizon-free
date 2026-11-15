@@ -1340,6 +1340,37 @@ mod tests {
         }
     }
 
+    /// The catch-up of [`a_missed_push_counts_once`] takes at most half a block a tick
+    /// ([`MOST_MET`]): a client that gives itself more on its own (a velocity cheat, a dash) still
+    /// counts on the ticks after, while the rest of its velocity dies out, not on its first tick
+    /// only.
+    #[test]
+    fn a_push_over_half_a_block_counts_until_it_dies_out() {
+        for velocity in [[1.0, 0.0, 0.0], [0.0, 0.0, -1.5]] {
+            let push = Push {
+                tick: 25,
+                velocity,
+                heard: false,
+                excused: false,
+                taken: true,
+            };
+            let Some(steps) = steps(|_, _, honest| honest, Some(push)) else {
+                return;
+            };
+            let counted: Vec<usize> = steps
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.over.ticks > 0)
+                .map(|(i, _)| i)
+                .collect();
+            // Measured: ticks 25 to 36 count at 1 block a tick, 25 to 37 at 1.5.
+            assert!(
+                counted.starts_with(&(25..=33).collect::<Vec<_>>()),
+                "{velocity:?}: {counted:?}"
+            );
+        }
+    }
+
     /// What the catch-up of [`a_missed_push_counts_once`] costs: a small speed lie kept up on every
     /// tick of a sprint-jump (a twentieth of a block a tick) goes uncounted only while the velocity
     /// the replay took from its first tick still hides it; then it counts on every tick.
