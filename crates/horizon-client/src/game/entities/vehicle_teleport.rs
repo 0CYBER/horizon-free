@@ -487,24 +487,12 @@ impl Game<'_> {
                 Some(kept) => game.restore_transition_motion(target, kept),
                 None => game.teleport_stops(target),
             }
-            // Every live rider travels, not only the mobs: a stand, an item or a
-            // noSave entity seated on the tree (`passenger_tree`) goes with it.
-            let mounts: Vec<_> = game.mob_objects().map(|m| (m.id, m.extra.mount)).collect();
-            let mut tree = super::persist::vehicle_tree(root, &mounts);
-            for id in game.passenger_tree(root) {
-                if !tree.contains(&id) {
-                    tree.push(id);
-                }
-            }
-            // MERGE-CHECK: `vehicle_transfer_tag` lists the mob riders in the live
-            // list's order, `capture_vehicle_tree_state` in `vehicle_order`; the two
-            // must pair up in `prepare_vehicle_transfer`.
-            let tag = game
-                .vehicle_transfer_tag(root)
-                .ok_or("missing vehicle tree")?;
-            let state = game
-                .capture_vehicle_tree_state(root)
-                .ok_or("missing vehicle object state")?;
+            let tree = game.passenger_tree(root);
+            // NBT and runtime ownership come from the same ordered object walk,
+            // including off-level mobs and riders of every other live kind.
+            let (tag, state) = game
+                .take_vehicle_tree_transfer(root)
+                .ok_or("missing vehicle object tree")?;
             let mut players = Vec::new();
             // A command runs with its source player swapped out of the hub.
             if game.riding.is_some_and(|id| tree.contains(&id))

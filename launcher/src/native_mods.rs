@@ -846,7 +846,7 @@ fn files(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(out)
 }
 
-/// Bundle files omit only the API package's Cargo build output.
+/// Selected package files and compatibility metadata, excluding Cargo build output.
 fn bundle_files(bundle: &Bundle) -> Result<Vec<(String, PathBuf)>, String> {
     package::files(bundle)
 }
@@ -909,13 +909,15 @@ pub fn digest<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
     hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The selected flat files, in the same order as `native_status::enabled` hashes an archive.
-/// A build records this digest so an unchanged installed mod reads as up to date.
+/// The selected flat files, without compatibility metadata, in the same order as
+/// `native_status::enabled` hashes an archive. Compiler caches and the Mods page use this digest;
+/// installed-build identity separately includes the uses table that decides inclusion.
 fn source_digest(bundle: &Bundle) -> Option<String> {
     let paths = bundle_files(bundle);
     let read: Vec<_> = paths
         .ok()?
         .into_iter()
+        .filter(|(name, _)| name != horizon_mod_package::mod_surface::uses::USES_FILE)
         .map(|(name, path)| Some((name, fs::read(path).ok()?)))
         .collect::<Option<_>>()?;
     Some(digest(read.iter().map(|(n, b)| (n.as_str(), b.as_slice()))))

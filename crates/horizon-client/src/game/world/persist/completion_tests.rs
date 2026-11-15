@@ -458,5 +458,269 @@ fn nosave_riders_transfer_live_without_becoming_saved() {
     });
 }
 
+fn passenger_record(kind: &str, uuid: i32, passengers: Vec<Tag>) -> Tag {
+    let mut tag = Tag::compound([
+        ("id", Tag::String(format!("minecraft:{kind}").into())),
+        ("UUID", Tag::IntArray(vec![161, 26, 3, uuid])),
+        ("identity", Tag::Int(uuid)),
+        ("NoAI", Tag::Byte(1)),
+        ("NoGravity", Tag::Byte(1)),
+        ("PersistenceRequired", Tag::Byte(1)),
+        (
+            "Pos",
+            Tag::List(
+                [4.5_f64, 200.0, 4.5]
+                    .map(|value| Tag::Double(value.to_bits()))
+                    .to_vec(),
+            ),
+        ),
+    ]);
+    add_passengers(&mut tag, passengers);
+    tag
+}
+
+#[test]
+#[ignore = "daily"]
+fn mixed_riders_keep_load_order_and_offlevel_descendants_through_chunk_reload() {
+    with_game(|game| {
+        game.spawn_loaded_entity((0, 0), passenger_record("cow", 982, vec![]), None);
+        let root = passenger_record(
+            "pig",
+            980,
+            vec![
+                passenger_record("armor_stand", 981, vec![]),
+                passenger_record(
+                    "cow",
+                    982,
+                    vec![passenger_record("armor_stand", 983, vec![])],
+                ),
+                passenger_record(
+                    "oak_boat",
+                    984,
+                    vec![passenger_record("cow", 985, vec![])],
+                ),
+                passenger_record("minecart", 986, vec![]),
+            ],
+        );
+        game.spawn_loaded_entity((0, 0), root, None);
+        for round in 0..2 {
+            let root = id(game, 980).unwrap();
+            let body = game.vehicle_tree_nbt(root).unwrap();
+            assert_eq!(child_uuids(&body), [981, 982, 984, 986]);
+            let Some(Tag::List(children)) = body.get("Passengers") else {
+                panic!("mixed riders must serialize")
+            };
+            assert_eq!(child_uuids(&children[1]), [983]);
+            assert_eq!(child_uuids(&children[2]), [985]);
+            let rejected = game.mob_passenger_ids(root)[0];
+            assert!(game.persist.off_level.contains_key(&rejected));
+            assert_eq!(game.mob_object(rejected).unwrap().extra.mount, Some(root));
+            assert_eq!(game.passenger_vehicle(id(game, 983).unwrap()), Some(rejected));
+            assert_eq!(game.passenger_tree(root).len(), 7, "no duplicate riders");
+            assert_eq!(
+                game.ordered_live_passengers(root)
+                    .into_iter()
+                    .map(|id| game.persist.uuid_of(id).unwrap()[3])
+                    .collect::<Vec<_>>(),
+                [981, 984, 986],
+            );
+            if round == 0 {
+                let chunks = game.entity_chunks(&HashSet::from([(0, 0)]), true);
+                for (key, tags) in chunks {
+                    game.world.queue_entity_nbt(key, tags);
+                }
+                game.spawn_loaded_entities();
+            }
+        }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn mixed_transfer_pairs_runtime_state_with_exact_objects_not_uuid_or_mob_vec_order() {
+    use horizon_mod_runtime::attachments::{AttachmentType, Attachments, Holder};
+
+    with_game(|game| {
+        let runtime = AttachmentType {
+            namespace: "test",
+            name: "passenger_identity",
+            default: || 0,
+            codec: None,
+            copy_on_death: false,
+            sync: false,
+        };
+        let mut first = passenger_record("cow", 993, vec![]);
+        let mut second = first.clone();
+        if let Tag::Compound(fields) = &mut first {
+            fields.insert("identity".into(), Tag::Int(9930));
+        }
+        if let Tag::Compound(fields) = &mut second {
+            fields.insert("identity".into(), Tag::Int(9931));
+        }
+        let root = passenger_record(
+            "pig",
+            990,
+            vec![
+                passenger_record(
+                    "armor_stand",
+                    991,
+                    vec![passenger_record("cow", 992, vec![])],
+                ),
+                first,
+                second,
+                passenger_record("leash_knot", 994, vec![]),
+                passenger_record(
+                    "oak_boat",
+                    995,
+                    vec![passenger_record("armor_stand", 996, vec![])],
+                ),
+                passenger_record("minecart", 997, vec![]),
+            ],
+        );
+        game.spawn_loaded_entity((0, 0), root, None);
+        let root = id(game, 990).unwrap();
+        let sources = game.passenger_tree(root);
+        assert_eq!(sources.len(), 9);
+        for &source in &sources {
+            let Some(Tag::Int(identity)) = game.persist.raw[&source].get("identity") else {
+                panic!("source object identity")
+            };
+            let mut map = Attachments::default();
+            runtime.set(&mut map, Holder::Entity(source), *identity).unwrap();
+            game.entity_attachments.insert(source, map);
+        }
+        // Resident storage order is deliberately unrelated to the saved graph.
+        game.mobs.reverse();
+        assert!(
+            game.teleport_vehicle_across(
+                Target::Mob(root),
+                crate::game::Dim::Nether,
+                [8.5, 200.0, 8.5],
+                None,
+                false,
+                crate::game::vehicle_teleport::TeleportMotion::Stop,
+            )
+            .unwrap()
+        );
+        game.enter_level(crate::game::Dim::Nether).unwrap();
+        let root = id(game, 990).unwrap();
+        let restored = game.passenger_tree(root);
+        assert_eq!(restored.len(), sources.len(), "every live object transfers once");
+        let identities = restored
+            .iter()
+            .map(|id| {
+                let Some(Tag::Int(identity)) = game.persist.raw[id].get("identity") else {
+                    panic!("restored object identity")
+                };
+                let map = game.entity_attachments.get_mut(id).unwrap();
+                assert_eq!(runtime.get(map, Holder::Entity(*id)), Ok(*identity));
+                *identity
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(identities, HashSet::from([990, 991, 992, 9930, 9931, 994, 995, 996, 997]));
+        let children = game.ordered_passenger_slots(root)
+            .into_iter()
+            .map(|slot| match slot {
+                PassengerSlot::Live(id) => game.persist.uuid_of(id).unwrap()[3],
+                PassengerSlot::Saved(_) => panic!("every transferred rider is an object"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(children, [991, 993, 993, 994, 995, 997]);
+        assert_eq!(
+            child_uuids(&game.vehicle_tree_nbt(root).unwrap()),
+            [991, 993, 993, 995, 997],
+            "noSave riders transfer but remain excluded from disk saves",
+        );
+        assert_eq!(
+            restored
+                .iter()
+                .filter(|id| game.persist.off_level.contains_key(*id))
+                .count(),
+            1,
+            "duplicate UUIDs retain distinct rider objects, not duplicate residents",
+        );
+        game.enter_level(crate::game::Dim::Overworld).unwrap();
+        assert!(sources.into_iter().all(|id| !game.passenger_object_present(id)));
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn dismount_and_reboard_appends_a_loaded_mob_after_existing_mixed_riders() {
+    with_game(|game| {
+        let root = passenger_record(
+            "pig",
+            1000,
+            vec![
+                passenger_record("cow", 1001, vec![]),
+                passenger_record("armor_stand", 1002, vec![]),
+                passenger_record("cow", 1003, vec![]),
+            ],
+        );
+        game.spawn_loaded_entity((0, 0), root, None);
+        let root = id(game, 1000).unwrap();
+        let rider = id(game, 1001).unwrap();
+        assert_eq!(
+            child_uuids(&game.vehicle_tree_nbt(root).unwrap()),
+            [1001, 1002, 1003],
+        );
+        game.dismount_mob(rider);
+        game.ride_mount(Target::Mob(rider), Target::Mob(root)).unwrap();
+        assert_eq!(
+            child_uuids(&game.vehicle_tree_nbt(root).unwrap()),
+            [1002, 1003, 1001],
+            "boarding again appends the rider instead of reviving its old slot",
+        );
+        assert_eq!(
+            game.ordered_live_passengers(root),
+            [id(game, 1002).unwrap(), id(game, 1003).unwrap(), rider],
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn saved_nonmob_slot_takes_destination_admission_without_moving_its_uuid_owner() {
+    with_game(|game| {
+        game.spawn_loaded_entity((0, 0), passenger_record("armor_stand", 1011, vec![]), None);
+        let original = id(game, 1011).unwrap();
+        let root = passenger_record(
+            "pig",
+            1010,
+            vec![passenger_record(
+                "armor_stand",
+                1011,
+                vec![passenger_record("cow", 1012, vec![])],
+            )],
+        );
+        game.spawn_loaded_entity((0, 0), root, None);
+        let root = id(game, 1010).unwrap();
+        assert!(game.ordered_live_passengers(root).is_empty());
+        assert!(id(game, 1012).is_none());
+        assert!(
+            game.teleport_vehicle_across(
+                Target::Mob(root),
+                crate::game::Dim::Nether,
+                [8.5, 200.0, 8.5],
+                None,
+                false,
+                crate::game::vehicle_teleport::TeleportMotion::Stop,
+            )
+            .unwrap()
+        );
+        game.enter_level(crate::game::Dim::Nether).unwrap();
+        let root = id(game, 1010).unwrap();
+        let stand = id(game, 1011).unwrap();
+        let cow = id(game, 1012).unwrap();
+        assert_ne!(stand, original);
+        assert_eq!(game.passenger_vehicle(stand), Some(root));
+        assert_eq!(game.passenger_vehicle(cow), Some(stand));
+        assert_eq!(game.passenger_tree(root).len(), 3);
+        game.enter_level(crate::game::Dim::Overworld).unwrap();
+        assert_eq!(id(game, 1011), Some(original));
+        assert!(id(game, 1010).is_none() && id(game, 1012).is_none());
+    });
+}
+
 #[path = "completion_tests/generic_seating_tests.rs"]
 mod generic_seating_tests;

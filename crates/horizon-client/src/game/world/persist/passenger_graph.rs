@@ -4,25 +4,13 @@ use super::{Game, PassengerSlot, Tag, entity_nbt};
 use crate::game::{commands::Target, native_entities::target_id};
 
 impl Game<'_> {
-    /// The `Passengers` of a vehicle that the game loads as live riders after the vehicle:
-    /// all of them, or, for a vehicle whose loader takes its mob riders itself
-    /// (`own_loader`: a mob, boat or minecart), the other kinds; its mob riders stay in `tag`.
+    /// Object-backed vehicles load their entire ordered tree themselves.
     pub(super) fn take_unmodeled_passengers(&self, tag: &mut Tag, own_loader: bool) -> Option<Tag> {
-        let all = take_passengers(tag)?;
-        if !own_loader {
-            return Some(all);
+        if own_loader {
+            None
+        } else {
+            take_passengers(tag)
         }
-        let Tag::List(list) = all else {
-            return Some(all);
-        };
-        let (mob_riders, others): (Vec<Tag>, Vec<Tag>) =
-            list.into_iter().partition(|p| self.loads_as_rider(p));
-        if !mob_riders.is_empty()
-            && let Tag::Compound(c) = tag
-        {
-            c.insert("Passengers".into(), Tag::List(mob_riders));
-        }
-        (!others.is_empty()).then_some(Tag::List(others))
     }
 }
 
@@ -45,25 +33,64 @@ impl Game<'_> {
         })
     }
 
-    /// Mob riding state remains authoritative for existing AI/dismount callers.
-    /// Other live kinds use the same ordered slots the loader already retains.
-    pub(in crate::game) fn passenger_vehicle(&self, id: u32) -> Option<u32> {
-        if !self.passenger_present(id) {
+    pub(super) fn passenger_object_present(&self, id: u32) -> bool {
+        self.mob_object(id).is_some_and(|mob| !mob.removed)
+            || self.boat_object(id).is_some()
+            || self.cart_object(id).is_some()
+            || self.passenger_present(id)
+    }
+
+    pub(super) fn passenger_object_vehicle(&self, id: u32) -> Option<u32> {
+        if let Some(mob) = self.mob_object(id) {
+            return (!mob.removed)
+                .then_some(mob.extra.mount)
+                .flatten()
+                .filter(|vehicle| self.passenger_object_present(*vehicle));
+        }
+        if !self.passenger_object_present(id) {
             return None;
         }
-        if let Some(m) = self.mobs.iter().find(|m| m.id == id) {
-            return m.extra.mount.filter(|v| self.passenger_present(*v));
+        self.persist.passenger_slots.iter().find_map(|(&vehicle, slots)| {
+            (self.passenger_object_present(vehicle)
+                && slots
+                    .iter()
+                    .any(|slot| matches!(slot, PassengerSlot::Live(rider) if *rider == id)))
+            .then_some(vehicle)
+        })
+    }
+
+    /// Public riding queries still exclude objects refused level residency.
+    pub(in crate::game) fn passenger_vehicle(&self, id: u32) -> Option<u32> {
+        self.passenger_present(id)
+            .then(|| self.passenger_object_vehicle(id))
+            .flatten()
+    }
+
+    /// One ordered relation for saving, transfer and resident tracking. A mob's
+    /// mount is authoritative; object-memory-only riders follow the saved slots.
+    pub(super) fn ordered_passenger_slots(&self, vehicle: u32) -> Vec<PassengerSlot> {
+        let mut slots = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        if let Some(loaded) = self.persist.passenger_slots.get(&vehicle) {
+            for slot in loaded {
+                match slot {
+                    PassengerSlot::Live(id)
+                        if self.passenger_object_vehicle(*id) == Some(vehicle)
+                            && seen.insert(*id) =>
+                    {
+                        slots.push(PassengerSlot::Live(*id));
+                    }
+                    PassengerSlot::Saved(tag) => slots.push(PassengerSlot::Saved(tag.clone())),
+                    _ => {}
+                }
+            }
         }
-        self.persist
-            .passenger_slots
-            .iter()
-            .find_map(|(&vehicle, slots)| {
-                (self.passenger_present(vehicle)
-                    && slots
-                        .iter()
-                        .any(|slot| matches!(slot, PassengerSlot::Live(rider) if *rider == id)))
-                .then_some(vehicle)
-            })
+        for id in self.mob_passenger_ids(vehicle) {
+            if seen.insert(id) {
+                slots.push(PassengerSlot::Live(id));
+            }
+        }
+        slots
     }
 
     pub(in crate::game) fn ordered_live_passengers(&self, vehicle: u32) -> Vec<u32> {
@@ -72,17 +99,15 @@ impl Game<'_> {
             for slot in slots {
                 if let PassengerSlot::Live(id) = slot
                     && self.passenger_vehicle(*id) == Some(vehicle)
+                    && !ids.contains(id)
                 {
                     ids.push(*id);
                 }
             }
         }
-        for m in &self.mobs {
-            if m.extra.mount == Some(vehicle)
-                && self.passenger_present(m.id)
-                && !ids.contains(&m.id)
-            {
-                ids.push(m.id);
+        for id in self.mob_passenger_ids(vehicle) {
+            if self.passenger_present(id) && !ids.contains(&id) {
+                ids.push(id);
             }
         }
         ids
@@ -114,24 +139,35 @@ impl Game<'_> {
 
     pub(super) fn load_passengers(&mut self, vehicle: u32, passengers: Tag) {
         let Tag::List(list) = passengers else { return };
-        let Some(target) = self.level_entity(vehicle as i32) else {
+        let kind = if let Some(mob) = self.mob_object(vehicle) {
+            mob.kind.id.to_string()
+        } else if let Some(boat) = self.boat_object(vehicle) {
+            boat.entity_type()
+        } else if let Some(cart) = self.cart_object(vehicle) {
+            cart.kind.id().to_owned()
+        } else if let Some(target) = self.level_entity(vehicle as i32) {
+            self.target_type(target)
+        } else {
             return;
         };
-        let kind = self.target_type(target);
         // Marker.couldAcceptPassenger refuses even forced boarding. A no-save
         // vehicle is refused on a server too. Its unlinked children never join.
         if kind == "minecraft:marker" || !crate::game::spawner::entity_type_saves(&kind) {
             return;
         }
         self.load_entity_types();
-        let mut slots = Vec::new();
         for mut tag in list {
             if !self.passenger_creatable(&tag) {
                 continue;
             }
-            if entity_nbt::uuid(&tag).is_some_and(|u| self.target_with_uuid(u).is_some()) {
-                // #11807: joined-level duplicate skips tracking, not saving.
-                slots.push(PassengerSlot::Saved(tag));
+            let is_mob = entity_nbt::kind(&tag)
+                .is_some_and(|kind| self.res.mob_types().contains_key(&kind));
+            if !is_mob
+                && entity_nbt::uuid(&tag).is_some_and(|u| self.target_with_uuid(u).is_some())
+            {
+                // Non-mob disk duplicates retain their saved slot, not a new resident.
+                self.persist.passenger_slots.entry(vehicle).or_default()
+                    .push(PassengerSlot::Saved(tag));
                 continue;
             }
             let Some(kind) = entity_nbt::kind(&tag) else {
@@ -150,14 +186,17 @@ impl Game<'_> {
             let key = super::chunk_of(at);
             let uuid = entity_nbt::uuid(&tag);
             let unknown_before = self.persist.unknown.get(&key).map_or(0, Vec::len);
-            if let Err(tag) = self.load_unlisted(key, &kind, uuid, tag)
+            if is_mob {
+                self.load_mob(tag, Some(vehicle));
+            } else if let Err(tag) = self.load_unlisted(key, &kind, uuid, tag)
                 && let Err(tag) = self.load_listed(&kind, uuid, self.level.player_uuid, tag)
                 // The missing-mod gate decides whether an unknown kind may be kept.
                 && self.general_quarantine_admits(&tag, &kind, at)
             {
                 self.load_other(tag, &kind);
             }
-            let Some(id) = ((before + 1)..=self.next_entity).find(|id| self.passenger_present(*id))
+            let Some(id) = ((before + 1)..=self.next_entity)
+                .find(|id| self.passenger_object_present(*id))
             else {
                 if let Some(unknown) = self.persist.unknown.get_mut(&key) {
                     unknown.truncate(unknown_before);
@@ -165,28 +204,24 @@ impl Game<'_> {
                 continue;
             };
             self.link_loaded_passenger(id, vehicle);
-            slots.push(PassengerSlot::Live(id));
             if let Some(children) = children {
                 self.load_passengers(id, children);
             }
-        }
-        if !slots.is_empty() {
-            self.persist.passenger_slots.insert(vehicle, slots);
         }
     }
 
     pub(in crate::game) fn link_loaded_passenger(&mut self, id: u32, vehicle: u32) {
         self.unlink_passenger(id);
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(m) = self.mob_object_mut(id) {
             m.extra.mount = Some(vehicle);
             m.extra.passenger = true;
-            // The object id keeps load order, as the object memory's own mount does.
+            // The object id keeps load order, including refused resident copies.
             m.extra.vehicle_order = i64::from(m.id);
         }
         if let Some(a) = self.armor_stands.iter_mut().find(|a| a.id == id) {
             a.vehicle = Some(vehicle);
         }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == vehicle) {
+        if let Some(m) = self.mob_object_mut(vehicle) {
             m.extra.rider.get_or_insert(id);
         }
         self.persist
@@ -331,63 +366,22 @@ impl Game<'_> {
         }
     }
 
-    /// Dimension travel clones every live rider, including noSave types.
-    /// Filesystem/RootVehicle serialization deliberately uses the saved tree
-    /// instead. Both snapshots use the existing per-kind body writers.
-    pub(in crate::game) fn vehicle_transfer_tag(&mut self, id: u32) -> Option<Tag> {
-        let target = self.level_entity(id as i32)?;
-        let mut body = self.command_target_nbt(target)?;
-        take_passengers(&mut body);
-        let slots = self
-            .persist
-            .passenger_slots
-            .get(&id)
-            .cloned()
-            .unwrap_or_default();
-        let mut included = Vec::new();
-        let mut children = Vec::new();
-        for slot in slots {
-            match slot {
-                PassengerSlot::Live(child) if self.passenger_vehicle(child) == Some(id) => {
-                    included.push(child);
-                    if let Some(tag) = self.vehicle_transfer_tag(child) {
-                        children.push(tag);
-                    }
-                }
-                PassengerSlot::Saved(tag) => children.push(tag),
-                _ => {}
-            }
-        }
-        let mut extra: Vec<u32> = self
-            .ordered_live_passengers(id)
-            .into_iter()
-            .filter(|child| !included.contains(child))
-            .collect();
-        if let Some(driver) = self
-            .mobs
-            .iter()
-            .find(|m| m.id == id)
-            .and_then(|m| m.extra.rider)
-            && let Some(i) = extra.iter().position(|child| *child == driver)
-        {
-            extra.remove(i);
-            extra.insert(0, driver);
-        }
-        for child in extra {
-            if let Some(tag) = self.vehicle_transfer_tag(child) {
-                children.push(tag);
-            }
-        }
-        super::add_passengers(&mut body, children);
-        super::write_attachments(&mut body, id, &self.entity_attachments);
-        Some(body)
-    }
-
     pub(in crate::game) fn passenger_tree(&self, root: u32) -> Vec<u32> {
         let mut tree = vec![root];
         let mut cursor = 0;
         while cursor < tree.len() {
-            for id in self.ordered_live_passengers(tree[cursor]) {
+            let vehicle = tree[cursor];
+            if let Some(slots) = self.persist.passenger_slots.get(&vehicle) {
+                for slot in slots {
+                    if let PassengerSlot::Live(id) = slot
+                        && self.passenger_object_vehicle(*id) == Some(vehicle)
+                        && !tree.contains(id)
+                    {
+                        tree.push(*id);
+                    }
+                }
+            }
+            for id in self.mob_passenger_ids(vehicle) {
                 if !tree.contains(&id) {
                     tree.push(id);
                 }
@@ -433,6 +427,11 @@ impl Game<'_> {
     }
 
     pub(super) fn saved_passenger_body(&mut self, id: u32) -> Option<Tag> {
+        if self.persist.off_level.contains_key(&id)
+            && (self.boat_object(id).is_some() || self.cart_object(id).is_some())
+        {
+            return self.vehicle_tree_nbt(id);
+        }
         let target = self.level_entity(id as i32)?;
         if !self.passenger_present(id)
             || !crate::game::spawner::entity_type_saves(&self.target_type(target))

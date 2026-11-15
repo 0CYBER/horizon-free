@@ -125,8 +125,7 @@ fn chunk_loaded_families_keep_vanilla_lookup_and_save_order() {
         lookup.push(snapshot(game));
         // The pig leaves through a portal and comes back.
         let pig = game.mob_by_uuid([2703, 0, 0, 2]).unwrap();
-        let tag = game.vehicle_tree_nbt(pig).unwrap();
-        let state = game.capture_vehicle_tree_state(pig).unwrap();
+        let (tag, state) = game.take_vehicle_tree_transfer(pig).unwrap();
         game.remove_vehicle_tree(pig);
         lookup.push(snapshot(game));
         game.restore_vehicle_tree_state(tag, state).unwrap();

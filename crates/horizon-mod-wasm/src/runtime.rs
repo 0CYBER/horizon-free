@@ -1084,8 +1084,7 @@ impl WasmMod {
                                     .map_or_else(|| OUTSIDE_GUEST.clone(), Holder::snapshot),
                             ));
                         }
-                        if (class != CallClass::Worker
-                            && nested
+                        if (nested
                             && (payload || self.running.lending.load(Ordering::Relaxed) != 0))
                             || (class != CallClass::Worker
                                 && (id == crate::prepared::RELEASE

@@ -535,8 +535,7 @@ fn cancelled_body_reconstruction_keeps_the_hit_and_original_twenty_tick_deadline
                 let original = game.mob_object(44).unwrap().accepted_hit.clone().unwrap();
                 // This is the exact NBT + non-Clone runtime-token reconstruction
                 // used by teleport_vehicle_across, not a copied in-memory Mob.
-                let tag = game.vehicle_tree_nbt(44).unwrap();
-                let state = game.capture_vehicle_tree_state(44).unwrap();
+                let (tag, state) = game.take_vehicle_tree_transfer(44).unwrap();
                 assert!(game.mob_object(44).unwrap().accepted_hit.is_none());
                 game.mobs.retain(|body| body.id != 44);
                 game.detach_entity(44);

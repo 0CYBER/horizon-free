@@ -1,11 +1,11 @@
-//! Mob metadata and live attributes, built on the owning server thread, with the entity data
-//! (the part that reads only the mob and the synced tables) built on the tick's helper threads
-//! while the parallel tick is on (`horizon_client::parallel`), as one thread always did otherwise.
+//! Mob metadata and live attributes, built on the owning server thread.
+//! With multiple tick lanes, metadata is deferred until after the snapshot pass; it is still
+//! built serially because `Mob` contains non-`Sync` interior-mutable state.
 use super::*;
 use horizon_client::mobs::villager::ResolvedProfessions;
 
-/// From this many mobs the entity data goes to the helper threads.
-#[cfg_attr(not(test), allow(dead_code))]
+/// A fixture large enough to exercise the former parallel-state threshold.
+#[cfg(test)]
 const MIN_MOBS: usize = 1024;
 
 /// One mob's entity data (`meta`, and the `defaults` its entries can go back to); whether its
@@ -38,11 +38,11 @@ fn mob_state(
 
 #[cfg(test)]
 thread_local! {
-    /// A test's choice of the path, over the parallel tick's switch.
+    /// A test's choice of deferred or immediate metadata construction.
     static DEFER: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-/// Whether the entity data waits for the helper threads: while the parallel tick is on.
+/// Whether metadata waits until after the snapshot pass.
 fn deferring() -> bool {
     #[cfg(test)]
     if let Some(defer) = DEFER.with(std::cell::Cell::get) {
@@ -55,8 +55,7 @@ fn deferring() -> bool {
 /// player entity its lead may name, its effect entries, which the hub makes).
 type Waiting = (usize, usize, Option<i32>, Vec<(u8, i32, Value)>);
 
-/// The mobs' states of one pass: built in place, or (while the parallel tick is on) the mobs
-/// whose entity data waits for the helper threads.
+/// The mobs' states of one pass, with metadata optionally deferred until after the pass.
 pub(super) struct Later {
     waiting: Option<Vec<Waiting>>,
     game_time: i64,
@@ -74,11 +73,9 @@ impl Later {
 
     /// Mob `index`'s state `e`, in `slot` of the states: built now, or left for [`Self::fill`].
     /// The attributes are always built now.
-    // MERGE-CHECK: main built the attributes on the helper threads too (`AttrSources`, plain
-    // tables). The fork's `Game::mob_attributes` reads the live attribute map through
-    // `m.extra.live`, a `std::cell::OnceCell` that a read builds on first use: not something two
-    // threads may do to one mob. Moving it off-thread needs the maps built first (or a different
-    // cell), a design choice for the owner of `living_attributes.rs`. Until then they stay here.
+    // `mob_attributes` can initialize `m.extra.live` through a shared read.
+    // Its `std::cell::OnceCell` is not `Sync`; neither attributes nor metadata
+    // may share `&Mob` with helper threads, even if the live map was built first.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn state(
         &mut self,
@@ -107,33 +104,25 @@ impl Later {
         game.mob_attributes(m, &mut self.speeds, &mut e.attributes);
     }
 
-    /// The waiting entity data, built on the helper threads and put in place.
+    /// The waiting metadata, built serially on the owning server thread and put in place.
     pub(super) fn fill(self, game: &Game<'_>, mobs: &[Mob], sync: &SyncData, out: &mut States) {
         let Some(waiting) = self.waiting else {
             return;
         };
         let (game_time, professions) = (self.game_time, &game.stations().professions);
-        // Serial: `Mob` holds `OnceCell`/`Cell` fields (not `Sync`), so the mobs cannot be shared
-        // with helper threads (main's #14506 did this; the fork's `Mob` cannot).
-        let mut built = Vec::with_capacity(waiting.len());
-        for (slot, index, player, effects) in &waiting {
-            let (mut meta, mut defaults) = (Vec::new(), Vec::new());
-            let precise = mob_state(
-                &mobs[*index],
+        let states = out.as_mut_slice();
+        for (slot, index, player, effects) in waiting {
+            let e = &mut states[slot];
+            e.precise = mob_state(
+                &mobs[index],
                 sync,
                 professions,
-                effects.clone(),
-                *player,
+                effects,
+                player,
                 game_time,
-                &mut meta,
-                &mut defaults,
+                &mut e.meta,
+                &mut e.defaults,
             );
-            built.push((*slot, meta, defaults, precise));
-        }
-        let states = out.as_mut_slice();
-        for (slot, meta, defaults, precise) in built {
-            let e = &mut states[slot];
-            (e.meta, e.defaults, e.precise) = (meta, defaults, precise);
         }
     }
 }

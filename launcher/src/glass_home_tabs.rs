@@ -139,9 +139,8 @@ impl Launcher {
 /// A release's changes: each section's name and its lines.
 pub(super) type Sections = Vec<(String, Vec<String>)>;
 
-// MERGE-CHECK: main drew this patch log on Home's Overview; the fork's Home has no patch log,
-// so nothing draws it. Kept only because notes_cache.rs (main) builds on it; drop both together
-// if the fork's Home stays without one.
+// Glass Home omits Overview. Release-note helpers remain shared with notes_cache;
+// the Versions page, rather than Home, displays patch notes.
 #[allow(dead_code)]
 /// What the patch log shows: the line under its title, then its rows.
 pub(super) struct PatchLog {

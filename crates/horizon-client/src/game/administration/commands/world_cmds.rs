@@ -1870,6 +1870,7 @@ impl Game<'_> {
         if let Some(mob) = self.mob_object_mut(rider) {
             mob.extra.mount = None;
         }
+        self.unlink_passenger(rider);
         let remaining = self
             .mob_objects()
             .filter(|m| m.extra.mount == Some(v))

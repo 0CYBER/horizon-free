@@ -82,8 +82,13 @@ pub(super) fn tool_manifest(bundle: &Bundle) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// The copied package and its compatibility metadata must identify the same installed build.
 fn checked_files(bundle: &Bundle) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
-    Package::read(&bundle.dir)?.directory_files(&bundle.dir)
+    let mut files = Package::read(&bundle.dir)?.directory_files(&bundle.dir)?;
+    if let Ok(table) = fs::read(bundle.dir.join(USES_FILE)) {
+        files.insert(USES_FILE.to_owned(), table);
+    }
+    Ok(files)
 }
 
 pub(super) fn files(bundle: &Bundle) -> Result<Vec<(String, std::path::PathBuf)>, String> {
@@ -99,11 +104,7 @@ pub(super) fn files(bundle: &Bundle) -> Result<Vec<(String, std::path::PathBuf)>
 /// The package's files and its uses table, which is no source file: a copy is judged against
 /// another game build as the package was.
 pub(super) fn copy(bundle: &Bundle, to: &Path) -> Result<(), String> {
-    let mut files = checked_files(bundle)?;
-    if let Ok(table) = fs::read(bundle.dir.join(USES_FILE)) {
-        files.insert(USES_FILE.to_owned(), table);
-    }
-    copy_files(to, files)
+    copy_files(to, checked_files(bundle)?)
 }
 
 /// Only code enters the tool; runtime resource packs stay with the package.

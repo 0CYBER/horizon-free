@@ -3565,9 +3565,8 @@ impl Game<'_> {
     }
     fn cmd_setworldspawn(&mut self, ctx: &Context) -> R<i32> {
         let pos = if ctx.get("pos").is_some() {
-            // MERGE-CHECK: main (and the merge base) read `pos` with `spawnable_pos_arg`
-            // (`BlockPosArgument.getSpawnablePos`); the fork's side has `block_pos_arg`.
-            self.block_pos_arg(ctx, "pos")?
+            // BlockPosArgument.getSpawnablePos does not require a loaded chunk or build height.
+            self.spawnable_pos_arg(ctx, "pos")?
         } else {
             let p = self.source_position();
             [
@@ -5299,6 +5298,33 @@ mod forced_respawn_tests {
             let lines = game.chat_capture.take().unwrap();
             assert_eq!(lines.len(), 1);
             assert_eq!(lines[0].plain(), expected.plain());
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn setworldspawn_accepts_unloaded_spawnable_positions() {
+        use crate::game::native_entity_refs::tests::with_game;
+
+        with_game(|game| {
+            game.build_registries();
+            game.set_allow_commands(true);
+            for pos in [[1_000_000, 1024, -1_000_000], [-29_999_999, -1024, 29_999_999]] {
+                assert!(!game.world.chunks.contains_key(&(pos[0] >> 4, pos[2] >> 4)));
+                assert!(game.run_command(&format!(
+                    "setworldspawn {} {} {}",
+                    pos[0], pos[1], pos[2]
+                )));
+                assert_eq!(game.level.world_spawn, Some(pos));
+            }
+            let previous = game.level.world_spawn;
+            for pos in [[30_000_000, 64, 0], [0, 20_000_000, 0], [0, 64, -30_000_001]] {
+                assert!(!game.run_command(&format!(
+                    "setworldspawn {} {} {}",
+                    pos[0], pos[1], pos[2]
+                )));
+                assert_eq!(game.level.world_spawn, previous);
+            }
         });
     }
 

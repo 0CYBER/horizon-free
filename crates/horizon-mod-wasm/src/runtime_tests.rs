@@ -5,6 +5,9 @@ use crate::test_log::{CAPTURE, capture_logs};
 #[path = "runtime_tests/payload_busy.rs"]
 mod payload_busy;
 
+#[path = "runtime_tests/nested_worker.rs"]
+mod nested_worker;
+
 #[test]
 fn released_queue_empty_fast_path_does_not_wait_for_its_mutex() {
     let releases = Arc::new(Releases::<Id>::default());

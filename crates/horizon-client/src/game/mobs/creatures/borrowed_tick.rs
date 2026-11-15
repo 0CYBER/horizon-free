@@ -261,10 +261,9 @@ impl Game<'_> {
                     let nearest_player = nearest
                         .nearest(m.position.x, m.position.y, m.position.z)
                         .map(|p| p.position);
-                    // ServerLevel.tick: entities outside entity-ticking chunks do not tick
-                    // and do not check despawn (#16553), so no despawn event either.
-                    // MERGE-CHECK: main's #16749 dropped the despawn check here; the mods' despawn event now
-                    // also skips mobs outside entity-ticking chunks.
+                    // ServerLevel's EntityTickList contains only entity-ticking mobs
+                    // (PersistentEntitySectionManager.startTicking/stopTicking).
+                    // Keep this guard before both checkDespawn and its native event (#16749).
                     if !resuming && !ticking(bx, bz) {
                         keep[slot] = true;
                         cursor += 1;

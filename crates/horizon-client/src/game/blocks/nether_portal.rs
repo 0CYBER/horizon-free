@@ -1228,16 +1228,12 @@ impl Game<'_> {
     /// `Entity.teleportCrossDimension` away from the loaded dimension: the
     /// entity is saved and removed, and waits for its dimension to load.
     fn remove_portal_vehicle_tree(&mut self, root: u32) {
-        let mounts: Vec<_> = self.mob_objects().map(|m| (m.id, m.extra.mount)).collect();
-        let tree = super::persist::vehicle_tree(root, &mounts);
+        let tree = self.passenger_tree(root);
         self.mobs.retain(|m| !tree.contains(&m.id));
         self.persist.off_level.retain(|id, _| !tree.contains(id));
         self.boats.retain(|b| !tree.contains(&b.id));
         self.carts.retain(|c| !tree.contains(&c.id));
-        for id in tree {
-            self.release_vehicle_container(id);
-            self.detach_entity(id);
-        }
+        self.take_passenger_entities(&tree, true);
     }
     /// Where an entity that changes level alone stands, and the width and
     /// height of its box: an item, a primed TNT, a trident, a firework, an
@@ -1451,16 +1447,13 @@ impl Game<'_> {
             if !self.may_travel_through(id, &plan) {
                 return;
             }
-            let Some(mut tag) = self.vehicle_tree_nbt(id) else {
+            let Some((mut tag, state)) = self.take_vehicle_tree_transfer(id) else {
                 return;
             };
             // Entity.removeAfterChangingDimensions drops the leash.
             if let Tag::Compound(c) = &mut tag {
                 c.remove(&"leash".into());
             }
-            let Some(state) = self.capture_vehicle_tree_state(id) else {
-                return;
-            };
             self.remove_portal_vehicle_tree(id);
             self.portals.arrivals.push(Arrival {
                 tnt_used_portal: false,
@@ -1477,10 +1470,7 @@ impl Game<'_> {
                 return;
             }
             self.release_vehicle_container(id);
-            let Some(tag) = self.vehicle_tree_nbt(id) else {
-                return;
-            };
-            let Some(state) = self.capture_vehicle_tree_state(id) else {
+            let Some((tag, state)) = self.take_vehicle_tree_transfer(id) else {
                 return;
             };
             self.remove_portal_vehicle_tree(id);
@@ -1502,7 +1492,7 @@ impl Game<'_> {
                 return;
             }
             self.release_vehicle_container(id);
-            let Some(mut tag) = self.vehicle_tree_nbt(id) else {
+            let Some((mut tag, state)) = self.take_vehicle_tree_transfer(id) else {
                 return;
             };
             // `PositionMoveRotation.of(this)` takes the cart's `getKnownMovement`.
@@ -1512,9 +1502,6 @@ impl Game<'_> {
             if let Tag::Compound(c) = &mut tag {
                 c.insert("Motion".into(), doubles([m.x, m.y, m.z]));
             }
-            let Some(state) = self.capture_vehicle_tree_state(id) else {
-                return;
-            };
             self.remove_portal_vehicle_tree(id);
             self.portals.arrivals.push(Arrival {
                 tnt_used_portal: false,

@@ -57,8 +57,8 @@ const MOB_TURN_QUEUED: &[&str] = &["living_jump", "living_damage_post"];
 /// them) has a function named for a hook the turn waits on; `"quiet"` when trait packages were
 /// staged and nothing hooks; None when no trait package was staged and no mixin hooks.
 pub fn mob_turn(root: &Path) -> Option<&'static str> {
-    // MERGE-CHECK: reads `injections[].target` as main's record had it; the fork's horizon-mods
-    // record may not carry it, in which case every injection counts as "hooked" (the safe side).
+    // A record without a target conservatively serializes mob turns; only a known hook
+    // outside the turn can leave parallelism enabled.
     if let Ok(text) = std::fs::read_to_string(root.join(MODS_STAGE)) {
         let record = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
         let injections = record["injections"].as_array();

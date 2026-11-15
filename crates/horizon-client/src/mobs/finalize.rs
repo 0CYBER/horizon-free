@@ -944,23 +944,12 @@ pub fn loaded_max_health(m: &Mob) -> f32 {
         saved.max(m.attrs.max_health)
     }
 }
-/// Whether the mob stores a base for `a`: `set_base` or a load made one.
-pub fn has_base(m: &Mob, a: Attr) -> bool {
-    m.extra
-        .attributes
-        .as_ref()
-        .is_some_and(|s| s.bases.iter().any(|(x, _)| *x == a))
-}
 /// `LivingEntity.onAttributeUpdated(MAX_HEALTH)` after a Health Boost
 /// change: the cached maximum follows the attribute model again, and Health
-/// above it is lowered (nothing is healed). A wolf with no stored max health
-/// base keeps the cached maximum it was given outside the model; taming
-/// stores the base (`tame::set_tame`), so a tame wolf follows the model.
+/// above it is lowered (nothing is healed). Wolves use the type's default
+/// unless a saved base or `tame::set_tame` stored one; neither refreshing an
+/// effect nor the tame flag may replace that base (#16719).
 pub fn health_boost_changed(m: &mut Mob) {
-    // MERGE-CHECK: main (#16719) returns for every wolf; the fork lets a wolf with a stored base follow the model.
-    if m.species() == Species::Wolf && !has_base(m, Attr::MaxHealth) {
-        return;
-    }
     refresh(m, Attr::MaxHealth);
     clamp_health(m);
 }
@@ -2633,6 +2622,57 @@ pub fn villager_type(biome: &str) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wolves_refresh_health_boost_with_default_and_stored_bases() {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.id = "minecraft:wolf".into();
+        kind.species = Species::Wolf;
+        kind.max_health = 8.0;
+        kind.attributes = Arc::new([(Attr::MaxHealth.id().to_owned(), 8.0)].into());
+        let kind = Arc::new(kind);
+        // A fresh wild wolf, an owner-only load, a wild load's stored 8,
+        // a newly tamed wolf's 40, and a saved custom tame maximum.
+        for (tame, stored, base) in [
+            (false, None, 8.0),
+            (true, None, 8.0),
+            (false, Some(8.0), 8.0),
+            (true, Some(40.0), 40.0),
+            (true, Some(80.0), 80.0),
+        ] {
+            let mut m = Mob::new(
+                1,
+                Arc::clone(&kind),
+                horizon_core::geometry::Vec3::ZERO,
+                0.0,
+            );
+            m.extra.tame = tame;
+            if let Some(base) = stored {
+                set_base(&mut m, Attr::MaxHealth, base);
+            }
+            m.health = 4.0;
+            m.add_effect("minecraft:health_boost", 600, 1);
+            assert_eq!(m.attrs.max_health, base as f32 + 8.0);
+            assert_eq!(m.health, 4.0, "adding Health Boost must not heal");
+            assert_eq!(base_value(&m, Attr::MaxHealth), base);
+            m.health = m.attrs.max_health;
+            assert!(m.retain_effects(|e| e.id != "minecraft:health_boost"));
+            assert_eq!(m.attrs.max_health, base as f32);
+            assert_eq!(
+                m.health, base as f32,
+                "removal clamps to the unboosted maximum"
+            );
+            assert_eq!(base_value(&m, Attr::MaxHealth), base);
+            assert_eq!(
+                m.extra
+                    .attributes
+                    .as_ref()
+                    .and_then(|s| s.bases.first().map(|(_, v)| *v)),
+                stored,
+                "effect changes must not synthesize or overwrite a saved base"
+            );
+        }
+    }
 
     /// A mob's own attribute record sanitizes with the definitions of the
     /// catalog its type loaded with, not with copies of vanilla's bounds:

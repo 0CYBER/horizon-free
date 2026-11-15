@@ -128,17 +128,14 @@ impl Game<'_> {
             let was = self.persist.anon.insert(key.clone(), (at, tag.clone()));
             self.journal_anon((key, was));
         }
-        // Every saved `Passengers` tree loads as live entities, whatever the kinds
-        // (`EntityType.loadEntityRecursive`): they ride once their vehicle is in the level. A
-        // mob, boat or minecart loads its mob riders itself (the object memory), so those stay in
-        // its tag; a mod's kind carries its riders in its general row.
-        // MERGE-CHECK: main loads all riders through `load_passengers` and slots, the fork loads
-        // mob riders of mobs, boats and minecarts through `take_mob_passengers`; both run here.
+        // Each tree has one loader: object-backed vehicles retain every rider for
+        // their recursive loader; other kinds load the same ordered slots below.
         let passengers = (transferred.is_none() && !super::super::general::quarantined_kind(&kind))
             .then(|| {
                 let own_loader = is_mob
                     || super::super::boats::any_boat_wood(&kind).is_some()
-                    || super::super::minecarts::CartKind::from_id(&kind).is_some();
+                    || super::super::minecarts::CartKind::from_id(&kind).is_some()
+                    || kind == "minecraft:tnt";
                 self.take_unmodeled_passengers(&mut tag, own_loader)
             })
             .flatten();

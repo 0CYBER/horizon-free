@@ -1632,8 +1632,7 @@ mod tests {
             "enchantment/test:vorpal".to_owned(),
             vec![json.as_bytes().to_vec()],
         )];
-        // MERGE-CHECK: written for main's two-argument `SyncData::load`; the fork's also reads the
-        // item defaults, which this fixture gives as an empty `items.json`.
+        // Item defaults are a separate input; this enchantment-only fixture has none.
         std::fs::write(root.join("items.json"), "{}").unwrap();
         let loaded = SyncData::load(
             &root,

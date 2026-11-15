@@ -97,6 +97,74 @@ fn the_copy_a_build_makes_is_judged_by_the_same_table() {
 }
 
 #[test]
+fn uses_table_changes_and_removal_invalidate_the_installed_build() {
+    use crate::native_mods::{package, source_digest, version_for, Profile, Target};
+
+    let dir = project_dir("fit-build-key", Some(&[("fn:give", "h1")]), None);
+    let target = surface(&[("fn:give", "h2")]);
+    let original = std::fs::read(dir.join(uses::USES_FILE)).unwrap();
+    // The build hashes and judges its incoming copy, including requested mods it leaves out.
+    let snapshot = |name: &str| {
+        let copy = crate::native_mods::tests::dir(name);
+        let bundle = crate::native_mods::bundle_in(&dir).unwrap().unwrap();
+        package::copy(&bundle, &copy).unwrap();
+        let copied = crate::native_mods::bundle_in(&copy).unwrap().unwrap();
+        let digest = source_digest(&copied).unwrap();
+        let version = version_for(
+            OTHER_BUILD,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            Profile::Optimized,
+            Target::Client,
+            None,
+            &[copied],
+        )
+        .unwrap();
+        let verdict = judged(&copy, OTHER_BUILD, &target);
+        std::fs::remove_dir_all(copy).unwrap();
+        (version, digest, verdict)
+    };
+    let excluded = snapshot("fit-build-key-excluded");
+    assert!(matches!(excluded.2, Verdict::DoesNotFit { .. }));
+    assert_eq!(snapshot("fit-build-key-unchanged"), excluded);
+
+    // Same manifest, sources and table length; only a compatibility fingerprint changes.
+    let changed = String::from_utf8(original.clone())
+        .unwrap()
+        .replace("\"h1\"", "\"h2\"");
+    std::fs::write(dir.join(uses::USES_FILE), changed).unwrap();
+    let included = snapshot("fit-build-key-included");
+    assert!(included.2.usable());
+    assert_ne!(
+        included.0, excluded.0,
+        "a usable mod must not reuse the installed build's previous left_out decision"
+    );
+    assert_eq!(included.1, excluded.1, "compiler inputs did not change");
+    assert_eq!(snapshot("fit-build-key-changed-stable"), included);
+
+    std::fs::remove_file(dir.join(uses::USES_FILE)).unwrap();
+    let absent = snapshot("fit-build-key-absent");
+    assert!(matches!(absent.2, Verdict::NoList { .. }));
+    assert_ne!(absent.0, included.0, "table presence decides inclusion");
+    assert_ne!(absent.0, excluded.0, "a removed table is a different input");
+    assert_eq!(absent.1, included.1);
+    assert_eq!(snapshot("fit-build-key-absent-stable"), absent);
+
+    // The same complete inputs select the same build, independent of the incoming path.
+    std::fs::write(dir.join(uses::USES_FILE), original).unwrap();
+    assert_eq!(snapshot("fit-build-key-restored"), excluded);
+    let bundle = crate::native_mods::bundle_in(&dir).unwrap().unwrap();
+    let tool = crate::native_mods::tests::dir("fit-build-key-tool");
+    package::copy_tool_input(&bundle, &tool).unwrap();
+    assert!(!tool.join(uses::USES_FILE).exists());
+    assert_eq!(
+        std::fs::read(tool.join("src/lib.rs")).unwrap(),
+        std::fs::read(dir.join("src/lib.rs")).unwrap()
+    );
+    std::fs::remove_dir_all(tool).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_changed_or_removed_item_it_uses_is_named() {
     let dir = project_dir(
         "fit-misfit",
