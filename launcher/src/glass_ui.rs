@@ -1705,6 +1705,7 @@ pub struct Tip(SharedString);
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         div()
+            .max_w(px(360.))
             .px(px(10.))
             .py(px(6.))
             .rounded(px(radius::CONTROL))
