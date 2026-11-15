@@ -10610,16 +10610,27 @@ impl Renderer {
             // One of Horizon's own packs reads the world before translucent terrain
             // (`opaque_depth`, `opaque_color`): the pass ends, the targets are copied, and a
             // pass that loads both carries on.
-            if material.is_some_and(|m| m.reads_opaque)
+            // A material pack's translucent terrain drawn per section (no flat draws) gets a
+            // pass of its own too, copies or not. Drawn on in the solid world's pass, a pack
+            // with `[displacement]` under HDR output lost the Vulkan device (an NVIDIA GPU
+            // fault, cause not found); a pass of its own avoids it.
+            let reads_opaque = material.is_some_and(|m| m.reads_opaque);
+            let per_section = material.is_some()
+                && !pack_draws_water
+                && oit.is_none()
+                && !(flat_frame && self.flat.is_some());
+            if (reads_opaque || per_section)
                 && let Some(native) = &self.native
             {
                 drop(pass);
-                native.copy_opaque(native_material::OpaqueCopy {
-                    device: &self.device,
-                    encoder: &mut encoder,
-                    depth: world_depth.texture(),
-                    color: scaled.as_ref().map(|(c, _)| c),
-                });
+                if reads_opaque {
+                    native.copy_opaque(native_material::OpaqueCopy {
+                        device: &self.device,
+                        encoder: &mut encoder,
+                        depth: world_depth.texture(),
+                        color: scaled.as_ref().map(|(c, _)| c),
+                    });
+                }
                 pass = world_pass_after_culling(
                     &mut encoder,
                     world_view,
