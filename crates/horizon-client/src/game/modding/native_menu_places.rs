@@ -629,7 +629,11 @@ mod tests {
         let host: &mut dyn ServerHost = game;
         let boxed: u32 = (0..27).map(|n| held_slot(n).amount(host)).sum();
         let own: u32 = (0..27)
-            .map(|slot| ItemPlace::MenuSlot { menu, slot }.amount(host))
+            .map(|slot| match menu.slot_backing(host, slot) {
+                // A backed slot is a view of the box, already counted above.
+                Some(MenuSlotBacking::Native(_)) => ItemPlace::MenuSlot { menu, slot }.amount(host),
+                _ => 0,
+            })
             .sum();
         let carried = ItemPlace::PlayerSlot {
             player: 123,
