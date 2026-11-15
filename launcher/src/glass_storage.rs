@@ -47,22 +47,54 @@ impl Launcher {
                     "A native build or cache cleanup is running. Try again when it finishes.",
                 ));
         let mut card = div().flex().flex_col().p(px(8.)).gap(px(12.));
-        let total = self.storage_report.as_ref().map_or_else(
-            || tr("Calculating…").to_string(),
-            |report| storage::format_bytes(report.rows.iter().map(|row| row.remaining_bytes).sum()),
-        );
+        let total_bytes = self.storage_report.as_ref().map(|report| {
+            report
+                .rows
+                .iter()
+                .map(|row| row.remaining_bytes)
+                .sum::<u64>()
+        });
+        let total =
+            total_bytes.map_or_else(|| tr("Calculating…").to_string(), storage::format_bytes);
+        // Nothing to clear is not a press: Clear dims at nothing, as while a build runs.
+        let all_blocked = blocked || total_bytes == Some(0);
         card = card.child(ui::setting_row(
-            tr("Storage"),
-            Some(div().child(total).into_any_element()),
+            tr("Launcher caches"),
             Some(
-                button("storage-clear-all", "Clear all", Kind::Secondary, &t)
-                    .opacity(if blocked { 0.4 } else { 1.0 })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !blocked {
-                            this.storage_confirm = Some(None);
-                        }
-                        cx.notify();
-                    }))
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(total)
+                    .child(tr(
+                        "Downloads and build files the launcher can fetch or make again. Your \
+                         worlds, instances and settings are never touched.",
+                    ))
+                    .into_any_element(),
+            ),
+            Some(
+                div()
+                    .flex()
+                    .gap(px(8.))
+                    .child(
+                        button("storage-refresh", "Recount", Kind::Ghost, &t).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.refresh_storage(None, false);
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .child(
+                        button("storage-clear-all", "Clear all", Kind::Secondary, &t)
+                            .opacity(if all_blocked { 0.4 } else { 1.0 })
+                            .when(all_blocked, |b| b.cursor_default())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !all_blocked {
+                                    this.storage_confirm = Some(None);
+                                }
+                                cx.notify();
+                            })),
+                    )
                     .into_any_element(),
             ),
         ));
@@ -101,14 +133,6 @@ impl Launcher {
         if self.storage_pending {
             card = card.child(tr("A build or storage operation is running."));
         }
-        card = card.child(
-            button("storage-refresh", "Refresh", Kind::Secondary, &t).on_click(cx.listener(
-                |this, _, _, cx| {
-                    this.refresh_storage(None, false);
-                    cx.notify();
-                },
-            )),
-        );
         if let Some(error) = &self.storage_error {
             card = card.child(error.clone());
         }
@@ -126,10 +150,16 @@ impl Launcher {
                 .storage_report
                 .as_ref()
                 .and_then(|report| report.rows.iter().find(|row| row.category == category));
-            let mut detail = div().child(row.map_or_else(
-                || tr("Calculating…").to_string(),
-                |row| storage::format_bytes(row.remaining_bytes),
-            ));
+            let mut detail = div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(row.map_or_else(
+                    || tr("Calculating…").to_string(),
+                    |row| storage::format_bytes(row.remaining_bytes),
+                ))
+                .child(tr(category_about(category)));
+            let row_blocked = blocked || row.is_some_and(|row| row.remaining_bytes == 0);
             if let Some(row) = row {
                 for kept in &row.kept {
                     detail = detail.child(div().child(trf(
@@ -151,9 +181,10 @@ impl Launcher {
                         Kind::Secondary,
                         &t,
                     )
-                    .opacity(if blocked { 0.4 } else { 1.0 })
+                    .opacity(if row_blocked { 0.4 } else { 1.0 })
+                    .when(row_blocked, |b| b.cursor_default())
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !blocked {
+                        if !row_blocked {
                             this.storage_confirm = Some(Some(category));
                         }
                         cx.notify();
@@ -261,6 +292,23 @@ fn category_label(category: Category) -> &'static str {
         Category::SpareGameBuilds => "Spare game builds",
         Category::RustCompiler => "Rust compiler",
         Category::OtherCaches => "Other caches",
+    }
+}
+
+/// What a row holds, and that clearing it costs only a download or a rebuild.
+fn category_about(category: Category) -> &'static str {
+    match category {
+        Category::BuildFiles => "What building native mods leaves behind: made again when needed.",
+        Category::PrebuiltGames => {
+            "The game packages native mods are built against: downloaded again when needed."
+        }
+        Category::SpareGameBuilds => {
+            "Game builds kept for running servers: downloaded again when needed."
+        }
+        Category::RustCompiler => {
+            "The compiler that builds native mods: downloaded again the next time one is built."
+        }
+        Category::OtherCaches => "Other downloads kept to make the launcher faster.",
     }
 }
 
