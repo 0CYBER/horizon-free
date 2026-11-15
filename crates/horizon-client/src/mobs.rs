@@ -119,7 +119,7 @@ pub mod wither;
 #[cfg(test)]
 mod invisible_follow_tests;
 mod world;
-pub use world::{TargetInfo, single_player_pos, visual_clip};
+pub use world::{TargetInfo, VisualShape, single_player_pos, visual_clip, visual_shape};
 pub mod dragon_contacts;
 pub mod zombie_villager;
 

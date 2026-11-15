@@ -11,7 +11,7 @@ use horizon_client::{
 use horizon_client::{
     entities::nameplate::NameplateDistances,
     hud::HudBatch,
-    mobs::{Anim, Brain, Mob, MobType},
+    mobs::{Anim, Brain, Mob, MobType, VisualShape},
     mouse::Rotation,
     pose::Pose,
 };
@@ -55,37 +55,25 @@ impl RayWorld for VisualRays<'_, '_> {
         p: BlockPos,
         _: RayBlockMode,
     ) -> io::Result<VoxelShape> {
-        let facts = self.facts.get(state);
-        let name = &*facts.name;
-        // TransparentBlock (glass, stained and tinted glass, copper grates),
-        // IronBarsBlock (bars and panes) and PowderSnowBlock: nothing;
-        // SoulSandBlock and MudBlock: a full block; SnowLayerBlock and
-        // FenceBlock: their outline.
-        if name.ends_with("glass")
-            || name.ends_with("glass_pane")
-            || name.ends_with("_bars")
-            || name.ends_with("copper_grate")
-            || name == "minecraft:powder_snow"
-        {
-            return Ok(VoxelShape::empty());
-        }
-        if name == "minecraft:soul_sand" || name == "minecraft:mud" {
-            return Ok(VoxelShape::block());
-        }
-        if name == "minecraft:snow" || name.ends_with("_fence") {
-            let mut shape = VoxelShape::empty();
-            for b in facts.outline.iter() {
-                let b = b.map(f64::from);
-                let part = VoxelShape::from_box(Aabb::new(
-                    Vec3::new(b[0], b[1], b[2]),
-                    Vec3::new(b[3], b[4], b[5]),
-                ))
-                .map_err(|e| io::Error::other(format!("{e:?}")))?;
-                shape = shape
-                    .join(&part, ShapeOp::OR)
+        match horizon_client::mobs::visual_shape(self.facts, state) {
+            VisualShape::Empty => return Ok(VoxelShape::empty()),
+            VisualShape::Block => return Ok(VoxelShape::block()),
+            VisualShape::Outline(boxes) => {
+                let mut shape = VoxelShape::empty();
+                for b in boxes {
+                    let b = b.map(f64::from);
+                    let part = VoxelShape::from_box(Aabb::new(
+                        Vec3::new(b[0], b[1], b[2]),
+                        Vec3::new(b[3], b[4], b[5]),
+                    ))
                     .map_err(|e| io::Error::other(format!("{e:?}")))?;
+                    shape = shape
+                        .join(&part, ShapeOp::OR)
+                        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+                }
+                return Ok(shape);
             }
-            return Ok(shape);
+            VisualShape::Collision => {}
         }
         let binding = self.scene.binding;
         binding
