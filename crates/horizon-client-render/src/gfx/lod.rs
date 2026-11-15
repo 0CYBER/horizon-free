@@ -290,7 +290,17 @@ impl Renderer {
             copies.clear_tiles();
         }
         self.lod_pending = None;
-        // No far terrain left to fade out over.
+        for (_, tile) in std::mem::take(&mut self.lods) {
+            self.release_tile(tile);
+        }
+        self.lod_cull_free.clear();
+        self.lod_cull_next = 0;
+        self.set_lod_cutout(Default::default());
+        // No far terrain left to fade out over. Drained after `set_lod_cutout`, which
+        // moves the sections far terrain still held (`lod_retiring`) onto this list:
+        // `release_left` runs only from `upload_lods`, and the game stops calling that
+        // once far terrain is off, so a section left here would draw its unloaded
+        // column past the render distance for the rest of the renderer's life.
         for (key, since) in std::mem::take(&mut self.lod_leaving) {
             if self
                 .sections
@@ -300,12 +310,6 @@ impl Renderer {
                 self.release_section(key);
             }
         }
-        for (_, tile) in std::mem::take(&mut self.lods) {
-            self.release_tile(tile);
-        }
-        self.lod_cull_free.clear();
-        self.lod_cull_next = 0;
-        self.set_lod_cutout(Default::default());
     }
 
     /// Queues a finished mesh job (`Lod::update`, `Lod::removed`,
