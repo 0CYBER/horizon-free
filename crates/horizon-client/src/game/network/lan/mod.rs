@@ -89,7 +89,8 @@ pub(super) struct LanHost {
     /// `horizon-lod-distance` is 0.
     pub far: Option<horizon_client::lod_net::Service>,
     /// Native mods' commands and the level each needs, once asked (game/modding/native_server.rs).
-    pub(super) native_commands: Option<super::native_server::NativeCommands>,
+    /// The generation of the session's mod commands the hub was given.
+    pub(super) native_commands_sent: Option<u64>,
     /// The players a native mod leaves out of the sleep count when they
     /// aren't in bed (`native_sleep_ignored`).
     pub sleep_ignored: std::collections::HashSet<u128>,
@@ -1299,7 +1300,7 @@ impl Game<'_> {
             commands: Vec::new(),
             quiet: std::collections::VecDeque::new(),
             far,
-            native_commands: None,
+            native_commands_sent: None,
             sleep_ignored: Default::default(),
             states: Default::default(),
             states_next_entity: None,
@@ -3751,7 +3752,7 @@ mod tests {
             commands: Default::default(),
             quiet: Default::default(),
             far: None,
-            native_commands: None,
+            native_commands_sent: None,
             sleep_ignored: Default::default(),
             states: Default::default(),
             states_next_entity: None,
@@ -5877,7 +5878,7 @@ mod merchant_packet_tests {
                 commands: Default::default(),
                 quiet: Default::default(),
                 far: None,
-                native_commands: None,
+                native_commands_sent: None,
                 sleep_ignored: Default::default(),
                 states: Default::default(),
                 states_next_entity: None,
