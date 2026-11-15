@@ -81,8 +81,12 @@ fn block(game: &super::Game<'_>, pos: [i32; 3]) -> String {
 }
 
 /// A server's game with its own player standing in the origin chunk, as the native player-break
-/// tests set one up: their UUID.
-fn with_player(game: &mut super::Game<'_>, mode: GameMode, held: Option<ItemStack>) -> u128 {
+/// tests set one up: their handle.
+fn with_player(
+    game: &mut super::Game<'_>,
+    mode: GameMode,
+    held: Option<ItemStack>,
+) -> mod_api::PlayerRef {
     game.options.dedicated = Some(Vec::new());
     let _ = game
         .block_ticks
@@ -97,7 +101,9 @@ fn with_player(game: &mut super::Game<'_>, mode: GameMode, held: Option<ItemStac
     game.lan_acting_permission = Some(0);
     game.set_mode(mode);
     game.inventory[game.selected] = held;
-    game.native_acting_id()
+    // The acting player as a hook would name them: this server's entity 20.
+    let epoch = game.native_lifecycle.epoch().unwrap();
+    mod_api::__private::game::player_ref(mod_api::EntityRef::new(epoch, 20), 123)
 }
 
 #[test]
@@ -120,14 +126,14 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
             let take = || std::mem::take(&mut *heard.lock().unwrap());
 
             // Survival, with the right tool: stone drops, and the break is heard.
-            let uuid = with_player(
+            let player = with_player(
                 game,
                 GameMode::Survival,
                 Some(ItemStack::new("minecraft:diamond_pickaxe", 1)),
             );
             let stone = [6, 64, 4];
             place(game, stone, "minecraft:stone");
-            assert!(game.native_player_break_block(uuid, stone, false));
+            assert!(game.player_destroy_block(player, stone, false));
             assert_eq!(block(game, stone), "minecraft:air");
             assert_eq!(take(), [(stone, "minecraft:stone".to_owned(), None)]);
             // Heard before `playerDestroy` counts the block mined; the count comes after.
@@ -138,7 +144,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
 
             // Creative: no drops and an early return in vanilla, still heard once. A chest
             // carries its saved contents.
-            let uuid = with_player(game, GameMode::Creative, None);
+            let player = with_player(game, GameMode::Creative, None);
             let chest = [7, 64, 4];
             place(game, chest, "minecraft:chest");
             let mut contents = vec![None; 27];
@@ -147,7 +153,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
                 (chest[0], chest[1], chest[2]),
                 horizon_client::containers::BlockEntity::Chest(contents),
             );
-            assert!(game.native_player_break_block(uuid, chest, false));
+            assert!(game.player_destroy_block(player, chest, false));
             assert_eq!(block(game, chest), "minecraft:air");
             let heard_now = take();
             assert_eq!(heard_now.len(), 1);
@@ -173,7 +179,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
             );
 
             // A break `break_block` cancels keeps the block and is not heard.
-            let uuid = with_player(
+            let player = with_player(
                 game,
                 GameMode::Survival,
                 Some(ItemStack::new("minecraft:diamond_pickaxe", 1)),
@@ -181,7 +187,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
             cancel_break.store(true, Ordering::Relaxed);
             let kept = [8, 64, 4];
             place(game, kept, "minecraft:stone");
-            assert!(!game.native_player_break_block(uuid, kept, false));
+            assert!(!game.player_destroy_block(player, kept, false));
             assert_eq!(block(game, kept), "minecraft:stone");
             assert!(take().is_empty());
             cancel_break.store(false, Ordering::Relaxed);
