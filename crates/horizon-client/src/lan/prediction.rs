@@ -75,6 +75,12 @@ const MOST_MET: f64 = 0.5;
 /// replay's velocity is still being brought to the client's.
 const AGREED: f64 = 1e-3;
 
+/// What a tick that lands `offset` blocks off the replay weighs: its offset in tolerances, at most
+/// [`MOST_WEIGHT`].
+fn weight(offset: f64, tolerance: f64) -> f32 {
+    (offset / tolerance).min(MOST_WEIGHT) as f32
+}
+
 /// Whether the block at `block` is near enough a player at `at` to change its next moves, `slack`
 /// blocks farther for a fast one (see [`slack`]).
 pub fn near(at: [f64; 3], block: [i32; 3], slack: f64) -> bool {
@@ -438,7 +444,7 @@ impl Replay {
                     over.at_worst = self.ticks.back().copied();
                 }
                 over.worst = over.worst.max(offset);
-                over.weight += (offset / tolerance).min(MOST_WEIGHT) as f32;
+                over.weight += weight(offset, tolerance);
                 if steady == STEADY {
                     self.meet();
                 }
@@ -1089,6 +1095,50 @@ mod tests {
             "{}",
             worst.describe()
         );
+    }
+
+    /// A tick weighs its offset in tolerances, and at most 5 however far it lands
+    /// (docs/anticheat.md): one blink can't kick on its own.
+    #[test]
+    fn a_tick_weighs_its_offset_in_tolerances_at_most_5() {
+        assert_eq!(weight(0.06, 0.03), 2.0);
+        assert_eq!(weight(0.1, 0.05), 2.0);
+        assert_eq!(weight(0.3, 0.03), 5.0);
+        assert_eq!(weight(100.0, 0.03), 5.0);
+    }
+
+    /// An excuse covers the ticks after it until the moves agree again, at most 40 of them (two
+    /// seconds, docs/anticheat.md): a client that never agrees again counts again from the 41st.
+    #[test]
+    fn an_excuse_lasts_40_ticks_at_most() {
+        let push = Push {
+            tick: 5,
+            velocity: [0.3, 0.0, 0.0],
+            heard: false,
+            excused: true,
+            taken: true,
+        };
+        // From the push on, a zigzag across that the replay never meets.
+        let zigzag = |i: usize, _: Vec3, honest: Vec3| {
+            let x = match i {
+                0..=5 => 0.0,
+                _ if i.is_multiple_of(2) => 0.2,
+                _ => -0.2,
+            };
+            honest.add_vector(Vec3::new(x, 0.0, 0.0))
+        };
+        let Some(steps) = steps(zigzag, Some(push)) else {
+            return;
+        };
+        let counted: Vec<usize> = steps
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.over.ticks > 0)
+            .map(|(i, _)| i)
+            .collect();
+        // The push's own tick counts and is excused; the 40 ticks after it don't count; the 41st
+        // does (the ones after it only every other tick: the replay tries the velocity it missed).
+        assert_eq!(counted.get(..2), Some(&[5, 46][..]), "{counted:?}");
     }
 
     #[test]
