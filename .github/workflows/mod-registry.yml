@@ -1,17 +1,30 @@
 name: mod-registry
 # The submission service is its own workspace (crates/horizon-mod-registry), so the checks job doesn't build
-# it: this one does, when it or horizon-mods (the checks it shares with the launcher and the game) changes.
+# it: this one does, and builds its image, whenever anything the image copies changes (horizon-mod-vocab's build
+# script reads the game's hook sources, so the image copies every crate).
 on:
   push:
     branches: [main]
     paths:
-      - 'crates/horizon-mod-package/**'
-      - 'crates/horizon-mod-registry/**'
+      # Everything its image copies (crates/horizon-mod-registry/Dockerfile): every crate's sources and the
+      # layering inventory and the mixin patch its build reads, the root manifest and the build context's
+      # ignore list.
+      - 'crates/**'
+      - 'tools/layering/mod_vocab_state.json'
+      - 'tools/mixins/narrow-reference-rule.patch'
+      - 'Cargo.toml'
+      - '.dockerignore'
       - '.github/workflows/mod-registry.yml'
   pull_request:
     paths:
-      - 'crates/horizon-mod-package/**'
-      - 'crates/horizon-mod-registry/**'
+      # Everything its image copies (crates/horizon-mod-registry/Dockerfile): every crate's sources and the
+      # layering inventory and the mixin patch its build reads, the root manifest and the build context's
+      # ignore list.
+      - 'crates/**'
+      - 'tools/layering/mod_vocab_state.json'
+      - 'tools/mixins/narrow-reference-rule.patch'
+      - 'Cargo.toml'
+      - '.dockerignore'
       - '.github/workflows/mod-registry.yml'
 permissions:
   contents: read
@@ -38,3 +51,11 @@ jobs:
       - run: cargo +stable fmt --check
       - run: cargo +stable clippy --all-targets --locked -- -D warnings
       - run: cargo +stable test --locked
+  image:
+    # The image Railway deploys, built from the repository root as Railway does: a crate its build needs and
+    # the Dockerfile does not copy fails here, not at the next deploy. GitHub's runners have Docker.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -f crates/horizon-mod-registry/Dockerfile .

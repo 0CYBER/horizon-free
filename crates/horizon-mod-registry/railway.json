@@ -4,21 +4,11 @@
     "builder": "DOCKERFILE",
     "dockerfilePath": "crates/horizon-mod-registry/Dockerfile",
     "watchPatterns": [
-      "/crates/horizon-mod-package/**",
-      "/crates/horizon-core/**",
-      "/crates/horizon-mod-api-gen/**",
-      "/crates/horizon-game-discovery/**",
-      "/crates/horizon-mod-vocab/**",
-      "/crates/horizon-client/src/game/native_hooks/**",
-      "/crates/horizon-mod-runtime/**",
-      "/crates/horizon-mod-api-macros/**",
-      "/crates/horizon-mod-point-shape/**",
-      "/crates/horizon-mod-source/**",
-      "/crates/horizon-mod-surface/**",
-      "/crates/horizon-release-sign/**",
-      "/crates/horizon-shader-api/**",
-      "/crates/horizon-mod-registry/**",
-      "/Cargo.toml"
+      "/crates/**",
+      "/tools/layering/mod_vocab_state.json",
+      "/tools/mixins/narrow-reference-rule.patch",
+      "/Cargo.toml",
+      "/.dockerignore"
     ]
   },
   "deploy": {
