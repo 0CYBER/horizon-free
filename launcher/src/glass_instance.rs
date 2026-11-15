@@ -1121,9 +1121,18 @@ impl Launcher {
             Channel::Stable => tr("One build a week, fewer surprises"),
             Channel::Nightly => tr("Every day's build: newest, may break"),
         });
-        let current = match &pin {
-            None => tr("Latest").to_string(),
-            Some(p) => name(p),
+        // Latest on Nightly plays the launcher's version: an older one Use picked is named.
+        let held = self
+            .held_version()
+            .filter(|_| channel == Channel::Nightly)
+            .map(|tag| self.version_name(tag));
+        let current = match (&pin, &held) {
+            (None, Some(held)) => trf(
+                "Latest: {version}, picked on Versions",
+                &[("version", held)],
+            ),
+            (None, None) => tr("Latest").to_string(),
+            (Some(p), _) => name(p),
         };
         let button = keyboard(
             div()
@@ -1173,7 +1182,13 @@ impl Launcher {
             "horizon-version-latest".into(),
             pin.is_none(),
             tr("Latest").into(),
-            tr("Moves to each new one").into(),
+            match &held {
+                Some(held) => trf(
+                    "Plays the launcher's version, {version}, picked on Versions",
+                    &[("version", held)],
+                ),
+                None => tr("Moves to each new one").into(),
+            },
             None,
         )];
         for tag in &builds {

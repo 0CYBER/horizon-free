@@ -86,6 +86,15 @@ impl Launcher {
             .unwrap_or_else(|| tag.to_owned())
     }
 
+    /// The launcher's version when Use picked one older than the newest installed: what an
+    /// instance set to Latest on Nightly plays then, named so "Latest" never says otherwise.
+    pub(crate) fn held_version(&self) -> Option<&String> {
+        self.settings
+            .selected
+            .as_ref()
+            .filter(|tag| self.installed.first() != Some(*tag))
+    }
+
     /// The names of the Horizon instances that play `tag`.
     pub(crate) fn instances_using(&self, tag: &str) -> Vec<&str> {
         self.instances
@@ -579,7 +588,7 @@ impl Launcher {
                     "Play this version only in {instance}. To go back to the latest, choose Latest in its settings, Installation.",
                     &[("instance", &i.name)],
                 ),
-                _ => tr("Play this version in every instance set to Latest.")
+                _ => tr("Play this version in every Nightly instance set to Latest.")
                     .to_string(),
             };
             d = d.child(
