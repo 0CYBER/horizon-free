@@ -4,6 +4,7 @@
 //! fly and amphibious node evaluators (`path`, `nav`), move/look/jump/body controls (`control`),
 //! `LivingEntity` physics (`living`) and per-species behaviour, models, animations and sounds.
 pub mod ai;
+mod ai_pause;
 pub mod allay;
 pub mod ambient;
 pub mod anim;
