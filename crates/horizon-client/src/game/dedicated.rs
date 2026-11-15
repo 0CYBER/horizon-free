@@ -1148,6 +1148,9 @@ impl Game<'_> {
         self.native_lifecycle_open_started();
         // The registries the server sends are read while the world prepares.
         let sync = super::lan::preload_sync_data(&self.options.resources);
+        // Read before the levels are made: each one's block ticks take it (`Levels::new_ticks`).
+        self.levels
+            .set_max_chained_neighbor_updates(props.max_chained_neighbor_updates);
         self.load_world(WorldRequest::new(
             &folder,
             Some(&level_name),

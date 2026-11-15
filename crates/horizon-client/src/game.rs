@@ -7529,7 +7529,7 @@ impl Game<'_> {
             .is_some_and(|w| w.preset == horizon_client::save::WorldPreset::Flat);
         self.world_debug = horizon_client::save::WorldGen::read(&save_root)
             .is_some_and(|w| w.preset == horizon_client::save::WorldPreset::Debug);
-        self.block_ticks = Ticks::new(self.level.seed as i32);
+        self.block_ticks = self.levels.new_ticks(self.level.seed as i32);
         self.tick_chunks.clear();
         self.clear_entities();
         self.player = None;

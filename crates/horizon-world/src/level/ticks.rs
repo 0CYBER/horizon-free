@@ -86,6 +86,11 @@ impl Ticks {
             capture: None,
         }
     }
+    /// `MinecraftServer.getMaxChainedNeighborUpdates`, the limit of this level's
+    /// neighbour update chains (`max-chained-neighbor-updates`); negative is no limit.
+    pub fn set_max_chained_neighbor_updates(&mut self, max: i32) {
+        self.updater.max = max;
+    }
     /// Register a loaded chunk's saved block and fluid ticks.
     pub fn add_chunk(
         &mut self,

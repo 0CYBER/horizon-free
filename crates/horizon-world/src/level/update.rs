@@ -99,14 +99,33 @@ enum Step {
     },
 }
 
-#[derive(Default)]
 pub(crate) struct NeighborUpdater {
     stack: Vec<Update>,
     added: Vec<Update>,
     count: i32,
+    /// `CollectingNeighborUpdater.maxChainedNeighborUpdates`: a negative value is no limit.
+    pub(super) max: i32,
+}
+
+impl Default for NeighborUpdater {
+    fn default() -> Self {
+        Self {
+            stack: Vec::new(),
+            added: Vec::new(),
+            count: 0,
+            max: MAX_CHAINED_NEIGHBOR_UPDATES,
+        }
+    }
 }
 
 impl Update {
+    /// The position `CollectingNeighborUpdater.addAndRun` is given with the update.
+    fn pos(&self) -> BlockPos {
+        match *self {
+            Self::Shape { pos, .. } | Self::Simple { pos, .. } | Self::Full { pos, .. } => pos,
+            Self::Multi { source, .. } => source,
+        }
+    }
     /// `runNext`: the update to execute now and whether more remain.
     fn next(&mut self, level: &mut (impl LevelAccess + ?Sized)) -> (Step, bool) {
         match *self {
@@ -610,7 +629,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     fn add_and_run(&mut self, update: Update) {
         let updater = &mut self.ticks.updater;
         let running = updater.count > 0;
-        let too_many = updater.count >= MAX_CHAINED_NEIGHBOR_UPDATES;
+        let too_many = updater.max >= 0 && updater.count >= updater.max;
         updater.count += 1;
         if !too_many {
             if running {
@@ -618,6 +637,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             } else {
                 updater.stack.push(update);
             }
+        } else if updater.count - 1 == updater.max {
+            let pos = update.pos();
+            log::error!(
+                "Too many chained neighbor updates. Skipping the rest. First skipped position: {}, {}, {}",
+                pos.x,
+                pos.y,
+                pos.z
+            );
         }
         if !running {
             self.run_updates();
