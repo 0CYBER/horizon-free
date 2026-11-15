@@ -2596,7 +2596,7 @@ impl BlockEntityRenderer {
         scene: &Scene,
         pos: [i32; 3],
         state: u32,
-        stage: [f32; 2],
+        stage: crate::breaking::CrackSprite,
         out: &mut Vec<Vertex>,
     ) {
         if !matches!(
@@ -3855,7 +3855,7 @@ mod tests {
             let mut base = Vec::new();
             renderer.render_block(&scene, [0; 3], state, Mat4::IDENTITY, 0xff, &mut base);
             let mut cracks = Vec::new();
-            renderer.render_breaking(&scene, [0; 3], state, [0.0; 2], &mut cracks);
+            renderer.render_breaking(&scene, [0; 3], state, Default::default(), &mut cracks);
             assert!(!cracks.is_empty());
             assert_eq!(
                 base.iter().map(|v| v.pos).collect::<Vec<_>>(),
@@ -3869,7 +3869,7 @@ mod tests {
                 scene.lid = &|_| 1.0;
             }
             let mut animated = Vec::new();
-            renderer.render_breaking(&scene, [0; 3], state, [0.0; 2], &mut animated);
+            renderer.render_breaking(&scene, [0; 3], state, Default::default(), &mut animated);
             assert!(cracks.iter().zip(&animated).any(|(a, b)| a.pos != b.pos));
             scene.game_time = 0;
             scene.lid = &|_| 0.0;

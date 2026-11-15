@@ -2,13 +2,18 @@
 //! moon and stars (`celestial_geometry`), the first-person hand and arm (`hand_geometry`,
 //! `first_person_arm`) and the rain and snow around the camera (`weather_geometry`).
 use super::*;
+use horizon_client::breaking::CrackSprite;
 
 impl Game<'_> {
-    /// The cracks to draw and their stage sprite's atlas origin: our own mining and the
-    /// other players' (`renderBlockDestroyAnimation`: within 32 blocks of the camera, the
-    /// furthest progress on each block).
-    pub(super) fn cracks(&self, camera: glam::DVec3) -> Vec<([i32; 3], [f32; 2])> {
-        let names = crack_stage_names(self.settings.improved_transparency);
+    /// The cracks to draw and their stage sprites: our own mining and the other players'
+    /// (`renderBlockDestroyAnimation`: within 32 blocks of the camera, the furthest progress on
+    /// each block).
+    pub(super) fn cracks(&self, camera: glam::DVec3) -> Vec<([i32; 3], CrackSprite)> {
+        // Only a renderer drawing the transparency path draws a translucent crack with its set.
+        let transparent = self
+            .renderer
+            .as_ref()
+            .is_some_and(|r| r.translucent_cracks_transparent());
         let mut stages: Vec<([i32; 3], u32)> = Vec::new();
         let mut add = |pos: [i32; 3], stage: u32| match stages.iter_mut().find(|c| c.0 == pos) {
             Some(c) => c.1 = c.1.max(stage),
@@ -34,9 +39,10 @@ impl Game<'_> {
                 d.length_squared() <= 1024.0
             })
             .filter_map(|(pos, stage)| {
-                let name = names.get(stage as usize)?;
-                let r = self.gui.atlas.sprites.get(*name)?;
-                Some((pos, [r.u0, r.v0]))
+                Some((
+                    pos,
+                    crack_sprite(&self.gui.atlas.sprites, stage, transparent)?,
+                ))
             })
             .collect()
     }
@@ -550,8 +556,8 @@ const DESTROY_STAGES: [&str; 10] = [
     "block/destroy_stage_8",
     "block/destroy_stage_9",
 ];
-// `ModelBakery.DESTROY_STAGES_OIT`: with improved transparency the cracks are
-// ordinary translucent quads (`OIT_CRUMBLING`) and use their own sprites.
+// `ModelBakery.DESTROY_STAGES_OIT`: with improved transparency a translucent block's crack is an
+// ordinary translucent quad (`OIT_CRUMBLING`) and uses its own sprites.
 const DESTROY_STAGES_OIT: [&str; 10] = [
     "block/destroy_oit_stage_0",
     "block/destroy_oit_stage_1",
@@ -565,33 +571,42 @@ const DESTROY_STAGES_OIT: [&str; 10] = [
     "block/destroy_oit_stage_9",
 ];
 
-/// The crack sprites drawn: with improved transparency vanilla's own OIT set.
-fn crack_stage_names(improved_transparency: bool) -> &'static [&'static str; 10] {
-    if improved_transparency {
-        &DESTROY_STAGES_OIT
-    } else {
-        &DESTROY_STAGES
-    }
+type Sprites = std::collections::HashMap<String, horizon_client::hud::Rect>;
+
+/// A stage sprite as `[u0, v0, width, height]`: each crack carries its own size, as a resource
+/// pack may replace one set and not the other (a 32x pack's `destroy_stage_*` beside vanilla's 16x
+/// `destroy_oit_stage_*`, #11164).
+fn stage_sprite(sprites: &Sprites, name: &str) -> Option<[f32; 4]> {
+    let r = sprites.get(name)?;
+    Some([r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
 }
 
-/// The crack's sprite size (and stage 0's origin) the crumbling shaders read: of the set drawn,
-/// as a resource pack may replace one set and not the other (a 32x pack's `destroy_stage_*`
-/// beside vanilla's 16x `destroy_oit_stage_*`, #11164).
-pub(super) fn crumbling_sprite(
-    sprites: &std::collections::HashMap<String, horizon_client::hud::Rect>,
-    improved_transparency: bool,
-) -> [f32; 4] {
-    sprites
-        .get(crack_stage_names(improved_transparency)[0])
-        .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
+/// Stage `stage`'s sprites. A solid block's crack is always classic; a translucent block's takes
+/// the transparency set only when the renderer draws it `transparent` (`OIT_CRUMBLING`), as the
+/// classic multiply would darken that set's black lines and double its white ones.
+fn crack_sprite(sprites: &Sprites, stage: u32, transparent: bool) -> Option<CrackSprite> {
+    let solid = stage_sprite(sprites, DESTROY_STAGES.get(stage as usize)?)?;
+    let translucent = DESTROY_STAGES_OIT
+        .get(stage as usize)
+        .filter(|_| transparent)
+        .and_then(|name| stage_sprite(sprites, name));
+    Some(CrackSprite {
+        solid,
+        translucent: translucent.unwrap_or(solid),
+    })
+}
+
+/// Stage 0's classic sprite, for a shader pack's cracks (`project_cracks`), which are all classic.
+pub(super) fn crumbling_sprite(sprites: &Sprites) -> [f32; 4] {
+    stage_sprite(sprites, DESTROY_STAGES[0]).unwrap_or([0.0; 4])
 }
 
 #[cfg(test)]
-mod crumbling_sprite_tests {
+mod crack_sprite_tests {
     use super::*;
 
     #[test]
-    fn the_crack_takes_the_size_of_the_set_it_draws() {
+    fn only_a_translucent_crack_drawn_transparent_takes_the_transparency_set() {
         let rect = |u0: f32, size: f32| horizon_client::hud::Rect {
             u0,
             v0: 0.0,
@@ -600,21 +615,38 @@ mod crumbling_sprite_tests {
             w: 16,
             h: 16,
         };
-        // A pack's 32x destroy stages beside vanilla's 16x OIT stages, in a 1024-wide atlas.
-        let sprites = std::collections::HashMap::from([
-            ("block/destroy_stage_0".to_owned(), rect(0.0, 32.0 / 1024.0)),
+        // A pack's 32x destroy stages beside vanilla's 16x transparency stages, in a 1024-wide atlas.
+        let mut sprites = Sprites::from([
+            ("block/destroy_stage_3".to_owned(), rect(0.0, 32.0 / 1024.0)),
             (
-                "block/destroy_oit_stage_0".to_owned(),
+                "block/destroy_oit_stage_3".to_owned(),
                 rect(0.5, 16.0 / 1024.0),
             ),
         ]);
+        let classic = [0.0, 0.0, 32.0 / 1024.0, 32.0 / 1024.0];
+        let transparency = [0.5, 0.0, 16.0 / 1024.0, 16.0 / 1024.0];
         assert_eq!(
-            crumbling_sprite(&sprites, false),
-            [0.0, 0.0, 32.0 / 1024.0, 32.0 / 1024.0]
+            crack_sprite(&sprites, 3, true),
+            Some(CrackSprite {
+                solid: classic,
+                translucent: transparency
+            })
         );
         assert_eq!(
-            crumbling_sprite(&sprites, true),
-            [0.5, 0.0, 16.0 / 1024.0, 16.0 / 1024.0]
+            crack_sprite(&sprites, 3, false),
+            Some(CrackSprite {
+                solid: classic,
+                translucent: classic
+            })
+        );
+        // Without a transparency sprite the crack still draws, classic.
+        let classic_only = Sprites::from([sprites.remove_entry("block/destroy_stage_3").unwrap()]);
+        assert_eq!(
+            crack_sprite(&classic_only, 3, true),
+            Some(CrackSprite {
+                solid: classic,
+                translucent: classic
+            })
         );
     }
 }

@@ -14,8 +14,12 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
-/// The stage sprite origin the cracks carry (the oracle compares the geometry and UVs only).
-const STAGE: [f32; 2] = [0.25, 0.5];
+/// The stage sprite the cracks carry, in either set (the oracle compares the geometry and UVs only).
+const SPRITE: [f32; 4] = [0.25, 0.5, 1.0 / 64.0, 1.0 / 64.0];
+const STAGE: breaking::CrackSprite = breaking::CrackSprite {
+    solid: SPRITE,
+    translucent: SPRITE,
+};
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = crate::args().collect();
     let root = Path::new(&args[1]);
@@ -60,7 +64,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 q.iter()
                     .map(|v| {
                         assert_eq!(v.color, 0xffff_ffff);
-                        assert_eq!(v.light, breaking::stage_light(STAGE));
+                        assert_eq!(v.light, breaking::stage_light([SPRITE[0], SPRITE[1]]));
                         assert_eq!(v.layer, if translucent { 12 } else { 11 });
                         [v.pos[0], v.pos[1], v.pos[2], v.uv[0], v.uv[1]]
                     })

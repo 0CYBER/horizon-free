@@ -1605,6 +1605,8 @@ pub struct Renderer {
     pub fullbright: bool,
     /// The Improved transparency option (`GameRenderer.useImprovedTransparency`).
     pub improved_transparency: bool,
+    /// The last frame drew translucent blocks' cracks through its path (`translucent_cracks_transparent`).
+    cracks_transparent: bool,
     /// Its passes and targets, made when first drawn with.
     oit: Option<oit::Oit>,
     /// Advance animated block textures (Horizon setting; vanilla always does).
@@ -4952,6 +4954,7 @@ impl Renderer {
             screenshot_halvings: 0,
             gamma: 0.5,
             improved_transparency: false,
+            cracks_transparent: false,
             oit: None,
             fullbright: false,
             animated_textures: true,
@@ -9005,12 +9008,8 @@ impl Renderer {
         }
         // GameRenderer.useImprovedTransparency. A shader pack keeps its own
         // path.
-        let oit_on = self.improved_transparency
-            && !frame.title
-            && !warp_on
-            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.native.is_none()
-            && oit::supported(&self.device);
+        let oit_on = !frame.title && !warp_on && self.improved_transparency_runs();
+        self.cracks_transparent = oit_on && !hdr_gain;
         let [
             entity_quads,
             text_quads,
@@ -10496,8 +10495,8 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            // Cracks multiply the existing light; scalar OIT coverage cannot carry that factor.
-            if crumbling_quads > 0 && (!oit_on || hdr_gain) {
+            // A solid block's crack is classic whatever the setting (`DESTROY_TYPES`, solid phase).
+            if crumbling_quads > 0 {
                 pass.stage(self.own_timing.as_mut(), "block breaking");
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -10683,12 +10682,6 @@ impl Renderer {
                         };
                         quads(pass, &f.text[s], text_quads, entity_quads);
                         if !hdr_gain {
-                            quads(
-                                pass,
-                                &f.crumbling[s],
-                                crumbling_quads,
-                                entity_quads + text_quads,
-                            );
                             quads(
                                 pass,
                                 &f.crumbling[s],
@@ -10884,6 +10877,7 @@ impl Renderer {
                 pass.stage(self.own_timing.as_mut(), "block outline");
                 self.draw_outline(&mut pass, outline_edges as u32, frame.outline_high_contrast);
             }
+            // Cracks multiply the existing light; scalar OIT coverage cannot carry that factor.
             if translucent_crumbling_quads > 0 && (!oit_on || hdr_gain) {
                 pass.stage(self.own_timing.as_mut(), "block breaking");
                 pass.set_pipeline(&self.crumbling_pipeline);

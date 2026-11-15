@@ -63,6 +63,25 @@ pub fn supported(device: &wgpu::Device) -> bool {
         .contains(wgpu::Features::FLOAT32_BLENDABLE)
 }
 
+impl super::Renderer {
+    /// Improved Transparency is on and nothing keeps the world off its path (but a world warp,
+    /// decided per frame).
+    pub(super) fn improved_transparency_runs(&self) -> bool {
+        self.improved_transparency
+            && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
+            && self.native.is_none()
+            && supported(&self.device)
+    }
+
+    /// The last frame drew a translucent block's crack through the transparency path, so it takes
+    /// `DESTROY_TYPES_OIT`'s sprites; otherwise the classic multiply draws it, with the classic
+    /// ones. The frame's own path, so a world warp or HDR's layered output is never missed; a
+    /// change shows a frame late.
+    pub fn translucent_cracks_transparent(&self) -> bool {
+        self.cracks_transparent
+    }
+}
+
 /// What a stage's pipelines write: `OIT_*_SNIPPET`'s colour targets.
 pub(super) fn stage_targets(stage: Stage) -> Vec<Option<wgpu::ColorTargetState>> {
     let blend = |operation| wgpu::BlendComponent {

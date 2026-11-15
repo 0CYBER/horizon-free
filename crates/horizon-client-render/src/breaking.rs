@@ -25,19 +25,36 @@ pub fn decal_uv([x, y, z]: [f32; 3], direction: Direction) -> [f32; 2] {
 
 /// The light bytes of a crack vertex: the pass is unlit, so they carry the origin of the
 /// vertex's destroy stage sprite (each crack in `LevelRenderer.destroyingBlocks` has its own
-/// stage; every stage sprite has the same size, `crumbling_sprite.zw`).
+/// stage); its size goes in `glint_uv`, as the two sets may differ in size (`CrackSprite`).
 pub fn stage_light([u0, v0]: [f32; 2]) -> u32 {
     let q = |x: f32| (x.clamp(0.0, 1.0) * 65535.0).round() as u32;
     q(u0) | (q(v0) << 16)
+}
+
+/// A crack's stage sprite, `[u0, v0, width, height]` in the atlas, for each kind of surface:
+/// `SubmitNodeCollection.submitBreakingBlockModel` takes `DESTROY_TYPES_OIT` for a translucent model
+/// under Improved Transparency and `DESTROY_TYPES` for any other, so a solid block's crack is
+/// always the classic set.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CrackSprite {
+    pub solid: [f32; 4],
+    pub translucent: [f32; 4],
 }
 
 pub fn geometry(
     model: &BakedModel,
     origin: glam::Vec3,
     translucent: bool,
-    stage: [f32; 2],
+    stage: CrackSprite,
     out: &mut Vec<Vertex>,
 ) {
+    // The sprite's origin in the light bytes (`stage_light`), its size in `glint_uv`, which cracks
+    // don't otherwise use.
+    let [u0, v0, w, h] = if translucent {
+        stage.translucent
+    } else {
+        stage.solid
+    };
     // Vanilla visits all six cull groups and then the unculled faces, even beside solid neighbours.
     for cull in Direction::ALL.map(Some).into_iter().chain([None]) {
         for face in model.faces.iter().filter(|face| face.quad.cull == cull) {
@@ -47,18 +64,19 @@ pub fn geometry(
                     uv: decal_uv(pos, face.quad.facing),
                     layer: if translucent { 12 } else { 11 },
                     color: 0xffff_ffff,
-                    light: stage_light(stage),
+                    light: stage_light([u0, v0]),
                     normal: [0; 4],
-
-                    glint_uv: [0.0, 0.0],
+                    glint_uv: [w, h],
                 });
             }
         }
     }
 }
 
-/// Project a block entity's transformed quads onto the same destroy-stage pass.
-pub fn entity_geometry(vertices: &mut [Vertex], origin: glam::Vec3, stage: [f32; 2]) {
+/// Project a block entity's transformed quads onto the same destroy-stage pass, as a solid crack
+/// (`submitCrumblingOverlay`: their render types don't blend).
+pub fn entity_geometry(vertices: &mut [Vertex], origin: glam::Vec3, stage: CrackSprite) {
+    let [u0, v0, w, h] = stage.solid;
     for quad in vertices.as_chunks_mut::<4>().0 {
         let positions = [0, 1, 2].map(|i| glam::Vec3::from(quad[i].pos));
         let normal = (positions[1] - positions[0]).cross(positions[2] - positions[0]);
@@ -81,7 +99,8 @@ pub fn entity_geometry(vertices: &mut [Vertex], origin: glam::Vec3, stage: [f32;
             vertex.uv = decal_uv((glam::Vec3::from(vertex.pos) - origin).to_array(), facing);
             vertex.layer = 11;
             vertex.color = 0xffff_ffff;
-            vertex.light = stage_light(stage);
+            vertex.light = stage_light([u0, v0]);
+            vertex.glint_uv = [w, h];
         }
     }
 }
@@ -153,7 +172,7 @@ mod tests {
             &model,
             glam::Vec3::new(2.0, 3.0, 4.0),
             false,
-            [0.0; 2],
+            CrackSprite::default(),
             &mut vertices,
         );
         assert_eq!(vertices.len(), 4);
@@ -166,14 +185,20 @@ mod tests {
     fn entity_overlay_uses_block_local_projected_uvs() {
         let origin = glam::Vec3::new(12.0, -3.0, 8.0);
         let mut expected = Vec::new();
-        geometry(&slab_top(), origin, false, [0.0; 2], &mut expected);
+        geometry(
+            &slab_top(),
+            origin,
+            false,
+            CrackSprite::default(),
+            &mut expected,
+        );
         let mut actual = expected.clone();
         for vertex in &mut actual {
             vertex.uv = [0.0; 2];
             vertex.layer = 0;
             vertex.color = 0;
         }
-        entity_geometry(&mut actual, origin, [0.0; 2]);
+        entity_geometry(&mut actual, origin, CrackSprite::default());
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&actual),
             bytemuck::cast_slice::<_, u8>(&expected)
@@ -187,17 +212,29 @@ mod tests {
         assert!(((b[1] - a[1]).abs() - 0.5).abs() < 1e-6);
     }
     #[test]
-    fn translucent_overlay_has_its_own_pass() {
+    fn translucent_overlay_has_its_own_pass_and_sprite() {
+        let stage = CrackSprite {
+            solid: [0.0; 4],
+            translucent: [0.5, 0.25, 0.125, 0.0625],
+        };
         let mut vertices = Vec::new();
-        geometry(&slab_top(), glam::Vec3::ZERO, true, [0.0; 2], &mut vertices);
-        assert!(vertices.iter().all(|v| v.layer == 12));
+        geometry(&slab_top(), glam::Vec3::ZERO, true, stage, &mut vertices);
+        assert!(vertices.iter().all(|v| v.layer == 12
+            && v.light == stage_light([0.5, 0.25])
+            && v.glint_uv == [0.125, 0.0625]));
     }
     #[test]
     fn empty_model_has_no_cube_overlay() {
         let mut model = slab_top();
         model.faces.clear();
         let mut vertices = Vec::new();
-        geometry(&model, glam::Vec3::ZERO, false, [0.0; 2], &mut vertices);
+        geometry(
+            &model,
+            glam::Vec3::ZERO,
+            false,
+            CrackSprite::default(),
+            &mut vertices,
+        );
         assert!(vertices.is_empty());
     }
 }

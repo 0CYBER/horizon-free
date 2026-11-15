@@ -292,8 +292,8 @@ fn entity_color(in: Out, front: bool) -> vec4<f32> {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     if in.overlay == 11u || in.overlay == 12u {
-        // Each crack's stage sprite origin comes in its light bytes (breaking::stage_light).
-        uv = crumbling_uv(in.uv, in.wrap, globals.crumbling_sprite.zw, textureDimensions(atlas));
+        // Each crack's stage sprite: its origin in the light bytes, its size in glint_uv (breaking::sprite).
+        uv = crumbling_uv(in.uv, in.wrap, in.glint_uv, textureDimensions(atlas));
     }
     let texel = textureSample(atlas, atlas_sampler, uv);
     var tint = select(in.back_color, in.color, front);
