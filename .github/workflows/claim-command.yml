@@ -1,7 +1,7 @@
 name: claim command
-# `/claim` and `/unclaim` comments: anyone takes an issue before working on it (swapping `help wanted` for `claimed`),
-# up to 5 claimed issues without an open pull request of theirs, and a daily run releases the claims older than 5 days
-# that no open pull request links (CONTRIBUTING.md "Claim before you start", tools/ci/claim_command.py).
+# `/claim` and `/unclaim` comments: anyone takes an issue before working on it, and a daily run releases the claims
+# older than 5 days that no open pull request links (CONTRIBUTING.md "Claim before you start",
+# tools/ci/claim_command.py).
 #
 # Why no pull request's code runs here, though the token can write:
 # - `issue_comment` and `schedule` always run this file from main, whoever comments and wherever.
@@ -18,17 +18,15 @@ permissions:
   contents: read
 jobs:
   command:
-    # Comments that never mention a command skip here, before a runner starts; the script finds the command on any
-    # line (or ignores the comment). Pull requests are answered by the script.
+    # Every other comment skips here, before a runner starts. Pull requests are answered by the script.
     if: >-
       github.event_name == 'issue_comment' && github.event.comment.user.type != 'Bot' && (
-      contains(github.event.comment.body, '/claim') ||
-      contains(github.event.comment.body, '/unclaim'))
+      startsWith(github.event.comment.body, '/claim') ||
+      startsWith(github.event.comment.body, '/unclaim') ||
+      startsWith(github.event.comment.body, '🤖 Agent: /claim') ||
+      startsWith(github.event.comment.body, '🤖 Agent: /unclaim'))
     # One command per issue at a time, so two `/claim`s can't both find it free. On the job, not the workflow:
-    # the skipped runs of ordinary comments must not cancel a waiting one. Not one group for the whole repository:
-    # GitHub keeps one pending run per group and cancels the older one, so a burst of claims on different issues
-    # would leave comments unanswered. Claims by one person on different issues can run at once; the script counts
-    # again after assigning and backs out a claim that took them past the limit.
+    # the skipped runs of ordinary comments must not cancel a waiting one.
     concurrency:
       group: claim-${{ github.event.issue.number }}
     # One of our small runners (horizon-light), out of GitHub's pool: main's script only (docs/ci-runners.md).
@@ -55,10 +53,6 @@ jobs:
           AUTHOR: ${{ github.event.comment.user.login }}
           # Who may act is decided by this numeric ID: a login can be claimed by someone else after a rename.
           AUTHOR_ID: ${{ github.event.comment.user.id }}
-          # OWNER, MEMBER or COLLABORATOR: the repository's own people, whom the claim limit doesn't apply to.
-          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
-          # Trusted contributors the claim limit doesn't apply to: comma-separated logins, set by the maintainers.
-          CLAIM_LIMIT_EXEMPT: ${{ vars.CLAIM_LIMIT_EXEMPT }}
           ISSUE: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           REPO: ${{ github.repository }}
