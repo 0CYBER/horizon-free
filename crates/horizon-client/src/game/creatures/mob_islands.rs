@@ -393,12 +393,9 @@ impl Islands<'_> {
             };
             let mut base = rebuild();
             base.who_lookup = Some(&lookup);
-            // The despawn checks look up no mob, as the serial loop's.
-            let despawn = base.despawn_view();
             base.foreign = Some(&foreign);
             let mut turns = Turns {
                 base: &base,
-                despawn,
                 ticking: &*ticking,
                 nearest,
                 single_player,
@@ -1469,7 +1466,6 @@ mod tests {
                 let nearest = super::super::prep::MobsNearest::new(&players, &mobs, false);
                 let mut turns = Turns {
                     base: &base,
-                    despawn: base.despawn_view(),
                     ticking: &|_, _| true,
                     nearest: &nearest,
                     single_player: Some(None),
@@ -1717,7 +1713,6 @@ mod tests {
         let nearest = super::super::prep::MobsNearest::new(&players, &mobs, false);
         let turns = Turns {
             base: &base,
-            despawn: base.despawn_view(),
             ticking: &|_, _| true,
             nearest: &nearest,
             single_player: Some(None),
@@ -1964,7 +1959,6 @@ mod tests {
         let ticking = |x: i32, _: i32| x.rem_euclid(1000) >= 1;
         let mut turns = Turns {
             base: &base,
-            despawn: base.despawn_view(),
             ticking: &ticking,
             nearest: &nearest,
             single_player: Some(None),
