@@ -25,6 +25,14 @@ impl Launcher {
         if self.native_step.is_some() {
             return;
         }
+        // Every way to a build asks first while native mods aren't allowed (permission taken
+        // back in Storage, say, with a card still open): the question, never a refusal.
+        if self.settings.native_mods_allowed_at.is_none() {
+            self.native_error = None;
+            self.native_worlds = None;
+            self.request_native_build_consent();
+            return;
+        }
         self.pending_consent = None;
         self.native_error = None;
         self.native_failed_mods.clear();

@@ -252,10 +252,12 @@ impl Launcher {
                     self.reload_instances();
                     // A build attempt ended: an open panel reads the log it left.
                     self.native_log.stale = true;
-                    if let (Err(e), false) = (result, cancelled) {
-                        if matches!(e, native_mods::Failed::NoConsent) {
-                            self.request_native_build_consent();
-                        }
+                    // No permission: the question is the answer, not the refusal's words.
+                    let no_consent = matches!(result, Err(native_mods::Failed::NoConsent));
+                    if no_consent {
+                        self.request_native_build_consent();
+                    }
+                    if let (Err(e), false) = (result, cancelled || no_consent) {
                         if let native_mods::Failed::Worlds(stake) = &e {
                             self.keep_stop(stake);
                         }
