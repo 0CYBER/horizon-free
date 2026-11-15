@@ -40,7 +40,7 @@ fn tick_registered_goals(game: &mut Game<'_>, mob: &mut Mob) -> Vec<MobEvent> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn leave_block_goal_uses_real_neighbor_shapes_and_keeps_air_placement() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();
@@ -191,7 +191,7 @@ fn leave_block_goal_uses_real_neighbor_shapes_and_keeps_air_placement() {
 /// Normalization must not bypass the existing entity_place cancel contract:
 /// even a carried flower that becomes AIR stays in the enderman's hand.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn canceled_normalized_placements_keep_the_original_carried_block() {
     use horizon_core::position::BlockPos;
     use horizon_world::registry::BlockStateId;
@@ -279,7 +279,7 @@ fn canceled_normalized_placements_keep_the_original_carried_block() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_placement_listener_discarding_the_enderman_refuses_the_attempt() {
     use mod_api::{EntityPlaceEvent, Flow, Hooks, ModEntry, ServerHost};
     use mod_platform::testing::with_mods;
@@ -349,7 +349,7 @@ fn a_placement_listener_discarding_the_enderman_refuses_the_attempt() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_air_normalized_placement_empties_the_hand_without_a_block_change_notice() {
     use mod_api::{EntityChangeBlockEvent, Hooks, ModEntry, ServerHost};
     use mod_platform::testing::with_mods;

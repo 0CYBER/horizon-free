@@ -35,7 +35,7 @@ fn saved_pages(game: &Game<'_>) -> Vec<String> {
 /// `BookEditScreen` has no `onClose`: Escape is `Screen.onClose`, which closes
 /// the screen and sends nothing, so the typed page is lost.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn escape_in_the_editor_saves_nothing() {
     let mut game = editing("hello");
     game.book_input(Some(KeyCode::Escape), None);
@@ -46,7 +46,7 @@ fn escape_in_the_editor_saves_nothing() {
 /// `BookSignScreen` has no `onClose` either: Escape closes the whole book
 /// rather than going back to the editor, and saves nothing.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn escape_on_the_sign_screen_closes_the_book() {
     let mut game = editing("hi");
     game.book_control(Some("sign")).expect("the Sign button");
@@ -66,7 +66,7 @@ fn escape_on_the_sign_screen_closes_the_book() {
 /// so three spaces sign a book whose title trims to nothing; an empty title
 /// stays unsignable.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn enter_signs_a_title_of_spaces_but_not_an_empty_one() {
     let mut game = editing("hi");
     game.book_control(Some("sign")).expect("the Sign button");

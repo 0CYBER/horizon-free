@@ -314,6 +314,7 @@ horizon-client-lib mobs::raider::tests::a_banner_chase_stops_when_the_raid_ends 
 horizon-client-lib mobs::raider::tests::a_celebrating_raider_does_not_jump_while_riding lib daily resources
 horizon-client-lib mobs::raider::tests::companions_and_shout_range_match_the_full_scan lib daily resources
 horizon-client-lib mobs::ravager::sight_tests::a_stunned_or_roaring_ravager_does_not_see_the_player lib daily resources
+horizon-client-lib mobs::render::villager_client::tests::villager_client_partial_hat_cache_refreshes lib daily resources
 horizon-client-lib mobs::riders::tests::a_spider_sits_by_its_own_rule_on_a_narrow_vehicle lib daily resources
 horizon-client-lib mobs::silent_voice_tests::a_silent_mob_makes_no_ambient_sound lib daily resources
 horizon-client-lib mobs::sniffer::sniffer_silence_tests::silent_sniffer_mutes_the_state_and_seed_sounds lib daily resources
@@ -360,7 +361,6 @@ horizon-client-lib mobs::villager::tests::own_random_brain_tick_keeps_the_entity
 horizon-client-lib mobs::villager_brain::farming_tests::planting_posts_block_place_with_villager_and_crop_state lib daily resources
 horizon-client-lib mobs::villager_brain::mob_map_tests::hostile_sensor_matches_registered_ids_and_world_snapshot lib daily resources
 horizon-client-lib mobs::villager_brain::trades_tests::displayed_trade_items_have_no_drop_chance_and_clear_restores_it lib daily resources
-horizon-client-lib mobs::villager_client_visual_tests::villager_client_partial_hat_cache_refreshes lib daily resources
 horizon-client-lib mobs::visibility::tests::a_mods_visibility_scales_a_mobs_range_to_a_mob lib daily resources
 horizon-client-lib mobs::visibility::tests::an_invisible_mob_is_found_from_less_far lib daily resources
 horizon-client-lib mobs::warden::warden_target_tests::an_allied_vibration_is_not_heard lib daily resources

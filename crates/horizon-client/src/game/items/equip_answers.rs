@@ -392,7 +392,7 @@ mod tests {
     /// dispenser's and a pickup's prepared stack; nor does an item no part listens to. Each
     /// answer is the part's.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn warmed_can_equip_questions_allocate_nothing() {
         with_cobbler(|game, asked| {
             let (helmet, other) = (
@@ -436,7 +436,7 @@ mod tests {
     /// helmet inside off the head, and the bundle, the armour and the inventory stay as they were;
     /// it lets it onto the feet, and the bundle is empty after.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_guests_bundle_puts_on_what_the_part_allows() {
         use horizon_client::bundle::Contents;
         use horizon_protocol::packets::play::{ContainerClick, Serverbound};

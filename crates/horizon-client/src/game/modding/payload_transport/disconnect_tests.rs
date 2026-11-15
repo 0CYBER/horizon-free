@@ -120,7 +120,7 @@ fn send(c: &mut Connection, target: u8) {
 }
 
 #[test]
-#[ignore = "needs HORIZON_TEST_RESOURCES; starts an integrated server and two physical TCP clients"]
+#[ignore = "daily"]
 fn a_payload_handler_disconnects_once_and_the_poll_logs_out_once() {
     super::tests::require_resources();
     if super::super::native_entity_refs::tests::run_fresh_cases(

@@ -74,7 +74,7 @@ fn summon(game: &mut Game<'_>, n: i32, x: i32) -> String {
 /// inside the cooldown a hit is compared, and lastHurt kept, by its amount
 /// before armor and Resistance; actuallyHurt reduces only the difference.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn the_hurt_cooldown_compares_the_incoming_damage_before_its_reductions() {
     with_game(|game| {
         let full = summon(game, 1, 2);

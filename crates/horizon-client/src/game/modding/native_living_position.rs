@@ -185,7 +185,7 @@ pub(in crate::game) mod tests {
     use mod_api::PathType;
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn pose_regression_dying_avatar_is_fixed() {
         with_game(|game| {
             let ty = game
@@ -205,7 +205,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn pose_regression_sleeping_stand() {
         with_game(|game| {
             game.armor_stands
@@ -223,7 +223,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn pose_regression_dragon_dimensions() {
         with_game(|game| {
             let mut dragon = super::super::dragon::Dragon::new(Vec3::ZERO, 0.0, 0);
@@ -256,7 +256,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn pose_regression_scaled_stand() {
         with_game(|game| {
             game.armor_stands
@@ -289,7 +289,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn pose_regression_scaled_digging_warden_is_fixed() {
         with_game(|game| {
             let ty = game
@@ -342,7 +342,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn line_of_sight_follows_the_blocks_between() {
         with_game(|game| {
             floor_and_zombies(game);
@@ -369,7 +369,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn random_teleport_drops_to_the_ground_and_honours_the_avoid_tag() {
         crate::game::entity::taken_pass_tests::in_both_dimensions(|game, balance| {
             floor_and_zombies(game);
@@ -412,7 +412,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn dimensions_follow_the_pose_asked() {
         use super::super::lan::LanSettings;
         use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
@@ -514,7 +514,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn camel_sitting_is_lower_even_while_standing() {
         with_game(|game| {
             floor_and_zombies(game);
@@ -550,7 +550,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn goat_long_jump_scales_the_box_by_seven_tenths() {
         with_game(|game| {
             floor_and_zombies(game);
@@ -575,7 +575,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn warden_digging_answers_low_in_every_pose() {
         with_game(|game| {
             floor_and_zombies(game);
@@ -606,7 +606,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn villager_sleeping_answers_the_sleeping_box() {
         with_game(|game| {
             floor_and_zombies(game);
@@ -641,7 +641,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn no_action_time_and_pathfinding_malus_reach_the_mob() {
         with_game(|game| {
             floor_and_zombies(game);

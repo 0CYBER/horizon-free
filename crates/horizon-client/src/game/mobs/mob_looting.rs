@@ -260,7 +260,7 @@ mod tests {
     /// zombie that would take it, and puts it on a skeleton, unless the skeleton stands lower
     /// than the part allows. Items without a part follow their component.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_can_equip_part_decides_which_mob_wears_a_picked_up_item() {
         use horizon_core::geometry::Vec3;
 
@@ -337,7 +337,7 @@ mod tests {
     /// hand, wears one overridden for the feet on its feet, and takes none whose
     /// `allowed_entities` leaves zombies out, an explicitly empty list included.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mob_reads_the_picked_up_stacks_own_equippable() {
         use horizon_core::{geometry::Vec3, nbt::Tag};
 

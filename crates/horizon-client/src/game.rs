@@ -1939,7 +1939,7 @@ struct Game<'a> {
     /// with the player excluded); the events after it are not.
     lan_break_pos: Option<[i32; 3]>,
     /// Where a player's break puts the block's own drops instead of popping
-    /// them (`native_player_break_block` with `into_inventory`).
+    /// them (`PlayerRef::destroy_block` with `into_inventory`).
     break_collect: Option<Vec<ItemStack>>,
     /// The name of the guest `lan_acting` acts for (`Player.getName`).
     lan_acting_name: Option<String>,
@@ -11641,7 +11641,7 @@ fn test_server_load() -> horizon_world::native_load_context::LoadContext {
 #[cfg(test)]
 mod nested_orb_spawn_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn experience_pickup_keeps_nested_orbs_until_the_next_ordered_pass() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.world.chunks.insert(

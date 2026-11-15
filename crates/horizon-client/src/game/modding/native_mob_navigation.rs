@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn navigation_starts_a_real_path_and_refuses_stale_handles() {
         crate::game::entity::taken_pass_tests::in_both_dimensions(|game, balance| {
             game.world
@@ -480,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn navigation_speed_is_the_paths_speed_modifier() {
         with_game(|game| {
             let kind = game

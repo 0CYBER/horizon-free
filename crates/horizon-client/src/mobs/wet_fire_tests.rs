@@ -45,7 +45,7 @@ fn step(mob: &mut Mob, w: &MobWorld, environment: &str) -> (f32, i32, usize) {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn wet_fire_damage_and_extinguishing_follow_the_full_mob_tick() {
     let root = std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES");
     assert!(crate::mobs::world::with_resource_test_world(

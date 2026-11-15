@@ -37,7 +37,7 @@ fn posted() -> Vec<(&'static str, [f64; 3], Option<Who>)> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn digging_posts_entity_action_every_ten_ticks_outside_the_dust_window() {
     game(|game| {
         let (id, head) = digging_sniffer(game);
@@ -74,7 +74,7 @@ fn digging_posts_entity_action_every_ten_ticks_outside_the_dust_window() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_silent_sniffer_still_plays_the_local_searching_and_hit_sounds() {
     game(|game| {
         let _ = digging_sniffer(game);
@@ -97,7 +97,7 @@ fn a_silent_sniffer_still_plays_the_local_searching_and_hit_sounds() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_egg_push_comes_from_the_items_own_random() {
     game(|game| {
         let kind = game

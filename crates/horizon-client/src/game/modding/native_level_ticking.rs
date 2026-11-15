@@ -40,7 +40,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn ticking_reads_follow_live_tickets_bounds_and_residency() {
         with_game(|game| {
             let level = game.level("minecraft:overworld").unwrap();
@@ -78,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn ticking_reads_refuse_each_unavailable_handle_independently() {
         with_game(|game| {
             let level = game.level("minecraft:overworld").unwrap();

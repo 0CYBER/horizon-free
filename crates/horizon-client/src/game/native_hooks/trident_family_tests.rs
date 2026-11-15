@@ -170,7 +170,7 @@ fn step(game: &mut Game<'_>, player: bool) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn player_thrown_trident_is_refused_by_powered_wither_and_closed_shulker() {
     crate::game::in_own_process(
         "game::native_hooks::trident_family_tests::player_thrown_trident_is_refused_by_powered_wither_and_closed_shulker",
@@ -202,7 +202,7 @@ fn player_thrown_trident_is_refused_by_powered_wither_and_closed_shulker() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mob_thrown_trident_is_refused_by_powered_wither_and_closed_shulker() {
     crate::game::in_own_process(
         "game::native_hooks::trident_family_tests::mob_thrown_trident_is_refused_by_powered_wither_and_closed_shulker",
@@ -231,7 +231,7 @@ fn mob_thrown_trident_is_refused_by_powered_wither_and_closed_shulker() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn accepted_player_and_mob_tridents_keep_type_entities_position_and_full_weapon() {
     crate::game::in_own_process(
         "game::native_hooks::trident_family_tests::accepted_player_and_mob_tridents_keep_type_entities_position_and_full_weapon",
@@ -268,7 +268,7 @@ fn accepted_player_and_mob_tridents_keep_type_entities_position_and_full_weapon(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn type_only_damage_trident_and_arrow_are_not_direct_abstract_arrows() {
     crate::game::in_own_process(
         "game::native_hooks::trident_family_tests::type_only_damage_trident_and_arrow_are_not_direct_abstract_arrows",
@@ -299,7 +299,7 @@ fn type_only_damage_trident_and_arrow_are_not_direct_abstract_arrows() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn actual_arrows_still_bounce_off_powered_wither_and_closed_shulker() {
     crate::game::in_own_process(
         "game::native_hooks::trident_family_tests::actual_arrows_still_bounce_off_powered_wither_and_closed_shulker",
@@ -330,7 +330,7 @@ fn actual_arrows_still_bounce_off_powered_wither_and_closed_shulker() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn unlistened_projectile_factory_keeps_family_without_copying_weapon() {
     crate::game::in_own_process(
         "game::native_hooks::trident_family_tests::unlistened_projectile_factory_keeps_family_without_copying_weapon",
@@ -374,7 +374,7 @@ fn unlistened_projectile_factory_keeps_family_without_copying_weapon() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn explicit_damage_by_actual_arrow_family_is_refused_even_with_generic_type() {
     crate::game::in_own_process(
         "game::native_hooks::trident_family_tests::explicit_damage_by_actual_arrow_family_is_refused_even_with_generic_type",
@@ -406,7 +406,7 @@ fn explicit_damage_by_actual_arrow_family_is_refused_even_with_generic_type() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn explicit_damage_by_trident_retains_its_weapon_with_independent_causing_entity() {
     crate::game::in_own_process(
         "game::native_hooks::trident_family_tests::explicit_damage_by_trident_retains_its_weapon_with_independent_causing_entity",

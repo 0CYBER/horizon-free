@@ -1,13 +1,13 @@
 //! `host.transaction` (#41 §7): NeoForge 26.3's `Transaction` and `SnapshotJournal`, kept by
 //! the game at the storage level, so a mod's handlers hold no state and write no journal.
 //!
-//! A write through a capability helper inside a transaction applies in place, so later steps
-//! see it; the first write to a storage at each depth keeps that storage as it was. What a
-//! write would tell the world (`setChanged` and comparators, a jukebox starting or stopping, a
-//! cauldron's block update, an item dropped) waits for the root commit and then runs once,
-//! as `SnapshotJournal.onRootCommit` does. A nested commit hands its snapshots and waiting
-//! work to the transaction around it; an abort puts every storage back quietly and drops the
-//! waiting work, which nothing outside had seen.
+//! A capability write applies in place and keeps its storage's first before-image per depth.
+//! Game-held vanilla containers defer implicit changed/comparator effects to root commit;
+//! nested commits hand their snapshots and waiting work to the parent. An abort restores
+//! storage quietly and discards those commit effects. Raw mod-owned storage writes and
+//! restores synthesize no notice. Explicit notifications a mod issues run immediately and
+//! survive abort: the journal restores storage, not observer calls or scheduled comparator
+//! ticks that already happened.
 //!
 //! Covered here: block entities (slots, saved compound, custom name, lock, loot roll, attachments), a hopper's cooldown and
 //! cauldron and composter block states. The attachment map of every other holder (an entity, a player, a
@@ -56,6 +56,8 @@ pub(super) struct OpenTransactions {
     composter_epoch: Option<mod_api::WorldEpoch>,
     /// Each composter port owns its transactional random stream, independently of Level.random.
     composter_randoms: ComposterRandoms,
+    #[cfg(test)]
+    pub(in crate::game) trace: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }
 
 impl std::ops::Deref for OpenTransactions {
@@ -257,10 +259,6 @@ pub(super) enum After {
     FluidEffects(Box<super::world_fluids::FluidEffects>),
     /// `BlockEntity.setChanged`.
     Changed(Pos),
-    /// `BlockEntity.setChanged` and `Level.sendBlockUpdated` after its data was loaded.
-    Updated(Pos),
-    /// `Level.sendBlockUpdated` alone, without marking the save dirty.
-    NotifyClients(Pos),
     /// A provider's answer changed here (`level_invalidate_capabilities`): the capability
     /// generation moves on.
     Capabilities(Pos),
@@ -338,6 +336,13 @@ impl Level {
 }
 
 impl Game<'_> {
+    /// Actual transaction/restore events for storage-attempt regression traces.
+    #[cfg(test)]
+    pub(in crate::game) fn trace_storage_attempt(&self, entry: String) {
+        if let Some(trace) = &self.transactions.trace {
+            trace.lock().unwrap().push(entry);
+        }
+    }
     /// Opens a transaction, nested in the open one if any (`Transaction.open`), and gives back
     /// the seal that ends it.
     pub(in crate::game) fn transaction_open(&mut self) -> TransactionSeal {
@@ -361,6 +366,8 @@ impl Game<'_> {
             lifetimes,
             ..Level::default()
         });
+        #[cfg(test)]
+        self.trace_storage_attempt("open".into());
         if let Some(key) = &mut self.block_entity_tick_key {
             key.unbalanced = true;
         }
@@ -436,6 +443,10 @@ impl Game<'_> {
         // removed is final now, so it retires (`defer_retirement`).
         let root = self.transactions.is_empty() && outer.is_none();
         let guard = ClosingPhase { game: self, outer };
+        #[cfg(test)]
+        guard
+            .game
+            .trace_storage_attempt(if commit { "commit" } else { "abort" }.into());
         guard.game.close_level(level, commit);
         if root {
             guard.game.world.block_entities.publish_retirement();
@@ -926,8 +937,6 @@ impl Game<'_> {
             After::FluidWrite(written) => self.commit_fluid_write(*written),
             After::FluidEffects(effects) => self.commit_fluid_effects(*effects),
             After::Changed(pos) => self.container_changed(pos),
-            After::Updated(pos) => self.block_entity_updated(pos),
-            After::NotifyClients(pos) => self.notify_block_clients(pos),
             After::Capabilities(pos) => self.world.capability_generations.invalidate(pos),
 
             After::BreakProgress(breaker, pos, progress) => {
@@ -1145,6 +1154,13 @@ impl Game<'_> {
                 .and_then(|entity| entity.slots_mut().get_mut(slot))
             {
                 *target = kept.stack;
+                #[cfg(test)]
+                if let Some(trace) = &self.transactions.trace {
+                    trace
+                        .lock()
+                        .unwrap()
+                        .push(format!("restore:{},{},{}:{slot}", pos.0, pos.1, pos.2));
+                }
             }
         }
         let bottom_quart = self.world.bottom_y() >> 2;
@@ -1295,7 +1311,7 @@ mod tests {
     use std::{sync::Arc, time::Instant};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn cauldron_stat_listener_observes_committed_state_and_can_cancel() {
         use super::super::native_entity_refs::tests::run_fresh_cases;
         use crate::game::api_values::TryIntoApi;
@@ -1489,7 +1505,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn cauldron_effects_wait_for_root_and_abort_with_inventory() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let pos = [2, 64, 2];
@@ -1563,7 +1579,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_menu_write_outside_a_transaction_keeps_no_journal() {
         super::super::native_guest_turn_tests::with_guests(|game| {
             let player = game.player(12).unwrap();
@@ -1580,7 +1596,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn menu_journals_keep_only_the_first_write_inside_a_transaction() {
         super::super::native_guest_turn_tests::with_guests(|game| {
             let player = game.player(12).unwrap();
@@ -1673,7 +1689,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn container_limits_preserve_capacity_and_transaction_rollback() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -1857,7 +1873,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_aborted_transaction_puts_back_what_it_and_its_committed_children_changed() {
         let Some(root) = super::super::native_entity_refs::tests::declared_part_root(
             "game::transactions::tests::an_aborted_transaction_puts_back_what_it_and_its_committed_children_changed",
@@ -2393,7 +2409,7 @@ mod mod_capability_tests {
     /// move between them in a committed transaction moves the chemical, kept in their saved
     /// data; in an aborted one, both are put back.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_chemical_moves_between_two_mods_parts_and_an_abort_puts_it_back() {
         use super::super::native_entity_refs::tests::{declared_part_root, with_game_at};
         let Some(root) = declared_part_root(
@@ -2470,7 +2486,7 @@ mod mod_capability_tests {
     /// the transaction first reached it (none for an entity that had none), and a guest's is
     /// put back wherever their state lives at the abort, swapped in for their turn or not.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn entity_and_player_attachments_stay_on_commit_and_go_back_on_abort() {
         use horizon_client::entities::ArmorStand;
         use horizon_core::geometry::Vec3;

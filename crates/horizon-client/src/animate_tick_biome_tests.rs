@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn biome_ambient_particle_is_emitted_by_the_animate_tick() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let assets = crate::assets::Assets::load(&root).unwrap();

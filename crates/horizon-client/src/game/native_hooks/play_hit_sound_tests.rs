@@ -26,7 +26,7 @@ impl Hooks for Register {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn play_hit_sound_helper_and_eight_mining_ticks() {
     for installed in [false, true] {
         let hits = Hits::default();

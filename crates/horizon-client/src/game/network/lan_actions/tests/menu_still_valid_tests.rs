@@ -48,7 +48,7 @@ impl Hooks for Mod {
 }
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn a_mod_menu_part_decides_whether_its_menu_stays_open() {
     let mods: Mods = vec![ModEntry::new("shell", Box::new(Mod))].into();
     crate::game::api_values::install_parts(&mods).unwrap();

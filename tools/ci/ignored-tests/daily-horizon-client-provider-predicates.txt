@@ -1,0 +1,1 @@
+horizon-client game::commands::compute::tests::published_predicates_and_nested_provider_shorthand_evaluate lib daily resources

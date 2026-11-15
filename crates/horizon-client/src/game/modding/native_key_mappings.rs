@@ -142,7 +142,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn opening_and_closing_a_direct_screen_discards_pending_clicks() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.title = None;

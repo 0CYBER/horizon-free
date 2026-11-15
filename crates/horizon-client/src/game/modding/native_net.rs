@@ -86,7 +86,7 @@ mod tests {
     /// A joined flag cannot manufacture a physical transport. Packet codec,
     /// reservation, and framing cases live in net::mod_packet_tests.
     #[test]
-    #[ignore = "needs private prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mod_packets_require_joined_player_and_physical_transport() {
         if run_fresh_cases(
             "game::native_net::tests::mod_packets_require_joined_player_and_physical_transport",

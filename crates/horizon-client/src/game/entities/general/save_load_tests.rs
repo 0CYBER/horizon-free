@@ -92,7 +92,7 @@ fn saved_chunk(game: &mut Game<'_>, key: ChunkKey) -> Vec<Tag> {
 /// record per root — the riders inside it — with the payload bytes it
 /// loaded.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn general_tree_loads_joins_and_saves_one_record() {
     with_types(|game| {
         let rider = record_tag("mymod:robot", [9, 9, 9, 9], b"rider", Vec::new());
@@ -132,7 +132,7 @@ fn general_tree_loads_joins_and_saves_one_record() {
 /// `noSave`: instances load and live like any other, but produce zero
 /// persisted records.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn no_save_type_writes_zero_records() {
     with_types(|game| {
         game.load_listed(
@@ -150,7 +150,7 @@ fn no_save_type_writes_zero_records() {
 /// A UUID a live entity of the level already owns refuses the whole tree:
 /// zero rows publish, rider included, and the refusing record names it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn duplicate_uuid_with_a_live_entity_refuses_the_whole_tree() {
     with_types(|game| {
         game.load_listed(
@@ -177,7 +177,7 @@ fn duplicate_uuid_with_a_live_entity_refuses_the_whole_tree() {
 /// A codec refusal (an envelope field of the wrong shape) publishes zero
 /// rows and leaves nothing behind: the next valid record loads cleanly.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn codec_refusal_publishes_nothing_and_poisons_nothing() {
     with_types(|game| {
         let mut broken = record_tag("mymod:robot", [1, 2, 3, 4], b"", Vec::new());
@@ -200,7 +200,7 @@ fn codec_refusal_publishes_nothing_and_poisons_nothing() {
 
 /// A structural refusal (a NaN coordinate) publishes zero rows of the tree.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn structural_refusal_publishes_nothing() {
     with_types(|game| {
         let mut nan = record_tag("mymod:robot", [1, 2, 3, 4], b"", Vec::new());
@@ -223,7 +223,7 @@ fn structural_refusal_publishes_nothing() {
 /// compound back (`Err`), keeping it for the missing mod's path instead of
 /// publishing or dropping it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn unknown_rider_type_hands_the_tree_back() {
     with_types(|game| {
         let rider = record_tag("gone:drone", [9, 9, 9, 9], b"", Vec::new());
@@ -246,7 +246,7 @@ fn unknown_rider_type_hands_the_tree_back() {
 /// record that comes back loads as exactly one tree of the same UUIDs,
 /// under fresh ids from the never-decreasing counter.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn general_row_unloads_with_its_chunk_and_reloads_once() {
     use crate::game::entity_residency::SlotAccess;
     use mod_api::DimensionKey;
@@ -302,7 +302,7 @@ fn general_row_unloads_with_its_chunk_and_reloads_once() {
 /// keeps the existing unknown-kind path — held as loaded (`persist.raw`),
 /// never ticked, written back from that store — byte for byte.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn quarantine_preserves_a_missing_mods_record_byte_for_byte() {
     with_types(|game| {
         game.others.clear();
@@ -327,7 +327,7 @@ fn quarantine_preserves_a_missing_mods_record_byte_for_byte() {
 /// A loaded mod's namespace with an unknown type skips with a warning:
 /// nothing is published, quarantined or kept for it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn loaded_mods_unknown_type_skips() {
     // The package inventory is what owns a namespace: "mymod" is a loaded
     // package here, while no type of it was ever declared.
@@ -351,7 +351,7 @@ fn loaded_mods_unknown_type_skips() {
 /// An unknown `minecraft:` kind keeps its existing path unchanged —
 /// preserved whatever its size, outside the quarantine bounds.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn unknown_minecraft_kind_keeps_its_existing_path() {
     with_types(|game| {
         game.others.clear();
@@ -371,7 +371,7 @@ fn unknown_minecraft_kind_keeps_its_existing_path() {
 /// The quarantine record bound: a missing-mod record one byte over
 /// [`limits::QUARANTINE_RECORD_LIMIT`] skips; one inside it is kept.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn quarantine_record_limit_skips_one_byte_over() {
     with_types(|game| {
         game.others.clear();
@@ -397,7 +397,7 @@ fn quarantine_record_limit_skips_one_byte_over() {
 /// [`limits::QUARANTINE_CHUNK_LIMIT`]'th record of one chunk is kept, the
 /// next skips.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn quarantine_chunk_limit_skips_past_256() {
     with_types(|game| {
         game.others.clear();
@@ -443,7 +443,7 @@ fn quarantine_chunk_limit_skips_past_256() {
 /// the new id — instead of the old "refusing unsupported transferred
 /// entity kind".
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn transferred_general_tree_loads_as_the_same_logical_entity() {
     with_types(|game| {
         game.load_listed(
@@ -475,7 +475,7 @@ fn transferred_general_tree_loads_as_the_same_logical_entity() {
 /// zero rows and stale ids, the destination holds the same tree — same
 /// UUIDs, same mount links — with fresh join identities, the root placed.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn general_tree_travels_to_another_dimension_with_its_riders() {
     use crate::game::entity_residency::SlotAccess;
     use mod_api::DimensionKey;
@@ -532,7 +532,7 @@ fn general_tree_travels_to_another_dimension_with_its_riders() {
 /// the tree's UUIDs refuses before anything moves, and the source keeps
 /// every row at its place with its join identity.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn refused_dimension_transfer_returns_the_whole_tree() {
     with_types(|game| {
         // Seed the destination with a row of the travelling UUID.
@@ -574,7 +574,7 @@ fn refused_dimension_transfer_returns_the_whole_tree() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn no_save_rider_is_omitted_from_saved_tree() {
     with_types(|game| {
         let rider = record_tag("mymod:ghost", [9, 9, 9, 9], b"rider", Vec::new());

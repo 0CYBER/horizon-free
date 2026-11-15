@@ -291,7 +291,7 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
 /// the client must draw the particles, as it does for the events it let
 /// through before. An event with no particle table row (2) draws nothing.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_villager_raid_sweat_event_draws_particles() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();

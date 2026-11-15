@@ -45,7 +45,7 @@ fn arms(mob: &Mob) -> [[f32; 9]; 2] {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn registered_angles_reach_local_remote_and_humanoid_before_species_animation() {
     with_client_game(|game| {
         game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
@@ -117,7 +117,7 @@ fn registered_angles_reach_local_remote_and_humanoid_before_species_animation() 
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn suppressed_custom_offhand_never_calls_its_transformer() {
     use std::sync::{Arc, Mutex};
     struct PosesMod {

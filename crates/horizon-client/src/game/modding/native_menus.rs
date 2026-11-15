@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_slot_written_outside_a_click_is_one_set_slot_at_the_next_sync() {
         with_game(|game| {
             let rx = watched_guest(game);
@@ -740,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_menu_opened_in_place_sends_no_close_returns_the_cursor_and_ignores_the_old_window() {
         with_game(|game| {
             let rx = watched_guest(game);
@@ -996,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources; isolated menu registration"]
+    #[ignore = "daily"]
     fn mod_menu_backend_payload_and_refusals() {
         if super::super::native_entity_refs::tests::run_fresh_cases(
             "game::native_menus::tests::mod_menu_backend_payload_and_refusals",

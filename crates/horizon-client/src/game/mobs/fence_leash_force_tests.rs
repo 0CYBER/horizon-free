@@ -162,7 +162,7 @@ fn vectors(game: &mut Game<'_>, uuid: &str) -> ([f64; 3], f32) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_fence_leash_pulls_a_pig_as_vanilla_does() {
     let mut resources = None;
     let mut game = game(&mut resources);

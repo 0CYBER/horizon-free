@@ -56,7 +56,7 @@ mod customize_chat_overlay_tests {
     /// GUI size, focused or not, and the chat is drawn where it moved it. With the chat hidden
     /// (F1, chat closed) nothing is asked.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_mod_moves_the_chat() {
         let message = Text::literal("hello from the chat test");
         let mut plain = None;

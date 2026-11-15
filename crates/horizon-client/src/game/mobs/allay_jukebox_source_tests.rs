@@ -95,7 +95,7 @@ fn play(game: &mut Game<'_>, x: i32, item: &str) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn stopping_the_first_jukebox_stops_the_dance_until_the_other_plays_again() {
     let mut game = game();
     assert!(!dancing(&game));
@@ -122,7 +122,7 @@ fn stopping_the_first_jukebox_stops_the_dance_until_the_other_plays_again() {
 const ALLAY: &str = "00000a11-0000-0000-0000-000000000001";
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn control_data_merge_keeps_the_dance_and_its_jukebox() {
     let mut game = game();
     play(&mut game, 5, "minecraft:music_disc_cat");
@@ -142,7 +142,7 @@ fn control_data_merge_keeps_the_dance_and_its_jukebox() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn control_a_no_ai_allay_never_dances() {
     let mut game = game();
     assert!(game.run_command(&format!("data merge entity {ALLAY} {{NoAI:1b}}")));
@@ -152,7 +152,7 @@ fn control_a_no_ai_allay_never_dances() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn control_an_allay_out_of_reach_stops_on_a_twentieth_tick() {
     let mut game = game();
     play(&mut game, 5, "minecraft:music_disc_cat");

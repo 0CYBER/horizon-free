@@ -2384,7 +2384,7 @@ mod interaction_saved_defaults_tests {
     use crate::game::{Audio, Options, Progress, Settings, commands::Target, load_resources};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn registered_interactions_save_default_and_loaded_settings() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2592,7 +2592,7 @@ mod loaded_tag_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn loaded_pig_tags_cap_before_dedup_and_live_rewrites_adopt_the_set() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
@@ -2908,7 +2908,7 @@ mod item_display_saved_transform_tests {
         id
     }
     #[test]
-    #[ignore = "prepared resources; actual item-display registered load and no-raw save"]
+    #[ignore = "daily"]
     fn omitted_item_display_transformation_is_saved_as_typed_identity() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -2929,7 +2929,7 @@ mod item_display_saved_transform_tests {
         });
     }
     #[test]
-    #[ignore = "prepared resources; actual explicit load must survive removal of raw source"]
+    #[ignore = "daily"]
     fn admitted_compound_item_transforms_are_actual_saved_state() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -2961,7 +2961,7 @@ mod item_display_saved_transform_tests {
         });
     }
     #[test]
-    #[ignore = "prepared resources; actual native setter, stale raw and no-raw writer"]
+    #[ignore = "daily"]
     fn existing_native_item_display_setter_carries_only_transform_state() {
         use mod_api::Transformation;
         with_game(|game| {
@@ -3024,7 +3024,7 @@ mod item_display_saved_transform_tests {
         });
     }
     #[test]
-    #[ignore = "prepared resources; matrix and malformed transforms through actual summon"]
+    #[ignore = "daily"]
     fn item_display_matrices_and_invalid_values_save_a_typed_transformation() {
         with_game(|game| {
             for (n, form) in [
@@ -3135,7 +3135,7 @@ mod baby_modifier_mutation_tests {
     /// setBaby (an IsBaby merge that changes it) replaces a permanent one
     /// with the transient modifier, and an adult has none.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn the_baby_speed_modifier_answers_add_and_remove_like_any_other() {
         with_game(|game| {
             let attr = "minecraft:movement_speed";
@@ -3222,7 +3222,7 @@ mod baby_modifier_mutation_tests {
     /// minecraft:baby and, for a baby, adds the transient one; an unrelated
     /// permanent modifier stays.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn set_baby_in_place_replaces_a_permanent_baby_modifier() {
         with_game(|game| {
             assert!(game.run_command(
@@ -3294,7 +3294,7 @@ mod baby_modifier_mutation_tests {
     /// reload (a /data merge, whose Entity.load runs setBaby) and an
     /// in-place setBaby bring it back; an adult made a baby gets it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_removed_baby_modifier_stays_removed_until_set_baby() {
         with_game(|game| {
             let attr = "minecraft:movement_speed";
@@ -3408,7 +3408,7 @@ mod attribute_instance_save_tests {
     /// movement_speed (aiStep -> removeFrost -> getAttribute); an instance it
     /// was loaded with stays.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_mob_saves_the_attribute_instances_it_has() {
         with_game(|game| {
             let speed = || vec!["minecraft:movement_speed".to_string()];
@@ -3464,7 +3464,7 @@ mod attribute_instance_save_tests {
     /// its first tick. Ids are compared as sets: vanilla's order is its
     /// map's.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn load_created_and_loaded_instances_stay_and_an_empty_list_is_saved() {
         with_game(|game| {
             // The hostile summons need a non-Peaceful difficulty.
@@ -3636,7 +3636,7 @@ mod mob_inventory_merge_tests {
     /// stacks of the same item and components up to the limit, then empty
     /// slots, and drops what does not fit in the eight.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_piglin_and_a_villager_merge_their_saved_inventory_stacks() {
         with_game(|game| {
             let it = |id: &str, n: u32| format!("{{id:\"minecraft:{id}\",count:{n}}}");
@@ -3820,7 +3820,7 @@ mod invalid_passenger_tests {
     /// EntityType.loadPassengersRecursive keeps only the entries that load,
     /// and Entity.saveWithoutId saves the riders the entity has.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn passengers_that_do_not_load_are_not_saved() {
         with_game(|game| {
             let mut failures = Vec::new();
@@ -4074,7 +4074,7 @@ mod h262_enderman_absolute_anger_tests {
         assert!(saved.get("CustomName").is_some());
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h262_loaded_noai_enderman_actual_ticks_and_model_projection() {
         with_game(|game| {
             game.world.game_time = 100;
@@ -4120,7 +4120,7 @@ mod h262_enderman_absolute_anger_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h262_noai_enderman_absent_zero_past_and_future_are_actual_longs() {
         with_game(|game| {
             game.world.game_time = 100;
@@ -4142,7 +4142,7 @@ mod h262_enderman_absolute_anger_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h262_live_enderman_write_uses_actual_decoded_timestamp() {
         with_game(|game| {
             game.world.game_time = 100;
@@ -4163,7 +4163,7 @@ mod h262_enderman_absolute_anger_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h262_existing_ai_and_other_neutral_counter_projection_is_unchanged() {
         with_game(|game| {
             game.world.game_time = 100;
@@ -4270,7 +4270,7 @@ mod sulfur_body_attribute_tests {
     /// defaults until a tick adopts its body (collectEquipmentChanges); then the
     /// body's archetype modifiers count (oak planks: bouncy).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_sulfur_cube_reads_its_body_archetype_modifiers_after_a_tick() {
         with_game(|game| {
             for (n, body) in [
@@ -4320,7 +4320,7 @@ mod sulfur_body_attribute_tests {
     /// modifier on the cached resistance its physics reads
     /// (Mob::knockback_resistance falls back to attrs.knockback_resistance).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_bodiless_cube_keeps_its_command_knockback_resistance_effect() {
         with_game(|game| {
             assert!(game.run_command(
@@ -4381,7 +4381,7 @@ mod sulfur_body_attribute_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_readded_archetype_id_updates_the_bodiless_physics_cache() {
         with_game(|game| {
             assert!(game.run_command(
@@ -4423,7 +4423,7 @@ mod sulfur_body_attribute_tests {
     /// on a bodiless and a bodied cube reach the cached resistance, which never
     /// takes the body archetype's transient modifiers (bouncy: -2).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn command_knockback_changes_reach_the_cache_without_archetype_values() {
         with_game(|game| {
             for (n, body) in [
@@ -4569,7 +4569,7 @@ mod summoned_knot_tests {
         [1, 2, 3].map(|n| knot_id(game, n))
     }
     #[test]
-    #[ignore = "prepared resources; registered explicit knot load and real saved projection"]
+    #[ignore = "daily"]
     fn summoned_knots_adopt_normalized_position_and_save_common_defaults() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -4617,7 +4617,7 @@ mod summoned_knot_tests {
         });
     }
     #[test]
-    #[ignore = "prepared resources; actual Game world ticks and support removal"]
+    #[ignore = "daily"]
     fn summoned_knots_check_actual_fence_support_on_tick_101() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -4677,7 +4677,7 @@ mod summoned_knot_tests {
         });
     }
     #[test]
-    #[ignore = "prepared resources; negative fractional registered position"]
+    #[ignore = "daily"]
     fn negative_fractional_knot_position_uses_floor_before_centering() {
         with_game(|game| {
             // Chunk (-1, -1) is already loaded by the fixture's neighbourhood.
@@ -4693,7 +4693,7 @@ mod summoned_knot_tests {
         });
     }
     #[test]
-    #[ignore = "prepared resources; paused and actual ticket-excluded ticks"]
+    #[ignore = "daily"]
     fn explicit_knot_check_counts_only_running_entity_ticking_turns() {
         with_game(|game| {
             let ids = summon_knots(game);
@@ -4730,7 +4730,7 @@ mod summoned_knot_tests {
         });
     }
     #[test]
-    #[ignore = "prepared resources; existing natural lead/knot adapter control"]
+    #[ignore = "daily"]
     fn explicit_knot_removal_preserves_a_real_lead_created_knot() {
         with_game(|game| {
             use horizon_client::mobs::leash::Holder;
@@ -4770,7 +4770,7 @@ mod camel_pose_saved_tests {
     use crate::game::{Audio, Options, Progress, Settings, load_resources};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn loaded_camel_pose_timestamps_survive_actual_save_and_tick() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -4982,7 +4982,7 @@ mod mob_hurt_cooldown_tests {
     /// inside the cooldown a hit is compared, and lastHurt kept, by its amount
     /// before armor and Resistance; actuallyHurt reduces only the difference.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn the_hurt_cooldown_compares_the_incoming_damage_before_its_reductions() {
         with_game(|game| {
             let full = summon(game, 1, 2);
@@ -5036,7 +5036,7 @@ mod restored_vehicle_transfer_tests {
     use horizon_mod_runtime::attachments::{AttachmentCodec, AttachmentType, Attachments, Holder};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn runtime_transfers_do_not_alias_a_saved_player_vehicle_with_the_same_uuid() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let runtime = AttachmentType {
@@ -5248,7 +5248,7 @@ mod trader_llama_discard_tests {
     /// after the fifth tick and a delay of 0 after the first; a tame and a
     /// persistent llama stay.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+    #[ignore = "daily"]
     fn a_trader_llama_leaves_the_level_in_the_tick_its_delay_runs_out() {
         with_game(|game| {
             for (n, extra) in [

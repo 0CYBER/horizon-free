@@ -7,7 +7,7 @@ use syn::{Item, spanned::Spanned};
 /// Return catalog areas and lossless item line ranges for the source splitter.
 pub fn native_hook_layout(root: &Path, source: &str) -> Result<Value, String> {
     let mut engine_areas = BTreeMap::new();
-    for path in crate::native_hook_files(root)? {
+    for path in horizon_game_discovery::native_hook_files(root)? {
         let area = path.file_stem().unwrap().to_string_lossy().into_owned();
         let file = syn::parse_file(&fs::read_to_string(&path).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;

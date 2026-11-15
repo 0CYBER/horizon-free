@@ -866,7 +866,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn management_online_skips_fake_players_by_name_and_id() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let level = game.level("minecraft:overworld").unwrap();

@@ -1429,7 +1429,7 @@ mod tests {
     /// `Level.hasNearbyAlivePlayer` as spawners ask it, against the same
     /// test on every player's full record (`level_players`).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn alive_player_near_tests_guests_where_they_stand() {
         use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
         use horizon_protocol::packets::configuration::ClientInformation;
@@ -1524,7 +1524,7 @@ mod tests {
     /// (`getNoiseBiome`): next to a floor at Y 0 every monster list is the End's, and an
     /// empty column's surface is the floor (#15880).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn end_spawning_reads_the_level_range_not_the_widened_column() {
         use horizon_client::chunk::{Chunk, LevelShape};
         use std::sync::Arc;
@@ -1562,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn authoritative_world_border_gates_positions_and_whole_chunks() {
         use horizon_core::position::BlockPos;
         use horizon_world::level::LevelAccess;
@@ -1592,7 +1592,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn world_border_outer_chunk_gate_keeps_attempt_randomness() {
         use horizon_client::{chunk::Chunk, motion::PlayerMotion};
         use std::sync::Arc;
@@ -1878,7 +1878,7 @@ mod tests {
     /// its draws are vanilla's whatever a mod answers. The position check replaces vanilla's two
     /// checks: no listener and `Default` draw exactly as vanilla, `Succeed` and `Fail` draw nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn spawn_checks_pin_the_random_draws_of_both_halves() {
         use super::super::native_entity_refs::tests::with_game;
         with_game(|game| {
@@ -2098,7 +2098,7 @@ mod tests {
     /// id and spawned mob as with no listener, so the mob it read is the one that spawned, not
     /// created twice. A `Fail` drops each mob: none is added and no provisional id is used.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn natural_spawn_checks_lend_the_mob_and_keep_the_draws() {
         use super::super::native_entity_refs::tests::with_game;
         with_game(|game| {
@@ -2197,7 +2197,7 @@ mod tests {
     /// (the lent mob is the one that joins); a `Fail` adds no mob, uses no entity id and leaves
     /// no tracking entry. Spawn data with entity data lends the kind and position only.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn spawner_checks_tell_the_block_and_keep_the_draws() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::chunk::block_entity::Next;
@@ -2287,7 +2287,7 @@ mod tests {
     /// `Spawner::Trial` at the block; a `Default` listener leaves the draws, ids and mob as with
     /// none; a `Fail` adds no mob and no tracking entry.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn trial_spawner_checks_tell_the_block_and_keep_the_draws() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::mobs::spawner::{SpawnData, SpawnDataExt};
@@ -2380,7 +2380,7 @@ mod tests {
     /// No listener and a listener that changes nothing finalize and draw as vanilla; a cancel
     /// skips finalization and its draws, the mob still spawning; `spawn_cancelled` adds no mob.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn finalize_spawn_cancels_pin_the_draws_and_the_outcome() {
         use super::super::native_entity_refs::tests::with_game;
         with_game(|game| {
@@ -2444,7 +2444,7 @@ mod tests {
     /// A site vanilla makes without `finalizeSpawn` (an infested block's silverfish) is not
     /// told; one it finalizes is.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn finalize_spawn_is_told_only_where_vanilla_finalizes() {
         use super::super::creatures::SpawnSite;
         use super::super::native_entity_refs::tests::with_game;
@@ -2496,7 +2496,7 @@ mod tests {
     /// `ZombieHorse.finalizeSpawn` finalizes its rider with the horse's own
     /// `spawnReason`, a baby zombie's chicken with `JOCKEY`.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn jockeys_finalize_with_the_parents_reason() {
         use super::super::creatures::SpawnSite;
         use super::super::native_entity_refs::tests::with_game;
@@ -2549,7 +2549,7 @@ mod tests {
     /// real draw source (a `LegacyRandom`), compared with an untouched copy.
     /// A mob in an unloaded chunk is never asked.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn mob_despawn_answers_override_vanilla_and_default_passes_through() {
         use super::super::native_entity_refs::tests::with_game;
         use mod_api::Despawn::{Allow, Default as Vanilla, Deny};
@@ -2628,7 +2628,7 @@ mod tests {
     /// With no mod listening, `Mob.despawn` stays `Default` and vanilla's checks
     /// and draws run as before.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_despawn_with_no_listener_draws_as_vanilla() {
         use super::super::native_entity_refs::tests::with_game;
         with_game(|game| {
@@ -2711,7 +2711,7 @@ mod tests {
     /// vanilla's for its type and reason (the first part to answer wins), a part that does not
     /// answer, and a type with no part, leave it to vanilla.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn entity_parts_answer_the_spawn_cluster_size() {
         use super::super::native_entity_refs::tests::{run_fresh_cases, with_game};
         if run_fresh_cases(
@@ -2756,7 +2756,7 @@ mod tests {
     /// tick joins before that tick's natural and custom spawns, with the
     /// lower entity ids. The phases name themselves in the spans they run in.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn raids_tick_before_natural_and_custom_spawning() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);

@@ -13,8 +13,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The patch crate's name: the copies' ids and the executable's `--extern` use it.
-pub(super) const CRATE: &str = "horizon_patch";
+/// The patch crates' name (a lower game crate's is `<name>_<crate>`): the copies' ids and the library entry's
+/// `--extern` use it. It is not `horizon_patch`, the name of the library built from them: a library and a crate
+/// it links with one crate name are indistinguishable to rustc (E0519), and a registry workspace refuses two
+/// packages of one name.
+pub(super) const CRATE: &str = "horizon_patched";
 
 /// The compiled patch crates, `(crate name, rlib)`, and the installation result expressions the
 /// generated `main` installs.

@@ -260,7 +260,7 @@ fn lifecycle_scratch_is_removed_when_an_assertion_unwinds() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn lifecycle_fixture_walks_fangs_owners() {
     LifecycleFixture {
         seed: |game, entries| {
@@ -278,7 +278,7 @@ fn lifecycle_fixture_walks_fangs_owners() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn lifecycle_fixture_walks_other_owners() {
     LifecycleFixture {
         seed: |game, entries| {
@@ -501,7 +501,7 @@ pub(in crate::game) fn assert_projectile_spawn_survives(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn data_merge_preserves_two_distinct_other_joins_for_every_runtime_kind() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         game.build_registries();
@@ -542,7 +542,7 @@ fn data_merge_preserves_two_distinct_other_joins_for_every_runtime_kind() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mob_tick_restores_spawn_buffer_before_multiple_survivors_without_renumbering() {
     fn seed(game: &mut Game<'_>, ids: std::ops::RangeInclusive<u32>, x: f64) {
         for (index, id) in ids.enumerate() {

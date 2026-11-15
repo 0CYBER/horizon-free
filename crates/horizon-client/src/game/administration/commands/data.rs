@@ -1889,7 +1889,7 @@ mod tests {
     /// `lan_guest_joined`'s placement-only pass, between a forced write and
     /// the tracker pass, must not spend the marks in either dimension.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn guest_placement_keeps_forced_metadata_in_each_dimension() {
         use horizon_client::lan::entity::{EntityState, States};
         with_game(|game| {
@@ -1924,7 +1924,7 @@ mod tests {
     /// display's load marks its start delay forced
     /// (`Display.setTransformationInterpolationDelay`).
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn merging_display_nbt_keeps_the_uuid_and_forces_the_start_delay() {
         with_game(|game| {
             let mut raw = Compound::new();
@@ -2004,7 +2004,7 @@ mod wolf_live_anger_tests {
     use horizon_core::nbt::Tag;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn live_wolf_anger_writes_use_the_level_clock_and_keep_bee_state() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2108,7 +2108,7 @@ mod boat_passenger_tree_tests {
     use super::*;
     use crate::game::native_entity_refs::tests::with_game;
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn actual_boat_getter_projects_runtime_children_and_existing_bookkeeping() {
         with_game(|game| {
             game.build_registries();
@@ -2317,7 +2317,7 @@ mod loot_table_tests {
     /// RandomizableContainer.tryLoadLootTable: a tag without a table loads an
     /// empty chest that stays so, and one with a table keeps it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn data_commands_on_an_unopened_loaded_chest_survive_a_save_and_reload() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2432,7 +2432,7 @@ mod arrow_owner_tests {
     use horizon_core::nbt::Tag;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn loaded_arrow_getter_uses_registered_owner_reference_without_raw() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2544,7 +2544,7 @@ mod modern_literal_tests {
     use crate::game::{Audio, Options, Progress, Settings, load_resources};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn admitted_modern_literals_reach_actual_storage_as_typed_tags() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2685,7 +2685,7 @@ mod bell_command_identity_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn placed_bell_is_a_real_stored_entity_with_command_metadata() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -2815,7 +2815,7 @@ mod falling_live_adoption_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn commands_mutate_the_resident_falling_model_without_rejoining() {
         with_game(|game| {
             let uuid = "000003d4-0000-0000-0000-000000000001";
@@ -2907,7 +2907,7 @@ mod vehicle_container_tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn loaded_vehicle_saves_own_only_their_container_fields() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.build_registries();

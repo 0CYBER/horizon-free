@@ -853,7 +853,7 @@ mod tests {
     /// A single-player jigsaw edit is applied by the game that is its own
     /// server, as `handleSetJigsawBlock` does there, and marks the chunk.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_local_jigsaw_edit_applies_and_marks_the_chunk() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);

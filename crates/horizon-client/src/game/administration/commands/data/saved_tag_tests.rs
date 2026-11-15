@@ -47,6 +47,10 @@ fn with_command_game(name: &str, test: impl FnOnce(&mut Game<'_>)) {
     std::fs::create_dir_all(&scratch).unwrap();
     game.world_root = scratch.clone();
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(10.5, 200.0, 0.5)).unwrap());
+    game.reset_entity_residency();
+    game.native_lifecycle
+        .begin_open(mod_api::Authority::IntegratedServer);
+    crate::game::native_entity_refs::tests::bind_local_player(&mut game, 1, 1);
     game.build_registries();
     game.set_allow_commands(true);
     test(&mut game);
@@ -55,7 +59,7 @@ fn with_command_game(name: &str, test: impl FnOnce(&mut Game<'_>)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn tag_commands_and_explicit_empty_loads_save_without_empty_tags() {
     with_command_game("tags", tag_commands_and_explicit_empty);
 }
@@ -118,7 +122,7 @@ fn tag_commands_and_explicit_empty(game: &mut Game<'_>) {
 /// `/data get` on a cloud that was never saved shows `Entity.saveWithoutId`'s
 /// common fields, as 26.3 prints them (#13057).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_live_area_effect_cloud_reads_with_the_common_entity_fields() {
     with_command_game("cloud", |game| {
         assert!(game.run_command("summon area_effect_cloud 4.5 200 4.5 {UUID:[I;328,0,0,3]}"));
@@ -158,7 +162,7 @@ fn tag_list(tags: &[&str]) -> Tag {
 /// prints the single-target form, and the count in the multiple form is the
 /// number of entities with tags, not the number of targets.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn tag_list_counts_only_the_entities_that_have_tags() {
     with_command_game("tag-list", |game| {
         for (uuid, x) in [("1", "4.5"), ("2", "8.5")] {
@@ -189,7 +193,7 @@ fn tag_list_counts_only_the_entities_that_have_tags() {
 /// while `addTag`/`removeTag` pass `true` (`CommandSourceStack.sendSuccess`):
 /// only a change is repeated to the operators.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn tag_list_is_not_repeated_to_the_operators() {
     with_command_game("tag-list-broadcast", |game| {
         assert!(game.run_command(
@@ -211,7 +215,7 @@ fn tag_list_is_not_repeated_to_the_operators() {
 /// saves it), and `Entity.saveWithoutId` writes `Tags` only for a nonempty set,
 /// so removing the last tag of a player or any entity leaves no key.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_last_tag_leaves_no_key_and_a_spawner_keeps_its_tags() {
     with_command_game("tag-remove", |game| {
         assert!(game.run_command("tag @s add audit"));

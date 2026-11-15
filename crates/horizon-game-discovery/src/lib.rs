@@ -1,7 +1,13 @@
 //! Directory-derived game module declarations.
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
+pub mod exports;
 
 /// Discover area-root modules in deterministic filename order, preserving their logical scope.
 /// `explicit` lists root files or directories declared separately by the caller. Every other
@@ -212,8 +218,91 @@ pub fn folder_hooks(directory: &Path) -> Result<String, String> {
          // `register` is the one method several files may define; they run in file-name order.\n{tokens}\n"
     ))
 }
+/// The hand-written sources, in deterministic order; `fire.rs` includes generated dispatch.
+pub fn native_hook_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let dir = root.join("crates/horizon-client/src/game/native_hooks");
+    let mut paths = fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .map(|entry| entry.map(|entry| entry.path()).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    paths.retain(|path| {
+        path.extension().is_some_and(|ext| ext == "rs")
+            && path.file_name().is_some_and(|name| name != "fire.rs")
+    });
+    paths.sort();
+    Ok(paths)
+}
+/// The generated native-hook module list, shared by the compiler and source-only inventories.
+pub fn native_hook_modules(root: &Path) -> Result<String, String> {
+    let mut modules = String::new();
+    for path in native_hook_files(root)? {
+        let module = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .ok_or_else(|| format!("{}: invalid native hook module name", path.display()))?;
+        if matches!(module, "mod" | "shared") {
+            continue;
+        }
+        syn::parse_str::<syn::Ident>(module).map_err(|e| e.to_string())?;
+        let path = fs::canonicalize(&path).map_err(|e| e.to_string())?;
+        modules.push_str(&format!("#[path = {path:?}] mod {module};\n"));
+    }
+    Ok(modules)
+}
+/// Declare LAN actions in the caller's canonical order (catalog order for generation).
+pub fn lan_action_modules(directory: &Path, modules: Vec<String>) -> Result<String, String> {
+    let mut declarations = String::new();
+    for module in modules.into_iter().chain(std::iter::once("mod".to_owned())) {
+        let path = directory.join(format!("{module}.rs"));
+        if matches!(module.as_str(), "mod" | "shared") {
+            let source = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let file = syn::parse_file(&source).map_err(|e| e.to_string())?;
+            for item in file.items {
+                let syn::Item::Impl(item) = item else {
+                    continue;
+                };
+                let syn::Type::Path(ty) = &*item.self_ty else {
+                    continue;
+                };
+                if ty.path.segments.len() != 1 || ty.path.segments[0].ident != "Game" {
+                    continue;
+                }
+                if module == "shared"
+                    && item.items.iter().all(|member| {
+                        matches!(member, syn::ImplItem::Fn(method)
+                        if (method.sig.ident == "vehicle_has_other_viewers"
+                            || method.sig.ident.to_string().starts_with("__fnr_"))
+                            && method.sig.receiver().is_none())
+                    })
+                {
+                    continue;
+                }
+                return Err(format!(
+                    "{}: put Game methods in an action area",
+                    path.display()
+                ));
+            }
+            continue;
+        }
+        let absolute = path.canonicalize().map_err(|e| e.to_string())?;
+        declarations.push_str(&format!("#[path = {absolute:?}] mod {module};\n"));
+    }
+    Ok(declarations)
+}
+/// Hand-written host modules; the generator appends its real generated forwarders separately.
+pub fn host_modules(root: &Path) -> Result<String, String> {
+    let directory = root.join("crates/horizon-client/src/game/host");
+    let mut modules = String::new();
+    for stem in ["draw", "services"] {
+        let path =
+            fs::canonicalize(directory.join(format!("{stem}.rs"))).map_err(|e| e.to_string())?;
+        modules.push_str(&format!("#[path = {path:?}] pub(crate) mod {stem};\n"));
+    }
+    Ok(modules)
+}
 
-fn module_files(directory: &Path) -> Result<Vec<String>, String> {
+/// Sorted source module stems, using the same validation as directory-derived declarations.
+pub fn module_files(directory: &Path) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
     for entry in fs::read_dir(directory).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();

@@ -115,7 +115,7 @@ fn last_slot(game: &Game<'_>) -> i32 {
 /// over a book still makes its slot the last one touched, rewrites the state
 /// and posts `BLOCK_CHANGE`, so the comparator follows the write.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_book_written_over_a_book_makes_its_slot_the_last_touched() {
     let Some((posted, slot, signal)) = with_game(|game| {
         place_shelf(game, &[2], &[2]);
@@ -144,7 +144,7 @@ fn a_book_written_over_a_book_makes_its_slot_the_last_touched() {
 /// but the block entity does not: no `removeItem`, so no `updateState`, but
 /// the pickup sound, `BLOCK_CHANGE` from the player and SUCCESS still come.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_empty_slot_clicked_as_occupied_still_plays_the_pickup() {
     let Some((posted, sounds)) = with_game(|game| {
         place_shelf(game, &[2], &[]);

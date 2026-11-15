@@ -42,7 +42,7 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "requires private prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn specific_click_keeps_location_and_stops_after_a_claim() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             for claim in [false, true] {

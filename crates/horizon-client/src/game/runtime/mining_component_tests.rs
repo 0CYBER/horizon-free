@@ -4,7 +4,7 @@ use horizon_core::{geometry::Vec3, position::ChunkPos};
 use std::sync::Arc;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn mining_uses_admitted_stack_tools_and_actual_eye_immersion() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();
@@ -191,7 +191,7 @@ fn with_survival_game(f: impl FnOnce(&mut Game<'_>)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_custom_durable_stick_wears_while_mining() {
     with_survival_game(|game| {
         let registry = game.pack.assets.registry;
@@ -237,7 +237,7 @@ fn a_custom_durable_stick_wears_while_mining() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn efficiency_applies_to_a_same_item_swap() {
     with_survival_game(|game| {
         let registry = game.pack.assets.registry;
@@ -276,7 +276,7 @@ fn efficiency_applies_to_a_same_item_swap() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_stacks_attribute_modifiers_replace_its_items_attack_damage() {
     with_survival_game(|game| {
         // Player.attack reads getAttributeValue(ATTACK_DAMAGE): the base 1

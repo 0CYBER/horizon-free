@@ -2197,7 +2197,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn destruction_and_underwater_ejection_snap_rejected_passenger_descendants() {
         for broken in [false, true] {
             super::super::native_entity_refs::tests::with_game(|game| {
@@ -2444,7 +2444,7 @@ mod cobweb_tests {
     /// twentieth down, its velocity is spent and its fall is reset. A boat outside the web
     /// moves as it did and keeps falling.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_cobweb_slows_a_boat_and_resets_its_fall() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -2509,7 +2509,7 @@ mod cobweb_tests {
     /// the multiplier of the block vanilla's traversal reaches last: the one
     /// after the move, not the one it leaves.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_boat_leaving_a_cobweb_for_powder_snow_takes_the_powder_snow() {
         let mut resources = None;
         let mut game = server_game(&mut resources);

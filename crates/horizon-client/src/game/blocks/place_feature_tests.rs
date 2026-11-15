@@ -79,7 +79,7 @@ fn block_is(game: &mut Game<'_>, at: &str, block: &str) -> bool {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_inline_simple_block_feature_places_like_a_named_one() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -130,7 +130,7 @@ fn an_inline_simple_block_feature_places_like_a_named_one() {
 /// A feature that does not place fails the command the same way, inline or
 /// named; a named feature that places keeps its named message.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn inline_and_named_features_fail_and_succeed_alike() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -163,7 +163,7 @@ fn inline_and_named_features_fail_and_succeed_alike() {
 /// weighted poppy or dandelion) and the same JSON inline pick the same flower
 /// and leave the level random at the same point, seed by seed.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_inline_feature_draws_the_level_random_as_its_named_twin() {
     use horizon_core::random::RandomSource;
     let mut game_resources = None;

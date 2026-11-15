@@ -89,7 +89,7 @@ fn check_answer(g: &Game<'_>, slot: usize, answers: bool) {
     }
 }
 #[test]
-#[ignore = "requires HORIZON_TEST_RESOURCES and fresh Horizon homes"]
+#[ignore = "daily"]
 fn mob_thorns_melee_projectiles_and_non_attacks() {
     with_game(|g| {
         for slot in [f::MAINHAND, f::OFFHAND, f::FEET, f::LEGS, f::CHEST, f::HEAD] {
@@ -192,7 +192,7 @@ fn mob_thorns_melee_projectiles_and_non_attacks() {
     });
 }
 #[test]
-#[ignore = "requires HORIZON_TEST_RESOURCES and fresh Horizon homes"]
+#[ignore = "daily"]
 fn dragon_takes_player_thorns_through_its_body() {
     with_game(|g| {
         for wing in [false, true] {

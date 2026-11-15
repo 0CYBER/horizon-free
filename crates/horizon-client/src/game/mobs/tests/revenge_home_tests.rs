@@ -77,7 +77,7 @@ fn step(game: &mut Game<'_>, ticks: u32) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_zombie_takes_revenge_only_on_a_cow_inside_its_home() {
     let mut resources = None;
     let mut game = game(&mut resources);

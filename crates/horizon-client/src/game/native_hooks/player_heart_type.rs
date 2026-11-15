@@ -41,7 +41,7 @@ mod player_heart_type_tests {
     /// `PlayerHeartTypeEvent`: the mod gets vanilla's pick and its answer is drawn; without a
     /// listener the pick is vanilla's.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_mod_changes_the_health_bars_hearts() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.execution_role = super::ExecutionRole::Client;

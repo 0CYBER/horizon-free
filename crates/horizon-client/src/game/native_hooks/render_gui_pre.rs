@@ -29,7 +29,7 @@ mod local_sound_tests {
     /// A sound a screen hook plays through its read-only host is held, then played by the
     /// next audio update, before its tick.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_screen_hooks_sound_reaches_audio_at_the_next_update() {
         let mods: mod_api::Mods = vec![ModEntry::new("click", Box::new(Mod))].into();
         with_mods(mods, || {

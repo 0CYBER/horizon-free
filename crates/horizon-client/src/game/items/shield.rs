@@ -351,7 +351,7 @@ mod durability_tests {
     use horizon_core::geometry::Vec3;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn shield_break_clears_the_active_use() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
@@ -388,7 +388,7 @@ mod durability_tests {
     /// The wear a raised shield takes from a blocked hit (8 points here), through the part of the
     /// shield: halved to 4, canceled to none, and as vanilla (8) for the part-less item next to it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+    #[ignore = "daily"]
     fn a_damage_item_part_changes_the_wear_of_a_blocking_shield() {
         use crate::game::damage_item_tests::{Rule, with_wear_part};
         with_wear_part("minecraft:shield", Rule::Halve, |game, wear| {
@@ -437,7 +437,7 @@ mod blocked_hit_use_tests {
     /// `BlocksAttacks.hurtBlockingItem`: a hit taken while using a shield
     /// counts it as used, even when the shield blocks none of the damage.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn a_blocked_hit_counts_the_shield_as_used() {
         let mut game_resources = None;
         let mut game = server_game(&mut game_resources);

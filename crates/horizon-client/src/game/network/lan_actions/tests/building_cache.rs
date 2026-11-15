@@ -145,7 +145,7 @@ fn mover_at(boxes: &Boxes, x: f64) -> bool {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_teleported_guest_blocks_where_it_went_not_where_the_tick_began() {
     let (before, cached, fresh) = the_mover_changed_mid_tick("tp Mover 24.5 100 8.5", false);
     assert!(mover_at(&before, 8.5));
@@ -154,7 +154,7 @@ fn a_teleported_guest_blocks_where_it_went_not_where_the_tick_began() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_guest_killed_mid_tick_no_longer_blocks() {
     // The kill takes its health; the guest dies in its own turn of the tick.
     let (before, cached, fresh) = the_mover_changed_mid_tick("kill Mover", true);
@@ -164,7 +164,7 @@ fn a_guest_killed_mid_tick_no_longer_blocks() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_guest_put_in_spectator_mid_tick_no_longer_blocks() {
     let (before, cached, fresh) = the_mover_changed_mid_tick("gamemode spectator Mover", false);
     assert!(mover_at(&before, 8.5));

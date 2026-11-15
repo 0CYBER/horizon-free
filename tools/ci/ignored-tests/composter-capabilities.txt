@@ -1,3 +1,0 @@
-# Composter capability transactions and server-only resource fixtures (#4081).
-horizon-client game::composter::capability_tests::sided_composter_transactions_preserve_literal_chance_and_defer_all_effects HORIZON_TEST_RESOURCES needs
-horizon-client game::composter::capability_tests::a_client_copy_never_answers_composter_items HORIZON_TEST_RESOURCES needs

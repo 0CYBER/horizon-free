@@ -49,7 +49,7 @@ fn run(game: &mut Game<'_>, command: &str) -> ModRevision {
 }
 
 #[test]
-#[ignore = "requires private prepared 26.3 resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn actual_data_commands_preserve_same_mod_entity_runtime_state() {
     if crate::game::native_entity_refs::tests::run_fresh_cases(
         "game::commands::data::mod_block_entity_tests::actual_data_commands_preserve_same_mod_entity_runtime_state",

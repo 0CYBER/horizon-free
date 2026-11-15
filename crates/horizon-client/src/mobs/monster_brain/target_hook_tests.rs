@@ -34,7 +34,7 @@ impl MobHooks for Decide {
 }
 
 #[test]
-#[ignore = "requires prepared entity resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn start_attacking_brain_honors_cancel_and_redirect() {
     // First obtain a real mob view to which the hook can redirect.
     let mut redirected = None;

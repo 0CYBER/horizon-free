@@ -11,7 +11,7 @@ use mod_api::EquipmentSlot;
 use super::native_entity_refs::tests::with_game;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn item_replace_asks_the_slot_predicate_of_a_stand_and_the_dragon() {
     with_game(|game| {
         game.build_registries();

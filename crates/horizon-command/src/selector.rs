@@ -118,31 +118,6 @@ pub struct SelectorParser<'r, 'a> {
     advancements_option: bool,
 }
 
-/// UUID.fromString.
-pub fn java_uuid(name: &str) -> Option<u128> {
-    if name.encode_utf16().count() > 36 {
-        return None;
-    }
-    let parts: Vec<&str> = name.split('-').collect();
-    if parts.len() != 5 {
-        return None;
-    }
-    let mut v: [i64; 5] = [0; 5];
-    for (i, p) in parts.iter().enumerate() {
-        // Long.parseLong(s, 16): an optional sign then hex digits.
-        let digits = p.strip_prefix(['+', '-']).unwrap_or(p);
-        if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
-            return None;
-        }
-        v[i] = i64::from_str_radix(p, 16).ok()?;
-    }
-    let msb = (((v[0] as u64) & 0xffff_ffff) << 32)
-        | (((v[1] as u64) & 0xffff) << 16)
-        | ((v[2] as u64) & 0xffff);
-    let lsb = (((v[3] as u64) & 0xffff) << 48) | ((v[4] as u64) & 0xffff_ffff_ffff);
-    Some((u128::from(msb) << 64) | u128::from(lsb))
-}
-
 /// The `sort=` value a name stands for.
 fn sort_named(name: &str) -> Option<Sort> {
     Some(match name {
@@ -301,7 +276,7 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
         let name = self.reader.read_string()?;
         // A UUID selects by entityUUID alone: findEntities looks a
         // playerName up first, among the players only.
-        if let Some(uuid) = java_uuid(&name) {
+        if let Some(uuid) = horizon_core::text::parse_java_uuid(&name) {
             self.s.uuid = Some(uuid);
             self.s.include_entities = true;
         } else {

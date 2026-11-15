@@ -214,7 +214,7 @@ fn unchanged(game: &Game<'_>, seen: &Seen) {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_syrup_applies_once() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_syrup_applies_once",
@@ -255,7 +255,7 @@ fn cauldron_syrup_applies_once() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_refused_fire_is_atomic() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_refused_fire_is_atomic",
@@ -271,7 +271,7 @@ fn cauldron_refused_fire_is_atomic() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_panicking_fire_is_atomic() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_panicking_fire_is_atomic",
@@ -302,7 +302,7 @@ fn cauldron_panicking_fire_is_atomic() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_outer_abort_discards_effects_and_drops() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_outer_abort_discards_effects_and_drops",
@@ -326,7 +326,7 @@ fn cauldron_outer_abort_discards_effects_and_drops() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_duplicates_name_both_owners() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_duplicates_name_both_owners",
@@ -375,7 +375,7 @@ fn cauldron_duplicates_name_both_owners() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_dye_tag_shadows_exact_handler_even_on_pass() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_dye_tag_shadows_exact_handler_even_on_pass",
@@ -412,7 +412,7 @@ fn cauldron_dye_tag_shadows_exact_handler_even_on_pass() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_transfer_awards_two_statistics_once() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_transfer_awards_two_statistics_once",
@@ -428,7 +428,7 @@ fn cauldron_transfer_awards_two_statistics_once() {
     });
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_client_skips_custom_prediction() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_client_skips_custom_prediction",
@@ -481,7 +481,7 @@ fn cauldron_client_skips_custom_prediction() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_register_to_all_and_admission_errors() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_register_to_all_and_admission_errors",
@@ -610,7 +610,7 @@ fn cauldron_register_to_all_and_admission_errors() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_world_close_discards_callbacks_before_failed_preparation() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_world_close_discards_callbacks_before_failed_preparation",
@@ -674,7 +674,7 @@ fn cauldron_world_close_discards_callbacks_before_failed_preparation() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_unknown_effect_keys_refuse_before_fire() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_unknown_effect_keys_refuse_before_fire",
@@ -694,7 +694,7 @@ fn cauldron_unknown_effect_keys_refuse_before_fire() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cauldron_tag_registration_normalizes_admits_and_expands_over_the_complete_set() {
     if run_fresh_cases(
         "game::cauldron_interactions::tests::cauldron_tag_registration_normalizes_admits_and_expands_over_the_complete_set",

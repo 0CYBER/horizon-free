@@ -39,7 +39,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and isolated native mod process"]
+    #[ignore = "daily"]
     fn fluid_tick_dispatch_keeps_arguments_cancel_and_authority() {
         let heard = Arc::new(AtomicUsize::new(0));
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(

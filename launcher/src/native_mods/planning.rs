@@ -53,7 +53,7 @@ pub(super) fn classify(
         return Ok(result);
     }
     let sdk_base = sdk_cache::Base::from_env();
-    let keys = horizon_release_sign::trusted_keys_for(backend::REPO);
+    let keys = horizon_release_sign::sdk_keys_for(backend::REPO);
     let sdk = match sdk_cache::index(&sdk_base, &revision, &keys) {
         Ok(sdk) => sdk,
         Err(refusal) => {
@@ -146,7 +146,7 @@ pub fn update_check(home: &Path, to: &str) -> Result<UpdateCheck, Failed> {
         .collect();
     let revision = build_revision(to, None)?;
     let sdk_base = sdk_cache::Base::from_env();
-    let keys = horizon_release_sign::trusted_keys_for(backend::REPO);
+    let keys = horizon_release_sign::sdk_keys_for(backend::REPO);
     let sdk = sdk_cache::index(&sdk_base, &revision, &keys).map_err(|r| r.to_string())?;
     let verdicts = judge_all(&projects, &sdk, &sdk_base).map_err(|r| r.to_string())?;
     let shown = sdk.shown();

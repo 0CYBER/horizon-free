@@ -46,7 +46,8 @@ impl ItemKey {
     }
 }
 
-fn resolved_items() -> &'static std::sync::OnceLock<horizon_mod_runtime::registry_keys::Names> {
+pub(crate) fn resolved_items()
+-> &'static std::sync::OnceLock<horizon_mod_runtime::registry_keys::Names> {
     static EMPTY: std::sync::OnceLock<horizon_mod_runtime::registry_keys::Names> =
         std::sync::OnceLock::new();
     crate::parts::installed().map_or(&EMPTY, |installed| &installed.resolved_items)
@@ -121,16 +122,16 @@ pub fn item_key_by_identifier(id: &crate::Identifier) -> Option<ItemKey> {
 }
 
 /// Entity types use the same requested-slot and immutable resolved-table lifecycle as items.
-fn resolved_entity_types() -> &'static std::sync::OnceLock<horizon_mod_runtime::registry_keys::Names>
-{
+pub(crate) fn resolved_entity_types()
+-> &'static std::sync::OnceLock<horizon_mod_runtime::registry_keys::Names> {
     static EMPTY: std::sync::OnceLock<horizon_mod_runtime::registry_keys::Names> =
         std::sync::OnceLock::new();
     crate::parts::installed().map_or(&EMPTY, |installed| &installed.resolved_entity_types)
 }
-static MENUS: std::sync::LazyLock<
+pub(crate) static MENUS: std::sync::LazyLock<
     std::sync::RwLock<Option<horizon_mod_runtime::registry_keys::Names>>,
 > = std::sync::LazyLock::new(|| std::sync::RwLock::new(None));
-static ENCHANTMENTS: std::sync::LazyLock<
+pub(crate) static ENCHANTMENTS: std::sync::LazyLock<
     std::sync::RwLock<Option<horizon_mod_runtime::registry_keys::Names>>,
 > = std::sync::LazyLock::new(|| std::sync::RwLock::new(None));
 
@@ -381,6 +382,18 @@ pub fn dimension_key(id: &str) -> DimensionKey {
 /// The name of a dimension's key, None for a slot the game never gave out.
 pub fn dimension_id(key: DimensionKey) -> Option<&'static str> {
     horizon_mod_runtime::registry_keys::dimension_id(key.0)
+}
+
+/// Look up an already-issued dimension key without minting a slot for unknown names.
+pub(crate) fn existing_dimension_slot(id: &crate::Identifier) -> Option<u32> {
+    let mut slot = 0;
+    while let Some(name) = horizon_mod_runtime::registry_keys::dimension_id(slot) {
+        if name.split_once(':') == Some((id.namespace(), id.path())) {
+            return Some(slot);
+        }
+        slot = slot.checked_add(1)?;
+    }
+    None
 }
 
 // no wire: process-local registration diagnostic retains a static hook or mod identity.

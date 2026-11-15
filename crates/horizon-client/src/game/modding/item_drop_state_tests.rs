@@ -169,7 +169,7 @@ fn on_ground(game: &super::Game<'_>, ids: &[u32]) -> usize {
 /// listener set, through the API drop and back; with the listener leaving them alone they join
 /// as fresh item entities.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn living_drops_state_reaches_the_dropped_item_entities() {
     assert_eq!(ItemDrop::UNLIMITED_LIFETIME, -32768);
     with_marker(|mode| {
@@ -199,7 +199,7 @@ fn living_drops_state_reaches_the_dropped_item_entities() {
 /// A drop the hook targets at guest 12 is not picked up by guest 13 standing on it, and is by
 /// guest 12.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_targeted_drop_is_picked_up_only_by_its_target() {
     with_marker(|mode| {
         super::native_guest_turn_tests::with_guests(|game| {
@@ -233,7 +233,7 @@ const CENTRE: [f64; 3] = [8.5, 64.0, 8.5];
 /// After 6000 ticks a floating drop with an ordinary lifetime has despawned, and one the hook
 /// gave an unlimited lifetime (which never merges) is still there.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_unlimited_lifetime_drop_outlives_an_ordinary_one() {
     with_marker(|mode| {
         super::native_entity_refs::tests::with_game(|game| {
@@ -266,7 +266,7 @@ fn an_unlimited_lifetime_drop_outlives_an_ordinary_one() {
 /// A drop given `age` `i32::MAX` ticks and wraps to `i32::MIN`, as Java's int does, with no
 /// overflow panic.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_largest_age_wraps_on_its_first_tick() {
     with_marker(|mode| {
         super::native_entity_refs::tests::with_game(|game| {

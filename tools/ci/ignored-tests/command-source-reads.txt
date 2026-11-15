@@ -1,3 +1,0 @@
-# Prepared command-source profile and execution-context reads from #3647.
-horizon-client game::native_command_reads::tests::a_console_command_executes_in_the_level_execute_in_names HORIZON_TEST_RESOURCES needs
-horizon-client game::native_command_reads::tests::a_profile_keeps_its_login_properties HORIZON_TEST_RESOURCES needs

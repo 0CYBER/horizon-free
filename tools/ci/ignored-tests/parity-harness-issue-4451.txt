@@ -1,0 +1,2 @@
+# The fishing RNG parity driver supplies the independent vanilla oracle and exact-selects this step.
+horizon-client game::fishing::tests::fishing_retrieve_reference tools/test_fishing_rng_parity.py harness

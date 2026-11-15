@@ -85,7 +85,7 @@ fn with_mods(mods: Vec<ModEntry>, test: impl FnOnce()) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_click_asks_the_part_for_each_slot_and_stack_it_consults_in_order() {
     with_mods(vec![ModEntry::new("rules", Box::new(Listener))], || {
         with_game(|game| {
@@ -106,7 +106,7 @@ fn a_click_asks_the_part_for_each_slot_and_stack_it_consults_in_order() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_answers_are_bounded_to_one_to_ninety_nine_and_the_items_limit() {
     with_mods(vec![ModEntry::new("rules", Box::new(Listener))], || {
         with_game(|game| {
@@ -122,7 +122,7 @@ fn the_answers_are_bounded_to_one_to_ninety_nine_and_the_items_limit() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_failing_listener_leaves_the_slots_own_answers_and_the_next_click_works() {
     with_mods(vec![ModEntry::new("rules", Box::new(Listener))], || {
         with_game(|game| {
@@ -145,7 +145,7 @@ fn a_failing_listener_leaves_the_slots_own_answers_and_the_next_click_works() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn without_a_part_nothing_is_asked_and_the_click_is_the_same() {
     // The same click with no mod installed, with a mod that has no part, and with a part on
     // another menu type: the final state is identical and the part is never asked.
@@ -178,7 +178,7 @@ fn without_a_part_nothing_is_asked_and_the_click_is_the_same() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_lan_hub_click_asks_the_same_questions_in_the_same_order() {
     use horizon_client::lan::menu::Slots;
     use horizon_protocol::packets::play::{ContainerClick, Serverbound};

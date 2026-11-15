@@ -9,7 +9,7 @@ fn only_container_loot_filled_changes_when_stack_count_marker_is_removed() {
             let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
             let mut catalog = Catalog::load(&root).unwrap();
             let mut methods = Vec::new();
-            for path in crate::native_hook_files(&root).unwrap() {
+            for path in horizon_game_discovery::native_hook_files(&root).unwrap() {
                 let file = syn::parse_file(&fs::read_to_string(path).unwrap()).unwrap();
                 for item in file.items {
                     if let Item::Impl(item) = item {

@@ -737,7 +737,7 @@ mod tests {
 
     use super::*;
     #[test]
-    #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn decorated_lod_refines_real_seed_canopies_and_all_dimensions() -> crate::Result<()> {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"),
@@ -1058,7 +1058,7 @@ mod tests {
     /// Small End islands are decoration over the void, so the direct sampler
     /// has to estimate them from `end_island_decorated`.
     #[test]
-    #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn end_small_islands_are_estimated_over_the_void() -> crate::Result<()> {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"),
@@ -1141,7 +1141,7 @@ mod tests {
     }
     /// The refined path must keep the real feature's end stone in its columns.
     #[test]
-    #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn end_small_islands_from_decoration_survive_far_columns() -> crate::Result<()> {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"),
@@ -1234,7 +1234,7 @@ mod tests {
     /// Vanilla decoration places chorus plants in the End; the far columns must
     /// keep them even though they are not motion-blocking blocks.
     #[test]
-    #[ignore = "requires prepared worldgen data in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn end_far_columns_keep_real_chorus_plants() -> crate::Result<()> {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"),

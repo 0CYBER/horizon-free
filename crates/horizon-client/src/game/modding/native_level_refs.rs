@@ -990,7 +990,7 @@ mod tests {
     use mod_api::{ChunkRef, LevelRef, LightLayer, WorldEpoch};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn review_climate_literals() {
         with_game(|game| {
             let level = game.level("minecraft:overworld").unwrap();
@@ -1024,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_with_its_own_clock_counts_apart_from_the_overworlds() {
         with_game(|game| {
             game.world.day_time = 100;
@@ -1085,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_transform_preview_preserves_state_and_marks_simulation() {
         use super::super::native_guest_turn_tests::with_guests;
         use horizon_client::{chunk::Chunk, items::ItemStack};
@@ -1195,7 +1195,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn shared_level_signal_dispatches_and_clamps_part_output() {
         use horizon_client::chunk::Chunk;
         use horizon_core::geometry::Direction;
@@ -1226,7 +1226,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn shared_level_signal_reads_live_comparator_and_refuses_other_levels() {
         use horizon_client::chunk::Chunk;
         use horizon_core::geometry::Direction;
@@ -1270,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn respawn_data_maps_and_ticks_write_through_the_handle_and_refuse_others() {
         use horizon_client::chunk::Chunk;
         use std::sync::Arc;
@@ -1353,7 +1353,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn loaded_chunks_lists_the_level_in_order_without_loading() {
         use horizon_client::chunk::Chunk;
         use std::sync::Arc;
@@ -1380,7 +1380,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn bounds_reads_follow_the_level_without_loading_chunks() {
         with_game(|game| {
             let level = game.level("minecraft:overworld").unwrap();
@@ -1411,7 +1411,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn world_border_reads_refuse_stale_and_unopened_levels() {
         with_game(|game| {
             let level = game.level("minecraft:overworld").unwrap();
@@ -1429,7 +1429,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn height_reads_server_levels_and_the_joined_client_level() {
         use super::super::execution_role::ExecutionRole;
         use horizon_client::chunk::LevelShape;
@@ -1471,7 +1471,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_state_reads_stored_ids_and_refuses_unloaded_positions() {
         use horizon_client::chunk::Chunk;
         use std::sync::Arc;
@@ -1508,7 +1508,7 @@ mod tests {
     /// source, normalized; so does the source, toward it; a source with only air on stone
     /// around it, and air, have none.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fluid_flow_reads_the_current_that_pushes_entities() {
         use horizon_client::chunk::Chunk;
         use mod_api::Vec3;
@@ -1579,7 +1579,7 @@ mod tests {
     /// under air and a full block under water, flowing water of level 5 a third high, the
     /// camera's full block under a sturdy ceiling, and what water and lava replace.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fluid_queries_answer_vanilla_values_at_a_position() {
         use mod_api::{Direction, Host};
 
@@ -1678,7 +1678,7 @@ mod tests {
 
     /// Lava flows fast in the Nether: the delay follows the level's own dimension.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn lava_ticks_every_ten_in_a_fast_lava_level() {
         use mod_api::Host;
 
@@ -1698,7 +1698,7 @@ mod tests {
     /// neighbours with flowing water of level 1 (amount 7), once; an empty cell, an unloaded
     /// column, a position below the world, a stale handle and a level not in place do nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_explicit_fluid_tick_spreads_a_source_and_refuses_other_positions() {
         with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -1733,7 +1733,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn forced_chunks_set_clear_and_query_like_forceload() {
         with_chunk_streaming(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -1778,7 +1778,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn forced_chunk_changes_the_ticket_sources_and_the_saved_set() {
         with_chunk_streaming(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -1794,7 +1794,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn forced_chunks_of_a_parked_level_and_stale_handles() {
         with_chunk_streaming(|game| {
             let stale_epoch = WorldEpoch::new(game.native_lifecycle.epoch().unwrap().get() + 1);
@@ -1836,7 +1836,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_ref_draws_from_its_levels_own_stream() {
         use horizon_core::random::RandomSource;
         use mod_api::{LevelRef, ServerHost};
@@ -1982,7 +1982,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn water_tickets_hydrate_real_farmland_and_preserve_vanilla_water_and_rain() {
         use horizon_client::chunk::Chunk;
         use std::sync::Arc;
@@ -2070,7 +2070,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn water_ticket_handles_isolate_dimensions_owners_and_unload_lifetimes() {
         with_machines(|game| {
             let overworld = game.level(game.dim.id()).unwrap();
@@ -2162,7 +2162,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn water_tickets_are_not_restored_with_saved_farmland() {
         use horizon_client::{chunk::Chunk, save::SaveDir, world::World};
         use std::sync::Arc;
@@ -2228,7 +2228,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mod_tickets_are_scoped_by_owner_and_share_the_forceload_store() {
         use mod_api::TicketOwner::{Block, Entity};
         with_machines(|game| {
@@ -2300,7 +2300,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mod_tickets_save_apart_from_vanillas_tickets_and_release_with_the_world() {
         use mod_api::TicketOwner::{Block, Entity};
         with_machines(|game| {
@@ -2353,7 +2353,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_ticket_keeps_a_parked_level_active() {
         with_machines(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -2387,7 +2387,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn forceload_add_returns_with_each_new_column_loaded() {
         with_chunk_streaming(|game| {
             game.ui.registries.permission = 4;
@@ -2410,7 +2410,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn forceload_query_lists_only_command_tickets() {
         with_machines(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -2433,7 +2433,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn natural_spawning_tickets_and_plain_ones_save_and_load_apart() {
         use mod_api::TicketOwner::Block;
         with_machines(|game| {
@@ -2480,7 +2480,7 @@ mod tests {
     /// attempt); the local mob cap still wants a non-spectator within 128
     /// blocks of its centre.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_natural_spawning_ticket_far_from_every_player_runs_the_attempt_but_the_local_cap_refuses()
     {
         use horizon_client::chunk::Chunk;
@@ -2544,7 +2544,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn validation_drops_a_removed_ticket_and_leaves_the_rest() {
         with_machines(|game| {
             // `quarry` and `vault` validate; `plain` doesn't. All of them hold the pruned block.
@@ -2597,7 +2597,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn validation_runs_when_a_parked_level_opens_and_not_without_a_listener() {
         mod_platform::testing::with_mods(mods(), || {
             with_game(|game| {
@@ -2648,7 +2648,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn validation_sees_the_saved_tickets_not_ones_added_after_the_load() {
         with_machines(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -2668,7 +2668,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn light_and_loaded_reads_match_the_games_query_and_load_nothing() {
         use horizon_client::chunk::{Chunk, Light};
         use mod_api::LevelHost;
@@ -2725,7 +2725,7 @@ mod tests {
     /// where the next update asks a `dynamic_light` block again and relights it; a stale
     /// handle and a position that isn't loaded queue nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn check_light_queues_the_cell_with_the_light_edits() {
         use horizon_client::chunk::Chunk;
         use std::sync::Arc;
@@ -2772,7 +2772,7 @@ mod environment_read_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn biome_reads_follow_live_cells_parked_levels_and_client_login_without_loading() {
         use crate::game::execution_role::ExecutionRole;
         use horizon_protocol::connection::Pipe;
@@ -2836,7 +2836,7 @@ mod environment_read_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn floor_reads_real_collision_shapes_and_refuses_unloaded_positions() {
         with_game(|game| {
             game.world
@@ -2879,7 +2879,7 @@ mod environment_read_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn sky_and_logical_height_read_the_named_dimension_and_client_state() {
         use crate::game::execution_role::ExecutionRole;
         use horizon_client::chunk::LevelShape;
@@ -2958,7 +2958,7 @@ mod environment_read_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn closest_biome_uses_the_named_generator_without_loading_resident_chunks() {
         use horizon_client::vanillagen::{TerrainResources, VanillaTerrain};
 
@@ -3067,7 +3067,7 @@ mod environment_read_tests {
     /// (`ConcentricRingsStructurePlacement` with distance 32), each then moved
     /// to a biome it may start in within 112 blocks.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn nearest_structure_uses_the_named_generator_without_loading_resident_chunks() {
         use horizon_client::vanillagen::{TerrainResources, VanillaTerrain};
         use mod_api::StructureSearch;
@@ -3164,7 +3164,7 @@ mod environment_read_tests {
 
     /// API results over original fixture worlds, compared with independently recorded vanilla calls.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn level_environment_reads_match_vanilla_vectors() {
         use horizon_client::vanillagen::{TerrainResources, VanillaTerrain};
         use serde_json::{Value, json};

@@ -57,7 +57,7 @@ fn game() -> Game<'static> {
 /// `BlockAttachedEntity.setPos`: the block it hangs in is the floor of the
 /// requested position; its bounds follow from it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn tp_moves_a_frame_and_a_painting() {
     let mut game = game();
     assert!(game.run_command("summon minecraft:painting 0 2 0 {facing:0b}"));
@@ -73,7 +73,7 @@ fn tp_moves_a_frame_and_a_painting() {
 /// `Entity.teleportTo(ServerLevel, ..)` -> `teleportCrossDimension` for a
 /// target in another level than the command source's.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn every_entity_kind_follows_a_cross_dimension_tp() {
     let mut game = game();
     let back = game.enter_command_level(Dim::Nether);
@@ -153,7 +153,7 @@ fn every_entity_kind_follows_a_cross_dimension_tp() {
 /// inside, the upper bounds outside, so `/tp` accepts the world border
 /// coordinates. Pins the bound (already true before the cross-dimension move).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn tp_accepts_the_spawnable_border_coordinates() {
     let mut game = game();
     assert!(game.run_command("summon minecraft:armor_stand 0.5 2 0.5"));

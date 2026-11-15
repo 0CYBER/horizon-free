@@ -189,7 +189,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn for_player_keeps_the_outer_body_in_its_original_dimension() {
         use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
         use horizon_client::{

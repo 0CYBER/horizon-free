@@ -377,7 +377,7 @@ mod tests {
     /// tick, in vanilla's source: a goat's ram (the mobs' `BoundSound`) and
     /// a dispenser shearing a snow golem. Each reaches the players once.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn entity_bound_sites_ask_at_their_entity() {
         let heard = Arc::default();
         let mods = vec![mod_api::ModEntry::new(
@@ -456,7 +456,7 @@ mod tests {
     /// sound bound to an entity at that entity; the players get the mod's
     /// sound, and none for a cancelled one.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_changes_and_cancels_level_sounds() {
         let heard = Arc::default();
         let mods = vec![mod_api::ModEntry::new(

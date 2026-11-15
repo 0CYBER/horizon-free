@@ -187,9 +187,9 @@ pub(crate) fn resolve(base: &Base, text: &str) -> Result<String, String> {
     ))
 }
 
-/// The release keys an SDK must be signed with.
+/// The keys an SDK must be signed with: the release keys, and in a debug-assertions build the one in `HORIZON_SDK_TRUSTED_KEY`.
 pub(crate) fn keys() -> Vec<PublicKey> {
-    horizon_release_sign::trusted_keys_for(native::PREBUILT_REPO)
+    horizon_release_sign::sdk_keys_for(native::PREBUILT_REPO)
 }
 
 /// Where SDK releases are read from.

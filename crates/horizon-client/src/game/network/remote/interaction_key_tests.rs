@@ -37,7 +37,7 @@ impl Hooks for KeyControl {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn interaction_key_literal_matrix_preserves_actions_and_swing_independently() {
     for (cancel, swing, actions, swings) in [
         (false, false, 1, 0),
@@ -139,7 +139,7 @@ fn interaction_key_literal_matrix_preserves_actions_and_swing_independently() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn pick_keeps_packet_veto_and_never_swings() {
     for cancel in [false, true] {
         let packets = Arc::new(Mutex::new(Vec::new()));
@@ -182,7 +182,7 @@ fn pick_keeps_packet_veto_and_never_swings() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn no_listener_preserves_natural_swing_and_unsuccessful_use_stays_quiet() {
     mod_platform::testing::with_mods(Vec::new().into(), || {
         with_interaction_game(true, |game| {
@@ -248,7 +248,7 @@ impl Hooks for FirstSilent {
     }
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn silent_policy_does_not_leak_into_next_ordinary_use() {
     let mods = vec![mod_api::ModEntry::new(
         "first_silent",
@@ -289,7 +289,7 @@ fn silent_policy_does_not_leak_into_next_ordinary_use() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn no_interaction_listener_attack_mining_offhand_and_pick() {
     for path in 0..4 {
         mod_platform::testing::with_mods(Vec::new().into(), || {

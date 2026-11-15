@@ -1,7 +1,7 @@
 use super::item_use::interact_vibration_tests::with_game;
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn spectator_stops_use_at_player_feet() {
     let lines = with_game("minecraft:golden_apple", |game| {
         assert!(game.start_using_item());
@@ -19,7 +19,7 @@ fn spectator_stops_use_at_player_feet() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn stopping_spear_use_is_silent() {
     let lines = with_game("minecraft:iron_spear", |game| {
         assert!(game.start_using_item());
@@ -89,7 +89,7 @@ fn guest_action(item: &str, action: u8) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn guest_swap_stops_at_guest_feet() {
     assert_eq!(
         guest_action("minecraft:golden_apple", 0),
@@ -101,7 +101,7 @@ fn guest_swap_stops_at_guest_feet() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn guest_hotbar_change_stops_at_guest_feet() {
     assert_eq!(
         guest_action("minecraft:golden_apple", 1),
@@ -113,7 +113,7 @@ fn guest_hotbar_change_stops_at_guest_feet() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn mod_hotbar_change_stops_at_guest_feet() {
     assert_eq!(
         guest_action("minecraft:golden_apple", 2),
@@ -125,13 +125,13 @@ fn mod_hotbar_change_stops_at_guest_feet() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn spear_hotbar_change_posts_nothing() {
     assert!(guest_action("minecraft:iron_spear", 1).is_empty());
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn guest_death_clear_posts_no_finish() {
     assert_eq!(
         guest_action("minecraft:golden_apple", 3),
@@ -143,7 +143,7 @@ fn guest_death_clear_posts_no_finish() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn axe_disabled_shield_posts_finish() {
     use horizon_client::health::HurtSource;
     use horizon_client::health::{BlockOutcome, NO_ATTACK};
@@ -186,7 +186,7 @@ fn axe_disabled_shield_posts_finish() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn same_dimension_tp_keeps_use() {
     assert_eq!(
         guest_action("minecraft:golden_apple", 4),
@@ -195,7 +195,7 @@ fn same_dimension_tp_keeps_use() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn swap_with_emptied_used_slot_clears_silently() {
     use super::native_item_places::tests::{guest, open_to_lan};
     use horizon_client::items::ItemStack;
@@ -228,7 +228,7 @@ fn swap_with_emptied_used_slot_clears_silently() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn nether_portal_stops_use_in_target_level() {
     use super::native_item_places::tests::{guest, open_to_lan};
     use horizon_client::{chunk::Chunk, items::ItemStack};

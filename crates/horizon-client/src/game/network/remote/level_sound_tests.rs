@@ -96,7 +96,7 @@ impl mod_api::Hooks for LocalTuner {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn local_level_requests_can_mute_sound_without_undoing_prediction() {
     use horizon_core::position::BlockPos;
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -199,7 +199,7 @@ fn local_level_requests_can_mute_sound_without_undoing_prediction() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn game_events_ask_client_level_before_playback() {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let mods = vec![mod_api::ModEntry::new(
@@ -272,7 +272,7 @@ fn game_events_ask_client_level_before_playback() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn packets_ask_client_level_before_playback_not_ui() {
     use horizon_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs, LoopSide};
     let log = Arc::new(Mutex::new(Log::default()));

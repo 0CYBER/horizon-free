@@ -161,7 +161,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn sounds_reach_the_right_connections() {
         with_game(|game| {
             let net = NetConfig {
@@ -273,7 +273,7 @@ pub(super) mod tests {
     /// random; and a player exactly at the range edge is outside
     /// `PlayerList.broadcast`.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn queued_sounds_draw_sound_seeds_at_play_and_cut_at_the_range_edge() {
         use horizon_core::random::RandomSource;
 

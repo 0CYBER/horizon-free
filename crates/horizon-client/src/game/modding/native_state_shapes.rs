@@ -117,7 +117,7 @@ mod tests {
     use crate::game::api_values::TryIntoApi;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn supplied_shape_state_does_not_replace_world_state() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let level = game.level("minecraft:overworld").unwrap();

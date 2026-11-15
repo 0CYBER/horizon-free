@@ -598,7 +598,7 @@ mod pass_tests {
     /// A nausea listener can change another mob's spatial membership. The next
     /// geyser in the same pass must see that write, not bless the old grid.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn nausea_listener_moving_a_mob_invalidates_the_pass_grid() {
         use mod_api::{Hooks, MobEffectApplicableEvent, ModEntry, ServerHost};
 
@@ -683,7 +683,7 @@ mod pass_tests {
     /// The grid of a block entity pass finds every mob a scan finds, in the
     /// same order, however the mob list changed between two geysers.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_pass_grid_finds_what_a_scan_finds() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let kinds = ["minecraft:zombie", "minecraft:chicken", "minecraft:ravager"];

@@ -166,7 +166,7 @@ fn loot(game: &mut Game<'_>, command: &str) -> (Vec<String>, Vec<String>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn loot_kill_as_a_guest_is_killed_by_that_player() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -208,7 +208,7 @@ fn loot_stacks(game: &mut Game<'_>, command: &str) -> Vec<(String, u32, bool)> {
 /// stack draws nothing from the loot's random sequence; a guest that is not
 /// there keeps the old rule; every player's state is back afterwards.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_empty_handed_guest_is_the_killer_and_a_missing_one_is_not() {
     let insert = format!("loot insert 8 100 8 kill {ELDER}");
     let mut looting = ItemStack::new("minecraft:diamond_sword", 1);

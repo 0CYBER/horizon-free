@@ -95,7 +95,7 @@ fn owned(items: &[(&str, u32)]) -> Vec<(String, u32)> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_empty_bucket_picks_up_an_adult_sulfur_cube() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -128,7 +128,7 @@ fn an_empty_bucket_picks_up_an_adult_sulfur_cube() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn no_pickup_without_an_empty_bucket_or_of_a_baby_or_primed_cube() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -182,7 +182,7 @@ fn field(tag: &Option<Tag>, key: &str) -> Option<Tag> {
 /// cube's age, age lock and body, and nothing for a cube with no body; a
 /// cod's bucket keeps its own data.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_sulfur_bucket_carries_the_live_cube_s_age_lock_and_body() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);

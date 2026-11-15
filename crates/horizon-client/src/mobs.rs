@@ -5307,7 +5307,7 @@ pub(crate) mod sensor_scan_tests {
         })
     }
     #[test]
-    #[ignore = "needs prepared attributes in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn declared_health_spawn_fields_match_computed_values() {
         use horizon_world::attributes::entity::Catalog;
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
@@ -6739,13 +6739,13 @@ mod effect_refusal_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared entity types in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn glow_squid_damage_result_keeps_parent_health_side_effect() {
         check_squid_damage_result("minecraft:glow_squid");
     }
 
     #[test]
-    #[ignore = "needs prepared entity types in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn squid_damage_result_keeps_parent_health_side_effect() {
         check_squid_damage_result("minecraft:squid");
     }

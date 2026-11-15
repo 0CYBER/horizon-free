@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_listeners_size_sizes_the_mobs_box_until_vanilla_changes_it() {
         let calls = Calls::default();
         let mods = vec![mod_api::ModEntry::new(
@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn invalid_size_answers_leave_the_mobs_default_box() {
         let size = Arc::new(Mutex::new([1.0; 3]));
         let mods = vec![mod_api::ModEntry::new(
@@ -278,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn partial_collision_sizes_complete_navigation() {
         // Resource loading and the shared mod fixture lock are not navigation.
         // Start the deadline only once the fixture is ready, while keeping it

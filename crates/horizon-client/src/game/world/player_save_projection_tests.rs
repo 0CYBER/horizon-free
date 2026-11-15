@@ -43,7 +43,7 @@ fn raw(marker: &str, grace: i32, particles: bool) -> Tag {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn actual_player_save_tracks_mutable_body_and_keeps_guest_context() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         game.world_root = std::env::current_dir().unwrap().join("h157-owner");

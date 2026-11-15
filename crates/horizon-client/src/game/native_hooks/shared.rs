@@ -3660,7 +3660,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn enchantment_registry_returns_records_and_unknown_cost() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let all = game.enchantments();
@@ -3679,7 +3679,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn translate_gives_the_text_of_a_defined_key_and_none_otherwise() {
         use horizon_client::lang::{Language, ResourceSource, scoped};
         struct Empty;
@@ -3699,7 +3699,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_trait_mod_measures_text_through_its_draw_context() {
         use super::super::host::draw::GameDrawContext;
         use super::super::native_entity_refs::tests::with_game;
@@ -3716,7 +3716,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn declared_types_create_tick_and_reload_through_game() {
         use super::super::native_entity_refs::tests::{record_key, run_fresh_cases, with_game_at};
         use horizon_client::{chunk::Chunk, containers::BlockEntity, save};
@@ -3969,7 +3969,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_host_reads_current_pause_state() {
         use super::super::native_entity_refs::tests::with_game;
         use crate::game::execution_role::ExecutionRole;
@@ -3984,7 +3984,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_host_reads_playing_and_key_mappings() {
         use super::super::Screen;
         use super::super::native_entity_refs::tests::with_game;
@@ -4030,7 +4030,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn replacing_mod_block_entity_payload_keeps_its_type_and_saved_identity() {
         use super::super::native_entity_refs::tests::with_game;
         use horizon_client::chunk::Chunk;
@@ -4112,7 +4112,7 @@ mod tests {
     /// Exercise the gameplay constructor, where name-based entities compete
     /// with a mod block's sign template.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mod_sign_constructor_prioritizes_templates_over_suffixes() {
         // This fixture adds blocks that are absent from the shared vanilla
         // game's frozen process-wide block definitions.
@@ -4243,7 +4243,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn generated_fire_matches_dispatch() {
         use super::super::{Audio, Game, Options, Progress, Settings, load_resources};
         use mod_api::{ClientHost, Flow, Hooks, ModEntry};
@@ -4374,7 +4374,7 @@ mod tests {
 
     /// With no window to lay a screen out in there is no slot under the pointer.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn no_item_is_hovered_without_a_window() {
         use super::super::{Audio, Game, Options, Progress, Settings, load_resources};
 
@@ -4989,7 +4989,7 @@ mod item_fall_on_tests {
     /// Only the inner production loan is exercised: the outer dropped-item pass
     /// is deliberately not claimed to survive this unwind.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+    #[ignore = "daily"]
     fn item_fall_on_returns_progressed_level_loan_after_part_panic() {
         let payload = std::sync::Arc::new(());
         let mods: mod_api::Mods = vec![ModEntry::new(
@@ -5067,7 +5067,7 @@ mod item_fall_on_tests {
     /// `minecraft:item`, with the whole fall and no damage; the write the part asks for lands
     /// after the items' batch; and an item resting there lands no more.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_dropped_item_lands_on_a_fall_on_part() {
         let heard = Lands::default();
         let mods: mod_api::Mods = vec![ModEntry::new("lands", Box::new(Mod(heard.clone())))].into();
@@ -5178,7 +5178,7 @@ pub(super) mod particle_count_tests {
     /// before the next frame is drawn, with no tick in between (a paused or frozen game),
     /// or at the next particle tick. A server answers 0 and refuses the clear.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_mod_counts_and_clears_particles() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.options.execution_role = super::ExecutionRole::Client;
@@ -5240,7 +5240,7 @@ pub(super) mod particle_count_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn late_gui_clear_prevents_same_frame_particle_geometry_without_a_tick() {
         let mods: mod_api::Mods =
             vec![mod_api::ModEntry::new("clear_gui", Box::new(ClearInGui))].into();
@@ -5285,7 +5285,7 @@ pub(super) mod particle_count_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_model_callback_clear_discards_particle_geometry_already_extracted() {
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -5541,7 +5541,7 @@ pub(super) mod particle_count_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a display"]
+    #[ignore = "daily"]
     fn fog_clear_reaches_the_complete_frame_consumer() {
         let name = "game::native_hooks::particle_count_tests::fog_clear_reaches_the_complete_frame_consumer";
         if super::super::native_entity_refs::tests::run_fresh_cases(
@@ -5603,7 +5603,7 @@ pub(super) mod particle_count_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a display"]
+    #[ignore = "daily"]
     fn late_clear_removes_native_particle_lights_at_the_frame_consumer() {
         let name = "game::native_hooks::particle_count_tests::late_clear_removes_native_particle_lights_at_the_frame_consumer";
         if super::super::native_entity_refs::tests::run_fresh_cases(

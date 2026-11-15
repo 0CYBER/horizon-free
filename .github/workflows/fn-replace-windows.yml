@@ -40,22 +40,41 @@ jobs:
         run: python tools/prebuilt_game.py build prebuilt --server
       - name: Exported names, toward Windows' 65,535
         run: python tools/prebuilt_game.py exports prebuilt | tee -a "$GITHUB_STEP_SUMMARY"
-      # Release, as players get it: the debug launcher overflows Windows' 1 MiB main-thread stack.
+      # The launcher reads its SDK from a signed release folder (as fn-replace-check.yml does): this one's SDK, one leg,
+      # signed with a throwaway key whose public half only a debug-assertions launcher trusts.
+      - name: Assemble the SDK release folder, signed with a throwaway key
+        run: |
+          rustup target add wasm32-unknown-unknown
+          commit=$(git rev-parse HEAD)
+          python tools/prebuilt_game.py pack prebuilt legs/sdk-leg-windows-server
+          python tools/prebuilt_game.py gather legs dist
+          python tools/sdk_api_source.py build api-source
+          python tools/sdk_api_source.py archive api-source dist/api-source.tar.xz
+          python tools/prebuilt_game.py index dist
+          EPHEMERAL=yes bash tools/ci/sign_release.sh "sdk-$commit" dist/*
+          echo "HORIZON_SDK_TRUSTED_KEY=$(cat dist/ephemeral.pub)" >> "$GITHUB_ENV"
+          rm dist/ephemeral.pub
+          mkdir -p sdk-base
+          mv dist "sdk-base/sdk-$commit"
+      # Release, as players get it: the debug launcher overflows Windows' 1 MiB main-thread stack, so the
+      # release build keeps its optimizations and turns debug assertions on, as fn-replace-check.yml does.
       - name: Launcher (built with MSVC on the pinned Rust, as launcher-windows-check builds it)
         working-directory: launcher
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: true
         run: |
           rustup toolchain install "$(cat ../tools/ci/rust-version)-x86_64-pc-windows-msvc" --profile minimal
           cargo +"$(cat ../tools/ci/rust-version)-x86_64-pc-windows-msvc" build --release --locked
       - name: Function replacement check (build and link)
         run: |
           FNR_MODS="alpha beta support fdshape registry" tools/ci/fn_replace_check.sh \
-            launcher/target/release/horizon-launcher.exe prebuilt fnr-scratch 2>&1 | tee fnr-check.log
+            launcher/target/release/horizon-launcher.exe sdk-base fnr-scratch 2>&1 | tee fnr-check.log
           grep -F 'Function replacement:' fnr-check.log >> "$GITHUB_STEP_SUMMARY"
       - name: Refusals by name
         if: always()
         run: |
           for set in "alpha overwrite2" refused refused_state; do
-            FNR_KEEP=1 FNR_MODS="$set" tools/ci/fn_replace_check.sh launcher/target/release/horizon-launcher.exe prebuilt fnr-scratch > "refusal-${set// /_}.log" 2>&1 && { echo "$set built"; exit 1; } || true
+            FNR_KEEP=1 FNR_MODS="$set" tools/ci/fn_replace_check.sh launcher/target/release/horizon-launcher.exe sdk-base fnr-scratch > "refusal-${set// /_}.log" 2>&1 && { echo "$set built"; exit 1; } || true
             grep -E 'E_[A-Z_]+' "refusal-${set// /_}.log" | head -5 | tee -a "$GITHUB_STEP_SUMMARY"
           done
       - uses: actions/upload-artifact@v4

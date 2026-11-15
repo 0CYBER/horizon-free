@@ -544,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn recipes_of_type_answers_vanilla_types_from_the_live_table() {
         with_game(|game| {
             let smelting = game.recipes_of_type("minecraft:smelting");
@@ -576,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn tag_and_fluid_reads_follow_vanilla_and_load_nothing() {
         with_game(|game| {
             let dir =
@@ -929,7 +929,7 @@ mod tests {
     /// Sources and their flowing forms are one fluid, the empty fluid has no bucket and no
     /// pickup sound, and a name no fluid has answers nothing, through a mod's `Host`.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fluid_sameness_buckets_and_bucket_sounds_follow_vanilla() {
         with_game(|game| {
             let host: &dyn mod_api::Host = game;

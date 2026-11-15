@@ -771,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn redirected_fake_target_is_refused_with_the_original_target_intact() {
         use std::sync::{Arc, Mutex};
         struct Redirect(Arc<Mutex<Option<LivingRef>>>);
@@ -812,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn leash_holder_reads_live_state() {
         use super::super::{boats::Boat, lan::LanSettings};
         use horizon_client::lan::{
@@ -922,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_portal_eligibility_matches_gameplay() {
         with_game(|game| {
             let cow = add_mob(game, 12, "minecraft:cow");
@@ -959,7 +959,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_flags_custom_persistence_is_independent_of_stored_flags() {
         with_game(|game| {
             let mob = add_mob(game, 12, "minecraft:cow");
@@ -997,7 +997,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_flags_baby_setter_uses_species_age_and_attribute_boundaries() {
         use mobs::finalize::{Attr, base_value};
 
@@ -1040,7 +1040,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_flags_baby_setter_runs_ghastling_setup_in_both_directions() {
         use mobs::{control::MoveKind, nav::NavKind};
 
@@ -1069,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_flags_baby_setter_refuses_no_baby_species_and_unavailable_mobs() {
         with_game(|game| {
             for (id, name) in [(12, "minecraft:skeleton"), (13, "minecraft:parrot")] {
@@ -1116,7 +1116,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn player_target_round_trips_through_the_mob_binding() {
         use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
         use horizon_protocol::packets::configuration::ClientInformation;
@@ -1296,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fox_enderman_and_zombified_piglin_take_targets_with_their_side_effects() {
         use horizon_core::random::{LegacyRandom, RandomSource};
         with_game(|game| {
@@ -1390,7 +1390,7 @@ mod tests {
     /// propagated to another piglin. Seed selection fixes the first sound at
     /// one tick; advancing the alert timer avoids waiting four seconds.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn piglin_target_write_drives_anger_sound_and_alert() {
         use horizon_core::random::{LegacyRandom, RandomSource};
         with_game(|game| {
@@ -1435,7 +1435,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn brain_species_take_a_written_attack_target_memory() {
         with_game(|game| {
             for (id, name) in [
@@ -1514,7 +1514,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_handles_read_write_and_refuse_unavailable_entities() {
         with_game(|game| {
             let zombie = game
@@ -1610,7 +1610,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn look_and_jump_go_through_the_mobs_own_controls() {
         with_game(|game| {
             let zombie = game
@@ -1657,7 +1657,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_restriction_round_trips_through_the_handle_and_saves() {
         use horizon_core::nbt::Tag;
         with_game(|game| {
@@ -1717,7 +1717,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_extreme_restriction_answers_as_vanilla() {
         with_game(|game| {
             let zombie = game
@@ -1759,7 +1759,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn hand_and_loot_flags_live_on_the_mob_handle() {
         use horizon_core::nbt::Tag;
         with_game(|game| {

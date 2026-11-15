@@ -4306,7 +4306,7 @@ mod air_filter_tests;
 #[cfg(test)]
 mod teleport_pitch_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn teleport_and_rotate_resolve_pitch_at_their_own_boundary() {
         use super::Target;
         use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
@@ -4543,7 +4543,7 @@ mod teleport_player_tests {
     use horizon_core::geometry::Vec3;
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn command_moves_velocity_per_axis_and_keeps_fall_distance() {
         with_game(|game| {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
@@ -4600,7 +4600,7 @@ mod fake_travel_tests {
     use super::Target;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_fake_player_is_not_teleported_to_another_dimension() {
         super::super::native_entity_refs::tests::with_game(|game| {
             super::super::bossbars::audience_tests::add_real_and_fake(game);
@@ -4638,7 +4638,7 @@ mod fake_travel_tests {
     /// A mod's `teleport_to_level`: a player to another level goes on the queue; to their own
     /// level, nothing is queued; an entity no level holds is refused.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_sends_a_player_to_another_level_and_not_a_missing_entity() {
         super::super::native_entity_refs::tests::with_game(|game| {
             super::super::bossbars::audience_tests::add_real_and_fake(game);
@@ -4672,7 +4672,7 @@ mod fake_travel_tests {
 #[cfg(test)]
 mod teleport_rider_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_vehicle_carries_its_riders_and_a_rider_leaves_its_vehicle() {
         use super::Target;
         use horizon_core::geometry::Vec3;
@@ -4918,7 +4918,7 @@ mod local_coordinate_command_tests {
         })
     }
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn h149_actual_registered_local_commands_preserve_exact_saved_positions() {
         with_game(|game| {
             game.build_registries();
@@ -5109,7 +5109,7 @@ mod local_coordinate_command_tests {
 #[cfg(test)]
 mod query_feedback_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn gamerule_feedback_uses_short_ids_without_changing_registry_identity() {
         use super::{Arg, Context};
         use crate::game::native_entity_refs::tests::with_game;
@@ -5187,7 +5187,7 @@ mod query_feedback_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_silent_source_drops_query_results_but_still_stores_them() {
         use crate::game::{
             Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,
@@ -5262,7 +5262,7 @@ mod query_feedback_tests {
 #[cfg(test)]
 mod forced_respawn_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn setworldspawn_reports_normalized_rotation() {
         use crate::game::native_entity_refs::tests::with_game;
         use horizon_client::{chunk::Chunk, motion::PlayerMotion, text::Text};
@@ -5291,7 +5291,7 @@ mod forced_respawn_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn overworld_spawnpoint_is_validated_at_both_player_blocks() {
         use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
         use horizon_client::chunk::Chunk;
@@ -5442,7 +5442,7 @@ mod effective_presence_tests {
     use super::*;
     use crate::game::native_entity_refs::tests::with_game;
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn registered_presence_uses_actual_catalog_and_stack_patch() {
         with_game(|game| {
             game.build_registries();
@@ -5640,7 +5640,7 @@ mod fill_note_instrument_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn ordinary_fill_normalizes_a_note_block_against_real_stone() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -5668,7 +5668,7 @@ mod fill_note_instrument_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_existing_default_state_does_not_skip_note_normalization() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -5684,7 +5684,7 @@ mod fill_note_instrument_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn strict_explicit_and_filtered_out_inputs_keep_their_existing_contracts() {
         with_game(|game| {
             let clock = game.world.game_time;
@@ -5713,7 +5713,7 @@ mod item_damage_range_tests {
     use horizon_core::position::BlockPos;
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn actual_chest_damage_range_uses_live_damage_and_effective_presence() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -5888,7 +5888,7 @@ mod global_selector_order_tests {
     use horizon_core::position::ChunkPos;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn actual_registered_global_selector_keeps_interleaved_insertion_and_limits() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());

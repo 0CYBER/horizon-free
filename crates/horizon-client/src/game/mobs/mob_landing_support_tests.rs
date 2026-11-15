@@ -91,7 +91,7 @@ fn drop_pig(x: f64) -> (f32, Option<[i32; 3]>, f64) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_pig_landing_on_the_stone_beside_honey_takes_the_stones_fall() {
     let (health, supporting, y) = drop_pig(8.9);
     assert_eq!(y, 100.0, "the box rests on the stone's top");
@@ -100,7 +100,7 @@ fn a_pig_landing_on_the_stone_beside_honey_takes_the_stones_fall() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_pig_landing_fully_on_honey_takes_a_fifth_of_the_fall() {
     let (health, supporting, y) = drop_pig(8.5);
     assert_eq!(y, 99.9375);

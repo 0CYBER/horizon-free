@@ -112,7 +112,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn existing_lists_fire_on_client_and_dedicated_even_without_differences() {
         struct Listener(Arc<Mutex<usize>>);
         #[mod_api::__subscriptions]
@@ -179,7 +179,7 @@ mod tests {
     /// A listener that resolves the missing mod takes it off the question, so no screen shows;
     /// without one it is asked about. Asking reads the world and writes nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_resolved_missing_mod_is_not_asked_about() {
         struct Migrator;
         #[mod_api::__subscriptions]

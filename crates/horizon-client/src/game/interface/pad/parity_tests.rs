@@ -90,7 +90,7 @@ fn pad_release(game: &mut Game, button: Button) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_keyboard_release_keeps_the_sneak_the_pad_went_on_to_hold() {
     playing(|game| {
         // Hold mode: toggling, the pad's press would flip it.
@@ -106,7 +106,7 @@ fn a_keyboard_release_keeps_the_sneak_the_pad_went_on_to_hold() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn keyboard_handoff_keeps_what_the_pad_holds() {
     playing(|game| {
         game.mapped_key(KeyCode::KeyW, true, false, KeyCode::KeyW, Source::Keyboard)
@@ -124,7 +124,7 @@ fn keyboard_handoff_keeps_what_the_pad_holds() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn pad_smooth_camera_binding_toggles_the_cinematic_camera() {
     playing(|game| {
         game.settings
@@ -142,7 +142,7 @@ fn with_player(game: &mut Game) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn bumpers_step_the_hotbar_where_the_wheel_does() {
     playing(|game| {
         game.selected = 8;
@@ -162,7 +162,7 @@ fn bumpers_step_the_hotbar_where_the_wheel_does() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_spectators_bumpers_set_the_flying_speed_as_the_wheel_does() {
     playing(|game| {
         with_player(game);
@@ -178,7 +178,7 @@ fn a_spectators_bumpers_set_the_flying_speed_as_the_wheel_does() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn readers_of_the_movement_keys_see_the_stick() {
     playing(|game| {
         game.focused = true;
@@ -200,7 +200,7 @@ fn readers_of_the_movement_keys_see_the_stick() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn pad_number_actions_select_the_hotbar_as_their_keys_do() {
     playing(|game| {
         with_player(game);
@@ -215,7 +215,7 @@ fn pad_number_actions_select_the_hotbar_as_their_keys_do() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_held_pad_toolbar_action_counts_as_the_toolbar_key() {
     playing(|game| {
         game.settings
@@ -229,7 +229,7 @@ fn a_held_pad_toolbar_action_counts_as_the_toolbar_key() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_pads_attack_and_use_reach_what_the_mouse_tells_mods() {
     playing(|game| {
         assert_eq!(game.native_clicks(), (0, 0));
@@ -245,7 +245,7 @@ fn the_pads_attack_and_use_reach_what_the_mouse_tells_mods() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_mouse_letting_go_leaves_what_the_pad_holds_and_back() {
     playing(|game| {
         game.mouse_mapping(MouseButton::Left, true, Source::Keyboard)
@@ -273,7 +273,7 @@ fn the_mouse_letting_go_leaves_what_the_pad_holds_and_back() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_release_from_a_screen_can_not_strand_the_pads_attack() {
     playing(|game| {
         // The mouse went down in play, and came up where the mappings didn't hear it.
@@ -288,7 +288,7 @@ fn a_release_from_a_screen_can_not_strand_the_pads_attack() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn keyboard_handoff_keeps_the_attack_the_pad_holds() {
     playing(|game| {
         pad_press(game, Button::RightTrigger, "key.attack");

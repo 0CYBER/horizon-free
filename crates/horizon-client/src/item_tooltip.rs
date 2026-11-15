@@ -2557,7 +2557,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared items/language in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn equipment_attributes_with_prepared_items_and_language() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),

@@ -59,7 +59,7 @@ mod server_tick_rate_changed_tests {
     /// `MinecraftServer.onTickRateChanged`: each route tells a mod once, the new rate readable,
     /// and leaves the autosave wait at 300 seconds of ticks when that is shorter.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_hears_every_route_of_on_tick_rate_changed_once() {
         with_scheduler(None, |game, heard| {
             assert_eq!(game.ticks_until_autosave, 6000);
@@ -105,7 +105,7 @@ mod server_tick_rate_changed_tests {
     /// The hook comes before the wait is adjusted: a listener that sets another rate decides
     /// the wait, here 40 ticks a second keeping the 6000 that 10 would have halved.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_listener_runs_before_the_autosave_wait_is_adjusted() {
         with_scheduler(Some("tick rate 40"), |game, heard| {
             assert!(game.native_run_command("tick rate 10"));

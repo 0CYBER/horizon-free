@@ -43,13 +43,14 @@ type Pending = (String, PathBuf, PathBuf, Vec<String>);
 /// The files of the module `module`, read from `path` (its children in `dir`), following `mod`
 /// declarations (and `#[path]`s, and inline modules that declare files), each read with `parse`.
 /// With `every_build`, a module behind a `cfg` is left out with everything under it; without, it
-/// is kept with its conditions. Test-only modules are always left out, including files gated by
-/// inner attributes.
+/// is kept with its conditions. Unless `include_tests`, test-only modules are left out, including
+/// files gated by inner attributes.
 pub fn walk_module_files(
     module: String,
     path: PathBuf,
     dir: PathBuf,
     every_build: bool,
+    include_tests: bool,
     parse: impl Fn(&Path, &str) -> Result<syn::File, String>,
 ) -> Result<Vec<ModuleFile>, String> {
     let mut files = Vec::new();
@@ -62,7 +63,7 @@ pub fn walk_module_files(
         }
         let source = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let file = parse(&path, &source)?;
-        if test_only(&file.attrs) || (every_build && gated(&file.attrs)) {
+        if (!include_tests && test_only(&file.attrs)) || (every_build && gated(&file.attrs)) {
             continue;
         }
         let cfg = cfg
@@ -78,8 +79,10 @@ pub fn walk_module_files(
             &file.items,
             &here,
             &dir,
+            &here,
             &cfg,
             every_build,
+            include_tests,
             &mut pending,
         );
         files.push(ModuleFile { module, path, cfg });
@@ -95,26 +98,29 @@ fn children(
     items: &[Item],
     here: &Path,
     dir: &Path,
+    include_directory: &Path,
     cfg: &[String],
     every_build: bool,
+    include_tests: bool,
     pending: &mut Vec<Pending>,
 ) {
     for item in items {
         if let Item::Macro(included) = item
             && included.mac.path.is_ident("include")
-            && !test_only(&included.attrs)
+            && (include_tests || !test_only(&included.attrs))
             && !(every_build && gated(&included.attrs))
             && let Ok(relative) = syn::parse2::<syn::LitStr>(included.mac.tokens.clone())
         {
             pending.push((
                 module.to_owned(),
-                here.join(relative.value()),
+                include_directory.join(relative.value()),
                 dir.to_owned(),
                 cfg.to_vec(),
             ));
         }
         let Item::Mod(declared) = item else { continue };
-        if test_only(&declared.attrs) || (every_build && gated(&declared.attrs)) {
+        if (!include_tests && test_only(&declared.attrs)) || (every_build && gated(&declared.attrs))
+        {
             continue;
         }
         let name = declared.ident.to_string();
@@ -182,8 +188,10 @@ fn children(
                 inner,
                 &inner_dir,
                 &inner_dir,
+                include_directory,
                 &cfg,
                 every_build,
+                include_tests,
                 pending,
             );
             continue;

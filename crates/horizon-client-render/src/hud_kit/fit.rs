@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "full translation corpus: run in the existing render data leg"]
+    #[ignore = "daily"]
     fn ellipsize_cuts_every_string_as_the_old_fit_did() {
         let atlas = atlas();
         let mut cut = 0;

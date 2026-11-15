@@ -169,7 +169,7 @@ fn targets_guest(game: &mut Game<'_>, ticks: usize) -> bool {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_golem_targets_the_guest_its_villager_hates() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -181,7 +181,7 @@ fn a_golem_targets_the_guest_its_villager_hates() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_golem_leaves_a_guest_at_minus_95_alone() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -190,7 +190,7 @@ fn a_golem_leaves_a_guest_at_minus_95_alone() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn control_with_the_guest_as_the_level_player_the_golem_targets_it() {
     // The same scene, the mobs' reputation snapshot keyed by the guest: the
     // goal itself works, only the identity it reads differs.
@@ -205,7 +205,7 @@ fn control_with_the_guest_as_the_level_player_the_golem_targets_it() {
 // host, UUID 1) is hated and the selected guest is not: no defence. Then the
 // host is the nearest player: its own gossip makes it the target.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn control_a_hated_host_does_not_turn_the_golem_on_the_selected_guest() {
     let mut resources = None;
     let mut game = game(&mut resources);

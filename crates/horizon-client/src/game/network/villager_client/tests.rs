@@ -84,7 +84,7 @@ fn roundtrip(kind: &str, custom: bool, texture: &str) {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn engineer_metadata_and_villager_texture() {
     roundtrip(
         "minecraft:villager",
@@ -93,7 +93,7 @@ fn engineer_metadata_and_villager_texture() {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn engineer_metadata_and_zombie_texture() {
     roundtrip(
         "minecraft:zombie_villager",
@@ -102,7 +102,7 @@ fn engineer_metadata_and_zombie_texture() {
     );
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn vanilla_farmer_metadata_and_texture() {
     roundtrip(
         "minecraft:villager",
@@ -207,7 +207,7 @@ fn encoded_receive(client: &mut Mob, values: Vec<(u8, i32, Value)>, table: &Reso
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn villager_client_packet_slots_and_unresolved_identity() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let types = MobTypes::load(&root).unwrap();

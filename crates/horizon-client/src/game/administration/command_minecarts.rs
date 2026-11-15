@@ -231,7 +231,7 @@ mod tests {
     use horizon_core::geometry::Vec3;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn scoped_cart_commands_keep_tick_and_self_removal_rules() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.world.game_time = 10;

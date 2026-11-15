@@ -72,13 +72,13 @@ fn gaze_cases(replace_tag: bool) {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn gaze_disguise_shipped_tag() {
     gaze_cases(false);
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn gaze_disguise_replaced_tag() {
     gaze_cases(true);
 }

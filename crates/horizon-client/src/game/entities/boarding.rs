@@ -129,7 +129,7 @@ impl Game<'_> {
 mod tests {
     use super::*;
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn retained_passengers_occupy_seats_in_boarding_order() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             use horizon_client::mobs::Mob;

@@ -38,7 +38,7 @@ fn shape(game: &Game<'_>, [x, y, z]: [i32; 3]) -> String {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn rail_parts_decide_the_track_carts_and_connections_follow() {
     // The fixture's parts: a plain rail lays east-west for a cart and can't curve, a powered
     // rail can't climb, and an activator rail refuses east-west.

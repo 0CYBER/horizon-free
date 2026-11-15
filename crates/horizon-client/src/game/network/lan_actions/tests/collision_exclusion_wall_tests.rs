@@ -34,7 +34,7 @@ fn exclude(game: &mut Game<'_>, boxes: &[[f64; 6]]) {
 const OPENING: [[f64; 6]; 1] = [[3.0, 64.0, 5.0, 4.0, 66.0, 6.0]];
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_in_a_players_exclusions_does_not_suffocate_it() {
     crate::game::native_guest_turn_tests::with_guests(|game| {
         walled(game);
@@ -62,7 +62,7 @@ fn a_block_in_a_players_exclusions_does_not_suffocate_it() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_in_a_players_exclusions_does_not_push_it_out() {
     crate::game::native_guest_turn_tests::with_guests(|game| {
         walled(game);

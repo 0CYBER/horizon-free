@@ -674,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn patched_bow_keeps_vanilla_animation_without_listener() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             use UseAnimation::*;
@@ -711,7 +711,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn item_animation_dispatches_vanilla_parts_and_refuses_invalid_spears() {
         use mod_api::{ClientHost, Hooks, ItemPart, ModEntry, Mods, Registrar, UseAnimationEvent};
         use std::sync::{
@@ -890,7 +890,7 @@ mod tests {
     /// hand out. The pose the mod sets moves vanilla's hand, not what it
     /// drew. The empty off hand is asked too.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_mod_draws_in_a_hand_that_holds_an_item() {
         use mod_api::{ClientHost, Flow, Hand, Hooks, ModEntry, Mods, RenderHandEvent};
         use std::sync::{
@@ -1250,7 +1250,7 @@ pub(super) mod interact_vibration_tests {
     /// finish the same way, which Horizon already did, so a use is a pair of
     /// vibrations and an item that turns them off is neither.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_use_start_is_an_item_interact_start_vibration() {
         let bow = || ItemStack::new("minecraft:bow", 1);
         let Some(lines) = with_game("minecraft:bow", |game| {
@@ -1278,7 +1278,7 @@ pub(super) mod interact_vibration_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn cake_context_uses_can_eat_instead_of_raw_hunger() {
         use mod_api::{CanEatEvent, Hooks};
         use std::sync::{
@@ -1413,7 +1413,7 @@ pub(super) mod interact_vibration_tests {
     /// casts, is drawn cast while its hook is out, and reels in. Another item
     /// is not a rod.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_content_mods_rod_casts_and_reels_in() {
         let Some(_) = with_game("minecraft:stick", |game| {
             // A world with a data pack has tables of its own, which take the mod's item.
@@ -1494,7 +1494,7 @@ pub(super) mod interact_vibration_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fishing_cast_and_reel_post_player_vibrations() {
         use horizon_client::mobs::Who;
         let Some(_) = with_game("minecraft:fishing_rod", |game| {
@@ -1555,7 +1555,7 @@ pub(super) mod interact_vibration_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn thrown_eye_posts_projectile_shoot_at_eye_from_player() {
         use horizon_client::mobs::Who;
         let Some(_) = with_game("minecraft:ender_eye", |game| {

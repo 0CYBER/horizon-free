@@ -47,7 +47,7 @@ fn porkchops(game: &Game<'_>) -> usize {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_vetoed_kill_keeps_the_mob_and_a_later_kill_dies_once() {
     crate::game::in_own_process(
         "game::kill_die_cancel_tests::a_vetoed_kill_keeps_the_mob_and_a_later_kill_dies_once",

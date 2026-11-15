@@ -188,7 +188,7 @@ fn selected(game: &mut Game<'_>) -> Option<String> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_saddled_camels_riding_jump_posts_entity_action() {
     let mut game = game();
     scene(&mut game, true);
@@ -210,7 +210,7 @@ fn a_saddled_camels_riding_jump_posts_entity_action() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_jump_without_power_or_saddle_posts_nothing() {
     let mut game = game();
     scene(&mut game, true);
@@ -223,7 +223,7 @@ fn a_jump_without_power_or_saddle_posts_nothing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_scene_sensor_hears_a_mob_beside_it() {
     let mut game = game();
     scene(&mut game, true);
@@ -253,7 +253,7 @@ fn posted_actions(game: &mut Game<'_>, jumps: &[i32]) -> usize {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn control_each_accepted_jump_posts_one_entity_action() {
     let mut game = game();
     scene(&mut game, true);

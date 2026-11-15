@@ -49,7 +49,7 @@ fn burns(
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn custom_and_missing_dimension_infiniburn() {
     let f = tagged_fixture(true);
     let mut w = World::new(&f);
@@ -67,7 +67,7 @@ fn custom_and_missing_dimension_infiniburn() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn refreshed_and_builtin_dimension_infiniburn() {
     let f = fixture().expect("prepared resources");
     let mut w = World::new(f);

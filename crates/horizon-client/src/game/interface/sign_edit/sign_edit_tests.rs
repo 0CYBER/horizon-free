@@ -261,7 +261,7 @@ fn oak_sign() -> &'static str {
 /// `SignBlockEntity.updateSignText` writes only for the sign's own editor,
 /// and `SignBlock.openTextEdit` refuses the click of everyone else.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn one_sign_belongs_to_one_editor() {
     let mut w = Edits::new(&[oak_sign()]);
     w.click(A, SIGN);
@@ -288,7 +288,7 @@ fn one_sign_belongs_to_one_editor() {
 /// block interaction range plus four blocks, or gone from the world
 /// (`playerIsTooFarAwayToEdit`, `Level.getPlayerByUUID`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_sign_lets_its_editor_go_when_they_walk_away_or_leave() {
     let mut w = Edits::new(&[oak_sign()]);
     w.click(A, SIGN);
@@ -317,7 +317,7 @@ fn a_sign_lets_its_editor_go_when_they_walk_away_or_leave() {
 /// `SignBlock.useItemOn`: `otherPlayerIsEditingSign` refuses a dye while
 /// somebody edits the sign, so nothing is coloured and no dye is used up.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_dye_is_refused_while_another_player_edits_the_sign() {
     let mut w = Edits::new(&[
         "setblock 4 100 4 oak_sign{front_text:{messages:[\"hello\",\"\",\"\",\"\"]}}",
@@ -344,7 +344,7 @@ fn a_dye_is_refused_while_another_player_edits_the_sign() {
 /// on a side holding anything but plain text, while a style or an empty line
 /// does not count.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_editor_opens_only_on_plain_text() {
     // The first line of the side (`ComponentSerialization.CODEC` in NBT: a
     // string is a literal, a compound carries the contents), and whether
@@ -377,7 +377,7 @@ fn the_editor_opens_only_on_plain_text() {
 /// `SignBlock.setPlacedBy`: a sign placed with text that is not plain text
 /// keeps it and opens no editor.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_placed_sign_with_a_translated_line_opens_no_editor() {
     let mut w = Edits::new(&["setblock 4 99 4 stone", "setblock 6 99 4 stone"]);
     // The sign item's text (`DataComponents.SIGN_TEXT_FRONT`, which

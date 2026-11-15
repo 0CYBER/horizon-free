@@ -373,7 +373,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn unresolved_profession_preserves_offers_but_cannot_trade_them() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -397,7 +397,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn merchant_handles_edit_offers_and_villager_data() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());

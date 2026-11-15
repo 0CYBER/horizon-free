@@ -48,7 +48,7 @@ fn game_with_open_donkey(gap: f64) -> Game<'static> {
 /// eyes to the box, so a mount moved 5 blocks and then 6.5 blocks away keeps
 /// its menu open.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mount_moved_five_blocks_away_keeps_its_menu_open() {
     let mut game = game_with_open_donkey(5.0);
     game.tick_mount_menu();
@@ -70,7 +70,7 @@ fn a_mount_moved_five_blocks_away_keeps_its_menu_open() {
 /// Past the entity interaction range plus 4 (7 blocks from the box) the menu
 /// closes.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mount_past_seven_blocks_closes_its_menu() {
     let mut game = game_with_open_donkey(7.5);
     game.tick_mount_menu();
@@ -132,7 +132,7 @@ fn box_face(game: &Game<'_>) -> f64 {
 /// interaction range (`Player.isWithinEntityInteractionRange(mount, 4.0)`):
 /// 3 + 4 blocks in survival, 5 + 4 in creative.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_guests_mount_menu_holds_to_its_own_entity_interaction_range_plus_four() {
     let (game, mut guest) = guest_beside_a_donkey(6.5);
     assert!(

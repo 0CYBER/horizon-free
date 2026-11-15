@@ -84,7 +84,7 @@ fn load_saved(game: &mut Game<'_>, clock: Option<i64>) {
 /// out, before the song's own `JUKEBOX_STOP_PLAY`. A sculk sensor beside a
 /// jukebox heard neither insert nor eject: only the song's end.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_insert_posts_two_block_changes_and_an_eject_one() {
     let Some((inserted, popped)) = with_game(|game| {
         place_jukebox(game, false);
@@ -122,7 +122,7 @@ fn an_insert_posts_two_block_changes_and_an_eject_one() {
 /// only inserts when it says there is none, and replacing the slot's item is
 /// `setTheItem`'s own doing. Horizon decided both by the slot.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_has_record_state_decides_both_clicks() {
     let Some((ignored, replaced)) = with_game(|game| {
         // has_record with nothing in the slot: the click pops nothing and the
@@ -182,7 +182,7 @@ fn the_has_record_state_decides_both_clicks() {
 /// clock past the song's end is dropped without a `JUKEBOX_STOP_PLAY`, and a
 /// record saved without a clock is no song at all.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_saved_song_comes_back_without_its_sound() {
     let Some(cases) = with_game(|game| {
         place_jukebox(game, true);

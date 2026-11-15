@@ -52,7 +52,7 @@ fn with_game(test: impl FnOnce(&mut Game<'_>)) {
 /// summon forms report success. The entity id is taken all the same, and the
 /// name is `ItemStack.EMPTY.getItemName()`: an empty component.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn summon_item_succeeds_with_and_without_nbt_without_leaving_an_entity() {
     with_game(|game| {
         for command in [
@@ -83,7 +83,7 @@ fn summon_item_succeeds_with_and_without_nbt_without_leaving_an_entity() {
 /// position is `SummonCommand`'s `snapTo` and nothing unsticks it, so an orb
 /// summoned against the top of a block stays where it was asked for.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_summoned_orb_keeps_the_position_it_was_asked_for() {
     with_game(|game| {
         assert!(game.run_command("setblock 4 100 4 stone"));

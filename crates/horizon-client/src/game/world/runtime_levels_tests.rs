@@ -294,7 +294,7 @@ fn tick_post(game: &mut super::Game<'_>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_opens_only_ids_in_its_own_namespace() {
     for (id, expected) in [
         ("other:x", Err(RuntimeLevelError::OutsideNamespace)),
@@ -324,7 +324,7 @@ fn a_mod_opens_only_ids_in_its_own_namespace() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn nothing_opens_inside_a_tick_and_the_queue_is_applied_after_the_levels() {
     with_opener("phase", "phase:a", flat(), |game, seen| {
         tick_post(game);
@@ -343,7 +343,7 @@ fn nothing_opens_inside_a_tick_and_the_queue_is_applied_after_the_levels() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_handle_from_before_an_unload_never_names_the_reopened_level() {
     with_opener("stale", "stale:a", flat(), |game, seen| {
         tick_post(game);
@@ -372,7 +372,7 @@ fn a_handle_from_before_an_unload_never_names_the_reopened_level() {
 /// The idle close drops a runtime level from memory as any level, but it stays open: entering
 /// it opens it again with the same handle, and only `unload` closes it for good.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_idle_close_keeps_a_runtime_level_open_until_its_unload() {
     with_opener("idle", "idle:a", flat(), |game, seen| {
         tick_post(game);
@@ -398,7 +398,7 @@ fn the_idle_close_keeps_a_runtime_level_open_until_its_unload() {
 /// An unload whose save fails leaves the level open and in place: the mod can unload it again,
 /// and that unload goes through once the save can be written.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_failed_unload_leaves_the_level_open_for_a_retry() {
     with_opener("stuck", "stuck:a", flat(), |game, _| {
         tick_post(game);
@@ -424,7 +424,7 @@ fn a_failed_unload_leaves_the_level_open_for_a_retry() {
 /// A save a mod asked for, then an unload in the same tick: the save leaves with the level, so
 /// the next tick does not open it again.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_unload_drops_a_save_waiting_for_its_level() {
     with_opener("saved", "saved:a", flat(), |game, seen| {
         tick_post(game);
@@ -442,7 +442,7 @@ fn an_unload_drops_a_save_waiting_for_its_level() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_level_with_a_player_in_it_is_not_unloaded() {
     with_opener("crowd", "crowd:a", flat(), |game, seen| {
         tick_post(game);
@@ -470,7 +470,7 @@ fn a_level_with_a_player_in_it_is_not_unloaded() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_reopened_level_comes_back_from_its_folder_with_its_block() {
     with_opener("keep", "keep:a", flat(), |game, seen| {
         let stone = game
@@ -525,7 +525,7 @@ fn a_reopened_level_comes_back_from_its_folder_with_its_block() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn failed_construction_rolls_back_every_published_table() {
     with_opener("rollback", "rollback:a", flat(), |game, seen| {
         tick_post(game);
@@ -558,7 +558,7 @@ fn failed_construction_rolls_back_every_published_table() {
 /// Deleting an open, empty level closes it, then removes its folder and the structure references
 /// kept beside the world, and the folders they leave empty.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_closes_the_level_and_removes_its_folder_and_references_file() {
     with_opener("erase", "erase:instance/ab", flat(), |game, seen| {
         tick_post(game);
@@ -597,7 +597,7 @@ fn a_delete_closes_the_level_and_removes_its_folder_and_references_file() {
 
 /// A level that is not open, in the mod's namespace, is only files: what a crash left.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_of_a_level_that_is_not_open_removes_its_leftovers() {
     with_opener("left", "left:room", flat(), |game, seen| {
         let folder = game.world_root.join("dimensions/left/room");
@@ -630,7 +630,7 @@ fn a_delete_of_a_level_that_is_not_open_removes_its_leftovers() {
 /// The folder of another mod's level, of a vanilla level and of a path that leaves the world is
 /// never touched.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_outside_the_mods_namespace_is_refused_and_removes_nothing() {
     with_opener("mine", "mine:a", flat(), |game, _| {
         let other = game.world_root.join("dimensions/other/x/region/r.0.0.mca");
@@ -657,7 +657,7 @@ fn a_delete_outside_the_mods_namespace_is_refused_and_removes_nothing() {
 
 /// A level deleted and opened again starts empty: the block placed before is gone.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_level_opened_again_after_a_delete_starts_empty() {
     with_opener("fresh", "fresh:a", flat(), |game, seen| {
         let stone = game
@@ -702,7 +702,7 @@ fn a_level_opened_again_after_a_delete_starts_empty() {
 /// An open made after the delete of a level that is not open is applied after it: the leftovers
 /// are gone before the level opens.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_open_queued_behind_a_delete_of_leftovers_finds_no_folder() {
     with_opener("behind", "behind:a", flat(), |game, seen| {
         let leftover = game.world_root.join("dimensions/behind/a/region/r.0.0.mca");
@@ -719,7 +719,7 @@ fn an_open_queued_behind_a_delete_of_leftovers_finds_no_folder() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_level_with_a_player_in_it_is_not_deleted() {
     with_opener("guest", "guest:a", flat(), |game, _| {
         tick_post(game);
@@ -753,7 +753,7 @@ fn a_level_with_a_player_in_it_is_not_deleted() {
 /// A delete asked inside a level's tick leaves the level and its files as they are until the
 /// queue is applied after the levels.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_is_applied_after_the_levels_and_not_inside_a_tick() {
     with_opener("later", "later:a", flat(), |game, seen| {
         tick_post(game);
@@ -777,7 +777,7 @@ fn a_delete_is_applied_after_the_levels_and_not_inside_a_tick() {
 
 /// A delete of a level whose open is still waiting is refused: its open comes first.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_of_a_level_still_waiting_to_open_is_refused() {
     with_opener("wait", "wait:a", flat(), |game, _| {
         tick_post(game);
@@ -817,7 +817,7 @@ fn a_delete_marks_an_open_level_closing_and_a_second_unload_finds_it_not_open() 
 /// The folders of levels nest: a delete of a level with a level below it, open or only a folder,
 /// is refused and removes nothing of either.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_of_a_level_with_a_level_below_it_is_refused() {
     with_opener("kid", "kid:instance/ab", flat(), |game, _| {
         let parent_file = game
@@ -853,7 +853,7 @@ fn a_delete_of_a_level_with_a_level_below_it_is_refused() {
 /// A level below that only exists as a folder, as after a crash, stops the delete too, even when
 /// its folder has the name of one a level writes.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_stops_at_a_folder_that_holds_a_level() {
     with_opener("fold", "fold:unused", flat(), |game, _| {
         let child = game
@@ -904,7 +904,7 @@ fn a_delete_stops_at_a_folder_that_holds_a_level() {
 /// Two ids can name one structure references file (`a_b:c`, `a:b_c`): a delete of one keeps the
 /// file while the other exists, and removes it once the other is gone.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_keeps_a_references_file_another_level_shares() {
     with_opener("a_b", "a_b:c", flat(), |game, _| {
         let mine = game.world_root.join("dimensions/a_b/c/region/r.0.0.mca");
@@ -933,7 +933,7 @@ fn a_delete_keeps_a_references_file_another_level_shares() {
 /// A removal that fails leaves the level closed, its id kept from `open` until a `delete` has
 /// removed the files.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_failed_removal_leaves_the_level_closed_and_its_id_closed_to_open() {
     with_opener("stuck2", "stuck2:a", flat(), |game, seen| {
         tick_post(game);
@@ -977,7 +977,7 @@ fn a_failed_removal_leaves_the_level_closed_and_its_id_closed_to_open() {
 /// An `open` made after the `delete` of leftovers is applied after it; if the removal failed it
 /// is dropped, so the level never starts from the files that are left.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_open_queued_behind_a_failed_removal_is_dropped() {
     with_opener("behind2", "behind2:a", flat(), |game, seen| {
         let leftover = game
@@ -1029,7 +1029,7 @@ fn remove_link(link: &std::path::Path) {
 /// A link under `dimensions` or `data`, or one of the two being a link, is never followed out of
 /// the world, and nothing is removed first.
 #[test]
-#[ignore = "needs permission to create a symbolic link or junction"]
+#[ignore = "daily"]
 fn a_removal_does_not_follow_links_out_of_the_world() {
     let root = TempRoot::new("links");
     let outside = root.0.join("outside");
@@ -1121,7 +1121,7 @@ impl Drop for Lock {
 /// its id is refused to `open`, the file is still there, and a `delete` asked again, once the
 /// file can go, finishes the work.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_removal_that_fails_part_way_is_finished_by_a_second_delete() {
     with_opener("part", "part:a", flat(), |game, seen| {
         tick_post(game);
@@ -1200,7 +1200,7 @@ impl Drop for UnreadableFolder {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_refuses_unreadable_data_and_removes_nothing() {
     with_opener("blind", "blind:a", flat(), |game, _| {
         let folder = game.world_root.join("dimensions/blind/a");
@@ -1228,7 +1228,7 @@ fn a_delete_refuses_unreadable_data_and_removes_nothing() {
 
 #[cfg(unix)]
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_delete_keeps_references_when_shared_level_metadata_is_unreadable() {
     with_opener("a_b", "a_b:c", flat(), |game, _| {
         let folder = game.world_root.join("dimensions/a_b/c");

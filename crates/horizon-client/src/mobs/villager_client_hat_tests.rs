@@ -1,6 +1,6 @@
 use super::*;
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn engineer_hat_full_and_none_control_type_head() {
     use horizon_assets::resource_source::Resource;
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());

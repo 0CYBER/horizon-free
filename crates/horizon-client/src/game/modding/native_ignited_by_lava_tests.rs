@@ -26,7 +26,7 @@ impl Hooks for LavaMod {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_part_decides_whether_lava_lights_it() {
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new("lava", Box::new(LavaMod))].into();
     crate::game::api_values::install_parts(&mods).unwrap();

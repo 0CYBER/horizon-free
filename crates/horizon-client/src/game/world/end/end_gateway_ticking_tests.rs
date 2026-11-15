@@ -47,7 +47,7 @@ fn item(id: u32, at: Vec3) -> ItemEntity {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn items_past_the_simulation_distance_enter_no_end_gateway() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
@@ -100,7 +100,7 @@ fn items_past_the_simulation_distance_enter_no_end_gateway() {
 /// itself, so `/data get block` reads 0, then 5, then 25 (#13202), also far
 /// from the player, where nothing draws the gateway.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_ticking_gateway_counts_its_age_in_its_block_entity() {
     use horizon_client::containers::BlockEntity;
     let mut game_resources = None;

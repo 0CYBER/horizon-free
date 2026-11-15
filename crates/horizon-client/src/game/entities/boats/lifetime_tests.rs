@@ -33,7 +33,7 @@ fn a_tick_clone_follows_its_join_but_cannot_replace_a_later_resident() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_bound_boat_keeps_its_registration_through_ticks_until_discard() {
     bound_boat_case(false, |game, step| {
         game.tick_boats();
@@ -44,7 +44,7 @@ fn a_bound_boat_keeps_its_registration_through_ticks_until_discard() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_bound_boat_commits_the_driven_client_tick() {
     bound_boat_case(true, |game, step| {
         game.riding = Some(71);
@@ -65,7 +65,7 @@ fn a_bound_boat_commits_the_driven_client_tick() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_bound_ridden_boat_commits_the_server_leash_tick() {
     bound_boat_case(false, |game, step| {
         game.riding = Some(71);

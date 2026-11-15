@@ -354,7 +354,7 @@ pub(super) fn compile(
         .as_ref()
         .map(|patch| patch.installs.as_slice())
         .unwrap_or(&[]);
-    let entry = prebuilt::library_entry(
+    let mut entry = prebuilt::library_entry(
         &template,
         &[],
         &catalog,
@@ -363,6 +363,7 @@ pub(super) fn compile(
         "0",
         installs,
     );
+    entry.push_str(prebuilt::PATCH_HOST_LINK);
     fs::write(out.join("src/lib.rs"), entry).map_err(|e| e.to_string())?;
     let mut manifest = toml::toml! { [package] name = "horizon_patch" version = "0.0.0" edition = "2024" [lib] crate-type = ["dylib"] [workspace] resolver = "2" };
     manifest
@@ -424,7 +425,7 @@ pub(super) fn compile(
     if inventory.added_crates > 0 && !options.consent.is_some_and(|ask| ask(&inventory)) {
         return Err(crate::i18n::tr("Registry dependency compilation was not approved").into());
     }
-    let mut externs = prebuilt::wrapper_externs(&deps, &template)?;
+    let mut externs = prebuilt::wrapper_externs(&deps)?;
     externs.insert("mod_vocab".into(), prebuilt::library(&deps, "mod_vocab")?);
     for (name, path) in &externs {
         prebuilt::refuse_closure_rlib("horizon_patch", name, path)?;
@@ -773,7 +774,7 @@ mod tests {
             api::main_rs(&template, &[], &internals::Catalog::default()),
         )
         .unwrap();
-        let bindings = prebuilt::wrapper_externs(&game.join("deps"), &template).unwrap();
+        let bindings = prebuilt::wrapper_externs(&game.join("deps")).unwrap();
         let mut wrapper_plan = compiler_plan(
             &rust,
             &game,

@@ -81,7 +81,7 @@ mod tests {
     /// A server whose data pack makes stone climbable and sticks planks: the
     /// client reads its tags, not the game's own (#7843).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_servers_block_and_item_tags_replace_the_games() {
         let mut game = client();
         assert!(!game.items().block_tags["minecraft:climbable"].contains("minecraft:stone"));

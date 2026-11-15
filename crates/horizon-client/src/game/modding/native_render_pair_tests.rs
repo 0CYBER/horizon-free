@@ -128,7 +128,7 @@ fn events(heard: &Arc<Mutex<Heard>>) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn two_entities_are_asked_in_the_draw_queues_order() {
     let heard = Arc::default();
     with_pair(&heard, |game| {
@@ -149,7 +149,7 @@ fn two_entities_are_asked_in_the_draw_queues_order() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_canceled_living_pre_skips_the_model_and_the_post_hook() {
     let heard: Arc<Mutex<Heard>> = Arc::default();
     with_pair(&heard, |game| {
@@ -174,7 +174,7 @@ fn a_canceled_living_pre_skips_the_model_and_the_post_hook() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_canceled_entity_draws_no_name_tag() {
     let heard: Arc<Mutex<Heard>> = Arc::default();
     with_pair(&heard, |game| {
@@ -195,7 +195,7 @@ fn a_canceled_entity_draws_no_name_tag() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_culled_entity_is_asked_neither_hook() {
     let heard: Arc<Mutex<Heard>> = Arc::default();
     with_pair(&heard, |game| {
@@ -227,7 +227,7 @@ fn own_player_frame(game: &mut Game<'_>, spectator: bool) -> Vec<Vertex> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_player_pair_wraps_the_living_pair() {
     let heard: Arc<Mutex<Heard>> = Arc::default();
     with_pair(&heard, |game| {
@@ -260,7 +260,7 @@ fn the_player_pair_wraps_the_living_pair() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_spectator_draws_no_layers_but_gets_its_post_hooks() {
     let heard: Arc<Mutex<Heard>> = Arc::default();
     with_pair(&heard, |game| {

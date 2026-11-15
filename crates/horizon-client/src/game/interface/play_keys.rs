@@ -373,7 +373,7 @@ mod swap_hands_tests {
     /// The window's own swap contract: a cancel
     /// keeps both hands, and a listener's stack lands in the off hand.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_own_player_swap_asks_the_listener_for_each_hand() {
         let (cancel, calls) = (
             Arc::new(AtomicBool::new(true)),
@@ -420,7 +420,7 @@ mod swap_hands_tests {
     /// both hands as they were, and a listener's stack reaches its off-hand
     /// slot.
     #[test]
-    #[ignore = "needs prepared resources and isolated scratch homes/cwd"]
+    #[ignore = "daily"]
     fn a_guest_swap_through_its_connection_is_heard_once_and_sends_the_hands() {
         use crate::game::play_ping_tests::{fixture, output};
         use horizon_protocol::packets::play::{self, Clientbound as C, Serverbound as S};

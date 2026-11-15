@@ -42,13 +42,13 @@ fn heard_stone_fall(silent: bool) -> Vec<(f32, f32)> {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn remote_five_block_fall_plays_stone_locally_once() {
     assert_eq!(heard_stone_fall(false), vec![(0.5, 0.75)]);
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn a_silent_local_player_hears_no_block_fall_sound() {
     assert_eq!(heard_stone_fall(true), Vec::new());
 }

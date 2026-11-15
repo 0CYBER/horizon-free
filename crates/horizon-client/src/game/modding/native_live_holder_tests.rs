@@ -157,7 +157,7 @@ pub(super) fn mod_holder(game: &mut super::Game<'_>) -> mod_api::BlockEntityRef 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn data_slot_sizing_after_creation_and_load_joins_the_existing_journal() {
     use mod_api::BlockEntityDataError;
     const NAME: &str = "game::native_live_holder_tests::data_slot_sizing_after_creation_and_load_joins_the_existing_journal";
@@ -294,7 +294,7 @@ impl BlockEntityPart for BothPaths {
 /// declaration, whose type declares no ticker, never reaches the level's
 /// ticking list.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_declared_type_ticks_once_whichever_path_named_it() {
     // The overlay's `.horizon-cache` lives under the working directory and
     // `native_declared()` caches the first fire per process, so tests sharing

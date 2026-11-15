@@ -14,7 +14,7 @@ impl mobs::LiveMobs for OneMob<'_> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn scoped_host_reads_live_other_mob_before_stale_snapshot() {
     with_game(|game| {
         let kind = game
@@ -53,7 +53,7 @@ fn scoped_host_reads_live_other_mob_before_stale_snapshot() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn scoped_host_resolves_other_real_players_from_the_game() {
     use horizon_client::lan::{Joined, PlayerSender, guest::Guest};
     use horizon_protocol::packets::configuration::ClientInformation;

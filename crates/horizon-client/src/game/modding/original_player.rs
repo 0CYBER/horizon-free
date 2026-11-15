@@ -520,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn death_clone_retains_original_and_expires_after_dispatch() {
         crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
             clone_case(true, false);
@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn end_return_clone_retains_end_state_and_expires_after_dispatch() {
         crate::game::native_entity_refs::tests::run_on_guest_stack(|| {
             clone_case(false, true);
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn unsubscribed_clone_does_not_capture() {
         mod_platform::testing::with_mods(Vec::<mod_api::ModEntry>::new().into(), || {
             with_guests(|game| assert!(game.capture_original_player(12).is_none()));

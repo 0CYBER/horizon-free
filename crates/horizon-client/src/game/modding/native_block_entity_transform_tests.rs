@@ -493,7 +493,7 @@ fn structure_transform_hostile_output_keeps_original_identity() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn structure_transform_survives_real_datapack_reload_with_its_registry() {
     use crate::game::{native_entity_refs::tests::with_game, world_loading::WorldRequest};
     let calls = Calls::default();

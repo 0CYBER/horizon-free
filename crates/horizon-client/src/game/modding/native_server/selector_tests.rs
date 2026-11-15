@@ -37,7 +37,7 @@ impl mod_api::Hooks for SelectorCommands {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn native_selectors_deliver_ordered_handles_once_and_refuse_invalid_selections() {
     let heard = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
@@ -322,7 +322,7 @@ fn selector_kinds_publish_vanilla_flags_and_share_parser_suggestions() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn entity_selection_has_no_additional_count_cap() {
     let heard = Arc::new(Mutex::new(Vec::new()));
     mod_platform::testing::with_mods(
@@ -419,7 +419,7 @@ fn in_two_levels(lines: &[(&str, &str, &[u32])]) {
 /// (`in_target_level`): a mod command run from the overworld reaches the entity that lives in
 /// the nether, and each tag picks its own cow, not the one with the other id.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_typed_entity_argument_reaches_an_entity_in_another_level() {
     in_two_levels(&[
         (
@@ -439,7 +439,7 @@ fn a_typed_entity_argument_reaches_an_entity_in_another_level() {
 /// `dx`, `dy` and `dz`) confines it to the source's level, which `execute in` sets; and
 /// `execute as` makes the chosen entity `@s`, not the invoker.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn execute_moves_the_selector_source_to_its_level_and_entity() {
     in_two_levels(&[
         // No positional option: both levels, whatever level the source is in.

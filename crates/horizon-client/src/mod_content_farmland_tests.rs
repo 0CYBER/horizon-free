@@ -153,7 +153,7 @@ fn unknown_farmland_base_is_a_typed_load_error() {
 }
 
 #[test]
-#[ignore = "full content root: needs prepared vanilla data"]
+#[ignore = "daily"]
 fn farmland_base_reaches_drying_cover_and_trample() {
     let Some(base) = prepared() else { return };
     let scratch =

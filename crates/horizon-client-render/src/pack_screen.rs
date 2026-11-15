@@ -2323,7 +2323,7 @@ mod footer_label_tests {
     /// the crash of #6129) it scrolls. A local `Language` per file: the global
     /// language stays as it was.
     #[test]
-    #[ignore = "requires prepared language data in HORIZON_TEST_RESOURCES or .local/horizon-client/26.3"]
+    #[ignore = "daily"]
     fn the_footer_draws_in_every_language_file() {
         let root = std::env::var_os("HORIZON_TEST_RESOURCES")
             .map(std::path::PathBuf::from)

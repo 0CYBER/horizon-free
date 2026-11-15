@@ -1,0 +1,1 @@
+horizon-client game::attachment_instruction_bench::attachment_instruction_count by-hand manual # callgrind measurement; needs HORIZON_TEST_RESOURCES and ATTACHMENT_PASSES parsed as usize; exact-select full test path with --ignored --exact --nocapture; no automated runner currently supplies the opt-in

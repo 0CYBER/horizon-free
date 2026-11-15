@@ -206,7 +206,7 @@ fn a_slime_part_block_is_held_apart_from_honey_as_slime_is() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn refused_adhesion_next_tick_updates_replace_client_replay_before_landing() {
     let f = fixture().expect("prepared resources");
     let slime = state(f, "slime_block");
@@ -328,7 +328,7 @@ fn refused_adhesion_next_tick_updates_replace_client_replay_before_landing() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn failed_part_retraction_corrects_successful_vanilla_replay() {
     let f = fixture().expect("prepared resources");
     let stone = state(f, "stone");

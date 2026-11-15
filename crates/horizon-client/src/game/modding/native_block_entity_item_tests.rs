@@ -18,7 +18,7 @@ fn commit(host: &mut dyn ServerHost, test: impl FnOnce(&mut dyn ServerHost, &Tra
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn internal_slots_preserve_automation_limits_and_nested_transactions() {
     const NAME: &str = "game::native_block_entity_item_tests::internal_slots_preserve_automation_limits_and_nested_transactions";
     with_mod_parts(NAME, |root| {
@@ -126,7 +126,15 @@ fn internal_slots_preserve_automation_limits_and_nested_transactions() {
                 ))
             );
             assert_eq!(get(game, 1), Ok(Some(diamond.clone())));
-            assert!(!game.world.modified.is_empty());
+            assert!(
+                game.world.modified.is_empty(),
+                "raw mod slot writes are silent"
+            );
+            assert!(entity.set_changed(game).unwrap());
+            assert!(
+                !game.world.modified.is_empty(),
+                "explicit notification marks the chunk"
+            );
             let BlockEntity::Mod(holder) = game.world.block_entities.get(&pos).unwrap() else {
                 panic!()
             };
@@ -267,7 +275,7 @@ fn container_holder(game: &mut super::Game<'_>, keys: usize) -> mod_api::BlockEn
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn container_moves_roll_back_slots_and_saved_data_in_any_order() {
     const NAME: &str = "game::native_block_entity_item_tests::container_moves_roll_back_slots_and_saved_data_in_any_order";
     with_mod_parts(NAME, |root| {
@@ -357,7 +365,7 @@ fn holder_state(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_container_move_keeps_one_slot_not_the_entity() {
     const NAME: &str =
         "game::native_block_entity_item_tests::a_container_move_keeps_one_slot_not_the_entity";
@@ -416,7 +424,7 @@ fn a_container_move_keeps_one_slot_not_the_entity() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_child_whole_capture_keeps_its_older_slot_entries() {
     const NAME: &str =
         "game::native_block_entity_item_tests::a_child_whole_capture_keeps_its_older_slot_entries";
@@ -506,7 +514,7 @@ fn a_child_whole_capture_keeps_its_older_slot_entries() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn an_insert_past_a_short_mod_list_rolls_back_its_length() {
     const NAME: &str = "game::native_block_entity_item_tests::an_insert_past_a_short_mod_list_rolls_back_its_length";
     with_mod_parts(NAME, |root| {
@@ -565,7 +573,7 @@ fn slots_at(game: &super::Game<'_>, pos: (i32, i32, i32)) -> Option<Vec<Option<I
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn each_slot_journalled_container_aborts_to_its_exact_stacks() {
     const NAME: &str = "game::native_block_entity_item_tests::each_slot_journalled_container_aborts_to_its_exact_stacks";
     with_mod_parts(NAME, |root| {
@@ -620,7 +628,7 @@ fn each_slot_journalled_container_aborts_to_its_exact_stacks() {
 /// an abort after it doesn't bring the old block back. What the slot journal must not do is
 /// write a kept slot into the block entity that replaced the one it was taken from.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_kept_slot_goes_back_only_into_the_block_entity_it_came_from() {
     const NAME: &str = "game::native_block_entity_item_tests::a_kept_slot_goes_back_only_into_the_block_entity_it_came_from";
     with_mod_parts(NAME, |root| {
@@ -706,7 +714,7 @@ fn timing_container_moves_beside_saved_data() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn storage_asks_a_game_container_by_kind_and_rolls_back_with_its_transaction() {
     const NAME: &str = "game::native_block_entity_item_tests::storage_asks_a_game_container_by_kind_and_rolls_back_with_its_transaction";
     with_mod_parts(NAME, |root| {
@@ -808,7 +816,7 @@ fn whole_state(game: &super::Game<'_>, pos: (i32, i32, i32)) -> String {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn storage_writes_abort_to_the_exact_state_of_every_container_kind() {
     const NAME: &str = "game::native_block_entity_item_tests::storage_writes_abort_to_the_exact_state_of_every_container_kind";
     with_mod_parts(NAME, |root| {
@@ -900,7 +908,7 @@ fn storage_writes_abort_to_the_exact_state_of_every_container_kind() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn an_aborted_bulk_transfer_conserves_every_item() {
     const NAME: &str =
         "game::native_block_entity_item_tests::an_aborted_bulk_transfer_conserves_every_item";

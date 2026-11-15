@@ -977,7 +977,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn replacing_a_gateway_discards_its_old_cooldown() {
         use crate::game::*;
         let root = std::path::PathBuf::from(
@@ -1254,7 +1254,7 @@ mod conduit_target_tests {
     /// (a zombie horse, camel husk, zombie nautilus) are not enemies, so a
     /// conduit beside them picks nothing; a zombie is.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_conduit_hunts_only_enemies() {
         let mut resources = None;
         let mut game = game(&mut resources);
@@ -1275,7 +1275,7 @@ mod conduit_target_tests {
     /// mob and `animationTick` draws one nautilus particle at its eye. A tag
     /// without a `Target` takes the mob away again.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_conduits_target_reaches_the_client_as_a_particle() {
         let mut server_resources = None;
         let mut server = game(&mut server_resources);
@@ -1359,7 +1359,7 @@ mod gateway_age_tests {
     /// `TheEndGatewayBlockEntity.portalTick`: an age that moved is a change
     /// to save.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_gateway_that_ages_marks_the_chunk() {
         let mut resources = None;
         let mut game = server_game(&mut resources);

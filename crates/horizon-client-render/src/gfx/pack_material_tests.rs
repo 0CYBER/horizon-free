@@ -3,7 +3,7 @@ use super::*;
 use wgpu::util::DeviceExt;
 
 #[test]
-#[ignore = "requires a host GPU; missing adapter is a failure"]
+#[ignore = "daily"]
 fn terrain_material_samplers_preserve_surface_and_encoded_bytes() {
     let _gpu = crate::gfx::test_gpu::lock();
     let instance = crate::gfx::test_gpu::instance();

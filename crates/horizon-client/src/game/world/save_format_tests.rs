@@ -4,7 +4,7 @@
 use horizon_core::nbt::parse_snbt;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn ordinary_nested_entities_keep_the_complete_save_format() {
     // Fully specified ordinary-world contract, checked independently on main f8f517a8e4.
     // Do not build this expectation with the serializer being tested: extra engine
