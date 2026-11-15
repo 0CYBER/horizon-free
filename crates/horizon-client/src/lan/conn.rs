@@ -825,6 +825,18 @@ fn refuse(
     user: &str,
     reason: &horizon_world::nbt::Tag,
 ) -> String {
+    let text = log_disconnect(shared, thread, user, reason);
+    login_disconnect(c, reason);
+    text
+}
+
+/// The "Disconnecting" log line of a refusal; returns the reason's text.
+fn log_disconnect(
+    shared: &Shared,
+    thread: &str,
+    user: &str,
+    reason: &horizon_world::nbt::Tag,
+) -> String {
     let text = shared
         .config
         .log
@@ -834,8 +846,22 @@ fn refuse(
     if let Some(log) = &shared.config.log {
         (log.write)(thread, "INFO", &format!("Disconnecting {user}: {text}"));
     }
-    login_disconnect(c, reason);
     text
+}
+
+/// ServerCommonPacketListenerImpl.handleCookieResponse in the configuration state: this server
+/// sends no cookie request there, so an answer is unexpected (DISCONNECT_UNEXPECTED_QUERY) and
+/// ends the connection with a configuration disconnect.
+fn refuse_cookie_in_configuration(
+    c: &mut Connection,
+    shared: &Shared,
+    user: &str,
+) -> Result<Option<Parts>, String> {
+    let reason = translatable("multiplayer.disconnect.unexpected_query_response", &[]);
+    let text = log_disconnect(shared, "Server thread", user, &reason);
+    let _ = c.send(&cfg::Clientbound::Disconnect(cfg::Disconnect { reason }).encode());
+    lost(shared, user, &text);
+    Ok(None)
 }
 
 /// ServerLoginPacketListenerImpl.onDisconnect, once the server thread sees
@@ -1332,6 +1358,9 @@ fn login_and_configure(
                     .unwrap_or(brand);
             }
             cfg::Serverbound::SelectKnownPacks(p) => break p.packs == vec![core.clone()],
+            cfg::Serverbound::CookieResponse(_) => {
+                return refuse_cookie_in_configuration(c, shared, user);
+            }
             _ => {}
         }
     };
@@ -1431,6 +1460,9 @@ fn login_and_configure(
                 }
                 cfg::Serverbound::Pong(p) if p.id == 1 => break,
                 cfg::Serverbound::ClientInformation(i) => info = i,
+                cfg::Serverbound::CookieResponse(_) => {
+                    return refuse_cookie_in_configuration(c, shared, user);
+                }
                 _ => {}
             }
         }
@@ -1469,6 +1501,9 @@ fn login_and_configure(
                 }
                 cfg::Serverbound::Pong(p) if p.id == 0 => break,
                 cfg::Serverbound::ClientInformation(i) => info = i,
+                cfg::Serverbound::CookieResponse(_) => {
+                    return refuse_cookie_in_configuration(c, shared, user);
+                }
                 _ => {}
             }
         }
@@ -1511,6 +1546,9 @@ fn login_and_configure(
         match packet {
             cfg::Serverbound::FinishConfiguration(_) => break,
             cfg::Serverbound::ClientInformation(i) => info = i,
+            cfg::Serverbound::CookieResponse(_) => {
+                return refuse_cookie_in_configuration(c, shared, user);
+            }
             _ => {}
         }
     }
@@ -2425,13 +2463,10 @@ mod tests {
         assert_eq!(guest.uuid, offline_uuid("Alex"));
     }
 
-    /// Logs "Alex" in over memory up to `LoginFinished`, sends `stray` if there is one, then
-    /// `LoginAcknowledged` (so a server that lets the stray packet pass goes on to configuration
-    /// instead of waiting for the next packet), and returns the server's next packet with the lines
-    /// its log has written so far (en_us's text for the one key the refusal uses).
-    fn login_with_stray_packet(
-        stray: Option<login::Serverbound>,
-    ) -> ((i32, Vec<u8>), Arc<Mutex<Vec<String>>>) {
+    /// Logs "Alex" in over memory up to `LoginFinished`; returns the server (kept alive by the
+    /// caller), the connection and the lines the server's log writes (en_us's text for the one key
+    /// the refusals use).
+    fn alex_logged_in() -> (crate::lan::Lan, Connection, Arc<Mutex<Vec<String>>>) {
         let lines = Arc::new(Mutex::new(Vec::<String>::new()));
         let into = lines.clone();
         let mut lang = horizon_protocol::text::Language::new();
@@ -2479,12 +2514,100 @@ mod tests {
                 other => panic!("unexpected login packet {other:?}"),
             }
         }
+        (lan, c, lines)
+    }
+
+    /// `alex_logged_in`, then sends `stray` if there is one and `LoginAcknowledged` (so a server
+    /// that lets the stray packet pass goes on to configuration instead of waiting for the next
+    /// packet), and returns the server's next packet with the lines its log has written so far.
+    fn login_with_stray_packet(
+        stray: Option<login::Serverbound>,
+    ) -> ((i32, Vec<u8>), Arc<Mutex<Vec<String>>>) {
+        let (_lan, mut c, lines) = alex_logged_in();
         if let Some(stray) = stray {
             c.send(&stray.encode()).unwrap();
         }
         // A server that has already refused the login may have closed the connection.
         let _ = c.send(&login::Serverbound::LoginAcknowledged(Empty).encode());
         (c.recv().unwrap(), lines)
+    }
+
+    /// `ServerCommonPacketListenerImpl.handleCookieResponse` in the configuration state: this
+    /// server sends no cookie request there, so an answer is unexpected and ends the connection
+    /// with a configuration disconnect, before the player joins. `after` is the clientbound
+    /// packet the client waits for before it sends the cookie response (it answers the known packs
+    /// on the way).
+    fn assert_cookie_refused_in_configuration(after: i32) {
+        use horizon_protocol::ids::configuration::clientbound::{DISCONNECT, SELECT_KNOWN_PACKS};
+        let (_lan, mut c, lines) = alex_logged_in();
+        c.send(&login::Serverbound::LoginAcknowledged(Empty).encode())
+            .unwrap();
+        loop {
+            let (id, payload) = c.recv().unwrap();
+            if id == after {
+                break;
+            }
+            assert_ne!(id, DISCONNECT, "refused before the cookie response");
+            // Like a vanilla client: the known packs offered are the ones it knows.
+            if id == SELECT_KNOWN_PACKS {
+                let cfg::Clientbound::SelectKnownPacks(offer) =
+                    cfg::Clientbound::decode(id, &payload).unwrap()
+                else {
+                    panic!("not the known packs")
+                };
+                c.send(&cfg::Serverbound::SelectKnownPacks(offer).encode())
+                    .unwrap();
+            }
+        }
+        c.send(
+            &cfg::Serverbound::CookieResponse(cfg::CookieResponse {
+                key: "horizon:test".into(),
+                payload: None,
+            })
+            .encode(),
+        )
+        .unwrap();
+        loop {
+            let (id, payload) = c.recv().expect("the server closed without a disconnect");
+            if id != DISCONNECT {
+                continue;
+            }
+            let cfg::Clientbound::Disconnect(reason) =
+                cfg::Clientbound::decode(id, &payload).unwrap()
+            else {
+                panic!("not a configuration disconnect")
+            };
+            assert_eq!(
+                format!("{:?}", reason.reason),
+                format!(
+                    "{:?}",
+                    translatable("multiplayer.disconnect.unexpected_query_response", &[])
+                ),
+            );
+            break;
+        }
+        let user = "Alex (<ip address withheld>)";
+        let expected = [
+            format!("Disconnecting {user}: Unexpected custom data from client"),
+            format!("{user} lost connection: Unexpected custom data from client"),
+        ];
+        let until = Instant::now() + Duration::from_secs(10);
+        while lines.lock().unwrap().len() < expected.len() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(*lines.lock().unwrap(), expected);
+    }
+
+    #[test]
+    fn a_configuration_cookie_response_before_the_known_packs_disconnects_the_client() {
+        use horizon_protocol::ids::configuration::clientbound::SELECT_KNOWN_PACKS;
+        assert_cookie_refused_in_configuration(SELECT_KNOWN_PACKS);
+    }
+
+    #[test]
+    fn a_configuration_cookie_response_while_it_finishes_disconnects_the_client() {
+        use horizon_protocol::ids::configuration::clientbound::FINISH_CONFIGURATION;
+        assert_cookie_refused_in_configuration(FINISH_CONFIGURATION);
     }
 
     /// `ServerLoginPacketListenerImpl.handleCustomQueryPacket` and `handleCookieResponse`: this
