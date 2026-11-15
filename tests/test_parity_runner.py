@@ -156,6 +156,26 @@ class ParityRunnerTests(unittest.TestCase):
             source.write_text("two!")
             self.assertTrue(parity.stale("x", state, hasher, "env"))
 
+    def test_a_group_file_added_after_the_record_counts(self):
+        # tools/command_exec_groups/ modules are found by file name (#16833): one added later is in no record.
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)),                 mock.patch.object(parity, "SHARED", Path(temp, "shared")):
+            groups = Path(temp, "tools", "command_exec_groups")
+            groups.mkdir(parents=True)
+            (groups / "old.py").write_text("old")
+            found = {name: Path(temp, "tools", f"test_{name}_parity.py") for name in ("command_exec", "food")}
+            records = {"command_exec": {"status": "pass", "dependencies": ["tools/command_exec_groups/old.py"]},
+                       "food": {"status": "pass", "dependencies": ["tools/lab.py"]}}
+            state = {"harnesses": records, "hashes": {}}
+            hasher = parity.Hasher(state["hashes"])
+            for record in records.values():
+                record["key"] = parity.key(record, hasher, "env")
+            self.assertFalse(parity.stale("command_exec", state, hasher, "env"))
+            (groups / "new.py").write_text("new")
+            self.assertTrue(parity.stale("command_exec", state, hasher, "env"))
+            self.assertFalse(parity.stale("food", state, hasher, "env"))
+            self.assertEqual(parity.affected_harnesses(found, records, {"tools/command_exec_groups/new.py"}),
+                             {"command_exec"})
+
     def test_a_change_affects_the_harnesses_that_depend_on_it(self):
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)), \
                 mock.patch.object(parity, "SHARED", Path(temp, "shared")):
