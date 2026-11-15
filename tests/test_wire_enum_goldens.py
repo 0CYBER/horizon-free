@@ -32,7 +32,7 @@ class WireEnumDiscoveryTests(unittest.TestCase):
             fn portable(c: char) -> bool { matches!(c, '/' | '\\' | '"' | '{' | '\u{7f}') }
             fn message() -> &'static str { "a mod's state crosses one link \
                 group: not { every target" }
-            #[doc = r" a raw "quote" and } brace"] fn raw() {}
+            #[doc = r#" a raw "quote and } brace"#] fn raw() {}
             enum Plain { A, B }
             #[automatically_derived] impl ::mod_api::wire::Wire for Plain {}
         }
