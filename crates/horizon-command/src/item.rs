@@ -28,6 +28,7 @@ fn int_of(t: &Tag) -> Option<i64> {
 pub const DECODED_COMPONENTS: &[&str] = &[
     "minecraft:cat/sound_variant",
     "minecraft:cat/variant",
+    "minecraft:chicken/variant",
     "minecraft:wolf/sound_variant",
     "minecraft:wolf/variant",
     "minecraft:container_loot",

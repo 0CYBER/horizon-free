@@ -1,13 +1,14 @@
-//! Persistent registry holders used by cat and wolf item components.
+//! Persistent registry holders used by animal item components.
 use super::resolvable::identifier;
 use horizon_client_core::registries::Registries;
 use horizon_core::nbt::Tag;
 
-/// `DataComponents`: these four codecs use registry references, never inline records.
+/// `DataComponents`: these codecs use registry references, never inline records.
 pub fn registry(component: &str) -> Option<&'static str> {
     Some(match component {
         "minecraft:cat/sound_variant" => "minecraft:cat_sound_variant",
         "minecraft:cat/variant" => "minecraft:cat_variant",
+        "minecraft:chicken/variant" => "minecraft:chicken_variant",
         "minecraft:wolf/sound_variant" => "minecraft:wolf_sound_variant",
         "minecraft:wolf/variant" => "minecraft:wolf_variant",
         _ => return None,
