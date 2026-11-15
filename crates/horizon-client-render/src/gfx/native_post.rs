@@ -600,9 +600,9 @@ impl NativeFrame {
     }
 
     /// What the shadow camera sees this frame, for the renderer's shadow lists.
-    pub fn shadow_view(&self, frame: &Frame) -> Option<super::pack_post::ShadowView> {
+    pub fn shadow_view(&self, frame: &Frame) -> Option<super::external::ShadowView> {
         let camera = self.shadow_camera.as_ref()?;
-        Some(super::pack_post::ShadowView {
+        Some(super::external::ShadowView {
             cull: super::pack_uniforms::shadow_culling(frame, camera),
             light: super::pack_uniforms::shadow_light(frame, camera),
             // The light's box culls: on the ground it reaches further than `distance` along

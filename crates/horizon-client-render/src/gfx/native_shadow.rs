@@ -756,6 +756,126 @@ impl NativeShadow {
     }
 }
 
+/// What the renderer hands the shadow passes each frame.
+pub struct ShadowDraws<'a> {
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    pub timing: Option<&'a mut super::pack_timing::PassTiming>,
+    /// What the light sees, when the frame asked for a shadow view.
+    pub lists: Option<ShadowLists<'a>>,
+}
+
+/// The renderer's lists of what the light sees, and what they draw from.
+pub struct ShadowLists<'a> {
+    /// The world's group 0.
+    pub group: &'a wgpu::BindGroup,
+    pub sections: super::SectionLists<'a>,
+    /// The frame draws its terrain flat (`sections.flat`'s shadow calls).
+    pub flat_frame: bool,
+    pub instances: &'a wgpu::Buffer,
+    pub indirect: &'a wgpu::Buffer,
+    /// The light's first draw, its solid draws and its translucent draws after them.
+    pub draws: [u32; 3],
+    /// The entities' group 0 and vertices: `entity_quads` from the start, then
+    /// `shadow_only_quads` before the GPU-posed outlines at `outline_base`.
+    pub entity_group: &'a wgpu::BindGroup,
+    pub entity_vertices: &'a wgpu::Buffer,
+    pub entity_quads: u32,
+    pub shadow_only_quads: u32,
+    pub outline_base: u32,
+}
+
+impl super::native_pack::NativePack {
+    /// The pack's shadow passes (`[shadow]`): the solid terrain the light sees into its shadow
+    /// map, the translucent over a copy of it, then the entities. A pack without one gets its
+    /// 1×1 map cleared to "far" once.
+    pub fn draw_shadow(&mut self, draws: ShadowDraws<'_>) {
+        let ShadowDraws {
+            encoder,
+            mut timing,
+            lists,
+        } = draws;
+        self.frame.shadow_map.clear_blank(encoder);
+        let (Some(lists), Some(shadow)) = (lists, &self.shadow) else {
+            return;
+        };
+        let map = &self.frame.shadow_map;
+        let sections = &lists.sections;
+        let [first, solid, translucent] = lists.draws;
+        let mut pass = map.begin(encoder, "Native shader pack shadow", timing.as_deref_mut());
+        pass.set_bind_group(0, lists.group, &[]);
+        pass.set_bind_group(GROUP, &shadow.group, &[]);
+        if lists.flat_frame
+            && let Some(flat) = sections.flat
+            && let Some(pipeline) = &shadow.flat
+        {
+            pass.set_pipeline(pipeline);
+            let [first, translucent] = flat.shadow_calls;
+            flat.draw(
+                &mut pass,
+                &flat.calls[first..translucent],
+                sections.flat_vertices(),
+            );
+        } else if !lists.flat_frame {
+            pass.set_pipeline(&shadow.solid);
+            pass.set_index_buffer(sections.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(1, lists.instances.slice(..));
+            let pulled = sections.flat.is_some();
+            sections.draw(&mut pass, lists.indirect, 0, first, solid, pulled);
+        }
+        // `[displacement]`'s grid casts in place of the flat quads it took over.
+        if let Some((d, picks, pipeline)) = self
+            .displacement
+            .as_ref()
+            .and_then(|d| Some((d, d.shadow.as_ref()?, shadow.displaced.as_ref()?)))
+        {
+            d.draw(&mut pass, picks, pipeline);
+        }
+        drop(pass);
+        let mut pass =
+            map.begin_translucent(encoder, "Native shader pack translucent shadow", timing);
+        pass.set_bind_group(0, lists.group, &[]);
+        pass.set_bind_group(GROUP, &shadow.group, &[]);
+        if lists.flat_frame
+            && let Some(flat) = sections.flat
+            && let Some(pipeline) = &shadow.flat_translucent
+        {
+            pass.set_pipeline(pipeline);
+            let [_, translucent] = flat.shadow_calls;
+            flat.draw(
+                &mut pass,
+                &flat.calls[translucent..],
+                sections.flat_vertices(),
+            );
+        } else if !lists.flat_frame {
+            pass.set_pipeline(&shadow.translucent);
+            pass.set_index_buffer(sections.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_vertex_buffer(1, lists.instances.slice(..));
+            sections.draw(
+                &mut pass,
+                lists.indirect,
+                0,
+                first + solid,
+                translucent,
+                false,
+            );
+        }
+        drop(pass);
+        let (quads, shadow_only) = (lists.entity_quads, lists.shadow_only_quads);
+        if quads > 0 || shadow_only > 0 {
+            let mut pass = map.begin_entities(encoder, "Native shader pack entity shadow");
+            pass.set_pipeline(&shadow.entity);
+            pass.set_bind_group(0, lists.entity_group, &[]);
+            pass.set_bind_group(GROUP, &shadow.group, &[]);
+            pass.set_vertex_buffer(0, lists.entity_vertices.slice(..));
+            pass.set_index_buffer(sections.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..quads * 6, 0, 0..1);
+            // Before the GPU-posed outlines (`EntityBatch::append_shadow_only`).
+            let first = lists.outline_base - shadow_only * 4;
+            pass.draw_indexed(0..shadow_only * 6, first as i32, 0..1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
