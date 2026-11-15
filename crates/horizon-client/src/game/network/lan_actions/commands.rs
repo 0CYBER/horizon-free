@@ -301,6 +301,12 @@ impl Game<'_> {
         };
         let reg = self.suggestion_registries();
         let level = std::mem::replace(&mut reg.permission, permission);
+        let own_sender = reg
+            .sender
+            .replace(horizon_client_core::registries::CommandSender {
+                uuid: player_uuid,
+                name: player_name.clone(),
+            });
         let own_players = std::mem::replace(&mut reg.players, players);
         let own_ops = std::mem::replace(&mut reg.ops, ops);
         let own_banned = std::mem::replace(&mut reg.banned_players, banned_players);
@@ -308,8 +314,11 @@ impl Game<'_> {
         let own_whitelisted = std::mem::replace(&mut reg.whitelisted, whitelisted);
         let own_triggers = std::mem::replace(&mut reg.trigger_objectives, triggers);
         let parse = d.parse(command, &self.ui.registries);
+        // Commands.sendCommands prunes the tree a player's client completes from; the answer the
+        // server sends follows the same test, so a child literal of a path the sender may not run
+        // is not offered either (Bukkit hides it; brigadier alone lists every child).
         let ((start, end), mut suggestions) =
-            d.suggestions(&parse, command.len(), &self.ui.registries);
+            d.client_suggestions(&parse, command.len(), &self.ui.registries);
         self.native_tab_complete(
             player_uuid,
             &player_name,
@@ -319,6 +328,7 @@ impl Game<'_> {
         );
         let reg = self.suggestion_registries();
         reg.permission = level;
+        reg.sender = own_sender;
         reg.players = own_players;
         reg.ops = own_ops;
         reg.banned_players = own_banned;

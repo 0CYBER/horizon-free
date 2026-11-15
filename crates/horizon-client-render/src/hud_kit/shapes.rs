@@ -445,6 +445,45 @@ mod tests {
     }
 
     #[test]
+    fn a_clipped_rectangle_gradient_keeps_its_colour_ramp() {
+        let atlas = atlas();
+        let top = rgba(255, 0, 0, 255);
+        let bottom = rgba(0, 0, 255, 255);
+        let mut contained = batch();
+        contained.fill_gradient(&atlas, (10.0, 10.0, 20.0, 8.0), top, bottom);
+        let original: Vec<_> = contained.vertices.iter().map(|v| v.color).collect();
+        contained.clip_since(0, 0.0, 0.0, 100.0, 100.0);
+        assert_eq!(
+            contained
+                .vertices
+                .iter()
+                .map(|v| v.color)
+                .collect::<Vec<_>>(),
+            original
+        );
+
+        let mut cut = batch();
+        cut.fill_gradient(&atlas, (10.0, 10.0, 20.0, 8.0), top, bottom);
+        cut.clip_since(0, 0.0, 12.0, 100.0, 16.0);
+        let top_cut = rgba(191, 0, 64, 255);
+        let bottom_cut = rgba(64, 0, 191, 255);
+        assert!(
+            cut.vertices
+                .iter()
+                .all(|v| v.pos[1] == 12.0 || v.pos[1] == 16.0)
+        );
+        let top_vertices: Vec<_> = cut.vertices.iter().filter(|v| v.pos[1] == 12.0).collect();
+        let bottom_vertices: Vec<_> = cut.vertices.iter().filter(|v| v.pos[1] == 16.0).collect();
+        assert!(!top_vertices.is_empty(), "clip has no top edge vertices");
+        assert!(
+            !bottom_vertices.is_empty(),
+            "clip has no bottom edge vertices"
+        );
+        assert!(top_vertices.iter().all(|v| v.color == top_cut));
+        assert!(bottom_vertices.iter().all(|v| v.color == bottom_cut));
+    }
+
+    #[test]
     fn alpha_and_translate_change_only_what_came_after_the_mark() {
         let atlas = atlas();
         let mut b = batch();

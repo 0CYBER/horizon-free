@@ -807,7 +807,7 @@ impl Game<'_> {
                 Some(true) => {
                     self.audio.play_button_click();
                     let reason = Text::translate("menu.custom_screen_info.disconnect", &[]);
-                    return self.leave_server(Some(reason.plain()));
+                    return self.leave_server(Some(reason));
                 }
                 Some(false) => {
                     self.audio.play_button_click();

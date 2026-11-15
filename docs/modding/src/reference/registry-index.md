@@ -62,6 +62,11 @@ entry leaves out.
 Readers ignore fields they don't know, so an optional field can be added to schema 1. Renaming or removing a field, or
 changing what one means, makes schema 2.
 
+The registry's CI holds the whole index to these rules. A reader keeps what passes them: a version that breaks one is
+left out with its reason, a project left with no version goes too, a modpack version whose mod was left out goes with
+it, and an id listed twice leaves out every project with that id. The rest of the index still loads; only text that is
+not an index, or a newer schema, fails as a whole.
+
 Each version may list `native_binaries`, an array of records with `build` (the
 exact game build ID, at most 128 bytes with no ASCII control characters), `target` (the canonical Rust target triple), and `file`.
 The file uses the index's existing name, URL, size, SHA-256 and minisign signature
