@@ -1056,6 +1056,10 @@ pub(in crate::game) fn register_iterated_registries(
         mod_api::__private::resolve_entity_types(ids.names.iter().map(String::as_str))
             .map_err(|errors| errors.join("\n"))?;
     }
+    if let Some(ids) = builtin.get("minecraft:game_event") {
+        mod_api::__private::resolve_game_events(ids.names.iter().map(String::as_str))
+            .map_err(|errors| errors.join("\n"))?;
+    }
     if let Some(ids) = builtin.get("minecraft:menu") {
         mod_api::__private::resolve_menus(ids.names.iter().map(String::as_str))
             .map_err(|errors| errors.join("\n"))?;

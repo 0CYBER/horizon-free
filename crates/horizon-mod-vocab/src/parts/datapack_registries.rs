@@ -5,6 +5,12 @@ use crate::world::datapack_registry::{
 
 /// The datapack registries mods declared.
 pub fn datapack_registry_declarations() -> &'static [DatapackRegistryDeclaration] {
+    // A fixture's installed mods own its declarations. Process-wide declarations are
+    // only the fallback for connection threads without an inherited fixture snapshot.
+    #[cfg(any(test, feature = "testing"))]
+    if let Some(installed) = crate::parts::TEST_PARTS.get() {
+        return &installed.datapack_registries;
+    }
     #[cfg(any(test, feature = "testing"))]
     if let Some(declarations) = PROCESS_DECLARATIONS.get() {
         return declarations;
@@ -14,7 +20,7 @@ pub fn datapack_registry_declarations() -> &'static [DatapackRegistryDeclaration
 
 /// Declarations a test process shares with every thread. A test's own installation is per
 /// thread, but the connection a server answers a client on runs on threads the test did not
-/// start.
+/// start. A thread's scoped installation takes precedence over this fallback.
 #[cfg(any(test, feature = "testing"))]
 static PROCESS_DECLARATIONS: OnceLock<Vec<DatapackRegistryDeclaration>> = OnceLock::new();
 

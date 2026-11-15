@@ -84,7 +84,7 @@ macro_rules! typed_entries {
         impl entry::Entry for $key {
             const REGISTRY: &'static str = $registry;
             fn id(&self, backend: &dyn Backend) -> Result<String, DataMapError> {
-                Ok(backend.$id(*self))
+                key_id_result(backend.$id(*self))
             }
         }
         impl $key {
@@ -108,7 +108,27 @@ macro_rules! typed_entries {
         }
     )+};
 }
+trait KeyIdResult {
+    fn into_result(self) -> Result<String, DataMapError>;
+}
+impl KeyIdResult for String {
+    fn into_result(self) -> Result<String, DataMapError> {
+        Ok(self)
+    }
+}
+impl KeyIdResult for Result<String, crate::GameEventKeyError> {
+    fn into_result(self) -> Result<String, DataMapError> {
+        self.map_err(|error| match error {
+            crate::GameEventKeyError::Unavailable => DataMapError::Unavailable,
+            crate::GameEventKeyError::InvalidKey => DataMapError::InvalidKey,
+        })
+    }
+}
+fn key_id_result(value: impl KeyIdResult) -> Result<String, DataMapError> {
+    value.into_result()
+}
 typed_entries! {
+    crate::GameEventKey => "minecraft:game_event", game_event_key_id;
     ItemKey => "minecraft:item", item_key_id;
     BlockKey => "minecraft:block", block_key_id;
     FluidKey => "minecraft:fluid", fluid_key_id;

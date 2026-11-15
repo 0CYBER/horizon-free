@@ -602,3 +602,46 @@ impl crate::IntGameRuleKey {
         known.then_some(Self(slot)).ok_or("unknown int rule slot")
     }
 }
+
+/// Complete startup game events in builtin registration order.
+pub fn resolve_game_events<'a>(ids: impl IntoIterator<Item = &'a str>) -> Result<(), Vec<String>> {
+    let names = crate::parts::requested_keys()
+        .game_events
+        .complete(ids, |mod_id, id| {
+            format!("mod {mod_id} requested unknown game event {id}")
+        })?;
+    if let Some(installed) = crate::parts::installed() {
+        let _ = installed.resolved_game_events.set(names);
+    }
+    Ok(())
+}
+/// Resolve an exact id in the installed load.
+pub fn game_event_key(id: &str) -> Option<crate::GameEventKey> {
+    let names = crate::parts::installed()?.resolved_game_events.get()?;
+    Some(crate::GameEventKey(*names.slots.get(id)?))
+}
+/// Read an installed slot without trusting a retained mod key.
+pub fn game_event_key_id(key: crate::GameEventKey) -> Option<String> {
+    crate::parts::registration_name(crate::parts::RegistrationKeyKind::GameEvent, key.0).or_else(
+        || {
+            crate::parts::installed()?
+                .resolved_game_events
+                .get()?
+                .id(key.0)
+                .map(str::to_owned)
+        },
+    )
+}
+impl crate::GameEventKey {
+    #[cfg(any(not(target_arch = "wasm32"), test))]
+    pub(crate) fn from_slot(slot: u32) -> Result<Self, &'static str> {
+        crate::parts::registration_membership(crate::parts::RegistrationKeyKind::GameEvent, slot)
+            .unwrap_or_else(|| {
+                crate::parts::installed()
+                    .and_then(|installed| installed.resolved_game_events.get())
+                    .is_some_and(|names| names.id(slot).is_some())
+            })
+            .then_some(Self(slot))
+            .ok_or("unknown GameEventKey slot")
+    }
+}

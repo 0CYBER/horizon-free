@@ -13,6 +13,7 @@ pub enum RegistrationKeyKind {
     Effect,
     BlockEntityType,
     EntityType,
+    GameEvent,
     Particle,
     GameRule,
 }
@@ -143,6 +144,7 @@ fn names(
         RegistrationKeyKind::Effect => &keys.effects,
         RegistrationKeyKind::BlockEntityType => &keys.block_entity_types,
         RegistrationKeyKind::EntityType => &keys.entity_types,
+        RegistrationKeyKind::GameEvent => &keys.game_events,
         RegistrationKeyKind::Particle => &keys.particles,
         RegistrationKeyKind::GameRule => &keys.game_rules,
     }
