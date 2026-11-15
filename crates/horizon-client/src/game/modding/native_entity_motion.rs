@@ -239,7 +239,7 @@ impl Game<'_> {
     /// The height of the entity's eyes above its feet (`Entity.getEyeHeight`).
     /// API 379.
     pub(super) fn entity_eye_height(&self, entity: EntityRef) -> Option<f64> {
-        Some(self.target_eye_height(self.native_entity_target(entity)?))
+        Some(self.target_eye_height(self.native_entity_read_target(entity)?))
     }
     /// Where the entity's eyes are (`Entity.getEyePosition`). API
     /// 379.

@@ -1,5 +1,6 @@
 //! A player's reach and flight (#3349): whether an entity is within the server's reach rules,
 //! and whether the player may fly (NeoForge's `IPlayerExtension.mayFly`).
+//! A client applies the same rules to its local player and the target's displayed box.
 use super::Game;
 use horizon_core::geometry::{Aabb, Vec3};
 use mod_api::{EntityReach, EntityRef, Hand, LivingRef, PlayerRef};
@@ -205,6 +206,134 @@ mod tests {
             abilities.may_fly = true;
             assert!(game.player_set_abilities(player, abilities));
             assert_eq!(game.player_may_fly(player), Some(true));
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn client_reach_uses_predicted_eyes_and_the_tracked_targets_box() {
+        use crate::game::{
+            native_client_session::tests::logged_client,
+            native_entity_refs::tests::with_client_game,
+        };
+        use horizon_client::motion::PlayerMotion;
+        use horizon_protocol::packets::play;
+
+        with_client_game(|game| {
+            let _server = logged_client(game);
+            game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO).unwrap());
+            let player = game.local_player().unwrap();
+            let me = player.entity();
+            let eye_height = f64::from(game.player.as_ref().unwrap().dimensions.eye_height);
+            let host = &*game as &dyn mod_api::ClientHost;
+            assert_eq!(me.eye_height(host), Some(eye_height));
+            assert_eq!(me.eye_position(host), Some([0.0, eye_height, 0.0]));
+            assert_eq!(
+                LivingRef::new(me).attribute_value(host, "minecraft:entity_interaction_range"),
+                Some(3.0)
+            );
+            // The next read sees a predicted pose's new eye height, with no server update.
+            game.player.as_mut().unwrap().dimensions.eye_height = 0.4;
+            assert_eq!(
+                me.eye_position(&*game as &dyn mod_api::ClientHost),
+                Some([0.0, f64::from(0.4_f32), 0.0])
+            );
+            game.player.as_mut().unwrap().dimensions.eye_height = eye_height as f32;
+
+            // Survival's synced range is 3; strict interact/container limits are 6 and 7,
+            // and attack includes 6. Pig half-width is 0.9f32 / 2 widened to f64.
+            for (id, face, interact, container, attack) in [
+                (20, -0.44999998807907104, true, true, true),
+                (21, 5.5, true, true, true),
+                (22, 6.0, false, true, true),
+                (23, 6.5, false, true, false),
+                (24, 7.0, false, false, false),
+            ] {
+                game.spawn_entity(
+                    id,
+                    "minecraft:pig",
+                    [face + 0.44999998807907104, eye_height - 0.45, 0.0],
+                    [0.0; 3],
+                );
+                let pig = game.entity(id).unwrap();
+                let host = &*game as &dyn mod_api::ClientHost;
+                assert_eq!(pig.bounding_box(host).unwrap()[0][0], face);
+                for (rule, expected) in [
+                    (EntityReach::Interact, interact),
+                    (EntityReach::Container, container),
+                    (EntityReach::Attack, attack),
+                ] {
+                    assert_eq!(
+                        player.within_entity_reach(host, pig, rule),
+                        Some(expected),
+                        "face {face}, {rule:?}"
+                    );
+                }
+            }
+
+            // The client reads its main hand's attack-range component too: min 5, max 6,
+            // margin 0.3 and server buffer 3 admit 9 but refuse a target nearer than 1.7.
+            let mut weapon = ItemStack::new("minecraft:stick", 1);
+            weapon.data_mut().set_other(
+                "minecraft:attack_range",
+                Some(Tag::Compound(
+                    [
+                        ("min_reach".into(), Tag::Float(5.0_f32.to_bits())),
+                        ("max_reach".into(), Tag::Float(6.0_f32.to_bits())),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )),
+            );
+            game.selected = 0;
+            game.inventory[0] = Some(weapon);
+            game.spawn_entity(
+                25,
+                "minecraft:pig",
+                [9.449999988079071, eye_height - 0.45, 0.0],
+                [0.0; 3],
+            );
+            let far = game.entity(25).unwrap();
+            let inside = game.entity(20).unwrap();
+            let host = &*game as &dyn mod_api::ClientHost;
+            assert_eq!(
+                player.within_entity_reach(host, far, EntityReach::Attack),
+                Some(true)
+            );
+            assert_eq!(
+                player.within_entity_reach(host, inside, EntityReach::Attack),
+                Some(false)
+            );
+            assert_eq!(
+                player.within_entity_reach(host, far, EntityReach::Interact),
+                Some(false)
+            );
+            let stale = EntityRef::new(mod_api::WorldEpoch::new(0), 25);
+            assert_eq!(stale.eye_position(host), None);
+            assert_eq!(
+                player.within_entity_reach(host, stale, EntityReach::Interact),
+                None
+            );
+            game.handle_packet(play::Clientbound::RemoveEntities(play::RemoveEntities {
+                ids: vec![25],
+            }))
+            .unwrap();
+            assert_eq!(
+                player.within_entity_reach(
+                    &*game as &dyn mod_api::ClientHost,
+                    far,
+                    EntityReach::Attack
+                ),
+                None
+            );
+            game.remote.as_mut().unwrap().logged_in = false;
+            let host = &*game as &dyn mod_api::ClientHost;
+            assert_eq!(me.eye_height(host), None);
+            assert_eq!(me.eye_position(host), None);
+            assert_eq!(
+                player.within_entity_reach(host, inside, EntityReach::Interact),
+                None
+            );
         });
     }
 }

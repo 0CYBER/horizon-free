@@ -404,7 +404,7 @@ pub trait PlayersBackend {
     /// None for a stale or unavailable player.
     #[access(WorldOnly)]
     fn player_may_fly(&self, player: PlayerRef) -> Option<bool>;
-    /// Side: server.
+    /// Side: both.
     /// Whether `entity` is within the player's reach by the server's rule
     /// `reach` ([`EntityReach`]): from the player's eyes to the closest point
     /// of the entity's box, with the rule's own buffer, the range from the
@@ -413,7 +413,8 @@ pub trait PlayersBackend {
     /// eyes inside the box the distance is 0; there is no ray and no other
     /// fallback. This is the server's check, not the client's pick. None for a
     /// stale player or entity, one whose box Horizon doesn't keep, or one in
-    /// another level.
+    /// another level. On a client, `player` must be the local player: the range and main hand
+    /// are its synced copy, its eye position is predicted, and the target's box is its client copy.
     #[access(WorldOnly)]
     fn player_within_entity_reach(
         &self,
