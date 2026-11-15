@@ -59,9 +59,16 @@ pub fn parse_snbt(text: &str) -> Result<(Tag, usize), String> {
 pub fn snbt_suggestions(text: &str) -> (usize, Vec<String>) {
     let mut parser = Parser::new(Input::Utf8(text));
     parser.collect_suggestions = true;
-    if parser.value().is_ok() && parser.cursor > parser.suggestion_cursor {
-        parser.suggestions.clear();
-        parser.suggestion_cursor = parser.cursor;
+    match parser.value() {
+        Ok(_) if parser.cursor > parser.suggestion_cursor => {
+            parser.suggestions.clear();
+            parser.suggestion_cursor = parser.cursor;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let values: Vec<&str> = error.suggestions.iter().map(String::as_str).collect();
+            parser.record(error.cursor, &values);
+        }
     }
     (parser.suggestion_cursor, parser.suggestions)
 }
@@ -269,10 +276,10 @@ impl<'a> Parser<'a> {
                 Some(0x5c) => self.escape(&mut units)?,
                 Some(c) => push_code_point(&mut units, c),
                 None => {
-                    let mut error = self.error("argument.literal.incorrect");
-                    let quote = char::from_u32(quote).expect("quote").to_string();
-                    error.args.push(quote.clone());
-                    error.suggestions.push(quote);
+                    // The contents rule fails first at the end; the closing quote, the other
+                    // quote and a backslash are what could continue the string.
+                    let mut error = self.error("snbt.parser.invalid_string_contents");
+                    error.suggestions = ["\"", "'", "\\"].map(str::to_owned).to_vec();
                     return Err(error);
                 }
             }
@@ -623,17 +630,7 @@ impl<'a> Parser<'a> {
     }
     fn word(&mut self) -> Result<Tag, SnbtError> {
         let start = self.cursor;
-        let word = match self.unquoted() {
-            Ok(word) => word,
-            Err(mut error) => {
-                let values = [
-                    "false", "true", "bool", "uuid", "{", "[", "\"", "'", "+", "-", "0", ".",
-                ];
-                self.record(error.cursor, &values);
-                error.suggestions = values.map(str::to_owned).to_vec();
-                return Err(error);
-            }
-        };
+        let word = self.unquoted()?;
         if self.eat(b'(') {
             self.enter()?;
             let result = self.arguments(&word);

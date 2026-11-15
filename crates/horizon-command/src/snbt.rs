@@ -46,11 +46,9 @@ pub fn parse_fully(text: &str) -> CmdResult<Tag> {
 /// `ParserBasedArgument.listSuggestions`, using the same grammar as decoding.
 pub fn suggest(builder: &mut SuggestionsBuilder) {
     let (cursor, suggestions) = snbt_suggestions(builder.remaining());
-    let mut offset = SuggestionsBuilder::new(builder.input, builder.start + cursor);
-    for suggestion in suggestions {
-        offset.suggest(suggestion);
-    }
-    builder.out.extend(offset.out);
+    let mut offset = builder.offset(builder.start + cursor);
+    offset.suggest_matching(suggestions.iter().map(String::as_str));
+    builder.add(offset);
 }
 /// Parse with an outer state (TagParseRule inside another grammar).
 pub fn rule_in<V: super::packrat::Value>(
@@ -200,5 +198,32 @@ mod floating_zero_tests {
                 (Tag::Double(expected), bytes.len())
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod suggestion_tests {
+    use super::*;
+
+    fn suggestions(input: &str) -> Vec<String> {
+        let mut builder = SuggestionsBuilder::new(input, 0);
+        suggest(&mut builder);
+        let mut texts: Vec<String> = builder.out.into_iter().map(|s| s.text).collect();
+        texts.sort();
+        texts
+    }
+
+    /// A failed parse offers what could continue it at the furthest position.
+    #[test]
+    fn failed_parses_offer_their_continuations() {
+        assert_eq!(suggestions("{a"), [":"]);
+        assert_eq!(suggestions("[1,"), ["]"]);
+        assert_eq!(suggestions("{\"a"), ["\"", "'", "\\"]);
+    }
+
+    /// Candidates must match the text typed at that position: nothing continues `\q`.
+    #[test]
+    fn candidates_are_filtered_by_the_typed_text() {
+        assert_eq!(suggestions("\"\\q"), Vec::<String>::new());
     }
 }
