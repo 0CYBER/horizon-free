@@ -62,11 +62,46 @@ pub fn day(date: &str) -> String {
     }
 }
 
-/// A Nightly as the Versions page names it, "the Nov 13 update", for `nightly-2026-11-13`
-/// (with or without its commit); None for anything that is not one.
+/// The Nightlies of the last release list read that share their day with another, and the time
+/// (`HH:MM` UTC) each came out: [`same_day_time`] reads it for every screen that names a version.
+static SAME_DAY: std::sync::RwLock<Vec<(String, String)>> = std::sync::RwLock::new(Vec::new());
+
+/// Keeps, from the release list `releases`, when each Nightly that shares its day with another
+/// came out, so every name of it says its time.
+pub fn note_published(releases: &[Release]) {
+    let nightlies: Vec<&Release> = releases.iter().filter(|r| r.nightly.is_some()).collect();
+    let same_day = nightlies
+        .iter()
+        .filter(|r| !r.time.is_empty() && nightlies.iter().filter(|o| o.date == r.date).count() > 1)
+        .map(|r| (r.tag.clone(), r.time.clone()))
+        .collect();
+    *SAME_DAY
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = same_day;
+}
+
+/// When Nightly `version` came out, `HH:MM` UTC, if another came out the same day.
+pub fn same_day_time(version: &str) -> Option<String> {
+    SAME_DAY
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(tag, _)| tag == version)
+        .map(|(_, time)| time.clone())
+}
+
+/// A Nightly as the Versions page names it, "the Nov 13 update" for `nightly-2026-11-13` (with
+/// or without its commit), with its time when another came out that day ("the Nov 13, 07:22 UTC
+/// update"); None for anything that is not one.
 pub fn update_name(version: &str) -> Option<String> {
     let date = date_of(version)?;
-    Some(crate::i18n::trf("the {day} update", &[("day", &day(date))]))
+    Some(match same_day_time(version) {
+        Some(time) => crate::i18n::trf(
+            "the {day}, {time} UTC update",
+            &[("day", &day(date)), ("time", &time)],
+        ),
+        None => crate::i18n::trf("the {day} update", &[("day", &day(date))]),
+    })
 }
 
 /// A full 40-character commit as a player reads it, `b1ff51d9e…`; anything else as it is.
@@ -178,6 +213,33 @@ mod tests {
         assert_eq!(date_of("v0.2.95"), None);
         assert_eq!(date_of("nightly"), None);
         assert!(horizon_release_sign::is_nightly(&version_of(&r)));
+    }
+
+    #[test]
+    fn two_nightlies_of_one_day_are_named_with_their_times() {
+        let nightly = |version: &str, date: &str, time: &str| Release {
+            tag: version.into(),
+            time: time.into(),
+            nightly: Some(NIGHTLY.into()),
+            ..release("", date)
+        };
+        note_published(&[
+            nightly("nightly-2031-03-04-bbbbbbb", "2031-03-04", "18:05"),
+            nightly("nightly-2031-03-04-aaaaaaa", "2031-03-04", "07:22"),
+            nightly("nightly-2031-03-03-ccccccc", "2031-03-03", "09:00"),
+        ]);
+        let late = update_name("nightly-2031-03-04-bbbbbbb").unwrap();
+        let early = update_name("nightly-2031-03-04-aaaaaaa").unwrap();
+        assert_ne!(late, early);
+        assert!(
+            late.contains("18:05") && early.contains("07:22"),
+            "{late} / {early}"
+        );
+        // Alone on its day, a Nightly keeps its day's name.
+        assert_eq!(
+            update_name("nightly-2031-03-03-ccccccc"),
+            update_name("nightly-2031-03-03")
+        );
     }
 
     #[test]
