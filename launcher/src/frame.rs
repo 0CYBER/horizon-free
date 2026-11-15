@@ -18,6 +18,26 @@ pub const MARGIN: f32 = 14.;
 /// The rail's width at rest (icons) and open (icons and names), while the pointer is on it.
 pub const RAIL: f32 = 80.;
 pub const RAIL_OPEN: f32 = 248.;
+/// What drifting particles (Taiga's snow, Hypr Neon's streaks, leaves, petals) keep clear of in a
+/// window of `w` by `h`: the title and top bars, the rail, and the text. Home's hero text sits in
+/// the left column and its tabs below it, so the sky drifts through the top right between them;
+/// every other page is text from the top bar down.
+pub fn keep_clear(w: f32, h: f32, home: bool) -> rain::Keep {
+    const TOP: f32 = 32. + MARGIN + theme::TOPBAR;
+    const HERO: f32 = 400.;
+    const HERO_WIDTH: f32 = 640.;
+    let left = MARGIN + RAIL;
+    let body = if home { HERO } else { TOP };
+    rain::Keep([
+        [0., 0., w, TOP],
+        [0., 0., left, h],
+        [left, TOP, HERO_WIDTH.min(w - left), (HERO - TOP).max(0.)],
+        [left, body, w - left, (h - body).max(0.)],
+        // The hero's buttons at the right edge.
+        [(w - 360.).max(left), TOP, 360., 80.],
+    ])
+}
+
 /// How the rail opens and shuts: quick, settling from a little past its width.
 const RAIL_MOTION: horizon_theme::Motion = horizon_theme::Motion {
     name: "rail",

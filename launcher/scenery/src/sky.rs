@@ -8,6 +8,7 @@
 //! stars steps to its next brightness): a few frames a second. The sky stands still under reduced
 //! motion, and stops 10 s after the window loses focus ([`motion`]).
 use crate::art::bake;
+use crate::rain::Keep;
 use gpui::{
     canvas, div, fill, img, linear_color_stop, linear_gradient, point, prelude::*, px, rgb, size,
     Bounds, Div, Hsla, Pixels, RenderImage, Window,
@@ -333,6 +334,7 @@ impl Sky {
         n: &Night,
         (w, h): (f32, f32),
         scale: f32,
+        keep: Keep,
         focused: bool,
         now: Instant,
     ) -> (Div, Option<Duration>) {
@@ -466,7 +468,7 @@ impl Sky {
             sky = sky.child(
                 canvas(
                     |_, _, _| {},
-                    move |b, _, window, _| paint_drift(mood, moved, b, window),
+                    move |b, _, window, _| paint_drift(mood, moved, keep, b, window),
                 )
                 .absolute()
                 .top_0()
@@ -600,7 +602,7 @@ fn paint_behind(mood: Mood, t: f32, b: Bounds<Pixels>, window: &mut Window) {
 
 /// What a [`Mood`] paints in front of the skylines: bubbles rising, leaves and petals falling,
 /// each from its own place and phase, wrapping just off the window.
-fn paint_drift(mood: Mood, t: f32, b: Bounds<Pixels>, window: &mut Window) {
+fn paint_drift(mood: Mood, t: f32, keep: Keep, b: Bounds<Pixels>, window: &mut Window) {
     use crate::rain::hash;
     let (w, h) = (f32::from(b.size.width), f32::from(b.size.height));
     if let Mood::Neon([_, grid]) = mood {
@@ -625,6 +627,9 @@ fn paint_drift(mood: Mood, t: f32, b: Bounds<Pixels>, window: &mut Window) {
             Mood::Leaves(tones) => {
                 let y = (t * (45. + 45. * pace) + phase * run) % run - 20.;
                 let x = x + (t * 1.6 + sway * std::f32::consts::TAU).sin() * 5. * TEXEL;
+                if keep.hits(x, y, TEXEL * 3., TEXEL * 3.) {
+                    continue;
+                }
                 let c = tone(tones[i as usize % 3]);
                 // A diagonal leaf of two bars, turning over now and then.
                 let (a, z) = if (t * 1.5 + sway * 4.).floor() as i32 % 2 == 0 {
@@ -638,6 +643,9 @@ fn paint_drift(mood: Mood, t: f32, b: Bounds<Pixels>, window: &mut Window) {
             Mood::Petals(tones) => {
                 let y = (t * (32. + 32. * pace) + phase * run) % run - 20.;
                 let x = x + (t * 1.2 + sway * std::f32::consts::TAU).sin() * 8. * TEXEL;
+                if keep.hits(x, y, TEXEL * 3., TEXEL * 3.) {
+                    continue;
+                }
                 let c = tone(tones[i as usize % 2]).opacity(0.9);
                 window.paint_quad(fill(cell(b, x, y, TEXEL * 2., TEXEL), c));
                 window.paint_quad(fill(
@@ -648,6 +656,9 @@ fn paint_drift(mood: Mood, t: f32, b: Bounds<Pixels>, window: &mut Window) {
             Mood::Water([_, rim, shine]) => {
                 let y = h + 20. - (t * (40. + 40. * pace) + phase * run) % run;
                 let x = x + (t * 1.4 + sway * std::f32::consts::TAU).sin() * 2. * TEXEL;
+                if keep.hits(x, y, TEXEL * 3., TEXEL * 3.) {
+                    continue;
+                }
                 let big = i % 3 == 0;
                 let side = if big { TEXEL * 2. } else { TEXEL };
                 window.paint_quad(fill(cell(b, x, y, side, side), tone(rim).opacity(0.55)));
@@ -660,6 +671,9 @@ fn paint_drift(mood: Mood, t: f32, b: Bounds<Pixels>, window: &mut Window) {
                 // it, so white snow still reads on a pale sky.
                 let y = (t * (26. + 26. * pace) + phase * run) % run - 20.;
                 let x = x + (t * 0.9 + sway * std::f32::consts::TAU).sin() * 3. * TEXEL;
+                if keep.hits(x, y, TEXEL * 3., TEXEL * 3.) {
+                    continue;
+                }
                 let side = if i % 4 == 0 { TEXEL * 2. } else { TEXEL };
                 window.paint_quad(fill(
                     cell(b, x, y + TEXEL, side, side),
@@ -1051,7 +1065,7 @@ pub fn frost_later(
 /// the sky again and the rest of the window from its last frame (GPUI Fast retains views).
 pub struct SkyView {
     sky: Sky,
-    shown: Option<(Night, (f32, f32), f32)>,
+    shown: Option<(Night, (f32, f32), f32, Keep)>,
     wake: Option<(Instant, gpui::Task<()>)>,
     _activation: gpui::Subscription,
 }
@@ -1068,8 +1082,15 @@ impl SkyView {
     }
 
     /// The sky to draw for `n` in a window of `size` logical pixels at `scale`.
-    pub fn set(&mut self, n: Night, size: (f32, f32), scale: f32, cx: &mut gpui::Context<Self>) {
-        let next = Some((n, size, scale));
+    pub fn set(
+        &mut self,
+        n: Night,
+        size: (f32, f32),
+        scale: f32,
+        keep: Keep,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let next = Some((n, size, scale, keep));
         if self.shown != next {
             self.shown = next;
             cx.notify();
@@ -1100,12 +1121,17 @@ impl gpui::Render for SkyView {
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         self.sky.free_replaced(window);
-        let Some((n, size, scale)) = self.shown else {
+        let Some((n, size, scale, keep)) = self.shown else {
             return div();
         };
-        let (sky, next) =
-            self.sky
-                .render(&n, size, scale, window.is_window_active(), Instant::now());
+        let (sky, next) = self.sky.render(
+            &n,
+            size,
+            scale,
+            keep,
+            window.is_window_active(),
+            Instant::now(),
+        );
         if let Some(next) = next {
             self.wake(next, cx);
         }
@@ -1228,7 +1254,7 @@ mod tests {
         assert!((until_next(0.) - 1.).abs() < 1e-6);
         let mut sky = Sky::default();
         let now = Instant::now();
-        let (_, next) = sky.render(&NIGHT, (1280., 800.), 2., true, now);
+        let (_, next) = sky.render(&NIGHT, (1280., 800.), 2., Keep::default(), true, now);
         if motion() != Motion::Still {
             let next = next.expect("a moving sky asks for its next frame");
             assert!(next <= Duration::from_secs(1), "{next:?}");
@@ -1237,8 +1263,15 @@ mod tests {
         if motion() != Motion::InFront {
             return;
         }
-        sky.render(&NIGHT, (1280., 800.), 2., false, now);
-        let (_, next) = sky.render(&NIGHT, (1280., 800.), 2., false, now + UNFOCUSED);
+        sky.render(&NIGHT, (1280., 800.), 2., Keep::default(), false, now);
+        let (_, next) = sky.render(
+            &NIGHT,
+            (1280., 800.),
+            2.,
+            Keep::default(),
+            false,
+            now + UNFOCUSED,
+        );
         assert_eq!(next, None);
     }
 }

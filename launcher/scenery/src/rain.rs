@@ -18,11 +18,26 @@ const DROPS: u32 = 130;
 const BLUE: u32 = 0x7aa2ff;
 const PINK: u32 = 0xff6ad5;
 
+/// Where text and controls sit over the sky, in window pixels as `[x, y, width, height]`:
+/// drifting particles are not drawn there, so a flake or a streak never crosses a letter.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub struct Keep(pub [[f32; 4]; 5]);
+
+impl Keep {
+    /// Whether a particle at `(x, y)` of size `w` by `h` touches a kept-clear area.
+    pub fn hits(&self, x: f32, y: f32, w: f32, h: f32) -> bool {
+        self.0
+            .iter()
+            .any(|&[kx, ky, kw, kh]| x < kx + kw && x + w > kx && y < ky + kh && y + h > ky)
+    }
+}
+
 pub struct Rain {
     start: Instant,
     /// Hypr Neon's night is shown and nothing asks the rain to stand still.
     on: bool,
     accent: u32,
+    keep: Keep,
     /// A frame is asked for: the rain is falling.
     falling: bool,
 }
@@ -39,15 +54,17 @@ impl Rain {
             start: Instant::now(),
             on: false,
             accent: 0xb48cff,
+            keep: Keep::default(),
             falling: false,
         }
     }
 
     /// Whether it rains (`on`), in the theme's `accent`. Redrawn only when either changes.
-    pub fn set(&mut self, on: bool, accent: u32, cx: &mut Context<Self>) {
-        if self.on != on || self.accent != accent {
+    pub fn set(&mut self, on: bool, accent: u32, keep: Keep, cx: &mut Context<Self>) {
+        if self.on != on || self.accent != accent || self.keep != keep {
             self.on = on;
             self.accent = accent;
+            self.keep = keep;
             cx.notify();
         }
     }
@@ -89,7 +106,7 @@ impl Render for Rain {
         } else {
             self.start.elapsed().as_secs_f32()
         };
-        let accent = self.accent;
+        let (accent, keep) = (self.accent, self.keep);
         div().absolute().top_0().left_0().size_full().child(
             canvas(
                 |_, _, _| {},
@@ -115,6 +132,9 @@ impl Render for Rain {
                         let speed = speed * (0.8 + 0.4 * hash(i * 3 + 2));
                         let q = (t * speed / travel + hash(i * 3 + 3)).fract();
                         let y = q * travel - len;
+                        if keep.hits(x, y, thick, len) {
+                            continue;
+                        }
                         let streak = Bounds::new(
                             point(b.origin.x + px(x), b.origin.y + px(y)),
                             size(px(thick), px(len)),

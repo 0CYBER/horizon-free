@@ -112,7 +112,13 @@ impl Render for Launcher {
         });
         // What is behind the launcher, handed to its views only when it changed: reading them
         // on every frame would make each sky frame draw the launcher again too.
+        let keep = frame::keep_clear(
+            size.width.into(),
+            size.height.into(),
+            self.page == Page::Play,
+        );
         let pushed = Pushed {
+            keep,
             performance,
             tint,
             blur,
@@ -133,10 +139,11 @@ impl Render for Launcher {
                 scene.set_performance(performance, cx);
                 scene.set_look(tint, blur, cx);
             });
-            self.rain.update(cx, |rain, cx| rain.set(rains, accent, cx));
+            self.rain
+                .update(cx, |rain, cx| rain.set(rains, accent, keep, cx));
             if let Some((night, size, scale)) = painted {
                 self.sky
-                    .update(cx, |sky, cx| sky.set(night, size, scale, cx));
+                    .update(cx, |sky, cx| sky.set(night, size, scale, keep, cx));
             }
             self.backdrop.update(cx, |b, cx| b.set(pushed.back, cx));
         }
@@ -406,6 +413,7 @@ impl Render for Launcher {
 /// What the launcher's frame hands the views behind it (the scene, the rain, the painted sky).
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Pushed {
+    keep: rain::Keep,
     performance: bool,
     tint: Option<u32>,
     blur: f32,
