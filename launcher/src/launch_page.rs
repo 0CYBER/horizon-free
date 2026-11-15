@@ -97,29 +97,21 @@ impl Launcher {
         ])
     }
 
-    /// Why the last save of the hook fields failed.
-    pub(super) fn hooks_error(&self) -> Option<String> {
-        self.launch.as_ref()?.saved.as_ref()?.clone().err()
+    /// Parse the open command fields without writing any instance settings.
+    pub(super) fn parsed_launch(&self, id: &str) -> Option<Result<launch::Launch, String>> {
+        let fields = self.hooks_typed(id)?;
+        let saved = self.instances.list.iter().find(|i| i.id == id)?;
+        Some(parse_commands(saved.launch.clone(), fields))
     }
 
     pub(super) fn save_launch(&mut self) {
         let Some(id) = self.launch.as_ref().map(|p| p.instance.clone()) else {
             return;
         };
-        let pre = self.servers.value(Field::PreLaunch).trim().to_string();
-        let wrapper = self.servers.value(Field::Wrapper).trim().to_string();
-        let post_exit = self.servers.value(Field::PostExit).trim().to_string();
-        let saved = launch::parse_env(self.servers.value(Field::LaunchEnv)).and_then(|env| {
-            instances::edit(&id, |m| {
-                m.launch = launch::Launch {
-                    pre_launch: pre,
-                    wrapper,
-                    env,
-                    post_exit,
-                    ..m.launch.clone()
-                }
-            })
-        });
+        let Some(parsed) = self.parsed_launch(&id) else {
+            return;
+        };
+        let saved = parsed.and_then(|launch| instances::edit(&id, |m| m.launch = launch));
         let saved = saved.map(|i| {
             self.reload_instances();
             i.launch.summary()
@@ -777,5 +769,49 @@ impl Launcher {
             body = body.child(list);
         }
         Some(body)
+    }
+}
+
+fn parse_commands(
+    mut launch: launch::Launch,
+    [pre, wrapper, post, env]: [String; 4],
+) -> Result<launch::Launch, String> {
+    launch.env = launch::parse_env(&env)?;
+    launch.pre_launch = pre;
+    launch.wrapper = wrapper;
+    launch.post_exit = post;
+    Ok(launch)
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn parsing_commands_is_an_unsaved_draft() {
+        let saved = launch::Launch::default();
+        let fields = [
+            "backup".into(),
+            "wrapper".into(),
+            "after".into(),
+            "MODE=play".into(),
+        ];
+        let draft = parse_commands(saved.clone(), fields).unwrap();
+        assert!(saved.pre_launch.is_empty());
+        assert!(saved.env.is_empty());
+        assert_eq!(draft.pre_launch, "backup");
+        assert_eq!(draft.wrapper, "wrapper");
+        assert_eq!(draft.post_exit, "after");
+        assert_eq!(draft.env.get("MODE").unwrap(), "play");
+        assert!(parse_commands(
+            saved,
+            [
+                String::new(),
+                String::new(),
+                String::new(),
+                "not an assignment".into()
+            ]
+        )
+        .is_err());
     }
 }

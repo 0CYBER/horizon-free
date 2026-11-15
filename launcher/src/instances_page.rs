@@ -412,22 +412,25 @@ impl Launcher {
             .as_ref()
             .filter(|d| !d.busy)
             .and_then(|d| d.editing.clone());
-        if let Some(id) = &edited_id {
+        if edited_id.is_some() {
             // Nothing to save, as the footer's Save says.
             if !self.sheet_changed() {
                 return;
             }
-            // The hook fields, when the Hooks section was opened, are kept with the rest.
-            if self.hooks_typed(id).is_some() {
-                self.save_launch();
-                if let Some(e) = self.hooks_error() {
-                    if let Some(d) = &mut self.instances.dialog {
-                        d.error = Some(e);
-                    }
-                    return;
-                }
-            }
         }
+        let launch = match edited_id
+            .as_deref()
+            .and_then(|id| self.parsed_launch(id))
+            .transpose()
+        {
+            Ok(launch) => launch,
+            Err(e) => {
+                if let Some(d) = &mut self.instances.dialog {
+                    d.error = Some(e);
+                }
+                return;
+            }
+        };
         let selected = self.selected_instance().map(|i| i.id.clone());
         let name = self.servers.value(Field::InstanceName).trim().to_string();
         let group = Some(self.servers.value(Field::InstanceGroup).to_string());
@@ -516,10 +519,22 @@ impl Launcher {
                 (None, Some((j, mc))) => new_instance::create_java(&j, &name, &mc)?.id,
                 (None, None) => instances::create(&name, copy.as_deref())?.id,
             };
+            // Finish fallible picture work before committing the edited metadata and commands.
+            if let Some(png) = picture {
+                let instance = instances::find(&id)?;
+                instances::set_picture(
+                    &instance.home,
+                    png.as_deref(),
+                    &horizon_launcher::desktop_seams::to_trash,
+                )?;
+            }
             let instance = instances::edit(&id, |m| {
                 m.name = Some(name);
                 m.group = group;
                 m.icon = icon;
+                if let Some(launch) = launch {
+                    m.launch = launch;
+                }
                 if let Some(game) = m.java.as_mut().filter(|_| edited) {
                     game.jvm_args = jvm_args;
                     game.window = window;
@@ -529,13 +544,6 @@ impl Launcher {
                     m.channel = Some(channel);
                 }
             })?;
-            if let Some(png) = picture {
-                instances::set_picture(
-                    &instance.home,
-                    png.as_deref(),
-                    &horizon_launcher::desktop_seams::to_trash,
-                )?;
-            }
             Ok(instance)
         });
         cx.spawn(async move |this, cx| {
