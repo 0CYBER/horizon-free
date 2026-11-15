@@ -407,7 +407,7 @@ pub const WEATHER_INPUT: Struct = Struct {
 /// What `trace` returns (0.2, `[ray_tracing]`): the nearest surface along a ray.
 pub const RAY_HIT: Struct = Struct {
     name: "RayHit",
-    doc: "The nearest surface along a ray, from `trace`. Its `albedo`, `tint`, `light`, `uv`, `material` and `tags` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0.",
+    doc: "The nearest surface along a ray, from `trace`. Its `albedo`, `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0 (`translucent` false).",
     fields: fields! {
         distance: "f32" = "How far along the ray the surface is, in blocks; negative on a miss.",
         position: "vec3<f32>" = "The point, camera-relative, in blocks (as `view_position`).",
@@ -418,6 +418,11 @@ pub const RAY_HIT: Struct = Struct {
         light: "vec2<f32>" = "Block and sky light, 0..1, smoothed over the face.",
         material: "u32" = "The `[[materials]]` id of the surface's sprite (0 when no entry names it).",
         tags: "u32" = "The pack's sprite tags the surface's sprite has: bit i for the manifest's i-th `[[tags]]`.",
+        emission: "f32" = "How strongly the block itself shines, 0..1, by its kind of light: a redstone torch or a candle 7/15, a torch or lava 14/15, glowstone 1; 0 for most blocks (as `MaterialInput.emission`).",
+        fluid: "u32" = "0 not a fluid, 1 water, 2 lava (as `MaterialInput.fluid`).",
+        translucent: "bool" = "A surface of the translucent pass (water, stained glass, ice), as `MaterialInput.translucent`. The scene holds no translucent terrain yet: false for every hit.",
+        tangent: "vec4<f32>" = "The surface's tangent, as `MaterialInput.tangent`: xyz the unit direction in world axes along which `uv.x` grows, w the sign (1 or -1) that makes `cross(normal, tangent.xyz) * tangent.w` the direction `uv.y` grows along (down the texture). It follows `normal`, which faces the ray's origin. With `normal` it turns `hit_normal_map`'s normals into world axes.",
+        horizon_sprite: "u32" = "Horizon's own: where the hit's sprite is kept, for `hit_normal_map` and `hit_specular_map`. Not for packs to read; it changes with the renderer.",
     },
 };
 

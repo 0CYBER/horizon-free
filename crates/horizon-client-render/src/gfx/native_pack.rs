@@ -346,7 +346,7 @@ impl NativePack {
             && !material.as_ref().is_some_and(traced);
         if let Some(post) = post.as_mut().filter(|_| !scenes.is_empty() && !refused) {
             let shape = super::native_post::trace::TraceShape::of(terrain);
-            if !post.trace_scene(device, scenes, constants, &shape)
+            if !post.trace_scene(device, scenes, constants, &shape, &frame.pbr)
                 && let Some(m) = material.as_mut()
             {
                 m.scene = None;

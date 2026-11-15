@@ -226,8 +226,8 @@ let hit = trace(position * 0.99, direction, 64.0);   // hit.distance < 0.0: noth
 ```
 
 `trace` returns the nearest surface along a ray, with what the material stage would get for that point (`albedo`,
-`tint`, `light`, `uv`, `material`, `tags`) and its `position`, `normal` and `distance`; `trace_any` only says whether
-something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
+`tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent`, `tangent`) and its `position`, `normal`
+and `distance`; `trace_any` only says whether something is in the way, which is all a shadow needs. Origins are camera-relative, as `view_position` gives them, and
 rays pass through the clear texels of leaves and plants. Horizon keeps the scene; the look is the pack's: Horizon
 adds no shadows, bounce light or denoising of its own. The pack never sees the acceleration structure or a ray query,
 and the check refuses a pack that names one itself.
@@ -238,6 +238,20 @@ and the check refuses a pack that names one itself.
 | Not in it yet | Water, glass and other translucent terrain, entities, block entities, the hand, distant terrain tiles |
 | Turning it on | Pick the pack and start the game with it, on a GPU and graphics API with hardware ray queries: the device needs them from its creation, so in a game started without them a pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1` asks for ray queries and keeps the scene with any pack or none; any other value of it turns ray tracing off |
 | Without it | The pack loads and runs as it is: `frame.has_ray_tracing` is 0, `trace` misses and `trace_any` is false. Branch on `has_ray_tracing` and keep a look that works without rays. It is also 0 in a pack none of whose stages calls `trace` or `trace_any` |
+
+A hit also reads the resource packs' LabPBR maps, as a drawn surface does: `hit_normal_map(hit)` and
+`hit_specular_map(hit)` give its sprite's texel at full size, with the same defaults as `block_normal_map` and
+`block_specular_map` where there are no maps (and on a miss), and `block_pbr_maps()` says whether there are, in a post
+pass too (there it is false while the game doesn't trace, when no hit reads them). `hit.tangent` turns the normal map into world axes as `input.tangent` does. A reflection shaded with the
+roughness the same block has on screen:
+
+```wgsl
+let hit = trace(position * 0.99, direction, 64.0);
+let smoothness = select(0.5, hit_specular_map(hit).r, block_pbr_maps());   // LabPBR's perceptual smoothness
+let roughness = (1.0 - smoothness) * (1.0 - smoothness);
+let shine = pow(max(dot(reflect(direction, hit.normal), frame.sun_direction), 0.0), 2.0 / max(roughness * roughness, 1e-4));
+let color = hit.albedo.rgb * hit.tint.rgb * (hit.light.y + hit.emission) + vec3<f32>(shine * hit.light.y);
+```
 
 The scene trails the world by a frame or two where chunks load or blocks change, and is empty for the first frames in
 a world. The smallest working pack is `crates/horizon-shader-api/packs/traced_shadows`: the sun's shadows, one ray a

@@ -5,7 +5,8 @@ use crate::inputs::{DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, Struct};
 use crate::manifest::{Api, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{
-    GROUP, MOTION_BINDING, RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
+    GROUP, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING, RAY_SCENE_BINDING,
+    RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
 };
 
 fn table(s: &Struct, offsets: Option<&[usize]>) -> String {
@@ -113,9 +114,10 @@ fn ray_tracing() -> String {
     let mut out = String::from(
         "### Ray tracing\n\n\
          With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post\n\
-         stage's prelude also has `RayHit`, `trace` and `trace_any`, so does the material stage's where the stage's files\n\
-         name either function, and the `Frame` of every stage of the pack has `has_ray_tracing` and `ray_distance`. A pack\n\
-         without the key has none of them, and a material stage that names neither function is built as without it.\n\n\
+         stage's prelude also has `RayHit`, `trace`, `trace_any` and the helpers below, so does the material stage's where\n\
+         its files name `trace` or `trace_any`, and the `Frame` of every stage of the pack has `has_ray_tracing` and\n\
+         `ray_distance`. A pack without the key has none of them, and a material stage that names neither function is built\n\
+         as without it.\n\n\
          The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it\n\
          ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a\n\
          pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1`\n\
@@ -124,14 +126,19 @@ fn ray_tracing() -> String {
          `origin` (camera-relative, in blocks, as `view_position` gives it) along the unit vector `direction`, within\n  \
          `max_distance` blocks.\n\
          - `fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool`: whether any surface is in\n  \
-         the way: a shadow ray, which stops at the first it finds and reads nothing of it.\n\n\
+         the way: a shadow ray, which stops at the first it finds and reads nothing of it.\n\
+         - `fn hit_normal_map(hit: RayHit) -> vec4<f32>`, `fn hit_specular_map(hit: RayHit) -> vec4<f32>`: the resource\n  \
+         packs' LabPBR maps at the hit, its sprite's texel at `hit.uv` at full size, as `block_normal_map_level(uv, 0.0)`\n  \
+         and `block_specular_map_level(uv, 0.0)` read a drawn surface's; their defaults without maps, and on a miss.\n\
+         - In the post stage, `fn block_pbr_maps() -> bool`: whether the resource packs ship LabPBR maps, as the material\n  \
+         stage's.\n\n\
          A ray starts at `origin` itself, so move a point off its own surface before tracing from it. It passes through\n\
          the clear texels of a cut-out texture (leaves, plants), as terrain's alpha test does: a texel stops it from alpha\n\
          0.5 up. The scene is Horizon's: the solid terrain around the camera, out to `frame.ray_distance` at least. While\n\
          the game doesn't trace (`frame.has_ray_tracing` is 0) the pack is built and runs all the same, and every ray\n\
          misses. Your files name no ray query of their own (`ray_query`, `acceleration_structure`, `RayDesc`,\n\
          `RayIntersection`, a `rayQuery` function, `enable wgpu_ray_query`): the check refuses them, and an `output`\n\
-         called `trace` or `trace_any`.\n\n\
+         named as one of these functions.\n\n\
          In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share\n\
          its module, run in vertex shaders, and the check refuses a pack where either reaches `trace` or `trace_any`.\n\
          `material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for\n\
@@ -139,7 +146,8 @@ fn ray_tracing() -> String {
     );
     out += &table(&RAY_HIT, None);
     out += &format!(
-        "Bindings {RAY_SCENE_BINDING} to {} of group {GROUP} hold the scene while the game traces. They are Horizon's, as their\n\
+        "Bindings {RAY_SCENE_BINDING} to {} of group {GROUP} hold the scene while the game traces, and in a post pass bindings\n\
+         {PBR_NORMALS_BINDING} and {PBR_SPECULAR_BINDING} the LabPBR maps (the material stage has them there already). They are Horizon's, as their\n\
          `horizon_` names say, and change with the renderer.\n\n",
         RAY_SPRITES_BINDING + RAY_SPRITE_ARRAYS - 1
     );

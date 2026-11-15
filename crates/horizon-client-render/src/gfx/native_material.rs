@@ -150,30 +150,6 @@ fn horizon_material_corner(c: HorizonCorner, origin: vec4<f32>) -> HorizonMateri
     let s = horizon_terrain_section_corner(vertex);
     return horizon_material_corner(horizon_terrain_corner_inputs(s.c), horizon_corner_origin(s));
 }
-// The prelude's `block_normal_map` and `block_specular_map`: the resource packs' LabPBR maps
-// in the pack's frame group (3), one array each, a blank 1x1 without them.
-@group(3) @binding(12) var horizon_pbr_normals: texture_2d_array<f32>;
-@group(3) @binding(13) var horizon_pbr_specular: texture_2d_array<f32>;
-fn horizon_block_pbr_present() -> bool {
-    return textureDimensions(horizon_pbr_normals).x > 1u;
-}
-fn horizon_block_pbr_size() -> vec2<f32> {
-    return vec2<f32>(textureDimensions(horizon_pbr_normals).xy);
-}
-fn horizon_block_pbr(uv: vec2<f32>, layer: u32, lod: f32, map: u32) -> vec4<f32> {
-    if !horizon_block_pbr_present() || layer >= textureNumLayers(horizon_pbr_normals) {
-        return select(vec4<f32>(0.5, 0.5, 1.0, 1.0), vec4<f32>(0.0), map == 1u);
-    }
-    let s = horizon_terrain_sprite_sampler;
-    // The maps may be smaller than the colour: the same footprint is fewer of their texels.
-    let scale = f32(textureDimensions(horizon_terrain_sprites).x)
-        / f32(textureDimensions(horizon_pbr_normals).x);
-    let l = max(lod - log2(scale), 0.0);
-    if map == 0u {
-        return textureSampleLevel(horizon_pbr_normals, s, uv, i32(layer), l);
-    }
-    return textureSampleLevel(horizon_pbr_specular, s, uv, i32(layer), l);
-}
 // The prelude's `block_texture`: a sprite of the terrain's arrays at a mip level.
 fn horizon_block_size() -> vec2<f32> {
     return vec2<f32>(textureDimensions(horizon_terrain_sprites).xy);
@@ -461,8 +437,11 @@ fn shader_source(
     (vertex, displaced): (bool, bool),
     (api, linear): (horizon_shader_api::Api, bool),
 ) -> String {
+    // The LabPBR maps in the frame's group, read by the prelude's `block_normal_map` and its
+    // kin, and by a tracing stage's `hit_normal_map`.
+    let pbr = horizon_shader_api::stages::PBR_MAPS_TERRAIN;
     format!(
-        "{source}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{}{}{SECTION_CORNER}{ENTRIES}{}{}",
+        "{source}\n// Horizon's terrain (terrain.wgsl)\n{}{}{}{}{}{SECTION_CORNER}{ENTRIES}{pbr}{}{}",
         vanilla_terrain(),
         super::native_post::line_helpers(api, linear),
         if vertex {
@@ -934,7 +913,8 @@ mod tests {
             [displacement]\n[ray_tracing]\n";
         let material = "fn material(input: MaterialInput) -> Surface {\n    \
                 let hit = trace(input.position, input.normal, 16.0);\n    \
-                return Surface(input.albedo * f32(hit.distance < 0.0));\n}\n\
+                let maps = hit_normal_map(hit) * hit_specular_map(hit).r * hit.emission;\n    \
+                return Surface(input.albedo * f32(hit.distance < 0.0) + maps * hit.tangent);\n}\n\
             fn displacement(input: DisplacementInput) -> f32 { return 0.0; }\n";
         let vertex = "fn vertex(input: VertexInput) -> vec3<f32> { return input.position; }\n";
         let files = [

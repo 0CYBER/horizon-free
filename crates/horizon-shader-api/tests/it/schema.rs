@@ -966,6 +966,10 @@ fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
             format!("{named}[ray_tracing]\n"),
             "output \"trace\" is not a free WGSL name",
         ),
+        (
+            named.replace("\"trace\"", "\"hit_normal_map\"") + "[ray_tracing]\n",
+            "output \"hit_normal_map\" is not a free WGSL name",
+        ),
     ];
     for (text, needle) in cases {
         let e = refused(&text);

@@ -114,9 +114,14 @@ fn declared_reads_aliases_across_lines() {
     );
 }
 
-/// What naga finds in the same text, to hold `declared` to: it must miss nothing naga sees.
+/// What naga finds in the same text, to hold `declared` to: it must miss nothing naga sees. The
+/// material prelude's LabPBR functions call into the renderer (a traced post prelude has its own).
 fn parsed(wgsl: &str) -> BTreeSet<String> {
-    let text = format!("{wgsl}{}", horizon_shader_api::stages::PBR_STUB);
+    let pbr = match wgsl.contains("fn horizon_block_pbr(") {
+        true => "",
+        false => horizon_shader_api::stages::PBR_STUB,
+    };
+    let text = format!("{wgsl}{pbr}");
     let m = naga::front::wgsl::parse_str(&text).unwrap();
     let types = m.types.iter().filter_map(|(_, t)| t.name.clone());
     let functions = m.functions.iter().filter_map(|(_, f)| f.name.clone());
@@ -204,9 +209,10 @@ fn listed(list: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// `[ray_tracing]` brings the names of `post_ray_tracing.txt`, and no others, to the post stage of the pack that set
-/// it and to its material stage where that calls `trace` or `trace_any`, the same whether the
-/// renderer has the scene or not.
+/// The rule at work: `[ray_tracing]` brings the names of `post_ray_tracing.txt` to the post
+/// stage of the pack that set it and to its material stage where that calls `trace` or
+/// `trace_any` (which has `block_pbr_maps` already), the same whether the renderer has the scene
+/// or not.
 #[test]
 fn ray_tracing_brings_its_names_to_the_stages_of_the_pack_that_trace() {
     let material = "fn material(input: MaterialInput) -> Surface {\n    \
@@ -218,6 +224,9 @@ fn ray_tracing_brings_its_names_to_the_stages_of_the_pack_that_trace() {
             let mut want = listed(kind.name());
             if kind == StageKind::Post || kind == StageKind::Material && traces {
                 want.extend(listed("post_ray_tracing"));
+            }
+            if kind == StageKind::Post {
+                want.insert("block_pbr_maps".to_owned());
             }
             for composed in [
                 compose(&pack, kind, &file),

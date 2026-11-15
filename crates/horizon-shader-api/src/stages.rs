@@ -518,11 +518,103 @@ const RAY_STUB: &str = "\
 // within `max_distance` blocks. The scene isn't there (`frame.has_ray_tracing` is 0): a miss.
 fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
     return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
-        vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u);
+        vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 0u);
 }
 // Whether anything lies within `max_distance` blocks of `origin` along `direction`.
 fn trace_any(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> bool {
     return false;
+}
+";
+
+/// The LabPBR maps in group 3 at the material stage's bindings 12 and 13, and what reads them:
+/// the material prelude's `block_normal_map` and its kin, and every stage's `hit_normal_map`
+/// and `hit_specular_map`. The arguments are the stage's sampler and the colour sprite array
+/// whose size the maps' mip levels follow (they may be smaller than the colour).
+macro_rules! pbr_maps {
+    ($sampler:literal, $sprites:literal) => {
+        concat!(
+            "\
+// The resource packs' LabPBR maps, one array each, a blank 1x1 without them.
+@group(3) @binding(12) var horizon_pbr_normals: texture_2d_array<f32>;
+@group(3) @binding(13) var horizon_pbr_specular: texture_2d_array<f32>;
+fn horizon_block_pbr_present() -> bool {
+    return textureDimensions(horizon_pbr_normals).x > 1u;
+}
+fn horizon_block_pbr_size() -> vec2<f32> {
+    return vec2<f32>(textureDimensions(horizon_pbr_normals).xy);
+}
+fn horizon_block_pbr(uv: vec2<f32>, layer: u32, lod: f32, map: u32) -> vec4<f32> {
+    if !horizon_block_pbr_present() || layer >= textureNumLayers(horizon_pbr_normals) {
+        return select(vec4<f32>(0.5, 0.5, 1.0, 1.0), vec4<f32>(0.0), map == 1u);
+    }
+    let s = ",
+            $sampler,
+            ";
+    // The maps may be smaller than the colour: the same footprint is fewer of their texels.
+    let scale = f32(textureDimensions(",
+            $sprites,
+            ").x)
+        / f32(textureDimensions(horizon_pbr_normals).x);
+    let l = max(lod - log2(scale), 0.0);
+    if map == 0u {
+        return textureSampleLevel(horizon_pbr_normals, s, uv, i32(layer), l);
+    }
+    return textureSampleLevel(horizon_pbr_specular, s, uv, i32(layer), l);
+}
+"
+        )
+    };
+}
+
+/// The bindings `pbr_maps!` declares the LabPBR maps at in group 3: normals, specular.
+pub const PBR_NORMALS_BINDING: u32 = 12;
+pub const PBR_SPECULAR_BINDING: u32 = 13;
+
+/// The terrain's (`native_material.rs`), with its sprite sampler.
+pub const PBR_MAPS_TERRAIN: &str =
+    pbr_maps!("horizon_terrain_sprite_sampler", "horizon_terrain_sprites");
+
+/// A traced post pass's, against the scene: its `nearest_sampler` (at full size, the one mip
+/// level a hit reads, as the terrain's sampler there) and the scene's first sprite array.
+const PBR_MAPS_POST: &str = pbr_maps!("nearest_sampler", "horizon_ray_sprites_0");
+
+/// A traced post pass's `block_pbr_maps`, as the material prelude's.
+const POST_PBR: &str = "\
+// LabPBR: whether the resource packs ship normal (`_n`) or specular (`_s`) maps beside their
+// block textures. Without them `hit_normal_map` and `hit_specular_map` give their defaults.
+fn block_pbr_maps() -> bool {
+    return horizon_block_pbr_present();
+}
+";
+
+/// The LabPBR maps at a hit, in every stage that traces, with the scene or without it.
+const RAY_PBR: &str = "\
+// One texel of a LabPBR map at a hit, whatever the stage's sampler filters: the centre of the
+// texel `hit.uv` is in at the maps' own full size, kept inside the sprite as the hit's albedo.
+fn horizon_hit_pbr(hit: RayHit, map: u32) -> vec4<f32> {
+    let inside = hit.uv - max(ceil(hit.uv) - 1.0, vec2<f32>(0.0));
+    let size = horizon_block_pbr_size();
+    let texel = clamp(floor(inside * size), vec2<f32>(0.0), size - 1.0);
+    return horizon_block_pbr((texel + 0.5) / size, hit.horizon_sprite, -32.0, map);
+}
+// The resource packs' LabPBR normal map at a hit: its sprite's texel at `hit.uv`, at full size
+// (mip level 0), as `block_normal_map_level(uv, 0.0)` reads a drawn surface's (rg the normal's
+// x and y in the texture's space, x along `hit.tangent`, y down the texture; 0..1 for -1..1,
+// b ambient occlusion, a height). (0.5, 0.5, 1, 1) where the texture has none, and on a miss.
+fn hit_normal_map(hit: RayHit) -> vec4<f32> {
+    if hit.distance < 0.0 {
+        return vec4<f32>(0.5, 0.5, 1.0, 1.0);
+    }
+    return horizon_hit_pbr(hit, 0u);
+}
+// The LabPBR specular map at a hit, as `block_specular_map_level(uv, 0.0)` (r perceptual
+// smoothness, g F0 or a metal's id, b porosity or subsurface scattering, a emission, 1 none).
+// (0, 0, 0, 0) where the texture has none, and on a miss.
+fn hit_specular_map(hit: RayHit) -> vec4<f32> {
+    if hit.distance < 0.0 {
+        return vec4<f32>(0.0);
+    }
+    return horizon_hit_pbr(hit, 1u);
 }
 ";
 
@@ -611,6 +703,25 @@ fn horizon_ray_uv(t: horizon_RayTriangle) -> vec2<f32> {
         + horizon_ray_corner_uv(t.corners.y) * t.weights.y
         + horizon_ray_corner_uv(t.corners.z) * t.weights.z;
 }
+// The direction `uv.x` grows along on a triangle whose edges from its first corner are `e1` and
+// `e2`, and the sign of the one `uv.y` grows along against `cross(normal, tangent)`: the
+// material stage's `MaterialInput.tangent`, from the corners rather than the derivatives.
+fn horizon_ray_tangent(t: horizon_RayTriangle, e1: vec3<f32>, e2: vec3<f32>, normal: vec3<f32>) -> vec4<f32> {
+    let uv = horizon_ray_corner_uv(t.corners.x);
+    let d1 = horizon_ray_corner_uv(t.corners.y) - uv;
+    let d2 = horizon_ray_corner_uv(t.corners.z) - uv;
+    // The position's derivatives along u and v, times the uv triangle's area: its sign alone
+    // matters here, so it is kept and the length dropped.
+    let s = select(-1.0, 1.0, d1.x * d2.y - d2.x * d1.y >= 0.0);
+    let du = (e1 * d2.y - e2 * d1.y) * s;
+    let dv = (e2 * d1.x - e1 * d2.x) * s;
+    let along = du - normal * dot(normal, du);
+    if length(along) < 1e-12 {
+        return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+    }
+    let tangent = normalize(along);
+    return vec4<f32>(tangent, select(-1.0, 1.0, dot(cross(normal, tangent), dv) >= 0.0));
+}
 // Whether a triangle stops the ray where it crosses it: terrain's cutout test. Bit 15 of the
 // layer marks a quad over opaque texels; another stops it where its texel's alpha is 0.5 or more.
 fn horizon_ray_stops(c: RayIntersection) -> bool {
@@ -640,11 +751,13 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
     let hit = horizon_ray_cast(origin, direction, max_distance, false);
     if hit.kind == RAY_QUERY_INTERSECTION_NONE {
         return RayHit(-1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), vec4<f32>(0.0),
-            vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u);
+            vec4<f32>(0.0), vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 0u);
     }
     let t = horizon_ray_triangle(hit.instance_custom_data, hit.primitive_index, hit.barycentrics);
     let a = horizon_ray_corner(t.corners.x);
-    var normal = normalize(cross(horizon_ray_corner(t.corners.y) - a, horizon_ray_corner(t.corners.z) - a));
+    let e1 = horizon_ray_corner(t.corners.y) - a;
+    let e2 = horizon_ray_corner(t.corners.z) - a;
+    var normal = normalize(cross(e1, e2));
     if dot(normal, direction) > 0.0 {
         normal = -normal;
     }
@@ -664,9 +777,22 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>, max_distance: f32) -> RayHit {
         material = horizon_ray_layers[layer * 2u];
         tags = horizon_ray_layers[layer * 2u + 1u];
     }
+    // The colour's alpha byte, as the terrain reads it (mesher.rs's `fluid_face` and
+    // `emitting`): a fluid quad's high nibble is 8 + its face, every other quad's 0xF; the low
+    // nibble is 15 minus the face's HDR tier, codes above 4 the same tiers shining all over.
+    let flags = horizon_ray_word(t.corners.x, 5u) >> 24u;
+    let high = flags >> 4u;
+    let fluid_quad = high >= 8u && (high & 7u) < 6u;
+    // The scene holds solid terrain only: water and lava's kind as the solid pass resolves it.
+    let translucent = false;
+    let fluid = select(0u, select(2u, 1u, translucent), fluid_quad);
+    let code = 15u - (flags & 15u);
+    let tier = select(code, code - 4u, code > 4u);
+    let emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
     return RayHit(hit.t, origin + direction * hit.t, normal, uv,
         horizon_decode_rgba(horizon_ray_texel(layer, uv)), vec4<f32>(horizon_decode(color.rgb), 1.0),
-        min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)), material, tags);
+        min(vec2<f32>(block, sky) / 240.0, vec2<f32>(1.0)), material, tags, emission, fluid,
+        translucent, horizon_ray_tangent(t, e1, e2, normal), layer);
 }
 // Whether anything lies within `max_distance` blocks of `origin` along `direction`: a shadow
 // ray, which stops at the first surface it finds.
@@ -1017,14 +1143,15 @@ impl StageKind {
     }
 
     /// `prelude` with what `tracing` holds of the scene: in every stage the frame's two fields
-    /// for it, and in the post and material stages `RayHit`, `trace` and `trace_any`.
+    /// for it, and in the post and material stages `RayHit`, `trace`, `trace_any`,
+    /// `hit_normal_map` and `hit_specular_map` (and in the post stage `block_pbr_maps`).
     pub fn prelude_traced(self, api: Api, tracing: Tracing) -> String {
         let rays = matches!(self, StageKind::Post | StageKind::Material);
         self.prelude_rays(api, tracing, rays)
     }
 
-    /// `prelude_traced`, with `RayHit`, `trace` and `trace_any` only where `rays`: a material
-    /// stage that calls neither is built as it was before them.
+    /// `prelude_traced`, with the ray names only where `rays`: a material stage that calls
+    /// neither `trace` nor `trace_any` is built as it was before them.
     fn prelude_rays(self, api: Api, tracing: Tracing, rays: bool) -> String {
         let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
@@ -1077,6 +1204,15 @@ impl StageKind {
                 Tracing::Scene => RAY_SCENE,
                 _ => RAY_STUB,
             };
+            // The material stage's renderer, or the check's stand-in, reads the LabPBR maps.
+            if self == StageKind::Post {
+                out += match tracing {
+                    Tracing::Scene => PBR_MAPS_POST,
+                    _ => PBR_STUB,
+                };
+                out += POST_PBR;
+            }
+            out += RAY_PBR;
         }
         out
     }

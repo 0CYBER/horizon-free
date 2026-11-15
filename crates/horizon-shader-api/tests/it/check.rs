@@ -620,7 +620,12 @@ const SHADOWED: &str = "fn post(input: PostInput) -> vec4<f32> {
     let hit = trace(p, frame.sun_direction, frame.ray_distance);
     let open = f32(frame.has_ray_tracing) * f32(!trace_any(p, frame.sun_direction, 64.0));
     let lit = hit.albedo.rgb * hit.tint.rgb * hit.light.y * max(dot(hit.normal, frame.sun_direction), 0.0);
-    return vec4<f32>(lit * open + hit.position * hit.uv.x * hit.distance, f32(hit.material + hit.tags));
+    // The hit's own light, and its normal map turned into world axes.
+    let n = hit_normal_map(hit).xy * 2.0 - 1.0;
+    let bent = hit.tangent.xyz * n.x + cross(hit.normal, hit.tangent.xyz) * hit.tangent.w * n.y;
+    let rough = select(0.5, 1.0 - hit_specular_map(hit).r, block_pbr_maps());
+    let own = hit.albedo.rgb * hit.emission * f32(hit.fluid + u32(hit.translucent)) * rough + bent;
+    return vec4<f32>(lit * open + own + hit.position * hit.uv.x * hit.distance, f32(hit.material + hit.tags));
 }
 ";
 
@@ -754,9 +759,12 @@ fn post(input: PostInput) -> vec4<f32> {
             .to_string()
             .starts_with("tonemap.wgsl:1:15: `acceleration_structure`")
     );
-    // `RayHit` may gain fields, like the stage inputs.
+    // `RayHit` may gain fields, like the stage inputs: a pack can't make up the sprite a hit's
+    // maps are read from either.
     let built = "fn post(input: PostInput) -> vec4<f32> {
-    return RayHit(1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), input.color, input.color, vec2<f32>(0.0), 0u, 0u).albedo;
+    let hit = RayHit(1.0, vec3<f32>(0.0), vec3<f32>(0.0), vec2<f32>(0.0), input.color, input.color,
+        vec2<f32>(0.0), 0u, 0u, 0.0, 0u, false, vec4<f32>(0.0), 7u);
+    return hit_normal_map(hit);
 }
 ";
     let problems = traced(built).unwrap_err();
@@ -819,6 +827,44 @@ fn a_discard_reachable_from_material_needs_pack_coverage() {
     coverage_pack("", MATERIAL, helpers).unwrap();
 }
 
+#[test]
+fn a_traced_pack_s_own_hit_helper_is_refused_as_its_own_trace_is() {
+    for name in ["trace_any", "hit_normal_map", "block_pbr_maps"] {
+        let own = format!(
+            "fn {name}(c: vec4<f32>) -> vec4<f32> {{ return c; }}
+             fn post(input: PostInput) -> vec4<f32> {{ return {name}(input.color); }}
+"
+        );
+        let problems: Vec<String> = traced(&own)
+            .unwrap_err()
+            .iter()
+            .map(Problem::to_string)
+            .collect();
+        let redefined = format!("redefinition of `{name}`");
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.starts_with("post.wgsl:1:") && p.contains(&redefined)),
+            "{problems:#?}"
+        );
+        // Without the key the name is the pack's.
+        pack_0_2(&own, TONEMAP, "").unwrap();
+    }
+    // In a material stage that traces, as its `trace` is; one that doesn't keeps the name.
+    let own = "fn hit_specular_map(c: vec4<f32>) -> vec4<f32> { return c; }
+";
+    let quiet = format!("{own}{MATERIAL}");
+    traced_material(&quiet, "", &[]).unwrap();
+    let tracing = format!("{own}{REFLECTING}");
+    let problems = traced_material(&tracing, "", &[]).unwrap_err();
+    assert!(
+        problems[0]
+            .to_string()
+            .contains("redefinition of `hit_specular_map`"),
+        "{problems:#?}"
+    );
+}
+
 /// A 0.2 pack with `[ray_tracing]` and the material stage `material` (no post pass), its
 /// manifest's other `keys` and `files` added.
 fn traced_material(
@@ -846,7 +892,10 @@ const REFLECTING: &str = "fn material(input: MaterialInput) -> Surface {
     }
     let hit = trace(input.position, reflect(normalize(input.position), input.normal), 64.0);
     let shadowed = trace_any(input.position, frame.sun_direction, 64.0);
-    let seen = select(frame.sky_color.rgb, hit.albedo.rgb * hit.tint.rgb, hit.distance >= 0.0);
+    // What it hits shines by its own light, dimmed by how rough its specular map says it is.
+    let rough = 1.0 - hit_specular_map(hit).r * hit_normal_map(hit).b;
+    let glow = hit.albedo.rgb * hit.emission * rough * f32(hit.fluid + 1u) + hit.tangent.xyz * 0.0;
+    let seen = select(frame.sky_color.rgb, hit.albedo.rgb * hit.tint.rgb + glow, hit.distance >= 0.0);
     return Surface(vec4<f32>(mix(lit.rgb, seen, 0.5) * select(1.0, 0.5, shadowed), lit.a));
 }
 ";

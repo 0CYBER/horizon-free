@@ -3,3 +3,5 @@
 RayHit
 trace
 trace_any
+hit_normal_map
+hit_specular_map

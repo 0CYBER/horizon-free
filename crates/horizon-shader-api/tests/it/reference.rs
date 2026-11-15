@@ -99,9 +99,12 @@ fn every_0_2_stage_compiles_under_ray_tracing() {
     let api = Api::V0_2;
     let traces = "fn post(input: PostInput) -> vec4<f32> {\n    \
                   let hit = trace(view_position(input.uv, input.depth), frame.sun_direction, frame.ray_distance);\n    \
-                  return select(input.color, hit.albedo * hit.tint, hit.distance >= 0.0 && frame.has_ray_tracing == 1u);\n}\n";
+                  let maps = hit_normal_map(hit) * hit_specular_map(hit) * f32(block_pbr_maps()) + hit.tangent;\n    \
+                  let own = maps * hit.emission * f32(hit.fluid) * f32(hit.translucent);\n    \
+                  return select(input.color, hit.albedo * hit.tint + own, hit.distance >= 0.0 && frame.has_ray_tracing == 1u);\n}\n";
     let shaded = "fn material(input: MaterialInput) -> Surface {\n    \
-                  let lit = f32(!trace_any(input.position, frame.sun_direction, frame.ray_distance));\n    \
+                  let lit = f32(!trace_any(input.position, frame.sun_direction, frame.ray_distance))\n        \
+                      * hit_specular_map(trace(input.position, input.normal, 8.0)).r;\n    \
                   return Surface(input.albedo * input.tint * vec4<f32>(input.lightmap * lit, 1.0));\n}\n";
     for &kind in api.stages() {
         let own = match kind {
@@ -126,11 +129,11 @@ fn every_0_2_stage_compiles_under_ray_tracing() {
 const PINNED_TRACED_MATERIAL: [(Tracing, &str); 2] = [
     (
         Tracing::Stub,
-        "75f7c8b4dee77eb30e07cde8c753c19aaa7c1149ab42a711520144a8c4f9121c",
+        "817e028296f2e7b9d66a58dcfcc79ad133b9510869141f2cc952756685e4dce5",
     ),
     (
         Tracing::Scene,
-        "18f84e67f797242de0b36834c31a48c8b115c839e2347f2e2adfdf740340fd67",
+        "4ae18c72f7dd9a0b2809d5f16793a457780f3e12eca3687f15df5250ae265221",
     ),
 ];
 
