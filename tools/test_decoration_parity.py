@@ -44,12 +44,28 @@ def corpus(resources):
     if any(not isinstance(name,str) or name.startswith('#') for name in names):raise ValueError('unsupported fixture holder form')
     identity={name:i for i,name in enumerate(names)}
     biomes=[[[identity[name] for name in step] for step in steps] for steps in resources.values()]
+    bundled=biomes
     rng=random.Random(8845)
     for mode in range(4):
         for selected in [list(range(len(biomes))),[],*[ [i] for i in range(len(biomes))],*[rng.sample(range(len(biomes)),rng.randrange(len(biomes)+1)) for _ in range(24)]]:
             f=fixture(biomes,rng.randrange(-2**63,2**63),mode,selected)
             f['cx']=rng.randrange(-1875000,1875000);f['cz']=rng.randrange(-1875000,1875000)
             yield f
+    # A mod feature inserted into bundled steps (arismoko/horizon#815): the oracle pins how global
+    # indices, and so the feature seeds of the vanilla features after it, move.
+    added=len(names)
+    def insert(steps,where):
+        steps=[list(step) for step in steps]
+        if where=='new_step':return steps+[[added]]
+        if not steps:steps=[[]]
+        step=steps[min(3,len(steps)-1)]
+        step.insert({'first':0,'middle':len(step)//2,'last':len(step)}[where],added)
+        return steps
+    for where in ['first','middle','last','new_step']:
+        for target in [None,0]:
+            inserted=[insert(steps,where) if target in (None,i) else steps for i,steps in enumerate(bundled)]
+            for mode in range(4):
+                f=fixture(inserted,0,mode,list(range(len(inserted))));f['cx']=1;f['cz']=-2;yield f
     for _ in range(200):
         # Shared order avoids cycles while exercising sparse high step indices.
         biomes=[[[i for i in range(12) if rng.randrange(5)==0] for _ in range(rng.randrange(15))] for _ in range(rng.randrange(8))]
@@ -85,7 +101,7 @@ def main():
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})
         print(f'{side}: {matched:,} decoration output lines match Rust',flush=True)
     base.ensure_sources_unchanged(sources,tested_sources);base.ensure_sources_unchanged(fixture_paths,tested_fixtures)
-    report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':len(fixtures),'biomes':len(resources),'requested_decorations':len(fixtures)*2,'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':'Actual ChunkGenerator.applyBiomeDecoration with structure generation disabled, native ProtoChunk biome palettes, native FeatureSorter and WorldgenRandom, and traced feature sinks. Nine-chunk query order, possible-biome intersection, sorted global feature indices, decoration/feature seeds, biome-check placement, repeated calls, ignored false results, progress markers and partial failures are compared. All 67 bundled biome feature lists participate with synthetic payloads. Rust owns immutable generation settings and delegates resident palette transport and feature callbacks. Structure decoration, complete registry/world region integration, all feature algorithms, crash-report formatting and full gameplay remain pending.'}
+    report={'schema':1,'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'fixtures':len(fixtures),'biomes':len(resources),'requested_decorations':len(fixtures)*2,'sources_sha256':tested_sources,'fixtures_sha256':tested_fixtures,'rust_output_sha256':lab.digest(build/'rust.txt','sha256'),'references':references,'scope':'Actual ChunkGenerator.applyBiomeDecoration with structure generation disabled, native ProtoChunk biome palettes, native FeatureSorter and WorldgenRandom, and traced feature sinks. Nine-chunk query order, possible-biome intersection, sorted global feature indices, decoration/feature seeds, biome-check placement, repeated calls, ignored false results, progress markers and partial failures are compared. All 67 bundled biome feature lists participate with synthetic payloads, also with one extra feature inserted first, middle or last in a step or as a new step, in one or every biome. Rust owns immutable generation settings and delegates resident palette transport and feature callbacks. Structure decoration, complete registry/world region integration, all feature algorithms, crash-report formatting and full gameplay remain pending.'}
     lab.write_json(report_path,report);print(f'Scoped decoration parity passed: {report_path}')
 
 

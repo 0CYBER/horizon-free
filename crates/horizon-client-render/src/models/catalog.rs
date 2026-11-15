@@ -5,7 +5,7 @@ use crate::{Result, sprites::Sprites};
 use horizon_assets::{
     bake::{BlockModelTransform, ModelQuad, RenderType, bake_block_model},
     blockstate::{
-        BlockStateDefinition, Variant, VariantSet,
+        BlockStateDefinition, BlockStateFile, Variant, VariantSet,
         bind::{Properties, PropertySchema, PropertyValues, SelectedModels},
         choice::CompiledChoices,
     },
@@ -23,7 +23,6 @@ use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
     sync::OnceLock,
 };
 
@@ -154,18 +153,16 @@ fn key(variant: &Variant) -> VariantKey {
 }
 /// Bakes model `name` of `library`, turned and UV-locked as a variant says.
 fn bake_variant(
-    root: &Path,
     sprites: &mut Sprites,
     library: &horizon_assets::resolve::ModelLibrary,
     name: &str,
     turns: [u8; 3],
     lock: bool,
 ) -> Result<BakedModel> {
-    bake_resolved(root, sprites, &library.resolve(name)?, turns, lock)
+    bake_resolved(sprites, &library.resolve(name)?, turns, lock)
 }
 /// Bakes a resolved `model`, turned and UV-locked as a variant says.
 fn bake_resolved(
-    root: &Path,
     sprites: &mut Sprites,
     model: &horizon_assets::resolve::ResolvedCuboidModel,
     turns: [u8; 3],
@@ -173,12 +170,12 @@ fn bake_resolved(
 ) -> Result<BakedModel> {
     let particle = model
         .material("particle")?
-        .map(|material| sprites.insert(root, &material.sprite))
+        .map(|material| sprites.insert(&material.sprite))
         .transpose()?;
     let faces: Vec<BakedFace> = bake_block_model(model, BlockModelTransform::new(turns, lock))?
         .into_iter()
         .map(|quad| {
-            let layer = sprites.insert(root, &quad.material.sprite)?;
+            let layer = sprites.insert(&quad.material.sprite)?;
             // A model's `render_type` replaces the pass its sprite would pick.
             let (translucent, opaque) = match quad.render_type {
                 Some(RenderType::Translucent | RenderType::Tripwire) => (true, false),
@@ -200,6 +197,47 @@ fn bake_resolved(
         cube,
     })
 }
+
+/// `FaceBakery.bakeQuad`: use the same centered geometry and inverse face UV
+/// transformation as a blockstate variant, not the draw-time pose.
+fn bake_form(
+    root: &crate::resource_source::ResourceSource,
+    sprites: &mut Sprites,
+    models: &crate::model_library::ParsedModels,
+    form: &mod_api::StandaloneModelForm,
+) -> Result<BakedModel> {
+    use mod_api::StandaloneModelForm;
+    match form {
+        StandaloneModelForm::Rotated {
+            model,
+            turns,
+            uvlock,
+            ..
+        } => {
+            let library = models.block_library(root, vec![model.clone()])?;
+            bake_variant(sprites, &library, model, *turns, *uvlock)
+        }
+        StandaloneModelForm::Combined { parts, .. } => {
+            let library = models.block_library(root, parts.clone())?;
+            let mut combined = BakedModel {
+                ambient_occlusion: true,
+                particle: None,
+                faces: Vec::new(),
+                cube: None,
+            };
+            for part in parts {
+                let baked = bake_variant(sprites, &library, part, [0; 3], false)?;
+                if combined.particle.is_none() {
+                    combined.particle = baked.particle;
+                }
+                combined.ambient_occlusion &= baked.ambient_occlusion;
+                combined.faces.extend(baked.faces);
+            }
+            combined.cube = super::cube::cube_styles(&combined.faces);
+            Ok(combined)
+        }
+    }
+}
 /// The definitions a blockstate file holds, bottom first: the layers of a
 /// file the pack overlay stacked (`packs::BLOCKSTATE_LAYERS`), else the
 /// file itself.
@@ -211,6 +249,27 @@ fn definition_layers(text: &str) -> std::result::Result<Vec<String>, String> {
     match value.get(crate::packs::BLOCKSTATE_LAYERS) {
         Some(Value::Array(layers)) => Ok(layers.iter().map(Value::to_string).collect()),
         _ => Ok(vec![text.to_owned()]),
+    }
+}
+/// One layer of block `block`'s blockstate file, read and bound to its `possible` states:
+/// vanilla's variants and multipart, or the picks of the definition type a mod registered.
+fn bind_layer(
+    text: &str,
+    block: &str,
+    schema: &PropertySchema,
+    possible: &[Properties],
+) -> std::result::Result<(BlockStateDefinition, Vec<Option<SelectedModels>>), String> {
+    match BlockStateFile::from_json(text).map_err(|e| e.to_string())? {
+        BlockStateFile::Vanilla(definition) => {
+            let bound = definition
+                .bind(schema, possible)
+                .map_err(|e| e.to_string())?;
+            Ok((definition, bound))
+        }
+        BlockStateFile::Typed { kind, config } => {
+            crate::mod_block_state_models::instantiate(&kind, block, &config, possible)
+                .map(BlockStateDefinition::from_picks)
+        }
     }
 }
 /// Each state's model from definitions bound bottom first: the topmost one
@@ -231,18 +290,18 @@ fn topmost(layers: Vec<Vec<Option<SelectedModels>>>) -> Vec<Option<(usize, Selec
 }
 impl StateModels {
     pub fn load(
-        root: &Path,
+        root: &crate::resource_source::ResourceRoot,
         registry: &BlockRegistry,
         blocks: &[&str],
         sprites: &mut Sprites,
     ) -> Result<Self> {
         let facts: BTreeMap<String, Value> =
-            serde_json::from_slice(&fs::read(root.join("model-states.json"))?)?;
-        Self::from_facts(root, registry, blocks, sprites, &facts)
+            serde_json::from_slice(&fs::read(root.prepared().join("model-states.json"))?)?;
+        Self::from_facts(root.source(), registry, blocks, sprites, &facts)
     }
     /// Bind and bake models using an already parsed model-state document.
     pub fn from_facts(
-        root: &Path,
+        root: &crate::resource_source::ResourceSource,
         registry: &BlockRegistry,
         blocks: &[&str],
         sprites: &mut Sprites,
@@ -258,7 +317,7 @@ impl StateModels {
         )
     }
     pub(crate) fn from_facts_with_models(
-        root: &Path,
+        root: &crate::resource_source::ResourceSource,
         registry: &BlockRegistry,
         blocks: &[&str],
         sprites: &mut Sprites,
@@ -322,35 +381,23 @@ impl StateModels {
             // gets no model, and the other blocks still load. A file several
             // packs provide binds each pack's definition on its own, bottom
             // first (`loadBlockStateDefinitionStack`).
-            let layers = match horizon_core::prepared_files::read_to_string(
-                &root.join(format!("assets/{namespace}/blockstates/{path}.json")),
-            )
-            .map_err(|e| e.to_string())
-            .and_then(|text| definition_layers(&text))
+            let file = format!("assets/{namespace}/blockstates/{path}.json");
+            let layers = match root
+                .read_to_string(&file)
+                .map_err(|e| e.to_string())
+                .and_then(|text| definition_layers(&text))
             {
                 Ok(layers) => layers,
                 Err(e) => {
-                    log::warn!(
-                        "Horizon: blockstate definition of {namespace}:{path} not loaded: {e}"
-                    );
+                    log::warn!("Horizon: blockstate definition {file} not loaded: {e}");
                     continue;
                 }
             };
             let mut loaded = Vec::with_capacity(layers.len());
             for text in &layers {
-                let layer = BlockStateDefinition::from_json(text)
-                    .map_err(|e| e.to_string())
-                    .and_then(|definition| {
-                        let bound = definition
-                            .bind(&schema, &possible)
-                            .map_err(|e| e.to_string())?;
-                        Ok((definition, bound))
-                    });
-                match layer {
+                match bind_layer(text, &name, &schema, &possible) {
                     Ok(layer) => loaded.push(layer),
-                    Err(e) => log::warn!(
-                        "Horizon: blockstate definition of {namespace}:{path} not loaded: {e}"
-                    ),
+                    Err(e) => log::warn!("Horizon: blockstate definition {file} not loaded: {e}"),
                 }
             }
             if loaded.is_empty() {
@@ -419,7 +466,6 @@ impl StateModels {
         // Every texture the models name, decoded side by side before the bake adds them one
         // by one in its own order.
         sprites.prefetch(
-            root,
             resolved
                 .iter()
                 .flatten()
@@ -429,7 +475,7 @@ impl StateModels {
         let mut baked = Vec::with_capacity(variants.len());
         let mut index = BTreeMap::new();
         for ((name, turns, lock), model) in variants.into_iter().zip(resolved) {
-            let model = bake_resolved(root, sprites, &model?, turns, lock)?;
+            let model = bake_resolved(sprites, &model?, turns, lock)?;
             index.insert((name.clone(), turns, lock), baked.len() as u32);
             let variant = Variant {
                 model: name,
@@ -464,7 +510,7 @@ impl StateModels {
     /// is; the others still bake.
     pub(crate) fn bake_standalone(
         &mut self,
-        root: &Path,
+        root: &crate::resource_source::ResourceSource,
         sprites: &mut Sprites,
         models: &crate::model_library::ParsedModels,
         names: &[String],
@@ -483,7 +529,7 @@ impl StateModels {
             }
             let model = models
                 .block_library(root, vec![name.clone()])
-                .and_then(|library| bake_variant(root, sprites, &library, name, [0; 3], false));
+                .and_then(|library| bake_variant(sprites, &library, name, [0; 3], false));
             match model {
                 Ok(model) => {
                     self.standalone
@@ -500,6 +546,40 @@ impl StateModels {
         }
         Ok(())
     }
+    /// Bake dependencies atomically into one standalone slot; never publish a partial form.
+    pub(crate) fn bake_standalone_forms(
+        &mut self,
+        root: &crate::resource_source::ResourceSource,
+        sprites: &mut Sprites,
+        models: &crate::model_library::ParsedModels,
+        forms: &[super::StandaloneFormRegistration],
+    ) {
+        for entry in forms {
+            let id = entry.form.id();
+            if self.standalone.contains_key(id) {
+                continue;
+            }
+            let result = bake_form(root, sprites, models, &entry.form);
+            match result {
+                Ok(model) => {
+                    self.standalone
+                        .insert(id.to_owned(), self.baked.len() as u32);
+                    self.baked.push((
+                        Variant {
+                            model: id.to_owned(),
+                            rotations: [0; 3],
+                            uv_lock: false,
+                        },
+                        model,
+                    ));
+                }
+                Err(error) => log::warn!(
+                    "Horizon: mod {} standalone form {id} not loaded: {error}",
+                    entry.owner
+                ),
+            }
+        }
+    }
     /// Every baked model with the variant it was baked from, to change its faces.
     pub fn models_mut(&mut self) -> impl Iterator<Item = (&Variant, &mut BakedModel)> {
         self.bounds.take();
@@ -509,8 +589,19 @@ impl StateModels {
     }
     /// A model baked by [`Self::bake_standalone`], by id (`mymod:block/shaft_half`).
     pub fn standalone(&self, name: &str) -> Option<&BakedModel> {
-        let &i = self.standalone.get(name)?;
-        Some(&self.baked[i as usize].1)
+        self.model_by_slot(self.standalone_slot(name)?)
+    }
+    /// Resolve a standalone name once, without copying its baked geometry.
+    pub fn standalone_slot(&self, name: &str) -> Option<u32> {
+        self.standalone.get(name).copied()
+    }
+    /// Slots of registered standalone models, including models shared with block states.
+    pub fn standalone_slots(&self) -> impl Iterator<Item = u32> + '_ {
+        self.standalone.values().copied()
+    }
+    /// Geometry in this catalog's existing baked store.
+    pub fn model_by_slot(&self, slot: u32) -> Option<&BakedModel> {
+        self.baked.get(slot as usize).map(|(_, model)| model)
     }
     pub fn collect(
         &self,
@@ -673,6 +764,145 @@ mod tests {
     }
 
     #[test]
+    fn archive_models_bind_prepared_states_and_load_world_texture_features_in_place() -> Result<()>
+    {
+        use crate::resource_source::{ResourceRoot, ResourceSource};
+        use std::io::Write;
+        use {horizon_core::nbt::Tag, horizon_world::DATA_VERSION};
+        let fixture = Fixture(
+            std::env::temp_dir().join(format!("horizon-world-archive-{}", std::process::id())),
+        );
+        let prepared = fixture.0.join("prepared");
+        fs::create_dir_all(&prepared)?;
+        fs::write(
+            prepared.join("model-states.json"),
+            br#"{"demo:stone":{"schema":{},"states":[{}]}}"#,
+        )?;
+        let state = BlockState {
+            name: "demo:stone".into(),
+            properties: Default::default(),
+        };
+        let registry = BlockRegistry::from_nbt(&Tag::compound([
+            ("DataVersion", Tag::Int(DATA_VERSION)),
+            ("states", Tag::List(vec![state.to_nbt()])),
+            ("defaults", Tag::compound([("demo:stone", Tag::Int(0))])),
+        ]))?;
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, 16, 16);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .write_header()?
+                .write_image_data(&[10, 20, 30, 255].repeat(256))?;
+        }
+        let jar = fixture.0.join("world.jar");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&jar)?);
+        for (name, bytes) in [
+            ("model-states.json", b"this is not the prepared schema".as_slice()),
+            ("assets/demo/blockstates/stone.json", br#"{"variants":{"":{"model":"demo:block/child"}}}"#),
+            ("assets/demo/models/block/child.json", br#"{"loader":"fusion:model","type":"fusion:connecting","parent":"demo:block/base"}"#),
+            ("assets/demo/models/block/base.json", br##"{"textures":{"all":"demo:block/stone","particle":"#all"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"north":{"texture":"#all"}}}]}"##),
+            ("assets/demo/textures/block/stone.png.mcmeta", br#"{"fusion":{"type":"connecting","layout":"simple"}}"#),
+            ("assets/demo/optifine/ctm/stone.properties", b"matchBlocks=demo:stone\nmethod=fixed\ntiles=./tile\n"),
+        ] {
+            writer.start_file(name, zip::write::SimpleFileOptions::default())?;
+            writer.write_all(bytes)?;
+        }
+        for (name, color) in [
+            ("assets/demo/textures/block/stone.png", [10, 20, 30, 255]),
+            ("assets/demo/textures/block/stone_e.png", [30, 40, 50, 255]),
+            ("assets/demo/optifine/ctm/tile.png", [50, 60, 70, 255]),
+            ("assets/demo/optifine/ctm/tile_e.png", [70, 80, 90, 255]),
+            (
+                "assets/demo/textures/emissive/glow.png",
+                [90, 100, 110, 255],
+            ),
+        ] {
+            let mut bytes = Vec::new();
+            {
+                let mut encoder = png::Encoder::new(&mut bytes, 16, 16);
+                encoder.set_color(png::ColorType::Rgba);
+                encoder.set_depth(png::BitDepth::Eight);
+                encoder
+                    .write_header()?
+                    .write_image_data(&color.repeat(256))?;
+            }
+            writer.start_file(name, zip::write::SimpleFileOptions::default())?;
+            writer.write_all(&bytes)?;
+        }
+        writer.finish()?;
+        let root = ResourceRoot::new(
+            prepared.clone(),
+            fixture.0.join("cache"),
+            ResourceSource::archive(&jar)?,
+        );
+        let mut sprites = Sprites::with_disk_cache(&root);
+        let mut catalog = StateModels::load(&root, &registry, &["demo:stone"], &mut sprites)?;
+        let base = sprites.layers["demo:block/stone"];
+        let picked = catalog.collect(BlockStateId(0), BlockPos::new(0, 0, 0))?;
+        assert_eq!(picked.len(), 1);
+        assert_eq!(
+            picked[0].1.faces.len(),
+            1,
+            "parent geometry loaded from the jar"
+        );
+        assert_eq!(picked[0].1.faces[0].layer, base);
+        assert_eq!(picked[0].1.particle, Some(base));
+        assert!(
+            sprites
+                .try_insert_limited("demo:block/stone", png.len() as u64 - 1)
+                .is_err(),
+            "the byte limit also applies to cached layers"
+        );
+        assert_eq!(
+            sprites.try_insert_limited("demo:block/stone", png.len() as u64)?,
+            base
+        );
+        let _fusion = crate::fusion::FusionTextures::load(
+            root.source(),
+            &registry,
+            &mut sprites,
+            &mut catalog,
+        );
+        assert!(
+            catalog.collect(BlockStateId(0), BlockPos::new(0, 0, 0))?[0]
+                .1
+                .faces[0]
+                .fusion
+                .is_some()
+        );
+        let connected = crate::connected::ConnectedTextures::load(
+            root.source(),
+            horizon_optifine::ctm::load(root.source()),
+            &registry,
+            &mut sprites,
+            |_, _| Some(base),
+        );
+        assert!(!connected.is_empty());
+        crate::native_emissive::load(root.source(), &mut sprites);
+        assert!(sprites.layers.contains_key("demo:emissive/glow"));
+        let pairs = crate::native_emissive::load_optifine(root.source(), &mut sprites);
+        assert!(pairs.contains(&("demo:block/stone".into(), "demo:block/stone_e".into())));
+        assert!(pairs.contains(&(
+            "assets/demo/optifine/ctm/tile.png".into(),
+            "assets/demo/optifine/ctm/tile_e.png".into()
+        )));
+        sprites.save_disk_cache();
+        sprites.finish();
+        let offset = base as usize * (sprites.size * sprites.size * 4) as usize;
+        assert_eq!(sprites.pixels[offset..offset + 4], [10, 20, 30, 255]);
+        assert!(!prepared.join("assets").exists());
+        assert!(!fixture.0.join("assets").exists());
+        assert_eq!(
+            fs::read_dir(&prepared)?.count(),
+            1,
+            "asset reads did not touch prepared tables"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn standalone_models_bake_once_and_skip_what_does_not_read() -> Result<()> {
         let fixture = Fixture(
             std::env::temp_dir().join(format!("horizon-standalone-{}", std::process::id())),
@@ -688,7 +918,9 @@ mod tests {
         );
         fixture.write("lanef:block/orphan", r#"{"parent":"lanef:block/absent"}"#);
         let mut models = StateModels::default();
-        let mut sprites = Sprites::default();
+        let mut sprites = Sprites::new(crate::resource_source::ResourceSource::directory(
+            fixture.0.clone(),
+        ));
         let names: Vec<String> = [
             "lanef:block/shaft_half",
             "lanef:block/cog",
@@ -698,8 +930,15 @@ mod tests {
         ]
         .map(str::to_owned)
         .into();
-        let parsed = ParsedModels::load(&fixture.0);
-        models.bake_standalone(&fixture.0, &mut sprites, &parsed, &names)?;
+        let parsed = ParsedModels::load(&crate::resource_source::ResourceSource::directory(
+            fixture.0.clone(),
+        ));
+        models.bake_standalone(
+            &horizon_assets::resource_source::ResourceSource::directory(fixture.0.to_path_buf()),
+            &mut sprites,
+            &parsed,
+            &names,
+        )?;
         let shaft = models.standalone("lanef:block/shaft_half").expect("baked");
         assert_eq!(shaft.faces.len(), 2);
         let cog = models.standalone("lanef:block/cog").expect("baked");
@@ -712,7 +951,12 @@ mod tests {
         assert_eq!(models.baked.len(), 2);
         // Without a parsed library, the files are read directly.
         let mut direct = StateModels::default();
-        direct.bake_standalone(&fixture.0, &mut sprites, &ParsedModels::default(), &names)?;
+        direct.bake_standalone(
+            &horizon_assets::resource_source::ResourceSource::directory(fixture.0.to_path_buf()),
+            &mut sprites,
+            &ParsedModels::default(),
+            &names,
+        )?;
         assert_eq!(
             direct.standalone("lanef:block/cog").map(|m| m.faces.len()),
             Some(2)
@@ -739,7 +983,7 @@ mod tests {
         let names = vec!["lanef:block/shared".to_owned()];
         let root = std::env::temp_dir().join("horizon-standalone-none");
         models.bake_standalone(
-            &root,
+            &horizon_assets::resource_source::ResourceSource::directory(root.to_path_buf()),
             &mut Sprites::default(),
             &ParsedModels::default(),
             &names,
@@ -753,3 +997,7 @@ mod tests {
 #[cfg(test)]
 #[path = "catalog/bounds_tests.rs"]
 mod bounds_tests;
+
+#[cfg(test)]
+#[path = "catalog/standalone_tests.rs"]
+mod standalone_tests;

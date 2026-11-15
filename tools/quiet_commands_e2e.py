@@ -73,7 +73,7 @@ def main():
     if args.bin_dir:
         binary = Path(args.bin_dir) / 'horizon-client'
     else:
-        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'],
+        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'],
                        cwd=ROOT, check=True)
         binary = Path(lab.cargo_target()) / 'fast' / 'horizon-client'
     port = lab.free_port()

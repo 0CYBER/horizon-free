@@ -83,7 +83,7 @@ pub(super) fn reference(
 pub struct ApplyRandom {
     pub(super) draws: Draws,
     lists: Vec<(i32, ProcessorList)>,
-    total: i32,
+    total: i64,
 }
 impl ApplyRandom {
     pub(super) fn decode(
@@ -106,10 +106,7 @@ impl ApplyRandom {
                 None => Ok((1, processors(e, resources, bindings)?)),
             })
             .collect::<Result<Vec<_>, DecodeError>>()?;
-        let total = lists
-            .iter()
-            .map(|(w, _)| *w)
-            .fold(0i32, i32::saturating_add);
+        let total = lists.iter().map(|(w, _)| i64::from(*w)).sum();
         Ok(Self {
             draws: Draws::decode(value.get("mode"), value)?,
             lists,
@@ -121,14 +118,24 @@ impl ApplyRandom {
         if self.total <= 0 {
             return None;
         }
-        let mut at = random.int(self.total);
+        let mut at = draw(self.total, random);
         for (weight, list) in &self.lists {
-            at -= weight;
+            at -= i64::from(*weight);
             if at < 0 {
                 return Some(list);
             }
         }
         None
+    }
+}
+
+// Preserve bounded-int draws for ordinary packs. Oversized totals use one
+// unsigned nextLong modulo the total, as in the other wide weight selectors.
+fn draw(total: i64, random: &mut impl ProcessorRandom) -> i64 {
+    if total <= i64::from(i32::MAX) {
+        i64::from(random.int(total as i32))
+    } else {
+        ((random.long() as u64) % total as u64) as i64
     }
 }
 
@@ -291,7 +298,7 @@ impl Conditional {
 pub struct SetBlock {
     pub(super) draws: Draws,
     states: Vec<(i32, BlockStateId)>,
-    total: i32,
+    total: i64,
     /// `preserve_state` (true by default): the template block's properties
     /// the new block has too are kept.
     pub(super) preserve: bool,
@@ -310,14 +317,17 @@ impl SetBlock {
                 .flatten()
                 .map(|e| {
                     Ok((
-                        e["weight"].as_i64().unwrap_or(1).clamp(0, 1 << 30) as i32,
+                        e["weight"]
+                            .as_i64()
+                            .unwrap_or(1)
+                            .clamp(0, i64::from(i32::MAX)) as i32,
                         state(&e["data"])?,
                     ))
                 })
                 .collect::<Result<_, DecodeError>>()?,
             _ => return Err(DecodeError::Field("set_block state_provider")),
         };
-        let total = states.iter().map(|(w, _)| *w).sum();
+        let total = states.iter().map(|(w, _)| i64::from(*w)).sum();
         if total <= 0 {
             return Err(DecodeError::Field("set_block state_provider"));
         }
@@ -334,9 +344,9 @@ impl SetBlock {
     }
     /// The provider's state: WeightedList.getRandom, one bounded draw.
     pub(super) fn state(&self, random: &mut impl ProcessorRandom) -> BlockStateId {
-        let mut at = random.int(self.total);
+        let mut at = draw(self.total, random);
         for (weight, state) in &self.states {
-            at -= weight;
+            at -= i64::from(*weight);
             if at < 0 {
                 return *state;
             }
@@ -348,21 +358,23 @@ impl SetBlock {
 #[cfg(test)]
 mod tests {
     use super::super::{BlockInfo, PlaceSettings, ProcessorList, process_list};
-    use crate::{
-        heightmap::HeightmapType,
-        nbt::{JavaString, Tag},
-        registry::{BlockRegistry, BlockStateId},
-        worldgen::{
-            anchor::WorldGenerationContext,
-            block_feature::FeatureBlockBindings,
-            placement::{PlacementContext, PlacementQueryError},
-            structure::{
-                Rotation, StateTransforms, StructureResources, template::parse_state_string,
-            },
-        },
-    };
     use serde_json::{Value, json};
     use std::collections::{BTreeMap, BTreeSet};
+    use {
+        crate::{
+            heightmap::HeightmapType,
+            registry::{BlockRegistry, BlockStateId},
+            worldgen::{
+                anchor::WorldGenerationContext,
+                block_feature::FeatureBlockBindings,
+                placement::{PlacementContext, PlacementQueryError},
+                structure::{
+                    Rotation, StateTransforms, StructureResources, template::parse_state_string,
+                },
+            },
+        },
+        horizon_core::nbt::{JavaString, Tag},
+    };
 
     /// Every combination of `properties`' values, the first one the default.
     fn states(name: &str, properties: &[(&str, &[&str])]) -> Vec<Value> {
@@ -531,6 +543,61 @@ mod tests {
         fn out(&self, list: &ProcessorList, state: &str) -> String {
             self.name(self.run(list, (0, "minecraft:air"), [0; 3], [0; 3], state))
         }
+    }
+
+    #[test]
+    fn wide_weights_litho_apply_random() {
+        use horizon_core::random::{LegacyRandom, RandomSource};
+        for seed in -20..20 {
+            for total in [1, 2, 7, 100, i32::MAX] {
+                let mut old = LegacyRandom::new(seed);
+                let mut new = old.clone();
+                assert_eq!(
+                    super::draw(i64::from(total), &mut new),
+                    i64::from(old.next_int_bound(total).unwrap())
+                );
+                assert_eq!(new.next_long(), old.next_long());
+            }
+        }
+        let t = Lists::new(&[]);
+        let entry = json!({"weight": i32::MAX, "data": []});
+        let list = t
+            .decode(json!([{"processor_type": "lithostitched:apply_random",
+            "processor_lists": [entry, entry, entry]}]))
+            .unwrap();
+        assert_eq!(
+            t.out(&list, "minecraft:cobblestone"),
+            "minecraft:cobblestone"
+        );
+        let bindings = FeatureBlockBindings::new(t.registry, BTreeSet::new()).unwrap();
+        let value = json!({"processor_lists": [entry, entry, entry]});
+        let picker = super::ApplyRandom::decode(&value, &t.resources, &bindings).unwrap();
+        // Every entry remains reachable, including the third (a saturated
+        // total would always stop in the first entry).
+        for index in 0..3 {
+            assert!((0..100).any(|seed| {
+                let selected = picker
+                    .pick(&mut horizon_core::random::LegacyRandom::new(seed))
+                    .unwrap();
+                std::ptr::eq(selected, &picker.lists[index].1)
+            }));
+        }
+    }
+
+    #[test]
+    fn wide_weights_litho_set_block() {
+        let t = Lists::new(&[]);
+        let entry = json!({"weight": i32::MAX, "data": {"id": "minecraft:blackstone"}});
+        let list = t
+            .decode(json!([set_block(
+                json!({"type": "minecraft:weighted_state_provider",
+            "entries": [entry, entry, entry]})
+            )]))
+            .unwrap();
+        assert_eq!(
+            t.out(&list, "minecraft:cobblestone"),
+            "minecraft:blackstone"
+        );
     }
 
     fn swap(blocks: Value) -> Value {

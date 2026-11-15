@@ -60,13 +60,15 @@ impl SupportType {
     }
 }
 
-use crate::{
-    collision::CachedCollisionRegistry,
-    compression::invalid,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId, BlockTable},
-};
 use std::{collections::HashMap, io};
+use {
+    crate::{
+        collision::CachedCollisionRegistry,
+        compression::invalid,
+        registry::{BlockRegistry, BlockStateId, BlockTable},
+    },
+    horizon_core::nbt::Tag,
+};
 /// Cached branch of BlockState.isFaceSturdy. Dynamic support-shape selection
 /// stays explicit as None, even when a context-free approximation looks obvious.
 pub struct CachedBlockSupportRegistry<'r> {

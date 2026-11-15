@@ -1,9 +1,4 @@
 //! Ocean ruins (OceanRuinPieces).
-use super::{
-    BoundingBox, Mirror, Rotation, StructureResources, StructureTemplate,
-    legacy::{PieceContext, Result, TemplateHandler, TemplatePiece},
-    processor::ProcessorList,
-};
 use crate::{
     fluid::FluidKind,
     heightmap::HeightmapType,
@@ -11,6 +6,14 @@ use crate::{
 };
 use horizon_core::random::RandomSource;
 use std::sync::Arc;
+use {
+    super::{
+        Mirror, Rotation, StructureResources, StructureTemplate,
+        legacy::{PieceContext, Result, TemplateHandler, TemplatePiece},
+        processor::ProcessorList,
+    },
+    horizon_core::bounding_box::BoundingBox,
+};
 
 const WARM: [&str; 8] = [
     "warm_1", "warm_2", "warm_3", "warm_4", "warm_5", "warm_6", "warm_7", "warm_8",
@@ -362,21 +365,26 @@ pub fn post_process(piece: &TemplatePiece, c: &mut PieceContext<'_>) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        fluid::FluidState,
-        nbt::{Compound, parse_snbt},
-        registry::{BlockRegistry, BlockStateId},
-        worldgen::{
-            placement::PlacementQueryError,
-            structure::{
-                BoundingBox, StateTransforms,
-                legacy::{PieceWorld, SolidRender, TemplatePiece},
-                processor::ProcessorList,
-            },
-        },
-    };
     use horizon_core::{position::ChunkPos, random::LegacyRandom};
     use std::{collections::BTreeMap, path::Path, sync::Mutex};
+    use {
+        crate::{
+            fluid::FluidState,
+            registry::{BlockRegistry, BlockStateId},
+            worldgen::{
+                placement::PlacementQueryError,
+                structure::{
+                    StateTransforms,
+                    legacy::{PieceWorld, SolidRender, TemplatePiece},
+                    processor::ProcessorList,
+                },
+            },
+        },
+        horizon_core::{
+            bounding_box::BoundingBox,
+            nbt::{Compound, parse_snbt},
+        },
+    };
 
     /// Air, the water and the floor the piece is placed in, and the structure
     /// block that carries the piece's markers.

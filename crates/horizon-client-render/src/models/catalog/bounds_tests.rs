@@ -30,7 +30,6 @@ fn catalog(definition: &str) -> StateModels {
             horizon_assets::resolve::ModelLibrary::new(BTreeMap::from([(name.clone(), model)]))
                 .unwrap();
         let baked = bake_resolved(
-            Path::new("/nonexistent-horizon-bounds-fixture"),
             &mut Sprites::default(),
             &library.resolve(&name).unwrap(),
             turns,

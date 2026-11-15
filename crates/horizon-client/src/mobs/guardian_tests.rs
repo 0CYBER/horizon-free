@@ -7,7 +7,6 @@ use crate::mobs::goals::{Cx, JUMP, MOVE};
 use crate::mobs::guardian::{elder_server_ai_step, register};
 use crate::mobs::world::{with_built_test_world, with_test_world};
 use horizon_core::geometry::Vec3;
-use horizon_core::random::LegacyRandom;
 use std::sync::Arc;
 
 /// The damage events in an outbox (a hurt also leaves its sound there).
@@ -28,6 +27,7 @@ fn spikes(events: &[MobEvent]) -> Vec<&MobEvent> {
 /// blow it refuses draws the spikes too. Thorns, magic and a projectile's
 /// arrow (a direct entity that is not living) are exempt.
 #[test]
+#[ignore = "daily"]
 fn a_still_guardian_spikes_whoever_hits_it() {
     let by_mob = |kind| Damage {
         kind,
@@ -62,7 +62,8 @@ fn a_still_guardian_spikes_whoever_hits_it() {
             // DATA_ID_MOVING, which `GuardianMoveControl` sets while it swims.
             m.extra.flag2 = moving;
             m.invulnerable_flag = invulnerable;
-            let landed = m.damage(2.0, source);
+            let mut test_level = crate::health::TestLevel::new(0);
+            let landed = m.damage(&mut test_level.level(), 2.0, source);
             out.push((case, landed, std::mem::take(&mut m.outbox)));
         }
     });
@@ -146,19 +147,19 @@ fn displaced_elders(xs: &[f64]) -> Option<Vec<(bool, Option<[i32; 3]>)>> {
             let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 62.0, 0.5), 0.0);
             register(&mut m);
             m.fluids.in_water = true;
-            let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(0));
+            let mut test_level = crate::health::TestLevel::new(0);
             let mut events = Vec::new();
             elder_server_ai_step(
                 &mut m,
                 &mut Cx {
                     w,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                 },
             );
             m.position = Vec3::new(x, 62.0, 0.5);
             m.previous = m.position;
-            crate::mobs::ai::tick(&mut m, w, &mut lr, &mut events);
+            crate::mobs::ai::tick(&mut m, w, &mut test_level.level(), &mut events);
             out.push((
                 m.ai.goals.is_running("MoveTowardsRestriction"),
                 m.ai.nav.target_pos,
@@ -175,6 +176,7 @@ fn displaced_elders(xs: &[f64]) -> Option<Vec<(bool, Option<[i32; 3]>)>> {
 /// outside its 16-block home the goal starts and picks a spot toward it;
 /// inside it the goal does not run at all.
 #[test]
+#[ignore = "daily"]
 fn a_displaced_elder_guardian_swims_back_toward_its_home() {
     let Some(out) = displaced_elders(&[60.5, 5.5]) else {
         return;
@@ -216,23 +218,20 @@ fn looks_at_guardian(types: &super::MobTypes, w: &MobWorld<'_>, me: &str, other:
         Vec3::new(10.5, 62.0, 0.5),
         0.0,
     )
-    .seen(None)];
+    .seen(None, &crate::items::Items::empty())];
     let world = MobWorld {
         others: &seen,
         ..w.clone()
     };
     let eye = [seen[0].position.x, seen[0].eye_y, seen[0].position.z];
     m.ai.goals.disabled = MOVE | JUMP;
-    let (mut lr, mut events) = (
-        horizon_core::random::LevelRandom::for_level(LegacyRandom::new(0)),
-        Vec::new(),
-    );
+    let (mut test_level, mut events) = (crate::health::TestLevel::new(0), Vec::new());
     let mut goals = std::mem::take(&mut m.ai.goals);
     let mut looked = false;
     for _ in 0..1000 {
         let mut cx = Cx {
             w: &world,
-            lr: &mut lr,
+            level: &mut test_level.level(),
             events: &mut events,
         };
         goals.tick(&mut m, &mut cx);

@@ -16,8 +16,9 @@
 //! use horizon_client_render::hud::{HudAtlas, HudBatch};
 //! use horizon_client_render::hud_kit::icon::{self, Icon, NoItems};
 //!
-//! let atlas = HudAtlas::build(std::path::Path::new("/nonexistent")).unwrap();
-//! let mut batch = HudBatch::new([854, 480]);
+//! let source = horizon_client_render::resource_source::ResourceSource::directory("/nonexistent".into());
+//! let atlas = HudAtlas::build(&source).unwrap();
+//! let mut batch = HudBatch::scratch([854, 480]);
 //! // Without the game, items have no painter: nothing is drawn.
 //! let drawn = icon::draw(&mut batch, &atlas, &NoItems, Icon::Item("minecraft:chest"), [10.0, 10.0, 16.0], 1.0);
 //! assert!(!drawn && batch.vertices.is_empty());
@@ -124,7 +125,10 @@ mod tests {
     use std::cell::RefCell;
 
     fn atlas() -> HudAtlas {
-        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+        HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap()
     }
 
     /// A painter that fills the area it is given and records what it was asked for.
@@ -147,7 +151,7 @@ mod tests {
     fn items_and_the_face_go_to_the_painter_and_are_faded() {
         let atlas = atlas();
         let painter = Recorder::default();
-        let mut batch = HudBatch::new([854, 480]);
+        let mut batch = HudBatch::scratch([854, 480]);
         assert!(draw(
             &mut batch,
             &atlas,
@@ -177,7 +181,7 @@ mod tests {
     #[test]
     fn without_a_painter_items_and_faces_draw_nothing() {
         let atlas = atlas();
-        let mut batch = HudBatch::new([854, 480]);
+        let mut batch = HudBatch::scratch([854, 480]);
         for icon in [Icon::Item("minecraft:chest"), Icon::PlayerFace] {
             assert!(!draw(
                 &mut batch,
@@ -194,7 +198,7 @@ mod tests {
     #[test]
     fn a_sprite_the_atlas_lacks_draws_nothing() {
         let atlas = atlas();
-        let mut batch = HudBatch::new([854, 480]);
+        let mut batch = HudBatch::scratch([854, 480]);
         let icon = Icon::Sprite("statistics/no_such_sprite");
         assert!(!draw(
             &mut batch,
@@ -223,7 +227,7 @@ mod tests {
     #[test]
     fn a_glyph_is_centred_in_its_square() {
         let atlas = atlas();
-        let mut batch = HudBatch::new([854, 480]);
+        let mut batch = HudBatch::scratch([854, 480]);
         let glyph = Glyph::menu(MenuJob::Back, Glyphs::default());
         assert!(draw(
             &mut batch,

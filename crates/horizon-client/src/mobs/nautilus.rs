@@ -12,7 +12,9 @@ use super::{
     nav::NavKind,
 };
 use crate::blocks::Fluid;
+use crate::health::DamageLevel;
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_world::move_gate::MoveGate;
 use std::collections::HashMap;
 
 // Nautilus state: `tame`/`owner`, the saddle, `head` the body armour,
@@ -78,7 +80,7 @@ pub fn finalize(m: &mut Mob, warm_ocean: bool, r: &mut impl RandomSource) {
 }
 /// `getControllingPassenger`: a player on a saddled nautilus.
 pub fn controlled(m: &Mob) -> bool {
-    m.rider.is_some() && m.extra.saddled
+    m.rider.is_some() && m.extra.saddled()
 }
 /// `AbstractNautilus.isFood`: taming items while wild, food otherwise.
 pub fn is_food(m: &Mob, item: &str, taming: &[String]) -> bool {
@@ -165,13 +167,19 @@ fn sound(m: &Mob, name: &'static str, events: &mut Vec<MobEvent>) {
     events.push(MobEvent::Sound(name, m.center(), 1.0, 1.0));
 }
 /// `AbstractNautilus.travelInWater`: its own speed, no fluid drag but 0.9.
-pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
+pub fn travel(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    input: Vec3,
+    events: &mut Vec<MobEvent>,
+) -> bool {
     if !m.fluids.in_water {
         return false;
     }
     let speed = m.ai.speed;
     m.move_relative(speed, input);
-    m.do_move(w, events);
+    m.do_move(w, level, events, &mut MoveGate::new());
     m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
     true
 }
@@ -217,7 +225,7 @@ pub fn ridden(m: &mut Mob) {
 /// (`executeRidersJump`). Returns whether the jump was taken.
 pub fn on_player_jump(m: &mut Mob, data: i32) -> bool {
     // `if (isSaddled() && dashCooldown <= 0) playerJumpPendingScale = ...`
-    if !m.extra.saddled || m.extra.anim_ticks > 0 {
+    if !m.extra.saddled() || m.extra.anim_ticks > 0 {
         return false;
     }
     let Some(rider) = m.rider.as_mut() else {
@@ -251,7 +259,7 @@ fn dash(m: &mut Mob, amount: f32) {
 /// `AbstractNautilus.getNautilusRestrictionRadius`: 32 blocks, or 16 for a
 /// baby or a saddled one.
 fn restriction_radius(m: &Mob) -> i32 {
-    if !m.is_baby() && !m.extra.saddled {
+    if !m.is_baby() && !m.extra.saddled() {
         32
     } else {
         16
@@ -297,13 +305,16 @@ pub fn ai_step(
     if m.rider.is_some() {
         if m.extra.ints[1] == 0 || w.game_time % 40 == 0 {
             m.extra.ints[1] = 1;
-            events.push(MobEvent::EffectPlayer {
-                effect: "minecraft:breath_of_the_nautilus",
-                ticks: 60,
-                amplifier: 0,
-                // AbstractNautilus.applyEffects: ambient, visible, showIcon.
-                ambient: true,
-            });
+            events.push(w.route_rider_event(
+                m.id,
+                MobEvent::EffectPlayer {
+                    effect: "minecraft:breath_of_the_nautilus",
+                    ticks: 60,
+                    amplifier: 0,
+                    // AbstractNautilus.applyEffects: ambient, visible, showIcon.
+                    ambient: true,
+                },
+            ));
         }
     } else {
         m.extra.ints[1] = 0;
@@ -339,8 +350,13 @@ pub fn ai_step(
     if m.extra.anger > 0 {
         m.extra.anger -= 1;
     }
-    if m.ai.target.is_none() && m.alive() && !m.no_ai {
-        m.ai.target = find_target(m, w, level_random);
+    if m.ai.target.is_none()
+        && m.alive()
+        && !m.no_ai
+        && let Some(target) = find_target(m, w, level_random)
+        && let super::TargetChange::Set(next) = w.change_target(m, true, Some(target))
+    {
+        m.ai.target = next;
     }
 }
 /// `MemorySlot.tick`: expire before decrementing a finite saved lifetime.
@@ -529,9 +545,11 @@ impl Goal for Charge {
             sound(m, name, cx.events);
         }
     }
-    fn stop(&mut self, m: &mut Mob, _: &mut Cx) {
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.extra.counter2 = TIME_BETWEEN_ATTACKS;
-        m.ai.target = None;
+        if let super::TargetChange::Set(target) = cx.w.change_target(m, true, None) {
+            m.ai.target = target;
+        }
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some(who) = m.ai.target else { return };
@@ -547,7 +565,9 @@ impl Goal for Charge {
         let from = [m.position.x, m.position.y, m.position.z];
         let amount = m.attrs.attack_damage;
         cx.events.push(match who {
-            Who::Player => MobEvent::AttackPlayer(amount, from),
+            Who::Player => {
+                cx.w.route_player_event(MobEvent::AttackPlayer(amount, from))
+            }
             Who::Mob(id) => MobEvent::AttackMob {
                 target: id,
                 amount,
@@ -558,8 +578,8 @@ impl Goal for Charge {
             m.extra
                 .effects
                 .iter()
-                .find(|x| x.0 == e)
-                .map_or(0, |x| x.2 + 1)
+                .find(|x| x.id == e)
+                .map_or(0, |x| x.amplifier + 1)
         };
         let boost = 0.25 * (level("minecraft:speed") - level("minecraft:slowness")) as f32;
         let factor = (self.speed as f32 * m.movement_speed() as f32).clamp(0.2, 2.0) + boost;
@@ -569,17 +589,24 @@ impl Goal for Charge {
             // from (sin(yaw), -cos(yaw)): its resistance, the halving of its own
             // motion, the lift on the ground and the knockback hook all apply.
             let yaw = f64::from(m.yaw * (std::f32::consts::PI / 180.0));
-            cx.events.push(MobEvent::Knockback {
+            let event = MobEvent::Knockback {
                 target: who,
                 power,
                 x: f64::from(horizon_core::geometry::trig::sin(yaw)),
                 z: -f64::from(horizon_core::geometry::trig::cos(yaw)),
                 source: super::Damage::mob(m.id, from),
                 apply_blocking: None,
+            };
+            cx.events.push(if who == Who::Player {
+                cx.w.route_player_event(event)
+            } else {
+                event
             });
             m.velocity = Vec3::new(m.velocity.x * 0.6, m.velocity.y, m.velocity.z * 0.6);
         }
-        m.ai.target = None;
+        if let super::TargetChange::Set(target) = cx.w.change_target(m, true, None) {
+            m.ai.target = target;
+        }
     }
 }
 /// The body texture: the baby's, the adult's, or the zombie's variant.
@@ -624,14 +651,14 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, animations: &HashMap<String, Anim
     if let Some(a) = animations.get("NautilusAnimation.SWIMMING") {
         a.apply_walk(s.pos + s.age / 5.0, s.speed + 0.2, 2.0, 3.0, p);
     }
-    if m.extra.body.is_some() {
+    if m.extra.body_id().is_some() {
         p.visible("corals", false);
     }
 }
 /// `TamableAnimal.addAdditionalSaveData`: owner and ordered Sitting, plus
 /// the saddle, the zombie's variant and the brain's attack cooldown.
-pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
-    use horizon_world::nbt::Tag;
+pub fn to_nbt(m: &Mob, map: &mut horizon_core::nbt::Compound) {
+    use horizon_core::nbt::Tag;
     if let Some(owner) = m.extra.owner {
         map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
     } else {
@@ -645,19 +672,6 @@ pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
             Tag::String(format!("minecraft:{v}").as_str().into()),
         );
     }
-    let mut equipment = match map.get(&"equipment".into()) {
-        Some(Tag::Compound(c)) => c.clone(),
-        _ => horizon_world::nbt::Compound::new(),
-    };
-    match m.saddle_item() {
-        Some(saddle) => {
-            equipment.insert("saddle".into(), crate::save::item_to_nbt(&saddle));
-        }
-        None => {
-            equipment.remove(&"saddle".into());
-        }
-    }
-    map.insert("equipment".into(), Tag::Compound(equipment));
     let memory = m.extra.nautilus_attack_cooldown_ttl.map(|ttl| {
         let mut fields = vec![("value", Tag::Int(m.extra.counter))];
         if ttl != i64::MAX {
@@ -671,8 +685,8 @@ pub fn to_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
     );
 }
 /// `TamableAnimal.readAdditionalSaveData`: Sitting is independent of Owner.
-pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
-    use horizon_world::nbt::Tag;
+pub fn from_nbt(m: &mut Mob, tag: &horizon_core::nbt::Tag) {
+    use horizon_core::nbt::Tag;
     m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
     m.extra.tame = m.extra.owner.is_some();
     crate::mobs::tame::restore_sitting(m, crate::entity_nbt::flag(tag, "Sitting"));
@@ -680,11 +694,6 @@ pub fn from_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
         let v = v.to_string().unwrap_or_default();
         m.extra.variant = u8::from(v.trim_start_matches("minecraft:") == "warm");
     }
-    let saddle = tag
-        .get("equipment")
-        .and_then(|e| e.get("saddle"))
-        .and_then(crate::save::item_from_nbt);
-    m.set_saddle(saddle);
     let memory = tag
         .get("Brain")
         .and_then(|b| b.get("memories"))
@@ -707,7 +716,7 @@ mod tests {
 
     #[test]
     fn saved_sitting_is_independent_of_owner_and_raw_nbt_for_both_species() {
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         for (id, species) in [
             ("minecraft:nautilus", Species::Nautilus),
             ("minecraft:zombie_nautilus", Species::ZombieNautilus),
@@ -768,6 +777,7 @@ mod tests {
     /// `ChargeAttack.dealKnockBack` is `causeExtraKnockback`: `LivingEntity.knockback`
     /// on the target, away from (sin(yaw), -cos(yaw)), not a raw push of its motion.
     #[test]
+    #[ignore = "daily"]
     fn a_charge_knocks_its_target_back_along_its_facing() {
         let mut events = Vec::new();
         let ran = with_test_world(&[], |w, types| {
@@ -782,10 +792,11 @@ mod tests {
             );
             m.ai.target = Some(Who::Player);
             let mut goal = Charge::new(0.5);
-            let mut lr = crate::mobs::world::level_random(1);
+            let mut test_level = crate::health::TestLevel::new(1);
+            let level = &mut test_level.level();
             let mut cx = Cx {
                 w: &w,
-                lr: &mut lr,
+                level,
                 events: &mut events,
             };
             goal.tick(&mut m, &mut cx);
@@ -839,7 +850,7 @@ mod tests {
         let mut m = ridden();
         assert!(on_player_jump(&mut m, 100));
         assert_eq!(m.rider.expect("the rider stays on").jump, 1.0);
-        super::super::equine::ridden_step(&mut m);
+        super::super::equine::ridden_step(&mut m, crate::test_resources::server_loop_context());
         assert_eq!(
             m.rider.expect("the rider stays on").jump,
             0.0,
@@ -858,7 +869,7 @@ mod tests {
         // neither does an unsaddled nautilus.
         assert!(!on_player_jump(&mut m, 50));
         m.extra.anim_ticks = 0;
-        m.extra.saddled = false;
+        m.extra.set_saddled(false);
         assert!(!on_player_jump(&mut m, 50));
         assert_eq!(m.rider.expect("the rider stays on").jump, 0.0);
     }
@@ -906,7 +917,8 @@ mod hostile_target_tests {
             |_, _| {},
             |_, types| {
                 let kind = Arc::new(types.types["minecraft:pufferfish"].clone());
-                fish = Some(Mob::new(2, kind, fish_at, 0.0).seen(None));
+                fish =
+                    Some(Mob::new(2, kind, fish_at, 0.0).seen(None, &crate::items::Items::empty()));
             },
         );
         let fish = fish?;
@@ -926,6 +938,7 @@ mod hostile_target_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_nautilus_only_targets_a_pufferfish_it_sees() {
         let near = Vec3::new(6.5, 62.0, 0.5);
         // 16 out on x and 3 on z: inside the sensor's box, past range(16).
@@ -947,7 +960,7 @@ mod hostile_target_tests {
 #[cfg(test)]
 mod cooldown_memory_tests {
     use super::*;
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
     use std::sync::Arc;
 
     const MEMORY: &str = "minecraft:attack_target_cooldown";
@@ -1055,7 +1068,7 @@ mod cooldown_memory_tests {
     }
 
     #[test]
-    #[ignore = "needs actual prepared mob data; must execute, not skip"]
+    #[ignore = "daily"]
     fn actual_mob_ticks_retain_noai_lifetime_and_apply_active_memory_boundaries() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("actual prepared resources"),
@@ -1101,13 +1114,13 @@ mod cooldown_memory_tests {
                         let tag = raw(id, state, no_ai);
                         let mut m = crate::entity_nbt::mob_from_nbt(&tag, &types, 7, None).unwrap();
                         m.attrs.speed = 0.0;
-                        let mut level_random = crate::mobs::world::level_random(140);
+                        let mut test_level = crate::health::TestLevel::new(140);
                         let mut events = Vec::new();
                         for elapsed in 0..=6 {
                             if elapsed > 0 {
                                 let mut w = world.clone();
                                 w.game_time += elapsed;
-                                assert!(m.tick(&w, &mut level_random, &mut events));
+                                assert!(m.tick(&w, &mut test_level.level(), &mut events));
                                 assert!(m.fluids.in_water && m.fluids.eye_in_water);
                                 assert!(m.ai.target.is_none(), "safe no-attack control");
                                 assert!(

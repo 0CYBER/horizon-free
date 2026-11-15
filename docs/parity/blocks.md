@@ -42,7 +42,7 @@ containers, weather-driven blocks. The library code lives in
   Level event 1505 plays the bone meal sound.
 - **Fixes to existing ticks.** Torchflower crops now mature into
   torchflowers. Kelp grows into any water block, as in vanilla.
-- **Primed TNT** (`game/tnt.rs`):
+- **Primed TNT** (`game/entities/tnt.rs`):
   - It has an 80-tick fuse, gravity 0.04, 0.98 drag and the 0.7/−0.5 ground
     bounce.
   - It explodes with power 4 at `y + 0.06125`.
@@ -52,7 +52,7 @@ containers, weather-driven blocks. The library code lives in
     (`TntBlock.useItemOn`), and by players breaking unstable TNT.
   - Explosions prime TNT with a random short fuse (chain reactions).
   - Dispensers prime TNT too.
-- **`ServerExplosion`** (`game/explosion.rs`):
+- **`ServerExplosion`** (`game/entities/explosion.rs`):
   - It marches 1352 rays through a Java `HashSet<BlockPos>`
     (`java_hash_map`), so iteration and the `Util.shuffle` draws match
     vanilla.
@@ -61,7 +61,7 @@ containers, weather-driven blocks. The library code lives in
     and TNT. Creative players take no damage.
   - TNT explosions drop every block. Mob explosions use drop decay.
   - Drops merge in stacks of up to 16. Container contents spill.
-- **Hoppers** (`game/machines.rs`):
+- **Hoppers** (`game/blocks/machines/mod.rs`):
   - They push and pull through `HopperBlockEntity.tryMoveItems`.
   - The 8-tick cooldown applies, with the transfer cooldown hand-off between
     hoppers.
@@ -106,7 +106,7 @@ containers, weather-driven blocks. The library code lives in
   - Their screens use the vanilla hopper and dispenser layouts.
   - `GameLevel::max_y` is exclusive, as `LevelAccess` documents.
 
-- **Block entity removal** (`level/removal.rs`, `game/spill.rs`):
+- **Block entity removal** (`level/removal.rs`, `game/blocks/spill.rs`):
   `LevelChunk.setBlockState` runs `BlockEntity.preRemoveSideEffects` when a
   block's block entity goes with it. Containers spill through
   `Containers.dropItemStack`, jukeboxes and lecterns pop their item, shulker
@@ -114,7 +114,7 @@ containers, weather-driven blocks. The library code lives in
   `Block.dropResources` draws when the behaviour calls it and awards ore,
   sculk and spawner experience; the item entities join the world before the
   behaviour returns.
-- **Copper golems** (`mobs/copper_golem.rs`, `game/copper_golems.rs`): built
+- **Copper golems** (`mobs/copper_golem.rs`, `game/mobs/copper_golems.rs`): built
   from a pumpkin on a copper block (`CopperChestBlock.getFromCopperBlock`),
   sheared and equipped by dispensers, weathering, waxing, statues.
 

@@ -48,6 +48,7 @@ struct Level {
     random: LegacyRandom,
     events: Vec<LevelEvent>,
 }
+impl crate::level::BlockEntityNeighbors for Level {}
 impl LevelAccess for Level {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.blocks.get(&pos).copied().unwrap_or(self.air)

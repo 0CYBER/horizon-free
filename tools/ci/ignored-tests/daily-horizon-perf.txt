@@ -1,0 +1,10 @@
+# The daily tests of horizon-perf: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-perf cli::the_binary_refuses_an_unfinished_file_with_the_message_and_exit_code_1 test:it daily child-process
+horizon-perf mcp::the_mcp_command_serves_the_protocol_on_stdio test:it daily child-process
+horizon-perf query_cli::a_failed_query_still_prints_its_error_as_json_and_exits_one test:it daily child-process
+horizon-perf query_cli::a_query_prints_one_json_line_and_exits_zero test:it daily child-process
+horizon-perf query_cli::bad_filters_are_usage_errors test:it daily child-process
+horizon-perf query_cli::summary_takes_a_thread_and_the_slow_switch test:it daily child-process
+horizon-perf query_cli::without_a_file_a_query_reads_the_latest_capture_of_the_directory test:it daily child-process
+horizon-perf query_samples::by_is_checked_against_the_vocabulary_of_its_op test:it daily child-process

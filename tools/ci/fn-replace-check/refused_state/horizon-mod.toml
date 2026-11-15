@@ -1,0 +1,24 @@
+id = "fnr_refused_state"
+name = "Function replacement check: tables the copy route refuses"
+version = "0.1.0"
+description = "fn-replace: a state field and a bridge, refused by name"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+[[native.state]]
+id = "count"
+owner = "horizon_client::game::Game"
+field = "count"
+type = "u32"
+
+[[native.bridge]]
+id = "clock"
+owner = "horizon_client::game::Game"
+field = "clock"

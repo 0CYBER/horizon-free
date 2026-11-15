@@ -63,9 +63,6 @@ impl BlockColumnFeature {
         *remaining -= 1;
         let object: Object = serde_json::from_str(json)?;
         let values: Vec<Box<RawValue>> = serde_json::from_str(required(&object, "layers")?.get())?;
-        if values.len() > 8192 {
-            return Err(DecodeError::Field("block column layer count"));
-        }
         let mut layers = Vec::with_capacity(values.len());
         for raw in values {
             let layer: Object = serde_json::from_str(raw.get())?;
@@ -182,5 +179,115 @@ fn truncate(heights: &mut [i32], total: i32, allowed: i32, prioritize_tip: bool)
         let count = heights[index].min(remove);
         remove = remove.wrapping_sub(count);
         heights[index] = heights[index].wrapping_sub(count);
+    }
+}
+
+#[cfg(test)]
+mod ceiling_tests {
+    use super::*;
+    use crate::{
+        block_placement::BlockPlacementBindings,
+        block_properties::BlockPropertiesRegistry,
+        collision::CachedCollisionRegistry,
+        registry::BlockRegistry,
+        worldgen::state_provider::{StateProviderBindings, StateProviderCatalog},
+    };
+    use horizon_core::nbt::Tag;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[test]
+    fn column_layer_ceiling() {
+        let names = [
+            "minecraft:air",
+            "minecraft:cave_air",
+            "minecraft:void_air",
+            "minecraft:stone",
+        ];
+        let mut states: Vec<Tag> = names
+            .iter()
+            .map(|name| Tag::String((*name).into()))
+            .collect();
+        // Placement binds all 2 * 3^4 moss transitions, even for columns that
+        // only use stone. These are synthetic states, not prepared game data.
+        for bottom in ["false", "true"] {
+            for code in 0..81 {
+                let mut n = code;
+                let mut props = BTreeMap::from([("bottom".into(), Tag::String(bottom.into()))]);
+                for side in ["north", "east", "south", "west"] {
+                    props.insert(
+                        side.into(),
+                        Tag::String(["none", "low", "tall"][n % 3].into()),
+                    );
+                    n /= 3;
+                }
+                states.push(Tag::compound([
+                    ("id", Tag::String("minecraft:pale_moss_carpet".into())),
+                    ("properties", Tag::Compound(props)),
+                ]));
+            }
+        }
+        let mut defaults: BTreeMap<_, _> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| ((*name).into(), Tag::Int(i as i32)))
+            .collect();
+        defaults.insert("minecraft:pale_moss_carpet".into(), Tag::Int(4));
+        let registry = BlockRegistry::from_nbt(&Tag::compound([
+            ("DataVersion", Tag::Int(crate::DATA_VERSION)),
+            ("states", Tag::List(states.clone())),
+            ("defaults", Tag::Compound(defaults)),
+        ]))
+        .unwrap();
+        let empty = Tag::compound([
+            ("x", Tag::LongArray(vec![0])),
+            ("y", Tag::LongArray(vec![0])),
+            ("z", Tag::LongArray(vec![0])),
+            ("occupied", Tag::ByteArray(vec![])),
+            ("cube", Tag::Byte(0)),
+            ("cube_axes", Tag::Byte(0)),
+            ("discrete_min", Tag::IntArray(vec![0; 3])),
+            ("discrete_max", Tag::IntArray(vec![0; 3])),
+        ]);
+        let collision_tag = Tag::compound([
+            ("DataVersion", Tag::Int(crate::DATA_VERSION)),
+            ("states", Tag::List(states.clone())),
+            ("shapes", Tag::List(vec![empty])),
+            ("cached_shapes", Tag::IntArray(vec![0; states.len()])),
+        ]);
+        let collisions = CachedCollisionRegistry::from_nbt(&collision_tag, &registry).unwrap();
+        let blocks = names
+            .iter()
+            .copied()
+            .chain(["minecraft:pale_moss_carpet"])
+            .map(|name| (name.into(), Tag::Byte(0)))
+            .collect();
+        let properties = BlockPropertiesRegistry::from_nbt(
+            &Tag::compound([
+                ("DataVersion", Tag::Int(crate::DATA_VERSION)),
+                ("states", Tag::List(states)),
+                ("blocks", Tag::Compound(blocks)),
+                ("occlusion", collision_tag),
+            ]),
+            &collisions,
+        )
+        .unwrap();
+        let providers =
+            StateProviderBindings::new(&registry, BTreeSet::new(), &BTreeMap::new()).unwrap();
+        let catalog = StateProviderCatalog::from_resources(&BTreeMap::new()).unwrap();
+        let placement =
+            BlockPlacementBindings::new(&registry, &properties, &BTreeSet::new(), &BTreeSet::new())
+                .unwrap();
+        let bindings = FeatureBlockBindings::new(&registry, BTreeSet::new())
+            .unwrap()
+            .with_state_providers(providers, catalog, placement)
+            .unwrap();
+        let layer = r#"{"height":0,"provider":{"id":"minecraft:stone"}}"#;
+        let json = format!(
+            r#"{{"layers":[{}],"direction":"up","allowed_placement":{{"type":"true"}},"prioritize_tip":false}}"#,
+            vec![layer; 8193].join(",")
+        );
+        let feature = BlockColumnFeature::from_json(&json, &bindings).unwrap();
+        assert_eq!(feature.layers.len(), 8193);
+        assert_eq!(feature.layers.last().unwrap().height.bounds(), [0, 0]);
     }
 }

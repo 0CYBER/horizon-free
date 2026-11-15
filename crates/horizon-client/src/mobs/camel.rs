@@ -11,6 +11,7 @@ use super::{
 use horizon_core::geometry::trig::Mth;
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_core::random::RandomSource;
+use horizon_world::native_load_context::LoopContext;
 use std::collections::HashMap;
 
 // Camel state: `egg_time` the mob age of the last pose change (it may be
@@ -489,7 +490,7 @@ fn animation_states(m: &mut Mob, pose_time: i64, sitting: bool) {
 /// jump is used up: it is, by a dash or when the camel cannot dash at all (cooling down,
 /// refusing to move: `onPlayerJump` would not have taken it); it waits while the camel is off
 /// the ground (`AbstractHorse.tickRidden` runs a pending jump when it lands).
-pub fn dash(m: &mut Mob, amount: f32, events: &mut Vec<MobEvent>) -> bool {
+pub fn dash(m: &mut Mob, context: &LoopContext, amount: f32, events: &mut Vec<MobEvent>) -> bool {
     if m.extra.anim_ticks > 0 || refuse_to_move(m) {
         return true;
     }
@@ -505,7 +506,7 @@ pub fn dash(m: &mut Mob, amount: f32, events: &mut Vec<MobEvent>) -> bool {
     m.velocity.y += 1.4285 * a * 0.42;
     m.extra.anim_ticks = DASH_COOLDOWN;
     m.extra.flag2 = true;
-    crate::motion::native_living_jump(m.id, &m.kind.id);
+    crate::motion::native_living_jump(context, m.id, &m.kind.id);
     sound(m, voice(m, 3), events);
     true
 }
@@ -567,16 +568,20 @@ mod tests {
     /// `Camel.getPassengerAttachmentPoint`: the second of two passengers sits
     /// 0.7 behind the middle, 0.5 ahead for the driver, 0.2 more for an animal.
     #[test]
+    #[ignore = "daily"]
     fn the_second_passenger_sits_behind() {
-        with_test_world(&[], |_, types| {
-            let kind = std::sync::Arc::new(types.types["minecraft:camel_husk"].clone());
-            let m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            assert_eq!(passenger_attachment_at(&m, 0, 2, false)[2], 0.5);
-            assert!((passenger_attachment_at(&m, 1, 2, false)[2] + 0.7).abs() < 1e-6);
-            assert!((passenger_attachment_at(&m, 1, 2, true)[2] + 0.5).abs() < 1e-6);
-            assert!((passenger_attachment_at(&m, 0, 2, true)[2] - 0.7).abs() < 1e-6);
-            assert_eq!(passenger_attachment_at(&m, 0, 1, true)[2], 0.5);
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let kind = std::sync::Arc::new(types.types["minecraft:camel_husk"].clone());
+                let m = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
+                assert_eq!(passenger_attachment_at(&m, 0, 2, false)[2], 0.5);
+                assert!((passenger_attachment_at(&m, 1, 2, false)[2] + 0.7).abs() < 1e-6);
+                assert!((passenger_attachment_at(&m, 1, 2, true)[2] + 0.5).abs() < 1e-6);
+                assert!((passenger_attachment_at(&m, 0, 2, true)[2] - 0.7).abs() < 1e-6);
+                assert_eq!(passenger_attachment_at(&m, 0, 1, true)[2], 0.5);
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `CamelAi.RandomSitting.checkExtraStartConditions`: a camel sits down
@@ -585,43 +590,51 @@ mod tests {
     /// (`#non_controlling_rider`), so a camel carrying a husk never sits
     /// with it floating above (#3199).
     #[test]
+    #[ignore = "daily"]
     fn a_camel_with_a_husk_on_its_back_never_sits_down() {
         // Whether the goal starts in 64 tries (each passes 1 in 4).
         let sits = |rider: Option<&str>, leashed: bool| {
             let mut seen = Vec::new();
             let mut camel = None;
-            with_test_world(&[], |_, types| {
-                let mob = |id: u32, name: &str| {
-                    let kind = std::sync::Arc::new(types.types[name].clone());
-                    Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
-                };
-                let mut m = mob(1, "minecraft:camel");
-                if let Some(name) = rider {
-                    let mut r = mob(2, name);
-                    r.extra.mount = Some(m.id);
-                    m.extra.rider = Some(r.id);
-                    seen.push(r.seen(None));
-                }
-                if leashed {
-                    m.extra.leash = Some(Holder::Mob(3));
-                }
-                camel = Some(m);
-            });
+            assert!(
+                with_test_world(&[], |_, types| {
+                    let mob = |id: u32, name: &str| {
+                        let kind = std::sync::Arc::new(types.types[name].clone());
+                        Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
+                    };
+                    let mut m = mob(1, "minecraft:camel");
+                    if let Some(name) = rider {
+                        let mut r = mob(2, name);
+                        r.extra.mount = Some(m.id);
+                        m.extra.rider = Some(r.id);
+                        seen.push(r.seen(None, &crate::items::Items::empty()));
+                    }
+                    if leashed {
+                        m.extra.leash = Some(Holder::Mob(3));
+                    }
+                    camel = Some(m);
+                }),
+                "vanilla data is missing"
+            );
             let mut m = camel?;
             m.age = 1000;
             m.extra.egg_time = 0;
             m.on_ground = true;
             let mut started = false;
-            with_test_world(&seen, |w, _| {
-                let mut lr = crate::mobs::world::level_random(0);
-                let mut events = Vec::new();
-                let mut cx = Cx {
-                    w,
-                    lr: &mut lr,
-                    events: &mut events,
-                };
-                started = (0..64).any(|_| RandomSitting.can_use(&mut m, &mut cx));
-            });
+            assert!(
+                with_test_world(&seen, |w, _| {
+                    let mut test_level = crate::health::TestLevel::new(0);
+                    let level = &mut test_level.level();
+                    let mut events = Vec::new();
+                    let mut cx = Cx {
+                        w,
+                        level,
+                        events: &mut events,
+                    };
+                    started = (0..64).any(|_| RandomSitting.can_use(&mut m, &mut cx));
+                }),
+                "vanilla data is missing"
+            );
             Some(started)
         };
         let Some(alone) = sits(None, false) else {
@@ -636,6 +649,7 @@ mod tests {
     fn camel() -> Mob {
         let model = Arc::new(Part::parse("root", &json!({"children": {"head": {}}})));
         let kind = Arc::new(MobType {
+            shadow: None,
             id: "minecraft:camel".into(),
             species: Species::Camel,
             width: 1.7,
@@ -655,6 +669,7 @@ mod tests {
             jump_strength: 0.42,
             attributes: Arc::default(),
             item_stack_limits: Default::default(),
+            attribute_bounds: Default::default(),
             gravity: 0.08,
             safe_fall_distance: 3.0,
             fall_damage_multiplier: 1.0,
@@ -676,9 +691,10 @@ mod tests {
             brain: Brain::Passive,
             anim: Anim::Camel,
             sounds: [""; 3],
-            step_sound: None,
+            sound_overrides: Default::default(),
             food: Arc::default(),
             tempt: Arc::default(),
+            passenger_attachments: Vec::new(),
         });
         Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0)
     }
@@ -733,7 +749,7 @@ mod tests {
         register(&mut m);
         let types = types(&m);
         let load = |tick: i64, now: i64| {
-            let (tag, _) = horizon_world::nbt::parse_snbt(&format!(
+            let (tag, _) = horizon_core::nbt::parse_snbt(&format!(
                 "{{id:\"minecraft:camel\",Pos:[0.0d,0.0d,0.0d],LastPoseTick:{tick}L}}"
             ))
             .unwrap();
@@ -754,8 +770,7 @@ mod tests {
         assert_eq!(pose_time(&m), 5);
         // No tag: standing.
         let (tag, _) =
-            horizon_world::nbt::parse_snbt("{id:\"minecraft:camel\",Pos:[0.0d,0.0d,0.0d]}")
-                .unwrap();
+            horizon_core::nbt::parse_snbt("{id:\"minecraft:camel\",Pos:[0.0d,0.0d,0.0d]}").unwrap();
         let mut m = crate::entity_nbt::mob_from_nbt(&tag, &types, 2, None).unwrap();
         finish_load(&mut m, 5000);
         assert!(!refuse_to_move(&m));
@@ -770,7 +785,7 @@ mod tests {
         register(&mut m);
         let types = types(&m);
         for tick in [200, -200, 0] {
-            let (tag, _) = horizon_world::nbt::parse_snbt(&format!(
+            let (tag, _) = horizon_core::nbt::parse_snbt(&format!(
                 "{{id:\"minecraft:camel\",Pos:[0.0d,0.0d,0.0d],LastPoseTick:{tick}L}}"
             ))
             .unwrap();
@@ -790,6 +805,7 @@ mod tests {
     /// always true, so only those two can fail). A hurt or ridden camel must
     /// not start breeding even while it is in love.
     #[test]
+    #[ignore = "daily"]
     fn a_wounded_or_ridden_camel_does_not_breed() {
         let mut pair = None;
         let ran = with_test_world(&[], |_, types| {
@@ -803,17 +819,17 @@ mod tests {
             };
             pair = Some((make(1, 0.5), make(2, 2.5)));
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
         let Some((mut a, b)) = pair else {
             return;
         };
-        let partner = b.seen(None);
+        let partner = b.seen(None, &crate::items::Items::empty());
         let mut events = Vec::new();
-        let mut lr = crate::mobs::world::level_random(0);
+        let mut fixture = crate::health::TestLevel::new(0);
         let ran = with_test_world(&[partner], |w, _| {
             let mut cx = Cx {
                 w,
-                lr: &mut lr,
+                level: &mut fixture.level(),
                 events: &mut events,
             };
             let mut breed = Breed::new(1.0);
@@ -834,7 +850,7 @@ mod tests {
                 "a ridden camel should not breed"
             );
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `CamelAi.RandomSitting.checkExtraStartConditions` ends with
@@ -843,6 +859,7 @@ mod tests {
     /// box is 2.375 tall against the sitting pose's 0.945, so a sitting camel
     /// under a two-block ceiling has no room to stand and must not try.
     #[test]
+    #[ignore = "daily"]
     fn a_camel_changes_pose_only_when_the_other_pose_fits() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -881,10 +898,10 @@ mod tests {
                 let mut blocked = sitting_camel(1, 0.5);
                 let mut open = sitting_camel(2, 5.5);
                 let mut events = Vec::new();
-                let mut lr = crate::mobs::world::level_random(0);
+                let mut fixture = crate::health::TestLevel::new(0);
                 let mut cx = Cx {
                     w,
-                    lr: &mut lr,
+                    level: &mut fixture.level(),
                     events: &mut events,
                 };
                 let mut goal = RandomSitting;
@@ -901,6 +918,6 @@ mod tests {
                 );
             },
         );
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

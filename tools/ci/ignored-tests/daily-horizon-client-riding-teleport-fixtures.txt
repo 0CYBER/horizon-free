@@ -1,0 +1,2 @@
+horizon-client game::commands::teleport_level_tests::a_mod_sends_an_armor_stand_to_another_level lib daily resources
+horizon-client game::minecarts::lifetime_tests::a_bound_tnt_cart_passes_interaction_without_priming lib daily resources

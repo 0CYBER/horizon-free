@@ -1,7 +1,7 @@
 //! `CommandStorage`: named compounds for `/data ... storage <id>`, kept per
 //! namespace in `data/<namespace>/command_storage.dat`.
 use crate::save;
-use horizon_world::nbt::{Compound, Tag};
+use horizon_core::nbt::{Compound, Tag};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -113,7 +113,7 @@ impl CommandStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_world::nbt::parse_snbt;
+    use horizon_core::nbt::parse_snbt;
 
     #[test]
     fn stores_per_namespace_and_persists() {

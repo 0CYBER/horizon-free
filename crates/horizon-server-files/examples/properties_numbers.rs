@@ -1,8 +1,6 @@
 //! DedicatedServerProperties numeric parsing probe; no server or window.
-use horizon_server_files::{
-    java_properties::Properties,
-    properties::{Entropy, ServerProperties},
-};
+use horizon_java_properties::Properties;
+use horizon_server_files::properties::{Entropy, ServerProperties};
 struct Fixed;
 impl Entropy for Fixed {
     fn next_long(&mut self) -> i64 {

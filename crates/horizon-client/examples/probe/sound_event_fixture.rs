@@ -11,7 +11,10 @@ fn bits(v: f32) -> String {
 
 pub fn main() {
     let args: Vec<String> = crate::args().collect();
-    let registry = SoundRegistry::load(std::path::Path::new(&args[1]));
+    let registry =
+        SoundRegistry::load(&horizon_assets::resource_source::ResourceSource::directory(
+            std::path::PathBuf::from(&args[1]),
+        ));
     let mut engine = SoundEngine::new(registry);
     let input = std::fs::read_to_string(&args[2]).expect("input");
     let mut out = std::io::BufWriter::new(std::fs::File::create(&args[3]).expect("output"));

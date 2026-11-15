@@ -11,6 +11,7 @@ use super::{
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_world::native_load_context::LoopContext;
 
 pub fn register(m: &mut Mob) {
     let g = &mut m.ai.goals;
@@ -174,7 +175,7 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         return;
     };
     let motion = match who {
-        Who::Player => cx.w.player.as_ref().map_or(Vec3::ZERO, |p| p.velocity),
+        Who::Player => cx.w.selected_player().map_or(Vec3::ZERO, |p| p.velocity),
         Who::Mob(id) => cx.w.seen(id).map_or(Vec3::ZERO, |s| s.velocity),
     };
     let xd = t.position.x + motion.x - m.position.x;
@@ -201,13 +202,13 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     };
     // `target.hasEffect`: a target that already has the effect gets the next one.
     let has = |effect: &str| match who {
-        Who::Player => cx.w.player.as_ref().is_some_and(|p| p.has_effect(effect)),
+        Who::Player => cx.w.selected_player().is_some_and(|p| p.has_effect(effect)),
         Who::Mob(id) => cx.w.seen(id).is_some_and(|s| s.has_effect(effect)),
     };
     // The potion it throws: `PotionContents.createItemStack(Items.SPLASH_POTION,
     // potion)` for the one `Witch.performRangedAttack` picks.
     let potion = if heals {
-        m.ai.target = None;
+        m.set_ai_target(cx.w, None);
         if health <= 4.0 {
             "minecraft:healing"
         } else {
@@ -252,13 +253,18 @@ pub fn speed(m: &Mob, base: f64) -> f64 {
 }
 /// Witch.aiStep before `super.aiStep()`: the healing cooldown, then drink
 /// water breathing, fire resistance, healing or swiftness.
-pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
+pub fn ai_step(
+    m: &mut Mob,
+    context: &LoopContext,
+    cx_events: &mut Vec<MobEvent>,
+    target_far: bool,
+) {
     if !m.alive() {
         return;
     }
     // healRaidersGoal.decrementCooldown (the attack goal's canAttack reads it).
     m.extra.counter2 -= 1;
-    drink(m, cx_events, target_far);
+    drink(m, context, cx_events, target_far);
     // `broadcastEntityEvent(this, 15)`: the magic puffs over its hat on every client.
     if m.random.next_float() < 7.5E-4 {
         cx_events.push(MobEvent::EntityEvent {
@@ -268,13 +274,13 @@ pub fn ai_step(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
         });
     }
 }
-fn drink(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
+fn drink(m: &mut Mob, context: &LoopContext, cx_events: &mut Vec<MobEvent>, target_far: bool) {
     if m.extra.flag {
         // `usingTime-- <= 0`
         m.extra.using_item -= 1;
         if m.extra.using_item < 0 {
             m.extra.using_item = 0;
-            if let Some(potion) = m.extra.take_main_hand() {
+            if let Some(potion) = m.extra.take_slot_id(horizon_items::equipment::MAINHAND) {
                 match potion.as_ref() {
                     "minecraft:water_breathing" => {
                         m.add_effect("minecraft:water_breathing", 3600, 0)
@@ -282,7 +288,7 @@ fn drink(m: &mut Mob, cx_events: &mut Vec<MobEvent>, target_far: bool) {
                     "minecraft:fire_resistance" => {
                         m.add_effect("minecraft:fire_resistance", 3600, 0)
                     }
-                    "minecraft:healing" => m.heal(4.0),
+                    "minecraft:healing" => m.heal(context, 4.0),
                     "minecraft:swiftness" => m.add_effect("minecraft:speed", 3600, 0),
                     _ => {}
                 }
@@ -357,7 +363,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
     let deg = horizon_core::geometry::trig::DEG_TO_RAD;
     p.xrot("nose", (s.age * speed).msin() * 4.5 * deg);
     p.zrot("nose", (s.age * speed).mcos() * 2.5 * deg);
-    if m.extra.main_hand.is_some() {
+    if m.extra.main_hand_id().is_some() {
         let n = p.get("nose");
         n[0] = 0.0;
         n[1] = 1.0;
@@ -414,7 +420,12 @@ mod tests {
         let mut events = Vec::new();
         for _ in 0..40 {
             m.extra.flag = false;
-            drink(&mut m, &mut events, true);
+            drink(
+                &mut m,
+                crate::test_resources::server_loop_context(),
+                &mut events,
+                true,
+            );
         }
         events
             .iter()

@@ -1,0 +1,39 @@
+//! The `finalize_spawn` hooks and helpers: declarations the mod API generator reads (see `hooks/mod.rs`).
+
+pub trait Hooks {
+    /// NeoForge's `FinalizeSpawnEvent`: the new mob of type `kind` is at `pos` and `Mob.finalizeSpawn` (equipment, attributes, variants, the class's own setup) is about to run for `reason`. `spawner` is the spawner block for a spawner or trial spawner spawn, none otherwise (a minecart spawner too). `difficulty` is the local difficulty finalization reads: change it to change what the mob gets. There are two cancels. Return `Flow::Cancel` to skip finalization: no finalizeSpawn runs, and the mob still spawns uninitialised (no equipment, attributes or class setup). Set `spawn_cancelled` to stop the spawn: no mob is added and finalization does not run. It draws nothing itself; skipped finalization skips its draws, and with no listener or an untouched event the draws are vanilla's. Fired only where vanilla 26.3 calls `finalizeSpawn` on a mob the game makes, with vanilla's `reason` at that call: natural spawning, chunk generation's animals, spawners, trial spawners, patrols, raids and sieges, zombie reinforcements, a cat spawner's cat, phantoms, jockeys, `/summon` and `/raid`, spawn eggs and dispensers, the nether portal's piglin (`Structure`), a skeleton trap's horse and riders, an evoker's vexes and wandering traders. A conversion fires with `Conversion`, and a cancel there leaves the converted mob as it is. Not fired where vanilla creates the mob without `finalizeSpawn`: breeding and a baby from a spawn egg, an infested block's or effect's silverfish, a thrown egg's chick, a thrown pearl's endermite, a hatching egg's turtle, sniffer or tadpole, a copper golem built from blocks, a slime from the oozing effect and a lightning trap's horse. Nor for entities loaded from disk or structure mobs placed by world generation. `mob` is the mob itself, not yet in a level: read it through the host (`mob.kind(host)`, `mob.equipment(host, slot)`, `mob.attribute_base(host, id)`) and change it through `edits` (`edits.set_equipment(mob, slot, item)`, `edits.set_attribute_base(mob, id, base)`, tags and the custom name); the handle and the editor reach only this mob, and after the hook returns the handle answers `Expired`. Listeners run before finalization: finalization's own rolls (equipment, attribute bonuses, variants) still run after them and overwrite what a listener put in the same slot or attribute; `Flow::Cancel` keeps every edit, since no finalization follows. A mob finalization itself makes (a chicken jockey's chicken, a zombie horse's rider) is lent with its own handle. `group` is the pack's spawn group data (`SpawnGroupData`, `SpawnGroup`): what the listener leaves there is what finalization reads for this mob. Every site this hook fires at hands it `None`: the game threads no group data through a live pack; chunk generation's animals share it only inside the generator, out of the hook's reach. The host is the read-only one, and `edits` changes nothing but this mob: listeners run on replayed ticks, so they must be pure functions of their inputs and edit only `mob` and `group`. Server-side.
+    #[notes = r#"## Finalize spawn
+
+- **`finalize_spawn(dimension, kind, reason, pos, spawner, difficulty, spawn_cancelled, mob, edits, group, cancel)`** (NeoForge's `FinalizeSpawnEvent`): fires where the game calls `Mob.finalizeSpawn` for a mob it made, before it runs. There are two cancels: return `Flow::Cancel` to skip finalization (no equipment, attributes or class setup; the mob still spawns uninitialised, and finalization's random draws are skipped), or set `spawn_cancelled` so no mob is added. `difficulty` (`Difficulty`) is settable and is what finalization reads. `spawner` is `SpawnSource::Block` for a spawner or trial spawner, none otherwise. Fired only where vanilla 26.3 calls `finalizeSpawn`, with vanilla's reason at that call: natural spawning, chunk generation, spawners, trial spawners, patrols, raids and sieges, reinforcements, cat spawners, phantoms, jockeys, `/summon`, `/raid`, spawn eggs, dispensers, the nether portal's piglin (`Structure`), skeleton traps, evoker vexes, wandering traders and conversions. Not fired where vanilla creates the mob without it (breeding, an infested block's silverfish, a thrown egg's chick, a thrown pearl's endermite, hatching eggs, built golems, the oozing effect's slimes, a lightning trap's horse), for loads (`persist.rs` finalizes a placed entity only through its `horizon:finalize` marker, which is a load) or for structure mobs placed by world generation. The mob being finalized is lent as `mob` (`UnspawnedMobRef`), a handle to a mob that is in no level yet: its reads take `&dyn Host` (`kind`, `position`, `equipment`, `attribute_base`, `attribute_value`, `tags`, `custom_name`), and `edits` (`&dyn UnspawnedMobEdits`, handed out with it) changes its equipment (`ItemResource` and a count), attribute bases and permanent modifiers, tags and custom name. Each edit applies at once and reaches only that mob; after the hook returns, or with another lend's handle, every read and edit answers `UnspawnedMobError::Expired`. The editor is a scoped resource rather than a `&mut dyn ServerHost` because the hook fires inside spawning passes that hold the level shared (natural spawning, spawners), as `CriterionContext` is lent to a criterion test. Listeners run before finalization, so finalization's own equipment and attribute rolls overwrite a listener's edit to the same slot or attribute; `Flow::Cancel` keeps every edit. Mobs that finalization creates (jockeys, a zombie horse's rider) get a lend of their own. The ender dragon, kept apart from mobs, answers its kind and position and `Unsupported` for the rest. `group` (`&mut Option<SpawnGroup>`) is the pack's `SpawnGroupData`, converted at the boundary: the listener may read, change, set or clear it, and finalization reads what it leaves. Every live site hands it `None` today: natural spawning does not thread group data through its packs yet, and chunk generation's animals share it only inside the generator, out of the hook's reach. The new types are plain data (`Difficulty`, `SpawnSource`, `SpawnGroup`, `AgeableGroup`, `TropicalVariant`, `#[non_exhaustive]`). Read-only host; listeners run on replayed ticks, so they are pure functions of their inputs and change only `mob` (through `edits`) and `group`. Tick-time effect: one `listened` branch with no listeners; with one, a copy of the mob for the lend and back. Beyond NeoForge: none.
+
+`window_resize` notifies client mods after a window resize or applying a changed GUI scale, fullscreen, or Unicode font setting. Its `width` and `height` are physical pixels, and `gui_width` and `gui_height` are scaled GUI pixels. It fires only when physical or scaled dimensions change.
+
+### Structure template snapshots
+
+`ServerHost::structure_template(id, at, rotation, mirror)` reads a template without placing it.
+It searches the world's saved templates before data packs and returns the rotated size and blocks
+in vanilla placement order, with each transformed state and its saved block-entity data. It uses
+the palette selected at `at`; processors and entities are not included. Invalid or missing names
+return `None`. A builder can retain this snapshot and place its blocks over time."#]
+    #[hook(
+        side = "server",
+        contract = "cancel",
+        out = "cancel",
+        host = "read",
+        neoforge = "FinalizeSpawnEvent",
+        cancellable = true
+    )]
+    fn finalize_spawn(
+        dimension: &str,
+        kind: &str,
+        reason: SpawnReason,
+        pos: [f64; 3],
+        spawner: Option<SpawnSource>,
+        difficulty: &mut Difficulty,
+        spawn_cancelled: &mut bool,
+        mob: UnspawnedMobRef,
+        edits: &dyn UnspawnedMobEdits,
+        group: &mut Option<SpawnGroup>,
+        cancel: &mut bool,
+    );
+}

@@ -3,7 +3,7 @@
 //! The expected flags are vanilla 26.3's, measured on loaded husks summoned
 //! with `FallFlying:1b` (tools/test_mob_glide_state_parity.py).
 use super::*;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::sync::Arc;
 
 fn husk(types: &crate::mobs::MobTypes, no_ai: bool, chest_damage: Option<u32>) -> Mob {
@@ -22,17 +22,17 @@ fn husk(types: &crate::mobs::MobTypes, no_ai: bool, chest_damage: Option<u32>) -
 }
 
 fn tick_once(m: &mut Mob, w: &MobWorld) {
-    let mut level_random = level_random(2);
+    let mut fixture = crate::health::TestLevel::new(2);
     let mut events = Vec::new();
     assert!(
-        tick(m, w, &mut level_random, &mut events),
+        tick(m, w, &mut fixture.level(), &mut events),
         "still in the level"
     );
 }
 
 /// `LivingEntity.readAdditionalSaveData`: `setSharedFlag(7, FallFlying)`.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_loaded_mob_keeps_its_saved_glide_flag() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -70,7 +70,7 @@ fn a_loaded_mob_keeps_its_saved_glide_flag() {
 /// `LivingEntity.addAdditionalSaveData`: `putBoolean(FallFlying, isFallFlying())`,
 /// whatever the tag the mob was loaded from said.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_saved_mob_writes_its_current_glide_flag() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -101,7 +101,7 @@ fn a_saved_mob_writes_its_current_glide_flag() {
 /// whose next damage breaks it, stops gliding on its first tick, NoAI or not;
 /// a whole elytra keeps the flag.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_mob_that_cannot_glide_stops_gliding_on_its_first_tick() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -126,7 +126,7 @@ fn a_mob_that_cannot_glide_stops_gliding_on_its_first_tick() {
 /// `LivingEntity.canGlide`: on the ground, riding, or levitating, a mob with
 /// a whole elytra stops gliding too, with or without AI.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_grounded_riding_or_levitating_mob_stops_gliding() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -159,9 +159,9 @@ fn a_grounded_riding_or_levitating_mob_stops_gliding() {
 /// the mob's own tick and on no other; a mob that stops gliding counts from
 /// 0 again.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_glider_wears_on_the_twentieth_and_fortieth_glide_ticks() {
-    use horizon_world::player_inventory::EquipmentSlot;
+    use horizon_core::equipment_slot::EquipmentSlot;
     let ran = crate::mobs::world::with_built_test_world(
         &[],
         |_, _| {},
@@ -170,7 +170,12 @@ fn a_glider_wears_on_the_twentieth_and_fortieth_glide_ticks() {
             let mut worn_at = Vec::new();
             for t in 1..=40 {
                 let mut events = Vec::new();
-                assert!(tick(&mut m, w, &mut level_random(2), &mut events));
+                assert!(tick(
+                    &mut m,
+                    w,
+                    &mut crate::health::TestLevel::new(2).level(),
+                    &mut events
+                ));
                 for e in &events {
                     if let MobEvent::GliderWear { mob, slot } = e {
                         assert_eq!((*mob, *slot), (1, EquipmentSlot::Chest));
@@ -197,9 +202,9 @@ fn a_glider_wears_on_the_twentieth_and_fortieth_glide_ticks() {
 /// one `nextInt(size)` from the mob's own random and picks that slot; the
 /// other glide ticks, and a refused glide, draw nothing.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn the_wear_draws_once_from_the_mobs_own_random() {
-    use horizon_world::player_inventory::EquipmentSlot;
+    use horizon_core::equipment_slot::EquipmentSlot;
     let ran = crate::mobs::world::with_built_test_world(
         &[],
         |_, _| {},
@@ -268,7 +273,7 @@ fn the_wear_draws_once_from_the_mobs_own_random() {
 /// the glider it picked: checked for every damage of the elytra's own
 /// maximum.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn the_wear_of_a_glide_never_breaks_the_glider() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -295,7 +300,7 @@ fn the_wear_of_a_glide_never_breaks_the_glider() {
 /// `updateFallFlying` posts `ELYTRA_GLIDE` at the mob on every 10th glide
 /// tick, after the wear on the 20th, and on no other tick.
 #[test]
-#[ignore = "needs prepared resources in .local/horizon-client"]
+#[ignore = "daily"]
 fn a_gliding_mob_posts_elytra_glide_on_every_tenth_glide_tick() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -305,10 +310,12 @@ fn a_gliding_mob_posts_elytra_glide_on_every_tenth_glide_tick() {
             let mut glided_at = Vec::new();
             for t in 1..=40 {
                 let mut events = Vec::new();
-                let mut random = horizon_core::random::LevelRandom::for_level(
-                    horizon_core::random::LegacyRandom::new(2),
-                );
-                assert!(tick(&mut m, w, &mut random, &mut events));
+                assert!(tick(
+                    &mut m,
+                    w,
+                    &mut crate::health::TestLevel::new(2).level(),
+                    &mut events
+                ));
                 let glides: Vec<_> = events
                     .iter()
                     .filter(|e| {

@@ -1,5 +1,5 @@
 //! Enchantments on the gear mobs wear and hold (`Mob.populateDefaultEquipmentEnchantments`,
-//! raid buffs): the side table kept beside the plain item ids in `Extra`,
+//! raid buffs): the side table kept beside the stacks in `Extra::equipment`,
 //! its saved form, and the combat numbers the enchantments give (Sharpness,
 //! Smite, Bane of Arthropods, Fire Aspect, Knockback, Power, Punch, Flame,
 //! Quick Charge and the protections).
@@ -21,22 +21,16 @@ pub type Levels = Vec<(Arc<str>, u32)>;
 /// The same named/direct armor-trim holders as the full item stack.
 pub type Trim = crate::item_data::Trim;
 
-/// The enchantments and trims of each equipment slot, and the whole stack of
-/// the ones that have more than an id (a damage value, a name, a count).
+/// The enchantments and trims of each equipment slot.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Gear {
     pub slots: [Levels; 6],
     /// The `minecraft:trim` of each slot's item (a loot table's set_components).
     pub trims: [Option<Trim>; 6],
-    /// The stack in each slot beyond the main hand (that one is
-    /// `Extra::main_hand_stack`), when it is not just one plain item.
-    pub stacks: [Option<crate::items::ItemStack>; 6],
 }
 impl Gear {
     pub fn is_empty(&self) -> bool {
-        self.slots.iter().all(Vec::is_empty)
-            && self.trims.iter().all(Option::is_none)
-            && self.stacks.iter().all(Option::is_none)
+        self.slots.iter().all(Vec::is_empty) && self.trims.iter().all(Option::is_none)
     }
     pub fn level(&self, slot: usize, id: &str) -> u32 {
         self.slots[slot]
@@ -70,18 +64,9 @@ pub fn set(m: &mut Mob, slot: usize, levels: Levels) {
     let g = m.extra.gear.get_or_insert_with(Box::default);
     g.slots[slot] = levels;
     g.trims[slot] = None;
-    g.stacks[slot] = None;
     if g.is_empty() {
         m.extra.gear = None;
     }
-}
-/// Keep the whole `stack` of the item in `slot` (call it after `set`, which
-/// forgets the old one) when it is more than one plain item.
-pub fn set_stack(m: &mut Mob, slot: usize, stack: crate::items::ItemStack) {
-    if stack.damage == 0 && stack.count <= 1 && stack.extra.is_none() {
-        return;
-    }
-    m.extra.gear.get_or_insert_with(Box::default).stacks[slot] = Some(stack);
 }
 /// Set (None removes) the trim of a slot's item.
 pub fn set_trim(m: &mut Mob, slot: usize, trim: Option<Trim>) {
@@ -146,27 +131,21 @@ pub fn damage_bonus(levels: &[(Arc<str>, u32)], target: Option<Species>) -> f32 
     bonus
 }
 /// `Mob.doHurtTarget`'s `getAttributeValue(ATTACK_DAMAGE)`: the mob's own
-/// value plus the `attack_damage` modifiers of the item in its main hand
-/// (an iron axe adds 8, a sword 4 to 7, a trident 8), which vanilla applies
-/// to the attribute map when the item is equipped.
+/// value plus the `attack_damage` modifiers of the stack in its main hand
+/// (an iron axe adds 8, a sword 4 to 7, a trident 8) — the stack's own
+/// `attribute_modifiers`, components included, or its item's, as
+/// `item_attribute_modifier` leaves them (arismoko/horizon#941). Vanilla applies them to the
+/// attribute map when the item is equipped; the live map reads the same rows.
 pub fn attack_damage(m: &Mob, items: Option<&crate::items::Items>) -> f32 {
     let base = f64::from(m.attrs.attack_damage);
-    let modifiers = match items {
-        Some(items) => m.extra.main_hand_stack().map_or_else(
-            || {
-                m.extra
-                    .main_hand
-                    .as_deref()
-                    .and_then(|id| items.get(id))
-                    .map(|i| i.modifiers.clone())
-                    .unwrap_or_default()
-            },
-            |stack| items.attribute_modifiers(stack),
-        ),
-        None => Vec::new(),
+    let Some(items) = items else {
+        return base as f32;
+    };
+    let Some(stack) = m.extra.slot_stack(horizon_items::equipment::MAINHAND) else {
+        return base as f32;
     };
     super::equip::attribute_with(
-        &modifiers,
+        &crate::item_attributes::attribute_modifiers(stack, items),
         "minecraft:attack_damage",
         base,
         super::equip::Slot::MainHand,
@@ -191,8 +170,6 @@ pub struct ArrowBonus {
     pub damage: f32,
     /// Punch: knockback levels.
     pub punch: u32,
-    /// Flame: sets the target on fire.
-    pub flame: bool,
     /// Piercing: entities an arrow passes through.
     pub pierce: u32,
 }
@@ -205,7 +182,6 @@ pub fn arrow_bonus(m: &Mob) -> ArrowBonus {
             0.0
         },
         punch: level(m, MAIN, "minecraft:punch"),
-        flame: level(m, MAIN, "minecraft:flame") > 0,
         pierce: level(m, MAIN, "minecraft:piercing"),
     }
 }

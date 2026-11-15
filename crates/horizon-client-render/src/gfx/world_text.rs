@@ -54,8 +54,9 @@ mod tests {
     use super::*;
     use wgpu::util::DeviceExt;
     #[test]
-    #[ignore = "requires a Vulkan/Metal/DX12 adapter"]
+    #[ignore = "daily"]
     fn world_text_blends_culls_and_obeys_world_depth() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
         let (device, queue) =
@@ -66,14 +67,14 @@ mod tests {
             label: None,
             source: wgpu::ShaderSource::Wgsl(
                 r#"
-override HDR_WRITE_LIGHT: bool = false;
-override FRAME_LINEAR: bool = false;
-struct Out { @builtin(position) pos:vec4<f32>, @location(0) color:vec4<f32> }
-@vertex fn vs_entity(@location(0) pos:vec3<f32>, @location(3) color:vec4<f32>)->Out {
- return Out(vec4(pos,1.0),color);
-}
-@fragment fn fs_entity_unmarked(v:Out)->@location(0) vec4<f32> { return v.color; }
-"#
+    override HDR_WRITE_LIGHT: bool = false;
+    override FRAME_LINEAR: bool = false;
+    struct Out { @builtin(position) pos:vec4<f32>, @location(0) color:vec4<f32> }
+    @vertex fn vs_entity(@location(0) pos:vec3<f32>, @location(3) color:vec4<f32>)->Out {
+     return Out(vec4(pos,1.0),color);
+    }
+    @fragment fn fs_entity_unmarked(v:Out)->@location(0) vec4<f32> { return v.color; }
+    "#
                 .into(),
             ),
         });

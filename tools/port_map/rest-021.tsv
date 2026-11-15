@@ -15,7 +15,7 @@ ClassTreeIdRegistry.define	skip:java		synched entity data slot allocator by clas
 CommonLinks.extendRealms	skip:service		Realms upgrade link
 CompilableString.codec	skip:java		codec
 CompilableString.equals	skip:java		value equality on the source string
-CompilableString.CommandParserHelper.apply	inline	crates/horizon-client/src/game/commands/text_commands.rs::invalid_selector	a selector and an nbt component's entity are parsed when the component is decoded, and text after them is command.trailing_data, as the codec does through the selector
+CompilableString.CommandParserHelper.apply	inline	crates/horizon-client/src/game/administration/commands/text_commands.rs::invalid_selector	a selector and an nbt component's entity are parsed when the component is decoded, and text after them is command.trailing_data, as the codec does through the selector
 CrudeIncrementalIntIdentityHashBiMap.byId	skip:java		identity bimap over registry ids; Horizon uses its own id tables
 CrudeIncrementalIntIdentityHashBiMap.contains	skip:java		identity bimap over registry ids; Horizon uses its own id tables
 CrudeIncrementalIntIdentityHashBiMap.nextId	skip:java		identity bimap over registry ids; Horizon uses its own id tables
@@ -117,7 +117,7 @@ FastBufferedInputStream.skip	skip:java		buffered stream helper; Rust readers do 
 FastBufferedInputStream.fill	skip:java		buffered stream helper; Rust readers do their own buffering
 FileSystemUtil.safeGetPath	skip:other		opens a jar or zip filesystem for a URI; Horizon reads archives with the zip crate
 FileUtil.sanitizeName	port	crates/horizon-client/src/title.rs::Title::target_folder	gap: minor: replaces every non-alphanumeric character with _; vanilla only replaces illegal file characters, dots, slashes and quotes
-FileUtil.isPathPortable	port	crates/horizon-client/src/game/structure_blocks.rs::portable_path	the structure path's check: no empty, `.` or `..` segment; vanilla also tests the part's characters (isPathPartPortable)
+FileUtil.isPathPortable	port	crates/horizon-client/src/game/administration/structure_blocks.rs::portable_path	the structure path's check: no empty, `.` or `..` segment; vanilla also tests the part's characters (isPathPartPortable)
 FileUtil.decomposePath	skip:data		resource path handling; Horizon reads its data from tables and files
 FileUtil.resolvePath	skip:data		resource path handling; Horizon reads its data from tables and files
 FileUtil.isValidPathSegment	skip:data		resource path handling; Horizon reads its data from tables and files
@@ -133,3 +133,6 @@ FormattedCharSequence.composite	port	crates/horizon-client-core/src/text.rs::Tex
 FormattedCharSequence.fromPair	port	crates/horizon-client-core/src/text.rs::Text::append	concatenation of two sequences
 FutureChain.append	skip:other		ordering helper for the async chat-signature checks in ServerGamePacketListenerImpl; a scheduling wrapper, no game behaviour of its own
 Graph.depthFirstSearch	inline	crates/horizon-world/src/worldgen/feature_sort.rs::build_features_per_step	iterative DFS with colours; finds the cycle and emits the reverse topological order
+Weapon.<clinit>	skip:java		constructs the Java persistent and stream codecs; record validation and values are implemented natively
+UseEffects.<clinit>	skip:java		constructs Java persistent and stream codecs and the immutable default; decoded values and validation are implemented natively
+AttackRange.<clinit>	skip:java		constructs Java persistent and stream codecs; native decoding validates and stores the six range fields

@@ -5,10 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Repository tasks: cargo run -p xtask -- package BINARY OUTDIR | tokens"
+description = "Repository tasks: cargo run -p xtask -- package BINARY OUTDIR | tokens | mixins-tool"
 
 [dependencies]
 horizon-mod-api-gen = { path = "../crates/horizon-mod-api-gen" }
+# `mixins-tool`: the pin, the carried patch and its applier, shared with the launcher.
+horizon-addresses = { path = "../crates/horizon-addresses" }
+horizon-mod-package = { path = "../crates/horizon-mod-package", default-features = false }
 horizon-theme = { path = "../crates/horizon-theme" }
 
 [lints]

@@ -177,9 +177,9 @@ pub fn services_profile_textures(profile: &serde_json::Value) -> Textures {
 /// `profile_skin_url` on a block entity's `profile` NBT (`SkullBlockEntity`):
 /// the same `properties` list, held as a compound. A name-only profile (a
 /// string tag) has no properties and no skin URL.
-pub fn profile_skin_url_nbt(profile: &horizon_world::nbt::Tag) -> Option<String> {
+pub fn profile_skin_url_nbt(profile: &horizon_core::nbt::Tag) -> Option<String> {
     let properties = match profile.get("properties")? {
-        horizon_world::nbt::Tag::List(list) => list,
+        horizon_core::nbt::Tag::List(list) => list,
         _ => return None,
     };
     let value = properties.iter().find_map(|p| {
@@ -193,20 +193,20 @@ pub fn profile_skin_url_nbt(profile: &horizon_world::nbt::Tag) -> Option<String>
 
 /// `ResolvableProfile.skinPatch().body()` of a skull's `profile` NBT: the
 /// `texture` id that replaces its skin.
-pub fn profile_texture_nbt(profile: &horizon_world::nbt::Tag) -> Option<String> {
+pub fn profile_texture_nbt(profile: &horizon_core::nbt::Tag) -> Option<String> {
     nbt_text(profile.get("texture"))
 }
 
 /// The profile's uuid as u128: `id` as an int array (block entity NBT) or a
 /// uuid string (older and component forms). Used for `DefaultPlayerSkin.get`
 /// when a head's skin is not downloaded yet.
-pub fn profile_uuid_nbt(profile: &horizon_world::nbt::Tag) -> Option<u128> {
+pub fn profile_uuid_nbt(profile: &horizon_core::nbt::Tag) -> Option<u128> {
     match profile.get("id")? {
-        horizon_world::nbt::Tag::IntArray(v) if v.len() == 4 => Some(
+        horizon_core::nbt::Tag::IntArray(v) if v.len() == 4 => Some(
             v.iter()
                 .fold(0u128, |a, &w| (a << 32) | u128::from(w as u32)),
         ),
-        horizon_world::nbt::Tag::String(s) => {
+        horizon_core::nbt::Tag::String(s) => {
             let digits: String = s.to_string_lossy().chars().filter(|c| *c != '-').collect();
             u128::from_str_radix(&digits, 16).ok()
         }
@@ -214,9 +214,9 @@ pub fn profile_uuid_nbt(profile: &horizon_world::nbt::Tag) -> Option<u128> {
     }
 }
 
-pub(crate) fn nbt_text(tag: Option<&horizon_world::nbt::Tag>) -> Option<String> {
+pub(crate) fn nbt_text(tag: Option<&horizon_core::nbt::Tag>) -> Option<String> {
     match tag {
-        Some(horizon_world::nbt::Tag::String(s)) => Some(s.to_string_lossy()),
+        Some(horizon_core::nbt::Tag::String(s)) => Some(s.to_string_lossy()),
         _ => None,
     }
 }
@@ -484,13 +484,12 @@ pub fn parse_profile(v: &serde_json::Value) -> ProfileInfo {
 /// `ResolvableProfile.create`'s `Dynamic` key from a skull's `profile` tag:
 /// a bare name string is `createUnresolved`, and a compound without
 /// properties and with exactly one of a name or an id is `Dynamic`.
-pub fn dynamic_nbt(profile: &horizon_world::nbt::Tag) -> Option<NameOrId> {
-    if let horizon_world::nbt::Tag::String(s) = profile {
+pub fn dynamic_nbt(profile: &horizon_core::nbt::Tag) -> Option<NameOrId> {
+    if let horizon_core::nbt::Tag::String(s) = profile {
         let name = s.to_string_lossy();
         return valid_player_name(&name).then_some(NameOrId::Name(name));
     }
-    if matches!(profile.get("properties"), Some(horizon_world::nbt::Tag::List(l)) if !l.is_empty())
-    {
+    if matches!(profile.get("properties"), Some(horizon_core::nbt::Tag::List(l)) if !l.is_empty()) {
         return None;
     }
     match (nbt_text(profile.get("name")), profile_uuid_nbt(profile)) {
@@ -521,7 +520,7 @@ fn prepare_head(profile: &serde_json::Value) -> HeadProfile {
 #[derive(Default)]
 struct HeadProfiles {
     entries: std::collections::HashMap<serde_json::Value, std::sync::Arc<HeadProfile>>,
-    nbt: std::collections::HashMap<horizon_world::nbt::Tag, std::sync::Arc<serde_json::Value>>,
+    nbt: std::collections::HashMap<horizon_core::nbt::Tag, std::sync::Arc<serde_json::Value>>,
     resolved: [std::collections::HashMap<String, std::sync::Arc<HeadProfile>>; 2],
 }
 
@@ -544,7 +543,7 @@ impl Resolver {
     /// mutated in place, and neither must leave a stale profile behind.
     pub fn head_profile_nbt(
         &mut self,
-        profile: &horizon_world::nbt::Tag,
+        profile: &horizon_core::nbt::Tag,
     ) -> std::sync::Arc<serde_json::Value> {
         if let Some(json) = self.heads.nbt.get(profile) {
             return json.clone();
@@ -925,7 +924,7 @@ pub struct Downloader {
     /// Skins and capes drawn from the atlas since `take_drawn`.
     drawn: std::collections::HashSet<String>,
     /// The resource packs' root, where a profile's `texture` patch is read.
-    resource_root: std::path::PathBuf,
+    resource_root: horizon_assets::resource_source::ResourceSource,
     /// How each `patch/` texture of the resource packs loaded, by location.
     resources: std::collections::HashMap<String, Download>,
     /// When each failed texture download was last tried, so it can be retried:
@@ -1011,7 +1010,9 @@ impl Downloader {
             images: Default::default(),
             image_order: Default::default(),
             drawn: Default::default(),
-            resource_root: Default::default(),
+            resource_root: horizon_assets::resource_source::ResourceSource::indexed(
+                Default::default(),
+            ),
             resources: Default::default(),
             failed: Default::default(),
             retry_after: std::time::Duration::from_secs(60),
@@ -1024,11 +1025,16 @@ impl Downloader {
     }
     /// The resource packs changed (or were first loaded) at `root`: patch
     /// textures load again from there.
-    pub fn set_resource_root(&mut self, root: std::path::PathBuf) {
-        for location in std::mem::take(&mut self.resources).into_keys() {
-            self.images.remove(&location);
-            self.image_order.retain(|l| *l != location);
-        }
+    pub fn set_resource_root(&mut self, root: horizon_assets::resource_source::ResourceSource) {
+        let previous = std::mem::take(&mut self.resources);
+        self.images
+            .retain(|location, _| !previous.contains_key(location));
+        self.image_order
+            .retain(|location| !previous.contains_key(location));
+        self.queued
+            .retain(|location| !previous.contains_key(location));
+        self.ready
+            .retain(|(location, _)| !previous.contains_key(location));
         self.resource_order.clear();
         self.resource_root = root;
     }
@@ -1045,10 +1051,9 @@ impl Downloader {
             }
             None => {}
         }
-        let file = self
+        let image = self
             .resource_root
-            .join(format!("assets/{namespace}/textures/{path}.png"));
-        let image = std::fs::read(file)
+            .read(&format!("assets/{namespace}/textures/{path}.png"))
             .ok()
             .and_then(|b| crate::hud::decode_bytes(&b).ok())
             .and_then(|(w, h, rgba)| resample_64(w, h, &rgba));
@@ -1416,17 +1421,17 @@ mod tests {
     #[test]
     fn head_profile_nbt_cache_tracks_value_changes() {
         let mut resolver = super::Resolver::new();
-        let mut tag = horizon_world::nbt::Tag::String("Notch".into());
+        let mut tag = horizon_core::nbt::Tag::String("Notch".into());
         let first = resolver.head_profile_nbt(&tag);
         assert_eq!(*first, crate::scoreboard::tag_to_json(&tag));
         assert!(std::sync::Arc::ptr_eq(
             &first,
             &resolver.head_profile_nbt(&tag)
         ));
-        tag = horizon_world::nbt::Tag::String("Alex".into());
+        tag = horizon_core::nbt::Tag::String("Alex".into());
         assert_eq!(*resolver.head_profile_nbt(&tag), serde_json::json!("Alex"));
         for i in 0..super::MAX_HEAD_PROFILES {
-            resolver.head_profile_nbt(&horizon_world::nbt::Tag::Int(i as i32));
+            resolver.head_profile_nbt(&horizon_core::nbt::Tag::Int(i as i32));
         }
         assert!(resolver.heads.nbt.len() < super::MAX_HEAD_PROFILES);
     }
@@ -1632,6 +1637,7 @@ mod tests {
     /// `getByName` and `getProfileById` answer from the services the
     /// discovery document names; a profile resolves through both.
     #[test]
+    #[ignore = "daily"]
     fn profiles_resolve_through_the_services() {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1809,6 +1815,7 @@ mod tests {
     /// Textures come over plain HTTP too (a local server here; https is the
     /// same request through rustls), and only 2xx answers count.
     #[test]
+    #[ignore = "daily"]
     fn http_get_reads_2xx_bodies() {
         use std::io::{BufRead, BufReader, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1840,7 +1847,7 @@ mod tests {
     #[test]
     fn skull_block_entity_profiles_supply_head_skins() {
         let value = "eyJ0ZXh0dXJlcyI6IHsiU0tJTiI6IHsidXJsIjogImh0dHBzOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlL2FiYzEyMyJ9fX0=";
-        let profile = horizon_world::nbt::parse_snbt(&format!(
+        let profile = horizon_core::nbt::parse_snbt(&format!(
             r#"{{name:"T",id:[I;-158327916,1572358581,-2125825222,-487948715],properties:[{{name:"textures",value:"{value}"}}]}}"#
         ))
         .unwrap()
@@ -1858,11 +1865,11 @@ mod tests {
             )
         );
         // A name-only profile (a string tag) has no properties: no url, no id.
-        let named = horizon_world::nbt::Tag::String("MHF_Blaze".into());
+        let named = horizon_core::nbt::Tag::String("MHF_Blaze".into());
         assert_eq!(super::profile_skin_url_nbt(&named), None);
         assert_eq!(super::profile_uuid_nbt(&named), None);
         // A uuid in string form decodes too.
-        let text_id = horizon_world::nbt::parse_snbt(
+        let text_id = horizon_core::nbt::parse_snbt(
             r#"{name:"T",id:"e843a1f4-0000-0001-0000-000200000003"}"#,
         )
         .unwrap()
@@ -1934,6 +1941,45 @@ mod tests {
         out
     }
 
+    #[test]
+    fn resource_reload_replaces_pixels_and_drops_queued_old_generation_images() {
+        use horizon_assets::resource_source::{Resource, ResourceSource};
+        let source = |color| {
+            ResourceSource::indexed(std::collections::BTreeMap::from([(
+                "assets/example/textures/player.png".into(),
+                Resource::bytes(png(color)),
+            )]))
+        };
+        let cache = std::env::temp_dir().join(format!(
+            "horizon-resource-skin-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut downloads = super::Downloader::new(cache.clone());
+        downloads.set_resource_root(source([255, 0, 0, 255]));
+        downloads.resource("patch/player", "example", "player");
+        assert_eq!(
+            &downloads.image("patch/player").unwrap()[..4],
+            [255, 0, 0, 255]
+        );
+        assert_eq!(downloads.ready.len(), 1);
+        downloads.set_resource_root(source([0, 0, 255, 255]));
+        assert!(downloads.image("patch/player").is_none());
+        assert!(downloads.ready.is_empty());
+        assert!(!downloads.queued.contains("patch/player"));
+        downloads.resource("patch/player", "example", "player");
+        let ready = downloads.take_ready();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(&ready[0].1[..4], [0, 0, 255, 255]);
+        assert!(
+            !cache.exists(),
+            "resource images never enter the URL download cache"
+        );
+    }
+
     /// A downloaded body reaches the disk cache only if it decodes; a broken
     /// cached file is fetched again and replaced. A failed fetch writes nothing.
     #[test]
@@ -1986,6 +2032,7 @@ mod tests {
     /// A texture download that failed is tried again after the wait, instead of
     /// pinning the player to the default skin for the rest of the session.
     #[test]
+    #[ignore = "daily"]
     fn a_failed_download_is_retried_after_the_wait() {
         use std::io::{BufRead, BufReader, Write};
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2075,12 +2122,32 @@ mod download_bound_tests {
 
     static RUNNING: AtomicUsize = AtomicUsize::new(0);
     static PEAK: AtomicUsize = AtomicUsize::new(0);
+    /// How many gated fetches may finish: the test, not the clock, decides when one ends. One gate
+    /// per test, since tests run side by side.
+    struct Gate(std::sync::Mutex<usize>, std::sync::Condvar);
+    impl Gate {
+        const fn new() -> Self {
+            Self(std::sync::Mutex::new(0), std::sync::Condvar::new())
+        }
+        fn permit(&self, count: usize) {
+            *self.0.lock().unwrap() += count;
+            self.1.notify_all();
+        }
+        fn pass(&self) {
+            *self
+                .1
+                .wait_while(self.0.lock().unwrap(), |p| *p == 0)
+                .unwrap() -= 1;
+        }
+    }
+    static THREADS: Gate = Gate::new();
+    static DUE: Gate = Gate::new();
 
-    /// A fetch that is slow enough for the others to pile up behind it, and counts how many run.
-    fn slow_failure(_: &str) -> Option<Vec<u8>> {
+    /// A fetch that ends only when the test grants it a permit, and counts how many run at once.
+    fn gated_failure(_: &str) -> Option<Vec<u8>> {
         let now = RUNNING.fetch_add(1, Ordering::SeqCst) + 1;
         PEAK.fetch_max(now, Ordering::SeqCst);
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        THREADS.pass();
         RUNNING.fetch_sub(1, Ordering::SeqCst);
         None
     }
@@ -2092,7 +2159,8 @@ mod download_bound_tests {
     }
 
     /// A tab list of 60 players names 60 textures at once: no more than the bound run together,
-    /// the ones that waited start as the others finish, and every one ends. Every frame asks again.
+    /// a waiting one starts only once a running one has finished, and every one ends. Every frame
+    /// asks again. No fetch ends before the test lets it, so nothing here depends on timing.
     #[test]
     fn downloads_run_a_few_at_a_time_and_the_late_ones_start_later() {
         let bounds = Bounds {
@@ -2100,28 +2168,44 @@ mod download_bound_tests {
             resources: 4096,
             downloads: 4,
         };
-        let mut d = downloader("threads", bounds, slow_failure);
+        let mut d = downloader("threads", bounds, gated_failure);
         let urls: Vec<String> = (0..60).map(url).collect();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        let mut first = true;
+        // Asked all at once: four started, and the others were not even recorded.
+        let states: Vec<Download> = urls.iter().map(|u| d.state(Kind::Skin, u)).collect();
+        assert!(states.iter().all(|s| *s == Download::Pending));
+        assert_eq!(d.in_flight, 4);
+        assert_eq!(d.states.len(), 4);
+        // One finishes: its place is free, and nothing new started on its own.
+        THREADS.permit(1);
+        while d.in_flight == 4 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the permitted fetch never ended"
+            );
+            d.state(Kind::Skin, &urls[0]);
+            std::thread::yield_now();
+        }
+        assert_eq!(d.in_flight, 3);
+        assert_eq!(d.states.len(), 4);
+        // The next texture asked takes that place, and only that one.
+        let states: Vec<Download> = urls.iter().map(|u| d.state(Kind::Skin, u)).collect();
+        assert_eq!(d.in_flight, 4);
+        assert_eq!(d.states.len(), 5);
+        assert_eq!(states.iter().filter(|s| **s == Download::Failed).count(), 1);
+        // The rest may finish: each frame starts the waiting ones as places come free.
+        THREADS.permit(usize::MAX / 2);
         loop {
             let states: Vec<Download> = urls.iter().map(|u| d.state(Kind::Skin, u)).collect();
-            if first {
-                // Asked all at once: four started, and the others were not even recorded.
-                assert_eq!(d.in_flight, 4);
-                assert_eq!(d.states.len(), 4);
-                assert!(states.iter().all(|s| *s == Download::Pending));
-                first = false;
-            }
             if states.iter().all(|s| *s == Download::Failed) {
                 break;
             }
             assert!(
                 std::time::Instant::now() < deadline,
                 "{} still pending",
-                states.len()
+                states.iter().filter(|s| **s == Download::Pending).count()
             );
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            std::thread::yield_now();
         }
         assert!(
             PEAK.load(Ordering::SeqCst) <= 4,
@@ -2183,9 +2267,9 @@ mod download_bound_tests {
         assert_eq!(d.states.len(), 6);
     }
 
-    /// A fetch long enough for a test to ask between its start and its end.
-    fn slowish_failure(_: &str) -> Option<Vec<u8>> {
-        std::thread::sleep(std::time::Duration::from_millis(150));
+    /// A fetch that ends only when the test lets it, so the test asks between its start and end.
+    fn due_failure(_: &str) -> Option<Vec<u8>> {
+        DUE.pass();
         None
     }
 
@@ -2198,8 +2282,9 @@ mod download_bound_tests {
             resources: 4096,
             downloads: 1,
         };
-        let mut d = downloader("due", bounds, slowish_failure);
+        let mut d = downloader("due", bounds, due_failure);
         let wait_time = d.retry_after;
+        DUE.permit(1);
         assert_eq!(wait(&mut d, &url(0)), Download::Failed);
         // Another texture takes the only place; the first one's retry becomes due but has to wait.
         assert_eq!(d.state(Kind::Skin, &url(1)), Download::Pending);
@@ -2207,11 +2292,13 @@ mod download_bound_tests {
         assert_eq!(d.state(Kind::Skin, &url(0)), Download::Failed);
         assert_eq!(d.in_flight, 1);
         d.retry_after = wait_time;
+        DUE.permit(1);
         assert_eq!(wait(&mut d, &url(1)), Download::Failed);
         // The place is free: the retry starts.
         d.retry_after = std::time::Duration::ZERO;
         assert_eq!(d.state(Kind::Skin, &url(0)), Download::Pending);
         assert_eq!(d.in_flight, 1);
+        DUE.permit(1);
     }
 
     /// A texture that is running is never the one dropped, however many settle behind it.
@@ -2259,7 +2346,9 @@ mod download_bound_tests {
         assert_eq!(d.resource_order.len(), d.resources.len());
         assert!(!d.resource_order.iter().any(|l| l == "patch/n/35"));
         // New packs start the count over.
-        d.set_resource_root(std::env::temp_dir());
+        d.set_resource_root(horizon_assets::resource_source::ResourceSource::directory(
+            std::env::temp_dir(),
+        ));
         assert!(d.resources.is_empty() && d.resource_order.is_empty());
     }
 }

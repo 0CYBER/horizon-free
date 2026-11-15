@@ -213,7 +213,8 @@ mod tests {
             r#"{"minecraft:stick":{},"minecraft:diamond_pickaxe":{"minecraft:tool":{"rules":[{"blocks":"minecraft:stone","speed":8.0,"correct_for_drops":true}],"damage_per_block":1}}}"#,
         )
         .unwrap();
-        let items = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         let pick = ItemStack::new("minecraft:diamond_pickaxe", 1);
         let stick = ItemStack::new("minecraft:stick", 1);

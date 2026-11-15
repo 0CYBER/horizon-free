@@ -3,7 +3,10 @@
 //! cargo run --profile fast -p horizon-client --example model_library_bench -- ROOT [--parity]
 //! Run fresh processes, warm up twice, then compare multiple alternating baseline/candidate runs.
 extern crate horizon_client_lib as horizon_client;
+#[path = "../src/test_resources.rs"]
+mod test_resources;
 use horizon_client::{assets::Assets, item_render::ItemRenderer};
+use horizon_world::native_load_context::DataLoadOrigin;
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     hash::{Hash, Hasher},
@@ -57,11 +60,18 @@ fn main() -> horizon_client::Result<()> {
     let initial = LIVE.load(Relaxed);
     let start = Instant::now();
     let assets = Assets::load(root)?;
-    let render = assets.reload(root)?;
+    let render = assets.reload(&horizon_assets::resource_source::ResourceRoot::directory(
+        root.to_path_buf(),
+    ))?;
     let block_ms = start.elapsed().as_secs_f64() * 1000.;
     let block_retained = LIVE.load(Relaxed) - initial;
     let start_items = Instant::now();
-    let items = ItemRenderer::load_with_library(root, render.model_library.clone())?;
+    let item_data = test_resources::item_data(root, DataLoadOrigin::ClientPreload)?;
+    let items = ItemRenderer::load_with_library(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        render.model_library.clone(),
+        &item_data,
+    )?;
     let item_ms = start_items.elapsed().as_secs_f64() * 1000.;
     let total_ms = start.elapsed().as_secs_f64() * 1000.;
     let retained = LIVE.load(Relaxed) - initial;

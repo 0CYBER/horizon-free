@@ -3,7 +3,6 @@
 //! and `SwampHutPieces`, all registered as
 //! `StructurePieceType.ContextlessType`s.
 use super::{
-    BoundingBox,
     fortress::FortressPiece,
     legacy::{LegacyPiece, PieceFrame},
     mineshaft::MineshaftPiece,
@@ -11,11 +10,8 @@ use super::{
     start::{StructureDef, StructureKind},
     stronghold::StrongholdPiece,
 };
-use crate::{
-    datafix::dynamic::{Number, as_number},
-    nbt::Tag,
-};
-use horizon_core::geometry::Direction;
+use crate::datafix::dynamic::{Number, as_number};
+use horizon_core::{bounding_box::BoundingBox, geometry::Direction, nbt::Tag};
 use std::{collections::BTreeSet, sync::Arc};
 
 /// `CompoundTag.getIntOr`: `Mth.floor` of a float or double tag, the low 32
@@ -297,7 +293,7 @@ mod tests {
             let def = &defs[family];
             // Codec.INT_STREAM accepts a numeric list as well as an int array,
             // and BoundingBox normalizes inverted corners.
-            let parse = |text: &str| crate::nbt::parse_snbt(text).unwrap().0;
+            let parse = |text: &str| horizon_core::nbt::parse_snbt(text).unwrap().0;
             let child = parse(&format!(
                 r#"{{id:"minecraft:{id}",BB:[4,5,6,1,2,3],O:-3,GD:-1.25f,{input}}}"#
             ));
@@ -329,7 +325,7 @@ mod tests {
         super::super::StructureResources,
         crate::worldgen::block_feature::FeatureBlockBindings<'static>,
     ) {
-        let (mut tag, _) = crate::nbt::parse_snbt(
+        let (mut tag, _) = horizon_core::nbt::parse_snbt(
             r#"{DataVersion:0,states:[
             {id:"minecraft:air"},{id:"minecraft:cave_air"},{id:"minecraft:void_air"}],defaults:{
             "minecraft:air":0,"minecraft:cave_air":1,"minecraft:void_air":2}}"#,

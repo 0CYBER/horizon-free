@@ -6,6 +6,7 @@
 //! not part of the pinned 26.3 sources, so a comment naming its classes
 //! describes the library this module ports.
 #![forbid(unsafe_code)]
+pub use horizon_client_core::suggestion::{Range, Suggestion};
 pub mod args;
 pub mod block;
 pub mod codec;
@@ -24,7 +25,10 @@ pub mod tree_world;
 pub mod vanilla;
 mod vanilla_order;
 
-pub use args::{Arg, ArgType, CustomCompletionAction, Registries, modify_custom_completions};
+pub use args::{
+    Arg, ArgType, CustomArgument, CustomArgumentKind, CustomCompletionAction, CustomSuggestion,
+    Registries, modify_custom_completions,
+};
 use horizon_client_core::text::Text;
 
 /// The command id of a mod's command (`Dispatcher::with_mod_commands`).
@@ -285,7 +289,6 @@ impl<'a> Reader<'a> {
     }
 }
 
-pub type Range = (usize, usize);
 #[derive(Clone, Debug)]
 pub enum NodeKind {
     Root,
@@ -301,6 +304,8 @@ pub struct Node {
     pub redirect: Option<usize>,
     /// Required permission level (0 everyone, 2 game masters, 4 owners).
     pub permission: u8,
+    /// The level needed to execute this node, independently of walking through it.
+    pub execution_permission: u8,
     /// A custom suggestion provider (`.suggests(...)`), used instead of the
     /// argument type's own suggestions.
     pub suggests: Option<Suggests>,
@@ -510,22 +515,6 @@ impl ParseResults {
         }
     }
 }
-/// A completion: replace `range` of the input with `text`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Suggestion {
-    pub range: Range,
-    pub text: String,
-    pub tooltip: Option<String>,
-    /// IntegerSuggestion: sorted numerically against other integers.
-    pub int_value: Option<i32>,
-}
-impl Suggestion {
-    /// Brigadier's suggestion apply.
-    pub fn apply(&self, input: &str) -> String {
-        let (s, e) = (self.range.0.min(input.len()), self.range.1.min(input.len()));
-        format!("{}{}{}", &input[..s], self.text, &input[e..])
-    }
-}
 /// SuggestionsBuilder: suggestions for the text from `start` to the cursor.
 pub struct SuggestionsBuilder<'a> {
     pub input: &'a str,
@@ -547,15 +536,7 @@ impl<'a> SuggestionsBuilder<'a> {
         self.remaining().to_lowercase()
     }
     pub fn suggest(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        if text != self.remaining() {
-            self.out.push(Suggestion {
-                range: (self.start, self.input.len()),
-                text,
-                tooltip: None,
-                int_value: None,
-            });
-        }
+        self.suggest_at(self.start, text);
     }
     /// Brigadier's suggestions-builder `suggest(int)`.
     pub fn suggest_int(&mut self, value: i32) {
@@ -567,15 +548,46 @@ impl<'a> SuggestionsBuilder<'a> {
         });
     }
     pub fn suggest_tooltip(&mut self, text: impl Into<String>, tooltip: impl Into<String>) {
+        self.suggest_at_tooltip(self.start, text, tooltip);
+    }
+    /// `SuggestionsBuilder.suggest` for a replacement that starts `start` bytes into the input:
+    /// the text from there to the cursor is replaced, so a completion can apply to one token of a
+    /// longer text argument (a mod's greedy text being split into words). A `start` past the
+    /// input or inside a character suggests nothing, rather than panicking where the range is
+    /// used.
+    pub fn suggest_at(&mut self, start: usize, text: impl Into<String>) {
         let text = text.into();
-        if text != self.remaining() {
-            self.out.push(Suggestion {
-                range: (self.start, self.input.len()),
-                text,
-                tooltip: Some(tooltip.into()),
-                int_value: None,
-            });
+        if !self.replaces_something(start) || text == self.input[start..] {
+            return;
         }
+        self.out.push(Suggestion {
+            range: (start, self.input.len()),
+            text,
+            tooltip: None,
+            int_value: None,
+        });
+    }
+    /// [`Self::suggest_at`] with an explanation.
+    pub fn suggest_at_tooltip(
+        &mut self,
+        start: usize,
+        text: impl Into<String>,
+        tooltip: impl Into<String>,
+    ) {
+        let text = text.into();
+        if !self.replaces_something(start) || text == self.input[start..] {
+            return;
+        }
+        self.out.push(Suggestion {
+            range: (start, self.input.len()),
+            text,
+            tooltip: Some(tooltip.into()),
+            int_value: None,
+        });
+    }
+    /// Whether `start` can begin a replacement range of the input.
+    fn replaces_something(&self, start: usize) -> bool {
+        start <= self.input.len() && self.input.is_char_boundary(start)
     }
     pub fn offset(&self, start: usize) -> SuggestionsBuilder<'a> {
         SuggestionsBuilder::new(self.input, start)
@@ -627,6 +639,9 @@ fn compare_suggestions(a: &Suggestion, b: &Suggestion) -> std::cmp::Ordering {
         _ => compare_ignore_case(&a.text, &b.text),
     }
 }
+/// The longest completion text a suggestion packet carries: `ByteBufCodecs.STRING_UTF8` counts
+/// 32767 UTF-16 code units, which is what vanilla's reader and its client both enforce.
+const MAX_SUGGESTION_TEXT: usize = 32767;
 /// Brigadier's suggestions create: merged, expanded to a common range and sorted case-insensitively.
 pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Suggestion>) {
     if list.is_empty() {
@@ -645,6 +660,13 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
             s.text,
             &input[s.range.1..end]
         );
+        // Padding grows the text past what the suggestion itself holds: a long prefix, and a
+        // suggestion starting later, expand to the whole merged range. Each one was within the
+        // packet's limit alone, so the expanded text is measured again and the ones that no
+        // longer fit are left out, keeping the others.
+        if text.encode_utf16().count() > MAX_SUGGESTION_TEXT {
+            continue;
+        }
         let expanded = Suggestion {
             range: (start, end),
             text,
@@ -658,6 +680,10 @@ pub fn merge_suggestions(input: &str, list: Vec<Suggestion>) -> (Range, Vec<Sugg
         if seen.insert((expanded.text.clone(), expanded.tooltip.clone())) {
             out.push(expanded);
         }
+    }
+    if out.is_empty() {
+        // Every completion was too long to send: nothing to show, and no range to show it in.
+        return ((0, 0), out);
     }
     let ints = out.iter().filter(|s| s.int_value.is_some()).count();
     if ints == 0 || ints == out.len() {
@@ -791,6 +817,7 @@ impl Dispatcher {
                 command: None,
                 redirect: None,
                 permission: 0,
+                execution_permission: 0,
                 suggests: None,
                 restricted: false,
             }],
@@ -826,6 +853,7 @@ impl Dispatcher {
             command: None,
             redirect: None,
             permission,
+            execution_permission: 0,
             suggests: None,
             restricted: false,
         });
@@ -861,7 +889,12 @@ impl Dispatcher {
         self.nodes[node].permission = level;
         node
     }
-    /// This tree plus the commands mods own (`docs/mods.md`), so the chat
+    /// Require a level to run this node without restricting access to its children.
+    pub fn requires_execution(&mut self, node: usize, level: u8) -> usize {
+        self.nodes[node].execution_permission = level;
+        node
+    }
+    /// This tree plus the commands mods own (`docs/modding/src/how-to/content-mods.md`), so the chat
     /// colours and completes them like the others. Every player may use one,
     /// and the text after its name goes to the mod as it was typed.
     pub fn with_mod_commands<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Dispatcher {
@@ -1043,7 +1076,9 @@ impl Dispatcher {
                 errors.push((child, e));
                 continue;
             }
-            context.command = self.nodes[child].command;
+            context.command = self.nodes[child]
+                .command
+                .filter(|_| self.nodes[child].execution_permission <= level);
             let redirect = self.nodes[child].redirect;
             if reader.can_read_n(if redirect.is_none() { 2 } else { 1 }) {
                 reader.skip();
@@ -1085,8 +1120,9 @@ impl Dispatcher {
             }
         }
         if !potentials.is_empty() {
-            // Prefer fully read input, then results without errors (stable sort).
-            potentials.sort_by_key(|p| (p.can_read(), !p.errors.is_empty()));
+            // Prefer fully read input, then results without errors. An executable
+            // result wins an otherwise complete tie; all other ties stay stable.
+            potentials.sort_by_key(|p| (p.can_read(), !p.errors.is_empty(), !p.is_valid()));
             return potentials.swap_remove(0);
         }
         ParseResults {
@@ -1171,6 +1207,16 @@ impl Dispatcher {
             all.extend(builder.out);
         }
         let (range, list) = merge_suggestions(truncated, all);
+        // The reply's range is the builder's, covering the token being typed, even when nothing
+        // is suggested locally: a node that asks the server (`ask_server`, and the mods' own
+        // `tab_complete` answers for the free `id`) brings its completions with the server's
+        // reply, which the chat applies to that token. The empty list's `(0, 0)` would paste
+        // what the server adds at the start of the line.
+        let range = if list.is_empty() {
+            (start, truncated.len())
+        } else {
+            range
+        };
         (range, list, ask)
     }
     fn smart_usage_of(&self, node: usize, optional: bool, deep: bool, level: u8) -> Option<String> {

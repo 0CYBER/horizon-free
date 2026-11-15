@@ -16,7 +16,7 @@ A survival dedicated server in a flat world, a world border 20 blocks wide aroun
 
 horizon-bots stand in for the clients (`--attack`, `--raw`). The server runs in a fresh folder with fresh
 HORIZON_HOME and XDG folders (lab.game_env), on a free port. Build first:
-    cargo build --profile fast -p horizon-client --bin horizon-client
+    cargo build --profile fast -p horizon-game --bin horizon-client
     cargo build --profile fast -p horizon-bots
 """
 import argparse

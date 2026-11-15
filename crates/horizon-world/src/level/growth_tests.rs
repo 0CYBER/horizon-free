@@ -52,8 +52,17 @@ struct Level {
     events: Vec<LevelEvent>,
     biome: &'static str,
     day: i64,
-    block_entities: Vec<(BlockPos, crate::nbt::Compound)>,
+    block_entities: Vec<(BlockPos, horizon_core::nbt::Compound)>,
+    /// What a mod's `BlockGrowFeatureEvent` grows when vanilla has no feature.
+    supplied: Option<&'static str>,
+    /// A mod's `CropGrowEvent.Pre` answer (`None`: `DEFAULT`).
+    crop: Option<bool>,
+    /// What the crop hooks heard: Pre's position and vanilla answer, Post's
+    /// position and original state.
+    crop_asked: Vec<(BlockPos, bool)>,
+    crop_grown: Vec<(BlockPos, BlockStateId)>,
 }
+impl crate::level::BlockEntityNeighbors for Level {}
 impl LevelAccess for Level {
     fn day_time(&self) -> i64 {
         self.day
@@ -79,8 +88,22 @@ impl LevelAccess for Level {
     fn biome_name(&self, _pos: BlockPos) -> Option<&str> {
         Some(self.biome)
     }
-    fn load_block_entity(&mut self, pos: BlockPos, nbt: crate::nbt::Compound) {
+    fn load_block_entity(&mut self, pos: BlockPos, nbt: horizon_core::nbt::Compound) {
         self.block_entities.push((pos, nbt));
+    }
+    fn block_grow_feature<'a>(
+        &mut self,
+        _pos: BlockPos,
+        feature: Option<&'a str>,
+    ) -> Option<std::borrow::Cow<'a, str>> {
+        feature.or(self.supplied).map(std::borrow::Cow::Borrowed)
+    }
+    fn crop_grow_pre(&mut self, pos: BlockPos, _state: BlockStateId, vanilla: bool) -> bool {
+        self.crop_asked.push((pos, vanilla));
+        self.crop.unwrap_or(vanilla)
+    }
+    fn crop_grow_post(&mut self, pos: BlockPos, original: BlockStateId) {
+        self.crop_grown.push((pos, original));
     }
 }
 
@@ -106,6 +129,10 @@ impl World {
                 biome: "minecraft:plains",
                 day: 6000,
                 block_entities: Vec::new(),
+                supplied: None,
+                crop: None,
+                crop_asked: Vec::new(),
+                crop_grown: Vec::new(),
             },
             f,
             ticks,
@@ -142,9 +169,14 @@ impl World {
         self.f.registry.state(state).unwrap().name.clone()
     }
     fn bone_meal(&mut self, pos: BlockPos) -> bool {
-        self.f
-            .behaviours
-            .use_bone_meal(&mut self.level, &mut self.ticks, pos, Direction::Up)
+        self.f.behaviours.use_bone_meal(
+            &mut self.level,
+            &mut self.ticks,
+            pos,
+            Direction::Up,
+            None,
+            None,
+        )
     }
     fn count(&self, suffix: &str) -> usize {
         self.level
@@ -205,7 +237,7 @@ fn a_tree_with_bees_fills_its_nest() {
         panic!("one block entity: {:?}", w.level.block_entities);
     };
     assert_eq!(w.name(*at), "minecraft:bee_nest");
-    let Some(crate::nbt::Tag::List(bees)) = nbt.get(&"bees".into()) else {
+    let Some(horizon_core::nbt::Tag::List(bees)) = nbt.get(&"bees".into()) else {
         panic!("bees: {nbt:?}");
     };
     assert!(
@@ -239,6 +271,33 @@ fn lone_dark_oak_sapling_cannot_grow() {
     w.put(BlockPos::new(0, 64, 0), sapling);
     assert!(!w.bone_meal(BlockPos::new(0, 64, 0)));
 }
+/// `BlockGrowFeatureEvent`'s feature is nullable: a lone dark oak sapling's
+/// random tick reaches `TreeGrower.growTree` with no feature, the event still
+/// asks, and a feature a mod supplies grows. With none supplied it stays.
+#[test]
+fn lone_dark_oak_sapling_grows_only_a_feature_a_mod_supplies() {
+    let Some(f) = fixture() else { return };
+    for supplied in [None, Some("minecraft:oak")] {
+        let mut w = World::new(f, 3);
+        w.level.supplied = supplied;
+        w.floor("grass_block", 8);
+        let pos = BlockPos::new(0, 64, 0);
+        let sapling = w.id("dark_oak_sapling", &[]);
+        w.put(pos, sapling);
+        for _ in 0..2000 {
+            if w.name(pos) != "minecraft:dark_oak_sapling" {
+                break;
+            }
+            f.behaviours.random_tick(&mut w.level, &mut w.ticks, pos);
+        }
+        let expected = if supplied.is_some() {
+            "minecraft:oak_log"
+        } else {
+            "minecraft:dark_oak_sapling"
+        };
+        assert_eq!(w.name(pos), expected);
+    }
+}
 #[test]
 fn bone_meal_on_a_client_succeeds_only_where_its_level_can_tell() {
     let Some(f) = fixture() else { return };
@@ -252,7 +311,7 @@ fn bone_meal_on_a_client_succeeds_only_where_its_level_can_tell() {
     let before = w.level.blocks.clone();
     let mut client = |pos| {
         f.behaviours
-            .bone_meal_succeeds_on_client(&mut w.level, pos, Direction::Up)
+            .bone_meal_succeeds_on_client(&mut w.level, pos, Direction::Up, None, None)
     };
     // SaplingBlock.isValidBonemealTarget needs a ServerLevel: the client passes.
     assert!(!client(BlockPos::new(0, 64, 0)));
@@ -282,7 +341,10 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
         rolls: Vec<(BlockPos, BlockStateId)>,
         /// `performBonemeal` ran, and what it saw.
         performed: Vec<(BlockPos, BlockStateId)>,
+        /// How often `isValidBonemealTarget` was asked.
+        asks: std::cell::Cell<u32>,
     }
+    impl crate::level::BlockEntityNeighbors for ModLevel<'_> {}
     impl LevelAccess for ModLevel<'_> {
         fn day_time(&self) -> i64 {
             self.inner.day_time()
@@ -306,6 +368,7 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
             self.inner.emit(event);
         }
         fn is_valid_bonemeal_target(&self, _pos: BlockPos, _state: BlockStateId) -> Option<bool> {
+            self.asks.set(self.asks.get() + 1);
             self.valid
         }
         fn is_bonemeal_success(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
@@ -332,13 +395,14 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
         success: true,
         rolls: Vec::new(),
         performed: Vec::new(),
+        asks: Default::default(),
     };
-    assert!(b.use_bone_meal(&mut level, &mut w.ticks, pos, Direction::Up));
+    assert!(b.use_bone_meal(&mut level, &mut w.ticks, pos, Direction::Up, None, None));
     assert_eq!(level.rolls, vec![(pos, stone)]);
     assert_eq!(level.performed, vec![(pos, stone)]);
     assert!(level.inner.events.iter().any(|e| matches!(
         e,
-        LevelEvent::LevelEvent { id: 1505, pos: at, data: 15 } if *at == pos
+        LevelEvent::LevelEvent { id: 1505, pos: at, data: 15, .. } if *at == pos
     )));
     // A roll that fails still uses the meal up, without growing it.
     let mut level = ModLevel {
@@ -347,8 +411,9 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
         success: false,
         rolls: Vec::new(),
         performed: Vec::new(),
+        asks: Default::default(),
     };
-    assert!(b.use_bone_meal(&mut level, &mut w.ticks, pos, Direction::Up));
+    assert!(b.use_bone_meal(&mut level, &mut w.ticks, pos, Direction::Up, None, None));
     assert!(level.performed.is_empty());
     // Refused: not a target, no roll, no growth, no meal used.
     let mut level = ModLevel {
@@ -357,8 +422,9 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
         success: true,
         rolls: Vec::new(),
         performed: Vec::new(),
+        asks: Default::default(),
     };
-    assert!(!b.use_bone_meal(&mut level, &mut w.ticks, pos, Direction::Up));
+    assert!(!b.use_bone_meal(&mut level, &mut w.ticks, pos, Direction::Up, None, None));
     assert!(level.rolls.is_empty() && level.performed.is_empty());
     // A block whose template bonemeals (a crop) is the mod's instead: the
     // block's own growth doesn't run.
@@ -369,8 +435,9 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
         success: true,
         rolls: Vec::new(),
         performed: Vec::new(),
+        asks: Default::default(),
     };
-    assert!(b.grow_crop(&mut level, &mut w.ticks, pos));
+    assert!(b.grow_crop(&mut level, &mut w.ticks, pos, None));
     assert_eq!(level.performed, vec![(pos, crop)]);
     assert_eq!(level.inner.block_state(pos), crop);
     // Refused by the mod: vanilla's growCrop stops, the crop keeps its meal
@@ -381,8 +448,9 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
         success: true,
         rolls: Vec::new(),
         performed: Vec::new(),
+        asks: Default::default(),
     };
-    assert!(!b.grow_crop(&mut level, &mut w.ticks, pos));
+    assert!(!b.grow_crop(&mut level, &mut w.ticks, pos, None));
     assert_eq!(level.inner.block_state(pos), crop);
     // Answered nothing, the crop keeps its own bone meal and grows.
     let mut level = ModLevel {
@@ -391,8 +459,9 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
         success: true,
         rolls: Vec::new(),
         performed: Vec::new(),
+        asks: Default::default(),
     };
-    assert!(b.grow_crop(&mut level, &mut w.ticks, pos));
+    assert!(b.grow_crop(&mut level, &mut w.ticks, pos, None));
     assert!(level.rolls.is_empty() && level.performed.is_empty());
     assert_ne!(level.inner.block_state(pos), crop, "the crop grew");
     // A client predicts the use with the same answer, where the block itself
@@ -404,10 +473,31 @@ fn bone_meal_answers_a_mod_blocks_three_questions() {
         success: true,
         rolls: Vec::new(),
         performed: Vec::new(),
+        asks: Default::default(),
     };
-    assert!(b.bone_meal_succeeds_on_client(&mut level, pos, Direction::Up));
+    assert!(b.bone_meal_succeeds_on_client(&mut level, pos, Direction::Up, None, None));
     level.valid = Some(false);
-    assert!(!b.bone_meal_succeeds_on_client(&mut level, pos, Direction::Up));
+    assert!(!b.bone_meal_succeeds_on_client(&mut level, pos, Direction::Up, None, None));
+    // A target the event already asked about is not asked again: `growCrop`
+    // takes the check, a refusal included.
+    w.put(pos, crop);
+    let mut level = ModLevel {
+        inner: &mut w.level,
+        valid: Some(true),
+        success: true,
+        rolls: Vec::new(),
+        performed: Vec::new(),
+        asks: Default::default(),
+    };
+    let check = b.is_valid_bonemeal_target(&mut level, pos, false);
+    assert!(check.is_valid());
+    assert!(b.grow_crop(&mut level, &mut w.ticks, pos, Some(check)));
+    assert_eq!(level.asks.get(), 1);
+    assert_eq!(level.performed, vec![(pos, crop)]);
+    level.valid = Some(false);
+    let refused = b.is_valid_bonemeal_target(&mut level, pos, false);
+    assert!(!b.grow_crop(&mut level, &mut w.ticks, pos, Some(refused)));
+    assert_eq!(level.asks.get(), 2);
 }
 
 #[test]
@@ -521,6 +611,69 @@ fn crops_age_with_bone_meal() {
     assert_eq!(w.name(pos), "minecraft:torchflower");
     assert!(!w.bone_meal(pos), "torchflowers are not bonemealable");
 }
+/// A canceled `BonemealEvent` settles `growCrop`'s answer: a success takes
+/// the use without growing anything, a failure leaves only `growWaterPlant`.
+/// The event's `isValidBonemealTarget` is the check `growCrop` runs.
+#[test]
+fn a_settled_grow_crop_answer_skips_the_growth() {
+    let Some(f) = fixture() else { return };
+    let b = &f.behaviours;
+    let mut w = World::new(f, 1);
+    w.floor("stone", 4);
+    let crop = BlockPos::new(0, 64, 0);
+    let wheat = w.id("wheat", &[("age", "0")]);
+    w.put(crop, wheat);
+    let stone = BlockPos::new(3, 63, 0);
+    w.put(BlockPos::new(3, 64, 0), w.id("water", &[("level", "0")]));
+    assert!(
+        b.is_valid_bonemeal_target(&mut w.level, crop, false)
+            .is_valid()
+    );
+    assert!(
+        b.is_valid_bonemeal_target(&mut w.level, crop, true)
+            .is_valid()
+    );
+    assert!(
+        !b.is_valid_bonemeal_target(&mut w.level, stone, false)
+            .is_valid()
+    );
+    let before = w.level.blocks.clone();
+    assert!(b.use_bone_meal(
+        &mut w.level,
+        &mut w.ticks,
+        crop,
+        Direction::Up,
+        Some(true),
+        None
+    ));
+    assert_eq!(w.level.blocks, before, "a successful cancel grows nothing");
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::LevelEvent { id: 1505, pos: at, data: 15, .. } if *at == crop
+    )));
+    assert!(!b.use_bone_meal(
+        &mut w.level,
+        &mut w.ticks,
+        crop,
+        Direction::Up,
+        Some(false),
+        None
+    ));
+    assert_eq!(w.level.block_state(crop), wheat);
+    assert!(b.bone_meal_succeeds_on_client(&mut w.level, stone, Direction::Up, Some(true), None));
+    assert!(!b.bone_meal_succeeds_on_client(&mut w.level, crop, Direction::Up, Some(false), None));
+    // The water beside the clicked face still takes the meal.
+    assert!(b.bone_meal_succeeds_on_client(&mut w.level, stone, Direction::Up, Some(false), None));
+    assert!(b.use_bone_meal(
+        &mut w.level,
+        &mut w.ticks,
+        stone,
+        Direction::Up,
+        Some(false),
+        None,
+    ));
+    assert!(w.name(BlockPos::new(3, 64, 0)).ends_with("seagrass"));
+}
 #[test]
 fn tall_flowers_and_seagrass() {
     let Some(f) = fixture() else { return };
@@ -572,9 +725,9 @@ fn snowy_biomes_freeze_and_snow() {
 
 #[test]
 fn a_template_with_entities_and_no_blocks_places_them() {
-    use crate::{
-        nbt::{Compound, JavaString, Tag},
-        worldgen::structure::{EntityInfo, Mirror, Rotation, StructureTemplate, save_nbt},
+    use {
+        crate::worldgen::structure::{EntityInfo, Mirror, Rotation, StructureTemplate, save_nbt},
+        horizon_core::nbt::{Compound, JavaString, Tag},
     };
     let Some(f) = fixture() else { return };
     let resources = f
@@ -790,74 +943,50 @@ fn a_non_strict_template_updates_its_shapes_and_neighbours() {
         );
     }
 }
-/// `LevelAccess::block_grow` is asked before a growth step and its cancel
-/// leaves the block as it was: a cactus whose level cancels every step keeps
-/// its age, and the step it asked about was the age going up by one.
+
+/// One random tick of `state` at the origin with the crop hook answering
+/// `answer`: the block after it, what the hooks heard, and the random's state.
+fn crop_tick(
+    f: &'static Fixture,
+    state: (&str, &[(&str, &str)]),
+    soil: &str,
+    answer: Option<bool>,
+) -> (World, u64) {
+    let mut w = World::new(f, 11);
+    w.floor(soil, 2);
+    let origin = BlockPos::new(0, 64, 0);
+    let id = w.id(state.0, state.1);
+    w.put(origin, id);
+    w.level.crop = answer;
+    f.behaviours.random_tick(&mut w.level, &mut w.ticks, origin);
+    let rolled = w.level.random.state();
+    (w, rolled)
+}
+
 #[test]
-fn a_cancelled_growth_step_leaves_the_block() {
-    /// A level that records each growth step and cancels it when `cancel`.
-    struct GrowLevel<'a> {
-        inner: &'a mut Level,
-        cancel: bool,
-        asked: Vec<(BlockPos, BlockStateId, BlockStateId)>,
-    }
-    impl LevelAccess for GrowLevel<'_> {
-        fn day_time(&self) -> i64 {
-            self.inner.day_time()
-        }
-        fn block_state(&self, pos: BlockPos) -> BlockStateId {
-            self.inner.block_state(pos)
-        }
-        fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
-            self.inner.set_raw(pos, state)
-        }
-        fn is_loaded(&self, pos: BlockPos) -> bool {
-            self.inner.is_loaded(pos)
-        }
-        fn random(&mut self) -> &mut LegacyRandom {
-            self.inner.random()
-        }
-        fn game_time(&self) -> i64 {
-            self.inner.game_time()
-        }
-        fn emit(&mut self, event: LevelEvent) {
-            self.inner.emit(event);
-        }
-        fn block_grow(
-            &mut self,
-            pos: BlockPos,
-            from: BlockStateId,
-            to: BlockStateId,
-            cancel: &mut bool,
-        ) {
-            self.asked.push((pos, from, to));
-            *cancel = self.cancel;
-        }
-    }
+fn the_crop_hook_decides_growth_and_keeps_vanillas_rolls() {
     let Some(f) = fixture() else { return };
-    let mut w = World::new(f, 5);
-    w.floor("sand", 4);
-    let pos = BlockPos::new(0, 64, 0);
-    let young = w.id("cactus", &[("age", "0")]);
-    let older = w.id("cactus", &[("age", "1")]);
-    w.put(pos, young);
-    let mut level = GrowLevel {
-        inner: &mut w.level,
-        cancel: true,
-        asked: Vec::new(),
+    let origin = BlockPos::new(0, 64, 0);
+    let wheat = ("wheat", &[("age", "0")][..]);
+    let (vanilla, rolled) = crop_tick(f, wheat, "farmland", None);
+    let [(at, roll)] = vanilla.level.crop_asked[..] else {
+        panic!("one Pre: {:?}", vanilla.level.crop_asked);
     };
-    f.behaviours.random_tick(&mut level, &mut w.ticks, pos);
-    assert_eq!(level.asked, vec![(pos, young, older)]);
-    assert_eq!(
-        level.block_state(pos),
-        young,
-        "a cancelled step grows nothing"
-    );
-    level.cancel = false;
-    f.behaviours.random_tick(&mut level, &mut w.ticks, pos);
-    assert_eq!(
-        level.block_state(pos),
-        older,
-        "an allowed step grows as before"
-    );
+    assert_eq!(at, origin);
+    let young = vanilla.id("wheat", &[("age", "0")]);
+    let grown = vanilla.id("wheat", &[("age", "1")]);
+    assert_eq!(vanilla.level.block_state(origin) == grown, roll);
+    for answer in [false, true] {
+        let (w, after) = crop_tick(f, wheat, "farmland", Some(answer));
+        assert_eq!(after, rolled, "the roll is drawn whatever the mod says");
+        assert_eq!(w.level.block_state(origin) == grown, answer);
+        let posts: &[_] = if answer { &[(origin, young)] } else { &[] };
+        assert_eq!(w.level.crop_grown, posts);
+    }
+
+    // Cactus asks for the block above, and a denied one doesn't age.
+    let cactus = ("cactus", &[("age", "0")][..]);
+    let (w, _) = crop_tick(f, cactus, "sand", Some(false));
+    assert_eq!(w.level.crop_asked, [(origin.offset(0, 1, 0), true)]);
+    assert_eq!(w.level.block_state(origin), w.id("cactus", &[("age", "0")]));
 }

@@ -19,8 +19,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find_map(|line| line.strip_prefix("#resources "))
         .map(Path::new)
         .ok_or("no #resources line")?;
-    let enchantments = Enchantments::load(root);
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let enchantments = Enchantments::load(root, &defaults)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
     let out = fs::File::create(args.get(2).ok_or("missing OUTPUT")?)?;
     let mut out = std::io::BufWriter::new(out);
     for line in input.lines() {
@@ -35,17 +36,16 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             "minecraft:repair_with_xp"
         };
+        let mut extra = StackData::default();
+        extra.enchantments = vec![(
+            component_enchantment(case["mode"].as_str().unwrap()).into(),
+            level,
+        )];
         let stack = ItemStack {
             item: item.into(),
             count: 1,
             damage: case["damage"].as_u64().unwrap() as u32,
-            extra: Some(Box::new(StackData {
-                enchantments: vec![(
-                    component_enchantment(case["mode"].as_str().unwrap()).into(),
-                    level,
-                )],
-                ..Default::default()
-            })),
+            extra: Some(Box::new(extra)),
         };
         let ctx = EffectContext {
             tool: Some(&stack.item),

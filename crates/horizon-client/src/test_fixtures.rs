@@ -16,8 +16,7 @@ use std::{
 };
 
 pub(crate) struct Vanilla {
-    /// The root everything below was read from: a test that also needs a file
-    /// the fixture does not carry reads it from here, never from another root.
+    /// The root everything below was read from: additional test data uses the same root.
     pub root: PathBuf,
     pub assets: Assets,
     pub render: RenderAssets,
@@ -30,7 +29,7 @@ pub(crate) struct Vanilla {
 /// `.local/horizon-client/<version>`; `None` when neither has it (CI).
 pub(crate) fn vanilla() -> Option<&'static Vanilla> {
     static VANILLA: OnceLock<Option<Vanilla>> = OnceLock::new();
-    VANILLA
+    let resources = VANILLA
         .get_or_init(|| {
             let root = std::env::var_os("HORIZON_TEST_RESOURCES")
                 .map(PathBuf::from)
@@ -43,18 +42,50 @@ pub(crate) fn vanilla() -> Option<&'static Vanilla> {
                 return None;
             }
             let assets = Assets::load(&root).unwrap();
-            let render = assets.reload(&root).unwrap();
+            let render = assets
+                .reload(&horizon_assets::resource_source::ResourceRoot::directory(
+                    root.clone(),
+                ))
+                .unwrap();
             let facts = BlockFacts::load(&root, assets.registry).unwrap();
             let collision = crate::collisions::load(&root, assets.registry).unwrap();
             let motion = MotionResources::load(&root, &assets).unwrap();
             Some(Vanilla {
                 root,
+                facts,
                 assets,
                 render,
-                facts,
                 collision,
                 motion,
             })
         })
-        .as_ref()
+        .as_ref();
+    if resources.is_none() {
+        report_missing();
+    }
+    resources
+}
+
+/// Attribute missing prepared data to every calling test, including cached misses.
+pub(crate) fn report_missing() {
+    use std::{
+        collections::HashSet,
+        io::Write,
+        sync::{LazyLock, Mutex},
+    };
+    static SKIPPED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+    let thread = std::thread::current();
+    let name = thread.name().unwrap_or("<unnamed test>");
+    let mut skipped = SKIPPED.lock().unwrap();
+    if skipped.insert(name.to_owned()) {
+        // One write, so concurrent tests never split the line that run_test_binaries.py reads.
+        let line = format!(
+            "skipped: no vanilla data; test={name}; skipped tests={}\n",
+            skipped.len()
+        );
+        std::io::stderr()
+            .lock()
+            .write_all(line.as_bytes())
+            .expect("writing missing-data skip report");
+    }
 }

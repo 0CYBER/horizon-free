@@ -12,7 +12,7 @@ restart" to seconds. It builds on the registry v2 ([registry-v2.md](registry-v2.
 | | Install | Turn on or off | Change |
 |---|---|---|---|
 | Content mod (`.hmod`) | launcher, or by hand in `horizon-mods/` | Options > Mods, then **restart** | rebuild the `.hmod`, restart |
-| Native mod (`.hnmod`) | launcher only | off: at once, if the mod checks `native_on`; on: **rebuild** | **rebuild** (minutes), restart |
+| Native mod (`.hnmod`) | launcher only | off: at once, if the mod checks `on`; on: **rebuild** | **rebuild** (minutes), restart |
 
 Three facts from the code shape the plan:
 
@@ -118,7 +118,7 @@ with the options screen's widgets (`options_ui`), every string through `Text::tr
 - **The index.** The same file the launcher reads (`horizon-mods` `index.json`, `HORIZON_MOD_INDEX` for a test
   registry), fetched on a worker with the game's `ureq` when the page opens (a Pages file, not the API: no rate
   limit), kept in `mod-browser/horizon-index.json` beside `options.txt`. The launcher and the game share that copy,
-  so an offline game still lists what the launcher saw last. Parsed with `horizon_mods::index::Index::parse`, which
+  so an offline game still lists what the launcher saw last. Parsed with `horizon_mod_package::index::Index::parse`, which
   refuses an index with a bad entry as the launcher does.
 - **The list.** A search box and the projects this game can install, sorted by downloads: name, author, summary,
   its categories, and **Installed**, **Update** or nothing. A search matches the name, id, summary, tags and
@@ -130,7 +130,7 @@ with the options screen's widgets (`options_ui`), every string through `Text::tr
   them as PNG and JPEG under its own Pages ([registry-v2.md](registry-v2.md)); the page will draw them through the
   same dynamic-texture path as player skins (`skin_slots`), one at a time, loaded when the page opens.
 - **Install.** As the launcher's `install_version`: the newest version for this game that was not taken down, into
-  `mod-browser/downloads/`, then `horizon_mods::index::check_file` (size, SHA-256, the author's signature, the
+  `mod-browser/downloads/`, then `horizon_mod_package::index::check_file` (size, SHA-256, the author's signature, the
   file's manifest against the index), then moved to `horizon-mods/<id>.hmod`, turned on in `horizon-mods.txt`, and
   recorded in `mod-browser.json` with the launcher's own fields, so the launcher lists it, updates it and removes
   it. A file the index took down (`revoked.toml`) is refused. A `.hmod` with code (`needs_port`) is not offered.
@@ -147,7 +147,7 @@ A native mod's code is in the game's binary. What can be made fast:
 
 | Option | A mod change takes | On and off | Unload | Risk |
 |---|---|---|---|---|
-| **Today**: the launcher rebuilds the game (`profile.fast`, incremental, warm `native/target`) | see measurements | off at once (if the mod checks `native_on`), on: rebuild | none | none |
+| **Today**: the launcher rebuilds the game (`profile.fast`, incremental, warm `native/target`) | see measurements | off at once (if the mod checks `on`), on: rebuild | none | none |
 | **A. Every installed mod built in, on and off at run time** | rebuild only to install, update or remove | **at once**, for trait mods by dispatch | the mod's hooks stop; its state stays until restart | low: one check per dispatched mod |
 | **B. Background build while playing, then a quick swap** | build while playing, then a restart into the same world | as A | restart | low; a second process and a hand-over |
 | **C. Rust `dylib`s** (#7386 stages 3 and 4, arismoko's #797) | that mod only, under 30 s (the spike's pass mark) | restart | **never**: a Rust `dylib` can't be unloaded soundly | medium: exact-build pinning, Windows export limit |
@@ -172,7 +172,7 @@ A native mod's code is in the game's binary. What can be made fast:
   finding a conflict, a modpack switch), and it needs no compiler at all while the mod is in the build. Step one
   (#10218): the game skips a turned-off trait mod in `Hooks` dispatch (`mod_api`), so a mod that was on at launch
   stops at once without its author doing anything, and starts again at once when turned back on. `RenderHooks`
-  run every frame over a plain list, so they are not switched yet, and mixin mods keep honouring `native_on` (they
+  run every frame over a plain list, so they are not switched yet, and mixin mods keep honouring `on` (they
   paste code into the game's own functions, so only they can check). Step two: the launcher builds every installed
   mod, whatever its `mod.<id>` line says, so a mod that was off at launch also turns on without a build; it waits
   for step one to settle, because a build with every installed mod costs players who keep many mods turned off.
@@ -189,7 +189,7 @@ On the desktop (i7-13700KF, `-j 8`, Linux, `rustc` 1.99, the launcher's `profile
 |---|---|
 | Cold, empty target | 812 s |
 | No change | 55 s |
-| One line changed in gameplay (`game/mods.rs`), as a mixin into gameplay does | 570 s (the revert: 668 s) |
+| One line changed in gameplay (`game/modding/mods/mod.rs`), as a mixin into gameplay does | 570 s (the revert: 668 s) |
 | One line changed in `horizon-world`, as a mixin into a lower crate does | 427 s (the revert: 469 s) |
 | The gameplay change, linked with mold | 612 s |
 
@@ -207,7 +207,7 @@ Nothing in this note widens what a mod can do.
   before installing one, and installing never builds or runs it: the launcher does, behind its own warning.
 - The registry review stays the gate for listing a project, `revoked.toml` turns off taken-down files in the game
   as in the launcher, and SHA-256 pinning and signatures are checked before a file reaches `horizon-mods/`.
-- The browser fetches only the index, the registry's release assets (`horizon_mods::index::FILE_HOST`) and, later,
+- The browser fetches only the index, the registry's release assets (`horizon_mod_package::index::FILE_HOST`) and, later,
   the registry's own mirrored images. It never follows a project's own links.
 
 ## Plan, small PRs
@@ -233,7 +233,7 @@ What this note takes from them:
 - From #7386: no unload for Rust `dylib`s, the spike's pass mark (under 30 s for a one-line mod change), and the
   static build kept for a settled mod set.
 - From levzzz5154's horizon-mixins: mixins stay for what has no hook; option A keeps every mixin mod working,
-  turned off only through `native_on`.
+  turned off only through `on`.
 - From Vaspyyy's #9866: the browser says before install whether a native mod builds on the player's Horizon; the
   in-game list shows the same verdict.
 
@@ -242,6 +242,6 @@ What we'd ask them:
 - **arismoko:** Should option A's dispatch gate (skip a turned-off mod's `Hooks`) go in the generated dispatch
   upstream now, or does your fork's dispatch already have a per-mod switch we should take instead? When the wasm
   runtime lands upstream, can a wasm mod's instance be dropped while a world is open, so its switch is live too?
-- **levzzz5154:** Could horizon-mixins wrap each mixin's injected code in a generated `native_on(<mod id>)` check,
+- **levzzz5154:** Could horizon-mixins wrap each mixin's injected code in a generated `on(<mod id>)` check,
   so a mixin mod turns off at run time without its author writing the check?
 - **Both:** Is a content root per mod set (`mod-content/<hash>/`) in the way of anything you load from it?

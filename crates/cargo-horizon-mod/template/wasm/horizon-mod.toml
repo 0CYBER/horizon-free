@@ -1,0 +1,10 @@
+id = "{id}"
+name = "{name}"
+version = "0.1.0"
+description = ""
+authors = []
+# A wasm mod: Rust in src/, built to mod.wasm by `cargo horizon-mod build --wasm` against the SDK build Cargo.toml pins, beside data/ and assets/.
+api = "0.2"
+side = "both"
+# registries: "May add blocks, items, mob effects and entity types to your worlds".
+capabilities = ["registries"]

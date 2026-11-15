@@ -86,7 +86,13 @@ pub enum Loader {
         shade_quads: Option<bool>,
         mtl_override: Option<String>,
     },
-    /// A loader this decoder does not know: it adds no geometry.
+    /// A loader a native mod registered ([`crate::model_loaders`]): the model's JSON object,
+    /// which its mod reads.
+    Registered {
+        kind: String,
+        config: Arc<serde_json::Value>,
+    },
+    /// A loader nobody registered: it adds no geometry.
     Unknown(String),
 }
 /// NeoForge's `neoforge_data` of an element or a face; a face's keys win.
@@ -347,6 +353,18 @@ impl Loader {
                     mtl_override: optional("mtl_override")?
                         .map(|name| identifier(&name))
                         .transpose()?,
+                })
+            }
+            kind if crate::model_loaders::is_registered(kind) => {
+                let mut config = serde_json::Map::new();
+                for (key, raw) in obj {
+                    let value = serde_json::from_str(raw.get())
+                        .map_err(|_| error("invalid model loader data"))?;
+                    config.insert(key.clone(), value);
+                }
+                Ok(Self::Registered {
+                    kind: name,
+                    config: Arc::new(serde_json::Value::Object(config)),
                 })
             }
             _ => Ok(Self::Unknown(name)),

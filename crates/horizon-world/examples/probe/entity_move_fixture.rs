@@ -298,7 +298,7 @@ impl RestitutionWorld for Bounce<'_, '_> {
     fn movement_support_position(&mut self) -> io::Result<BlockPos> {
         panic!("no bounce event")
     }
-    fn bounce_on(&mut self, _: BlockStateId, _: BlockPos, _: f64) -> io::Result<()> {
+    fn bounce_on(&mut self, _: BlockStateId, _: BlockPos, _: f64, _: Vec3) -> io::Result<Vec3> {
         panic!("no bounce event")
     }
     fn bounce_event(&mut self) -> io::Result<()> {

@@ -77,7 +77,7 @@ def main():
                lab.ROOT / "crates/horizon-client/src/health/datapack_tests.rs",
                lab.ROOT / "crates/horizon-client/src/landing.rs",
                lab.ROOT / "crates/horizon-client/src/lan/data.rs",
-               lab.ROOT / "crates/horizon-client/src/game/lan.rs"]
+               lab.ROOT / "crates/horizon-client/src/game/network/lan/mod.rs"]
     hashes = {str(p.relative_to(lab.ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
     libraries = sorted((args.game_dir / "libraries/server").rglob("*.jar"))
     jar = args.game_dir / "jars/server-game.jar"

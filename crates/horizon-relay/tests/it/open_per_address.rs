@@ -8,6 +8,7 @@ use std::{
 };
 
 #[test]
+#[ignore = "daily"]
 fn silent_connections_past_an_address_cap_close_at_once() {
     let (_relay, address, _) = Relay::spawn_local(Config {
         rates: Rates {

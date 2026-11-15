@@ -182,7 +182,7 @@ uniform! {
         /// The size of `reflection`, in pixels: half the world's picture.
         reflection_resolution: [f32; 2],
         /// Eight values a native mod hands its own pack each frame (`native_shader_params`,
-        /// docs/native-mods.md): what they mean is that mod's, such as where and when
+        /// docs/modding/src/how-to/native-mods.md): what they mean is that mod's, such as where and when
         /// something happened in the world. All 0 when no mod sets them.
         mods: [[f32; 4]; 8],
         /// Unit vector toward the body casting this frame's shadows: the sun by day, the moon

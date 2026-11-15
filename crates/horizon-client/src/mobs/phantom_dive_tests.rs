@@ -4,8 +4,8 @@
 //! `levelEvent(1039, blockPosition(), 0)` for the bite, which a silent phantom
 //! skips.
 use super::*;
+use crate::health::TestLevel;
 use crate::mobs::world::{test_player, with_built_test_world};
-use horizon_core::random::LegacyRandom;
 use std::sync::Arc;
 
 /// Ages (ticks lived) at which the phantom's swoop begins, and the age its
@@ -22,11 +22,11 @@ fn dive_ages(ticks: i32) -> Option<(i32, Vec<i32>)> {
             let mut m = Mob::new(1, kind, Vec3::new(0.5, 74.0, 0.5), 0.0);
             register(&mut m);
             m.persistent = true;
-            let mut lr = horizon_core::random::LevelRandom::for_level(LegacyRandom::new(1));
+            let mut test_level = TestLevel::new(1);
             let mut events = Vec::new();
             let (mut started, mut swoops, mut was) = (None, Vec::new(), false);
             for _ in 0..ticks {
-                crate::mobs::ai::tick(&mut m, &w, &mut lr, &mut events);
+                crate::mobs::ai::tick(&mut m, &w, &mut test_level.level(), &mut events);
                 if started.is_none() && m.ai.goals.is_running("AttackStrategy") {
                     started = Some(m.age as i32);
                 }
@@ -53,6 +53,7 @@ fn dive_ages(ticks: i32) -> Option<(i32, Vec<i32>)> {
 /// ticks after the chase starts. A goal that also asks for an every-tick
 /// update ticks five times in five ticks instead, halving the dive's delay.
 #[test]
+#[ignore = "daily"]
 fn the_first_dive_comes_eight_ticks_after_the_chase_starts() {
     let Some((started, swoops)) = dive_ages(60) else {
         return;
@@ -71,6 +72,7 @@ fn the_first_dive_comes_eight_ticks_after_the_chase_starts() {
 /// at the phantom's block, played by the client at 0.3 volume with a 0.9-1.0
 /// pitch — and skipped for a silent phantom (`if (!Phantom.this.isSilent())`).
 #[test]
+#[ignore = "daily"]
 fn a_bite_is_level_event_1039_at_the_phantoms_block_unless_it_is_silent() {
     let mut outcomes = None;
     let ran = with_built_test_world(
@@ -84,7 +86,7 @@ fn a_bite_is_level_event_1039_at_the_phantoms_block_unless_it_is_silent() {
             register(&mut m);
             m.ai.target = Some(Who::Player);
             m.extra.flag = true;
-            let mut lr = crate::mobs::world::level_random(0);
+            let mut test_level = TestLevel::new(0);
             let mut sweep = SweepAttack {
                 scared: false,
                 cat_search: 0,
@@ -93,7 +95,7 @@ fn a_bite_is_level_event_1039_at_the_phantoms_block_unless_it_is_silent() {
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w: &w,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                 };
                 sweep.tick(m, &mut cx);

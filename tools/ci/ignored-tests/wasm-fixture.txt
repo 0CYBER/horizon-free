@@ -1,0 +1,15 @@
+# Tests that load the compiled wasm fixture mod (REFERENCE is the variable). The slow shards refuse
+# them by name; wasm-mods.yml builds the fixture and runs each alone in its own process with
+# `ignored_tests.py --needs HORIZON_WASM_FIXTURE --one-process-each`.
+horizon-client game::native_server::wasm_selector_tests::wasm_selectors_resolve_in_game_and_refuse_before_guest_dispatch HORIZON_WASM_FIXTURE needs
+horizon-client game::native_server::wasm_selector_tests::wasm_server_tick_messages_reach_dedicated_game HORIZON_WASM_FIXTURE needs
+horizon-client game::native_hooks::math::tests::compiled_wasm_math_profile_import_matches_actual_game_host HORIZON_WASM_FIXTURE needs
+horizon-client game::payload_transport::wasm_tests::compiled_guest_runs_in_actual_game_roots HORIZON_WASM_FIXTURE needs
+horizon-client game::payload_transport::wasm_config_tests::compiled_guest_runs_on_configuration_connection_thread HORIZON_WASM_FIXTURE needs
+horizon-client game::remote::interaction_event_tests::interaction_event_wasm_tests::wasm_interaction_shared_matrix HORIZON_WASM_FIXTURE needs
+horizon-client game::block_entity_tick_reply_tests::native_and_compiled_wasm_tick_reply_matrix HORIZON_WASM_FIXTURE needs # HORIZON_WASM_STD is supplied alongside the fixture by wasm-mods.yml.
+horizon-client game::remote::movement_input_tests::wasm_movement_input_keys_axes_and_sprint HORIZON_WASM_FIXTURE needs
+horizon-client game::native_hooks::runtime_environment::tests::native_and_wasm_process_environment_in_registration_and_game_hosts HORIZON_WASM_FIXTURE needs
+horizon-client game::registration_capability_coverage_wasm_tests::compiled_guest_reads_game_coverage_during_registration HORIZON_WASM_FIXTURE needs
+horizon-client-lib raw_payloads::wasm_tests::compiled_guest_observes_physical_provider_pressure HORIZON_WASM_FIXTURE needs
+horizon-client game::native_hooks::math::tests::math_profile_selection_matches_platform_and_is_stable HORIZON_WASM_FIXTURE needs-plain

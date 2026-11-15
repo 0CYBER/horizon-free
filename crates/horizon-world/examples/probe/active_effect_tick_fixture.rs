@@ -2,21 +2,22 @@ use horizon_core::{
     position::BlockPos,
     random::{LegacyRandom, RandomSource, XoroshiroRandom},
 };
-use horizon_world::{
-    active_effect_tick::{TickError, TickHooks},
-    active_effects::{ActiveEffects, EffectHooks},
-    consume_effect::ConsumeEffect,
-    java_hash_map::CursorError,
-    java_hash_map::JavaKey,
-    status_effect::{BlendState, Details, EffectInstance},
-    stored_consume::{ConsumeHooks, StoredConsume},
-};
 use serde_json::Value;
 use std::{
     cmp::Ordering,
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::java_hash_map::{CursorError, JavaKey},
+    horizon_world::{
+        active_effect_tick::{TickError, TickHooks},
+        active_effects::{ActiveEffects, EffectHooks},
+        consume_effect::ConsumeEffect,
+        status_effect::{BlendState, Details, EffectInstance},
+        stored_consume::{ConsumeHooks, StoredConsume},
+    },
 };
 #[derive(Clone)]
 struct Key {

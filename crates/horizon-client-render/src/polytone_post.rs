@@ -6,7 +6,6 @@ use crate::environment::Frame;
 use crate::post_chain::{Extras, InternalTarget};
 use horizon_polytone::expr::Program;
 use serde_json::Value as Json;
-use std::path::Path;
 
 /// A `polytone/post_chains/<path>.json`.
 struct Chain {
@@ -66,34 +65,22 @@ impl PolyGlobals {
 }
 
 /// Every `.json` under `assets/<namespace>/polytone/<kind>`, by its implicit id.
-fn files(root: &Path, kind: &str) -> Vec<(String, Json)> {
+fn files(
+    root: &horizon_assets::resource_source::ResourceSource,
+    kind: &str,
+) -> Vec<(String, Json)> {
     let mut out = Vec::new();
-    let namespaces = std::fs::read_dir(root.join("assets"))
-        .into_iter()
-        .flatten()
-        .flatten();
-    for namespace in namespaces {
-        let mut stack = vec![namespace.path().join("polytone").join(kind)];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                    continue;
-                }
-                let relative = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .into_owned();
-                let Some(id) = horizon_polytone::implicit_id(&relative, kind) else {
-                    continue;
-                };
-                match horizon_world::json_file::read::<Json>(&path) {
-                    Ok(json) => out.push((id, json)),
-                    Err(e) => log::warn!("{relative}: {e}"),
-                }
-            }
+    for relative in root.list("assets/") {
+        let Some(id) = horizon_polytone::implicit_id(&relative, kind) else {
+            continue;
+        };
+        match root
+            .read_to_string(&relative)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Json>(&s).ok())
+        {
+            Some(json) => out.push((id, json)),
+            None => log::warn!("{relative}: invalid post configuration"),
         }
     }
     out
@@ -117,7 +104,10 @@ fn compile(where_: &str, src: &Json) -> Option<Program> {
 
 impl PolytonePost {
     /// The post chains and targets of the packs merged at `root`; `None` without chains.
-    pub fn read(root: &Path, configs: horizon_polytone::pack::Configs) -> Option<Self> {
+    pub fn read(
+        root: &horizon_assets::resource_source::ResourceSource,
+        configs: horizon_polytone::pack::Configs,
+    ) -> Option<Self> {
         let chains: Vec<Chain> = files(root, "post_chains")
             .into_iter()
             .filter_map(|(id, json)| {
@@ -240,7 +230,11 @@ mod tests {
             "assets/p/polytone/post_targets/history.json",
             r#"{"width": 1, "height": 1}"#,
         );
-        let post = PolytonePost::read(&root, Default::default()).unwrap();
+        let post = PolytonePost::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+        )
+        .unwrap();
         let mut frame = Frame {
             rain: 0.25,
             ..Frame::default()

@@ -1,4 +1,4 @@
-//! Horizon modpacks from the registry (`.hpack`, docs/api/mod-index.md), each played as its own
+//! Horizon modpacks from the registry (`.hpack`, docs/modding/src/reference/registry-index.md), each played as its own
 //! profile: `horizon-packs/<id>/` in the game's home holds the pack's file, `pack.json` (what
 //! was installed) and `home/`, the profile's game folder: its saves, its options, and the pack's
 //! mods in `home/horizon-mods/`, each downloaded and checked against the index like any
@@ -6,7 +6,7 @@
 //! packs, a mod's saved settings) are copied in once, when it is installed.
 use super::{fetch, index, install_version, local, newest, Index};
 use crate::browser::{java, FileRef};
-use horizon_mods::{index as idx, modpack::Modpack};
+use horizon_mod_package::{index as idx, modpack::Modpack};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,7 +85,7 @@ fn install_in(
     if p.kind != idx::Kind::Modpack {
         return Err(format!("{} is a {}, not a modpack.", p.name, p.kind.name()));
     }
-    let v = newest(index, p, None)?;
+    let v = newest(index, p)?;
     let work = dir.join(&p.id);
     let fresh = !work.exists();
     let result = install_version_in(index, local, p, v, &work, progress);
@@ -204,7 +204,7 @@ mod tests {
     /// [`registry`] with the pack at `pack_version`.
     fn registry_at(dir: &Path, pack_version: &str, on: bool, extra: &str) -> Index {
         let hmod_src = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../crates/horizon-mods/tests/index/coords_hud-0.1.0.hmod");
+            .join("../crates/horizon-mod-package/tests/index/coords_hud-0.1.0.hmod");
         let hmod = dir.join("coords_hud-0.1.0.hmod");
         fs::copy(hmod_src, &hmod).unwrap();
         let hmod_sha = idx::sha256_file(&hmod).unwrap();
@@ -235,8 +235,8 @@ mod tests {
         let text = format!(
             r#"{{"schema": 1, "projects": [
               {{"id": "coords_hud", "kind": "mod", "name": "Coordinates HUD", "summary": "", "license": "MIT",
-                "source": "https://x.test", "versions": [{{"version": "0.1.0", "api": "0.1", "side": "client",
-                "capabilities": ["game-read", "hud", "chat"], "game": "26.3", "file": {{"name": "coords_hud-0.1.0.hmod",
+                "source": "https://x.test", "versions": [{{"version": "0.1.0", "api": "0.2", "side": "client",
+                "capabilities": ["registries"], "game": "26.3", "file": {{"name": "coords_hud-0.1.0.hmod",
                 "url": "file://{}", "size": {}, "sha256": "{hmod_sha}"}}}}]}},
               {{"id": "cozy", "kind": "modpack", "name": "Cozy", "summary": "", "license": "MIT",
                 "source": "https://x.test", "versions": [{{"version": "{pack_version}", "api": "1", "game": "26.3",

@@ -1,0 +1,1 @@
+horizon-client-lib crafting::ingredient::builtin_kinds_tests::families::record_contracts::tooltip_hidden_set_accepts_a_real_transient_registry_type lib daily resources

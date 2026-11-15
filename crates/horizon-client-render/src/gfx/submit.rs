@@ -202,6 +202,7 @@ mod tests {
 
     #[test]
     fn writes_after_a_frame_on_the_thread_land_after_it() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             return;
         };

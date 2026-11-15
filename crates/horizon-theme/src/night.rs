@@ -40,6 +40,39 @@ pub const PLAY: f32 = 56.;
 /// lower stops (the sunset) are too bright for light text, so text there always has a plate.
 pub const UNCARDED_STOPS: usize = 3;
 
+/// What drifts or glows over a theme's sky besides the clouds, in the colours the theme gives it
+/// (`launcher/scenery/src/sky.rs` draws it, a few steps a second; nothing under reduced motion or in
+/// performance mode).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Mood {
+    Plain,
+    /// Light shafts from the surface (colour) and rising bubbles (rim, shine).
+    Water([u32; 3]),
+    /// Falling leaves in three tones.
+    Leaves([u32; 3]),
+    /// Falling petals in two tones.
+    Petals([u32; 2]),
+    /// Curtains of light in three tones.
+    Aurora([u32; 3]),
+    /// A glow over the horizon and a grid floor scrolling toward the viewer (glow, grid).
+    Neon([u32; 2]),
+    /// Snow falling softly: the flakes and the shade under each.
+    Snow([u32; 2]),
+}
+
+/// How the skylines and the sun are cut. Baked with the sky, so it stays in performance mode.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Land {
+    /// Plain silhouettes under a round sun sliced by the sky.
+    Plain,
+    /// A line of light along each skyline's top (far, near).
+    Neon([u32; 2]),
+    /// Grass along each skyline's top (far, near), leafy trees, and a square sun or moon.
+    Blocks { grass: [u32; 2], leaves: u32 },
+    /// Spruce woods on snowy hills: snow along each skyline's top (far, near), trees capped too.
+    Taiga { snow: [u32; 2] },
+}
+
 /// The sky's hand-drawn art (the clouds, the sun and the two skylines): the colours a launcher
 /// theme paints them with, beside the sky's own bands.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -54,6 +87,8 @@ pub struct SkyArt {
     pub lit: [u32; 3],
     pub shade: u32,
     pub star: u32,
+    pub mood: Mood,
+    pub land: Land,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,6 +153,8 @@ pub const NIGHT: Night = Night {
         lit: [0x5a3f8a, 0x9c5a92, 0xf7a98a],
         shade: 0x2a1a4c,
         star: 0xf4f2ff,
+        mood: Mood::Plain,
+        land: Land::Plain,
     },
 };
 
@@ -151,6 +188,8 @@ pub const DAWN: Night = Night {
         lit: [0xffffff; 3],
         shade: 0xd9cbe8,
         star: 0xffffff,
+        mood: Mood::Plain,
+        land: Land::Plain,
     },
 };
 

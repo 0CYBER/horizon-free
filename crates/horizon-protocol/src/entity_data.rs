@@ -8,7 +8,7 @@ use crate::{
     buf::{Codec, Reader, Writer},
     item::{Slot, Stack, Template},
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
@@ -182,6 +182,12 @@ pub enum PositionSource {
     Entity { id: i32, y_offset: f32 },
 }
 impl Particle {
+    /// A native mod's particle travels as `MOD_PARTICLE_ID` (-1) plus its name.
+    /// Vanilla reads the id with `IdMap.byIdOrThrow`, which throws on -1 and
+    /// drops the connection, so such a particle may only go to Horizon clients.
+    pub fn horizon_only(&self) -> bool {
+        matches!(self.data, Some(ParticleData::Mod(_)))
+    }
     pub fn read(r: &mut Reader) -> Result<Particle> {
         let id = r.varint()?;
         let id = if matches!(
@@ -598,6 +604,163 @@ impl Codec<Vec<(u8, i32, Value)>> for EntityData {
 
 /// ItemEntity.DATA_ITEM (after the eight Entity data entries).
 pub const ITEM_ENTITY_ITEM: u8 = 8;
+
+// Generated retained-allocation traversals; regenerate with protocol-retained-gen.
+impl crate::retained::OwnedHeap for Value {
+    fn owned_heap_bytes(&self) -> usize {
+        match self {
+            Self::Byte(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Int(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Long(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Float(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::String(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Text(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::OptText(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Item(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Bool(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Floats(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Pos(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::OptPos(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::OptUuid(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Id(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Ids(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Particle(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Particles(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Profile(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+        }
+    }
+}
+impl crate::retained::OwnedHeap for Profile {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            name,
+            uuid,
+            properties,
+            body,
+            cape,
+            elytra,
+            slim,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(name))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(uuid))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(properties))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(body))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(cape))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(elytra))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(slim))
+    }
+}
+impl crate::retained::OwnedHeap for Particle {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self { id, data } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(id))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(data))
+    }
+}
+impl crate::retained::OwnedHeap for ParticleData {
+    fn owned_heap_bytes(&self) -> usize {
+        match self {
+            Self::State(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Color(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::ColorScale(field_0, field_1) => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_1)),
+            Self::ColorScale2(field_0, field_1, field_2) => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_1))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_2)),
+            Self::ColorPower(field_0, field_1) => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_1)),
+            Self::Scalar(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Delay(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Trail(field_0, field_1, field_2) => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_1))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_2)),
+            Self::Item(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Geyser(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::GeyserBase(field_0, field_1) => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_1)),
+            Self::Vibration { source, ticks } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(source))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(ticks)),
+            Self::Mod(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+        }
+    }
+}
+impl crate::retained::OwnedHeap for PositionSource {
+    fn owned_heap_bytes(&self) -> usize {
+        match self {
+            Self::Block(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Entity { id, y_offset } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(id))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(y_offset)),
+        }
+    }
+}
+impl crate::retained::OwnedHeap for EntityData {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self = self;
+        0usize
+    }
+}
+// End generated retained traversals.
 
 #[cfg(test)]
 mod tests {

@@ -37,7 +37,7 @@ pub(super) fn registry_data(session: &Session, payload: &[u8]) -> Result<()> {
             .as_ref()
             .and_then(|data| data.get("template_item"))
             .and_then(|tag| {
-                if let horizon_world::nbt::Tag::String(name) = tag {
+                if let horizon_core::nbt::Tag::String(name) = tag {
                     Some(name.to_string_lossy())
                 } else {
                     None
@@ -97,7 +97,7 @@ fn chunk(payload: &[u8]) -> Result<Vec<u8>> {
         .into_iter()
         .enumerate()
         .filter_map(|(id, kind)| match tag.get(kind.name()) {
-            Some(horizon_world::nbt::Tag::LongArray(data)) => Some((id as i32, data.clone())),
+            Some(horizon_core::nbt::Tag::LongArray(data)) => Some((id as i32, data.clone())),
             _ => None,
         })
         .collect();
@@ -286,7 +286,7 @@ pub(super) fn entity_data(session: &Session, data: &mut play::SetEntityData) {
 mod tests {
     use super::*;
     use crate::entity_data::{Value, serializer};
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
     #[test]
     fn chat_keeps_the_message_and_ack_bits_without_the_new_checksum() {

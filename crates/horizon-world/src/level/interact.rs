@@ -3,7 +3,7 @@
 use super::{Behaviours, LevelAccess, LevelEvent, Sim, Ticks, classes::Class, update::below};
 use crate::registry::BlockStateId;
 use horizon_core::{
-    geometry::{Direction, Vec3},
+    geometry::{BlockHit, Direction, Vec3},
     position::BlockPos,
     random::RandomSource,
 };
@@ -124,6 +124,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     pub(crate) fn use_without_item(
         &mut self,
+        state: BlockStateId,
         pos: BlockPos,
         face: Direction,
         hit: Vec3,
@@ -132,7 +133,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         let b = self.b;
         let p = b.props;
         let table = &b.table;
-        let state = self.state(pos);
         let data = b.data(state);
         let block = b.block(state);
         use InteractionResult::*;
@@ -244,7 +244,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     let next = table.cycle(state, p.note);
                     let old_note = table.int(state, p.note);
                     let new_note = table.int(next, p.note);
-                    let instrument = table.text(state, p.instrument);
+                    let instrument = self.note_instrument(state);
                     let Some(note) = self
                         .level
                         .note_block_change(pos, instrument, old_note, new_note)
@@ -260,11 +260,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                             new_note
                         },
                     );
-                    if !self.note_play_allowed(pos, next) {
-                        return Success;
-                    }
                     self.set_block_and_update(pos, next);
-                    self.note_play_unchecked(pos, next);
+                    self.note_play(pos, next, true);
                     Success
                 }
                 Class::RedstoneWire => self.wire_use(pos, state, player),
@@ -279,7 +276,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     Success
                 }
                 Class::Cake => {
-                    if !player.can_eat {
+                    if !self.level.cake_can_eat(player.can_eat) {
                         return Pass;
                     }
                     self.player_effect(pos, state, PlayerEffect::EatCake);
@@ -294,7 +291,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     Success
                 }
                 Class::CandleCake => {
-                    if !player.can_eat {
+                    if !self.level.cake_can_eat(player.can_eat) {
                         return Pass;
                     }
                     self.player_effect(pos, state, PlayerEffect::EatCake);
@@ -554,13 +551,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `ComposterBlock.extractProduce`: the bone meal pops out, the composter
     /// empties and its sound plays.
     fn composter_extract_produce(&mut self, pos: BlockPos, state: BlockStateId) {
-        let b = self.b;
+        let next = self.b.composter_state_after_extract(state);
+        self.composter_extract_effects(pos, state, next);
+    }
+
+    fn composter_extract_effects(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        next: BlockStateId,
+    ) {
         self.player_effect(
             pos,
             state,
             PlayerEffect::DropItem("minecraft:bone_meal".into()),
         );
-        self.set_block_and_update(pos, b.table.set_int(state, b.props.level, 0));
+        self.set_block_and_update(pos, next);
         self.game_event(pos, "minecraft:block_change");
         self.emit(LevelEvent::Sound {
             pos,
@@ -573,20 +579,21 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `ComposterBlock.addLayer` once its `compostable` provider gave
     /// `layers`: the new state (the old one when no layer is added).
     fn composter_add_layer(&mut self, pos: BlockPos, layers: i32) -> BlockStateId {
-        let b = self.b;
         let state = self.state(pos);
-        if layers <= 0 {
-            return state;
-        }
-        let level = b.table.int(state, b.props.level);
-        let next_level = (level + layers).clamp(0, 7);
-        let next = b.table.set_int(state, b.props.level, next_level);
-        self.set_block_and_update(pos, next);
-        self.game_event_state(pos, "minecraft:block_change", next);
-        if next_level == 7 {
-            self.schedule_tick(pos, b.block(state), 20);
+        let next = self.b.composter_state_after_layers(state, layers);
+        if layers > 0 {
+            self.set_block_and_update(pos, next);
+            self.composter_layer_effects(pos, state, next);
         }
         next
+    }
+
+    fn composter_layer_effects(&mut self, pos: BlockPos, state: BlockStateId, next: BlockStateId) {
+        let b = self.b;
+        self.game_event_state(pos, "minecraft:block_change", next);
+        if b.table.int(next, b.props.level) == 7 {
+            self.schedule_tick(pos, b.block(state), 20);
+        }
     }
 
     /// `DragonEggBlock.teleport`.
@@ -617,6 +624,21 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 }
 
 impl Behaviours {
+    /// Pure state portion of `ComposterBlock.addLayer`; no write or effects.
+    pub fn composter_state_after_layers(&self, state: BlockStateId, layers: i32) -> BlockStateId {
+        if layers <= 0 {
+            return state;
+        }
+        let level = self.table.int(state, self.props.level);
+        self.table
+            .set_int(state, self.props.level, (level + layers).clamp(0, 7))
+    }
+
+    /// Pure state portion of `ComposterBlock.empty`; no write or effects.
+    pub fn composter_state_after_extract(&self, state: BlockStateId) -> BlockStateId {
+        self.table.set_int(state, self.props.level, 0)
+    }
+
     /// `ComposterBlock.addLayer` at `pos` with the layers its item's
     /// `compostable` provider gave, followed by level event 1500 (fill
     /// particles and sound; data 1 when a layer was added) as every caller
@@ -633,6 +655,36 @@ impl Behaviours {
         let next = sim.composter_add_layer(pos, layers);
         sim.level_event(1500, pos, i32::from(next != state));
         next
+    }
+
+    /// `ComposterBlock.InputContainer.setChanged` feedback after its state was committed.
+    /// The input was below level 7; the state write itself belongs to the caller's journal.
+    pub fn composter_insert_effects<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        before: BlockStateId,
+        after: BlockStateId,
+    ) {
+        let mut sim = self.sim(level, ticks);
+        if after != before {
+            sim.composter_layer_effects(pos, before, after);
+        }
+        sim.level_event(1500, pos, i32::from(after != before));
+    }
+
+    /// `ComposterBlock.empty` feedback after its state was committed, without a write,
+    /// dropped bone meal or the hand-extraction sound.
+    pub fn composter_empty_effects<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        after: BlockStateId,
+    ) {
+        self.sim(level, ticks)
+            .game_event_state(pos, "minecraft:block_change", after);
     }
 
     /// `ComposterBlock.addLayer` without level event 1500, for a villager
@@ -682,7 +734,7 @@ impl Behaviours {
     ) {
         let mut sim = self.sim(level, ticks);
         let state = sim.state(pos);
-        let next = self.table.set_int(state, self.props.level, 0);
+        let next = self.composter_state_after_extract(state);
         sim.set_block_and_update(pos, next);
         sim.game_event_state(pos, "minecraft:block_change", next);
     }
@@ -704,7 +756,7 @@ impl Behaviours {
             sim.dragon_egg_teleport(pos, state);
         }
         if chain.contains(&Class::Note) {
-            sim.note_play(pos, state);
+            sim.note_play(pos, state, true);
             return true;
         }
         if chain.contains(&Class::RedStoneOre) && !self.table.bool(state, self.props.lit) {
@@ -713,19 +765,23 @@ impl Behaviours {
         false
     }
 
-    /// `BlockState.useWithoutItem` for a right-click on `pos` (hit face and
-    /// absolute hit location as in `BlockHitResult`).
+    /// `BlockState.useWithoutItem` on the state captured before the item phase,
+    /// as in `ServerPlayerGameMode.useItemOn`, even if that phase replaced it.
     pub fn use_without_item<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
-        pos: BlockPos,
-        face: Direction,
-        hit: Vec3,
+        state: BlockStateId,
+        hit: BlockHit,
         player: PlayerContext,
     ) -> InteractionResult {
-        self.sim(level, ticks)
-            .use_without_item(pos, face, hit, player)
+        self.sim(level, ticks).use_without_item(
+            state,
+            hit.block,
+            hit.direction,
+            hit.location,
+            player,
+        )
     }
     /// `DoorBlock.setOpen`: a mob opens or closes the door at `pos` (either half), with its sound
     /// and game event. False when it is no door or already so.
@@ -827,56 +883,55 @@ impl Behaviours {
     /// block asks to try with an empty hand (the default), `useWithoutItem`.
     /// `SweetBerryBushBlock.useItemOn` passes bone meal on a bush that can
     /// still grow on to the item.
-    #[allow(clippy::too_many_arguments)]
     pub fn use_item_on<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
-        pos: BlockPos,
-        face: Direction,
-        hit: Vec3,
+        hit: BlockHit,
         player: PlayerContext,
         item: Option<&str>,
     ) -> InteractionResult {
-        self.use_item_on_branch(level, ticks, pos, face, hit, player, item)
+        let state = level.block_state(hit.block);
+        self.use_item_on_branch(level, ticks, state, hit, player, item)
             .0
     }
     /// `use_item_on`, and which of the two answered: `ServerPlayerGameMode.useItemOn`
     /// triggers ITEM_USED_ON_BLOCK when `useItemOn` consumes the click and
     /// DEFAULT_BLOCK_USE when `useWithoutItem` does.
-    #[allow(clippy::too_many_arguments)]
     pub fn use_item_on_branch<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
-        pos: BlockPos,
-        face: Direction,
-        hit: Vec3,
+        state: BlockStateId,
+        hit: BlockHit,
         player: PlayerContext,
         item: Option<&str>,
     ) -> (InteractionResult, UseBranch) {
-        match self.block_use_item_on(level, ticks, pos, face, hit, player, item) {
+        match self.block_use_item_on(level, ticks, state, hit, player, item) {
             Some(result) => (result, UseBranch::ItemOn),
             None => (
-                self.use_without_item(level, ticks, pos, face, hit, player),
+                self.use_without_item(level, ticks, state, hit, player),
                 UseBranch::WithoutItem,
             ),
         }
     }
     /// `BlockState.useItemOn`: the result, or `None` for
     /// `TRY_WITH_EMPTY_HAND`.
-    #[allow(clippy::too_many_arguments)]
-    fn block_use_item_on<L: LevelAccess + ?Sized>(
+    pub fn block_use_item_on<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
-        pos: BlockPos,
-        face: Direction,
-        hit: Vec3,
+        state: BlockStateId,
+        hit: BlockHit,
         player: PlayerContext,
         item: Option<&str>,
     ) -> Option<InteractionResult> {
-        let state = level.block_state(pos);
+        let BlockHit {
+            block: pos,
+            direction: face,
+            location: hit,
+            ..
+        } = hit;
         if item == Some("minecraft:bone_meal")
             && self.data(state).chain.contains(&Class::SweetBerryBush)
             && self.table.int(state, self.props.age) < 3
@@ -1040,7 +1095,7 @@ impl Behaviours {
         item: Option<&str>,
     ) -> InteractionResult {
         let item = item.unwrap_or("minecraft:air");
-        let waxed = self.table.name(state).starts_with("minecraft:waxed_");
+        let waxed = self.is_waxed(state);
         if item.ends_with("_axe") || (item == "minecraft:honeycomb" && !waxed) {
             return InteractionResult::Pass;
         }

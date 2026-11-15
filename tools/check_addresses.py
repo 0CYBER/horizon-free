@@ -10,7 +10,9 @@ tools/addresses.json says where each host may be:
 - `vanilla`: the endpoints vanilla itself contacts; allowed anywhere;
 - `not_addresses`: strings that look like hosts but are not contacted (a suffix matcher, a translation key);
 - `allowed`: today's addresses outside a home, "path host". They only go away: with --base, a branch may move
-  an entry to another file but may not add a host nor grow the list.
+  an entry to another file but may not add a host nor grow the list. A changed sync-baseline declaration,
+  verified by merge_base.sync_provenance, may restore exact rows from that upstream commit's inventory;
+  only those newly restored rows are excluded from the growth comparison.
 
     python3 tools/check_addresses.py                     # the check
     python3 tools/check_addresses.py --base origin/main  # and nothing added since the base
@@ -223,7 +225,7 @@ def scan(files=None):
     return found
 
 
-def check(config, found, base=None):
+def check(config, found, base=None, upstream_rows=frozenset()):
     """(problems, notes)."""
     homes = set(config.get("homes", []))
     vanilla = set(config.get("vanilla", []))
@@ -242,10 +244,12 @@ def check(config, found, base=None):
                         f"'vanilla', anything else in the Horizon layer's address home ({DOC})")
     if base is not None:
         before = {tuple(entry.split(" ", 1)) for entry in base.get("allowed", [])}
-        new_hosts = {host for _, host in allowed} - {host for _, host in before}
+        restored = (allowed - before) & upstream_rows
+        effective = allowed - restored
+        new_hosts = {host for _, host in effective} - {host for _, host in before}
         for host in sorted(new_hosts):
             problems.append(f"{host}: added to 'allowed' in {CONFIG_PATH}; new addresses go in a home ({DOC})")
-        if len(allowed) > len(before):
+        if len(effective) > len(before):
             problems.append(f"'allowed' in {CONFIG_PATH} grew from {len(before)} to {len(allowed)} entries; it only "
                             f"shrinks ({DOC})")
     notes = [f"{rel} {host}: no longer there; you can remove it from 'allowed' in {CONFIG_PATH}"
@@ -263,11 +267,32 @@ def base_config(base):
     return json.loads(shown.stdout) if shown.returncode == 0 else None
 
 
+def _merge_base():
+    if __package__:
+        from . import merge_base
+    else:
+        import merge_base
+    return merge_base
+
+
+def restored_upstream_rows(base):
+    """Allow exact upstream rows only for a changed, verified sync declaration."""
+    config, errors = _merge_base().verified_sync_config(base, CONFIG_PATH)
+    rows = {tuple(row.split(" ", 1)) for row in config.get("allowed", [])} if config is not None else set()
+    return rows, errors
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", help="refuse addresses added to 'allowed' since the branch left this git ref")
     parser.add_argument("--list", action="store_true", help="print every host found and its files")
+    parser.add_argument("--pull-request-merge", action="store_true", help=_merge_base().PULL_REQUEST_MERGE_HELP)
     args = parser.parse_args(argv)
+    if args.base:
+        args.base, error = _merge_base().pull_request_base(args.base, args.pull_request_merge)
+        if error:
+            print(f"Address check failed: {error}")
+            return 1
     config = json.loads((ROOT / CONFIG_PATH).read_text())
     found = scan()
     if args.list:
@@ -277,7 +302,15 @@ def main(argv=None):
         for host in sorted(by_host):
             print(f"{host}: {', '.join(sorted(by_host[host]))}")
         return 0
-    problems, notes = check(config, found, base_config(args.base) if args.base else None)
+    base = base_config(args.base) if args.base else None
+    problems, notes = check(config, found, base)
+    if args.base and (problems or config != base):
+        # Only a violation, or an inventory that differs from the base's, can need rows a verified sync restored:
+        # every other run stays off the network.
+        upstream_rows, provenance = restored_upstream_rows(args.base)
+        if upstream_rows or provenance:
+            problems, notes = check(config, found, base, upstream_rows)
+        problems = provenance + problems
     for note in notes:
         print(f"note: {note}")
     if problems:

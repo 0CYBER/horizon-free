@@ -8,6 +8,11 @@ publish = false
 description = "Generated mod API dispatch contract tests"
 
 [dependencies]
+horizon-core = { path = "../../horizon-core" }
+horizon-mod-api-macros = { path = "../../horizon-mod-api-macros" }
+horizon-client-core = { path = "../../horizon-client-core" }
+horizon-mod-runtime = { path = "../../horizon-mod-runtime" }
+log = "0.4"
 serde_json = "1"
 
 [build-dependencies]

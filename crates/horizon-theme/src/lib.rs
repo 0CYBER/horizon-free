@@ -46,7 +46,8 @@ pub mod fonts {
 /// The glass look's icons: Hugeicons' free set (MIT, `icons/glass/LICENSE-hugeicons.txt`), the
 /// ones the mockup uses, 24 unit outlines stroked 1.6 in `currentColor`, by Hugeicons' name
 /// (`"folder-01"`, `"more-vertical"`…). `github` is GitHub's mark, drawn for Horizon (filled,
-/// its cat cut out by a mask), beside the links to GitHub Sponsors.
+/// its cat cut out by a mask), beside the links to GitHub Sponsors. `sparkles` (Home's What's
+/// new) is drawn for Horizon in the same 1.6 stroke.
 pub mod glass_icons {
     macro_rules! icons {
         ($($name:literal),* $(,)?) => {
@@ -60,7 +61,10 @@ pub mod glass_icons {
         "ai-chat-02",
         "arrow-down-01",
         "arrow-right-01",
+        "book",
+        "map",
         "cancel-01",
+        "clock",
         "color-picker",
         "computer",
         "computer-terminal-01",
@@ -71,10 +75,12 @@ pub mod glass_icons {
         "download-04",
         "earth",
         "favourite",
+        "flash",
         "folder-01",
         "game-controller-01",
         "github",
         "globe-02",
+        "hammer",
         "image-01",
         "information-circle",
         "link-01",
@@ -89,6 +95,7 @@ pub mod glass_icons {
         "refresh",
         "search-01",
         "sliders-horizontal",
+        "sparkles",
         "stop",
         "tick-02",
         "upload-04",
@@ -136,6 +143,7 @@ pub mod icons {
         "home",
         "image",
         "info-box",
+        "map",
         "message",
         "monitor",
         "notes",

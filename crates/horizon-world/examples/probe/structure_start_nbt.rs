@@ -5,9 +5,9 @@
 //! with sorted keys and typed numbers (VanillaStructureStartOracle's
 //! `canonical`), or `unsaved CX CZ ID` when Horizon cannot save it yet.
 use horizon_core::position::ChunkPos;
-use horizon_world::{
-    nbt::Tag,
-    worldgen::generator::{GeneratorData, OverworldGenerator},
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::worldgen::generator::{GeneratorData, OverworldGenerator},
 };
 
 type Error = Box<dyn std::error::Error + Send + Sync>;

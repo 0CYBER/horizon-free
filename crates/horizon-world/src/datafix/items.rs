@@ -5,7 +5,7 @@ use super::dynamic::{
     int_list, is_empty_map, namespaced, remove, rename, set, stream, string,
 };
 use super::json;
-use crate::nbt::{JavaString, Tag};
+use horizon_core::nbt::{JavaString, Tag};
 
 /// `V704.ITEM_TO_BLOCKENTITY`.
 const ITEM_TO_BLOCK_ENTITY: &[(&str, &str)] = &[
@@ -557,7 +557,7 @@ fn fix_stack(s: &mut Stack) {
     if s.is("minecraft:filled_map") {
         s.move_to_component("map", "minecraft:map_id");
         let decorations = stream(s.remove_tag("Decorations").as_ref());
-        let mut map = crate::nbt::Compound::new();
+        let mut map = horizon_core::nbt::Compound::new();
         for d in decorations {
             let (id, value) = fix_map_decoration(&d);
             // Collectors.toMap(..., (first, second) -> first): the first stays.
@@ -677,7 +677,7 @@ fn fix_block_state_tag(v: Tag) -> Tag {
     let Tag::Compound(map) = v else {
         return v;
     };
-    let mut out = crate::nbt::Compound::new();
+    let mut out = horizon_core::nbt::Compound::new();
     for (k, value) in map {
         let name = k.to_string_lossy();
         if BOOLEAN_BLOCK_STATE_PROPERTIES.contains(&name.as_str())
@@ -1177,7 +1177,7 @@ pub(super) fn unflatten_particle(description: &str) -> Tag {
                 None => set(&mut stack, "id", string(contents)),
                 Some(i) => {
                     set(&mut stack, "id", string(&contents[..i]));
-                    if let Ok((tag, used)) = crate::nbt::parse_snbt(&contents[i..])
+                    if let Ok((tag, used)) = horizon_core::nbt::parse_snbt(&contents[i..])
                         && used == contents[i..].len()
                     {
                         set(&mut stack, "tag", tag);

@@ -3,7 +3,6 @@
 //! water animals, bats...), and `finalizeSpawn` (variants, colours, babies,
 //! equipment).
 use super::{Mob, MobWorld, Species, farm::Climate};
-use horizon_core::random::RandomSource;
 
 /// Biome facts finalizeSpawn and the spawn rules read.
 #[derive(Clone, Copy, Debug, Default)]
@@ -32,9 +31,19 @@ pub struct BiomeFacts {
     /// `#minecraft:spawns_gold_rabbits` (`Rabbit.getRandomRabbitVariant`).
     pub gold_rabbit: bool,
 }
-/// `SpawnPlacements.isSpawnPositionOk` for the species.
-pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> bool {
-    super::spawn_rules::is_spawn_position_ok(species, w, x, y, z)
+/// `SpawnPlacements.isSpawnPositionOk` for the entity type `entity`, of species `species`.
+pub fn placement_ok(entity: &str, species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> bool {
+    super::spawn_rules::is_spawn_position_ok(entity, species, w, x, y, z)
+}
+/// `Spider.SpiderEffectsGroupData.setRandomEffect`: Speed on two of five
+/// draws, then Strength, Regeneration and Invisibility on one each.
+pub fn spider_random_effect(random: &mut impl horizon_core::random::RandomSource) -> &'static str {
+    match random.next_int_bound(5).unwrap_or(0) {
+        0 | 1 => "minecraft:speed",
+        2 => "minecraft:strength",
+        3 => "minecraft:regeneration",
+        _ => "minecraft:invisibility",
+    }
 }
 /// Mob.finalizeSpawn for natural, chunk-generation and summoned mobs.
 /// `DifficultyInstance`: the local difficulty at a position.
@@ -49,6 +58,24 @@ pub struct LocalDifficulty {
     pub hard: bool,
     /// `Difficulty.getId`: 0 peaceful to 3 hard.
     pub id: u8,
+}
+impl From<LocalDifficulty> for mod_api::Difficulty {
+    fn from(d: LocalDifficulty) -> Self {
+        Self::new(d.base, d.effective)
+    }
+}
+impl From<mod_api::Difficulty> for LocalDifficulty {
+    /// A mod's difficulty; a base past hard is hard.
+    fn from(d: mod_api::Difficulty) -> Self {
+        let base = d.base.min(3);
+        Self {
+            base,
+            effective: d.effective,
+            normal: base == 2,
+            hard: base == 3,
+            id: base,
+        }
+    }
 }
 /// `DimensionType.MOON_BRIGHTNESS_PER_PHASE`.
 pub const MOON_BRIGHTNESS: [f32; 8] = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75];
@@ -84,415 +111,14 @@ impl LocalDifficulty {
     }
     /// `getSpecialMultiplier`.
     pub fn special(&self) -> f32 {
-        if self.effective < 2.0 {
-            0.0
-        } else if self.effective > 4.0 {
-            1.0
-        } else {
-            (self.effective - 2.0) / 2.0
-        }
-    }
-}
-/// The armour and toughness each vanilla armour piece adds.
-pub fn armor_stats(item: &str) -> (f32, f32) {
-    let Some(name) = item.strip_prefix("minecraft:") else {
-        return (0.0, 0.0);
-    };
-    let slot = ["helmet", "chestplate", "leggings", "boots"]
-        .iter()
-        .position(|p| name.ends_with(p));
-    let Some(slot) = slot else { return (0.0, 0.0) };
-    let (points, toughness): ([f32; 4], f32) = match name.split('_').next() {
-        Some("leather") => ([1.0, 3.0, 2.0, 1.0], 0.0),
-        Some("copper") => ([2.0, 4.0, 3.0, 1.0], 0.0),
-        Some("golden") => ([2.0, 5.0, 3.0, 1.0], 0.0),
-        Some("chainmail") => ([2.0, 5.0, 4.0, 1.0], 0.0),
-        Some("iron") => ([2.0, 6.0, 5.0, 2.0], 0.0),
-        Some("turtle") => ([2.0, 0.0, 0.0, 0.0], 0.0),
-        Some("diamond") => ([3.0, 8.0, 6.0, 3.0], 2.0),
-        Some("netherite") => ([3.0, 8.0, 6.0, 3.0], 3.0),
-        _ => return (0.0, 0.0),
-    };
-    (points[slot], toughness)
-}
-/// The armour and toughness a horse armor item adds in the body slot
-/// (`ArmorMaterial.createAttributes(ArmorType.BODY)`).
-pub fn horse_armor_stats(item: &str) -> (f32, f32) {
-    match item.strip_prefix("minecraft:") {
-        Some("leather_horse_armor") => (3.0, 0.0),
-        Some("copper_horse_armor") => (4.0, 0.0),
-        Some("iron_horse_armor") => (5.0, 0.0),
-        Some("golden_horse_armor") => (7.0, 0.0),
-        Some("diamond_horse_armor") => (11.0, 2.0),
-        Some("netherite_horse_armor") => (19.0, 3.0),
-        _ => (0.0, 0.0),
+        mod_api::Difficulty::from(*self).special_multiplier()
     }
 }
 /// `Mob.populateDefaultEquipmentSlots`: sometimes a set of armour, from the
 /// head down, of one random material.
-fn populate_armor(m: &mut Mob, d: &LocalDifficulty, r: &mut impl RandomSource) {
-    if r.next_float() >= 0.15 * d.special() {
-        return;
-    }
-    let mut kind = r.next_int_bound(3).unwrap_or(0);
-    for _ in 1..=3 {
-        if r.next_float() < 0.1087 {
-            kind += 1;
-        }
-    }
-    let partial = if d.hard { 0.1 } else { 0.25 };
-    let material = [
-        "leather",
-        "copper",
-        "golden",
-        "chainmail",
-        "iron",
-        "diamond",
-    ][kind as usize];
-    for (i, piece) in ["helmet", "chestplate", "leggings", "boots"]
-        .into_iter()
-        .enumerate()
-    {
-        if i > 0 && r.next_float() < partial {
-            break;
-        }
-        let slot = match i {
-            0 => &mut m.extra.head,
-            1 => &mut m.extra.chest,
-            2 => &mut m.extra.legs,
-            _ => &mut m.extra.feet,
-        };
-        if slot.is_none() {
-            *slot = Some(format!("minecraft:{material}_{piece}").into());
-        }
-    }
-}
-/// `Spider.SpiderEffectsGroupData.setRandomEffect`: Speed on two of five
-/// draws, then Strength, Regeneration and Invisibility on one each.
-pub fn spider_random_effect(random: &mut impl RandomSource) -> &'static str {
-    match random.next_int_bound(5).unwrap_or(0) {
-        0 | 1 => "minecraft:speed",
-        2 => "minecraft:strength",
-        3 => "minecraft:regeneration",
-        _ => "minecraft:invisibility",
-    }
-}
-/// `finalizeSpawn` of a fresh mob. `random` is the level's
-/// (`ServerLevelAccessor.getRandom()`), which `Mob.finalizeSpawn` and most
-/// overrides draw from; `Zombie.handleAttributes`, `Piglin.createSpawnWeapon`
-/// and the salmon's size draw from the mob's own.
-pub fn finalize(
-    m: &mut Mob,
-    biome: &BiomeFacts,
-    difficulty: &LocalDifficulty,
-    random: &mut impl RandomSource,
-) {
-    // A lone spawn: `finalizeSpawn(.., null)`.
-    finalize_with(m, biome, difficulty, random, &mut None, |_, _| {});
-}
-/// [`finalize`] with every roll on the mob's own random, in one stream.
-pub fn finalize_on_own_random(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
-    finalize_on_own_random_in(m, biome, difficulty, &mut None);
-}
-/// [`finalize_on_own_random`] for a member of a pack: `group` is the
-/// `SpawnGroupData` the pack's previous member returned (`None` for the
-/// first), and holds what this one returns.
-pub fn finalize_on_own_random_in(
-    m: &mut Mob,
-    biome: &BiomeFacts,
-    difficulty: &LocalDifficulty,
-    group: &mut Option<SpawnGroup>,
-) {
-    let mut random = m.random.clone();
-    // The stream changes hands around the draws `finalize` makes on the mob's own.
-    finalize_with(m, biome, difficulty, &mut random, group, |m, r| {
-        std::mem::swap(&mut m.random, r)
-    });
-    m.random = random;
-}
-/// The `SpawnGroupData` whose content the live finalizer reads back: the
-/// variant a pack shares, and `AgeableMobGroupData.groupSize`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SpawnGroup {
-    /// `Rabbit.RabbitGroupData`.
-    Rabbit { variant: u8, size: u32 },
-    /// `Axolotl.AxolotlGroupData`: two common variants.
-    Axolotl { types: [u8; 2], size: u32 },
-}
-/// `own` runs before and after each group of draws on the mob's own random.
-fn finalize_with<R: RandomSource>(
-    m: &mut Mob,
-    biome: &BiomeFacts,
-    difficulty: &LocalDifficulty,
-    random: &mut R,
-    group: &mut Option<SpawnGroup>,
-    own: impl Fn(&mut Mob, &mut R),
-) {
-    use Species as S;
-    let climate_index = match biome.climate {
-        Climate::Temperate => 0,
-        Climate::Warm => 1,
-        Climate::Cold => 2,
-    };
-    // `Registry.getRandom` of the `*_sound_variant` registry.
-    fn sound(m: &mut Mob, random: &mut impl RandomSource) {
-        let sounds = super::finalize::sound_variants(m.species()).len() as i32;
-        m.extra.sound_variant = Some(random.next_int_bound(sounds).unwrap_or(0) as u8);
-    }
-    // The overrides that draw before they call `super.finalizeSpawn`.
-    match m.species() {
-        S::Pig | S::Cow | S::Chicken | S::Wolf => {
-            // VariantUtils.selectVariantToSpawn: `Util.getRandomSafe` over
-            // the variants of the highest priority, the biome's one.
-            let _ = random.next_int_bound(1);
-            m.extra.variant = if m.species() == S::Wolf {
-                biome.wolf
-            } else {
-                climate_index
-            };
-            sound(m, random);
-        }
-        S::Sheep => m.extra.color = super::farm::sheep_color(biome.climate, random),
-        S::Horse | S::Donkey | S::Mule | S::SkeletonHorse | S::ZombieHorse => {
-            super::equine::finalize(m, random)
-        }
-        S::Llama | S::TraderLlama => super::llama::finalize(m, random),
-        S::Nautilus | S::ZombieNautilus => {
-            super::nautilus::finalize(m, biome.coral_nautilus, random)
-        }
-        S::Goat => super::finalize::goat_spawn(m, random),
-        // Rabbit.finalizeSpawn: getRandomRabbitVariant's nextInt(100) always,
-        // the group's variant over it; then AgeableMob.finalizeSpawn, where
-        // RabbitGroupData's baby chance is 1 (one nextFloat from the second on).
-        S::Rabbit => {
-            let rolled =
-                super::rabbit::random_variant(biome.white_rabbit, biome.gold_rabbit, random);
-            let (variant, size) = match *group {
-                Some(SpawnGroup::Rabbit { variant, size }) => (variant, size),
-                _ => (rolled, 0),
-            };
-            m.extra.variant = variant;
-            if size > 0 && random.next_float() <= 1.0 {
-                super::finalize::set_age(m, super::finalize::baby_start_age(S::Rabbit));
-            }
-            *group = Some(SpawnGroup::Rabbit {
-                variant,
-                size: size + 1,
-            });
-        }
-        // Parrot.finalizeSpawn: `Util.getRandom(Variant.values())`; its
-        // AgeableMobGroupData(false) never makes a baby.
-        S::Parrot => m.extra.variant = random.next_int_bound(5).unwrap_or(0) as u8,
-        // Axolotl.finalizeSpawn: a new group draws two common variants
-        // (`getCommonSpawnVariant`, ids 0 to 3), each member picks one, and
-        // the third member on is a baby. A bucket's axolotl skips it all
-        // (EntitySpawnReason.BUCKET returns first): its caller doesn't finalize.
-        S::Axolotl => {
-            let (types, size) = match *group {
-                Some(SpawnGroup::Axolotl { types, size }) => (types, size),
-                _ => {
-                    let a = random.next_int_bound(4).unwrap_or(0) as u8;
-                    let b = random.next_int_bound(4).unwrap_or(0) as u8;
-                    ([a, b], 0)
-                }
-            };
-            m.extra.variant = types[random.next_int_bound(2).unwrap_or(0) as usize];
-            if size >= 2 {
-                super::finalize::set_age(m, super::finalize::baby_start_age(S::Axolotl));
-            }
-            *group = Some(SpawnGroup::Axolotl {
-                types,
-                size: size + 1,
-            });
-        }
-        // Fox.finalizeSpawn: the variant by biome, then the mouth's item.
-        S::Fox => {
-            m.extra.variant = u8::from(biome.snow_fox);
-            m.extra.pick_up_loot = true;
-            super::fox::populate_default_equipment(m, random);
-        }
-        // Piglin.createSpawnWeapon: half crossbows, half golden swords, and
-        // each piece of golden armour one time in ten.
-        S::Piglin if !m.is_baby() => {
-            m.extra.pick_up_loot = true;
-            for i in 0..4 {
-                if random.next_float() < 0.1 {
-                    let (slot, piece) = match i {
-                        0 => (&mut m.extra.head, "helmet"),
-                        1 => (&mut m.extra.chest, "chestplate"),
-                        2 => (&mut m.extra.legs, "leggings"),
-                        _ => (&mut m.extra.feet, "boots"),
-                    };
-                    *slot = Some(format!("minecraft:golden_{piece}").into());
-                }
-            }
-            own(m, random);
-            let crossbow = m.random.next_float() < 0.5;
-            own(m, random);
-            m.extra.set_main_hand(Some(
-                if crossbow {
-                    "minecraft:crossbow"
-                } else {
-                    "minecraft:golden_sword"
-                }
-                .into(),
-            ));
-        }
-        _ => {}
-    }
-    // Mob.finalizeSpawn, reached through `super` by every mob but the cave
-    // spider (CaveSpider.finalizeSpawn returns without calling it).
-    if m.species() != S::CaveSpider {
-        super::finalize::mob_spawn(m, random);
-    }
-    match m.species() {
-        // Warden.finalizeSpawn: a minute before it digs back down.
-        S::Warden => super::warden::finalize(m, false, &mut Vec::new()),
-        S::Mooshroom => m.extra.variant = 0,
-        // Turtle.finalizeSpawn: home is where it spawned.
-        S::Turtle => {
-            m.extra.home = Some([
-                m.position.x.floor() as i32,
-                m.position.y.floor() as i32,
-                m.position.z.floor() as i32,
-            ])
-        }
-        S::Frog => m.extra.variant = biome.frog,
-        S::Cat => {
-            m.extra.variant = super::tame::cat_variant(biome.full_moon, random);
-            sound(m, random);
-        }
-        S::Zombie | S::Husk | S::Drowned | S::ZombieVillager => {
-            // Zombie.finalizeSpawn: pick up loot 55% of the time (scaled by
-            // difficulty), 5% babies (normal difficulty).
-            m.extra.pick_up_loot = random.next_float() < 0.55 * difficulty.special();
-            if random.next_float() < 0.05 {
-                m.extra.age = i32::MIN / 2;
-            }
-            // setCanBreakDoors(nextFloat() < special * 0.1), before the gear.
-            let can_break_doors = random.next_float() < difficulty.special() * 0.1;
-            super::doors::set_can_break_doors(m, can_break_doors);
-            if m.species() != S::Drowned {
-                populate_armor(m, difficulty, random);
-            }
-            let weapon = if difficulty.hard { 0.05 } else { 0.01 };
-            if m.species() != S::Drowned && random.next_float() < weapon {
-                let r = random.next_int_bound(6).unwrap_or(0);
-                m.extra.set_main_hand(Some(
-                    match r {
-                        0 => "minecraft:iron_sword",
-                        1 => "minecraft:iron_spear",
-                        _ => "minecraft:iron_shovel",
-                    }
-                    .into(),
-                ));
-            }
-            if m.species() == S::Drowned && random.next_float() > 0.9 {
-                m.extra.set_main_hand(Some(
-                    if random.next_int_bound(16).unwrap_or(1) < 10 {
-                        "minecraft:trident"
-                    } else {
-                        "minecraft:fishing_rod"
-                    }
-                    .into(),
-                ));
-            }
-            if m.species() == S::ZombieVillager {
-                // `finalizeVillagerType` only picks the type; the profession is
-                // the constructor's draw (`defineSynchedData`).
-                m.extra.variant = villager_type(biome);
-            }
-        }
-        // ZombifiedPiglin.populateDefaultEquipmentSlots: a golden sword, or
-        // one time in 20 a golden spear.
-        S::ZombifiedPiglin => {
-            // Zombie.finalizeSpawn's setCanBreakDoors.
-            let can_break_doors = random.next_float() < difficulty.special() * 0.1;
-            super::doors::set_can_break_doors(m, can_break_doors);
-            let item = super::piglin::default_equipment(random);
-            m.extra.set_main_hand(Some(item.into()));
-        }
-        // AbstractSkeleton.populateDefaultEquipmentSlots: armour, then a bow.
-        S::Skeleton | S::Stray | S::Bogged | S::Parched => {
-            populate_armor(m, difficulty, random);
-            m.extra.set_main_hand(Some("minecraft:bow".into()));
-            m.extra.pick_up_loot = random.next_float() < 0.55 * difficulty.special();
-        }
-        // WitherSkeleton.populateDefaultEquipmentSlots: a stone sword only;
-        // WitherSkeleton.finalizeSpawn then sets the attack damage base to 4.
-        S::WitherSkeleton => {
-            m.extra.set_main_hand(Some("minecraft:stone_sword".into()));
-            m.extra.pick_up_loot = random.next_float() < 0.55 * difficulty.special();
-            super::finalize::set_base(m, super::finalize::Attr::AttackDamage, 4.0);
-        }
-        S::Pillager => {
-            m.extra.set_main_hand(Some("minecraft:crossbow".into()));
-            m.extra.pick_up_loot = true;
-        }
-        // Camel.finalizeSpawn: standing, with fixed attributes.
-        S::Camel | S::CamelHusk => super::camel::stand_up_instantly(m),
-        S::SulfurCube => super::sulfur_cube::finalize(m),
-        S::PiglinBrute => {
-            m.extra.set_main_hand(Some("minecraft:golden_axe".into()));
-            m.extra.pick_up_loot = true;
-        }
-        S::Illusioner => super::illusioner::finalize(m),
-        // Spider.finalizeSpawn: on Hard, a tenth carry a permanent effect,
-        // for every spawn reason. Vanilla rolls the skeleton jockey first;
-        // here that roll follows in `Game::spawn_jockeys`.
-        S::Spider => {
-            if difficulty.hard && random.next_float() < 0.1 * difficulty.special() {
-                let effect = spider_random_effect(random);
-                m.add_effect(effect, -1, 0);
-            }
-        }
-        S::Vindicator => m.extra.set_main_hand(Some("minecraft:iron_axe".into())),
-        S::Villager => {
-            m.extra.variant = villager_type(biome);
-            m.extra.pick_up_loot = true;
-        }
-        S::Panda | S::Dolphin => m.extra.pick_up_loot = true,
-        S::TropicalFish => super::aquatic::finalize(m, random),
-        // Salmon.finalizeSpawn: a weighted size (small 30, medium 50, large 15).
-        S::Salmon => {
-            own(m, random);
-            let r = m.random.next_int_bound(95).unwrap_or(0);
-            own(m, random);
-            m.extra.variant = if r < 30 {
-                0
-            } else if r < 80 {
-                1
-            } else {
-                2
-            };
-        }
-        S::Slime | S::MagmaCube => super::cube::finalize(m, difficulty.special(), random),
-        _ => {}
-    }
-    // Zombie.finalizeSpawn ends with handleAttributes: the reinforcement
-    // chance (and a leader's bonus) that `Zombie.hurtServer` reads.
-    if matches!(
-        m.species(),
-        S::Zombie | S::Husk | S::Drowned | S::ZombieVillager | S::ZombifiedPiglin
-    ) {
-        own(m, random);
-        super::finalize::zombie_attributes(
-            m,
-            difficulty.special(),
-            super::finalize::Reason::Natural,
-        );
-        own(m, random);
-    }
-    // Drowned.finalizeSpawn, once Zombie.finalizeSpawn is done: a nautilus
-    // shell in an empty offhand, as a guaranteed drop.
-    if m.species() == S::Drowned && m.extra.off_hand.is_none() && random.next_float() < 0.03 {
-        super::finalize::set_item(m, super::finalize::OFFHAND, "minecraft:nautilus_shell");
-        super::finalize::set_drop_chance(m, super::finalize::OFFHAND, 2.0);
-    }
-}
 /// A baby from `Animal.spawnChildFromBreeding`: `getBreedOffspring` creates
 /// it without `finalizeSpawn`, so it never ran `Mob.finalizeSpawn`. Undoes
-/// that part of `finalize`: no `random_spawn_bonus`, right-handed.
+/// that part of finalizeSpawn: no `random_spawn_bonus`, right-handed.
 pub fn bred_offspring(m: &mut Mob) {
     use super::finalize::{Attr, remove_modifier};
     remove_modifier(m, Attr::FollowRange, "minecraft:random_spawn_bonus");
@@ -520,11 +146,11 @@ pub fn villager_type(b: &BiomeFacts) -> u8 {
 #[path = "spawn_group_variant_tests.rs"]
 mod spawn_group_variant_tests;
 #[cfg(test)]
-mod tests {
+pub(in crate::mobs) mod tests {
     use super::*;
     use crate::mobs::finalize::{Attr, has_modifier, value};
 
-    fn types() -> Option<crate::mobs::MobTypes> {
+    pub(in crate::mobs) fn types() -> Option<crate::mobs::MobTypes> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
             .join(horizon_core::VANILLA_VERSION);
@@ -533,6 +159,94 @@ mod tests {
         }
         Some(crate::mobs::MobTypes::load(&root).unwrap())
     }
+
+    struct Level {
+        registries: crate::mobs::finalize::SpawnRegistries,
+        enchantments: crate::enchant::Enchantments,
+        items: crate::items::Items,
+    }
+    impl crate::mobs::finalize::FinalizeLevel for Level {
+        fn biome(&self, _: [i32; 3]) -> String {
+            "minecraft:plains".into()
+        }
+        fn biome_tag(&self, _: &str, _: [i32; 3]) -> bool {
+            false
+        }
+        fn structures_with_piece_at(&self, _: [i32; 3]) -> Vec<String> {
+            Vec::new()
+        }
+        fn moon_phase(&self, _: [i32; 3]) -> usize {
+            0
+        }
+        fn spawning_monsters(&self) -> bool {
+            true
+        }
+        fn no_collision(&self, _: horizon_core::geometry::Aabb) -> bool {
+            true
+        }
+        fn free_chicken(&self, _: horizon_core::geometry::Aabb) -> Option<u32> {
+            None
+        }
+        fn ride_chicken(&mut self, _: u32, _: u32) {}
+        fn game_time(&self) -> i64 {
+            0
+        }
+        fn halloween(&self) -> bool {
+            false
+        }
+        fn create(&mut self, _: &str, _: crate::mobs::spawn_rules::Reason) -> Option<Mob> {
+            None
+        }
+        fn spawn_data(&self) -> crate::mobs::finalize::SpawnData<'_> {
+            crate::mobs::finalize::SpawnData {
+                registries: &self.registries,
+                enchantments: &self.enchantments,
+                items: &self.items,
+                camel_husk_size: (1.0, 1.0),
+            }
+        }
+    }
+    pub(in crate::mobs) fn run_finalize(m: &mut Mob, difficulty: LocalDifficulty) {
+        run_finalize_in(m, difficulty, None);
+    }
+    /// [`run_finalize`] for a member of a pack: `group` is the `SpawnGroupData` the previous
+    /// member returned (`None` for the first), and the result is what this one returns.
+    pub(in crate::mobs) fn run_finalize_in(
+        m: &mut Mob,
+        difficulty: LocalDifficulty,
+        group: Option<crate::mobs::finalize::Group>,
+    ) -> Option<crate::mobs::finalize::Group> {
+        static LEVEL: std::sync::OnceLock<std::sync::Mutex<Level>> = std::sync::OnceLock::new();
+        let mut level = LEVEL
+            .get_or_init(|| {
+                let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION);
+                let defaults = horizon_world::item_defaults::read(&root).unwrap();
+                std::sync::Mutex::new(Level {
+                    registries: crate::mobs::finalize::SpawnRegistries::load(&root),
+                    enchantments: crate::enchant::Enchantments::load(&root, &defaults).unwrap(),
+                    items: crate::items::Items::tags_only(
+                        &root,
+                        &horizon_world::loot::PackOverlay::NONE,
+                        &defaults,
+                    )
+                    .unwrap(),
+                })
+            })
+            .lock()
+            .unwrap();
+        let mut random = m.random.clone();
+        let mut cx = crate::mobs::finalize::Ctx {
+            level: &mut *level,
+            random: &mut random,
+            difficulty,
+            created: Vec::new(),
+            jockey_rider: None,
+        };
+        cx.finalize(m, crate::mobs::spawn_rules::Reason::Natural, group)
+    }
+
     fn spawn(types: &crate::mobs::MobTypes, kind: &str, id: u32) -> Mob {
         spawn_with(types, kind, id, &LocalDifficulty::new(3, 0, 0, 1.0))
     }
@@ -549,8 +263,7 @@ mod tests {
             horizon_core::geometry::Vec3::new(0.5, 64.0, 0.5),
             0.0,
         );
-        let mut level = horizon_core::random::LegacyRandom::new(i64::from(id));
-        finalize(&mut m, &BiomeFacts::default(), difficulty, &mut level);
+        run_finalize(&mut m, *difficulty);
         m
     }
     /// The four effects `Spider.SpiderEffectsGroupData.setRandomEffect` picks.
@@ -576,7 +289,8 @@ mod tests {
             let m = spawn_with(&types, "minecraft:spider", id, &hard);
             let effects = &m.extra.effects;
             assert!(effects.len() <= 1, "{id}: {effects:?}");
-            for &(effect, duration, amplifier) in effects {
+            for stored in effects {
+                let (effect, duration, amplifier) = (stored.id, stored.duration, stored.amplifier);
                 let i = SPIDER_EFFECTS
                     .iter()
                     .position(|e| *e == effect)
@@ -677,8 +391,8 @@ mod tests {
             "minecraft:random_spawn_bonus"
         ));
         assert!(!m.extra.left_handed);
-        assert!(m.extra.head.is_none());
-        assert!(m.extra.main_hand.is_none());
+        assert!(m.equipment_stacks()[5].is_none());
+        assert!(m.equipment_stacks()[0].is_none());
     }
     /// `Zombie` / `AbstractSkeleton` halloween garb: 25% of empty heads, never
     /// on other mobs, and not when it is not Halloween.
@@ -689,10 +403,13 @@ mod tests {
         let mut lanterns = 0;
         for id in 1..=400 {
             let mut m = spawn(&types, "minecraft:skeleton", id);
-            m.extra.head = None;
+            m.set_equipment_stack(5, None);
             let mut random = m.random.clone();
             crate::mobs::finalize::halloween_head(&mut m, &mut random, true);
-            match m.extra.head.as_deref() {
+            match m.equipment_stacks()[5]
+                .as_ref()
+                .map(|stack| stack.item.as_ref())
+            {
                 Some("minecraft:jack_o_lantern") => {
                     pumpkins += 1;
                     lanterns += 1;
@@ -712,14 +429,14 @@ mod tests {
         );
         assert!(lanterns < pumpkins / 2, "{lanterns} lanterns of {pumpkins}");
         let mut m = spawn(&types, "minecraft:skeleton", 1);
-        m.extra.head = None;
+        m.set_equipment_stack(5, None);
         let mut random = m.random.clone();
         crate::mobs::finalize::halloween_head(&mut m, &mut random, false);
-        assert!(m.extra.head.is_none());
+        assert!(m.equipment_stacks()[5].is_none());
         let mut cow = spawn(&types, "minecraft:cow", 1);
-        cow.extra.head = None;
+        cow.set_equipment_stack(5, None);
         let mut random = cow.random.clone();
         crate::mobs::finalize::halloween_head(&mut cow, &mut random, true);
-        assert!(cow.extra.head.is_none());
+        assert!(cow.equipment_stacks()[5].is_none());
     }
 }

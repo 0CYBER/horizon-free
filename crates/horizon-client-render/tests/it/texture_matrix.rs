@@ -156,7 +156,8 @@ fn assert_close(actual: [u8; 4], expected: [u8; 4], what: &str) {
 #[test]
 #[ignore = "requires a host GPU; run with --ignored --nocapture"]
 fn texture_matrix_is_the_identity_in_the_vertex_stage_and_zero_in_the_fragment_stage() {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     eprintln!("Texture matrix GPU: {:?}", adapter.get_info().name);
     let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();

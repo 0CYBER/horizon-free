@@ -1,0 +1,11 @@
+[package]
+name = "wasm-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+horizon-mod-api = { path = "../../../horizon-mod-api" }
+horizon-mod-points = { path = "../../../horizon-mod-points", features = ["wasm-guest", "listener-fixture"] }
+
+[workspace]

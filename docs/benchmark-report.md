@@ -2,8 +2,7 @@
 
 Every benchmark Horizon writes uses this one JSON format: `horizon-client --benchmark`, the launcher's own
 measurements, and `tools/perf_bench.py` (which also writes it for vanilla and vanilla with mods). The same
-file is the local log a player can attach to an issue and, only with the player's consent, what the
-telemetry upload sends (minus the local-only fields below). The types, the statistics and the hardware
+file is the local log a player can attach to an issue by hand; nothing uploads it. The types, the statistics and the hardware
 detection are in `crates/horizon-bench`; nothing else builds a report by hand.
 
 A report holds summaries and histogram counts, never raw frame streams: a 10-minute run is a few
@@ -135,11 +134,9 @@ The statistic, in `horizon_bench::compare`, exact and deterministic:
 
 ## Local only
 
-`label` (a name the person running it chose) and `local` (paths of the logs the run wrote next to the
-report) stay on the machine: the upload removes them and dates the report to the day only, as every
-telemetry item is (`Report::for_upload`). The upload is `horizon-telemetry`'s `benchmark` item: this
-report, as it is, only with the player's consent to benchmark uploads (docs/telemetry.md). Nothing in a report
-identifies the player, the machine's name or the world: no host name, user name, path or address.
+Nothing in a report identifies the player, the machine's name or the world: no host name, user name, path or
+address. `label` (a name the person running it chose) and `local` (paths of the logs the run wrote next to the
+report) are kept in the file. A report is never sent anywhere (docs/telemetry.md).
 
 ## Where reports go
 

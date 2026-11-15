@@ -1,0 +1,1 @@
+A mod's special item model renderer: the game calls it for each special model of its registered type it draws.

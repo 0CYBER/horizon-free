@@ -102,6 +102,7 @@ pub struct PlayerCheck {
 #[derive(Clone, Copy, Debug)]
 pub struct LevelLoadTracker {
     state: Option<ClientState>,
+    transition_screen: Option<usize>,
     close_delay_ms: u64,
     /// `LevelLoadingScreen.reason`.
     pub reason: Reason,
@@ -110,6 +111,7 @@ impl LevelLoadTracker {
     pub fn new(close_delay_ms: u64) -> Self {
         Self {
             state: None,
+            transition_screen: None,
             close_delay_ms,
             reason: Reason::Other,
         }
@@ -120,11 +122,23 @@ impl LevelLoadTracker {
             timeout_after: now + CLIENT_WAIT_TIMEOUT_MS,
         });
         self.reason = reason;
+        self.transition_screen = None;
     }
     /// The tracker's work is over and the screen has closed
     /// (`ClientPacketListener.tick` drops it once the level is ready).
     pub fn finish(&mut self) {
         self.state = None;
+        self.transition_screen = None;
+    }
+    /// Retain the presentation selected once at dimension entry, until this load finishes.
+    pub fn set_transition_screen(&mut self, screen: Option<usize>) {
+        if self.is_active() {
+            self.transition_screen = screen;
+        }
+    }
+    /// The selected presentation, absent for vanilla or after completion.
+    pub fn transition_screen(&self) -> Option<usize> {
+        self.transition_screen
     }
     /// A load is under way, so its screen is up.
     pub fn is_active(&self) -> bool {
@@ -480,6 +494,56 @@ pub fn draw_loading_overlay(
     );
 }
 
+/// Mods' startup bars under the stage bar, newest first, each with its label above it, as many
+/// as fit and at most four; and their lines in the top left corner (NeoForge's
+/// `StartupNotificationManager`). Labels and lines are cut to one line.
+pub fn draw_mod_progress(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    bars: &[(String, f32)],
+    lines: &[String],
+) {
+    let (w, h) = (batch.width, batch.height);
+    let (_, _, half_width, _) = logo_layout(w, h);
+    let x_center = (w as i32) / 2;
+    let white = u32::MAX;
+    let track = crate::hud::rgba(255, 255, 255, 64);
+    // Under the stage bar's bottom edge: a 9 px label and a 3 px bar for each mod bar.
+    let mut top = (f64::from(h) * 0.8325) as i32 + 8;
+    for (label, done) in bars.iter().take(4) {
+        if top + 13 > h as i32 {
+            break;
+        }
+        let label = crate::hud_kit::fit::ellipsize(atlas, label, (2 * half_width) as f32);
+        let text = Text::literal(label.into_owned());
+        let tw = atlas.font.width_text(&text) as i32;
+        let left = (x_center - tw / 2) as f32;
+        batch.text_styled(atlas, &text, left, top as f32, white, true);
+        let [x0, y0, x1, y1] = [
+            x_center - half_width,
+            top + 10,
+            x_center + half_width,
+            top + 13,
+        ];
+        let filled = ((x1 - x0) as f32 * done.clamp(0.0, 1.0)).ceil() as i32;
+        fill_corners(batch, atlas, [x0, y0, x1, y1], track);
+        fill_corners(batch, atlas, [x0, y0, x0 + filled, y1], white);
+        top += 16;
+    }
+    for (row, line) in lines.iter().enumerate() {
+        let line = crate::hud_kit::fit::ellipsize(atlas, line, w - 8.0);
+        let top = 4.0 + row as f32 * 10.0;
+        batch.text_styled(
+            atlas,
+            &Text::literal(line.into_owned()),
+            4.0,
+            top,
+            white,
+            true,
+        );
+    }
+}
+
 /// The startup loading screen: the stage's line and a progress bar, centred
 /// like `LevelLoadingScreen`'s text and bar.
 pub fn draw_progress(batch: &mut HudBatch, atlas: &HudAtlas, line: &str, progress: f32) {
@@ -645,6 +709,31 @@ pub fn draw_file_fixer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mod_bars_draw_under_the_stage_bar_at_most_four() {
+        let atlas = HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap();
+        let drawn = |bars: usize, lines: &[String]| {
+            let mut batch = HudBatch::scratch([854, 4000]);
+            let bars: Vec<_> = (0..bars).map(|i| (format!("bar {i}"), 0.5)).collect();
+            draw_mod_progress(&mut batch, &atlas, &bars, lines);
+            batch.vertices.len()
+        };
+        assert_eq!(drawn(0, &[]), 0);
+        assert!(drawn(1, &[]) > 0);
+        assert!(drawn(2, &[]) > drawn(1, &[]));
+        // A fifth bar at once is not drawn.
+        assert_eq!(drawn(5, &[]), drawn(4, &[]));
+        // A short screen draws only the bars that fit.
+        let mut batch = HudBatch::scratch([854, 480]);
+        let bars = vec![("bar".to_owned(), 1.0); 4];
+        draw_mod_progress(&mut batch, &atlas, &bars, &[]);
+        let bottom = batch.vertices.iter().map(|v| v.pos[1]).fold(0.0, f32::max);
+        assert!(bottom <= batch.height, "{bottom} > {}", batch.height);
+    }
 
     #[test]
     fn the_mojang_logo_is_a_quarter_of_the_shorter_side_and_four_times_as_wide() {

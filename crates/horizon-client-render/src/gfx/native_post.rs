@@ -1816,11 +1816,12 @@ mod tests {
     /// delta, and a long wait between its frames is not a gap that starts them over.
     #[test]
     fn a_scripted_clock_drives_time_frame_index_and_eased_values() {
+        let _gpu = crate::gfx::test_gpu::lock();
         use crate::gfx::pack_uniforms::FrameTiming;
-        let Some((device, _)) = device() else {
+        let Some((device, _)) = device(false) else {
             return;
         };
-        let hud = crate::hud::HudBatch::new([4, 4]);
+        let hud = crate::hud::HudBatch::scratch([4, 4]);
         let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
         let mut native =
             NativeFrame::new(&device, None, Vec::new(), Default::default(), None, false);
@@ -1859,11 +1860,18 @@ mod tests {
     /// however the frames before moved the eased values, wetness and the frame count.
     #[test]
     fn a_reset_frame_gives_a_fresh_pack_s_inputs() {
+        let _gpu = crate::gfx::test_gpu::lock();
         use crate::gfx::pack_uniforms::FrameTiming;
-        let Some((device, _)) = device() else {
+        let Some((device, _)) = device(false) else {
             return;
         };
-        let hud = crate::hud::HudBatch::new([4, 4]);
+        let hud = crate::hud::HudBatch::new(
+            [4, 4],
+            crate::hud::GuiScale {
+                requested: 0,
+                unicode: false,
+            },
+        );
         let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
         let new = || NativeFrame::new(&device, None, Vec::new(), Default::default(), None, false);
         let (mut used, mut fresh) = (new(), new());
@@ -1893,7 +1901,8 @@ mod tests {
     /// `fb`, which a pass reads before the pass that writes it, so it holds last frame's.
     #[test]
     fn a_reset_post_reads_its_own_targets_blank() {
-        let Some((device, queue)) = device() else {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
             return;
         };
         let manifest = "schema = 1
@@ -1902,17 +1911,17 @@ name = \"T\"
 version = \"1\"
 api = \"0.2\"
             [[post]]
-file = \"a.wgsl\"
-[[post]]
-file = \"b.wgsl\"
-output = \"fb\"
+    file = \"a.wgsl\"
+    [[post]]
+    file = \"b.wgsl\"
+    output = \"fb\"
             [[post]]
-file = \"c.wgsl\"
-";
+    file = \"c.wgsl\"
+    ";
         let a = "fn post(input: PostInput) -> vec4<f32> { return vec4<f32>(textureLoad(fb, vec2<i32>(input.pixel), 0).rgb + 0.25, 1.0); }
-";
+    ";
         let pass = "fn post(input: PostInput) -> vec4<f32> { return input.color; }
-";
+    ";
         let files = [
             (MANIFEST, manifest),
             ("a.wgsl", a),
@@ -1998,10 +2007,12 @@ file = \"c.wgsl\"
         );
     }
 
-    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = crate::gfx::test_gpu::instance();
-        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+    fn device(needs_depth_load: bool) -> Option<(wgpu::Device, wgpu::Queue)> {
+        let adapter = crate::gfx::test_gpu::adapter()?;
+        if needs_depth_load && !crate::gfx::test_gpu::supports_depth_load(&adapter) {
+            return None;
+        }
+        Some(crate::gfx::test_gpu::device(&adapter))
     }
 
     /// A pack's frame with nothing but an SDR display written (`headroom` 1): the tonemap
@@ -2041,7 +2052,8 @@ file = \"c.wgsl\"
     /// keep it) times an option, the second halves it and writes the depth as blue.
     #[test]
     fn passes_chain_through_half_float_targets_with_options_and_depth() {
-        let Some((device, queue)) = device() else {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
             return;
         };
         let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
@@ -2150,7 +2162,8 @@ file = \"c.wgsl\"
     /// frame before: half of white in linear light, 186 encoded.
     #[test]
     fn the_last_pass_reads_last_frames_input_as_history() {
-        let Some((device, queue)) = device() else {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
             return;
         };
         let manifest = "schema = 1
@@ -2159,14 +2172,14 @@ name = \"T\"
 version = \"1\"
 api = \"0.2\"
             [[post]]
-file = \"a.wgsl\"
-[[post]]
-file = \"b.wgsl\"
-";
+    file = \"a.wgsl\"
+    [[post]]
+    file = \"b.wgsl\"
+    ";
         let a = "fn post(input: PostInput) -> vec4<f32> { return vec4<f32>(input.color.rgb * 0.5, 1.0); }
-";
+    ";
         let b = "fn post(input: PostInput) -> vec4<f32> { return textureLoad(history, vec2<i32>(input.pixel), 0); }
-";
+    ";
         let files = [(MANIFEST, manifest), ("a.wgsl", a), ("b.wgsl", b)]
             .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
             .into();
@@ -2268,11 +2281,12 @@ file = \"b.wgsl\"
     /// is an integer format, and `surface_at` gets the floats back from the stored bits.
     #[test]
     fn the_surface_is_an_integer_target_that_the_post_stage_reads_bit_exact() {
+        let _gpu = crate::gfx::test_gpu::lock();
         assert_eq!(
             super::super::native_material::SURFACE_FORMAT.sample_type(None, None),
             Some(wgpu::TextureSampleType::Uint)
         );
-        let Some((device, queue)) = device() else {
+        let Some((device, queue)) = device(true) else {
             return;
         };
         let manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
@@ -2439,7 +2453,8 @@ file = \"b.wgsl\"
     /// signs and denormals included.
     #[test]
     fn the_surface_keeps_every_bit_of_the_floats_written_through_the_material_stage_bitcast() {
-        let Some((device, queue)) = device() else {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(false) else {
             return;
         };
         let cases: [[u32; 4]; 4] = [
@@ -2574,8 +2589,9 @@ file = \"b.wgsl\"
     /// an 8-bit step), at alpha 1.
     #[test]
     fn the_world_comes_back_through_decode_tonemap_and_encode() {
+        let _gpu = crate::gfx::test_gpu::lock();
         assert!(tonemap_entries(false).contains("horizon_encode(min(horizon_sanitize(out)"));
-        let Some((device, queue)) = device() else {
+        let Some((device, queue)) = device(true) else {
             return;
         };
         let post = "[[post]]\nfile = \"a.wgsl\"\n[[post]]\nfile = \"b.wgsl\"\n";
@@ -2698,10 +2714,11 @@ file = \"b.wgsl\"
     /// without one: `hdr` 0, `headroom` 1, `paper_white` and `peak` 80, `black_level` 0.
     #[test]
     fn the_frame_describes_the_display_it_goes_to() {
-        let Some((device, _)) = device() else {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, _)) = device(false) else {
             return;
         };
-        let hud = crate::hud::HudBatch::new([4, 4]);
+        let hud = crate::hud::HudBatch::scratch([4, 4]);
         let frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
         let mut native =
             NativeFrame::new(&device, None, Vec::new(), Default::default(), None, false);
@@ -2733,7 +2750,8 @@ file = \"b.wgsl\"
     /// to scRGB and back to HDR10 (`Hdr::retargeted`) maps it once all the same.
     #[test]
     fn a_pack_is_tone_mapped_once_by_its_own_curve_or_horizons() {
-        let Some((device, queue)) = device() else {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device(true) else {
             return;
         };
         // Light 8 times paper white, as the world's float frame stores it, in gamma.

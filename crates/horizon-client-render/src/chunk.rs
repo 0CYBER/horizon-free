@@ -1,8 +1,8 @@
 //! Resident client chunk storage. Sections are reference-counted so worker
 //! threads can mesh and light immutable snapshots while the game thread edits
 //! (copy-on-write through `Arc::make_mut`).
+use horizon_core::nbt::{Compound, Tag};
 use horizon_core::paletted::{PalettedContainer, Strategy};
-use horizon_world::nbt::{Compound, Tag};
 use horizon_world::registry::BlockStateId;
 use std::sync::atomic::{AtomicI16, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -72,9 +72,17 @@ impl LevelShape {
             logical_height,
         })
     }
+    pub fn with_ceiling(mut self, has_ceiling: bool) -> Self {
+        self.has_ceiling = has_ceiling;
+        self
+    }
     /// One above the highest block (`getMaxY() + 1`).
     pub fn max_y(self) -> i32 {
         self.min_y + self.height
+    }
+    /// Whether a block Y is inside the dimension's build height.
+    pub fn contains_y(self, y: i32) -> bool {
+        (self.min_y..self.max_y()).contains(&y)
     }
     pub fn min_section(self) -> i32 {
         self.min_y >> 4
@@ -94,18 +102,30 @@ impl LevelShape {
     }
 }
 
-/// The shapes of a world's three levels, from its dimension types.
+/// The shapes of a world's levels, from its dimension types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LevelShapes {
     pub overworld: LevelShape,
     pub nether: LevelShape,
     pub end: LevelShape,
+    /// The levels past vanilla's three that the world's data packs give, by id.
+    /// Leaked once per world opened, so the shapes stay `Copy`.
+    pub extra: &'static [ExtraLevel],
+}
+/// A level past vanilla's three.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExtraLevel {
+    pub id: &'static str,
+    /// The dimension type its level stem names.
+    pub dimension_type: &'static str,
+    pub shape: LevelShape,
 }
 impl LevelShapes {
     pub const VANILLA: Self = Self {
         overworld: LevelShape::OVERWORLD,
         nether: LevelShape::NETHER,
         end: LevelShape::END,
+        extra: &[],
     };
     /// The shape of the level `id` (`minecraft:overworld`,
     /// `minecraft:the_nether`, `minecraft:the_end`); others get the
@@ -114,8 +134,26 @@ impl LevelShapes {
         match id {
             "minecraft:the_nether" => self.nether,
             "minecraft:the_end" => self.end,
-            _ => self.overworld,
+            _ => self
+                .extra
+                .iter()
+                .find(|level| level.id == id)
+                .map_or(self.overworld, |level| level.shape),
         }
+    }
+    /// Whether the world has the level `id`.
+    pub fn has(&self, id: &str) -> bool {
+        matches!(
+            id,
+            "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
+        ) || self.extra.iter().any(|level| level.id == id)
+    }
+    /// The dimension type of the level `id`: a vanilla level's is its own name.
+    pub fn dimension_type<'a>(&self, id: &'a str) -> &'a str {
+        self.extra
+            .iter()
+            .find(|level| level.id == id)
+            .map_or(id, |level| level.dimension_type)
     }
     pub fn get_mut(&mut self, id: &str) -> &mut LevelShape {
         match id {
@@ -218,9 +256,8 @@ impl Default for ColumnLayout {
     }
 }
 
-/// Biomes are 4x4x4 containers over the biome table (67 entries: a 7-bit
-/// global palette).
-pub const BIOME_STRATEGY: Strategy = Strategy::biomes(8);
+/// Biomes are 4x4x4 containers with 16-bit IDs, including saved placeholders.
+pub const BIOME_STRATEGY: Strategy = Strategy::biomes(16);
 
 /// Bits of the block states' global palette: 16 for vanilla's 35,723 states
 /// (what vanilla servers and clients send), more when content mods add states
@@ -634,14 +671,24 @@ pub struct Chunk {
     pub postprocess: Vec<[i32; 3]>,
     /// Saved data Horizon keeps but does not simulate (save.rs).
     pub saved: Option<Arc<ChunkExtras>>,
+    /// Validated container limits, rebuilt on chunk admission and extras writes.
+    pub container_stack_limits: std::collections::HashMap<(i32, i32, i32), u32>,
     /// Entities read from a save (vanilla entity NBT), spawned on arrival.
-    pub entities: Vec<horizon_world::nbt::Tag>,
+    pub entities: Vec<horizon_core::nbt::Tag>,
     /// Structure starts reaching into this chunk (`structures.References`):
     /// structure id and the start's chunk.
     pub structure_refs: Vec<(Arc<str>, (i32, i32))>,
     /// The starts generation made in this chunk (`structures.starts`), saved
     /// with the state their placement has reached by then.
     pub structure_starts: Vec<Arc<horizon_world::worldgen::structure::start::StructureStart>>,
+    /// What the cells of `dynamic_light` blocks emit where a part answered `light_emission`
+    /// (`IBlockExtension.getLightEmission`), by [`Self::dynamic_cell`]: the light engine seeds them
+    /// from here, and a cell without an entry emits its state's own light. Asked on the thread that
+    /// owns the level, dropped with the chunk, never saved.
+    pub dynamic_emission: crate::fast_hash::FxHashMap<u32, u8>,
+    /// The chunk came in holding a `dynamic_light` state and its cells are not asked yet: no light
+    /// job reads it until they are (`streaming::light_region_ready`).
+    pub dynamic_pending: bool,
 }
 impl Chunk {
     /// An all-air chunk in the current `layout`.
@@ -669,14 +716,22 @@ impl Chunk {
             structure_starts: Vec::new(),
             postprocess: Vec::new(),
             saved: None,
+            container_stack_limits: Default::default(),
             entities: Vec::new(),
+            dynamic_emission: Default::default(),
+            dynamic_pending: false,
         }
     }
+    /// The [`Self::dynamic_emission`] key of the cell at `y` (chunk-local `x`, `z`):
+    /// `section << 12 | y << 8 | z << 4 | x`; `None` outside the column.
+    pub fn dynamic_cell(&self, x: i32, y: i32, z: i32) -> Option<u32> {
+        Some((self.section_index(y)? as u32) << 12 | index(x, y, z) as u32)
+    }
     /// The original `structures.starts`, including starts with unknown pieces.
-    pub fn saved_structure_starts(&self) -> Option<&horizon_world::nbt::Compound> {
+    pub fn saved_structure_starts(&self) -> Option<&horizon_core::nbt::Compound> {
         let structures = self.saved.as_ref()?.root.get(&"structures".into())?;
         match structures.get("starts")? {
-            horizon_world::nbt::Tag::Compound(starts) => Some(starts),
+            horizon_core::nbt::Tag::Compound(starts) => Some(starts),
             _ => None,
         }
     }
@@ -761,6 +816,11 @@ impl Chunk {
         // `Heightmap.update`: a write two or more below a map's height can't
         // move it. Any other change rebuilds that map on the next read.
         if previous != v {
+            // A part's answer was for the state the cell held.
+            if !self.dynamic_emission.is_empty() {
+                self.dynamic_emission
+                    .remove(&((s as u32) << 12 | index(x, y, z) as u32));
+            }
             for map in [&mut self.surface, &mut self.motion_blocking] {
                 map.write(column(x, z), y);
             }
@@ -770,6 +830,12 @@ impl Chunk {
     /// Section `s`'s block states replaced whole (a bulk edit): its storage
     /// compacted, and the heightmaps built again on their next read.
     pub fn replace_blocks(&mut self, s: usize, values: &[u32; 4096]) {
+        // The parts' answers of the cells whose state changes go with it.
+        let old = &self.sections[s];
+        self.dynamic_emission.retain(|&cell, _| {
+            let i = (cell & 4095) as usize;
+            cell >> 12 != s as u32 || old.get(i) == values[i]
+        });
         let section = Arc::make_mut(&mut self.sections[s]);
         section.blocks = Section::from_blocks(values);
         section.compact();
@@ -944,35 +1010,46 @@ pub struct SavedProto {
     pub entities: Vec<Tag>,
 }
 
-/// A container's loot table and what Horizon rolled from it. Vanilla keeps
-/// `LootTable` and `LootTableSeed` until the container is first opened;
-/// Horizon rolls when it generates or loads the chunk, and saves the table
-/// again while the container still holds exactly the rolled items.
+/// Original metadata for a container whose loot has not been accessed.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RolledLoot {
-    pub pos: (i32, i32, i32),
-    pub table: String,
-    /// The saved `LootTableSeed`, written back unless 0 (trySaveLootTable).
-    pub seed: Option<i64>,
-    /// The rolled `Items`.
-    pub items: Tag,
+pub struct PendingContainerLoot {
+    pub table: Tag,
+    pub seed: Option<Tag>,
 }
-impl RolledLoot {
-    /// Puts the loot table back in place of `Items` while they are still the
-    /// roll; false once the container holds anything else.
-    pub fn restore(&self, map: &mut Compound) -> bool {
-        // An empty shulker box saves no `Items`, which matches an empty roll.
-        let saved = map.get(&"Items".into());
-        let empty = matches!(&self.items, Tag::List(l) if l.is_empty());
-        if saved != Some(&self.items) && !(saved.is_none() && empty) {
-            return false;
+impl PendingContainerLoot {
+    /// Keep the original tags, including an absent or explicitly zero seed.
+    pub fn from_tag(tag: &Tag) -> Option<Self> {
+        let table = tag.get("LootTable")?;
+        let Tag::String(id) = table else { return None };
+        horizon_client_core::identifier::normalize_id(&id.to_string_lossy())?;
+        Some(Self {
+            table: table.clone(),
+            seed: tag.get("LootTableSeed").cloned(),
+        })
+    }
+    pub fn table_id(&self) -> String {
+        let Tag::String(id) = &self.table else {
+            unreachable!("validated loot table")
+        };
+        horizon_client_core::identifier::normalize_id(&id.to_string_lossy())
+            .expect("validated loot table")
+    }
+    pub fn seed_value(&self) -> Option<i64> {
+        horizon_client_core::nbt_value::number(self.seed.as_ref())
+    }
+    /// Overlay pending metadata without manufacturing an Items list. The table is written as the
+    /// identifier it reads as (`RandomizableContainer.trySaveLootTable`,
+    /// `ContainerEntity.addChestVehicleSaveData`): an empty string is `minecraft:`.
+    pub fn write_tags(&self, map: &mut Compound) {
+        map.insert(
+            "LootTable".into(),
+            Tag::String(self.table_id().as_str().into()),
+        );
+        map.remove(&"LootTableSeed".into());
+        if let Some(seed) = &self.seed {
+            map.insert("LootTableSeed".into(), seed.clone());
         }
         map.remove(&"Items".into());
-        map.insert("LootTable".into(), Tag::String(self.table.as_str().into()));
-        if let Some(seed) = self.seed.filter(|s| *s != 0) {
-            map.insert("LootTableSeed".into(), Tag::Long(seed));
-        }
-        true
     }
 }
 
@@ -980,9 +1057,12 @@ impl RolledLoot {
 #[derive(Clone, Debug, Default)]
 pub struct ChunkExtras {
     /// Server-owned mod data attached to this chunk.
-    pub attachments: horizon_world::attachments::Attachments,
+    pub attachments: horizon_mod_runtime::attachments::Attachments,
     /// Attachment maps of the chunk's block entities, on a save snapshot.
-    pub block_entity_attachments: Vec<((i32, i32, i32), horizon_world::attachments::Attachments)>,
+    pub block_entity_attachments: Vec<(
+        (i32, i32, i32),
+        horizon_mod_runtime::attachments::Attachments,
+    )>,
     /// Chunk root keys written back as loaded (structures, PostProcessing,
     /// InhabitedTime, blending data, ...).
     pub root: Compound,
@@ -1001,12 +1081,36 @@ pub struct ChunkExtras {
     pub fluid_ticks: Vec<horizon_core::ticks::SavedTick>,
     /// Game time written as `LastUpdate`.
     pub last_update: i64,
-    /// Containers still holding their loot table's roll.
-    pub rolled_loot: Vec<RolledLoot>,
+    /// Unopened tables, owned only here and indexed by absolute block position.
+    pub pending_loot: std::collections::HashMap<(i32, i32, i32), PendingContainerLoot>,
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_worlds_extra_levels_keep_their_shape_and_type() {
+        let shape = super::LevelShape::new(-128, 448, 448, true, false).unwrap();
+        let levels = super::LevelShapes {
+            extra: vec![super::ExtraLevel {
+                id: "test:pocket",
+                dimension_type: "test:small",
+                shape,
+            }]
+            .leak(),
+            ..super::LevelShapes::VANILLA
+        };
+        assert_eq!(levels.get("test:pocket"), shape);
+        assert_eq!(levels.dimension_type("test:pocket"), "test:small");
+        assert_eq!(
+            levels.dimension_type("minecraft:the_end"),
+            "minecraft:the_end"
+        );
+        assert!(levels.has("test:pocket"));
+        assert!(levels.has("minecraft:the_nether"));
+        assert!(!levels.has("test:gone"));
+        assert_eq!(levels.get("test:gone"), super::LevelShape::OVERWORLD);
+    }
+
     use super::*;
     #[test]
     fn extreme_y_queries_are_air_and_writes_leave_the_column_unchanged() {
@@ -1088,6 +1192,7 @@ mod tests {
     /// The kept WORLD_SURFACE heights match a scan of every column after
     /// each of a few thousand writes (air, cave air, stone, whole sections).
     #[test]
+    #[ignore = "daily"]
     fn world_surface_follows_writes() {
         let (air, cave_air, stone) = (0, 7, 1);
         let is_air = |v: u32| v == air || v == cave_air;
@@ -1188,6 +1293,7 @@ mod tests {
     /// Chunk snapshots can be cloned while helper threads refresh a stale height. No snapshot
     /// may retain the old height with its stale bit cleared, for either map.
     #[test]
+    #[ignore = "daily"]
     fn cloning_during_a_height_refresh_keeps_the_new_height() {
         for _ in 0..4096 {
             let mut chunk = Chunk::empty(0, 0);
@@ -1214,6 +1320,7 @@ mod tests {
     /// MOTION_BLOCKING ignores states that don't count (air, grass) and
     /// follows writes as the surface map does, both maps kept at once.
     #[test]
+    #[ignore = "daily"]
     fn motion_blocking_follows_writes() {
         let (air, grass, water, stone) = (0, 3, 5, 1);
         let blocks = |v: u32| v == water || v == stone;

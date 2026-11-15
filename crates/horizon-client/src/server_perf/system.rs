@@ -1,4 +1,4 @@
-use crate::gamerules::GameRules as Rules;
+use crate::gamerules::{GameRules as Rules, vanilla};
 use horizon_perf_format::Gauges;
 use horizon_perf_format::v1::{Build, GameRules, HorizonOptions, Machine, Settings};
 
@@ -209,14 +209,16 @@ pub fn settings(view: u32, simulation: u32, max_players: u32, compression: i32) 
 /// The game rules a capture records: the typed allowlist, nothing else from the world's rule set.
 pub fn game_rules(rules: &Rules) -> GameRules {
     GameRules {
-        random_tick_speed: Some(rules.int("random_tick_speed")),
-        max_entity_cramming: Some(rules.int("max_entity_cramming")),
-        fire_spread_radius_around_player: Some(rules.int("fire_spread_radius_around_player")),
-        advance_time: Some(rules.bool("advance_time")),
-        mob_griefing: Some(rules.bool("mob_griefing")),
-        spawn_mobs: Some(rules.bool("spawn_mobs")),
-        spawn_monsters: Some(rules.bool("spawn_monsters")),
-        spawner_blocks_work: Some(rules.bool("spawner_blocks_work")),
+        random_tick_speed: Some(rules.int_at(vanilla::RANDOM_TICK_SPEED)),
+        max_entity_cramming: Some(rules.int_at(vanilla::MAX_ENTITY_CRAMMING)),
+        fire_spread_radius_around_player: Some(
+            rules.int_at(vanilla::FIRE_SPREAD_RADIUS_AROUND_PLAYER),
+        ),
+        advance_time: Some(rules.bool_at(vanilla::ADVANCE_TIME)),
+        mob_griefing: Some(rules.bool_at(vanilla::MOB_GRIEFING)),
+        spawn_mobs: Some(rules.bool_at(vanilla::SPAWN_MOBS)),
+        spawn_monsters: Some(rules.bool_at(vanilla::SPAWN_MONSTERS)),
+        spawner_blocks_work: Some(rules.bool_at(vanilla::SPAWNER_BLOCKS_WORK)),
     }
 }
 

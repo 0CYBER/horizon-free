@@ -1,8 +1,11 @@
-use horizon_world::{chunk_status::ChunkStatus, nbt::Tag, worldgen::terrain::PreLightChunkStage};
 use serde_json::Value;
 use std::{
     fs,
     io::{self, Write},
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{chunk_status::ChunkStatus, worldgen::terrain::PreLightChunkStage},
 };
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = crate::args().collect();

@@ -53,7 +53,13 @@ fn shader_key(path: &Path) -> Option<String> {
     if !horizon_shader_api::package::is_pack(path) {
         return None;
     }
-    let manifest = horizon_shader_api::Pack::read_manifest(path).ok()?;
+    let manifest = if path.is_dir() {
+        horizon_shader_api::Pack::read_manifest(path)
+    } else {
+        let mut zip = horizon_port_pack::zip_intake::open(fs::File::open(path).ok()?).ok()?;
+        horizon_shader_api::Pack::read_zip_manifest(&mut zip)
+    }
+    .ok()?;
     Some(format!("horizon:{}", manifest.id))
 }
 
@@ -226,7 +232,7 @@ pub(crate) fn entry(path: &Path, name: &str) -> Option<Vec<u8>> {
             .read_to_end(&mut out)
             .ok()?;
     } else {
-        let mut zip = zip::ZipArchive::new(fs::File::open(path).ok()?).ok()?;
+        let mut zip = horizon_port_pack::zip_intake::open(fs::File::open(path).ok()?).ok()?;
         let entry = zip.by_name(name).ok()?;
         entry.take(4 << 20).read_to_end(&mut out).ok()?;
     }
@@ -380,19 +386,19 @@ pub fn kind_of(file: &Path) -> Result<Kind, String> {
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase());
     match ext.as_deref() {
-        Some(SHADER_PACKAGE) => return Ok(Kind::Shader),
-        Some("zip") => {}
+        Some(SHADER_PACKAGE | "zip") => {}
         _ => {
             return Err(format!(
                 "{name} is not a pack: packs are .zip or .hshader files."
             ))
         }
     }
-    let zip = fs::File::open(file)
-        .ok()
-        .and_then(|f| zip::ZipArchive::new(f).ok())
-        .ok_or_else(|| format!("{name} is not a zip file that can be read."))?;
-    if zip.index_for_name("pack.mcmeta").is_some() {
+    let archive = fs::File::open(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let zip = horizon_port_pack::zip_intake::open(archive)
+        .map_err(|e| format!("{}: {e}", file.display()))?;
+    if ext.as_deref() == Some(SHADER_PACKAGE) {
+        Ok(Kind::Shader)
+    } else if zip.index_for_name("pack.mcmeta").is_some() {
         Ok(Kind::Resource)
     } else if zip
         .file_names()

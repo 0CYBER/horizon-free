@@ -1,0 +1,34 @@
+id = "fnr_refused"
+name = "Function replacement check: refusals"
+version = "0.1.0"
+description = "fn-replace: targets the copy route can't take, each refused by name before anything compiles"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+# A function below the game crate.
+[[native.mixin]]
+id = "lower"
+target = "horizon_client_render::chunk::Chunk::get"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+# No such function.
+[[native.mixin]]
+id = "missing"
+target = "horizon_client::game::autosave::Game<'_>::no_such_function"
+kind = "HEAD"
+helper = "src/mixins/head.rs"
+
+# A body using a macro the game crate doesn't export.
+[[native.mixin]]
+id = "local_macro"
+target = "horizon_client::game::commands::Game<'_>::teleport_stops"
+kind = "HEAD"
+helper = "src/mixins/head.rs"

@@ -275,7 +275,8 @@ fn entity_state(mob: &mut Mob, species: Species, case: &Value) {
             }
         }
         Species::HappyGhast => {
-            mob.extra.body = case["bodyItem"].as_str().map(Into::into);
+            mob.extra
+                .set_body(case["bodyItem"].as_str().map(Into::into));
             if flag("isRidden") {
                 mob.rider = Some(Default::default());
             }

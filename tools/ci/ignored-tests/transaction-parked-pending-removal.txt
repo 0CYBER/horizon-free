@@ -1,0 +1,2 @@
+# A parked level's pending entity removal reads as gone from another level.
+horizon-client game::transaction_entities_tests::a_parked_levels_pending_removal_is_hidden_from_another_level_until_it_aborts lib daily child-process

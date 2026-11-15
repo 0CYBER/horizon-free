@@ -12,8 +12,9 @@ pub fn main() -> Result<(), Box<dyn Error>> {
         .find_map(|l| l.strip_prefix("#resources "))
         .map(PathBuf::from)
         .ok_or("no #resources line")?;
+    let defaults = horizon_world::item_defaults::read(&root)?;
     // Use the inventory's filtered translations so missing tooltip keys are caught.
-    let enchantments = Enchantments::load(&root);
+    let enchantments = Enchantments::load(&root, &defaults)?;
     let translate = |key: &str| enchantments.translate(key).map(str::to_owned);
     let mut output = String::new();
     for line in input.lines().filter(|l| !l.starts_with('#')) {

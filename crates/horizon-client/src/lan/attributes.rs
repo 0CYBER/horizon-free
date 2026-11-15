@@ -160,6 +160,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn player_live_map_reports_base_and_modified_value() {
+        use horizon_world::{attribute_map::ValueKind, attributes::entity::Catalog};
+        use std::sync::Arc;
+        let bits = |n: f64| format!("{:016x}", n.to_bits());
+        let catalog = Arc::new(Catalog::from_json(&serde_json::json!({
+            "data_version": horizon_world::DATA_VERSION,
+            "attributes": [{"id": "minecraft:max_health", "default": bits(20.0), "syncable": true}],
+            "entities": {"minecraft:player": {"minecraft:max_health": bits(20.0)}}
+        })).unwrap());
+        let mut player = LiveAttributes::new(catalog, "minecraft:player", &[17], || 1).unwrap();
+        let key = player.key("minecraft:max_health").unwrap();
+        let handle = player.get_instance(Some(key.clone())).unwrap().unwrap();
+        player
+            .edit(&handle, |instance, observer| {
+                instance.add_transient(
+                    Modifier::new("test:health", 4.0, Operation::AddValue).unwrap(),
+                    observer,
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            player.value(Some(key.clone()), ValueKind::Base).unwrap(),
+            20.0
+        );
+        assert_eq!(player.value(Some(key), ValueKind::Computed).unwrap(), 24.0);
+        assert!(player.key("minecraft:missing").is_none());
+    }
+
+    #[test]
     fn modifiers_replace_by_id_and_instances_are_created_once() {
         let mut out = Vec::new();
         let m = |id: &str, amount| AttributeModifier {

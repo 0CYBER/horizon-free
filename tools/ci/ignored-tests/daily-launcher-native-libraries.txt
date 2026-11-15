@@ -1,0 +1,2 @@
+# Fixture compilation runs outside the unit-only gate.
+horizon-launcher native_mods::registry_compile::tests::registry_adapter_compiles_facade_with_transitive_host_macro_metadata lib daily child-process

@@ -315,7 +315,7 @@ as its binding, and Start, a click or a key cancels; the keyboard's Escape unbin
 Don't declare a button Escape deliberately ignores: Optimize World's and a connection's Cancel have
 no pad button, only A on them, and show in `undeclared` for that reason.
 
-A focused text field shows A at its right end. `game/pad_actions.rs` holds this table. A screen that declares nothing keeps
+A focused text field shows A at its right end. `game/interface/pad_actions.rs` holds this table. A screen that declares nothing keeps
 B as Escape. `horizon-ctl pad status` lists `undeclared`: a button labelled
 Done, Back or Cancel on the current screen that didn't declare its job.
 `tools/pad_menu_e2e.py` fails on one in the settings screens. `glyphs` lists what is drawn: each
@@ -414,8 +414,8 @@ highlighted border).
 
 Vanilla's own keyboard focus navigation (`Screen.keyPressed`, 26.3) uses the
 same focus, so it works with no controller and with controllers turned off
-(`game/key_focus.rs` decides, `game/pad_menu.rs` applies it, and
-`game/startup_menu.rs` on the title shown while resources load). It matters
+(`game/interface/key_focus.rs` decides, `game/interface/pad_menu.rs` applies it, and
+`game/interface/startup_menu.rs` on the title shown while resources load). It matters
 most for the narrator: the focused widget is the narration's focused one.
 
 | Key | Does |

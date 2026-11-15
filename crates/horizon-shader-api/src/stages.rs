@@ -149,8 +149,9 @@ const BEFORE_WORLD_RESOURCES: [Resource; 7] = [
     shadow_color(10),
 ];
 
-/// The colour boundary, in every prelude: vanilla's 2.2 power both ways.
-const COLOR_HELPERS: &str = "\
+/// The colour boundary, in every prelude and in mod pipelines' generated entries:
+/// vanilla's 2.2 power both ways.
+pub const COLOR_HELPERS: &str = "\
 // Negatives and NaN made 0 (a comparison with NaN is false), so no `pow` sees them.
 fn horizon_sanitize(c: vec3<f32>) -> vec3<f32> {
     return select(vec3<f32>(0.0), c, c > vec3<f32>(0.0));

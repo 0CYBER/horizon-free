@@ -1,0 +1,2 @@
+# Client entity geometry and local-player reach (arismoko/horizon#4698).
+horizon-client game::native_player_reach::tests::client_reach_uses_predicted_eyes_and_the_tracked_targets_box lib daily resources

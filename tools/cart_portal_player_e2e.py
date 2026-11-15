@@ -16,7 +16,7 @@ REFS: Entity.handlePortal, Entity.teleportCrossDimension (the passengers are tak
 the vehicle again), AbstractMinecart.tick, ServerPlayer.teleport; cart_portal_e2e.py for the scene.
 LOGS: --out (default a temporary folder): <side>.log (server), <side>-client.log, <side>-client.txt (transcript),
 <side>.table (per tick).
-READS-BY: run by hand after changing game/nether_portal.rs or game/server_travel.rs.
+READS-BY: run by hand after changing game/blocks/nether_portal.rs or game/world/server_travel.rs.
 ENDS-WHEN: both sides ran and each client transcript holds what vanilla sent (exit status 1 if not), or the one side asked for has printed its summary.
 difference), or the one side asked for has printed its table.
 """

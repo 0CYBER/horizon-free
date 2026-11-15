@@ -1,0 +1,8 @@
+id = "wasm_test_observer"
+name = "Observer"
+version = "0.1.0"
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+[dependencies]
+wasm_test_library = "0.1.0"

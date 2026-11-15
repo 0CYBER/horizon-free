@@ -3,17 +3,22 @@ use horizon_core::{
     geometry::{Aabb, Axis, Vec3},
     position::BlockPos,
 };
-use horizon_world::{
-    chunk::BlockSection,
-    collision::CachedCollisionRegistry,
-    nbt::{self, Limits, Tag},
-    registry::{BlockRegistry, BlockStateId},
-};
 use std::{
     error::Error,
     fs,
     io::{BufRead, Write},
     path::PathBuf,
+};
+use {
+    horizon_core::{
+        nbt,
+        nbt::{Limits, Tag},
+    },
+    horizon_world::{
+        chunk::BlockSection,
+        collision::CachedCollisionRegistry,
+        registry::{BlockRegistry, BlockStateId},
+    },
 };
 
 fn bits(value: f64) -> u64 {

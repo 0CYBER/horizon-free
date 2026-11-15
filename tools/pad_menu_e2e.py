@@ -73,7 +73,7 @@ Cases:
   right stick picks another first (Up and Down), without closing the keyboard.
 - osk_labels: the on-screen keyboard over chat draws its keys' labels, in Horizon's look and with no menu style given
   (`HORIZON_MENU_STYLE=vanilla`, where the overlays have no fonts of their own and use the pack's).
-Needs built fast binaries (`cargo build --profile fast -p horizon-client -p horizon-client-lib --bins`)
+Needs built fast binaries (`cargo build --profile fast -p horizon-game -p horizon-client-lib --bins`)
 and prepared resources in .local/horizon-client/26.3. Exit status 0 when every case passes.
 - radial_commit: holding the opener shows the overlay and pauses nothing; the stick selects; releasing runs the action once.
 - radial_no_selection: a release with nothing selected, after retention ran out, or on an empty slot runs nothing.

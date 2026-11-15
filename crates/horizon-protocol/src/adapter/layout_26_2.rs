@@ -345,8 +345,8 @@ mod tests {
             w.bool(false);
             w.bool(display);
             if display {
-                w.nbt(&horizon_world::nbt::Tag::String("T".into()));
-                w.nbt(&horizon_world::nbt::Tag::String("D".into()));
+                w.nbt(&horizon_core::nbt::Tag::String("T".into()));
+                w.nbt(&horizon_core::nbt::Tag::String("D".into()));
                 crate::item::Template::write(&crate::item::Stack::new(1012, 1), &mut w);
                 w.varint(0);
                 w.i32(2);

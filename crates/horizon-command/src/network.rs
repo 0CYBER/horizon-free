@@ -93,6 +93,7 @@ pub fn from_packet(packet: &Commands, local: &Dispatcher) -> Dispatcher {
             redirect: node.redirect.as_ref().and_then(valid).map(index),
             // The server sent only what the player may use.
             permission: 0,
+            execution_permission: 0,
             suggests,
             restricted: node.restricted,
         });

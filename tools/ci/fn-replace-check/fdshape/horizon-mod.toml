@@ -1,0 +1,64 @@
+id = "fnr_fdshape"
+name = "Function replacement check: the Farmer's Delight targets"
+version = "0.1.0"
+description = "fn-replace: rows 4 and knockback's targets and kinds with trivial helpers (their real helpers call a retired runtime)"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+[[native.mixin]]
+id = "ported_block_entity_tick"
+kind = "HEAD"
+target = "horizon_client::game::block_entity_tick_reply::Game<'_>::api_block_entity_tick"
+helper = "src/mixins/tick.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+]
+
+[[native.mixin]]
+id = "knockback_0"
+kind = "MODIFY_VARIABLE"
+target = "horizon_client::game::creatures::knockback::Game<'_>::knock_back_player"
+variable = { name = "power", ordinal = 0, at = "LOAD", parameter = true }
+require = 1
+ordinal = 0
+helper = "src/mixins/knockback.rs"
+bindings = [{ name = "value", ty = "f64", value = "$value" }]
+
+# Farmer's Delight's sign-editor shape: a call directly beneath `&`, which the pinned tool refuses
+# for every call-site kind and the carried narrowing admits for a hook that wraps the value.
+[[native.mixin]]
+id = "sign_sprite"
+kind = "WRAP_OPERATION"
+target = "horizon_client::game::sign_edit::Game<'_>::draw_sign_editor"
+selector = "editor_sprite"
+require = 2
+ordinal = 0
+helper = "src/mixins/sign.rs"
+bindings = [
+  { name = "kind", ty = "&str", value = "$arg0" },
+  { name = "wood", ty = "&str", value = "$arg1" },
+  { name = "original", ty = "impl FnOnce(&str, &str) -> String", value = "$operation" },
+]
+[[native.mixin]]
+id = "native_server_started"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::base::Game<'_>::native_server_started"
+helper = "src/mixins/server_started.rs"
+bindings = [{ name = "dedicated", ty = "bool", value = "dedicated" }]
+
+# Farmer's Delight's sign-editor shape: a call directly beneath `&`, which the pinned tool refuses
+# for every call-site kind and the carried narrowing admits for a hook that wraps the value.
+
+[[native.mixin]]
+id = "trait_block_state"
+kind = "HEAD"
+target = "horizon_client::game::level_access::<GameLevel<'_> as LevelAccess>::block_state"
+helper = "src/mixins/trait.rs"

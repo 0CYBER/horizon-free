@@ -5,7 +5,7 @@ use std::collections::HashMap;
 /// Test the flame's own envelope, which is taller and wider than the entity's box.
 /// This only rejects camera-invisible geometry; callers keep other-view shader/mod paths.
 pub fn in_view(
-    view: &crate::gfx::Frustum,
+    view: &crate::gfx::JoinedFrusta,
     camera: glam::DVec3,
     position: [f64; 3],
     width: f32,

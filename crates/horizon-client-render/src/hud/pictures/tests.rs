@@ -24,7 +24,10 @@ fn pictures_are_lazy_shared_and_released_then_reloaded_from_the_pack() {
     let pack = root.join("pack");
     let defaults = root.join("defaults");
     let name = "gui/presets/isles";
-    let mut cache = Cache::new(&pack, &defaults);
+    let mut cache = Cache::new(
+        &crate::resource_source::ResourceSource::directory(pack.clone()),
+        &crate::resource_source::ResourceSource::directory(defaults.clone()),
+    );
     // Nothing has been read: creating a picture after the cache works.
     png(&defaults, name, [1, 2, 3, 255]);
     let first = cache.get(name).unwrap();
@@ -55,14 +58,20 @@ fn pictures_are_lazy_shared_and_released_then_reloaded_from_the_pack() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn realms_pictures_do_not_enlarge_the_startup_atlas() {
     let root = temp_root("realms-atlas");
-    let control = HudAtlas::build(&root).unwrap();
+    let control = HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+        root.clone(),
+    ))
+    .unwrap();
+    // The fork reserves static atlas slots for panorama 0/2/3 and the Isles icon.
+    // Other pictures must remain lazy, including arbitrary preset icons.
     for name in [
-        "gui/title/background/panorama_0",
-        "gui/title/background/panorama_2",
-        "gui/title/background/panorama_3",
-        "gui/presets/isles",
+        "gui/title/background/panorama_1",
+        "gui/title/background/panorama_4",
+        "gui/title/background/panorama_5",
+        "gui/presets/custom",
     ] {
         let path = root.join(format!("assets/minecraft/textures/{name}.png"));
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -75,17 +84,20 @@ fn realms_pictures_do_not_enlarge_the_startup_atlas() {
             .write_image_data(&vec![255; 1024 * 1024 * 4])
             .unwrap();
     }
-    let atlas = HudAtlas::build(&root).unwrap();
+    let atlas = HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+        root.clone(),
+    ))
+    .unwrap();
     assert_eq!(
         (atlas.width, atlas.height, atlas.pixels.len()),
         (control.width, control.height, control.pixels.len())
     );
-    assert!(!atlas.sprites.contains_key("gui/presets/isles"));
+    assert!(!atlas.sprites.contains_key("gui/presets/custom"));
     let image = atlas
         .pictures
         .lock()
         .unwrap()
-        .get("gui/presets/isles")
+        .get("gui/presets/custom")
         .unwrap();
     assert_eq!((image.width, image.height), (1024, 1024));
     eprintln!(

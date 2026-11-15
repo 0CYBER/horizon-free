@@ -1,0 +1,6 @@
+# The daily tests of xtask: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+xtask client_and_server_layouts_require_and_ship_std test:packaging daily child-process
+xtask tests::missing_inputs_are_named_before_the_folder_is_touched bin:xtask daily child-process
+xtask the_coverage_chapter_is_the_page_alone test:book_chapters daily slow
+xtask the_hook_notes_chapter_is_the_page_alone test:book_chapters daily child-process

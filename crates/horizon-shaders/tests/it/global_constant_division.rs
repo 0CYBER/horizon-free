@@ -154,6 +154,7 @@ fn finite_local_and_global_constant_only_contexts_remain_valid() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn lowered_multidimensional_array_preserves_its_type() {
     for declaration in [
         "float audit[2][1]",

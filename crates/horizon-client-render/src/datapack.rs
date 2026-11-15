@@ -1,87 +1,70 @@
 //! Data packs (`<world>/datapacks`: folders and zips with `pack.mcmeta`) and
 //! the parts of them commands use: `.mcfunction` functions (with macros and
 //! line continuation), function tags and predicates.
+use crate::resource_source::ResourceSource;
 mod slot_sources;
 use crate::zip::Zip;
-use horizon_world::{
-    nbt::Tag,
-    worldgen::overrides::{self, PackFile, WorldgenOverrides},
-};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::worldgen::{
+        overrides,
+        overrides::{PackFile, WorldgenOverrides},
+    },
+};
 
 /// A pack on disk.
+#[derive(Clone, Debug, PartialEq)]
 pub struct DataPack {
     /// `file/<name>` in `/datapack` and level.dat.
     pub id: String,
-    source: Source,
-}
-enum Source {
-    Dir(PathBuf),
-    Zip(Box<Zip>),
+    source: ResourceSource,
+    /// Presentation and selection supplied by an additional repository source.
+    pub selection: Option<crate::pack_screen::PackInfo>,
 }
 impl DataPack {
+    /// Whether this repository entry comes from the feature-pack source.
+    pub fn is_feature(&self) -> bool {
+        self.selection
+            .as_ref()
+            .is_some_and(|info| info.source == crate::pack_screen::Source::Feature)
+    }
+    /// A named resource layer, retaining its open source for lazy reads.
+    pub fn from_source(id: String, source: ResourceSource) -> Self {
+        Self {
+            id,
+            source,
+            selection: None,
+        }
+    }
+    pub fn source(&self) -> &ResourceSource {
+        &self.source
+    }
     /// Every file path under `prefix` (relative to the pack root).
     pub fn list(&self, prefix: &str) -> Vec<String> {
-        match &self.source {
-            Source::Zip(z) => z
-                .names()
-                .filter(|n| n.starts_with(prefix) && !n.ends_with('/'))
-                .map(str::to_owned)
-                .collect(),
-            Source::Dir(root) => {
-                let mut out = Vec::new();
-                walk(root, &root.join(prefix), &mut out);
-                out
-            }
-        }
+        self.source.list(prefix)
     }
-    /// The files of `data/<namespace>/<kind>/` for each kind, in the order
-    /// `list("data/")` gives them. A folder pack walks only those folders:
+    /// The files of `<top>/<namespace>/<kind>/` for each kind, in the order
+    /// `list("<top>/")` gives them. A folder pack walks only those folders:
     /// the built-in pack holds about 10,000 other data files.
-    fn list_kinds(&self, kinds: &[&str]) -> Vec<String> {
-        debug_assert!(kinds.is_sorted(), "kinds in walk order");
-        let Source::Dir(root) = &self.source else {
-            return self.list("data/");
-        };
-        let Ok(entries) = std::fs::read_dir(root.join("data")) else {
-            return Vec::new();
-        };
-        let mut namespaces: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-        namespaces.sort();
-        let mut out = Vec::new();
-        for ns in namespaces {
-            for kind in kinds {
-                walk(root, &ns.join(kind), &mut out);
-            }
-        }
-        out
+    pub fn list_under(&self, top: &str, kinds: &[&str]) -> Vec<String> {
+        self.source.list_under(top, kinds)
     }
+    /// The files of `data/<namespace>/<kind>/` for each kind.
+    pub fn list_kinds(&self, kinds: &[&str]) -> Vec<String> {
+        self.list_under("data", kinds)
+    }
+
     /// The files of `data/<namespace>/<folder>/` in every namespace, as
     /// `list` names them; a folder pack walks only those folders.
     pub fn list_folder(&self, folder: &str) -> Vec<String> {
-        let files = self.list_kinds(&[folder]);
-        let Source::Zip(_) = &self.source else {
-            return files;
-        };
-        files
-            .into_iter()
-            .filter(|f| {
-                f.strip_prefix("data/")
-                    .and_then(|r| r.split_once('/'))
-                    .is_some_and(|(_, r)| {
-                        r.strip_prefix(folder).is_some_and(|r| r.starts_with('/'))
-                    })
-            })
-            .collect()
+        self.list_kinds(&[folder])
     }
     pub fn read(&self, path: &str) -> Option<Vec<u8>> {
-        match &self.source {
-            Source::Zip(z) => z.read(path).ok(),
-            Source::Dir(root) => std::fs::read(root.join(path)).ok(),
-        }
+        self.source.read(path).ok()
     }
 
     /// The `description` of `pack.mcmeta`, as text.
@@ -114,27 +97,21 @@ impl DataPack {
             .unwrap_or_default()
     }
 }
-fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut entries: Vec<_> = entries.flatten().collect();
-    entries.sort_by_key(std::fs::DirEntry::file_name);
-    for e in entries {
-        let p = e.path();
-        if p.is_dir() {
-            walk(root, &p, out);
-        } else if let Ok(rel) = p.strip_prefix(root) {
-            out.push(rel.to_string_lossy().replace('\\', "/"));
-        }
-    }
-}
 impl DataPack {
+    /// A mod's passive data layer, without reading the archive's pack metadata.
+    pub fn mod_layer(id: String, source: &crate::packs::Source) -> std::io::Result<Self> {
+        Ok(Self {
+            id,
+            source: source.open()?,
+            selection: None,
+        })
+    }
     /// The built-in `vanilla` pack: the game's own data directory.
     pub fn builtin(root: &Path) -> Self {
         DataPack {
             id: "vanilla".into(),
-            source: Source::Dir(root.to_path_buf()),
+            source: ResourceSource::directory(root.to_path_buf()),
+            selection: None,
         }
     }
 }
@@ -175,7 +152,8 @@ pub(crate) fn discover_folder_with(
         if path.is_dir() && folder_metadata_present(&path) {
             packs.push(DataPack {
                 id: format!("file/{name}"),
-                source: Source::Dir(path),
+                source: ResourceSource::directory(path),
+                selection: None,
             });
         } else if path
             .file_name()
@@ -185,7 +163,8 @@ pub(crate) fn discover_folder_with(
         {
             packs.push(DataPack {
                 id: format!("file/{name}"),
-                source: Source::Zip(Box::new(z)),
+                source: ResourceSource::opened_archive(z),
+                selection: None,
             });
         }
     }
@@ -221,10 +200,36 @@ pub fn feature_packs(resources: &Path) -> Vec<DataPack> {
     for e in entries.flatten() {
         let path = e.path();
         if path.join("pack.mcmeta").exists() {
-            packs.push(DataPack {
+            let mut pack = DataPack {
                 id: e.file_name().to_string_lossy().into_owned(),
-                source: Source::Dir(path),
+                source: ResourceSource::directory(path),
+                selection: None,
+            };
+            let meta = pack.mcmeta();
+            let (description, description_style) =
+                crate::packs::component_root(&meta["pack"]["description"]);
+            let name = format!("dataPack.{}.name", pack.id);
+            pack.selection = Some(crate::pack_screen::PackInfo {
+                id: pack.id.clone(),
+                title: if crate::lang::has(&name) {
+                    crate::text::Text::translate(&name, &[])
+                } else {
+                    crate::text::Text::literal(pack.id.clone())
+                },
+                description,
+                description_style,
+                source: crate::pack_screen::Source::Feature,
+                compat: crate::packs::compatibility_for(
+                    &meta,
+                    horizon_core::version::DATA_PACK_FORMAT,
+                ),
+                icon: None,
+                required: false,
+                position: crate::packs::Position::Bottom,
+                fixed: false,
+                hidden: false,
             });
+            packs.push(pack);
         }
     }
     packs.sort_by(|a, b| a.id.cmp(&b.id));
@@ -235,6 +240,25 @@ pub fn feature_packs(resources: &Path) -> Vec<DataPack> {
 pub fn discover_with_features(world_root: &Path, resources: &Path) -> Vec<DataPack> {
     let mut packs = discover(world_root);
     packs.extend(feature_packs(resources));
+    packs
+}
+
+/// Built-in and contributed feature packs offered as world experiments.
+pub fn feature_repository(
+    resources: &Path,
+    additional: &[std::sync::Arc<DataPack>],
+) -> Vec<DataPack> {
+    let mut packs = feature_packs(resources);
+    packs.extend(
+        additional
+            .iter()
+            .filter(|pack| {
+                pack.selection
+                    .as_ref()
+                    .is_some_and(|info| info.source == crate::pack_screen::Source::Feature)
+            })
+            .map(|pack| (**pack).clone()),
+    );
     packs
 }
 
@@ -265,6 +289,7 @@ pub fn screen_packs(dir: &Path, resources: &Path) -> Vec<crate::pack_screen::Pac
             required: false,
             position: Position::Top,
             fixed: false,
+            hidden: false,
         })
         .collect();
     infos.push(PackInfo {
@@ -281,23 +306,10 @@ pub fn screen_packs(dir: &Path, resources: &Path) -> Vec<crate::pack_screen::Pac
         required: false,
         position: Position::Bottom,
         fixed: false,
+        hidden: false,
     });
     for p in feature_packs(resources) {
-        let meta = p.mcmeta();
-        let (description, description_style) =
-            crate::packs::component_root(&meta["pack"]["description"]);
-        infos.push(PackInfo {
-            icon: None,
-            id: p.id.clone(),
-            title: Text::translate(&format!("dataPack.{}.name", p.id), &[]),
-            description,
-            description_style,
-            source: Source::Feature,
-            compat: crate::packs::compatibility_for(&meta, format),
-            required: false,
-            position: Position::Bottom,
-            fixed: false,
-        });
+        infos.extend(p.selection);
     }
     infos
 }
@@ -438,7 +450,15 @@ pub fn install(dir: &Path, world: &Path, selected: &[String]) -> Result<(), Stri
     std::fs::create_dir_all(&target).map_err(|e| err(&target, e))?;
     let mut disabled = Vec::new();
     for pack in crate::packs::folder(dir, horizon_core::version::DATA_PACK_FORMAT) {
-        let (crate::packs::Source::Dir(from) | crate::packs::Source::Zip(from)) = &pack.source;
+        let from = match &pack.source {
+            crate::packs::Source::Dir(from) | crate::packs::Source::Zip(from) => from,
+            crate::packs::Source::Opened(_) => {
+                return Err(format!(
+                    "{}: an open resource layer cannot be installed as a file pack",
+                    pack.id
+                ));
+            }
+        };
         copy(from, &target.join(pack.id.trim_start_matches("file/")))?;
         if !selected.contains(&pack.id) {
             disabled.push(pack.id);
@@ -688,16 +708,17 @@ pub fn parse_function(id: &str, text: &str) -> Result<Function, String> {
 pub struct DataStore {
     pub functions: BTreeMap<String, Function>,
     /// Function tag id -> entries (`ns:f`, `#ns:tag`), with `required` flags.
-    pub function_tags: BTreeMap<String, Vec<(String, bool)>>,
+    pub function_tags: BTreeMap<String, Vec<TagEntryOf>>,
     pub predicates: BTreeMap<String, serde_json::Value>,
     /// `item_modifier` files, for `/item modify`.
     pub item_modifiers: BTreeMap<String, serde_json::Value>,
     /// `slot_source` definitions, evaluated against a command's live accessor.
     pub slot_sources: BTreeMap<String, serde_json::Value>,
     /// Slot-source tags belong to the same loaded snapshot as their definitions.
-    pub slot_source_tags: BTreeMap<String, Vec<(String, bool)>>,
+    pub slot_source_tags: BTreeMap<String, Vec<TagEntryOf>>,
     /// The content tables' raw files from the packs after the built-in one:
-    /// `recipe/`, `recipe_filter/`, `loot_table/`, `advancement/`, `dialog/`, `damage_type/`, `data_maps/`, `enchantment/` and `tags/…/` files, by
+    /// Server JSON resources (recipes, loot, enchantments, songs, instruments,
+    /// predicates, modifiers, advancements, registries, data maps and tags), by
     /// `<kind-dir>/<ns>:<path>`, each id's files in pack order. The tables
     /// merge them over what they read from the resource root.
     pub files: BTreeMap<String, Vec<Vec<u8>>>,
@@ -706,7 +727,8 @@ pub struct DataStore {
 }
 /// `<kind-dir>/<ns>:<path>` for a pack file the content tables read:
 /// `recipe/`, `recipe_filter/`, `loot_table/`, `advancement/`, `trade_set/`,
-/// `villager_trade/`, `dialog/`, `damage_type/`, `data_maps/`, `enchantment/` or `tags/<sub>/`, where the id keeps the sub
+/// `villager_trade/`, `dialog/`, `damage_type/`, `dimension_type/`, `data_maps/`, enchantments, songs,
+/// instruments, predicates, item modifiers or `tags/<sub>/`, where the id keeps the sub
 /// path so a nested tag kind stays addressable.
 fn content_id(file: &str) -> Option<String> {
     let rest = file.strip_prefix("data/")?;
@@ -714,7 +736,8 @@ fn content_id(file: &str) -> Option<String> {
     let (kind, rest) = rest.split_once('/')?;
     let kind = match kind {
         "recipe" | "recipe_filter" | "loot_table" | "advancement" | "trade_set"
-        | "villager_trade" | "dialog" | "damage_type" | "data_maps" | "enchantment" => kind,
+        | "villager_trade" | "dialog" | "damage_type" | "dimension_type" | "data_maps"
+        | "enchantment" | "jukebox_song" | "instrument" | "predicate" | "item_modifier" => kind,
         // A tag id is `{ns}:{path-under-tags}` (`tags/worldgen/biome/
         // test:sub/mytag`), the whole path after the namespace, so nested
         // registries keep their directory (`TagLoader`'s id shape).
@@ -735,8 +758,106 @@ fn resource_id(file: &str, kind: &str, ext: &str) -> Option<String> {
         .strip_suffix(ext)?;
     Some(format!("{ns}:{path}"))
 }
+/// The entry files of mods' datapack registries in `packs`, lowest pack first: each file
+/// `data/<entry namespace>/<registry namespace>/<registry path>/<entry>.json` of a registry
+/// in `registries` (`(namespace, path)` of its key), by that path, each path's versions in
+/// pack order, each with its pack's id. Only the highest accepted version is read into
+/// the returned map. `fallback` permits trying lower versions after a condition refusal;
+/// registered conditions disable fallback so losing callbacks never run. The folders
+/// are the mods' own, so the fixed kinds `DataStore` lists never cover them.
+pub fn registry_files(
+    packs: &[&DataPack],
+    registries: &[(&str, &str)],
+    fallback: bool,
+    mut accepts: impl FnMut(&str, &str, &[u8]) -> bool,
+) -> Result<BTreeMap<String, Vec<(String, Vec<u8>)>>, Box<mod_api::DatapackLoadError>> {
+    let mut kinds: Vec<&str> = registries.iter().map(|(namespace, _)| *namespace).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let mut sources: BTreeMap<String, Vec<&DataPack>> = BTreeMap::new();
+    for pack in packs {
+        for file in pack.list_kinds(&kinds) {
+            let in_registry = file
+                .strip_prefix("data/")
+                .and_then(|rest| rest.split_once('/'))
+                .is_some_and(|(_, rest)| {
+                    file.ends_with(".json")
+                        && registries.iter().any(|(namespace, path)| {
+                            rest.strip_prefix(namespace)
+                                .and_then(|rest| rest.strip_prefix('/'))
+                                .and_then(|rest| rest.strip_prefix(path))
+                                .is_some_and(|rest| rest.starts_with('/'))
+                        })
+                });
+            if in_registry {
+                sources.entry(file).or_default().push(pack);
+            }
+        }
+    }
+    let mut files = BTreeMap::new();
+    let mut total = 0;
+    for (file, packs) in sources {
+        for pack in packs.into_iter().rev() {
+            // Read at most the custom-registry limit plus a refusal byte, including
+            // decompressed output. No losing payload remains resident.
+            let bytes = pack
+                .source
+                .read_head(&file, mod_api::MAX_DATAPACK_ENTRY_BYTES as u64 + 1)
+                .unwrap_or_default();
+            let oversized = bytes.len() > mod_api::MAX_DATAPACK_ENTRY_BYTES;
+            if oversized || accepts(&file, &pack.id, &bytes) {
+                total += bytes.len();
+                if !oversized && total > mod_api::MAX_SNAPSHOT_BYTES {
+                    let (namespace, path) = registries
+                        .iter()
+                        .find(|(namespace, path)| {
+                            file.splitn(3, '/').nth(2).is_some_and(|rest| {
+                                rest.starts_with(&format!("{namespace}/{path}/"))
+                            })
+                        })
+                        .expect("listed custom registry file");
+                    let rest = file.strip_prefix("data/").unwrap();
+                    let (entry_namespace, rest) = rest.split_once('/').unwrap();
+                    let entry = rest
+                        .strip_prefix(&format!("{namespace}/{path}/"))
+                        .unwrap()
+                        .strip_suffix(".json")
+                        .unwrap();
+                    return Err(Box::new(mod_api::DatapackLoadError {
+                        registry: format!("{namespace}:{path}"),
+                        entry: format!("{entry_namespace}:{entry}"),
+                        file,
+                        pack: pack.id.clone(),
+                        reason: mod_api::DatapackLoadReason::CandidateTooLarge,
+                    }));
+                }
+                files.insert(file.clone(), vec![(pack.id.clone(), bytes)]);
+                break;
+            }
+            if !fallback {
+                break;
+            }
+        }
+    }
+    Ok(files)
+}
+
 impl DataStore {
     pub fn load(packs: &[&DataPack]) -> Self {
+        Self::load_impl(packs, None)
+    }
+    /// Command resources and function tags share the owning server load's
+    /// conditions; raw JSON stacks remain intact for world-table readers.
+    pub fn load_with_conditions(
+        packs: &[&DataPack],
+        conditions: &horizon_world::conditions::LoadConditions,
+    ) -> Self {
+        Self::load_impl(packs, Some(conditions))
+    }
+    fn load_impl(
+        packs: &[&DataPack],
+        conditions: Option<&horizon_world::conditions::LoadConditions>,
+    ) -> Self {
         let mut s = Self::default();
         for pack in packs {
             // `tags` walks the whole tags tree, so a `tags/function` file is
@@ -748,9 +869,12 @@ impl DataStore {
                 "damage_type",
                 "data_maps",
                 "dialog",
+                "dimension_type",
                 "enchantment",
                 "function",
+                "instrument",
                 "item_modifier",
+                "jukebox_song",
                 "loot_table",
                 "predicate",
                 "recipe",
@@ -762,6 +886,15 @@ impl DataStore {
             ]) {
                 if !seen.insert(f.clone()) {
                     continue;
+                }
+                // Preserve JSON stacks independently of the command views
+                // below. World-table readers evaluate the winning resource's
+                // conditions using their captured server inventory.
+                if !builtin
+                    && let Some(id) = content_id(&f)
+                    && let Some(bytes) = pack.read(&f)
+                {
+                    s.files.entry(id).or_default().push(bytes);
                 }
                 if let Some(id) = resource_id(&f, "function", ".mcfunction")
                     && let Some(bytes) = pack.read(&f)
@@ -776,7 +909,14 @@ impl DataStore {
                     && let Some(bytes) = pack.read(&f)
                     && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 {
-                    let entries = tag_entries(&v);
+                    let mut entries = tag_entries(&v);
+                    if let Some(removes) = v["remove"].as_array() {
+                        entries.extend(
+                            tag_entries(&serde_json::json!({ "values": removes }))
+                                .into_iter()
+                                .map(|(id, required, _)| (id, required, true)),
+                        );
+                    }
                     let slot = s.function_tags.entry(id).or_default();
                     if v["replace"].as_bool() == Some(true) {
                         slot.clear();
@@ -796,7 +936,14 @@ impl DataStore {
                     && let Some(bytes) = pack.read(&f)
                     && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes)
                 {
-                    let entries = tag_entries(&v);
+                    let mut entries = tag_entries(&v);
+                    if let Some(removes) = v["remove"].as_array() {
+                        entries.extend(
+                            tag_entries(&serde_json::json!({ "values": removes }))
+                                .into_iter()
+                                .map(|(id, required, _)| (id, required, true)),
+                        );
+                    }
                     let slot = s.slot_source_tags.entry(id).or_default();
                     if v["replace"].as_bool() == Some(true) {
                         slot.clear();
@@ -807,16 +954,14 @@ impl DataStore {
                     && let Ok(v) = serde_json::from_slice(&bytes)
                 {
                     s.slot_sources.insert(id, v);
-                } else if !builtin
-                    && let Some(id) = content_id(&f)
-                    && let Some(bytes) = pack.read(&f)
-                {
-                    // The built-in pack's content files are the resource
-                    // root's own, which the tables read from disk; only the
-                    // world's packs come through here.
-                    s.files.entry(id).or_default().push(bytes);
                 }
             }
+        }
+        if let Some(conditions) = conditions {
+            s.predicates
+                .retain(|id, value| conditions.allows_id(value, "predicate", id));
+            s.item_modifiers
+                .retain(|id, value| conditions.allows_id(value, "item_modifier", id));
         }
         s
     }
@@ -848,7 +993,10 @@ impl DataStore {
                 invalid.insert(tag);
                 continue;
             };
-            for (entry, required) in entries {
+            for (entry, required, remove) in entries {
+                if *remove {
+                    continue;
+                }
                 if let Some(child) = entry.strip_prefix('#') {
                     pending.push(child);
                     if *required {
@@ -885,9 +1033,46 @@ impl DataStore {
         let Some(entries) = self.function_tags.get(id) else {
             return;
         };
-        for (e, _) in entries {
+        for (e, required, remove) in entries {
+            // A removal (a `remove` list's entry, after the file's values)
+            // takes an id or a tag's members out of the set built so far; it
+            // is optional: an unknown id removes nothing and never
+            // invalidates the tag.
+            if *remove {
+                match e.strip_prefix('#') {
+                    Some(inner) => {
+                        let mut members = Vec::new();
+                        self.expand(
+                            inner,
+                            &mut members,
+                            &mut Default::default(),
+                            seen_tags,
+                            invalid,
+                        );
+                        out.retain(|f| !members.contains(f));
+                        seen_fns.retain(|f| !members.iter().any(|member| member.as_str() == *f));
+                    }
+                    None => {
+                        out.retain(|f| f.as_str() != e.as_str());
+                        seen_fns.remove(e.as_str());
+                    }
+                }
+                continue;
+            }
+            let _ = required;
             match e.strip_prefix('#') {
-                Some(inner) => self.expand(inner, out, seen_fns, seen_tags, invalid),
+                Some(inner) => {
+                    let mut members = Vec::new();
+                    let mut member_ids = Default::default();
+                    self.expand(inner, &mut members, &mut member_ids, seen_tags, invalid);
+                    for member in members {
+                        if let Some(&id) = member_ids.get(member.as_str())
+                            && seen_fns.insert(id)
+                        {
+                            out.push(member);
+                        }
+                    }
+                }
                 None => {
                     if self.functions.contains_key(e) && seen_fns.insert(e) {
                         out.push(e.clone());
@@ -895,6 +1080,7 @@ impl DataStore {
                 }
             }
         }
+        seen_tags.remove(id);
     }
 }
 fn normalize(id: &str) -> String {
@@ -904,18 +1090,23 @@ fn normalize(id: &str) -> String {
         format!("minecraft:{id}")
     }
 }
-fn tag_entries(v: &serde_json::Value) -> Vec<(String, bool)> {
+/// An entry of a tag file's `values` or `remove`: its id, whether it is
+/// required, and whether it removes (`TagLoader.EntryWithSource.remove`).
+type TagEntryOf = (String, bool, bool);
+
+fn tag_entries(v: &serde_json::Value) -> Vec<TagEntryOf> {
     v["values"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|e| match e {
-            serde_json::Value::String(s) => Some((hash_normalize(s), true)),
+            serde_json::Value::String(s) => Some((hash_normalize(s), true, false)),
             serde_json::Value::Object(o) => Some((
                 hash_normalize(o.get("id")?.as_str()?),
                 o.get("required")
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(true),
+                o.get("remove").and_then(serde_json::Value::as_bool) == Some(true),
             )),
             _ => None,
         })
@@ -985,8 +1176,7 @@ pub fn enabled_ids(world: &Path, packs: &[DataPack], enabled_features: &[String]
         }
     }
     for p in packs {
-        let feature_pack = !p.id.starts_with("file/") && p.id != "vanilla";
-        if feature_pack
+        if p.is_feature()
             && !p.features().is_empty()
             && features_enabled(p, enabled_features)
             && !enabled.contains(&p.id)
@@ -994,7 +1184,30 @@ pub fn enabled_ids(world: &Path, packs: &[DataPack], enabled_features: &[String]
             enabled.push(p.id.clone());
         }
     }
-    enabled
+    selected_ids(packs.iter(), &enabled)
+}
+
+/// Rebuild a data-pack selection, preserving its order and inserting required packs.
+pub fn selected_ids<'a>(
+    packs: impl Iterator<Item = &'a DataPack>,
+    selected: &[String],
+) -> Vec<String> {
+    // Existing selections keep their order; mandatory additions use the same
+    // insertion rules as the pack screen.
+    let available = packs
+        .map(|pack| {
+            pack.selection.as_ref().map_or_else(
+                || crate::packs::Selectable::optional(&pack.id, true),
+                crate::pack_screen::PackInfo::selectable,
+            )
+        })
+        .collect();
+    crate::packs::SelectionModel::new(available, selected)
+        .selected
+        .into_iter()
+        .rev()
+        .map(|pack| pack.id)
+        .collect()
 }
 
 /// The level stems of `packs` (`data/<namespace>/dimension/<path>.json`, lowest priority first,
@@ -1017,11 +1230,17 @@ pub fn dimension_stems(packs: &[&DataPack]) -> BTreeMap<String, serde_json::Valu
             else {
                 continue;
             };
+            // An id that is no safe folder name (`..`, an empty segment) would open a level
+            // outside the world's `dimensions` folder.
+            let id = format!("{namespace}:{path}");
+            if !horizon_core::level_id::valid_level_id(&id) {
+                continue;
+            }
             if let Some(json) = pack
                 .read(&file)
                 .and_then(|b| serde_json::from_slice(&b).ok())
             {
-                out.insert(format!("{namespace}:{path}"), json);
+                out.insert(id, json);
             }
         }
     }
@@ -1038,16 +1257,29 @@ pub fn worldgen_overrides(
     packs: &[&DataPack],
     biomes: impl Fn(&str) -> bool,
 ) -> (WorldgenOverrides, Vec<String>) {
+    worldgen_overrides_over(overrides::mod_dimensions(), packs, biomes)
+}
+
+/// [`worldgen_overrides`] over the levels `mods` registered, which sit below
+/// every pack.
+pub fn worldgen_overrides_over(
+    mods: &[overrides::ModDimension],
+    packs: &[&DataPack],
+    biomes: impl Fn(&str) -> bool,
+) -> (WorldgenOverrides, Vec<String>) {
     let mut out = WorldgenOverrides::default();
+    for dimension in mods {
+        out.add_mod_dimension(dimension);
+    }
     let mut not_read: BTreeMap<String, usize> = BTreeMap::new();
     let mut warnings = Vec::new();
     for pack in packs {
         for file in pack.list_kinds(&overrides::PACK_KINDS) {
             if let Some(id) = overrides::template_id(&file) {
-                match pack.read(&file) {
-                    Some(nbt) => out.set_template(&id, nbt),
-                    None => warnings.push(format!("{}: {file}: unreadable", pack.id)),
-                }
+                out.set_template(
+                    id,
+                    horizon_assets::resource_source::Resource::file(pack.source.clone(), file),
+                );
                 continue;
             }
             let read = || String::from_utf8(pack.read(&file)?).ok();
@@ -1070,6 +1302,199 @@ pub fn worldgen_overrides(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pack_level_outside_the_worlds_folder_is_not_a_level() {
+        let dir = std::env::temp_dir().join(format!("horizon-pack-ids-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pack = dir.join("datapacks/p");
+        for path in [
+            "data/test/dimension/pocket.json",
+            "data/test/dimension/a/b.json",
+            "data/test/dimension/my pocket.json",
+            "data/test/dimension/Pocket.json",
+            "data/Test/dimension/pocket.json",
+        ] {
+            let file = pack.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, "{}").unwrap();
+        }
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"","pack_format":15}}"#,
+        )
+        .unwrap();
+        let packs = discover(&dir);
+        let refs: Vec<&DataPack> = packs.iter().collect();
+        let ids: Vec<String> = dimension_stems(&refs).into_keys().collect();
+        assert_eq!(ids, ["test:a/b", "test:pocket"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pack_replaces_a_mods_level() {
+        let root = std::env::temp_dir().join(format!("horizon-mod-level-{}", std::process::id()));
+        let world = root.join("world");
+        let pack = world.join("datapacks/over");
+        let types = pack.join("data/test/dimension_type");
+        std::fs::create_dir_all(&types).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"","pack_format":15}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            types.join("pocket.json"),
+            r#"{"min_y":0,"height":64,"logical_height":64}"#,
+        )
+        .unwrap();
+        let packs = discover(&world);
+        let mods = [overrides::ModDimension {
+            id: "test:pocket".into(),
+            stem: r#"{"type":"test:pocket"}"#.into(),
+            dimension_type: r#"{"min_y":-128,"height":448,"logical_height":448}"#.into(),
+            sea_level: None,
+        }];
+        let height = |packs: &[&DataPack]| {
+            let (o, _) = worldgen_overrides_over(&mods, packs, |_| true);
+            o.level_height("test:pocket").unwrap().height
+        };
+        assert_eq!(height(&[]), 448);
+        assert_eq!(height(&[&packs[0]]), 64);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn structure_templates_read_archive_generations_without_extraction() {
+        use std::io::Write;
+        use {
+            horizon_core::nbt::{Limits, NamedTag},
+            horizon_world::{
+                registry::BlockRegistry,
+                worldgen::structure::{StateTransforms, StructureResources},
+            },
+        };
+        let root =
+            std::env::temp_dir().join(format!("horizon-template-source-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch = Scratch(root);
+        let archive = scratch.0.join("templates.jar");
+        let write_archive = |width| {
+            let tag = Tag::compound([
+                (
+                    "size",
+                    Tag::List(vec![Tag::Int(width), Tag::Int(3), Tag::Int(4)]),
+                ),
+                (
+                    "palette",
+                    Tag::List(vec![Tag::compound([(
+                        "Name",
+                        Tag::String("minecraft:stone".into()),
+                    )])]),
+                ),
+                (
+                    "blocks",
+                    Tag::List(vec![Tag::compound([
+                        (
+                            "pos",
+                            Tag::List(vec![Tag::Int(1), Tag::Int(0), Tag::Int(1)]),
+                        ),
+                        ("state", Tag::Int(0)),
+                    ])]),
+                ),
+                ("entities", Tag::List(Vec::new())),
+            ]);
+            let bytes = horizon_core::nbt::write_named(
+                &NamedTag {
+                    name: "".into(),
+                    tag,
+                },
+                Limits::templates(),
+            )
+            .unwrap();
+            let mut gzip =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            gzip.write_all(&bytes).unwrap();
+            let temporary = scratch.0.join("replacement.jar");
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&temporary).unwrap());
+            zip.start_file(
+                "data/example/structure/nested/piece.nbt",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(&gzip.finish().unwrap()).unwrap();
+            zip.finish().unwrap();
+            std::fs::rename(temporary, &archive).unwrap();
+        };
+        write_archive(2);
+        let old =
+            DataPack::from_source("passive".into(), ResourceSource::archive(&archive).unwrap());
+        let (before, warnings) = worldgen_overrides(&[&old], |_| true);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        write_archive(5);
+        let new =
+            DataPack::from_source("passive".into(), ResourceSource::archive(&archive).unwrap());
+        let (after, warnings) = worldgen_overrides(&[&new], |_| true);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_ne!(
+            before, after,
+            "a reopened archive invalidates the generator cache"
+        );
+        let registry = Box::leak(Box::new(
+            BlockRegistry::from_nbt(&Tag::compound([
+                ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
+                (
+                    "states",
+                    Tag::List(vec![
+                        Tag::compound([("id", Tag::String("minecraft:air".into()))]),
+                        Tag::compound([("id", Tag::String("minecraft:stone".into()))]),
+                    ]),
+                ),
+                (
+                    "defaults",
+                    Tag::compound([
+                        ("minecraft:air", Tag::Int(0)),
+                        ("minecraft:stone", Tag::Int(1)),
+                    ]),
+                ),
+            ]))
+            .unwrap(),
+        ));
+        let manager = |overrides: &WorldgenOverrides| {
+            let transforms = StateTransforms::from_json(
+                r#"{"rotate":[[0,0,0],[1,1,1]],"mirror":[[0,0],[1,1]],"full_block":[false,true]}"#,
+                2,
+            )
+            .unwrap();
+            StructureResources::new(
+                registry,
+                transforms,
+                &scratch.0.join("unpacked-templates"),
+                BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .with_templates(overrides.templates().clone())
+        };
+        // Neither generation has read its NBT yet; the old one must still
+        // read from the reader retained before the archive was replaced.
+        let first = manager(&before).template("example:nested/piece").unwrap();
+        let second = manager(&after).template("example:nested/piece").unwrap();
+        assert_eq!(first.size, [2, 3, 4]);
+        assert_eq!(second.size, [5, 3, 4]);
+        let blocks = second.palettes()[0].blocks();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].pos, [1, 0, 1]);
+        assert_eq!(blocks[0].state.0, 1);
+        assert!(!scratch.0.join("data").exists());
+        assert!(!scratch.0.join("unpacked-templates").exists());
+    }
 
     #[test]
     fn folder_metadata_is_required_before_contents_are_discovered() {
@@ -1268,7 +1693,7 @@ mod tests {
             [("minecraft:cave", "a")]
         );
         assert_eq!(o.templates().len(), 1);
-        assert_eq!(&*o.templates()["p:room/a"], b"a");
+        assert_eq!(o.templates()["p:room/a"].read().unwrap(), b"a");
         assert_eq!(
             o.entries("biomes").collect::<Vec<_>>(),
             [("minecraft:plains", "{}")]
@@ -1284,7 +1709,7 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
-    use horizon_world::nbt::parse_snbt;
+    use horizon_core::nbt::parse_snbt;
 
     #[test]
     fn parses_comments_continuations_and_macros() {
@@ -1425,6 +1850,7 @@ mod tests {
             "data/mine/dialog/config/points.json",
             "{\"type\":\"minecraft:notice\",\"title\":\"Points\"}",
         );
+        write("data/mine/dimension_type/pocket.json", "{\"min_y\":-128}");
         let packs = discover(&dir);
         assert_eq!(packs.len(), 1);
         assert_eq!(packs[0].id, "file/mypack");
@@ -1442,7 +1868,43 @@ mod tests {
             store.files["dialog/mine:config/points"],
             [b"{\"type\":\"minecraft:notice\",\"title\":\"Points\"}".to_vec()]
         );
+        // So do dimension types: a client takes a level's build height from them.
+        assert_eq!(
+            store.files["dimension_type/mine:pocket"],
+            [b"{\"min_y\":-128}".to_vec()]
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn function_removals_use_finished_members_and_ignore_missing_ids() {
+        let mut store = DataStore::default();
+        store.functions.insert(
+            "t:f".into(),
+            Function {
+                id: "t:f".into(),
+                lines: Vec::new(),
+                parameters: Vec::new(),
+            },
+        );
+        store.function_tags.insert(
+            "t:child".into(),
+            vec![("t:f".into(), true, false), ("t:f".into(), true, true)],
+        );
+        store.function_tags.insert(
+            "t:parent".into(),
+            vec![
+                ("t:f".into(), true, false),
+                ("#t:child".into(), true, true),
+                ("t:missing".into(), true, true),
+                ("#t:missing".into(), true, true),
+            ],
+        );
+        assert_eq!(store.tag_functions("t:parent"), ["t:f"]);
+        store
+            .function_tags
+            .insert("t:child".into(), vec![("t:f".into(), true, false)]);
+        assert!(store.tag_functions("t:parent").is_empty());
     }
 
     #[test]
@@ -1462,8 +1924,8 @@ mod tests {
                 },
             );
         }
-        let big: Vec<(String, bool)> = (0..50_000)
-            .map(|i| (format!("t:f{}", i % 25_000), true))
+        let big: Vec<TagEntryOf> = (0..50_000)
+            .map(|i| (format!("t:f{}", i % 25_000), true, false))
             .collect();
         store.function_tags.insert("t:big".into(), big);
         let start = std::time::Instant::now();
@@ -1474,23 +1936,133 @@ mod tests {
         // A cycle terminates and keeps first-seen order.
         store.function_tags.insert(
             "t:a".into(),
-            vec![("#t:b".into(), true), ("t:x".into(), true)],
+            vec![("#t:b".into(), true, false), ("t:x".into(), true, false)],
         );
         store.function_tags.insert(
             "t:b".into(),
-            vec![("#t:a".into(), true), ("t:y".into(), true)],
+            vec![("#t:a".into(), true, false), ("t:y".into(), true, false)],
         );
         assert_eq!(store.tag_functions("t:a"), ["t:y", "t:x"]);
         // Nesting deeper than the old cap of 16 still resolves.
         for i in 0..40 {
-            store
-                .function_tags
-                .insert(format!("d:{i}"), vec![(format!("#d:{}", i + 1), true)]);
+            store.function_tags.insert(
+                format!("d:{i}"),
+                vec![(format!("#d:{}", i + 1), true, false)],
+            );
         }
         store
             .function_tags
-            .insert("d:40".into(), vec![("t:deep".into(), true)]);
+            .insert("d:40".into(), vec![("t:deep".into(), true, false)]);
         assert_eq!(store.tag_functions("d:0"), ["t:deep"]);
+    }
+
+    #[test]
+    fn server_json_resources_keep_ordered_stacks_for_conditional_readers() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-server-json-stacks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let kinds = [
+            "enchantment",
+            "jukebox_song",
+            "instrument",
+            "predicate",
+            "item_modifier",
+        ];
+        let mut packs = Vec::new();
+        for name in ["low", "high"] {
+            let folder = root.join(name);
+            for kind in kinds {
+                let file = folder.join(format!("data/demo/{kind}/nested/entry.json"));
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(file, serde_json::json!({"layer":name,"neoforge:conditions":[{"type":"unsupported"}]}).to_string()).unwrap();
+            }
+            packs.push(DataPack::from_source(
+                name.into(),
+                ResourceSource::directory(folder),
+            ));
+        }
+        let store = DataStore::load(&packs.iter().collect::<Vec<_>>());
+        for kind in kinds {
+            let versions = &store.files[&format!("{kind}/demo:nested/entry")];
+            assert_eq!(versions.len(), 2);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&versions[0]).unwrap()["layer"],
+                "low"
+            );
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&versions[1]).unwrap()["layer"],
+                "high"
+            );
+        }
+        assert!(store.predicates.contains_key("demo:nested/entry"));
+        assert!(store.item_modifiers.contains_key("demo:nested/entry"));
+        let filtered = DataStore::load_with_conditions(
+            &packs.iter().collect::<Vec<_>>(),
+            &horizon_world::conditions::LoadConditions::vanilla(),
+        );
+        assert!(filtered.predicates.is_empty());
+        assert!(filtered.item_modifiers.is_empty());
+        assert_eq!(filtered.files, store.files);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn command_json_selects_before_conditions_and_function_tags_gate_each_layer() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-command-conditions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut packs = Vec::new();
+        for name in ["low", "high"] {
+            let folder = root.join(name);
+            let conditions = if name == "high" {
+                serde_json::json!([{"type":"neoforge:mod_loaded","modid":"provider"}])
+            } else {
+                serde_json::json!([])
+            };
+            for kind in ["predicate", "item_modifier"] {
+                let file = folder.join(format!("data/demo/{kind}/entry.json"));
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(
+                    file,
+                    serde_json::json!({"layer":name,"neoforge:conditions":conditions}).to_string(),
+                )
+                .unwrap();
+            }
+            let dir = folder.join("data/demo/tags/function");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("load.json"), serde_json::json!({"replace":true,"values":[format!("demo:{name}")],"neoforge:conditions":conditions}).to_string()).unwrap();
+            std::fs::write(
+                dir.join("unknown.json"),
+                r#"{"neoforge:conditions":[{"type":"unsupported"}],"replace":true}"#,
+            )
+            .unwrap();
+            packs.push(DataPack::from_source(
+                name.into(),
+                ResourceSource::directory(folder),
+            ));
+        }
+        let refs = packs.iter().collect::<Vec<_>>();
+        let off = DataStore::load_with_conditions(
+            &refs,
+            &horizon_world::conditions::LoadConditions::vanilla(),
+        );
+        assert!(off.predicates.is_empty());
+        assert!(off.item_modifiers.is_empty());
+        assert_eq!(
+            off.function_tags["demo:load"],
+            [("demo:high".into(), true, false)]
+        );
+        assert!(off.function_tags["demo:unknown"].is_empty());
+        let enabled = horizon_world::conditions::LoadConditions::new(["provider"]);
+        let on = DataStore::load_with_conditions(&refs, &enabled);
+        assert_eq!(on.predicates["demo:entry"]["layer"], "high");
+        assert_eq!(on.item_modifiers["demo:entry"]["layer"], "high");
+        assert_eq!(
+            on.function_tags["demo:load"],
+            [("demo:high".into(), true, false)]
+        );
+        assert_eq!(on.files, off.files);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1585,6 +2157,63 @@ mod tests {
             saved,
             serde_json::json!({"enabled": selected, "disabled": ["file/off"]})
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A mod's registry folders are listed per pack, lowest pack first, and only the declared
+    /// registries' `.json` files, in any entry namespace.
+    #[test]
+    fn registry_files_list_the_declared_folders_in_pack_order() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-registry-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut packs = Vec::new();
+        for name in ["low", "high"] {
+            let folder = root.join(name);
+            for file in [
+                "data/example/example/spell/fire.json",
+                "data/addon/example/spell/nested/ice.json",
+                "data/addon/example/other/skip.json",
+                "data/addon/example/spell/note.txt",
+                "data/addon/example/spellbook/skip.json",
+            ] {
+                let path = folder.join(file);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, name).unwrap();
+            }
+            packs.push(DataPack::from_source(
+                name.into(),
+                ResourceSource::directory(folder),
+            ));
+        }
+        let refs = packs.iter().collect::<Vec<_>>();
+        let files = registry_files(&refs, &[("example", "spell")], true, |_, _, _| true).unwrap();
+        assert_eq!(
+            files.keys().map(String::as_str).collect::<Vec<_>>(),
+            [
+                "data/addon/example/spell/nested/ice.json",
+                "data/example/example/spell/fire.json"
+            ]
+        );
+        assert_eq!(
+            files["data/example/example/spell/fire.json"],
+            vec![("high".to_owned(), b"high".to_vec())]
+        );
+        assert!(
+            registry_files(&refs, &[], true, |_, _, _| true)
+                .unwrap()
+                .is_empty()
+        );
+        // Oversized losing files are never read; an oversized winner is retained
+        // only as the bounded refusal prefix, not as its full payload.
+        let path = "data/example/example/spell/fire.json";
+        std::fs::write(root.join("low").join(path), vec![b' '; 1_048_577]).unwrap();
+        let files = registry_files(&refs, &[("example", "spell")], true, |_, _, _| true).unwrap();
+        assert_eq!(files[path], vec![("high".to_owned(), b"high".to_vec())]);
+        std::fs::write(root.join("high").join(path), vec![b' '; 1_048_578]).unwrap();
+        let files = registry_files(&refs, &[("example", "spell")], true, |_, _, _| true).unwrap();
+        assert_eq!(files[path].len(), 1);
+        assert_eq!(files[path][0].1.len(), 1_048_577);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

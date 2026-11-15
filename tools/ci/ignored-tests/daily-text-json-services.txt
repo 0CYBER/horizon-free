@@ -1,0 +1,5 @@
+# arismoko/horizon#3943 resource-backed text and level service tests. Kept separate from the generated shared inventory.
+horizon-client game::native_level_world::tests::a_canceled_time_skip_keeps_the_clock lib daily resources
+horizon-client game::native_level_world::tests::a_mod_set_game_rule_has_no_actor lib daily resources
+horizon-client game::native_server_distances::tests::a_mod_reads_and_sets_the_servers_distances lib daily resources
+horizon-client game::native_text_json::tests::the_host_reads_components_and_returns_none_for_the_rest lib daily resources

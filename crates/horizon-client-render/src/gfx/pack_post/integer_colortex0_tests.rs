@@ -58,6 +58,7 @@ fn pack(depth: bool, last: Option<&str>) -> Post {
 
 #[test]
 fn an_integer_colortex0_keeps_what_the_pack_wrote() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     for depth in [false, true] {
         let mut post = gpu.build(pack(depth, Some(FINAL)));
@@ -75,6 +76,7 @@ fn an_integer_colortex0_keeps_what_the_pack_wrote() {
 /// without it instead of a black screen (#9165). The refusal keeps why `final` was skipped.
 #[test]
 fn an_integer_colortex0_without_a_working_final_is_refused() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     for last in [None, Some(BROKEN_FINAL)] {
         let Err(refused) = gpu.try_build(pack(false, last)) else {

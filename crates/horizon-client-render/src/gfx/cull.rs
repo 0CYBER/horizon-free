@@ -786,6 +786,15 @@ fn source(depth_test: DepthTest) -> String {
     }
 }
 
+/// Whether the renderer should initialize its occlusion culling pass (`cull`).
+///
+/// Software adapters spend more time running the culling pass than drawing
+/// the sections it removes. Keep the pass available for explicit A/B checks,
+/// while leaving hardware adapters on the existing default.
+pub(super) fn occlusion_culling_requested(info: &wgpu::AdapterInfo, env: Option<&str>) -> bool {
+    env != Some("0") && (env.is_some() || info.device_type != wgpu::DeviceType::Cpu)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,10 +1,8 @@
 //! Vanilla 26.3's CubeMapTexture and CubeMap, separate from the pixel-filtered GUI atlas.
 use crate::{Result, hud::decode_bytes};
 use glam::Mat4;
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use horizon_assets::resource_source::ResourceSource;
+use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
 
 /// Native cube order: +X, -X, +Y, -Y, +Z, -Z (CubeMapTexture.SUFFIXES).
@@ -27,13 +25,13 @@ pub struct Faces {
 }
 
 impl Faces {
-    /// The title artwork of `root` (the packs' overlay) over `defaults` (the
+    /// The title artwork of `root` (the active resource source) over `defaults` (the
     /// game's own resources). `CubeMapTexture` registers each face with the
     /// resource manager, which takes the topmost pack that has it: a pack that
     /// leaves a face alone keeps vanilla's, and only a cube no layer completes
     /// falls back to the grey placeholder that an installation without the
     /// imported panorama shows.
-    pub fn load(root: &Path, defaults: &Path) -> Self {
+    pub fn load(root: &ResourceSource, defaults: &ResourceSource) -> Self {
         Self::try_load(root, defaults).unwrap_or_else(|error| {
             log::warn!(
                 "Horizon: no title panorama ({error}); prepare the game again in the launcher \
@@ -53,18 +51,16 @@ impl Faces {
         }
     }
 
-    fn try_load(root: &Path, defaults: &Path) -> Result<Self> {
+    fn try_load(root: &ResourceSource, defaults: &ResourceSource) -> Result<Self> {
         let mut size = 0;
         let mut files = Vec::with_capacity(FACE_ORDER.len());
         let mut texels = Vec::new();
         for face in FACE_ORDER {
             let (path, file, (w, h, data)) = load_face(root, defaults, face)?;
             if w != h || (size != 0 && w != size) {
-                return Err(format!(
-                    "{}: panorama faces must be equally sized squares",
-                    path.display()
-                )
-                .into());
+                return Err(
+                    format!("{}: panorama faces must be equally sized squares", path).into(),
+                );
             }
             size = w;
             // CubeMapTexture copies each original image with flipY=true. Keep every texel.
@@ -133,39 +129,29 @@ fn decode_faces(files: &[Vec<u8>]) -> Result<(u32, Vec<u8>)> {
     Ok((size, texels))
 }
 
-/// `panorama_{face}.png` from the first layer that has one, with the path it
-/// came from, its file and its decoded image. Reading a face that no layer
-/// provides fails naming every path tried, so a report of a missing panorama
-/// says where the game looked.
+/// The first readable panorama face, its resource name, bytes and decoded image.
+/// A missing face reports the resource name and every layer tried.
 #[allow(clippy::type_complexity)]
 fn load_face(
-    root: &Path,
-    defaults: &Path,
+    root: &ResourceSource,
+    defaults: &ResourceSource,
     face: u8,
-) -> Result<(std::path::PathBuf, Vec<u8>, (u32, u32, Vec<u8>))> {
-    let name = format!("panorama_{face}.png");
-    let mut tried: Vec<(std::path::PathBuf, String)> = Vec::new();
-    for layer in [root, defaults] {
-        let path = layer.join(BACKGROUND).join(&name);
-        // A vanilla-only installation loads one root twice.
-        if tried.first().is_some_and(|(seen, _)| *seen == path) {
-            continue;
-        }
-        let read = std::fs::read(&path)
+) -> Result<(String, Vec<u8>, (u32, u32, Vec<u8>))> {
+    let name = format!("{BACKGROUND}/panorama_{face}.png");
+    let mut tried = Vec::new();
+    for (index, layer) in [root, defaults].into_iter().enumerate() {
+        let read = layer
+            .read(&name)
             .map_err(|e| e.to_string())
             .and_then(|file| {
                 let image = decode_bytes(&file).map_err(|e| e.to_string())?;
                 Ok((file, image))
             });
         match read {
-            Ok((file, image)) => return Ok((path, file, image)),
-            Err(error) => tried.push((path, error)),
+            Ok((file, image)) => return Ok((name, file, image)),
+            Err(error) => tried.push(format!("layer {index} {name}: {error}")),
         }
     }
-    let tried: Vec<String> = tried
-        .iter()
-        .map(|(path, error)| format!("{}: {error}", path.display()))
-        .collect();
     Err(tried.join("; ").into())
 }
 
@@ -478,9 +464,14 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn original_resolution_texels_and_vanilla_cube_orientation_are_preserved() {
         let f = Fixture::new(1024);
-        let faces = Faces::try_load(&f.0, &f.0).unwrap();
+        let faces = Faces::try_load(
+            &ResourceSource::directory(f.0.clone()),
+            &ResourceSource::directory(f.0.clone()),
+        )
+        .unwrap();
         assert_eq!(faces.size, 1024);
         // The texels decoded while loading, then decoded again for the next cube.
         let (loaded, again) = (faces.texels(), faces.texels());
@@ -503,21 +494,54 @@ mod tests {
     #[test]
     fn placeholders_load_and_incomplete_or_mismatched_cubes_fall_back() {
         let f = Fixture::new(1);
-        assert_eq!(Faces::try_load(&f.0, &f.0).unwrap().size, 1);
+        assert_eq!(
+            Faces::try_load(
+                &ResourceSource::directory(f.0.clone()),
+                &ResourceSource::directory(f.0.clone())
+            )
+            .unwrap()
+            .size,
+            1
+        );
         f.write(5, 2, 1);
         assert!(
-            Faces::try_load(&f.0, &f.0)
-                .unwrap_err()
-                .to_string()
-                .contains("equally sized squares")
+            Faces::try_load(
+                &ResourceSource::directory(f.0.clone()),
+                &ResourceSource::directory(f.0.clone())
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("equally sized squares")
         );
-        let fallback = Faces::load(&f.0, &f.0);
+        let fallback = Faces::load(
+            &ResourceSource::directory(f.0.clone()),
+            &ResourceSource::directory(f.0.clone()),
+        );
         assert_eq!(fallback.texels(), [96, 110, 111, 255].repeat(6));
         f.write(5, 2, 2);
-        assert!(Faces::try_load(&f.0, &f.0).is_err());
+        assert!(
+            Faces::try_load(
+                &ResourceSource::directory(f.0.clone()),
+                &ResourceSource::directory(f.0.clone())
+            )
+            .is_err()
+        );
         fs::remove_file(f.background().join("panorama_5.png")).unwrap();
-        assert!(Faces::try_load(&f.0, &f.0).is_err());
-        assert_eq!(Faces::load(&f.0, &f.0).size, 1);
+        assert!(
+            Faces::try_load(
+                &ResourceSource::directory(f.0.clone()),
+                &ResourceSource::directory(f.0.clone())
+            )
+            .is_err()
+        );
+        assert_eq!(
+            Faces::load(
+                &ResourceSource::directory(f.0.clone()),
+                &ResourceSource::directory(f.0.clone())
+            )
+            .size,
+            1
+        );
     }
 
     #[test]
@@ -527,7 +551,11 @@ mod tests {
         // still the game's, as the bottom of the pack stack provides them.
         let pack = Fixture::bare();
         pack.write(2, 4, 4);
-        let faces = Faces::try_load(&pack.0, &vanilla.0).unwrap();
+        let faces = Faces::try_load(
+            &ResourceSource::directory(pack.0.clone()),
+            &ResourceSource::directory(vanilla.0.clone()),
+        )
+        .unwrap();
         assert_eq!(faces.size, 4);
         let texels = faces.texels();
         assert_eq!(texels.len(), 6 * 4 * 4 * 4);
@@ -543,17 +571,54 @@ mod tests {
     fn a_missing_cube_names_every_path_it_tried() {
         let vanilla = Fixture::bare();
         let pack = Fixture::bare();
-        let error = Faces::try_load(&pack.0, &vanilla.0)
-            .unwrap_err()
-            .to_string();
-        for root in [&pack, &vanilla] {
-            let path = root.background().join("panorama_1.png");
-            assert!(error.contains(&path.display().to_string()), "{error}");
+        let error = Faces::try_load(
+            &ResourceSource::directory(pack.0.clone()),
+            &ResourceSource::directory(vanilla.0.clone()),
+        )
+        .unwrap_err()
+        .to_string();
+        for layer in 0..2 {
+            assert!(
+                error.contains(&format!("layer {layer} {BACKGROUND}/panorama_1.png")),
+                "{error}"
+            );
         }
         // No layer completes the cube: the one-pixel grey placeholder, and the
         // window still has a title.
-        let fallback = Faces::load(&pack.0, &vanilla.0);
+        let fallback = Faces::load(
+            &ResourceSource::directory(pack.0.clone()),
+            &ResourceSource::directory(vanilla.0.clone()),
+        );
         assert_eq!((fallback.size, fallback.texels().len()), (1, 24));
+    }
+
+    #[test]
+    fn archive_faces_survive_removal_and_decode_again_without_extraction() {
+        use std::io::Write;
+        let vanilla = Fixture::new(2);
+        let pack = Fixture::bare();
+        let jar = pack.0.join("panorama.jar");
+        let mut writer = zip::ZipWriter::new(fs::File::create(&jar).unwrap());
+        for face in 0..6 {
+            let name = format!("{BACKGROUND}/panorama_{face}.png");
+            writer
+                .start_file(&name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer
+                .write_all(&fs::read(vanilla.0.join(&name)).unwrap())
+                .unwrap();
+        }
+        writer.finish().unwrap();
+        let source = ResourceSource::archive(&jar).unwrap();
+        // No directory contains the archive's faces when the consumer loads.
+        fs::remove_dir_all(vanilla.background()).unwrap();
+        let faces =
+            Faces::try_load(&source, &ResourceSource::directory(vanilla.0.clone())).unwrap();
+        fs::remove_file(&jar).unwrap();
+        let loaded = faces.texels();
+        assert_eq!(loaded.len(), 6 * 2 * 2 * 4);
+        assert_eq!(faces.texels(), loaded);
+        assert_eq!(fs::read_dir(pack.background()).unwrap().count(), 0);
     }
 
     #[test]

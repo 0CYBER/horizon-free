@@ -1,0 +1,3 @@
+ids = ["hook:render_living_pre"]
+why = "A hidden part now also hides layers drawn on the body's own model."
+migrate = "Listeners hiding parts now hide those corresponding layers too; armour and extra layers keep their poses. Held items and wings are unchanged."

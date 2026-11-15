@@ -1,0 +1,19 @@
+id = "fnr_loop_panic"
+name = "Function replacement check: loop panic"
+version = "0.1.0"
+description = "fn-replace: a slot in block_entities.tick that panics on the tenth hopper"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+[[native.loop]]
+id = "tenth"
+loop = "block_entities.tick"
+helper = "src/loops/tenth.rs"
+with = "Tenth"

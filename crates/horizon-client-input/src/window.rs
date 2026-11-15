@@ -29,6 +29,24 @@ pub fn gui_scaled_size(framebuffer: [i32; 2], gui_scale: i32) -> [i32; 2] {
     [scaled(framebuffer[0]), scaled(framebuffer[1])]
 }
 
+/// The GUI dimensions shared by screen layout and resize notifications.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuiSize {
+    pub scale: u32,
+    pub size: [u32; 2],
+}
+
+impl GuiSize {
+    pub fn new(framebuffer: [u32; 2], max_scale: u32, enforce_unicode: bool) -> Self {
+        let framebuffer = framebuffer.map(|v| v as i32);
+        let scale = calculate_scale(framebuffer, max_scale as i32, enforce_unicode);
+        Self {
+            scale: scale as u32,
+            size: gui_scaled_size(framebuffer, scale).map(|v| v as u32),
+        }
+    }
+}
+
 /// `MouseHandler.getScaledXPos`/`getScaledYPos`.
 pub fn scaled_pos(pos: f64, gui_scaled: i32, screen: i32) -> f64 {
     pos * f64::from(gui_scaled) / f64::from(screen)
@@ -727,6 +745,45 @@ pub fn display(window: &winit::window::Window) -> Option<Display> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_gui_size_applies_unicode_and_rounds_up() {
+        assert_eq!(
+            GuiSize::new([960, 720], 3, false),
+            GuiSize {
+                scale: 3,
+                size: [320, 240]
+            }
+        );
+        assert_eq!(
+            GuiSize::new([960, 720], 3, true),
+            GuiSize {
+                scale: 4,
+                size: [240, 180]
+            }
+        );
+        assert_eq!(
+            GuiSize::new([1921, 1081], 0, false),
+            GuiSize {
+                scale: 4,
+                size: [481, 271]
+            }
+        );
+        assert_eq!(
+            GuiSize::new([853, 479], 0, true),
+            GuiSize {
+                scale: 2,
+                size: [427, 240]
+            }
+        );
+        assert_eq!(
+            GuiSize::new([3840, 2160], 0, true),
+            GuiSize {
+                scale: 10,
+                size: [384, 216]
+            }
+        );
+    }
 
     #[test]
     fn video_mode_round_trips_the_options_json() {

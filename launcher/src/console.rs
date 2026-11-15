@@ -22,7 +22,7 @@ pub fn attach_for_cli() -> std::io::Result<()> {
     // Attaching can replace the standard handles. Keep inherited pipes/files intact for
     // JSON output, MCP and redirected logs, while filling missing handles from the terminal.
     // SAFETY: These APIs take numeric constants and opaque handles returned by Windows.
-    // No handles are closed or dereferenced, and this runs before any worker starts.
+    // No handles are closed or dereferenced, and this runs before any background work starts.
     unsafe {
         let handles = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
             .map(|kind| (kind, GetStdHandle(kind)));

@@ -2,6 +2,7 @@
 //! (`neoforge.mods.toml`, `mods.toml`, `fabric.mod.json`, `mcmod.info`) and a
 //! census of its data, assets and classes. Legacy metadata contributes identity
 //! only; license and dependency fields are not interpreted.
+use crate::zip_intake::{self, Archive};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
@@ -40,43 +41,119 @@ pub struct Census {
 
 const NOT_MODS: [&str; 5] = ["minecraft", "neoforge", "forge", "fabricloader", "java"];
 
-pub fn read(path: &Path) -> Result<JarInfo, String> {
-    let file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", path.display()))?;
-    // A metadata file larger than any real one refuses the jar (crate::entry); a missing or
-    // non-UTF-8 one reads as absent.
-    let text =
-        |zip: &mut zip::ZipArchive<fs::File>, name: &str| -> Result<Option<String>, String> {
-            let Ok(file) = zip.by_name(name) else {
-                return Ok(None);
-            };
-            let declared = file.size();
-            match crate::entry::read_text(file, declared, crate::entry::MAX_TEXT) {
-                Ok(s) => Ok(Some(s)),
-                Err(e) if crate::entry::is_too_big(&e) => {
-                    Err(format!("{}: {name}: {e}", path.display()))
-                }
-                Err(_) => Ok(None),
+/// The loader whose metadata identifies a jar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JarLoader {
+    NeoForge,
+    Fabric,
+}
+
+/// Identity read from the jar itself, never inferred from its filename.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JarIdentity {
+    pub loader: JarLoader,
+    pub id: String,
+    pub version: String,
+}
+
+/// Read a NeoForge or Fabric jar's own identity, refusing missing or invalid metadata.
+/// Each metadata entry is limited to 1 MiB after decompression.
+pub fn read_identity(path: &Path) -> Result<JarIdentity, String> {
+    let (info, loader) = read_inner(path, true)?;
+    let loader = loader.expect("strict metadata always has a loader");
+    let bytes = info.mod_id.as_bytes();
+    let valid_id = (2..=64).contains(&bytes.len())
+        && match loader {
+            JarLoader::Fabric => {
+                bytes[0].is_ascii_lowercase()
+                    && bytes
+                        .iter()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(b))
             }
+            JarLoader::NeoForge => bytes
+                .iter()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_'),
         };
-    let mut tomls = Vec::new();
-    for n in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
-        tomls.extend(text(&mut zip, n)?);
+    if !valid_id || info.version.is_empty() || info.version.contains("${") {
+        return Err(format!(
+            "{}: invalid jar identity or version",
+            path.display()
+        ));
     }
-    let mut info = if !tomls.is_empty() {
-        metadata(&tomls)?
-    } else if let Some(t) = text(&mut zip, "fabric.mod.json")? {
-        fabric(&t)?
-    } else if let Some(t) = text(&mut zip, "mcmod.info")? {
-        mcmod_info(&t)?
+    Ok(JarIdentity {
+        loader,
+        id: info.mod_id,
+        version: info.version,
+    })
+}
+
+pub fn read(path: &Path) -> Result<JarInfo, String> {
+    read_inner(path, false).map(|(info, _)| info)
+}
+
+fn read_inner(path: &Path, strict: bool) -> Result<(JarInfo, Option<JarLoader>), String> {
+    let file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut zip = zip_intake::open(file).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text = |zip: &mut Archive<fs::File>, name: &str| -> Result<Option<String>, String> {
+        let entry = match zip.by_name(name) {
+            Ok(entry) => entry,
+            Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+            Err(e) if strict => return Err(format!("{}: {name}: {e}", path.display())),
+            Err(_) => return Ok(None),
+        };
+        const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+        let declared = entry.size();
+        let cap = if strict {
+            MAX_METADATA_BYTES
+        } else {
+            crate::entry::MAX_TEXT
+        };
+        match crate::entry::read_text(entry, declared, cap) {
+            Ok(s) => Ok(Some(s)),
+            Err(e) if strict || crate::entry::is_too_big(&e) => {
+                Err(format!("{}: {name}: {e}", path.display()))
+            }
+            Err(_) => Ok(None),
+        }
+    };
+    let neo = text(&mut zip, "META-INF/neoforge.mods.toml")?;
+    let (mut info, loader) = if strict {
+        if let Some(t) = neo {
+            (mods_toml(&t)?, Some(JarLoader::NeoForge))
+        } else if let Some(t) = text(&mut zip, "fabric.mod.json")? {
+            (fabric(&t)?, Some(JarLoader::Fabric))
+        } else {
+            return Err(format!(
+                "{}: no NeoForge or Fabric metadata",
+                path.display()
+            ));
+        }
     } else {
-        JarInfo::default()
+        let tomls: Vec<String> = neo
+            .into_iter()
+            .chain(text(&mut zip, "META-INF/mods.toml")?)
+            .collect();
+        let info = if !tomls.is_empty() {
+            metadata(&tomls)?
+        } else if let Some(t) = text(&mut zip, "fabric.mod.json")? {
+            fabric(&t)?
+        } else if let Some(t) = text(&mut zip, "mcmod.info")? {
+            mcmod_info(&t)?
+        } else {
+            JarInfo::default()
+        };
+        (info, None)
     };
     // `version = "${file.jarVersion}"` is filled in from the manifest at load.
-    if info.version.starts_with("${") {
+    if (loader == Some(JarLoader::NeoForge) && info.version == "${file.jarVersion}")
+        || (!strict && info.version.starts_with("${"))
+    {
         info.version = text(&mut zip, "META-INF/MANIFEST.MF")?
             .and_then(|m| manifest_value(&m, "Implementation-Version"))
             .unwrap_or_default();
+    }
+    if strict {
+        return Ok((info, loader));
     }
     let names: Vec<String> = zip
         .file_names()
@@ -90,17 +167,27 @@ pub fn read(path: &Path) -> Result<JarInfo, String> {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
     }
-    Ok(info)
+    Ok((info, loader))
 }
 
 /// A main-section attribute of `META-INF/MANIFEST.MF`.
 fn manifest_value(manifest: &str, key: &str) -> Option<String> {
-    manifest
-        .lines()
-        .take_while(|l| !l.trim().is_empty())
-        .find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
+    let manifest = manifest.replace("\r\n", "\n").replace('\r', "\n");
+    let mut value: Option<String> = None;
+    for line in manifest.lines().take_while(|line| !line.is_empty()) {
+        if let Some(continuation) = line.strip_prefix(' ') {
+            if let Some(value) = &mut value {
+                value.push_str(continuation);
+            }
+        } else if value.is_some() {
+            break;
+        } else if let Some((name, contents)) = line.split_once(':')
+            && name.eq_ignore_ascii_case(key)
+        {
+            value = Some(contents.strip_prefix(' ').unwrap_or(contents).to_owned());
+        }
+    }
+    value.filter(|value| !value.is_empty())
 }
 
 /// The jar's mod from its metadata files (`neoforge.mods.toml` first, then
@@ -247,8 +334,14 @@ pub fn fabric(text: &str) -> Result<JarInfo, String> {
 /// Read the first mod's identity from legacy Forge metadata.
 /// License and dependency fields remain unknown.
 fn mcmod_info(text: &str) -> Result<JarInfo, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("mcmod.info: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(text)
+        .or_else(|error| {
+            let Some(normalized) = escape_legacy_string_newlines(text) else {
+                return Err(error);
+            };
+            serde_json::from_str(&normalized).map_err(|_| error)
+        })
+        .map_err(|e| format!("mcmod.info: {e}"))?;
     let first = match &value {
         serde_json::Value::Array(mods) => mods.first(),
         serde_json::Value::Object(root) => root
@@ -271,6 +364,34 @@ fn mcmod_info(text: &str) -> Result<JarInfo, String> {
         version: get("version"),
         ..JarInfo::default()
     })
+}
+
+// Forge 1.7.10 packs can contain literal line feeds in legacy metadata strings.
+// Escape just those line feeds and let the JSON parser validate the result.
+fn escape_legacy_string_newlines(text: &str) -> Option<String> {
+    let mut normalized = String::new();
+    let mut copied_until = 0;
+    let mut quoted = false;
+    let mut characters = text.char_indices();
+    while let Some((offset, character)) = characters.next() {
+        match character {
+            '"' => quoted = !quoted,
+            '\\' if quoted => {
+                characters.next();
+            }
+            '\n' if quoted => {
+                normalized.push_str(&text[copied_until..offset]);
+                normalized.push_str("\\n");
+                copied_until = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    if copied_until == 0 {
+        return None;
+    }
+    normalized.push_str(&text[copied_until..]);
+    Some(normalized)
 }
 
 pub fn census(names: &[String]) -> Census {
@@ -328,7 +449,7 @@ mod tests {
         }
     }
 
-    fn synthetic_jar(stem: &str, entries: &[(&str, &str)]) -> SyntheticJar {
+    fn synthetic_jar<B: AsRef<[u8]>>(stem: &str, entries: &[(&str, B)]) -> SyntheticJar {
         let id = NEXT_TEST_JAR.fetch_add(1, Ordering::Relaxed);
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
             ".jar-info-test-{}-{}-{id}",
@@ -345,10 +466,181 @@ mod tests {
             archive
                 .start_file(*name, zip::write::SimpleFileOptions::default())
                 .unwrap();
-            archive.write_all(contents.as_bytes()).unwrap();
+            archive.write_all(contents.as_ref()).unwrap();
         }
         archive.finish().unwrap();
         SyntheticJar(path, dir)
+    }
+
+    #[test]
+    fn manifest_version_continuations_are_read_in_the_main_section_only() {
+        let metadata = "[[mods]]\nmodId = 'ruby'\nversion = '${file.jarVersion}'\n";
+        let folded = synthetic_jar(
+            "folded-version",
+            &[
+                ("META-INF/neoforge.mods.toml", metadata),
+                (
+                    "META-INF/MANIFEST.MF",
+                    "Manifest-Version: 1.0\r\nimplementation-version: 1.2-\r\n snapshot\r\nNext-Attribute: ignored\r\n\r\nName: file\r\nImplementation-Version: wrong\r\n",
+                ),
+            ],
+        );
+        assert_eq!(read(&folded.0).unwrap().version, "1.2-snapshot");
+        assert_eq!(read_identity(&folded.0).unwrap().version, "1.2-snapshot");
+        let lone_cr = synthetic_jar(
+            "cr-version",
+            &[
+                ("META-INF/neoforge.mods.toml", metadata),
+                (
+                    "META-INF/MANIFEST.MF",
+                    "Manifest-Version: 1.0\rImplementation-Version:  2.3-\r build\r\rName: file\rImplementation-Version: wrong\r",
+                ),
+            ],
+        );
+        assert_eq!(read(&lone_cr.0).unwrap().version, " 2.3-build");
+        assert_eq!(read_identity(&lone_cr.0).unwrap().version, " 2.3-build");
+        let named = synthetic_jar(
+            "named-section-only",
+            &[
+                ("META-INF/neoforge.mods.toml", metadata),
+                (
+                    "META-INF/MANIFEST.MF",
+                    "Manifest-Version: 1.0\r\n\r\nName: file\r\nImplementation-Version: wrong\r\n",
+                ),
+            ],
+        );
+        assert_eq!(read(&named.0).unwrap().version, "");
+        assert!(read_identity(&named.0).is_err());
+    }
+
+    #[test]
+    fn strict_identity_uses_loader_metadata_and_never_filename() {
+        let fabric = synthetic_jar(
+            "different-filename",
+            &[("fabric.mod.json", r#"{"id":"fabric-api","version":"1.2"}"#)],
+        );
+        assert_eq!(
+            read_identity(&fabric.0).unwrap(),
+            JarIdentity {
+                loader: JarLoader::Fabric,
+                id: "fabric-api".into(),
+                version: "1.2".into()
+            }
+        );
+        let neo = synthetic_jar(
+            "neo",
+            &[
+                (
+                    "META-INF/neoforge.mods.toml",
+                    "[[mods]]\nmodId = 'example_mod'\nversion = '${file.jarVersion}'\n",
+                ),
+                (
+                    "META-INF/MANIFEST.MF",
+                    "Manifest-Version: 1.0\nImplementation-Version: 3.2\n\n",
+                ),
+            ],
+        );
+        let identity = read_identity(&neo.0).unwrap();
+        assert_eq!(
+            (
+                identity.loader,
+                identity.id.as_str(),
+                identity.version.as_str()
+            ),
+            (JarLoader::NeoForge, "example_mod", "3.2")
+        );
+        for (stem, entries) in [
+            ("missing", vec![]),
+            ("no-id", vec![("fabric.mod.json", r#"{"version":"1"}"#)]),
+            (
+                "bad-id",
+                vec![("fabric.mod.json", r#"{"id":"-bad","version":"1"}"#)],
+            ),
+            (
+                "uppercase",
+                vec![("fabric.mod.json", r#"{"id":"Fabric","version":"1"}"#)],
+            ),
+            ("no-version", vec![("fabric.mod.json", r#"{"id":"good"}"#)]),
+            (
+                "neo-hyphen",
+                vec![(
+                    "META-INF/neoforge.mods.toml",
+                    "[[mods]]\nmodId = 'bad-id'\nversion = '1'\n",
+                )],
+            ),
+            (
+                "neo-template",
+                vec![(
+                    "META-INF/neoforge.mods.toml",
+                    "[[mods]]\nmodId = 'good'\nversion = '${version}'\n",
+                )],
+            ),
+            (
+                "legacy",
+                vec![("mcmod.info", r#"[{"modid":"legacy","version":"1"}]"#)],
+            ),
+        ] {
+            let jar = synthetic_jar(stem, &entries);
+            assert!(read_identity(&jar.0).is_err(), "{stem}");
+        }
+    }
+
+    #[test]
+    fn unreadable_neoforge_metadata_is_not_absent_on_the_strict_route() {
+        let jar = synthetic_jar(
+            "bad-utf8",
+            &[
+                ("META-INF/neoforge.mods.toml", b"\xff".as_slice()),
+                (
+                    "fabric.mod.json",
+                    br#"{"id":"fabric-api","version":"1"}"#.as_slice(),
+                ),
+            ],
+        );
+        assert_eq!(read(&jar.0).unwrap().mod_id, "fabric-api");
+        let error = read_identity(&jar.0).unwrap_err();
+        assert!(error.contains("META-INF/neoforge.mods.toml"), "{error}");
+    }
+
+    #[test]
+    fn strict_metadata_does_not_apply_inventory_tolerance() {
+        let malformed = synthetic_jar(
+            "duplicate-key",
+            &[(
+                "META-INF/neoforge.mods.toml",
+                "[[mods]]\nmodId = 'ruby'\nmodId = 'ruby'\nversion = '1'\n",
+            )],
+        );
+        assert_eq!(read(&malformed.0).unwrap().mod_id, "ruby");
+        assert!(read_identity(&malformed.0).is_err());
+        let unresolved = synthetic_jar(
+            "unresolved-version",
+            &[
+                (
+                    "META-INF/neoforge.mods.toml",
+                    "[[mods]]\nmodId = 'ruby'\nversion = '${unknown}'\n",
+                ),
+                ("META-INF/MANIFEST.MF", "Implementation-Version: 1.0\n\n"),
+            ],
+        );
+        assert_eq!(read(&unresolved.0).unwrap().version, "1.0");
+        assert!(read_identity(&unresolved.0).is_err());
+    }
+
+    #[test]
+    fn fabric_versions_never_borrow_neoforges_manifest_placeholder() {
+        let jar = synthetic_jar(
+            "fabric-placeholder",
+            &[
+                (
+                    "fabric.mod.json",
+                    r#"{"id":"fabric-api","version":"${file.jarVersion}"}"#,
+                ),
+                ("META-INF/MANIFEST.MF", "Implementation-Version: 1.0\n\n"),
+            ],
+        );
+        assert_eq!(read(&jar.0).unwrap().version, "1.0");
+        assert!(read_identity(&jar.0).is_err());
     }
 
     #[test]
@@ -576,12 +868,81 @@ modId = \"neoforge\"
     }
 
     #[test]
+    fn strict_identity_bounds_decompressed_metadata_without_changing_inventory() {
+        for size in [1_048_576, 1_048_577] {
+            let mut metadata = br#"{"id":"bounded","version":"1","description":""#.to_vec();
+            metadata.resize(size - 2, b'x');
+            metadata.extend_from_slice(b"\"}");
+            let jar = synthetic_jar("metadata-boundary", &[("fabric.mod.json", metadata)]);
+            let identity = read_identity(&jar.0);
+            if size == 1_048_576 {
+                let identity = identity.unwrap();
+                assert_eq!(identity.id, "bounded");
+                assert_eq!(identity.version, "1");
+            } else {
+                let error = identity.unwrap_err();
+                assert!(
+                    error.contains("fabric.mod.json: an entry unpacks to more than 1 MiB"),
+                    "{error}"
+                );
+            }
+            assert_eq!(read(&jar.0).unwrap().mod_id, "bounded");
+        }
+    }
+
+    #[test]
+    fn reads_legacy_metadata_with_literal_line_feeds_and_counts_the_contents() {
+        let jar = synthetic_jar(
+            "legacy-multiline",
+            &[
+                (
+                    "mcmod.info",
+                    r#"[{"modid":"legacy","version":"1.2.3","name":"Legacy \"Demo\"
+résumé","description":"One line
+another line"}]"#,
+                ),
+                ("legacy/Example.class", ""),
+                ("assets/legacy/textures/item/example.png", ""),
+            ],
+        );
+
+        let info = read(&jar.0).unwrap();
+
+        assert_eq!(info.mod_id, "legacy");
+        assert_eq!(info.version, "1.2.3");
+        assert_eq!(info.name, "Legacy \"Demo\"\nrésumé");
+        assert_eq!(info.census.classes, 1);
+        assert_eq!(info.census.textures, 1);
+    }
+
+    #[test]
     fn malformed_legacy_json_is_an_error_instead_of_filename_fallback() {
-        let jar = synthetic_jar("malformed-legacy", &[("mcmod.info", "[{not-json]")]);
+        for metadata in [
+            "[{not-json]",
+            "[{\"name\":\"first\nsecond\tthird\"}]",
+            "[{\"name\":\"first\\\nsecond\"}]",
+        ] {
+            let jar = synthetic_jar("malformed-legacy", &[("mcmod.info", metadata)]);
 
-        let error = read(&jar.0).unwrap_err();
+            let error = read(&jar.0).unwrap_err();
 
-        assert!(error.starts_with("mcmod.info:"), "{error}");
+            assert!(error.starts_with("mcmod.info:"), "{error}");
+        }
+    }
+
+    #[test]
+    fn modern_fabric_metadata_still_rejects_literal_line_feeds() {
+        let jar = synthetic_jar(
+            "fabric-multiline",
+            &[(
+                "fabric.mod.json",
+                "{\"id\":\"example\",\"name\":\"First\nSecond\",\"version\":\"1\"}",
+            )],
+        );
+
+        let error = read_identity(&jar.0).unwrap_err();
+
+        assert!(error.starts_with("fabric.mod.json:"), "{error}");
     }
 
     #[test]

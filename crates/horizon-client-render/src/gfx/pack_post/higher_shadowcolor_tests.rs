@@ -58,6 +58,7 @@ fn pack() -> Post {
 
 #[test]
 fn higher_shadowcolor_buffers_are_written_read_and_cleared() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack());
     // Two frames: the second starts from the first one's buffers.

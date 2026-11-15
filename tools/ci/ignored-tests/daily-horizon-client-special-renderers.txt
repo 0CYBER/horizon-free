@@ -1,0 +1,7 @@
+# Special item model renderers (arismoko/horizon#876): when a mod's renderer is asked in a real game, outside a tick's
+# lifted pass and with saves refused in an action savepoint (matrix rows 6 and 7 of
+# docs/design/mod-api/resource-renderers.md). Each boots the game in its own process. Rows: PACKAGE TEST TARGET daily REASON, sorted.
+horizon-client game::native_special_renderers::frame_tests::a_special_renderer_is_never_asked_inside_a_lifted_pass lib daily game-boot
+horizon-client game::transactions::decision::game_tests::a_save_is_refused_in_an_action_savepoint_a_special_item_is_drawn_in lib daily game-boot
+horizon-client-lib item_render::special_parts_tests::a_registered_special_model_draws_its_renderers_resource_models lib daily resources
+horizon-client-lib item_render::special_parts_tests::an_old_state_draws_across_a_reload_and_releases_its_models_once lib daily resources

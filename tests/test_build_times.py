@@ -285,7 +285,7 @@ class RunTests(unittest.TestCase):
         self.report("--profiles", "dev,fast", "--crates", "horizon-items", "--jobs", "3")
         for call in self.builds():
             args = call["args"]
-            self.assertEqual(args[:5], ["build", "--locked", "-p", "horizon-client", "--profile"])
+            self.assertEqual(args[:5], ["build", "--locked", "-p", "horizon-game", "--profile"])
             self.assertIn(args[5], ["dev", "fast"])
             self.assertIn("--timings", args)
             self.assertEqual(args[args.index("--jobs") + 1], "3")

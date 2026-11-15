@@ -433,6 +433,7 @@ mod tick_parity {
         time: i64,
         speed: i32,
     }
+    impl horizon_world::level::BlockEntityNeighbors for Level {}
     impl LevelAccess for Level {
         fn block_state(&self, pos: BlockPos) -> BlockStateId {
             self.reads.borrow_mut().push(pos);

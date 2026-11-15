@@ -1,0 +1,6 @@
+# A mod's AI pause (MobRef::set_ai_paused, arismoko/horizon#4478): path, target, physics, save and refusals.
+horizon-client game::native_ai_pause::tests::a_long_pause_does_not_time_out_an_established_path lib daily resources
+horizon-client game::native_ai_pause::tests::a_paused_brain_or_goal_mob_runs_no_ai_step_and_holds_no_input lib daily resources
+horizon-client game::native_ai_pause::tests::a_paused_pig_keeps_its_path_and_target_falls_and_is_knocked_back lib daily resources
+horizon-client game::native_ai_pause::tests::each_refusal_is_named_and_changes_nothing lib daily resources
+horizon-client game::native_ai_pause::tests::the_pause_round_trips_through_a_save_and_writes_no_no_ai lib daily resources

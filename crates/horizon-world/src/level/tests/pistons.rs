@@ -138,6 +138,7 @@ fn breaking_a_moving_piston_removes_its_extended_base() {
         BlockPos::new(1, 1, 0),
         false,
         true,
+        None,
     );
     assert_eq!(
         w.get(BlockPos::new(0, 1, 0)),
@@ -152,6 +153,7 @@ fn breaking_a_moving_piston_removes_its_extended_base() {
         BlockPos::new(6, 1, 0),
         false,
         true,
+        None,
     );
     assert_eq!(
         w.get(BlockPos::new(5, 1, 0)),
@@ -192,9 +194,46 @@ fn replacing_a_moving_piston_leaves_its_extended_base() {
     );
 }
 
-/// Runs the scheduled ticks and block events a piston's move needs: the event
-/// fires on the tick after the neighbour change, and the head is placed when it
-/// runs.
+#[test]
+fn replacing_moving_piston_skips_the_same_effects_with_or_without_flag() {
+    let mut w = world!();
+    let moving = w.id("moving_piston", &[("facing", "east"), ("type", "normal")]);
+    let extended = w.id("piston", &[("facing", "east"), ("extended", "true")]);
+    let stone = w.id("stone", &[]);
+    let air = w.id("air", &[]);
+    for (x, flags) in [
+        (0, 0),
+        (5, super::flags::UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS),
+    ] {
+        let base = BlockPos::new(x, 1, 0);
+        let pos = BlockPos::new(x + 1, 1, 0);
+        w.put(base, extended);
+        w.put(pos, moving);
+        w.ticks.moving_pistons.push((
+            pos,
+            MovingPiston {
+                moved_state: stone,
+                direction: Direction::East,
+                extending: true,
+                source: false,
+                progress: 0.5,
+                progress_o: 0.4,
+                last_ticked: 0,
+                death_ticks: 0,
+                id: 0,
+            },
+        ));
+        assert!(w.b().set_block(&mut w.level, &mut w.ticks, pos, air, flags));
+        assert_eq!(w.get(pos), air);
+        assert_eq!(
+            w.get(base),
+            extended,
+            "setBlock over the head keeps the extended base"
+        );
+        assert!(!w.ticks.moving_pistons.iter().any(|(p, _)| *p == pos));
+    }
+}
+
 fn settle(w: &mut World) {
     for _ in 0..8 {
         w.full_tick();

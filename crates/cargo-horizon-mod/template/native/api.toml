@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# The launcher points this at the Horizon source it builds the game from. Any other
-# dependency must be a crate and version in Horizon's Cargo.lock.
-horizon-client = { git = "https://github.com/horizon-rust/horizon"{rev} }
+# The pinned SDK's API crate, fetched into .horizon/sdk/ by any `cargo horizon-mod` command (the
+# launcher builds against its own copy of the same build). Any other registry dependency must be
+# pinned with `horizon-launcher native-lock .` before building.
+horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
+{metadata}

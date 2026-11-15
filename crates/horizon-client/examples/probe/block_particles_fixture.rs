@@ -12,13 +12,16 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = crate::args().collect();
     let root = Path::new(&args[1]);
     let assets = Assets::load(root)?;
-    let render = assets.reload(root)?;
+    let render = assets.reload(&horizon_assets::resource_source::ResourceRoot::directory(
+        root.to_path_buf(),
+    ))?;
     let facts = BlockFacts::load(root, assets.registry)?;
     let tables = MeshTables::new(
         &assets,
         &render,
         &facts,
         models::load_visibility(root, assets.registry)?,
+        None,
     )?;
     let mut output = BufWriter::new(fs::File::create(&args[3])?);
     for line in BufReader::new(fs::File::open(&args[2])?).lines() {

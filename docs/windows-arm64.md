@@ -17,7 +17,7 @@ the Java exporters used by the game.
 ```powershell
 rustup target add aarch64-pc-windows-msvc
 cargo build --release --locked --target aarch64-pc-windows-msvc `
-  -p horizon-client -p horizon-client-lib --bin horizon-client --bin horizon-ctl `
+  -p horizon-game -p horizon-client-lib --bin horizon-client --bin horizon-ctl `
   -p horizon-prepare --bin horizon-prepare -p horizon-server --bin horizon-server
 ```
 

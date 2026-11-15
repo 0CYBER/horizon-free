@@ -1,4 +1,4 @@
-//! A portable Rust toolchain of the launcher's own, for native mods (docs/native-mods.md), which
+//! A portable Rust toolchain of the launcher's own, for native mods (docs/modding/src/how-to/native-mods.md), which
 //! compile the game. levzzz5154 (2026-10-27): players combine many native mods per build, so they
 //! build on their own computer, and the launcher brings the compiler.
 //!
@@ -8,29 +8,32 @@
 //! Windows also gets a pinned C/link toolchain: WinLibs for x64 and LLVM-MinGW for ARM64.
 use crate::backend;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The Rust release native mods build with: the stable release when it was pinned (CI builds the
-/// game on stable; horizon-mixins needs 1.95 or newer).
-pub const VERSION: &str = "1.99.1";
+/// The Rust release native mods build with: the one pin CI builds the game with and wasm mods
+/// build with (`tools/ci/rust-version`; horizon-mixins needs 1.95 or newer). Bumping it also
+/// updates [`DIST`] and each platform's component checksums below.
+pub const VERSION: &str = include_str!("../../tools/ci/rust-version").trim_ascii();
 const DIST: &str = "https://static.rust-lang.org/dist/2026-10-15";
 
-/// One platform's components: (name, SHA-256 of `<name>-<VERSION>-<target>.tar.gz`).
+/// One platform's components: (name, SHA-256, compressed bytes) of `<name>-<VERSION>-<target>.tar.gz`.
 #[derive(Debug, PartialEq)]
 pub struct Host {
     pub target: &'static str,
-    components: &'static [(&'static str, &'static str)],
+    components: &'static [(&'static str, &'static str, u64)],
     /// The C and link toolchain it brings besides Rust's components.
     c_toolchain: Option<&'static CToolchain>,
 }
 
-/// A Windows C/link toolchain archive, pinned by its SHA-256.
+/// A Windows C/link toolchain archive, pinned by its SHA-256 and byte length.
 #[derive(Debug, PartialEq)]
 pub struct CToolchain {
     pub version: &'static str,
     url: &'static str,
     sha256: &'static str,
+    bytes: u64,
     directory: &'static str,
     kind: CToolchainKind,
 }
@@ -47,6 +50,7 @@ pub const MINGW: CToolchain = CToolchain {
     version: "GCC 16.2.0, MinGW-w64 14.0.0 (WinLibs r3)",
     url: "https://github.com/brechtsanders/winlibs_mingw/releases/download/16.2.0posix-23.1.3-14.0.0-msvcrt-r3/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64msvcrt-14.0.0-r3.zip",
     sha256: "62af32ea58acdea1318ea5dd8eb7017eaee694dd40b269d52a59c769dcfefb82",
+    bytes: 277203392,
     directory: MINGW_DIR,
     kind: CToolchainKind::WinLibs,
 };
@@ -57,6 +61,7 @@ pub const LLVM_MINGW: CToolchain = CToolchain {
     version: "LLVM-MinGW 23.1.5 (20261104, UCRT)",
     url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-aarch64.zip",
     sha256: "7d7f8387a8706639b0b47a629d6e23f8b3ef9acce67e9832b8cd4c5bb2816eab",
+    bytes: 186164073,
     directory: LLVM_MINGW_DIR,
     kind: CToolchainKind::LlvmMingw,
 };
@@ -76,14 +81,17 @@ const HOSTS: &[Host] = &[
             (
                 "rustc",
                 "cc998c1dc8df006106472357aa87838b2da3f7b25446b98a94cfd58796cb0610",
+                85305190,
             ),
             (
                 "cargo",
                 "b5cc7634f919949c3e5e131123f813416dc47f6b809a5371d12f1f593595ae13",
+                13082476,
             ),
             (
                 "rust-std",
                 "c124006d63885ba1029aca49efd59e93be6b2b171c379318ff94a00ef5eba664",
+                48506029,
             ),
         ],
         c_toolchain: None,
@@ -95,14 +103,17 @@ const HOSTS: &[Host] = &[
             (
                 "rustc",
                 "dad7c1300549bc846e1f02652fa11d131b86cdbb8288d64da5f62b4504d62a8f",
+                104855037,
             ),
             (
                 "cargo",
                 "ed05dab7a703d1b4c6fa5cec8e99272cb1c3902a323986c80e0bc57915c85ddd",
+                13439668,
             ),
             (
                 "rust-std",
                 "5cc4606fdd6c9226be51f59a333942cc8a203e74f7da38d47aaaf44b986bfe3c",
+                48891033,
             ),
         ],
         c_toolchain: None,
@@ -113,14 +124,17 @@ const HOSTS: &[Host] = &[
             (
                 "rustc",
                 "85e7c0e6f21636f714e2a42966011364a6cc56b6548126d32144d6ba90904966",
+                141445153,
             ),
             (
                 "cargo",
                 "47babc028247e26577f8a1bf390b11f447ad9b7ab93f5c9a0dda078935fc149b",
+                14520879,
             ),
             (
                 "rust-std",
                 "d1290c05994a59c029e562cb75be1bddc6fb11a4c501e1b7b0f61d119c6cbb12",
+                50361623,
             ),
         ],
         c_toolchain: None,
@@ -131,18 +145,22 @@ const HOSTS: &[Host] = &[
             (
                 "rustc",
                 "43b17e9a9134ea72562bfbb23728a830f671ea9be1db6a72597a8d240e986b35",
+                161274138,
             ),
             (
                 "cargo",
                 "57e54617be4420dbb967ca8293f5ace7168104ac12efa9dc7c5c3bda112f8b36",
+                18659998,
             ),
             (
                 "rust-std",
                 "6546651238a3ac092b763511be524ca6eda6103e5d47342416923be1b3ce837c",
+                44957351,
             ),
             (
                 "rust-mingw",
                 "30263d7bb4fd0bf63a153afe36d7fc102f929a7d42781651c6b3a03a414ba428",
+                9594887,
             ),
         ],
         c_toolchain: Some(&MINGW),
@@ -153,23 +171,38 @@ const HOSTS: &[Host] = &[
             (
                 "rustc",
                 "261a6bff00129905f97e07db33aaecb994d22ab40efef2b6b1e27b8cc37231a8",
+                140086017,
             ),
             (
                 "cargo",
                 "a678122654b6ca4240997cec6ab6e3c91fa0e79466939c06b079c8a717efc6aa",
+                14008619,
             ),
             (
                 "rust-std",
                 "a492480db6ba615c70a10c8c146012d04276122cd57d00aef225764e0791968f",
+                45343615,
             ),
             (
                 "rust-mingw",
                 "69fe700a14751b7b5a191bab92a9620e4deb4095f232873476033d1a6a5d8cd7",
+                870178,
             ),
         ],
         c_toolchain: Some(&LLVM_MINGW),
     },
 ];
+
+impl Host {
+    /// Exact compressed bytes downloaded for this pinned compiler and its linker.
+    pub fn download_bytes(&self) -> u64 {
+        self.components
+            .iter()
+            .map(|(_, _, bytes)| bytes)
+            .sum::<u64>()
+            + self.c_toolchain.map_or(0, |compiler| compiler.bytes)
+    }
+}
 
 /// This computer's host, if the launcher ships a toolchain for it.
 fn host_for(os: &str, arch: &str) -> Option<&'static Host> {
@@ -184,9 +217,7 @@ fn host_for(os: &str, arch: &str) -> Option<&'static Host> {
     HOSTS.iter().find(|h| h.target == target)
 }
 
-/// Every host the launcher ships a toolchain for, so tests check each host's commands on
-/// whichever machine runs them (a macOS x64 or Windows ARM64 runner included).
-#[cfg(test)]
+/// Every supported host, shared by cache-name parsing and cross-platform command tests.
 pub(crate) fn hosts() -> &'static [Host] {
     HOSTS
 }
@@ -226,7 +257,23 @@ impl Toolchain {
         self.dir.join("bin").join(exe("cargo"))
     }
 
-    /// The managed C/link toolchain's programs, when the host brings one (Windows).
+    pub fn rustc(&self) -> PathBuf {
+        self.dir.join("bin").join(exe("rustc"))
+    }
+
+    /// Where Rust's own libraries for this computer are: the standard library a dynamically
+    /// linked program loads (the prebuilt game's).
+    pub fn target_libdir(&self) -> Option<PathBuf> {
+        Some(
+            self.dir
+                .join("lib")
+                .join("rustlib")
+                .join(self.host.target)
+                .join("lib"),
+        )
+    }
+
+    /// MinGW-w64's programs (gcc, as, dlltool), when the toolchain brings it (Windows).
     pub fn mingw_bin(&self) -> PathBuf {
         self.host
             .c_toolchain
@@ -272,7 +319,7 @@ impl Toolchain {
             cmd.current_dir(root);
         }
         cmd.env("PATH", std::env::join_paths(paths).unwrap_or(path))
-            .env("RUSTC", self.dir.join("bin").join(exe("rustc")))
+            .env("RUSTC", self.rustc())
             .env("CARGO_HOME", cargo_home());
         // gcc, as, ld — and `cargo install`'s build — put scratch files in the temp dir,
         // which has to be a path they can open too: the build's own, never the player's
@@ -334,7 +381,7 @@ impl Toolchain {
     /// `rustc --version`, once the toolchain answers.
     pub fn version(&self) -> Result<String, String> {
         let out = self
-            .command(&self.dir.join("bin").join(exe("rustc")))
+            .command(&self.rustc())
             .arg("--version")
             .output()
             .map_err(|e| format!("Rust {VERSION} doesn't start: {e}"))?;
@@ -374,7 +421,7 @@ const LOW_IO: libc::c_long = (2 << 13) | 7;
 /// Runs `cmd` (a build) below the player's own programs, so the desktop and a game in play stay
 /// smooth while it compiles; with the computer otherwise idle it still gets every core. Unix: nice
 /// 19, and on Linux the lowest best-effort I/O level (not the idle class, which gets the disk only
-/// when nothing else uses it, so a game streaming chunks could stall a build for minutes);
+/// when nothing else uses it, so a game streaming chunks could stall a build);
 /// Windows: below-normal priority, keeping [`crate::process::hide_console`]'s no-console flag
 /// (`creation_flags` sets the whole value, so this sets both).
 pub fn low_priority(cmd: &mut Command) -> &mut Command {
@@ -462,6 +509,71 @@ pub fn installed() -> Option<Toolchain> {
     (toolchain.dir.join(COMPLETE).is_file() && toolchain.compiler_available()).then_some(toolchain)
 }
 
+// Check the byte after the pinned prefix before the shared writer can commit it.
+struct PinnedArchive<R>(std::io::Take<R>);
+impl<R: Read> Read for PinnedArchive<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        let n = self.0.read(buffer)?;
+        if n == 0 && self.0.limit() == 0 && self.0.get_mut().read(&mut [0])? != 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                crate::i18n::tr("Rust toolchain archive exceeds its pinned size."),
+            ));
+        }
+        Ok(n)
+    }
+}
+
+fn download_archive(
+    url: &str,
+    bytes: u64,
+    sha256: &str,
+    to: &Path,
+    progress: &impl Fn(f32),
+) -> Result<(), String> {
+    save_archive(
+        backend::get(url)?.into_reader(),
+        url,
+        bytes,
+        sha256,
+        to,
+        progress,
+    )
+}
+
+fn save_archive(
+    reader: impl Read,
+    name: &str,
+    bytes: u64,
+    sha256: &str,
+    to: &Path,
+    progress: &impl Fn(f32),
+) -> Result<(), String> {
+    backend::save_checked(
+        PinnedArchive(reader.take(bytes)),
+        bytes,
+        name,
+        sha256,
+        to,
+        progress,
+    )?;
+    let actual = fs::metadata(to).map_err(|error| error.to_string())?.len();
+    if actual != bytes {
+        let _ = fs::remove_file(to);
+        return Err(crate::i18n::trf(
+            "Rust toolchain archive has {actual} bytes; expected {expected}.",
+            &[
+                ("actual", &actual.to_string()),
+                ("expected", &bytes.to_string()),
+            ],
+        ));
+    }
+    Ok(())
+}
+
 /// Downloads, checks and unpacks the pinned toolchain (once); `progress` gets the fraction done.
 pub fn install(progress: impl Fn(f32)) -> Result<Toolchain, String> {
     if let Some(done) = installed() {
@@ -484,11 +596,11 @@ pub fn install(progress: impl Fn(f32)) -> Result<Toolchain, String> {
     let _ = fs::remove_dir_all(&partial);
     fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
     let count = (host.components.len() + usize::from(host.c_toolchain.is_some())) as f32;
-    for (i, (name, sha256)) in host.components.iter().enumerate() {
+    for (i, &(name, sha256, bytes)) in host.components.iter().enumerate() {
         let file = format!("{name}-{VERSION}-{}.tar.gz", host.target);
         let archive = root().join(format!(".{file}"));
         let step = |f: f32| progress((i as f32 + f) / count);
-        backend::download(&format!("{DIST}/{file}"), 0, sha256, &archive, &step)
+        download_archive(&format!("{DIST}/{file}"), bytes, sha256, &archive, &step)
             .map_err(|e| format!("Rust {VERSION} ({name}): {e}"))?;
         let unpacked = unpack(&archive, &partial);
         let _ = fs::remove_file(&archive);
@@ -498,8 +610,14 @@ pub fn install(progress: impl Fn(f32)) -> Result<Toolchain, String> {
         let archive = root().join(format!(".{}.zip", compiler.directory));
         let done = host.components.len() as f32;
         let step = |f: f32| progress((done + f) / count);
-        backend::download(compiler.url, 0, compiler.sha256, &archive, &step)
-            .map_err(|e| format!("{}: {e}", compiler.version))?;
+        download_archive(
+            compiler.url,
+            compiler.bytes,
+            compiler.sha256,
+            &archive,
+            &step,
+        )
+        .map_err(|e| format!("{}: {e}", compiler.version))?;
         let unpacked = match compiler.kind {
             CToolchainKind::WinLibs => unpack_mingw(&archive, &partial),
             CToolchainKind::LlvmMingw => unpack_llvm_mingw(&archive, &partial),
@@ -723,7 +841,7 @@ pub fn blocked_by_app_control(text: &str) -> bool {
 /// headless server build links none of those (`--no-default-features`, docs/server.md).
 /// Desktop distributions ship the libraries but not these files, and SteamOS has GCC without
 /// the C library's headers (`stdint.h` not found in `ring`, #4770), so a build without them
-/// failed minutes in. `ok` runs a check; `os` is `/etc/os-release`, which picks the install
+/// failed after starting. `ok` runs a check; `os` is `/etc/os-release`, which picks the install
 /// command.
 fn linux_needs(ok: impl Fn(&str, &[&str]) -> bool, os: &str, full: bool) -> Result<(), String> {
     let cc = ok("cc", &["--version"]);
@@ -836,16 +954,49 @@ mod tests {
     use std::io::Write;
 
     #[test]
+    fn archive_download_checks_pinned_length_as_well_as_hash() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("archive");
+        let mut oversized = vec![b'x'; 1 << 20];
+        oversized[..4].copy_from_slice(b"rust");
+        for (body, bytes, accepted) in [
+            (b"rust".to_vec(), 4, true),
+            (b"rust".to_vec(), 5, false),
+            (oversized, 4, false),
+            (b"oops".to_vec(), 4, false),
+        ] {
+            let mut reader = std::io::Cursor::new(body);
+            let result = save_archive(
+                &mut reader,
+                "fixture",
+                bytes,
+                "521fe5c9ece1aa1f8b66228171598263574aefc6fa4ba06a61747ec81ee9f5a3",
+                &archive,
+                &|_| {},
+            );
+            assert_eq!(result.is_ok(), accepted, "{result:?}");
+            assert_eq!(archive.exists(), accepted);
+            if reader.get_ref().len() > 5 {
+                assert_eq!(reader.position(), 5);
+            }
+            if accepted {
+                fs::remove_file(&archive).unwrap();
+            }
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
     fn every_host_pins_each_component_once_with_a_sha256() {
         for host in HOSTS {
-            let names: Vec<&str> = host.components.iter().map(|c| c.0).collect();
+            let names: Vec<&str> = host.components.iter().map(|(name, ..)| *name).collect();
             assert_eq!(
                 &names[..3],
                 ["rustc", "cargo", "rust-std"],
                 "{}",
                 host.target
             );
-            for (name, sha) in host.components {
+            for &(name, sha, _) in host.components {
                 assert!(
                     sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
                     "{name} {}",
@@ -862,8 +1013,14 @@ mod tests {
             .find(|h| h.target == WINDOWS_ARM64_TARGET)
             .unwrap();
         assert!(x64.target.ends_with("-gnu"), "preserve the x64 toolchain");
-        assert!(x64.components.iter().any(|c| c.0 == "rust-mingw"));
-        assert!(arm64.components.iter().any(|c| c.0 == "rust-mingw"));
+        assert!(x64
+            .components
+            .iter()
+            .any(|(name, ..)| *name == "rust-mingw"));
+        assert!(arm64
+            .components
+            .iter()
+            .any(|(name, ..)| *name == "rust-mingw"));
         // Only Windows brings a C toolchain; macOS and Linux use the system's.
         for host in HOSTS {
             assert_eq!(

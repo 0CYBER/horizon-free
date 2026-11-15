@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::chunk_flatten::side_mask;
 use super::dynamic::{as_int, as_long_stream, as_str, ceillog2, set};
-use crate::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `PackedBitStorage`.
 #[derive(Clone)]

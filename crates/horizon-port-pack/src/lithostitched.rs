@@ -12,7 +12,7 @@
 //!   becomes a `reference` when the mod is ported along, else nothing.
 //! - `add_template_pool_elements` and `add_processor_list_processors`
 //!   modifiers become `horizon:add_to` pool and processor list files
-//!   (`docs/mods.md`), with their `priority`, when their load conditions pass.
+//!   (`docs/modding/src/how-to/content-mods.md`), with their `priority`, when their load conditions pass.
 //! - Its `limited` and `guaranteed` pool elements are the game's own
 //!   (`horizon_world`'s `structure::jigsaw`); `delegating` places its
 //!   `delegate`, and what it adds is counted as lost.

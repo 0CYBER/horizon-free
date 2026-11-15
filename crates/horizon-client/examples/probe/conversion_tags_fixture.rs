@@ -1,6 +1,6 @@
 //! Command-tag data carried to a converted mob's new entity ID.
 use horizon_client::entity_nbt;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::io::Write;
 
 pub fn main() {

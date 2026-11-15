@@ -1,10 +1,12 @@
-use horizon_world::{
-    DATA_VERSION,
-    nbt::Tag,
-    registry::BlockRegistry,
-    worldgen::{block_feature::FeatureBlockBindings, rule_test::RuleTest},
-};
 use std::collections::{BTreeMap, BTreeSet};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        registry::BlockRegistry,
+        worldgen::{block_feature::FeatureBlockBindings, rule_test::RuleTest},
+    },
+};
 fn registry() -> BlockRegistry {
     let names = [
         "minecraft:air",

@@ -4,6 +4,9 @@ use super::{
     unit_float,
 };
 use crate::heightmap::HeightmapType;
+use crate::native_worldgen_hooks::{
+    self, AlterGroundTree, GroundAccess, ModGroundProvider, WorldgenRandom,
+};
 use crate::registry::BlockStateId;
 use crate::worldgen::{
     DecodeError, Object,
@@ -13,6 +16,7 @@ use crate::worldgen::{
     placement::PlacementContext,
     required,
     state_provider::BlockStateProvider,
+    structure::processor::ProcessorRandom,
     tree_blocks::{self as tb, TreeBlocks},
 };
 use horizon_core::{geometry::Direction, random::RandomSource};
@@ -279,23 +283,20 @@ impl TreeDecorator {
             Self::Beehive(probability) => d.beehive(lists, *probability)?,
             Self::AlterGround(provider) => {
                 let positions = lists.lowest();
-                let Some(first) = positions.first() else {
+                if positions.is_empty() {
                     return Ok(());
-                };
-                let min_y = first[1];
-                for &pos in positions.iter().filter(|p| p[1] == min_y) {
-                    d.circle(provider, tb::offset(pos, -1, 0, -1))?;
-                    d.circle(provider, tb::offset(pos, 2, 0, -1))?;
-                    d.circle(provider, tb::offset(pos, -1, 0, 2))?;
-                    d.circle(provider, tb::offset(pos, 2, 0, 2))?;
-                    for _ in 0..5 {
-                        let placement = d.run.random.next_int_bound(64)?;
-                        let (xx, zz) = (placement % 8, placement / 8);
-                        if xx == 0 || xx == 7 || zz == 0 || zz == 7 {
-                            d.circle(provider, tb::offset(pos, -3 + xx, 0, -3 + zz))?;
-                        }
-                    }
                 }
+                let replaced = native_worldgen_hooks::alter_ground(&AlterGroundTree {
+                    logs: &lists.logs,
+                    leaves: &lists.leaves,
+                    roots: &lists.roots,
+                    positions: &positions,
+                });
+                let ground = Ground {
+                    decorator: provider,
+                    replaced: replaced.as_deref(),
+                };
+                d.alter_ground(&ground, &positions)?;
             }
             Self::AttachedToLeaves {
                 probability,
@@ -473,6 +474,59 @@ impl TreeDecorator {
     }
 }
 
+/// The provider `AlterGroundDecorator` places ground with: its own, or the one
+/// mods put in its place (`AlterGroundEvent.getStateProvider`).
+struct Ground<'p> {
+    decorator: &'p BlockStateProvider,
+    replaced: Option<&'p dyn ModGroundProvider>,
+}
+
+/// The decoration run as a mod's ground provider reads it. A failed read is
+/// kept and returned once the provider answers.
+struct GroundRun<'a, 'w, W: FeatureWorld, R> {
+    run: &'a mut Run<'w, W, R>,
+    decorator: &'a BlockStateProvider,
+    air: BlockStateId,
+    error: Option<FeatureExecutionError<W::Error>>,
+}
+impl<W: FeatureWorld + PlacementContext, R: RandomSource> GroundAccess for GroundRun<'_, '_, W, R> {
+    fn block_state(&mut self, pos: [i32; 3]) -> BlockStateId {
+        match read(self.run.world, pos) {
+            Ok(state) => state,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                self.air
+            }
+        }
+    }
+    fn decorator_state(&mut self, pos: [i32; 3]) -> Option<BlockStateId> {
+        match sample_optional(self.decorator, self.run.world, self.run.random, pos) {
+            Ok(state) => state,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                None
+            }
+        }
+    }
+}
+impl<W: FeatureWorld, R: RandomSource> WorldgenRandom for GroundRun<'_, '_, W, R> {
+    fn next_int_bound(&mut self, bound: i32) -> i32 {
+        ProcessorRandom::int(self.run.random, bound)
+    }
+    fn next_long(&mut self) -> i64 {
+        self.run.random.next_long()
+    }
+    fn next_float(&mut self) -> f32 {
+        self.run.random.next_float()
+    }
+    fn next_double(&mut self) -> f64 {
+        self.run.random.next_double()
+    }
+    fn next_boolean(&mut self) -> bool {
+        self.run.random.next_boolean()
+    }
+}
+
 struct Decorate<'a, 'b, 'w, W, R> {
     run: &'a mut Run<'w, W, R>,
     blocks: &'b TreeBlocks,
@@ -507,20 +561,61 @@ impl<W: FeatureWorld + PlacementContext, R: RandomSource> Decorate<'_, '_, '_, W
         let state = self.with(vine, face, "true")?;
         self.set(p, state)
     }
-    fn circle(
+    /// `AlterGroundDecorator.place` around `positions`, never empty.
+    fn alter_ground(
         &mut self,
-        provider: &BlockStateProvider,
-        center: [i32; 3],
+        ground: &Ground<'_>,
+        positions: &[[i32; 3]],
     ) -> TreeResult<(), W::Error> {
+        let min_y = positions[0][1];
+        for &pos in positions.iter().filter(|p| p[1] == min_y) {
+            self.circle(ground, tb::offset(pos, -1, 0, -1))?;
+            self.circle(ground, tb::offset(pos, 2, 0, -1))?;
+            self.circle(ground, tb::offset(pos, -1, 0, 2))?;
+            self.circle(ground, tb::offset(pos, 2, 0, 2))?;
+            for _ in 0..5 {
+                let placement = self.run.random.next_int_bound(64)?;
+                let (xx, zz) = (placement % 8, placement / 8);
+                if xx == 0 || xx == 7 || zz == 0 || zz == 7 {
+                    self.circle(ground, tb::offset(pos, -3 + xx, 0, -3 + zz))?;
+                }
+            }
+        }
+        Ok(())
+    }
+    /// The ground state at `cursor`: the decorator's own provider, or the
+    /// mods' in its place. A state the registry doesn't have is refused.
+    fn ground_state(
+        &mut self,
+        ground: &Ground<'_>,
+        cursor: [i32; 3],
+    ) -> TreeResult<Option<BlockStateId>, W::Error> {
+        let Some(replaced) = ground.replaced else {
+            return sample_optional(ground.decorator, self.run.world, self.run.random, cursor);
+        };
+        let mut access = GroundRun {
+            air: self.default("minecraft:air")?,
+            run: &mut *self.run,
+            decorator: ground.decorator,
+            error: None,
+        };
+        let state = replaced.state_at(&mut access, cursor);
+        if let Some(error) = access.error {
+            return Err(error);
+        }
+        match state {
+            Some(state) if !self.blocks.is_state(state) => Err(FeatureExecutionError::InvalidState),
+            state => Ok(state),
+        }
+    }
+    fn circle(&mut self, ground: &Ground<'_>, center: [i32; 3]) -> TreeResult<(), W::Error> {
         for xx in -2i32..=2 {
             for zz in -2i32..=2 {
                 if xx.abs() != 2 || zz.abs() != 2 {
                     let column = tb::offset(center, xx, 0, zz);
                     for dy in (-3..=2).rev() {
                         let cursor = tb::offset(column, 0, dy, 0);
-                        if let Some(state) =
-                            sample_optional(provider, self.run.world, self.run.random, cursor)?
-                        {
+                        if let Some(state) = self.ground_state(ground, cursor)? {
                             self.set(cursor, state)?;
                             break;
                         }
@@ -678,8 +773,8 @@ fn mushroom_pos(log: [i32; 3], facing: Direction) -> [i32; 3] {
 
 /// The nest's block entity after `BeehiveDecorator` stored its bees
 /// (`Occupant.create(ticks)`: a bee, with 600 minimum ticks in the hive).
-pub(crate) fn beehive_occupants(ticks_in_hive: &[i32]) -> crate::nbt::Compound {
-    use crate::nbt::{Compound, Tag};
+pub(crate) fn beehive_occupants(ticks_in_hive: &[i32]) -> horizon_core::nbt::Compound {
+    use horizon_core::nbt::{Compound, Tag};
     let bees = ticks_in_hive
         .iter()
         .map(|&ticks| {
@@ -696,4 +791,237 @@ pub(crate) fn beehive_occupants(ticks_in_hive: &[i32]) -> crate::nbt::Compound {
     nbt.insert("id".into(), Tag::String("minecraft:beehive".into()));
     nbt.insert("bees".into(), Tag::List(bees));
     nbt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Sets;
+    use super::*;
+    use crate::registry::BlockRegistry;
+    use crate::worldgen::state_provider::StateProviderBindings;
+    use crate::worldgen::{anchor::WorldGenerationContext, placement::PlacementQueryError};
+    use horizon_core::random::LegacyRandom;
+    use std::collections::{BTreeMap, HashMap};
+
+    fn registry() -> &'static BlockRegistry {
+        static REGISTRY: std::sync::OnceLock<BlockRegistry> = std::sync::OnceLock::new();
+        REGISTRY.get_or_init(|| {
+            let names = [
+                "minecraft:air",
+                "minecraft:grass_block",
+                "minecraft:dirt",
+                "minecraft:podzol",
+                "minecraft:coarse_dirt",
+                "minecraft:stone",
+            ];
+            let rows: Vec<_> = names
+                .iter()
+                .map(|name| {
+                    serde_json::json!([name, name.ends_with("air"), false, "", {"id": name, "properties": {}}])
+                })
+                .collect();
+            let defaults: BTreeMap<_, _> = names.iter().enumerate().map(|(i, n)| (*n, i)).collect();
+            let facts = serde_json::json!({"states": rows, "defaults": defaults});
+            BlockRegistry::from_facts_json(facts.to_string().as_bytes()).unwrap()
+        })
+    }
+    fn state(name: &str) -> BlockStateId {
+        registry().default_state(name).unwrap()
+    }
+
+    /// Grass at y 0 over dirt, air above: the ground a tree at y 1 stands on.
+    struct Meadow(HashMap<[i32; 3], BlockStateId>);
+    impl Meadow {
+        fn new() -> Self {
+            let mut blocks = HashMap::new();
+            for x in -8..=8 {
+                for z in -8..=8 {
+                    blocks.insert([x, 0, z], state("minecraft:grass_block"));
+                    for y in -3..0 {
+                        blocks.insert([x, y, z], state("minecraft:dirt"));
+                    }
+                }
+            }
+            Self(blocks)
+        }
+        fn at(&self, pos: [i32; 3]) -> BlockStateId {
+            self.0
+                .get(&pos)
+                .copied()
+                .unwrap_or_else(|| state("minecraft:air"))
+        }
+    }
+    impl FeatureWorld for Meadow {
+        type Error = ();
+        fn block(&mut self, pos: [i32; 3]) -> Result<BlockStateId, ()> {
+            Ok(self.at(pos))
+        }
+        fn set_block(&mut self, pos: [i32; 3], state: BlockStateId, _: i32) -> Result<bool, ()> {
+            self.0.insert(pos, state);
+            Ok(true)
+        }
+    }
+    impl PlacementContext for Meadow {
+        fn block_state(&mut self, pos: [i32; 3]) -> Result<BlockStateId, PlacementQueryError> {
+            Ok(self.at(pos))
+        }
+        fn generation(&self) -> WorldGenerationContext {
+            WorldGenerationContext::new(-64, 384, 63)
+        }
+        fn min_y(&mut self) -> Result<i32, PlacementQueryError> {
+            Ok(-64)
+        }
+        fn height(&mut self, _: HeightmapType, _: i32, _: i32) -> Result<i32, PlacementQueryError> {
+            Err(PlacementQueryError::Unavailable)
+        }
+    }
+
+    fn bindings() -> StateProviderBindings<'static> {
+        StateProviderBindings::new(registry(), Default::default(), &BTreeMap::new()).unwrap()
+    }
+
+    /// Mega spruce's kind of ground, with a draw per placed block: grass becomes podzol or
+    /// coarse dirt.
+    fn decorator_provider() -> BlockStateProvider {
+        let json = serde_json::json!({
+            "type": "minecraft:rule_based",
+            "rules": [{
+                "if_true": {"type": "minecraft:matching_blocks", "blocks": "minecraft:grass_block"},
+                "then": {"type": "minecraft:weighted", "entries": [
+                    {"data": {"id": "minecraft:podzol"}, "weight": 1},
+                    {"data": {"id": "minecraft:coarse_dirt"}, "weight": 1},
+                ]},
+            }],
+        });
+        BlockStateProvider::from_json(&json.to_string(), &bindings()).unwrap()
+    }
+
+    /// The ground under a two-log trunk at x 0, z 0 altered from `seed`: the meadow after,
+    /// and the random's next long.
+    fn alter(seed: i64, replaced: Option<&dyn ModGroundProvider>) -> TreeResult<(Meadow, i64), ()> {
+        let blocks = TreeBlocks::air_only(registry(), bindings().properties().unwrap());
+        let decorator = decorator_provider();
+        let mut world = Meadow::new();
+        let mut random = LegacyRandom::new(seed);
+        let mut run = Run {
+            world: &mut world,
+            random: &mut random,
+            sets: Sets::default(),
+            track: true,
+        };
+        let lists = Lists::new(vec![[0, 1, 0], [0, 2, 0]], vec![], vec![]);
+        let ground = Ground {
+            decorator: &decorator,
+            replaced,
+        };
+        Decorate {
+            run: &mut run,
+            blocks: &blocks,
+        }
+        .alter_ground(&ground, &lists.lowest())?;
+        Ok((world, random.next_long()))
+    }
+
+    fn changed(world: &Meadow) -> BTreeMap<[i32; 3], BlockStateId> {
+        let before = Meadow::new();
+        (world.0.iter())
+            .filter(|(pos, state)| before.at(**pos) != **state)
+            .map(|(pos, state)| (*pos, *state))
+            .collect()
+    }
+
+    /// The grass the four fixed circles around a trunk at x 0, z 0 cover: each a 5x5 square
+    /// without its corners (`AlterGroundDecorator.placeCircle`).
+    fn fixed_circles() -> Vec<[i32; 3]> {
+        let mut columns = Vec::new();
+        for [cx, cz] in [[-1, -1], [2, -1], [-1, 2], [2, 2]] {
+            for xx in -2i32..=2 {
+                for zz in -2i32..=2 {
+                    if xx.abs() != 2 || zz.abs() != 2 {
+                        columns.push([cx + xx, 0, cz + zz]);
+                    }
+                }
+            }
+        }
+        columns
+    }
+
+    /// Keeps the decorator's own provider, as a mod that wraps it and changes nothing.
+    struct Kept;
+    impl ModGroundProvider for Kept {
+        fn state_at(&self, access: &mut dyn GroundAccess, pos: [i32; 3]) -> Option<BlockStateId> {
+            access.decorator_state(pos)
+        }
+    }
+
+    /// Turns grass to stone, drawing nothing.
+    struct Stone;
+    impl ModGroundProvider for Stone {
+        fn state_at(&self, access: &mut dyn GroundAccess, pos: [i32; 3]) -> Option<BlockStateId> {
+            let grass = access.block_state(pos) == state("minecraft:grass_block");
+            grass.then(|| state("minecraft:stone"))
+        }
+    }
+
+    #[test]
+    fn the_decorators_own_provider_turns_the_circles_around_the_trunk() {
+        let (world, _) = alter(7, None).unwrap();
+        let changed = changed(&world);
+        for column in fixed_circles() {
+            assert!(changed.contains_key(&column), "{column:?} kept its grass");
+        }
+        let ground = [state("minecraft:podzol"), state("minecraft:coarse_dirt")];
+        assert!(
+            changed
+                .iter()
+                .all(|(pos, state)| pos[1] == 0 && ground.contains(state))
+        );
+        assert!(changed.values().any(|s| *s == ground[0]));
+        assert!(changed.values().any(|s| *s == ground[1]));
+    }
+
+    #[test]
+    fn a_provider_that_wraps_the_decorators_own_keeps_its_blocks_and_draws() {
+        for seed in [7, -3, i64::MIN, i64::MAX] {
+            let (own, own_next) = alter(seed, None).unwrap();
+            let (kept, kept_next) = alter(seed, Some(&Kept)).unwrap();
+            assert_eq!(changed(&own), changed(&kept), "seed {seed}");
+            assert_eq!(own_next, kept_next, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn a_mods_provider_places_its_own_ground_and_draws_only_what_it_draws() {
+        let (world, next) = alter(7, Some(&Stone)).unwrap();
+        let changed = changed(&world);
+        for column in fixed_circles() {
+            assert_eq!(changed.get(&column), Some(&state("minecraft:stone")));
+        }
+        assert!(
+            changed
+                .iter()
+                .all(|(pos, s)| pos[1] == 0 && *s == state("minecraft:stone"))
+        );
+        // The decorator itself draws five `nextInt(64)` for its one position; the provider
+        // drew nothing.
+        let mut expected = LegacyRandom::new(7);
+        for _ in 0..5 {
+            expected.next_int_bound(64).unwrap();
+        }
+        assert_eq!(next, expected.next_long());
+    }
+
+    #[test]
+    fn a_state_the_registry_lacks_is_refused() {
+        struct Unknown;
+        impl ModGroundProvider for Unknown {
+            fn state_at(&self, _: &mut dyn GroundAccess, _: [i32; 3]) -> Option<BlockStateId> {
+                Some(BlockStateId(u32::MAX))
+            }
+        }
+        assert!(matches!(
+            alter(7, Some(&Unknown)),
+            Err(FeatureExecutionError::InvalidState)
+        ));
+    }
 }

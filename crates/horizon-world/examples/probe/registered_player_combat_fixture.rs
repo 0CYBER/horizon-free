@@ -3,6 +3,7 @@ use horizon_world::damage_immunity::{DamageRule, ImmunityTag, ImmunityWorld};
 use horizon_world::damage_source::{
     Catalog as DamageCatalog, DamageSource, EntityKind, SourceWorld,
 };
+use horizon_world::living_damage::DamageContainer;
 use horizon_world::living_hurt::{HurtState, HurtTag, HurtWorld};
 use horizon_world::{
     attributes::{
@@ -155,7 +156,12 @@ impl HurtWorld for Env<'_> {
     fn hurt_helmet(&mut self, _: &mut HurtState<()>, v: f32) -> io::Result<()> {
         self.event(&format!("hurt-helmet {:08x}", f32_bits(v)))
     }
-    fn actually_hurt(&mut self, _s: &mut HurtState<()>, _v: f32) -> io::Result<()> {
+    fn actually_hurt(
+        &mut self,
+        _s: &mut HurtState<()>,
+        _: &mut DamageContainer,
+        _v: f32,
+    ) -> io::Result<()> {
         panic!("combat binding supplies actual inner damage")
     }
     fn blocking_component(&mut self, v: bool) -> Option<()> {

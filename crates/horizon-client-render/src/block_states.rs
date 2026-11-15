@@ -88,13 +88,7 @@ impl BlockStates {
                 }
             })
             .collect();
-        // Vanilla's names go without their namespace, as `native_draw_cube` takes them.
-        let textures = context
-            .render
-            .sprite_layers
-            .iter()
-            .map(|(name, layer)| (*layer, name.trim_start_matches("minecraft:").to_owned()))
-            .collect();
+        let textures = crate::block_sprites::texture_names(&context.render.sprite_layers);
         Self {
             states,
             context,
@@ -129,7 +123,7 @@ impl BlockStates {
     /// last state.
     pub fn sprites(&self, state: BlockStateId) -> Option<BlockSprites> {
         self.get(state)?;
-        Some(Lookup::new(&self.context, self.split).state(state))
+        Some(Lookup::new(&self.context, self.split, &self.textures).state(state))
     }
 
     /// The texture `sprite` shows, by the name `native_texture_sprites` takes (`block/grass_block_top`; a mod's with
@@ -165,16 +159,21 @@ mod tests {
                 std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
             );
             let assets = Arc::new(Assets::load(&root).unwrap());
-            let render = Arc::new(assets.reload(&root).unwrap());
+            let source = crate::resource_source::ResourceRoot::directory(root.clone());
+            let render = Arc::new(assets.reload(&source).unwrap());
             let facts = BlockFacts::load(&root, assets.registry).unwrap();
             let collision = crate::collisions::load(&root, assets.registry).unwrap();
             let visibility = crate::models::load_visibility(&root, assets.registry).unwrap();
             let context = Arc::new(WorkerContext {
                 light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
-                tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility).unwrap()),
+                tables: Arc::new(
+                    MeshTables::new(&assets, &render, &facts, visibility, None).unwrap(),
+                ),
                 assets: assets.clone(),
                 render,
-                biomes: Arc::new(Biomes::load(&root).unwrap()),
+                biomes: Arc::new(Biomes::load(&source).unwrap()),
+                hidden_states: Arc::from([]),
+                part_tables: Default::default(),
             });
             BlockStates::new(&facts, &collision, context, SMALL_SPLIT)
         })
@@ -187,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_grass_block_is_a_whole_solid_grass_coloured_block() {
         let grass = facts("grass_block");
         assert_eq!(&*grass.name, "minecraft:grass_block");
@@ -200,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn air_and_light_are_not_drawn() {
         let air = facts("air");
         assert!(air.air && air.invisible && !air.collides);
@@ -212,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_slabs_outline_is_its_half() {
         assert_eq!(
             &*facts("stone_slab[type=bottom]").outline,
@@ -229,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_face_names_its_texture() {
         let states = states();
         let id = parse_state(states.context.assets.registry, "grass_block").unwrap();

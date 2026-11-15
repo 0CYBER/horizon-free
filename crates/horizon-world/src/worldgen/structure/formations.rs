@@ -8,11 +8,6 @@
 //! the element's jigsaw children with vanilla's jigsaw
 //! ([`super::jigsaw::add_children`]): `horizon:pieced` on the structure
 //! holds its `max_depth` and `max_distance_from_center`.
-use super::{
-    BoundingBox, Rotation, StructureResources,
-    jigsaw::{JigsawConfig, PoolElement, PoolPiece, Pools, add_children},
-    start::{NoiseBlock, NoiseColumn, StartContext},
-};
 use crate::{
     heightmap::HeightmapType,
     worldgen::{DecodeError, block_feature::FeatureBlockBindings},
@@ -20,6 +15,14 @@ use crate::{
 use horizon_core::position::ChunkPos;
 use horizon_core::random::RandomSource;
 use serde_json::Value;
+use {
+    super::{
+        Rotation, StructureResources,
+        jigsaw::{JigsawConfig, PoolElement, PoolPiece, Pools, add_children},
+        start::{NoiseBlock, NoiseColumn, StartContext},
+    },
+    horizon_core::bounding_box::BoundingBox,
+};
 
 /// StructurePlacement: how the height is found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

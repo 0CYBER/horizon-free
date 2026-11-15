@@ -1,4 +1,5 @@
 use crate::support::common::f32_bits;
+use horizon_world::living_damage::DamageContainer;
 use horizon_world::living_hurt::{HurtState, HurtTag, HurtWorld};
 use horizon_world::{
     food::Difficulty,
@@ -138,7 +139,12 @@ impl HurtWorld for Env<'_> {
     fn hurt_helmet(&mut self, _: &mut HurtState<()>, v: f32) -> io::Result<()> {
         self.event(&format!("hurt-helmet {:08x}", f32_bits(v)))
     }
-    fn actually_hurt(&mut self, s: &mut HurtState<()>, v: f32) -> io::Result<()> {
+    fn actually_hurt(
+        &mut self,
+        s: &mut HurtState<()>,
+        _: &mut DamageContainer,
+        v: f32,
+    ) -> io::Result<()> {
         self.event(&format!("hurt {:08x} {}", f32_bits(v), state(s)))?;
         self.hit = true;
         self.recorded = v;

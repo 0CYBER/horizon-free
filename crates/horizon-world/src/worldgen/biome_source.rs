@@ -1,5 +1,9 @@
 //! Fixed, checkerboard and End biome-source queries. Registry codecs are separate.
 mod codec;
+pub mod region_selector;
+#[cfg(test)]
+mod region_selector_tests;
+pub mod regions;
 mod runtime;
 pub use codec::{BiomeSet, BiomeSourceCatalog, BiomeSourceDefinition};
 use horizon_core::density::{DensitySampler, SampleError, SamplerContext};
@@ -16,7 +20,6 @@ impl<T> FixedBiomeSource<T> {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckerboardError {
-    TooManyBiomes,
     EmptyBiomes,
 }
 impl std::fmt::Display for CheckerboardError {
@@ -34,9 +37,6 @@ impl<T> CheckerboardBiomeSource<T> {
     /// Runtime scale is unrestricted, including Java's masked shift distances.
     /// The vanilla JSON codec separately limits scale to 0..=62.
     pub fn new(biomes: Vec<T>, scale: i32) -> Result<Self, CheckerboardError> {
-        if biomes.len() > 8192 {
-            return Err(CheckerboardError::TooManyBiomes);
-        }
         Ok(Self { biomes, scale })
     }
     pub fn noise_biome(&self, quart: [i32; 3]) -> Result<&T, CheckerboardError> {
@@ -47,7 +47,10 @@ impl<T> CheckerboardBiomeSource<T> {
         let cell = quart[0]
             .wrapping_shr(shift)
             .wrapping_add(quart[2].wrapping_shr(shift));
-        Ok(&self.biomes[cell.rem_euclid(self.biomes.len() as i32) as usize])
+        // Widen before taking the modulus: a direct list may exceed i32::MAX,
+        // and narrowing its length could produce a zero or negative divisor.
+        let index = i128::from(cell).rem_euclid(self.biomes.len() as i128) as usize;
+        Ok(&self.biomes[index])
     }
 }
 #[derive(Clone, Debug)]

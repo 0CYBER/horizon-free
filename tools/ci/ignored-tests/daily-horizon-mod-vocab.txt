@@ -1,0 +1,4 @@
+# The daily tests of horizon-mod-vocab: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-mod-vocab world::datapack_registry_set::tests::a_candidate_over_64_mib_refuses_the_candidate lib daily slow
+horizon-mod-vocab world::datapack_registry_set::tests::a_registry_over_65536_entries_refuses_the_candidate lib daily slow

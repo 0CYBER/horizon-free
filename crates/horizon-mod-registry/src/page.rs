@@ -1,11 +1,11 @@
 //! A project's page in a submission: its categories, tags and description
-//! (`horizon_mods::index::page`), and its images, uploaded with the form and
+//! (`horizon_mod_package::index::page`), and its images, uploaded with the form and
 //! written into the registry (`icons/<id>.png`, `screenshots/<id>/<n>.<ext>`)
 //! so the site and the launcher load them only from the registry's own host.
 //! Also "Edit project": an owner changes the page with no new version.
 use crate::{Config, Form, Ownership, Refusal, bad, github::GitHub, github_down, now, ownership};
 use axum::http::StatusCode;
-use horizon_mods::index::{Kind, page as rules, registry::Entry};
+use horizon_mod_package::index::{Kind, page as rules, registry::Entry};
 
 /// The biggest image part: a screenshot (an icon is smaller, checked when added).
 pub const MAX_IMAGE: usize = rules::MAX_SCREENSHOT as usize;

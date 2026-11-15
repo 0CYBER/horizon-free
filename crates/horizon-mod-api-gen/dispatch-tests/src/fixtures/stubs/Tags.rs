@@ -1,0 +1,1 @@
+pub(super) trait Tags {}

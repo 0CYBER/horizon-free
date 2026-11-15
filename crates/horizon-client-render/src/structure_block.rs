@@ -3,9 +3,9 @@
 //! corner scan (`getEnclosingBoundingBox`) and the box the editor shows
 //! (`getRenderableBox`).
 use horizon_client_core::nbt_value::{float, number, string, text};
-use horizon_world::{
-    nbt::Tag,
-    worldgen::structure::{Mirror, Rotation},
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::worldgen::structure::{Mirror, Rotation},
 };
 
 pub const MAX_OFFSET_PER_AXIS: i32 = 48;

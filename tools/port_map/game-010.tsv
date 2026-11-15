@@ -19,7 +19,7 @@ GroundPathNavigation.createPath	port	crates/horizon-client/src/mobs/nav.rs::Mob:
 GroundPathNavigation.getSurfaceY	port	crates/horizon-client/src/mobs/nav.rs::Mob::surface_y	floats up through water up to 16 blocks when the mob can float, else floor(y + 0.5)
 GroundPathNavigation.trimPath	port	crates/horizon-client/src/mobs/nav.rs::Mob::trim_path	with avoid_sun on a ground or wall-climbing mob: the mob standing under sky keeps its path, otherwise the nodes are cut at the first one that can see the sky
 PathNavigation.getGroundY	inline	crates/horizon-client/src/mobs/nav.rs::Mob::nav_tick	target y is the floor level under the node unless the block below is air
-PathNavigation.shouldTargetNextNodeInDirection	port	crates/horizon-client/src/mobs/nav.rs::Mob::should_target_next_node	
+PathNavigation.shouldTargetNextNodeInDirection	port	crates/horizon-client/src/mobs/nav.rs::Mob::should_target_next_node
 PathNavigation.trimPath	port	crates/horizon-client/src/mobs/path.rs::Path::raise_cauldron_nodes	the cauldron node moves onto the rim and the node after it follows when it is not above it; Mob::trim_path runs it from nav_move_to_path
 PathNavigation.isClearForMovementBetween	port	crates/horizon-client/src/mobs/world.rs::MobWorld::clear_between	collider clip from start to the target raised by half the height, optionally stopped by fluids
 PathNavigation.shouldRecomputePath	inline	crates/horizon-client/src/mobs/nav.rs::Mob::should_recompute_path	called for every block write that changes a collision shape (`mobs.rs::blocks_changed`, `World::path_writes`); the recompute happens at the start of the mob's next navigation tick, not inside sendBlockUpdated
@@ -44,7 +44,7 @@ MobSensor.doTick	inline	crates/horizon-client/src/mobs/armadillo.rs::server_ai_s
 MobSensor.checkForMobsNearby	port	crates/horizon-client/src/mobs/armadillo.rs::scared_by_someone	undead, last attacker or a sprinting or riding player within 7 by 2 blocks
 MobSensor.mobDetected	inline	crates/horizon-client/src/mobs/armadillo.rs::server_ai_step	danger = 80 ticks
 NearestBedSensor.doTick	port	crates/horizon-client/src/mobs/villager_brain.rs::sense_bed	babies only, at most four new beds per scan, 40 tick cache, path must reach the bed
-NearestItemSensor.doTick	port	crates/horizon-client/src/game/piglins.rs::Game::piglin_pickups	gap: player: villagers never walk to dropped food or seeds (only what lands within a block is picked up) and piglins and allays scan their own items without the line-of-sight test
+NearestItemSensor.doTick	port	crates/horizon-client/src/game/mobs/piglins.rs::Game::piglin_pickups	gap: player: villagers never walk to dropped food or seeds (only what lands within a block is picked up) and piglins and allays scan their own items without the line-of-sight test
 NearestLivingEntitySensor.doTick	port	crates/horizon-client/src/mobs/brain.rs::living_near	alive entities within the follow range box, nearest first, stored with a fresh visible list
 NearestVisibleLivingEntitySensor.getNearestEntity	inline	crates/horizon-client/src/mobs/animal_brain.rs::sense_axolotl_attackables	find_closest over the visible list with the sensor's own test
 PiglinBruteSpecificSensor.doTick	inline	crates/horizon-client/src/mobs/piglin.rs::register_brute	gap: minor: nemesis is a NearestTarget on wither skeletons only, the wither boss is not one; alerting nearby adult piglins is HurtByTarget alert
@@ -71,8 +71,8 @@ GoalUtils.hasMalus	inline	crates/horizon-client/src/mobs/goals.rs::Mob::default_
 LandRandomPos.getPosTowards	port	crates/horizon-client/src/mobs/goals.rs::Mob::land_random_pos_towards	the direction from the mob to the point, then the ten tries within a quarter turn of it; GolemRandomStrollInVillageGoal calls it (golem.rs towards_villager_who_wants_golem and towards_poi) and is registered in mobs/golem.rs; MoveBackToVillageGoal is registered there too and calls DefaultRandomPos.getPosTowards (default_random_pos_towards), as vanilla does
 LandRandomPos.getPosInDirection	inline	crates/horizon-client/src/mobs/goals.rs::Mob::land_random_pos_away	only the away direction is wired; the toward call has no user
 LandRandomPos.movePosUpOutOfSolid	port	crates/horizon-client/src/mobs/goals.rs::Mob::land_up_out_of_solid	up out of solid, then no water and no malus
-RandomPos.generateRandomDirection	port	crates/horizon-client/src/mobs/goals.rs::Mob::random_direction	
-RandomPos.generateRandomDirectionWithinRadians	port	crates/horizon-client/src/mobs/goals.rs::Mob::random_direction_within	
+RandomPos.generateRandomDirection	port	crates/horizon-client/src/mobs/goals.rs::Mob::random_direction
+RandomPos.generateRandomDirectionWithinRadians	port	crates/horizon-client/src/mobs/goals.rs::Mob::random_direction_within
 RandomPos.generateRandomPos	port	crates/horizon-client/src/mobs/goals.rs::Mob::pick_best	best of ten by walk target value
 PoiManager.remove	inline	crates/horizon-client-render/src/poi_sections.rs::PoiSections::get	no stored records: a section's POI list is rebuilt from its blocks after an edit
 PoiManager.findAll	port	crates/horizon-client/src/mobs/villager_brain.rs::pois_in_range	square then sphere filter over the sections' POI blocks, nearest first, with a caller filter
@@ -102,10 +102,10 @@ PoiSection.refresh	inline	crates/horizon-client-render/src/poi_sections.rs::PoiS
 PoiSection.Packed.unpack	skip:other		POI files are not loaded into sections
 PoiTypes.registerBlockStates	inline	crates/horizon-client/src/save.rs::poi_type	state to POI type and max tickets in one match
 PoiTypes.bootstrap	port	crates/horizon-client/src/save.rs::poi_type	every POI type with its tickets (bed heads of the sixteen colours only, cauldrons, bell 32); villagers use villager_brain::state_poi for jobs, beds and bell
-Bat.isFlapping	port	crates/horizon-client/src/game/sculk.rs::flaps	an awake bat flaps every tenth tick, and the movement pass posts minecraft:flap when the block below is air (a bee, every other tick in the air, shares the same fn)
+Bat.isFlapping	port	crates/horizon-client/src/game/blocks/sculk.rs::flaps	an awake bat flaps every tenth tick, and the movement pass posts minecraft:flap when the block below is air (a bee, every other tick in the air, shares the same fn)
 Bat.getMovementEmission	port	crates/horizon-client/src/mobs/ai.rs::movement_sounds	EVENTS
 Bat.getAmbientSound	inline	crates/horizon-client/src/mobs/ai.rs::play_ambient	Species::Bat arm: a resting bat is silent three times in four
-Bat.isResting	port	crates/horizon-client/src/mobs/bat.rs::resting	
+Bat.isResting	port	crates/horizon-client/src/mobs/bat.rs::resting
 Bat.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	BatFlags byte, bit 0 resting
 Bat.checkBatSpawnRules	inline	crates/horizon-client/src/mobs/spawn_rules.rs::check_spawn_rules	S::Bat arm: below the surface, coin flip, light against nextInt(4), bats_spawnable_on, mob rules
 Dolphin.finalizeSpawn	port	crates/horizon-client/src/mobs/finalize.rs::Ctx::finalize	S::Dolphin arm: full air, pitch 0, baby chance 0.1
@@ -116,7 +116,7 @@ Dolphin.registerGoals	port	crates/horizon-client/src/mobs/aquatic.rs::register	t
 Dolphin.createAttributes	skip:data		attributes come from the entity tables
 Dolphin.canAttack	port	crates/horizon-client/src/mobs/goals.rs::spares_target	a baby dolphin takes nobody as its target
 Dolphin.playAttackSound	port	crates/horizon-client/src/mobs/ai.rs::do_hurt_target	the dolphin arm: DOLPHIN_ATTACK at 1.0/1.0 after the blow lands, skipped for a silent mob
-Dolphin.pickUpItem	port	crates/horizon-client/src/game/foxes.rs::Game::tick_dolphins	the game finds the first allowed item in the water within 8 blocks and takes it
+Dolphin.pickUpItem	port	crates/horizon-client/src/game/mobs/foxes.rs::Game::tick_dolphins	the game finds the first allowed item in the water within 8 blocks and takes it
 Dolphin.handleEntityEvent	port	crates/horizon-client-render/src/particles.rs::entity_event_burst	event 38: seven happy villager particles about the dolphin
 Dolphin.closeToNextPos	inline	crates/horizon-client/src/mobs/dolphin.rs::SwimToTreasure::tick	nav target within 12 blocks (144 squared) of the dolphin
 Dolphin.DolphinSwimWithPlayerGoal.canContinueToUse	port	crates/horizon-client/src/mobs/dolphin.rs::SwimWithPlayer::can_continue	player still swimming and within 16 blocks
@@ -129,5 +129,5 @@ AbstractChestedHorse.dropEquipment	port	crates/horizon-client/src/mobs/drops.rs:
 AbstractChestedHorse.addAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_to_nbt	ChestedHorse and Items for llamas, donkeys and mules
 AbstractChestedHorse.readAdditionalSaveData	port	crates/horizon-client/src/entity_nbt.rs::mob_from_nbt	ChestedHorse and Items, 15 slots
 AbstractChestedHorse.getSlot	missing		slot 499 (horse.chest) is not mapped for mobs, so /item replace entity ... horse.chest does nothing; the mob slot names Horizon resolves are the eight of loot::EQUIPMENT_SLOTS
-AbstractChestedHorse.equipChest	port	crates/horizon-client/src/game/mounts.rs::Game::interact_mount	tamed donkey or mule takes a held chest with the sound; llamas do it in game/llamas.rs interact_llama
-AbstractChestedHorse.playChestEquipsSound	inline	crates/horizon-client/src/game/mounts.rs::Game::interact_mount	entity.donkey.chest with the random pitch; llamas play entity.llama.chest in llama_sound
+AbstractChestedHorse.equipChest	port	crates/horizon-client/src/game/mobs/mounts.rs::Game::interact_mount	tamed donkey or mule takes a held chest with the sound; llamas do it in game/mobs/llamas.rs interact_llama
+AbstractChestedHorse.playChestEquipsSound	inline	crates/horizon-client/src/game/mobs/mounts.rs::Game::interact_mount	entity.donkey.chest with the random pitch; llamas play entity.llama.chest in llama_sound

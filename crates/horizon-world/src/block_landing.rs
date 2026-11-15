@@ -92,6 +92,14 @@ pub trait BlockLandingWorld: BlockPushWorld {
     fn under_spawn_protection(&mut self, position: BlockPos) -> Result<bool, Self::Error>;
     fn mob_griefing(&mut self) -> Result<bool, Self::Error>;
     fn entity_dimensions(&self) -> (f32, f32);
+    fn cancel_farmland_trample(
+        &mut self,
+        _position: BlockPos,
+        _state: BlockStateId,
+        _distance: f64,
+    ) -> bool {
+        false
+    }
     fn suppressing_bounce(&mut self) -> Result<bool, Self::Error>;
     fn damage_source(
         &mut self,
@@ -137,15 +145,6 @@ pub trait BlockLandingWorld: BlockPushWorld {
     ) -> Result<(), Self::Error>;
     fn level_event(&mut self, event: i32, position: BlockPos, data: i32)
     -> Result<(), Self::Error>;
-    /// Whether the farmland at `position` may turn to dirt under the entity that fell
-    /// `distance` onto it (NeoForge's `FarmlandTrampleEvent`), once vanilla's checks let it.
-    fn trample_allowed(
-        &mut self,
-        _position: BlockPos,
-        _distance: f64,
-    ) -> Result<bool, Self::Error> {
-        Ok(true)
-    }
 }
 #[derive(Debug)]
 pub enum LandingError<E> {
@@ -429,9 +428,7 @@ impl BlockLandingRegistry {
                     if allowed {
                         let (width, height) = world.entity_dimensions();
                         if width * width * height > 0.512f32
-                            && world
-                                .trample_allowed(position, distance)
-                                .map_err(LandingError::World)?
+                            && !world.cancel_farmland_trample(position, state, distance)
                         {
                             let next = push_entities_up(world, state, base, position)
                                 .map_err(LandingError::Push)?;

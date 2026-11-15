@@ -21,34 +21,34 @@ SerializableChunkData.packOffsets	inline	crates/horizon-client/src/save.rs::enco
 SimpleRegionStorage.write	port	crates/horizon-client/src/save.rs::SaveDir::queue	queues the record for the region writer thread
 DimensionType.<init>	skip:data		validates a dimension type's numbers when datapack data loads; Horizon uses fixed dimension data
 DimensionType.createDirectCodec	skip:java		codec for the dimension type JSON
-EnderDragonFight.createDefault	inline	crates/horizon-client/src/game/dragon.rs::Game::load_fight	the defaults load_fight uses when no saved fight exists (scan on, no gateways yet)
-EnderDragonFight.<init>	inline	crates/horizon-client/src/game/dragon.rs::Game::load_fight	reads the saved fight fields
-EnderDragonFight.init	inline	crates/horizon-client/src/game/dragon.rs::Game::load_fight	gap: minor: the gateway shuffle is here; the boss bar object and player predicate are fight_has_players and dragon_boss_progress
-EnderDragonFight.scanState	inline	crates/horizon-client/src/game/dragon.rs::Game::tick_fight	gap: minor: sets previously_killed from end_portal_active; does not spawn the inactive portal or discard a stray dragon
-EnderDragonFight.findOrCreateDragon	inline	crates/horizon-client/src/game/dragon.rs::Game::tick_fight	gap: minor: no lookup for an existing dragon; Horizon holds one fight dragon
-EnderDragonFight.setRespawnStage	port	crates/horizon-client/src/game/dragon.rs::Game::set_respawn	gap: minor: the END stage (new dragon, summoned-entity trigger) is not set here; finish_respawn ends the respawn and the trigger is not fired
-EnderDragonFight.hasActiveExitPortal	port	crates/horizon-client/src/game/dragon.rs::Game::end_portal_active	gap: minor: checks one column at the origin for bedrock and portal blocks, not portal block entities over 17x17 chunks
-EnderDragonFight.findExitPortal	port	crates/horizon-client/src/game/dragon.rs::Game::exit_portal	gap: minor: returns the remembered portal origin; there is no pattern search of the chunks
-EnderDragonFight.isArenaLoaded	port	crates/horizon-client/src/game/dragon.rs::Game::arena_loaded	gap: minor: checks a 4x4 block of lit chunks, not full status plus loaded entities
-EnderDragonFight.updatePlayers	port	crates/horizon-client/src/game/dragon.rs::Game::fight_has_players	gap: minor: the boss bar's player set is not kept; dragon_boss_progress checks each player's distance
-EnderDragonFight.updateCrystalCount	port	crates/horizon-client/src/game/dragon.rs::Game::count_crystals	counts crystals on the spike tops
-EnderDragonFight.spawnNewGateway	inline	crates/horizon-client/src/game/dragon.rs::Game::dragon_killed	gap: minor: pops the next gateway and its position; placing it is place_gateway_at (end.rs)
-EnderDragonFight.spawnExitPortal	port	crates/horizon-client/src/game/end.rs::Game::activate_exit_portal	gap: minor: places the active podium only; try_respawn places the inactive one
-EnderDragonFight.createNewDragon	inline	crates/horizon-client/src/game/dragon.rs::Game::tick_fight	creates the dragon over the podium with a random yaw; Dragon::new builds it
-EnderDragonFight.updateDragon	port	crates/horizon-client/src/game/dragon.rs::Game::dragon_boss_progress	gap: minor: returns the health fraction for the bar; the dragon's custom name is not used
-EnderDragonFight.abortRespawnSequence	port	crates/horizon-client/src/game/dragon.rs::Game::abort_respawn	clears the respawn, resets the spike crystals and reactivates the portal
-EnderDragonFight.respawnDragon	port	crates/horizon-client/src/game/dragon.rs::Game::try_respawn	turns the portal bedrock back to end stone, takes the crystals and starts the respawn
-EnderDragonFight.resetSpikeCrystals	port	crates/horizon-client/src/game/dragon.rs::Game::reset_spike_crystals	makes spike crystals vulnerable again and clears their beams
+EnderDragonFight.createDefault	inline	crates/horizon-client/src/game/mobs/dragon.rs::Game::load_fight	the defaults load_fight uses when no saved fight exists (scan on, no gateways yet)
+EnderDragonFight.<init>	inline	crates/horizon-client/src/game/mobs/dragon.rs::Game::load_fight	reads the saved fight fields
+EnderDragonFight.init	inline	crates/horizon-client/src/game/mobs/dragon.rs::Game::load_fight	gap: minor: the gateway shuffle is here; the boss bar object and player predicate are fight_has_players and dragon_boss_progress
+EnderDragonFight.scanState	inline	crates/horizon-client/src/game/mobs/dragon.rs::Game::tick_fight	gap: minor: sets previously_killed from end_portal_active; does not spawn the inactive portal or discard a stray dragon
+EnderDragonFight.findOrCreateDragon	inline	crates/horizon-client/src/game/mobs/dragon.rs::Game::tick_fight	gap: minor: no lookup for an existing dragon; Horizon holds one fight dragon
+EnderDragonFight.setRespawnStage	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::set_respawn	gap: minor: the END stage (new dragon, summoned-entity trigger) is not set here; finish_respawn ends the respawn and the trigger is not fired
+EnderDragonFight.hasActiveExitPortal	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::end_portal_active	gap: minor: checks one column at the origin for bedrock and portal blocks, not portal block entities over 17x17 chunks
+EnderDragonFight.findExitPortal	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::exit_portal	gap: minor: returns the remembered portal origin; there is no pattern search of the chunks
+EnderDragonFight.isArenaLoaded	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::arena_loaded	gap: minor: checks a 4x4 block of lit chunks, not full status plus loaded entities
+EnderDragonFight.updatePlayers	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::fight_has_players	gap: minor: the boss bar's player set is not kept; dragon_boss_progress checks each player's distance
+EnderDragonFight.updateCrystalCount	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::count_crystals	counts crystals on the spike tops
+EnderDragonFight.spawnNewGateway	inline	crates/horizon-client/src/game/mobs/dragon.rs::Game::dragon_killed	gap: minor: pops the next gateway and its position; placing it is place_gateway_at (end.rs)
+EnderDragonFight.spawnExitPortal	port	crates/horizon-client/src/game/world/end.rs::Game::activate_exit_portal	gap: minor: places the active podium only; try_respawn places the inactive one
+EnderDragonFight.createNewDragon	inline	crates/horizon-client/src/game/mobs/dragon.rs::Game::tick_fight	creates the dragon over the podium with a random yaw; Dragon::new builds it
+EnderDragonFight.updateDragon	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::dragon_boss_progress	gap: minor: returns the health fraction for the bar; the dragon's custom name is not used
+EnderDragonFight.abortRespawnSequence	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::abort_respawn	clears the respawn, resets the spike crystals and reactivates the portal
+EnderDragonFight.respawnDragon	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::try_respawn	turns the portal bedrock back to end stone, takes the crystals and starts the respawn
+EnderDragonFight.resetSpikeCrystals	port	crates/horizon-client/src/game/mobs/dragon.rs::Game::reset_spike_crystals	makes spike crystals vulnerable again and clears their beams
 Visibility.fromFullChunkStatus	missing		unsure: Horizon has entity_ticking checks in ticket_levels.rs but no TICKING/TRACKED/HIDDEN split; not clear whether entities in loaded, non-ticking chunks stay visible
 GameEvent.register	skip:data		registers a game event with its default radius; Horizon reads events from fixed tables (notification_radius)
-GameEventDispatcher.post	port	crates/horizon-client/src/game/sculk.rs::Game::post_game_event	delivers the event to sensors, shriekers and wardens within the radius
-GameEventDispatcher.handleGameEventMessagesInQueue	inline	crates/horizon-client/src/game/sculk.rs::Game::post_game_event	gap: minor: no sort by distance before delivery; the selector keeps the nearest candidate, which only differs on ties
-VibrationSystem.Listener.forceScheduleVibration	port	crates/horizon-client/src/game/sculk.rs::Game::sculk_stand_on	a step on a sensor schedules the step event after the sensor's own checks
+GameEventDispatcher.post	port	crates/horizon-client/src/game/blocks/sculk.rs::Game::post_game_event	delivers the event to sensors, shriekers and wardens within the radius
+GameEventDispatcher.handleGameEventMessagesInQueue	inline	crates/horizon-client/src/game/blocks/sculk.rs::Game::post_game_event	gap: minor: no sort by distance before delivery; the selector keeps the nearest candidate, which only differs on ties
+VibrationSystem.Listener.forceScheduleVibration	port	crates/horizon-client/src/game/blocks/sculk.rs::Game::sculk_stand_on	a step on a sensor schedules the step event after the sensor's own checks
 VibrationSystem.Listener.scheduleVibration	port	crates/horizon-client-render/src/sculk.rs::Data::schedule	adds the candidate to the selector; the distance is computed by sculk_listen
 VibrationSystem.Ticker.trySelectAndScheduleVibration	port	crates/horizon-client-render/src/sculk.rs::Data::tick	gap: minor: picks the chosen candidate and travel time; the particle is sent by tick_sculk_block
 VibrationSystem.Ticker.tryReloadVibrationParticle	missing		minor: the travelling vibration particle is sent once when the trip starts; vanilla resends it until a player receives it, which matters only for players who arrive mid-trip
-VibrationSystem.Ticker.receiveVibration	port	crates/horizon-client/src/game/sculk.rs::Game::sculk_receive	gap: minor: the adjacent-chunk hold-back is in Data::tick, not here
-VibrationSystem.Ticker.areAdjacentChunksTicking	inline	crates/horizon-client/src/game/sculk.rs::Game::tick_sculk_blocks	computes the adjacent flag per sensor from the 3x3 block-ticking chunks
+VibrationSystem.Ticker.receiveVibration	port	crates/horizon-client/src/game/blocks/sculk.rs::Game::sculk_receive	gap: minor: the adjacent-chunk hold-back is in Data::tick, not here
+VibrationSystem.Ticker.areAdjacentChunksTicking	inline	crates/horizon-client/src/game/blocks/sculk.rs::Game::tick_sculk_blocks	computes the adjacent flag per sensor from the 3x3 block-ticking chunks
 GameRules.codec	skip:java		codec for the saved game rules; to_nbt and from_nbt do the read and write
 GameRules.get	port	crates/horizon-client-core/src/gamerules.rs::GameRules::get	returns the rule's value, or None for an unknown rule
 GameRules.set	port	crates/horizon-client-core/src/gamerules.rs::GameRules::set	gap: minor: the change is not sent to connected clients; GameRuleValues goes out only on a client's request
@@ -76,7 +76,7 @@ SamplerContext.getCacheCell	port	crates/horizon-core/src/density/cache.rs::Sampl
 BlockColumnFeature.layer	skip:java		builder for a column layer; decode reads the layers from JSON
 BlockColumnFeature.simple	skip:java		builder for a one-layer column; decode reads the feature from JSON
 BlockPileFeature.mayPlaceOn	inline	crates/horizon-world/src/worldgen/block_pile.rs::BlockPileFeature::try_place	the support test: a path below is a coin flip, otherwise a sturdy top face
-EndIslandFeature.place	port	crates/horizon-client/src/game/end.rs::Game::place_end_island	the end stone blob with a seed from the position
+EndIslandFeature.place	port	crates/horizon-client/src/game/world/end.rs::Game::place_end_island	the end stone blob with a seed from the position
 EndPodiumFeature.dropPreviousAndSetBlock	port	crates/horizon-world/src/worldgen/end_podium.rs::EndPodiumFeature::replace	breaks the old block and sets the new one when they differ
 EndSpikeFeature.EndSpike.isCenterWithinChunk	inline	crates/horizon-world/src/worldgen/end_spike.rs::EndSpikeFeature::place	the chunk check of each spike's centre
 EndSpikeFeature.SpikeCacheLoader.load	port	crates/horizon-world/src/worldgen/end_spike.rs::spikes_for_seed	the spike layout for a seed

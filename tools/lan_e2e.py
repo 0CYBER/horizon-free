@@ -1272,11 +1272,16 @@ def check_damage(host, guest, out):
     guest.wait(10)
     before = remote(guest)['health']
     x, y, z = pos_of(guest)
+    guest('command', command=f'setblock {int(x // 1)} {int(y // 1) - 1} {int(z // 1)} minecraft:stone')
+    fall_sound = 'minecraft:block.stone.fall'
+    heard_before = {p.name: heard(p, fall_sound) for p in (host, guest)}
     guest('command', command=f'tp @s {x:.2f} {y + 12:.2f} {z:.2f}')
     guest.wait(50)
     after = remote(guest)['health']
     guest.shot(out, 'damage')
     assert after < before, f'health {before} -> {after} after a 12-block fall'
+    for p in (host, guest):
+        assert heard(p, fall_sound) - heard_before[p.name] == 1, f'{p.name}: expected one stone fall sound'
     # Into water: the fall does no damage.
     x, y, z = pos_of(guest)
     guest('command', command=f'setblock {int(x // 1)} {int(y // 1)} {int(z // 1)} minecraft:water')
@@ -7443,7 +7448,7 @@ def main():
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '-p', 'horizon-client-lib',
+        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib',
                         '--bin', 'horizon-client', '--bin', 'horizon-ctl'],
                        cwd=ROOT, check=True)
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,

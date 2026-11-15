@@ -63,10 +63,21 @@ fn main() -> horizon_client::Result<()> {
     let stone = assets.registry.default_state("minecraft:stone").unwrap().0;
     let water = assets.registry.default_state("minecraft:water").unwrap().0;
     let tables = Arc::new(SaveTables::new(&assets));
-    let biomes = horizon_client::biome::Biomes::load(root)?;
+    let biomes = horizon_client::biome::Biomes::load(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+    )?;
     let biome_names: Vec<String> = biomes.list.iter().map(|b| b.name.clone()).collect();
-    let sync =
-        horizon_client::lan::data::SyncData::load(root, &horizon_world::loot::PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let sync = horizon_client::lan::data::SyncData::load(
+        root,
+        &horizon_world::loot::PackOverlay::NONE,
+        &defaults,
+        &horizon_client::crafting::ResolvedSources::load_or_empty(
+            root,
+            &horizon_world::loot::PackOverlay::NONE,
+            &server_load(),
+        ),
+    )?;
     let biome_registry: Vec<String> = sync
         .dynamic
         .registries
@@ -172,4 +183,13 @@ fn main() -> horizon_client::Result<()> {
         }
     }
     Ok(())
+}
+
+fn server_load() -> horizon_world::native_load_context::LoadContext {
+    use horizon_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs};
+    LoadContext::new(
+        DataLoadOrigin::ServerDataLoad,
+        std::sync::Arc::new(LoadInputs::new(Default::default(), Default::default())),
+        [],
+    )
 }

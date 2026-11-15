@@ -21,10 +21,10 @@ PARITY_RUST_SCOPE = [
     'crates/horizon-client/src/health',
     'crates/horizon-client/src/health.rs',
     'crates/horizon-client/src/game.rs',
-    'crates/horizon-client/src/game/creatures.rs',
-    'crates/horizon-client/src/game/potions.rs',
-    'crates/horizon-client/src/game/falling_damage',
-    'crates/horizon-client/src/game/falling_damage.rs',
+    'crates/horizon-client/src/game/mobs/creatures',
+    'crates/horizon-client/src/game/items/potions.rs',
+    'crates/horizon-client/src/game/entities/falling_damage',
+    'crates/horizon-client/src/game/entities/falling_damage.rs',
 ]
 TEST = 'game::falling_damage::helmet_tests::falling_impacts_wear_the_helmet_before_normal_armor_and_reduction'
 

@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Where cosmetics are bought and the founder set is claimed: the website's shop.
-pub const SHOP_URL: &str = "https://playhorizon.dev/shop";
+pub const SHOP_URL: &str = horizon_addresses::SHOP;
 
 /// Why a request to the service failed, in words for the player.
 #[derive(Clone, Debug, PartialEq, Eq)]

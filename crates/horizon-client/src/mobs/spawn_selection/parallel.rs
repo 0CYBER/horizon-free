@@ -54,7 +54,7 @@ impl<'b> Lane<'b> {
                 continue;
             }
             let mut members = Vec::new();
-            let mut spawn = |l: &L, r: &SpawnRequest| {
+            let mut spawn = |l: &L, r: &SpawnRequest, _: &mut R| {
                 let kind = l.mob_type(r.entity)?;
                 let (spawned, made) = make(l, r)?;
                 members.push(Member {

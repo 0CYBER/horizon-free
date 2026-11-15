@@ -301,7 +301,7 @@ impl Tag {
             text: Text::empty()
                 .append(Text::translate("chat.tag.modified", &[]))
                 .append(Text::literal("\n"))
-                .append(Text::literal(original_content).with_color(text::GRAY)),
+                .append(Text::untrusted(original_content).with_color(text::GRAY)),
         }
     }
 }
@@ -365,7 +365,10 @@ pub fn queue_line(queued: usize) -> Text {
             id: QUEUE_EXPAND_ID.into(),
             payload: None,
         }),
-        hover: Some(Box::new(Text::translate("chat.queue.tooltip", &[]))),
+        hover: Some(std::sync::Arc::new(Text::translate(
+            "chat.queue.tooltip",
+            &[],
+        ))),
         ..Style::default()
     })
 }
@@ -379,6 +382,7 @@ impl Chat {
     }
     /// ChatComponent.addMessage: wrap, prepend and trim to 100 lines. A
     /// message the Chat option hides is dropped, unlogged.
+    #[horizon_mod_api_macros::replaceable]
     pub fn add(
         &mut self,
         atlas: &HudAtlas,
@@ -959,17 +963,43 @@ impl Chat {
     /// Draws [`Chat::layout`] into the HUD batch, and with the chat screen
     /// open the restricted prompt above the lines.
     pub fn draw(&self, batch: &mut HudBatch, atlas: &HudAtlas, ticks: f32, focused: bool) {
-        let draws = self.layout(batch.height as i32, ticks, focused);
-        hud_layout::paint(batch, atlas, &draws);
+        self.draw_at(batch, atlas, ticks, focused, [0.0; 2]);
+    }
+    /// [`Chat::draw`] moved by `offset` GUI pixels (a mod's `CustomizeGuiOverlayEvent.Chat`,
+    /// `Gui.renderChat`'s translate).
+    pub fn draw_at(
+        &self,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        ticks: f32,
+        focused: bool,
+        offset: [f32; 2],
+    ) {
+        let paint = |batch: &mut HudBatch, draws: Vec<GuiDraw>| {
+            if offset == [0.0; 2] {
+                hud_layout::paint(batch, atlas, &draws);
+            } else {
+                let mut moved = Vec::with_capacity(draws.len() + 2);
+                moved.push(GuiDraw::Push(vec![PoseOp::Translate(offset[0], offset[1])]));
+                moved.extend(draws);
+                moved.push(GuiDraw::Pop);
+                hud_layout::paint(batch, atlas, &moved);
+            }
+        };
+        paint(batch, self.layout(batch.height as i32, ticks, focused));
         let restricted = focused && self.abilities.any_restriction();
         if restricted {
-            let prompt = self.restricted_prompt(&atlas.font, batch.height as i32);
-            hud_layout::paint(batch, atlas, &prompt);
+            paint(
+                batch,
+                self.restricted_prompt(&atlas.font, batch.height as i32),
+            );
         }
         if focused && self.search_prompt {
             let row = if restricted { 2 } else { 1 };
-            let prompt = self.search_prompt(&atlas.font, batch.height as i32, row);
-            hud_layout::paint(batch, atlas, &prompt);
+            paint(
+                batch,
+                self.search_prompt(&atlas.font, batch.height as i32, row),
+            );
         }
     }
     /// `ChatComponent.extractRenderState` for `FOREGROUND_RESTRICTED`: a
@@ -1064,7 +1094,9 @@ impl Chat {
     /// The hover text under a GUI-space cursor while chat is focused
     /// (ChatScreen.render's `renderComponentHoverEffect`).
     pub fn hover_at(&self, font: &crate::font::Font, height: i32, x: f64, y: f64) -> Option<Text> {
-        self.style_at(font, height, x, y)?.hover.map(|h| *h)
+        self.style_at(font, height, x, y)?
+            .hover
+            .map(std::sync::Arc::unwrap_or_clone)
     }
     /// The wrapped line under a GUI-space cursor while chat is focused, and
     /// the cursor's x within it (the text starts at 0).
@@ -1095,10 +1127,14 @@ impl Chat {
             return None;
         }
         let content = line.content.resolve_legacy();
-        for (c, style) in content.chars() {
-            x -= f64::from(font.advance(c, style));
-            if x < 0.0 {
-                return Some(style.clone());
+        for span in &content.spans {
+            for c in span.text.chars() {
+                x -= f64::from(font.advance(c, &span.style));
+                if x < 0.0 {
+                    let mut style = span.style.clone();
+                    style.click = span.click_event().cloned();
+                    return Some(style);
+                }
             }
         }
         None
@@ -1574,23 +1610,10 @@ impl ChatScreen {
             self.edited(m, c);
         }
     }
-    /// Edit the existing input and refresh its command responder when it changes.
+    /// An edit of the input box from outside its own keys: the suggestions follow it.
     pub fn edit_input(&mut self, m: &Measure, c: &Commands, f: impl FnOnce(&mut TextField)) {
-        let before = (
-            self.input.value.clone(),
-            self.input.cursor,
-            self.input.highlight,
-        );
         f(&mut self.input);
-        if before
-            != (
-                self.input.value.clone(),
-                self.input.cursor,
-                self.input.highlight,
-            )
-        {
-            self.edited(m, c);
-        }
+        self.edited(m, c);
     }
     /// Typed text (`charTyped` per character).
     pub fn type_text(&mut self, m: &Measure, c: &Commands, text: &str) {
@@ -1605,6 +1628,7 @@ impl ChatScreen {
         }
     }
     /// `CommandSuggestions.updateCommandInfo`.
+    #[horizon_mod_api_macros::replaceable]
     fn update_command_info(&mut self, m: &Measure, c: &Commands) {
         let command = self.input.value.clone();
         if self.parse.as_ref().is_some_and(|p| p.input != command) {

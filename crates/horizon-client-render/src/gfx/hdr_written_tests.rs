@@ -744,6 +744,7 @@ impl<'a> Draw<'a> {
 
 #[test]
 fn float_plain_fragments_keep_rgb_and_write_only_coverage() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
         eprintln!("plain float GPU unavailable");
         return;
@@ -838,6 +839,7 @@ fn float_plain_fragments_keep_rgb_and_write_only_coverage() {
 
 #[test]
 fn float_stars_keep_the_original_rgb_with_brightness_as_coverage() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
         return;
     };
@@ -959,6 +961,7 @@ fn material_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
 
 #[test]
 fn float_material_wrappers_keep_rgb_and_coverage_including_displacement() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = material_gpu() else {
         return;
     };
@@ -994,6 +997,7 @@ fn float_material_wrappers_keep_rgb_and_coverage_including_displacement() {
 
 #[test]
 fn material_coverage_is_the_texture_s_unless_the_pack_declares_its_own() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = material_gpu() else {
         eprintln!("material coverage GPU unavailable");
         return;
@@ -1046,6 +1050,7 @@ fn material_coverage_is_the_texture_s_unless_the_pack_declares_its_own() {
 
 #[test]
 fn entity_coverage_is_the_texture_s_and_the_layer_s_unless_the_pack_declares_its_own() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = material_gpu() else {
         eprintln!("entity coverage GPU unavailable");
         return;
@@ -1098,6 +1103,7 @@ fn entity_coverage_is_the_texture_s_and_the_layer_s_unless_the_pack_declares_its
 
 #[test]
 fn actual_translucent_writers_blend_their_own_light() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
         eprintln!("HDR blend GPU unavailable");
         return;
@@ -1160,6 +1166,7 @@ fn actual_translucent_writers_blend_their_own_light() {
 /// light source's tier still gains.
 #[test]
 fn lit_surfaces_stay_at_their_sdr_light() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
         eprintln!("HDR lit surface GPU unavailable");
         return;
@@ -1390,6 +1397,7 @@ fn a_lifted_texel_shines_the_same_on_every_face() {
 
 #[test]
 fn unmarked_entity_users_keep_their_source_gain() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
         return;
     };
@@ -1431,6 +1439,7 @@ fn unmarked_entity_users_keep_their_source_gain() {
 
 #[test]
 fn additive_texels_below_the_mark_cutoff_keep_their_gain() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
         return;
     };
@@ -1536,17 +1545,21 @@ fn check_oit_writer(terrain: bool, kind: &str, overlay: u32, tier: u32, alphas: 
 
 #[test]
 fn actual_oit_terrain_writes_its_own_light_including_clear_glass() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check_oit_writer(true, "terrain", 0, 0, &[180, 100]);
 }
 #[test]
 fn actual_oit_particle_writes_its_own_light() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check_oit_writer(false, "entity", 0, 3, &[180]);
 }
 #[test]
 fn actual_oit_cloud_writes_its_own_light() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check_oit_writer(false, "cloud", 4, 0, &[180]);
 }
 #[test]
 fn actual_oit_additive_adds_converted_light_without_coverage() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check_oit_writer(false, "lightning", 0, 4, &[180]);
 }

@@ -13,10 +13,10 @@
 //! `sampler2D(texture, sampler)` again where it is used. The vertex stage's `main` is
 //! wrapped so that clip y is negated: targets keep GL's rows (row 0 is the bottom edge),
 //! so `texCoord` reads the texel it would in vanilla.
+use horizon_assets::resource_source::ResourceSource;
 use naga::ShaderStage;
 use naga::front::glsl::{Frontend, Options};
 use naga::valid::{Capabilities, ValidationFlags, Validator};
-use std::path::Path;
 
 /// One program, ready for wgpu.
 pub struct Program {
@@ -62,17 +62,14 @@ fn blank_comments(src: &str) -> String {
 }
 
 /// `GlslPreprocessor`'s `#include <ns:path>`.
-fn read_source(root: &Path, id: &str, ext: &str) -> Result<String, String> {
+fn read_source(root: &ResourceSource, id: &str, ext: &str) -> Result<String, String> {
     let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
-    let file = root
-        .join("assets")
-        .join(ns)
-        .join("shaders")
-        .join(format!("{path}.{ext}"));
-    std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))
+    let file = format!("assets/{ns}/shaders/{path}.{ext}");
+    root.read_to_string(&file)
+        .map_err(|e| format!("{file}: {e}"))
 }
 
-fn include(root: &Path, src: &str, depth: u32) -> Result<String, String> {
+fn include(root: &ResourceSource, src: &str, depth: u32) -> Result<String, String> {
     if depth > 8 {
         return Err("#include nested too deep".into());
     }
@@ -86,14 +83,10 @@ fn include(root: &Path, src: &str, depth: u32) -> Result<String, String> {
                 .trim_end_matches(['>', '"'])
                 .trim();
             let (ns, path) = name.split_once(':').unwrap_or(("minecraft", name));
-            let file = root
-                .join("assets")
-                .join(ns)
-                .join("shaders")
-                .join("include")
-                .join(path);
-            let text = std::fs::read_to_string(&file)
-                .map_err(|e| format!("#include <{name}>: {}: {e}", file.display()))?;
+            let file = format!("assets/{ns}/shaders/include/{path}");
+            let text = root
+                .read_to_string(&file)
+                .map_err(|e| format!("#include <{name}>: {file}: {e}"))?;
             out.push_str(&include(root, &text, depth + 1)?);
         } else if t.starts_with("#version") || t.starts_with("#extension") {
             // Re-added below, for the translator.
@@ -229,7 +222,7 @@ fn parse(stage: ShaderStage, text: &str) -> Result<naga::Module, String> {
 }
 
 /// Translates the vertex and fragment shader a pass names (`minecraft:post/invert`).
-pub fn translate(root: &Path, vertex: &str, fragment: &str) -> Result<Program, String> {
+pub fn translate(root: &ResourceSource, vertex: &str, fragment: &str) -> Result<Program, String> {
     let vs = include(root, &read_source(root, vertex, "vsh")?, 0)?;
     let fs = include(root, &read_source(root, fragment, "fsh")?, 0)?;
     // Blocks and samplers are shared by name across the stages, so both agree on a binding.
@@ -265,6 +258,7 @@ pub fn translate(root: &Path, vertex: &str, fragment: &str) -> Result<Program, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn root() -> Option<std::path::PathBuf> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -274,6 +268,18 @@ mod tests {
         dir.join("assets/minecraft/shaders/post/blit.fsh")
             .exists()
             .then_some(dir)
+    }
+
+    #[test]
+    fn shader_sources_and_includes_translate_without_files() {
+        use horizon_assets::resource_source::Resource;
+        let source = ResourceSource::indexed(std::collections::BTreeMap::from([
+            ("assets/custom/shaders/post/test.vsh".into(), Resource::bytes(b"#version 330\nvoid main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }".to_vec())),
+            ("assets/custom/shaders/post/test.fsh".into(), Resource::bytes(b"#version 330\n#include <custom:color.glsl>\nlayout(location=0) out vec4 fragColor;\nvoid main() { fragColor = color; }".to_vec())),
+            ("assets/custom/shaders/include/color.glsl".into(), Resource::bytes(b"const vec4 color = vec4(0.2, 0.4, 0.6, 1.0);".to_vec())),
+        ]));
+        translate(&source, "custom:post/test", "custom:post/test").unwrap();
+        assert!(translate(&source, "custom:missing", "custom:post/test").is_err());
     }
 
     #[test]
@@ -293,7 +299,7 @@ mod tests {
         for f in fs {
             for v in vs {
                 let name = format!("minecraft:post/{f}");
-                let p = translate(&root, v, &name);
+                let p = translate(&ResourceSource::directory(root.clone()), v, &name);
                 // rotscale's outputs only match spiderclip, but each stage translates alone.
                 if let Err(e) = &p {
                     panic!("{v} + {name}: {e}");

@@ -166,6 +166,7 @@ fn rows_are_flat(bytes: &[u8]) -> bool {
 
 #[test]
 fn a_slow_gradient_gets_grain_instead_of_bands_on_hdr10() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = gpu() else {
         return;
     };
@@ -232,9 +233,15 @@ fn a_slow_gradient_gets_grain_instead_of_bands_on_hdr10() {
 
 #[test]
 fn hdr10s_dither_keeps_both_ends_exact_and_leans_to_them_in_their_last_code() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = gpu() else {
         return;
     };
+    // Software adapters need not preserve the sub-code precision this dither check measures.
+    if gpu.0.adapter_info().device_type == wgpu::DeviceType::Cpu {
+        eprintln!("skipped: software adapter");
+        return;
+    }
     let mut hdr = float_hdr(&gpu, Output::Pq);
     let grey = |g: f64| {
         move |encoder: &mut wgpu::CommandEncoder, frame: &wgpu::Texture| {
@@ -265,7 +272,10 @@ fn hdr10s_dither_keeps_both_ends_exact_and_leans_to_them_in_their_last_code() {
     assert!(near_black.iter().flatten().all(|c| *c <= 1));
     let mean = mean_from(&near_black, 0.0);
     eprintln!("HDR10 dither GPU: a third of a code above black shows as {mean:.3}");
-    assert!(leans(mean), "{mean} above black");
+    assert!(
+        leans(mean),
+        "HDR10 near-black dither: measured mean {mean} codes above black, expected 0.015 <= mean < 0.325; undithered target {meant} codes, input grey {dim}"
+    );
 
     // The top of the range, PQ's 10 000 nits, stays the top: nothing wraps or dims. Light past
     // the peak is held at it, so the Peak setting is the signal here.
@@ -294,6 +304,7 @@ fn hdr10s_dither_keeps_both_ends_exact_and_leans_to_them_in_their_last_code() {
 
 #[test]
 fn scrgb_and_screenshots_get_no_dither() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = gpu() else {
         return;
     };

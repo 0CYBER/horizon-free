@@ -28,3 +28,4 @@ pub mod resourcepacks;
 pub mod upgrade;
 pub mod worldgen;
 mod yung;
+pub mod zip_intake;

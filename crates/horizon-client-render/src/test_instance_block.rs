@@ -1,9 +1,9 @@
 //! `TestInstanceBlockEntity`: the test instance block's test, size, rotation
 //! and status, its error markers, and the boxes derived from them.
 use horizon_client_core::nbt_value::{number, string, text};
-use horizon_world::{
-    nbt::Tag,
-    worldgen::structure::{BoundingBox, Rotation},
+use {
+    horizon_core::{bounding_box::BoundingBox, nbt::Tag},
+    horizon_world::worldgen::structure::Rotation,
 };
 
 /// `STRUCTURE_OFFSET`: where the structure starts from the block.

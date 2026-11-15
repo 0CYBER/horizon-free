@@ -13,8 +13,9 @@ use horizon_core::{
     random::RandomSource,
 };
 
+/// `RailShape`: the track a rail lays, its `shape` property.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RailShape {
+pub enum RailShape {
     NorthSouth,
     EastWest,
     AscendingEast,
@@ -27,7 +28,8 @@ enum RailShape {
     NorthEast,
 }
 impl RailShape {
-    fn parse(text: &str) -> Self {
+    /// The shape whose `shape` property value is `text`; north-south for any other.
+    pub fn parse(text: &str) -> Self {
         match text {
             "east_west" => Self::EastWest,
             "ascending_east" => Self::AscendingEast,
@@ -41,7 +43,8 @@ impl RailShape {
             _ => Self::NorthSouth,
         }
     }
-    fn name(self) -> &'static str {
+    /// The `shape` property value.
+    pub fn name(self) -> &'static str {
         match self {
             Self::NorthSouth => "north_south",
             Self::EastWest => "east_west",
@@ -103,10 +106,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     }
     fn rail_new(&self, pos: BlockPos, state: BlockStateId) -> Rail {
         let shape = RailShape::parse(self.rail_shape(state));
+        let flexible = self.b.data(state).is(Class::Rail);
+        let (shape, flexible) = if self.level.has_rail_hook() {
+            (
+                self.level.adjust_rail_direction(pos, state, shape),
+                self.level.adjust_rail_flexible(pos, state, flexible),
+            )
+        } else {
+            (shape, flexible)
+        };
         Rail {
             pos,
             state,
-            straight: !self.b.data(state).is(Class::Rail),
+            straight: !flexible,
             connections: Self::rail_connections(pos, shape),
         }
     }
@@ -159,7 +171,17 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             })
             .count() as i32
     }
-    fn rail_slopes(&self, pos: BlockPos, shape: Option<RailShape>) -> Option<RailShape> {
+    /// `RailState`'s slope step for the rail `state` at `pos`, unless it can't make slopes
+    /// (`IBaseRailBlockExtension.canMakeSlopes`).
+    fn rail_slopes(
+        &self,
+        pos: BlockPos,
+        state: BlockStateId,
+        shape: Option<RailShape>,
+    ) -> Option<RailShape> {
+        if self.level.has_rail_hook() && !self.level.adjust_rail_can_make_slopes(pos, state, true) {
+            return shape;
+        }
         let (n, s, w, e) = (
             rel(pos, Direction::North),
             rel(pos, Direction::South),
@@ -185,10 +207,22 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         shape
     }
-    fn rail_set_shape(&self, state: BlockStateId, shape: RailShape) -> BlockStateId {
-        self.b
+    /// `state` with `shape` (`state` itself when its `shape` property lacks that value), or none
+    /// when the rail refuses the shape (`IBaseRailBlockExtension.isValidRailShape`): the caller
+    /// then keeps the rail's state and connections as they were.
+    fn rail_set_shape(&self, state: BlockStateId, shape: RailShape) -> Option<BlockStateId> {
+        let shaped = self
+            .b
             .table
-            .set_text(state, self.b.props.shape, shape.name())
+            .with_text(state, self.b.props.shape, shape.name());
+        if self.level.has_rail_hook()
+            && !self
+                .level
+                .adjust_rail_valid_shape(state, shape, shaped.is_some())
+        {
+            return None;
+        }
+        Some(shaped.unwrap_or(state))
     }
     fn rail_connect_to(&mut self, rail: &mut Rail, other_pos: BlockPos) {
         rail.connections.push(other_pos);
@@ -219,9 +253,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
         }
         let shape = self
-            .rail_slopes(pos, shape)
+            .rail_slopes(pos, rail.state, shape)
             .unwrap_or(RailShape::NorthSouth);
-        rail.state = self.rail_set_shape(rail.state, shape);
+        let Some(state) = self.rail_set_shape(rail.state, shape) else {
+            // A refused shape keeps the rail as it was, without the new connection.
+            rail.connections.pop();
+            return;
+        };
+        rail.state = state;
         self.set_block_and_update(pos, rail.state);
     }
     /// `RailState.place`; returns the resulting state.
@@ -296,9 +335,12 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
             }
         }
-        let shape = self.rail_slopes(pos, shape).unwrap_or(default);
-        rail.connections = Self::rail_connections(pos, shape);
-        rail.state = self.rail_set_shape(rail.state, shape);
+        let shape = self.rail_slopes(pos, rail.state, shape).unwrap_or(default);
+        // A refused shape keeps the state and the connections the rail already lays.
+        if let Some(state) = self.rail_set_shape(rail.state, shape) {
+            rail.connections = Self::rail_connections(pos, shape);
+            rail.state = state;
+        }
         if first || self.state(pos) != rail.state {
             self.set_block_and_update(pos, rail.state);
             for i in 0..rail.connections.len() {
@@ -578,12 +620,10 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 f64::from(pos.z) + 1.0,
             ),
         );
-        let pressed = self.level.count_entities_at(
-            pos,
-            b.table.name(state),
-            area,
-            super::EntityQuery::Everything,
-        ) > 0;
+        let pressed = self
+            .level
+            .count_entities(area, super::EntityQuery::Everything)
+            > 0;
         let block = b.block(state);
         if pressed != was {
             let next = b.table.set_bool(state, b.props.powered, pressed);

@@ -1,0 +1,2 @@
+# horizon-client-core's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-client-core lang::tests::every_lang_file_of_a_pack_reads by-hand manual # needs a downloaded pack in HORIZON_LANG_PACK_DIR

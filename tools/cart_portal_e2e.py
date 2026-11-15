@@ -16,7 +16,7 @@ REFS: the expected numbers are what the vanilla 26.3 server printed for the same
 y=99, powered rails under the minecart and behind the exit portal, a minecart pushed at 0.4 blocks per
 tick along 10 rails into the portal, ticks frozen and stepped one at a time, no player).
 LOGS: the server's output goes to --out (a temporary folder by default), one file per lane.
-READS-BY: tools/pr_ready.py does not run it; run it by hand after changing game/nether_portal.rs.
+READS-BY: tools/pr_ready.py does not run it; run it by hand after changing game/blocks/nether_portal.rs.
 ENDS-WHEN: each lane has checked its ticks, or the first mismatch is printed (exit status 1).
 """
 import argparse

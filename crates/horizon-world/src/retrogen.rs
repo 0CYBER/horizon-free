@@ -1,7 +1,10 @@
 //! Below-zero upgrade metadata and resident block transformations.
 //! Generation scheduling remains owned by the caller.
-use crate::{chunk_status::ChunkStatus, compression::invalid, nbt::Tag};
 use std::io;
+use {
+    crate::{chunk_status::ChunkStatus, compression::invalid},
+    horizon_core::nbt::Tag,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BelowZeroRetrogen {

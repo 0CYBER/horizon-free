@@ -247,7 +247,7 @@ pub struct Incoming<'a> {
     pub body: Body<'a>,
     /// The server's replacement for the content, and the filter mask: part of the record
     /// `PlayerChatMessage.equals` compares.
-    pub unsigned_content: Option<&'a horizon_world::nbt::Tag>,
+    pub unsigned_content: Option<&'a horizon_core::nbt::Tag>,
     pub filter: &'a (i32, Vec<i64>),
 }
 
@@ -262,7 +262,7 @@ pub struct Accepted {
     timestamp: i64,
     salt: i64,
     last_seen: Vec<Signature>,
-    unsigned_content: Option<horizon_world::nbt::Tag>,
+    unsigned_content: Option<horizon_core::nbt::Tag>,
     filter: (i32, Vec<i64>),
 }
 
@@ -839,6 +839,7 @@ mod tests {
     /// What the encoder signs, the server's decoder (Chain) accepts, link by
     /// link, and refuses once a message is tampered with.
     #[test]
+    #[ignore = "daily"]
     fn encoder_signs_what_the_chain_accepts() {
         let player = RsaPrivateKey::from_der(&crate::rsa::tests::hex(CHAT_KEY_PKCS8)).unwrap();
         let (profile, id) = (0x1234u128, 0x9876u128);

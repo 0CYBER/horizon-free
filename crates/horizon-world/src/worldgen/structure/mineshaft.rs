@@ -1,15 +1,15 @@
 //! Mineshafts: MineshaftStructure and MineshaftPieces.
-use super::{
-    BoundingBox,
-    legacy::{LegacyPiece, PieceContext, PieceFrame, Result, solid_render},
-};
 use crate::datafix::dynamic::as_number;
-use crate::nbt::Tag;
 use crate::worldgen::biome::BiomeId;
+use horizon_core::nbt::Tag;
 use horizon_core::{geometry::Direction, random::RandomSource};
 use std::{
     collections::BTreeSet,
     sync::{Arc, Mutex},
+};
+use {
+    super::legacy::{LegacyPiece, PieceContext, PieceFrame, Result, solid_render},
+    horizon_core::bounding_box::BoundingBox,
 };
 
 /// MineshaftStructure.Type: wood, planks, fence, and the blocks pieces keep.
@@ -841,8 +841,8 @@ impl LegacyPiece for MineshaftPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
     }
-    fn save(&self) -> Option<crate::nbt::Compound> {
-        use crate::nbt::Tag;
+    fn save(&self) -> Option<horizon_core::nbt::Compound> {
+        use horizon_core::nbt::Tag;
         let flag = |b: bool| Tag::Byte(i8::from(b));
         let mut tag = super::legacy::piece_tag(
             self.type_name(),

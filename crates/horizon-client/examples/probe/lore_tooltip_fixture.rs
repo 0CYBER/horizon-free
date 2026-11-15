@@ -2,7 +2,7 @@
 //! `item_tooltip::lore_texts` gives each stack (SNBT, one per line).
 use horizon_client::{
     item_data::parse_stack,
-    item_tooltip::{TooltipDisplay, lore_texts},
+    item_tooltip::{lore_texts, tooltip_display},
 };
 use std::{error::Error, fmt::Write};
 
@@ -15,7 +15,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let stack = parse_stack(line)?.ok_or("empty stack")?;
-        let display = TooltipDisplay::for_stack(&stack);
+        let display = tooltip_display(&stack);
         if !display.shows("minecraft:lore") {
             writeln!(output, "-")?;
             continue;

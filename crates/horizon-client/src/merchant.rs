@@ -9,6 +9,8 @@ use crate::{
 };
 use horizon_core::random::{RandomSource, XoroshiroRandom, mix_stafford13, seed_from_hash};
 use horizon_world::loot::PackOverlay;
+mod offer;
+pub use offer::{ItemCost, MerchantOffer};
 use serde_json::Value;
 use std::{collections::HashMap, path::Path, sync::Arc};
 
@@ -31,23 +33,6 @@ pub fn max_xp(level: i32) -> i32 {
         0
     }
 }
-/// The professions with trades, as in `VillagerProfession`.
-pub const PROFESSIONS: &[&str] = &[
-    "armorer",
-    "butcher",
-    "cartographer",
-    "cleric",
-    "farmer",
-    "fisherman",
-    "fletcher",
-    "leatherworker",
-    "librarian",
-    "mason",
-    "shepherd",
-    "toolsmith",
-    "weaponsmith",
-];
-
 /// A villager's or wandering trader's trading state (`AbstractVillager.offers`
 /// and `Villager.villagerXp`); `None` on the mob until its offers are first asked for.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -117,115 +102,6 @@ pub fn update_special_prices(offers: &mut [MerchantOffer], reputation: i32, hero
                 (hero_modifier * f64::from(offer.base_cost_a.stack.count)).floor() as i32;
             offer.special_price_diff -= reduction.max(1);
         }
-    }
-}
-/// An `ItemCost`: item, count and the required exact component subset,
-/// kept as the stack's component patch.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ItemCost {
-    pub stack: ItemStack,
-}
-impl ItemCost {
-    pub fn test(&self, s: &ItemStack) -> bool {
-        if s.item != self.stack.item {
-            return false;
-        }
-        // ItemCost.test / DataComponentExactPredicate.test: exact values for
-        // each required component, with unrelated components allowed.
-        let Some(horizon_world::nbt::Tag::Compound(required)) =
-            crate::item_data::components_tag(self.stack.damage, self.stack.data())
-        else {
-            return true;
-        };
-        let actual = crate::item_data::components_tag(s.damage, s.data());
-        required.iter().all(|(key, value)| {
-            matches!(&actual, Some(horizon_world::nbt::Tag::Compound(c)) if c.get(key) == Some(value))
-        })
-    }
-}
-#[derive(Clone, Debug, PartialEq)]
-pub struct MerchantOffer {
-    pub base_cost_a: ItemCost,
-    pub cost_b: Option<ItemCost>,
-    pub result: ItemStack,
-    pub uses: i32,
-    pub max_uses: i32,
-    pub reward_exp: bool,
-    pub special_price_diff: i32,
-    pub demand: i32,
-    pub price_multiplier: f32,
-    pub xp: i32,
-}
-impl MerchantOffer {
-    fn max_stack(items: &Items, s: &ItemStack) -> u32 {
-        items.get(&s.item).map_or(64, |i| i.max_stack)
-    }
-    /// `getModifiedCostCount` for cost A.
-    pub fn cost_a_count(&self, items: &Items) -> u32 {
-        let base = self.base_cost_a.stack.count as i32;
-        // Mth.floor(basePrice * demand * priceMultiplier): an int product, then the float.
-        let demand_diff =
-            ((base.wrapping_mul(self.demand) as f32 * self.price_multiplier).floor() as i32).max(0);
-        (base + demand_diff + self.special_price_diff)
-            .clamp(1, Self::max_stack(items, &self.base_cost_a.stack) as i32) as u32
-    }
-    pub fn cost_a(&self, items: &Items) -> ItemStack {
-        ItemStack {
-            count: self.cost_a_count(items),
-            ..self.base_cost_a.stack.clone()
-        }
-    }
-    pub fn cost_b(&self) -> Option<ItemStack> {
-        self.cost_b.as_ref().map(|c| c.stack.clone())
-    }
-    pub fn out_of_stock(&self) -> bool {
-        self.uses >= self.max_uses
-    }
-    /// `MerchantOffer.updateDemand` (on restock).
-    pub fn update_demand(&mut self) {
-        self.demand = self.demand + self.uses - (self.max_uses - self.uses);
-    }
-    /// `satisfiedBy(buyA, buyB)`.
-    pub fn satisfied_by(
-        &self,
-        items: &Items,
-        a: Option<&ItemStack>,
-        b: Option<&ItemStack>,
-    ) -> bool {
-        let Some(a) = a else { return false };
-        if !self.base_cost_a.test(a) || a.count < self.cost_a_count(items) {
-            return false;
-        }
-        match (&self.cost_b, b) {
-            (None, b) => b.is_none(),
-            (Some(c), Some(b)) => c.test(b) && b.count >= c.stack.count,
-            (Some(_), None) => false,
-        }
-    }
-    /// `MerchantOffer.take`: consume the payment; false when not satisfied.
-    pub fn take(
-        &self,
-        items: &Items,
-        a: &mut Option<ItemStack>,
-        b: &mut Option<ItemStack>,
-    ) -> bool {
-        if !self.satisfied_by(items, a.as_ref(), b.as_ref()) {
-            return false;
-        }
-        let n = self.cost_a_count(items);
-        if let Some(s) = a.as_mut() {
-            s.count -= n;
-            if s.count == 0 {
-                *a = None;
-            }
-        }
-        if let (Some(c), Some(s)) = (&self.cost_b, b.as_mut()) {
-            s.count -= c.stack.count;
-            if s.count == 0 {
-                *b = None;
-            }
-        }
-        true
     }
 }
 /// `MerchantOffers.getRecipeFor`: a hint past the first offer names the only
@@ -298,6 +174,7 @@ pub enum Event {
     Traded(usize, Box<MerchantOffer>),
 }
 /// What the world lends a trading session for offers made while it is open.
+#[derive(Clone, Copy)]
 pub struct TradeEnv<'a> {
     pub trades: &'a Trades,
     pub enchantments: &'a Enchantments,
@@ -364,8 +241,8 @@ impl Session {
     /// The trade sets whose sequences a villager of `profession` at `level`
     /// may draw while trading: those of the levels above it.
     pub fn sequences_needed(trades: &Trades, profession: &str, level: i32) -> Vec<String> {
-        (level + 1..=5)
-            .filter_map(|l| trades.sequence(&Trades::set_for(profession, l)))
+        (level.saturating_add(1)..=5)
+            .filter_map(|l| trades.sequence(&trades.set_for(profession, l)))
             .collect()
     }
     /// `Villager.updateSpecialPrices` for the trading player.
@@ -399,7 +276,7 @@ impl Session {
             if can_level_up(self.level) && self.xp >= max_xp(self.level) {
                 self.level += 1;
                 if let Some(env) = env {
-                    let set = Trades::set_for(&self.profession, self.level);
+                    let set = env.trades.set_for(&self.profession, self.level);
                     if env.trades.sets.contains_key(&set) {
                         let more = self.offers_from_set(env, items, &set);
                         self.offers.extend(more);
@@ -459,6 +336,7 @@ impl Session {
 
 /// The trade registries.
 pub struct Trades {
+    pub professions: std::sync::Arc<crate::mobs::villager::ResolvedProfessions>,
     pub trades: HashMap<String, Value>,
     /// villager_trade tags, ordered.
     pub tags: HashMap<String, Vec<String>>,
@@ -573,6 +451,7 @@ impl Trades {
         Self {
             trades,
             tags: expand_all(&raw),
+            professions: std::sync::Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
             sets,
             potion_tags: expand_all(&raw_potions),
         }
@@ -592,11 +471,11 @@ impl Trades {
         v
     }
     /// `VillagerProfession.getTrades(level)`.
-    pub fn set_for(profession: &str, level: i32) -> String {
-        format!(
-            "minecraft:{}/level_{level}",
-            profession.trim_start_matches("minecraft:")
-        )
+    pub fn set_for(&self, profession: &str, level: i32) -> String {
+        self.professions
+            .trade_key(profession, level)
+            .unwrap_or("")
+            .to_owned()
     }
     fn trade_list(&self, spec: &Value) -> Vec<String> {
         match spec {
@@ -661,6 +540,8 @@ pub struct TradeContext<'a> {
 /// `ExplorationMapFunction`: `ServerLevel.findNearestMapStructure` and the
 /// map it makes, for the world the merchant is in.
 pub trait MapMaker {
+    /// Stage maps and id reservations with a menu edit.
+    fn with_staged(&self, edit: &mut dyn FnMut(&dyn MapMaker) -> bool) -> bool;
     /// The map for the nearest structure in `destination` (a structure tag)
     /// within `radius` chunks of `origin`, or the stack unchanged when none is
     /// found.
@@ -871,7 +752,7 @@ impl Trades {
             "minecraft:enchant_with_levels" => {
                 let levels = int_provider(&m["levels"], random);
                 // EnchantmentHelper.enchantItem on the loot context's random.
-                let chosen = e.select_of(ctx.items, random, &stack, levels, &pool(&m["options"]));
+                let chosen = e.select(ctx.items, random, &stack, levels, &pool(&m["options"]));
                 let mut out = if &*stack.item == "minecraft:book" {
                     ItemStack::new("minecraft:enchanted_book", stack.count)
                 } else {
@@ -1215,6 +1096,7 @@ mod tests {
         let t = Trades {
             trades,
             tags,
+            professions: std::sync::Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
             sets,
             potion_tags: HashMap::new(),
         };
@@ -1255,7 +1137,7 @@ mod tests {
         bottle
             .data_mut()
             .potion_extra
-            .push(("custom_color".into(), horizon_world::nbt::Tag::Int(123)));
+            .push(("custom_color".into(), horizon_core::nbt::Tag::Int(123)));
         assert!(!o.base_cost_a.test(&bottle));
     }
 
@@ -1266,6 +1148,7 @@ mod tests {
         let t = Trades {
             trades: HashMap::new(),
             tags: HashMap::new(),
+            professions: std::sync::Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
             sets: HashMap::new(),
             potion_tags: HashMap::new(),
         };
@@ -1290,5 +1173,49 @@ mod tests {
         );
         assert_eq!(o.base_cost_a.stack.count, 7);
         assert_eq!(o.cost_b.unwrap().stack.count, 2);
+    }
+}
+
+#[cfg(test)]
+mod enchant_select_tests {
+    use super::*;
+    use horizon_core::random::{LegacyRandom, RandomSource};
+    use serde_json::json;
+
+    #[test]
+    fn trade_removed_enchantable_preserves_random() {
+        let items = crate::enchant::tests::sample_items();
+        let e = crate::enchant::tests::sample();
+        let trades = Trades {
+            trades: HashMap::new(),
+            tags: HashMap::new(),
+            sets: HashMap::new(),
+            professions: std::sync::Arc::new(crate::mobs::villager::ResolvedProfessions::vanilla()),
+            potion_tags: HashMap::new(),
+        };
+        let ctx = TradeContext {
+            items: &items,
+            enchantments: &e,
+            variant: "minecraft:plains",
+            origin: [0.0; 3],
+            maps: None,
+        };
+        let mut random = LegacyRandom::new(11);
+        let mut expected = random.clone();
+        let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
+        stack.data_mut().set_other(
+            "!minecraft:enchantable",
+            Some(horizon_core::nbt::Tag::Compound(Default::default())),
+        );
+        let (stack, _) = trades
+            .apply_modifier(
+                &ctx,
+                &json!({"function":"minecraft:enchant_with_levels","levels":30}),
+                stack,
+                &mut random,
+            )
+            .unwrap();
+        assert!(stack.enchantments().is_empty());
+        assert_eq!(random.next_long(), expected.next_long());
     }
 }

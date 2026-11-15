@@ -6,7 +6,8 @@
 //! use horizon_client_render::hud::HudAtlas;
 //! use horizon_client_render::hud_kit::fit;
 //!
-//! let atlas = HudAtlas::build(std::path::Path::new("/nonexistent")).unwrap();
+//! let source = horizon_client_render::resource_source::ResourceSource::directory("/nonexistent".into());
+//! let atlas = HudAtlas::build(&source).unwrap();
 //! // Room enough: the same text, not a copy.
 //! assert_eq!(fit::ellipsize(&atlas, "Jump", 100.0), "Jump");
 //! // Too long: cut, with an ellipsis, inside the width.
@@ -131,23 +132,10 @@ mod tests {
     use super::*;
 
     fn atlas() -> HudAtlas {
-        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
-    }
-
-    /// `graphics_style::fit` as it was before the kit, the oracle `ellipsize` must match: a
-    /// whole `Font::width` for every longer start.
-    fn old_fit(atlas: &HudAtlas, text: &str, width: f32) -> String {
-        if atlas.font.width(text) <= width {
-            return text.to_owned();
-        }
-        let mut out = String::new();
-        for c in text.chars() {
-            if atlas.font.width(&format!("{out}{c}...")) > width {
-                break;
-            }
-            out.push(c);
-        }
-        format!("{}...", out.trim_end())
+        HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap()
     }
 
     /// Every Horizon string in a few languages, long and short, with `§` codes and right-to-left
@@ -185,16 +173,42 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn ellipsize_cuts_every_string_as_the_old_fit_did() {
         let atlas = atlas();
         let mut cut = 0;
+        let widths: Vec<f32> = (-4..=160).map(|w| w as f32 * 1.5).collect();
+        let max_width = widths.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         for text in corpus() {
-            // Every third width of the old 1.5 step: ~7,500 strings at 55 widths still cut
-            // ~200,000 times, and the quadratic oracle took ~90 s of every CI run at all 165
-            // (main's run 43595807302).
-            for width in (-4..=160).step_by(3).map(|w| w as f32 * 1.5) {
+            let full_width = atlas.font.width(&text);
+            // The old graphics_style::fit oracle measures each whole prefix plus literal dots.
+            // Reuse only those measurements, not ellipsize's answers. The first prefix over
+            // max_width stops every tested cut, even when shaped widths are not monotonic.
+            let mut prefixes = Vec::new();
+            for (i, c) in text.char_indices() {
+                let end = i + c.len_utf8();
+                let measured = atlas.font.width(&format!("{}...", &text[..end]));
+                prefixes.push((end, measured));
+                if measured > max_width {
+                    break;
+                }
+            }
+            for &width in &widths {
+                // Full-string fit wins before the original first-over-width prefix scan.
+                let expected = if full_width <= width {
+                    text.clone()
+                } else {
+                    let mut end = 0;
+                    for &(longer, measured) in &prefixes {
+                        if measured > width {
+                            break;
+                        }
+                        end = longer;
+                    }
+                    format!("{}...", text[..end].trim_end())
+                };
                 let new = ellipsize(&atlas, &text, width);
-                assert_eq!(new, old_fit(&atlas, &text, width), "{text:?} at {width}");
+                assert_eq!(new, expected, "{text:?} at {width}");
                 cut += usize::from(matches!(new, Cow::Owned(_)));
             }
         }

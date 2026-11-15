@@ -42,11 +42,15 @@ fn main() -> horizon_client::Result<()> {
     let assets = Assets::load(root)?;
     let _ = std::fs::remove_file(root.join("horizon-sprites.cache"));
     let start = Instant::now();
-    let cold = digest(&assets.reload(root)?);
+    let cold = digest(&assets.reload(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+    )?);
     let cold_ms = start.elapsed().as_secs_f64() * 1000.;
     let size = std::fs::metadata(root.join("horizon-sprites.cache"))?.len();
     let start = Instant::now();
-    let warm = digest(&assets.reload(root)?);
+    let warm = digest(&assets.reload(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+    )?);
     let warm_ms = start.elapsed().as_secs_f64() * 1000.;
     println!(
         "cold={cold:016x} ({cold_ms:.1} ms) warm={warm:016x} ({warm_ms:.1} ms) cache_bytes={size}"

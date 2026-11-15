@@ -105,7 +105,7 @@ const LAYOUT_RULES: [&str; 4] = [
     "pools_that_ignore_boundaries",
 ];
 /// The libraries' terrain kernel field, the game's
-/// `horizon:enhanced_terrain_adaptation` (docs/mods.md).
+/// `horizon:enhanced_terrain_adaptation` (docs/modding/src/how-to/content-mods.md).
 pub(crate) const ENHANCED_TERRAIN: &str = "enhanced_terrain_adaptation";
 pub(crate) const HORIZON_ENHANCED_TERRAIN: &str = "horizon:enhanced_terrain_adaptation";
 /// Fields of older versions the mods' codecs no longer read: their own
@@ -812,7 +812,7 @@ pub fn loader_biome_tags(work: &Path) -> BTreeMap<String, Value> {
     for jar in dir.flatten().map(|e| e.path()) {
         let Some(mut zip) = std::fs::File::open(&jar)
             .ok()
-            .and_then(|f| zip::ZipArchive::new(f).ok())
+            .and_then(|f| crate::zip_intake::open(f).ok())
         else {
             continue;
         };

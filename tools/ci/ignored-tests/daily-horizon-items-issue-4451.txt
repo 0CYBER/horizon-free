@@ -1,0 +1,4 @@
+# Prepared-resource/descriptive-ignore inventory migration for arismoko/horizon#4451.
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-items item_data::carried_component_tests::default_component_presence_and_removal lib daily resources
+horizon-items items::loot_query::tests::queried_ability_tags_use_prepared_item_sets lib daily resources

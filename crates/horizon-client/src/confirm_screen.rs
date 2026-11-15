@@ -234,7 +234,7 @@ impl Choice {
 mod tests {
     use super::*;
     use crate::hud::Rect;
-    use std::{collections::HashMap, path::Path};
+    use std::collections::HashMap;
 
     fn font() -> Font {
         // The missing-glyph metrics let these tests run without game assets.
@@ -247,7 +247,7 @@ mod tests {
             h: 1,
         };
         Font::load(
-            Path::new("/nonexistent-horizon-confirm-test-resources"),
+            &horizon_assets::resource_source::ResourceSource::default(),
             &HashMap::new(),
             &[],
             (1, 1),
@@ -274,7 +274,10 @@ mod tests {
     #[test]
     fn only_the_button_declared_no_gets_its_job() {
         use crate::widgets::{self, Action, DeclaredAction};
-        let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let atlas = HudAtlas::build(&crate::resource_source::ResourceSource::indexed(
+            Default::default(),
+        ))
+        .unwrap();
         let (title, message) = (Text::literal("Title"), Text::literal("Message"));
         let labels = [
             Text::literal("Yes"),
@@ -283,7 +286,7 @@ mod tests {
         ];
         let drawn = |frame: u64, draw: &dyn Fn(&mut HudBatch)| {
             widgets::set_action_screen(7);
-            draw(&mut HudBatch::new([480, 270]));
+            draw(&mut HudBatch::scratch([480, 270]));
             widgets::end_frame(frame);
             widgets::last_actions(7)
         };

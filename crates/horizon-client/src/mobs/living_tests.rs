@@ -1,4 +1,5 @@
 use super::*;
+use horizon_world::move_gate::MoveGate;
 /// `AgeableMob.isBaby` is `canBeABaby() && getAge() < 0`, and `Age` alone
 /// says nothing: the six ageable classes that override `canBeABaby` to
 /// false — `Frog`, `Parrot`, `ZombieNautilus`, `CamelHusk`, `Slime` and
@@ -158,6 +159,8 @@ fn a_mob_bounces_off_a_bouncy_block_and_not_off_stone() {
             }
         }
         let w = MobWorld {
+            mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
+            professions: crate::mobs::villager::profession_table(),
             teams: Default::default(),
             world: &world,
             registry,
@@ -276,6 +279,8 @@ fn a_ridden_horse_floats_in_deep_water() {
         }
     }
     let w = MobWorld {
+        mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
+        professions: crate::mobs::villager::profession_table(),
         teams: Default::default(),
         world: &world,
         registry,
@@ -326,17 +331,7 @@ fn a_ridden_horse_floats_in_deep_water() {
     for ridden in [false, true] {
         let mut m = Mob::new(1, kind.clone(), Vec3::new(8.5, 64.0, 8.5), 0.0);
         if ridden {
-            m.rider = Some(super::super::equine::Rider {
-                strafe: 0.0,
-                forward: 0.0,
-                yaw: 0.0,
-                pitch: 0.0,
-                jump: 0.0,
-                steer: false,
-                sprint: false,
-                jumping: false,
-                client: false,
-            });
+            m.rider = Some(super::super::equine::Rider::default());
         }
         m.fluids.in_water = true;
         m.fluids.water = 1.0;
@@ -430,8 +425,10 @@ fn a_falling_mob_lands_on_a_shulker_or_a_held_happy_ghast() {
     // Where a zombie starting 3 blocks above `below`'s top ends after 20
     // falling moves, with `below` in the mobs it sees.
     let landing = |below: &Mob| -> f64 {
-        let others = [below.seen(None)];
+        let others = [below.seen(None, &crate::items::Items::empty())];
         let w = MobWorld {
+            mob_maps: horizon_client::neoforge_mob_maps::NeoForgeMobMaps::vanilla(),
+            professions: crate::mobs::villager::profession_table(),
             teams: Default::default(),
             world: &world,
             registry,
@@ -626,6 +623,7 @@ fn the_world_border_stops_a_mob() {
         let mut east_edge = [0.0; 2];
         for (i, bordered) in [false, true].into_iter().enumerate() {
             let w = MobWorld {
+                professions: crate::mobs::villager::profession_table(),
                 border: bordered.then_some(&border),
                 ..w.clone()
             };

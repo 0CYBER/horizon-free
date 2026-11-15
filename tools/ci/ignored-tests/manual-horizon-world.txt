@@ -1,0 +1,2 @@
+# horizon-world's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-world world_io::benchmark_saving_into_a_full_region by-hand manual # microbenchmark; run with --ignored --nocapture

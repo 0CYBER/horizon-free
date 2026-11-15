@@ -88,7 +88,7 @@ def main():
     import lab
     import lan_e2e as lan
 
-    subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '-p', 'horizon-client-lib',
+    subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib',
                     '--bin', 'horizon-client', '--bin', 'horizon-ctl'], cwd=lab.ROOT, check=True)
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=lab.ROOT, text=True))
@@ -98,7 +98,7 @@ def main():
         lan.CHECK_FNS[name] = lambda h, g, o, role=role: check_walk(h, g, o, role)
     # Use the runner's current display (xvfb on Linux), with fresh isolated homes.
     lan.game_env = lambda _screen, home: lab.game_env(
-        HORIZON_HOME=home, HORIZON_TELEMETRY_URL='off')
+        HORIZON_HOME=home)
     out = lab.LOCAL / 'server-player-sculk-parity'
     out.mkdir(parents=True, exist_ok=True)
     # lan.Game launches each client with lab.game_env and private scratch homes.

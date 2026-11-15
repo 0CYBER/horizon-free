@@ -1,0 +1,4 @@
+# The daily tests of horizon-threads: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-threads profile::tests::a_live_session_puts_the_function_that_ran_longest_first lib daily slow
+horizon-threads sampler::tests::an_allocating_thread_survives_ten_seconds_of_signals lib daily slow

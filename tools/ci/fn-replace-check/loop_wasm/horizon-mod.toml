@@ -1,0 +1,18 @@
+id = "fnr_loop_wasm"
+name = "Function replacement check: wasm loop"
+version = "0.1.0"
+description = "fn-replace: a wasm package that declares a loop slot, refused by name when the launcher loads it"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[wasm]
+sha512 = "51b83b0f81b32da48144d0e88e2be3f7ab1b23324e4f87e2daa9490a53c08fb6138dd790bfe3db96ff2b25d33bd535b29d5320745385a7140938a5f19d5c36ac"
+toolchain = "nightly"
+
+[[native.loop]]
+id = "slot"
+loop = "block_entities.tick"
+helper = "src/loops/slot.rs"
+with = "Slot"

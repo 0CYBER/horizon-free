@@ -3,14 +3,19 @@ use horizon_core::{
     position::ChunkPos,
     ticks::{ScheduledTick, TickPriority, TickTypeId},
 };
-use horizon_world::{
-    chunk::ChunkData,
-    compression::Compression,
-    nbt::{self, Limits, Tag},
-    region::{ChunkRecord, RegionFile, RegionWriter},
-    tick_data::TickKind,
-};
 use std::{collections::BTreeMap, error::Error, fs, path::PathBuf};
+use {
+    horizon_core::{
+        nbt,
+        nbt::{Limits, Tag},
+    },
+    horizon_world::{
+        chunk::ChunkData,
+        compression::Compression,
+        region::{ChunkRecord, RegionFile, RegionWriter},
+        tick_data::TickKind,
+    },
+};
 pub fn main() -> Result<(), Box<dyn Error>> {
     let base = PathBuf::from(crate::args().nth(1).ok_or("expected fixture directory")?);
     let bytes = fs::read(base.join("ticks-input.nbt"))?;

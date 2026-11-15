@@ -306,10 +306,27 @@ def server_files(directory):
     return out
 
 
+def forced_chunk_barrier(server, label):
+    # ServerLevel.setChunkForced loads a newly forced column before returning.
+    # A block-region self-comparison first checks FULL chunk presence. Unlike
+    # `execute if loaded`, it does not also require entities to be ticking.
+    # Queue it without waiting for generation or polling readiness.
+    server.console('forceload add 20000 20000')
+    region = '20000 100 20000 20000 100 20000 20000 100 20000 all'
+    server.console(f'execute if blocks {region} run say forced chunk ready')
+    server.console(f'execute unless blocks {region} run say forced chunk missing')
+    server.console('say forced chunk barrier checked')
+    server.wait_for(r'\[Server\] forced chunk barrier checked', timeout=120)
+    assert any('[Server] forced chunk ready' in line for line in server.lines), label
+    assert not any('[Server] forced chunk missing' in line for line in server.lines), label
+    server.console('forceload remove 20000 20000')
+
+
 def run_side(label, command, directory, client):
     server = Server(command, directory, label)
     try:
         server.wait_for(r'Done \(')
+        forced_chunk_barrier(server, label)
         # A librarian beside the spawn for the client to trade with (no AI:
         # it stays put; experience keeps its profession).
         server.console('summon minecraft:villager ~1 ~ ~ {NoAI:1b,Xp:1,VillagerData:'
@@ -430,7 +447,7 @@ def main():
     oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-sourcepath',
                    lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                   build, 'compile-java')
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], build,
                   'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))

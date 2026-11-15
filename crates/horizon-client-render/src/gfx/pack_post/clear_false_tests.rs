@@ -9,6 +9,7 @@ use super::*;
 /// it grows by 0.125 every frame (Iris 1.11.7 adds once per frame).
 #[test]
 fn a_buffer_that_is_not_cleared_starts_the_frame_with_its_last_write() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let mut add = |name: &str, source: &str| {

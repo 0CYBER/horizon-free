@@ -127,7 +127,7 @@ def main():
     if args.binary:
         binary = args.binary.resolve(strict=True)
     else:
-        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client',
+        subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game',
                         '--bin', 'horizon-client'], cwd=lab.ROOT, check=True)
         metadata = json.loads(subprocess.check_output(
             ['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))

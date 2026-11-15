@@ -1,13 +1,14 @@
 //! Vanilla item-atlas coordinates for GUI glint; the HUD's unrelated packing cannot supply them.
 use crate::{atlas_sources, hud::Rect};
 use horizon_assets::animation::AnimationMetadata;
-use std::{collections::HashMap, path::Path};
+use horizon_assets::resource_source::ResourceSource;
+use std::collections::HashMap;
 
 type Entry = (String, u32, u32);
 
 /// `SpriteSourceList.list` and `SpriteResourceLoader.loadSprite` for the non-mipmapped ITEMS atlas.
 pub(super) fn load(
-    root: &Path,
+    root: &ResourceSource,
     padding: u32,
     maximum: u32,
 ) -> crate::Result<HashMap<String, Rect>> {
@@ -18,18 +19,26 @@ pub(super) fn load(
         .unwrap_or(&[]);
     let textures = atlas_sources::list_textures(root);
     let decode = |name: &str, dir: &str| {
-        crate::hud::decode(&atlas_sources::texture_path(root, name, dir)).ok()
+        crate::hud::decode_bytes(
+            &root
+                .read(&atlas_sources::texture_resource(name, dir))
+                .ok()?,
+        )
+        .ok()
     };
     let mut entries = vec![("minecraft:missingno".into(), 16, 16)];
     let mut names = Vec::new();
-    for (id, origin) in atlas_sources::list(sources, &textures) {
+    for (id, origin) in atlas_sources::list(sources, &textures, &mut atlas_sources::unasked) {
         names.push(id.clone());
         let dimensions = match &origin {
             atlas_sources::SpriteOrigin::File(texture) => (|| {
                 let (w, h, _) = decode(texture, "textures")?;
-                let path = atlas_sources::texture_path(root, texture, "textures")
-                    .with_extension("png.mcmeta");
-                let metadata = horizon_core::prepared_files::read_to_string(&path)
+                let path = format!(
+                    "{}.mcmeta",
+                    atlas_sources::texture_resource(texture, "textures")
+                );
+                let metadata = root
+                    .read_to_string(&path)
                     .ok()
                     .map(|text| serde_json::from_str::<serde_json::Value>(&text))
                     .transpose()

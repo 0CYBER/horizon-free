@@ -225,6 +225,7 @@ fn summary_of_latest_reads_the_horizon_home_reports_folder_and_skips_a_file_bein
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_binary_refuses_an_unfinished_file_with_the_message_and_exit_code_1() {
     let dir = TempDir::new("bin");
     let path = dir.path().join("live.hzperf");

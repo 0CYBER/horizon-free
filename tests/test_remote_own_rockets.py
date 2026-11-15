@@ -23,11 +23,11 @@ def lift(path, start, end):
 class RemoteOwnRocketTests(unittest.TestCase):
     def test_the_spark_follows_the_moved_player_at_the_rocket_hand(self):
         methods = lift(
-            GAME / "fireworks.rs",
+            GAME / "entities/fireworks.rs",
             "    /// `Entity.getHandHoldingItemAngle",
             "    /// `FireworkRocketItem.use` while gliding",
         ) + lift(
-            GAME / "remote_projectiles.rs",
+            GAME / "network/remote_projectiles.rs",
             "    /// This client's own player's entity id",
             "    /// One tick of interpolation",
         )
@@ -50,6 +50,21 @@ mod horizon_world {
             let [x, y, z] = crate::view_vector(yaw, pitch);
             crate::Vec3::new(x, y, z)
         }
+    }
+}
+// Storage is not the subject of this physics fixture. Real numbered-list
+// identity and restoration have separate production tests.
+mod horizon_client {
+    pub mod join_seq { pub enum RestoreOrder { SurvivorsFirst } }
+}
+trait Lift: Default + Sized {
+    fn lift(&mut self) -> Self { std::mem::take(self) }
+    fn restore(&mut self, taken: Self, order: horizon_client::join_seq::RestoreOrder);
+}
+impl<T> Lift for Vec<T> {
+    fn restore(&mut self, taken: Self, _: horizon_client::join_seq::RestoreOrder) {
+        assert!(self.is_empty(), "this physics fixture injects no nested spawn");
+        *self = taken;
     }
 }
 struct ItemStack { item: String }

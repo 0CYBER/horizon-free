@@ -1,9 +1,9 @@
 //! Tags as resource packs' files name them (`#minecraft:logs`): the ids
 //! `data/<namespace>/tags/<registry>/<path>.json` holds, nested tags included, read from a pack
 //! overlay root (which links the vanilla data) and kept once read.
+use horizon_assets::resource_source::ResourceSource;
 use serde_json::Value as Json;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// `minecraft:` for an id without a namespace.
@@ -18,14 +18,14 @@ fn full_id(id: &str) -> String {
 /// The tags under one root, read on first use.
 #[derive(Debug)]
 pub struct Tags {
-    root: PathBuf,
+    root: ResourceSource,
     cache: Mutex<HashMap<(String, String), Arc<HashSet<String>>>>,
 }
 
 impl Tags {
-    pub fn new(root: &Path) -> Self {
+    pub fn new(root: &ResourceSource) -> Self {
         Self {
-            root: root.to_path_buf(),
+            root: root.clone(),
             cache: Mutex::default(),
         }
     }
@@ -69,26 +69,22 @@ impl Tags {
             return;
         }
         let (namespace, path) = tag.split_once(':').unwrap_or(("minecraft", tag));
-        let file = self
+        let file = format!("data/{namespace}/tags/{registry}/{path}.json");
+        let Some(json) = self
             .root
-            .join(format!("data/{namespace}/tags/{registry}/{path}.json"));
-        let Ok(json) = horizon_world::json_file::read::<Json>(&file) else {
+            .read(&file)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Json>(&b).ok())
+        else {
             return;
         };
-        for value in json["values"].as_array().into_iter().flatten() {
-            // An entry is an id or `{"id": ..., "required": false}`.
-            let id = value
-                .as_str()
-                .or_else(|| value["id"].as_str())
-                .unwrap_or_default();
-            match id.strip_prefix('#') {
-                Some(inner) => self.collect(registry, &full_id(inner), out, seen),
-                None if !id.is_empty() => {
-                    out.insert(full_id(id));
-                }
-                None => {}
-            }
-        }
+        let members = horizon_world::tag_layers::TagLayers::from_file(&json).build(|inner| {
+            let mut child = HashSet::new();
+            self.collect(registry, &full_id(inner), &mut child, seen);
+            child.into_iter().collect()
+        });
+        out.extend(members.into_iter().map(|id| full_id(&id)));
+        seen.remove(tag);
     }
 }
 
@@ -109,20 +105,17 @@ mod tests {
         };
         write(
             "data/minecraft/tags/block/logs.json",
-            serde_json::json!({"values": ["oak_log", "#pack:fancy", {"id": "mod:log", "required": false}]}),
+            serde_json::json!({"values": ["oak_log", "#pack:fancy", {"id": "mod:log", "required": false}, {"id":"minecraft:oak_log", "remove":true}, "minecraft:oak_log"], "remove":["minecraft:cherry_log"]}),
         );
         // A tag that includes the one including it.
         write(
             "data/pack/tags/block/fancy.json",
             serde_json::json!({"values": ["minecraft:cherry_log", "#minecraft:logs"]}),
         );
-        let tags = Tags::new(&root);
+        let tags = Tags::new(&ResourceSource::directory(root.clone()));
         let mut logs: Vec<String> = tags.members("block", "logs").iter().cloned().collect();
         logs.sort();
-        assert_eq!(
-            logs,
-            ["minecraft:cherry_log", "minecraft:oak_log", "mod:log"]
-        );
+        assert_eq!(logs, ["minecraft:oak_log", "mod:log"]);
         assert!(tags.contains("block", "minecraft:logs", "minecraft:oak_log"));
         // Another registry's tag of the same name, and a tag no file defines, are empty.
         assert!(tags.members("entity_type", "logs").is_empty());

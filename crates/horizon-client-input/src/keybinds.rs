@@ -293,7 +293,10 @@ pub fn mouse_button(name: &str) -> Option<MouseButton> {
         _ => return None,
     })
 }
-pub use horizon_client_core::key_display::display_name;
+pub use horizon_client_core::key_display::{
+    clear_action_bindings, clear_action_resolver, display_name, replace_action_bindings,
+    reset_action_bindings, set_action_binding, set_action_resolver,
+};
 
 /// A key event: what the layout writes on its key, without modifiers, names
 /// that key from now on (`key_display::learn_layout`), so an AZERTY player's
@@ -312,6 +315,55 @@ pub fn learn_layout(event: &winit::event::KeyEvent) {
         Key::Character(text) => learn(name, &text),
         Key::Dead(Some(c)) => learn(name, c.encode_utf8(&mut [0; 4])),
         _ => {}
+    }
+}
+
+/// Vanilla's name for the key the layout produced (`InputEvent.Key.getKeycode`):
+/// `layout` is the event's key without modifiers. A letter or digit names its
+/// own key, so AZERTY's key at QWERTY's W gives `key.keyboard.z`; a named key
+/// (Enter, arrows, Shift) keeps its place on every layout, so it gets the
+/// physical key's name. `None` for any other character and for a physical key
+/// vanilla doesn't name. A dead key arrives as its character (winit's key
+/// without modifiers), so an accent key gives `None`, not a dead-key value.
+pub fn layout_key_name(
+    physical: winit::keyboard::PhysicalKey,
+    layout: &winit::keyboard::Key,
+) -> Option<&'static str> {
+    use winit::keyboard::{Key, PhysicalKey};
+    match layout {
+        Key::Character(text) => {
+            let mut chars = text.chars();
+            let c = chars.next().filter(|c| c.is_ascii_alphanumeric())?;
+            if chars.next().is_some() {
+                return None;
+            }
+            let c = c.to_ascii_lowercase();
+            KEYS.iter().map(|(n, _)| *n).find(|n| {
+                n.strip_prefix("key.keyboard.")
+                    .is_some_and(|rest| rest.chars().eq([c]))
+            })
+        }
+        Key::Named(_) => match physical {
+            PhysicalKey::Code(code) => key_name(code),
+            PhysicalKey::Unidentified(_) => None,
+        },
+        _ => None,
+    }
+}
+
+/// A code telling physical keys apart, named or not (`InputEvent.Key.getScanCode`):
+/// the platform scan code, or the native code winit reports for a key it
+/// doesn't identify; 0 when there is neither. Stable within a platform only.
+pub fn raw_key_code(physical: winit::keyboard::PhysicalKey) -> u32 {
+    use winit::keyboard::{NativeKeyCode, PhysicalKey};
+    use winit::platform::scancode::PhysicalKeyExtScancode;
+    match physical {
+        PhysicalKey::Unidentified(native) => match native {
+            NativeKeyCode::Android(c) | NativeKeyCode::Xkb(c) => c,
+            NativeKeyCode::MacOS(c) | NativeKeyCode::Windows(c) => c.into(),
+            NativeKeyCode::Unidentified => 0,
+        },
+        PhysicalKey::Code(_) => physical.to_scancode().unwrap_or(0),
     }
 }
 
@@ -367,6 +419,12 @@ impl KeyBinds {
             self.keys.insert(n, key.to_owned());
         }
     }
+    /// Publish these bindings as the ones `keybind` text components show
+    /// (`KeybindResolver`). Only the active set calls this: on load and after
+    /// the options change it.
+    pub fn sync_action_bindings(&self) {
+        replace_action_bindings(self.keys.iter().map(|(n, d)| (*n, d.as_str())));
+    }
     /// The bindings `options.txt` holds: vanilla's mappings only.
     pub fn saved(&self) -> Vec<(&'static str, String)> {
         MAPPINGS
@@ -413,7 +471,10 @@ impl KeyBinds {
     /// (`KeyboardHandler.handleDebugKeys`, `debug_keys.rs` reads the physical
     /// key and the binding itself); their defaults (A, S, D, T, L, 1 to 4...)
     /// would otherwise turn the key back into its old gameplay meaning.
-    fn translated_mappings<'a>(&'a self, key: &'a str) -> impl Iterator<Item = &'static str> + 'a {
+    pub fn translated_mappings<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> impl Iterator<Item = &'static str> + 'a {
         all_mappings()
             .filter(|m| m.2 != "debug")
             .map(|m| m.0)
@@ -671,5 +732,35 @@ mod tests {
     fn display_names() {
         assert_eq!(display_name("key.keyboard.w").plain(), "W");
         assert_eq!(display_name("key.keyboard.slash").plain(), "/");
+    }
+    #[test]
+    fn only_a_synced_set_changes_keybind_display() {
+        let mut k = KeyBinds::default();
+        k.set("key.forward", "key.keyboard.up");
+        k.sync_action_bindings();
+        assert_eq!(display_name("key.forward").plain(), "key.keyboard.up");
+        let mut inactive = KeyBinds::default();
+        inactive.set("key.forward", "key.keyboard.x");
+        assert_eq!(display_name("key.forward").plain(), "key.keyboard.up");
+        clear_action_bindings();
+    }
+
+    #[test]
+    fn a_key_event_names_the_layout_key_and_tells_unnamed_keys_apart() {
+        use winit::keyboard::{Key, NamedKey, NativeKeyCode, PhysicalKey};
+        // AZERTY: the key at QWERTY's W writes z.
+        let w = PhysicalKey::Code(KeyCode::KeyW);
+        assert_eq!(key_name(KeyCode::KeyW), Some("key.keyboard.w"));
+        let z = layout_key_name(w, &Key::Character("Z".into()));
+        assert_eq!(z, Some("key.keyboard.z"));
+        let enter = PhysicalKey::Code(KeyCode::Enter);
+        let named = layout_key_name(enter, &Key::Named(NamedKey::Enter));
+        assert_eq!(named, Some("key.keyboard.enter"));
+        assert_eq!(layout_key_name(w, &Key::Character("é".into())), None);
+        assert_eq!(layout_key_name(w, &Key::Dead(Some('^'))), None);
+        // Two keys vanilla doesn't name share a name but not a code.
+        let a = PhysicalKey::Unidentified(NativeKeyCode::Windows(0x6a));
+        let b = PhysicalKey::Unidentified(NativeKeyCode::Windows(0x6b));
+        assert_eq!((raw_key_code(a), raw_key_code(b)), (0x6a, 0x6b));
     }
 }

@@ -1,8 +1,8 @@
 //! Inventory/equipment ticking composed with ItemStack's pop-time update and
 //! server-only item dispatch. All references are captured at native boundaries.
-use crate::{
-    item_stack_refs::StackRef,
-    player_inventory::{EquipmentSlot, PlayerInventory},
+use {
+    crate::{item_stack_refs::StackRef, player_inventory::PlayerInventory},
+    horizon_core::equipment_slot::EquipmentSlot,
 };
 pub trait InventoryTickWorld<I, K, V> {
     type Error;

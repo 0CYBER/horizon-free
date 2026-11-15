@@ -19,7 +19,7 @@ fn purchase_live(p: &Purchase) -> bool {
 }
 
 /// A small label: 24 px, round at 8, 12 px medium; green when `live`, else an outline.
-fn chip(live: bool, label: impl Into<SharedString>) -> Div {
+pub(super) fn chip(live: bool, label: impl Into<SharedString>) -> Div {
     let d = div()
         .flex()
         .flex_none()

@@ -115,26 +115,32 @@ fn hdr_clear_case(sized: bool, attachment_limit: u32, byte_budget: u32, format: 
 
 #[test]
 fn fullsize_hdr_clear_respects_byte_budget() {
+    let _gpu = crate::gfx::test_gpu::lock();
     hdr_clear_case(false, 8, 32, "RGBA16F");
 }
 #[test]
 fn sized_hdr_clear_respects_byte_budget() {
+    let _gpu = crate::gfx::test_gpu::lock();
     hdr_clear_case(true, 8, 32, "RGBA16F");
 }
 #[test]
 fn fullsize_hdr_clear_respects_attachment_count() {
+    let _gpu = crate::gfx::test_gpu::lock();
     hdr_clear_case(false, 2, 64, "RGBA16F");
 }
 #[test]
 fn sized_hdr_clear_respects_attachment_count() {
+    let _gpu = crate::gfx::test_gpu::lock();
     hdr_clear_case(true, 2, 64, "RGBA16F");
 }
 
 #[test]
 fn fullsize_unorm_clear_respects_byte_budget() {
+    let _gpu = crate::gfx::test_gpu::lock();
     hdr_clear_case(false, 8, 32, "RGBA8");
 }
 #[test]
 fn sized_unorm_clear_respects_byte_budget() {
+    let _gpu = crate::gfx::test_gpu::lock();
     hdr_clear_case(true, 8, 32, "RGBA8");
 }

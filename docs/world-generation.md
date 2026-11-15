@@ -4,7 +4,8 @@
 starts and references (`structure/`), biomes (`biome_source/`, `climate/`), noise and density (`router.rs`,
 `terrain.rs`, `aquifer/`, on `horizon_core::density` and `horizon_core::noise`), surface rules (`material_*`), carvers
 (`carver/`), then decoration (`feature_graph.rs`, `decoration*.rs`, `placement/`) and structure pieces. The entry point
-is `generator*.rs`; `crates/horizon-client/src/vanillagen.rs` binds it to the streaming workers.
+is `generator*.rs`; `generator/data.rs` owns seed-independent `GeneratorData` and its load boundary.
+`crates/horizon-client/src/vanillagen.rs` binds it to the streaming workers.
 
 Each stage has its own harness against vanilla (`tools/test_<stage>_parity.py`; `python3 tools/parity.py --list`
 names them), and the whole-chunk harness below checks the stages together. `python3 tools/port_ledger.py where
@@ -65,6 +66,13 @@ generation 4 differing chunks (3 blocks, 1 block entity) out of 372; Nether and 
 Harness normalisations (not generation differences): sections above the noise height (Nether roof, End sky) are all air in vanilla and
 absent in Horizon; structure templates keep their stored NBT integer width; a vanilla block entity left as a `DUMMY` default is equal to no
 Horizon entry; `LootTableSeed` without a `LootTable` and a vault's default reward table are ignored.
+
+Generated containers keep their original `LootTable` and optional `LootTableSeed` tags
+in position-keyed chunk extras until inventory access. Generation, loading and raw
+`/data get block` reads do not roll them; absent seeds and explicit zero seeds stay
+unchanged on disk. Horizon-only: if a runtime inventory holds both items and a
+pending table, its first inventory access drops the table without rolling it,
+so emptying the inventory later cannot resurrect the table.
 
 Remaining known differences: a handful of single blocks near structure pieces in full generation (abandoned camps, shipwreck, villages) that
 need per-feature tracing, and tree features only through `tools/test_tree_feature_parity.py` (8,898 fixtures, all equal).

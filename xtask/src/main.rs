@@ -1,13 +1,13 @@
 //! Repository tasks, run with `cargo run -p xtask -- TASK`.
 //!
 //! `package BINARY OUTDIR`: a playable Horizon folder with the game binary, horizon-ctl,
-//! horizon-prepare and horizon-server (built beside it: cargo build --release -p horizon-client -p horizon-client-lib
+//! horizon-prepare and horizon-server (built beside it: cargo build --release -p horizon-game -p horizon-client-lib
 //! --bins -p horizon-prepare -p horizon-server), the exporters horizon-prepare compiles, its sources (the launcher compares
 //! them to its own), and PLAY.txt. It holds none of Minecraft's files: players prepare those
 //! from their own copy. .github/workflows/release.yml makes the release folders with it.
 //!
 //! `package-server ENGINE OUTDIR`: a server folder (docs/server.md): the server build of the game
-//! (`cargo build --release -p horizon-client --no-default-features`, without sound or controllers)
+//! (`cargo build --release -p horizon-game --no-default-features`, without sound or controllers)
 //! as horizon-engine, with horizon-prepare and horizon-server from beside it and the same sources.
 //!
 //! `tokens`: writes `crates/horizon-theme/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
@@ -17,6 +17,17 @@
 //! into every size the platforms and the website use, and packs `packaging/icons/horizon.ico`
 //! and `horizon.icns`. `docs/media/brand/README.md` lists what goes where.
 //!
+//! `mixins-tool release | patch SOURCE | identity TARGET`: what
+//! `.github/workflows/prebuilt-mixins-tool.yml` needs to build the horizon-mixins tool the launcher
+//! downloads. `release` prints the release's tag, the pinned commit and its source archive as
+//! `name=value` lines; `patch` applies the carried patch to an unpacked source, with the applier
+//! the launcher uses for its own source build; `identity` prints the lines the launcher checks in
+//! the archive's `identity.txt`.
+//! `sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]`: writes `DIST/sdk.json`,
+//! the mod SDK's index, over the release assets in DIST (`tools/prebuilt_game.py index` calls it),
+//! then reads it back and checks every asset against it. `--previous` names the SDK published
+//! before this one and DIFF the `horizon-stage surface-diff --json` of its surface against this
+//! one's, which fill the index's surface comparison.
 //! `perf-wasm`: builds `crates/horizon-perf` for `wasm32-unknown-unknown` with the `wasm` feature
 //! and writes `target/perf-wasm/{horizon_perf.wasm,horizon_perf.js}`, which horizon-rust/horizon-site imports into
 //! its static assets (docs/perf-platform.md §7.1).
@@ -27,7 +38,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | package-server ENGINE OUTDIR | tokens | icons | perf-wasm";
+const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | package-server ENGINE OUTDIR | mod-api [notes|coverage] | tokens | icons | perf-wasm | mixins-tool release | mixins-tool patch SOURCE | mixins-tool identity TARGET | sdk-index DIST COMMIT DATE [--nightly NAME] [--previous BUILD DIFF]";
 
 /// What the release folder takes from the repository at HEAD, as `git archive` writes it.
 const ARCHIVED: [&str; 5] = [
@@ -38,14 +49,11 @@ const ARCHIVED: [&str; 5] = [
     "LICENSE",
 ];
 
-/// The programs that sit beside the client: horizon-ctl, the command line and MCP server that
-/// play the game, horizon-prepare, which prepares the resources from the player's own
-/// Minecraft, and horizon-server, which hosts a server with the client as its engine
-/// (docs/server.md).
-const TOOLS: [&str; 3] = ["horizon-ctl", "horizon-prepare", "horizon-server"];
-
-/// The programs beside the engine in a server folder.
-const SERVER_TOOLS: [&str; 2] = ["horizon-prepare", "horizon-server"];
+// The programs that sit beside the client (horizon-ctl, the command line and MCP server that play
+// the game; horizon-prepare, which prepares the resources from the player's own Minecraft;
+// horizon-server, which hosts a server with the client as its engine, docs/server.md) and the
+// wasm runtime are listed, with the checkout's exporters, in the SDK's required inputs
+// (`horizon_mod_package::sdk::inputs`): routes `package` and `package-server`.
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -55,8 +63,28 @@ fn main() -> ExitCode {
             package_server(Path::new(engine), Path::new(out))
         }
         [task] if task == "mod-api" => mod_api::run(),
+        [task, notes] if task == "mod-api" && notes == "notes" => mod_api::notes(),
+        [task, coverage] if task == "mod-api" && coverage == "coverage" => mod_api::coverage(),
+        [task, dist, commit, date, options @ ..] if task == "sdk-index" => {
+            sdk_index(Path::new(dist), commit, date, options)
+        }
         [task] if task == "tokens" => tokens(),
         [task] if task == "icons" => icons(),
+        [task, what] if task == "mixins-tool" && what == "release" => {
+            use horizon_mod_package::mixins_tool::{REV, release_tag};
+            println!("tag={}\nrev={REV}", release_tag());
+            println!("source={}/{REV}", horizon_addresses::HORIZON_MIXINS_SOURCE);
+            Ok(())
+        }
+        [task, what, source] if task == "mixins-tool" && what == "patch" => {
+            use horizon_mod_package::mixins_tool::{PATCH, PATCH_NAME, apply};
+            apply(Path::new(source), PATCH)
+                .map_err(|why| format!("{PATCH_NAME} does not apply to {source}: {why}"))
+        }
+        [task, what, target] if task == "mixins-tool" && what == "identity" => {
+            print!("{}", horizon_mod_package::mixins_tool::identity(target));
+            Ok(())
+        }
         [task] if task == "perf-wasm" => perf_wasm(),
         _ => Err(USAGE.to_string()),
     };
@@ -67,6 +95,22 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The checkout xtask acts on: the nearest folder at or above the current directory that holds
+/// `xtask/Cargo.toml`. It is read when xtask runs, not when it is built, so a binary that
+/// worktrees share through one `CARGO_TARGET_DIR` writes to the checkout it is run from.
+fn repo_root() -> Result<PathBuf, String> {
+    let here = std::env::current_dir().map_err(|e| format!("current directory: {e}"))?;
+    checkout_above(&here)
+        .ok_or_else(|| format!("{}: not inside a Horizon checkout", here.display()))
+}
+
+fn checkout_above(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|dir| dir.join("xtask/Cargo.toml").is_file())
+        .map(Path::to_path_buf)
 }
 
 fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
@@ -135,7 +179,7 @@ fn perf_wasm() -> Result<(), String> {
 }
 
 fn tokens() -> Result<(), String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/horizon-theme/tokens.css");
+    let path = repo_root()?.join("crates/horizon-theme/tokens.css");
     fs::write(&path, horizon_theme::css()).map_err(|e| format!("{}: {e}", path.display()))?;
     println!("wrote crates/horizon-theme/tokens.css");
     Ok(())
@@ -220,7 +264,7 @@ fn icns(entries: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
 }
 
 fn icons() -> Result<(), String> {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let repo = repo_root()?;
     let brand = repo.join("docs/media/brand");
     let square = brand.join("icon.svg");
     let packaging = repo.join("packaging/icons");
@@ -274,37 +318,87 @@ fn icons() -> Result<(), String> {
     Ok(())
 }
 
+fn sdk_index(dist: &Path, commit: &str, date: &str, options: &[String]) -> Result<(), String> {
+    use horizon_mod_package::sdk::{Build, GAME, INDEX, Index};
+    let (mut nightly, mut previous) = (None, None);
+    let mut rest = options;
+    loop {
+        rest = match rest {
+            [] => break,
+            [flag, name, more @ ..] if flag == "--nightly" => {
+                nightly = Some(name.clone());
+                more
+            }
+            [flag, build, diff, more @ ..] if flag == "--previous" => {
+                previous = Some((build, Path::new(diff)));
+                more
+            }
+            _ => return Err(USAGE.to_string()),
+        };
+    }
+    let rust = fs::read_to_string(repo_root()?.join("tools/ci/rust-version"))
+        .map_err(|e| format!("tools/ci/rust-version: {e}"))?;
+    let build = Build {
+        commit: commit.to_owned(),
+        game: GAME.to_owned(),
+        date: date.to_owned(),
+        nightly,
+    };
+    let mut index =
+        Index::of_folder(dist, build, rust.trim().to_owned()).map_err(|e| e.to_string())?;
+    if let Some((build, diff)) = previous {
+        let text = fs::read(diff).map_err(|e| format!("{}: {e}", diff.display()))?;
+        index.compare(build, &text).map_err(|e| e.to_string())?;
+    }
+    let path = dist.join(INDEX);
+    fs::write(&path, index.to_json()).map_err(|e| format!("{}: {e}", path.display()))?;
+    let read = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Index::read(&read, commit)
+        .and_then(|read| read.verify_folder(dist))
+        .map_err(|e| e.to_string())?;
+    println!(
+        "wrote {} listing {} assets",
+        path.display(),
+        index.assets.len()
+    );
+    Ok(())
+}
+
 fn package(binary: &Path, out: &Path) -> Result<(), String> {
+    preflight("package", binary)?;
     let repo = new_folder(out)?;
     copy_into(binary, out)?;
-    copy_beside(binary, &TOOLS, out)?;
+    copy_runtime("package", binary, out)?;
     copy_exporters(&repo.join("exporters"), &out.join("exporters"))?;
     let play = repo.join("packaging/PLAY.txt");
     copy(&play, &out.join("PLAY.txt"))
 }
 
 fn package_server(engine: &Path, out: &Path) -> Result<(), String> {
+    preflight("package-server", engine)?;
     let repo = new_folder(out)?;
     copy_exporters(&repo.join("exporters"), &out.join("exporters"))?;
     copy(engine, &out.join(program_name(engine, "horizon-engine")))?;
-    copy_beside(engine, &SERVER_TOOLS, out)
+    copy_runtime("package-server", engine, out)
 }
 
-/// Release builds supply only our compiled classes and their integrity manifest.
+/// Every required input of `route` (the SDK's one list) is there before anything is emptied,
+/// built or copied; the refusal names all the missing ones.
+fn preflight(route: &str, program: &Path) -> Result<(), String> {
+    horizon_mod_package::sdk::inputs()
+        .check(route, program, &repo_root()?)
+        .map_err(|refusal| refusal.to_string())
+}
+
+/// Release builds supply only our compiled classes and their integrity manifest (a required
+/// input, checked by `preflight`).
 fn copy_exporters(from: &Path, to: &Path) -> Result<(), String> {
-    if !from.join("manifest.json").is_file() {
-        return Err("Missing exporters/manifest.json; run horizon-prepare compile-exporters and copy its bundle to exporters/".into());
-    }
-    copy_exporter_tree(from, to)
-}
-
-fn copy_exporter_tree(from: &Path, to: &Path) -> Result<(), String> {
     fs::create_dir_all(to).map_err(|e| e.to_string())?;
     for entry in fs::read_dir(from).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
         let target = to.join(path.file_name().unwrap());
         if path.is_dir() {
-            copy_exporter_tree(&path, &target)?;
+            copy_exporters(&path, &target)?;
         } else {
             copy(&path, &target)?;
         }
@@ -314,11 +408,7 @@ fn copy_exporter_tree(from: &Path, to: &Path) -> Result<(), String> {
 
 /// `OUT`, emptied, with the sources the release folders take (`ARCHIVED`); the repository's path.
 fn new_folder(out: &Path) -> Result<PathBuf, String> {
-    let top = git(
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-        &["rev-parse", "--show-toplevel"],
-    )?;
-    let repo = PathBuf::from(String::from_utf8_lossy(&top).trim());
+    let repo = repo_root()?;
     match fs::remove_dir_all(out) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
             return Err(format!("{}: {e}", out.display()));
@@ -341,19 +431,12 @@ fn program_name(program: &Path, name: &str) -> String {
     }
 }
 
-/// Copies `tools`, built beside `program`, into `out`.
-fn copy_beside(program: &Path, tools: &[&str], out: &Path) -> Result<(), String> {
-    for tool in tools {
-        let path = program
-            .parent()
-            .unwrap_or(Path::new(""))
-            .join(program_name(program, tool));
-        if !path.is_file() {
-            return Err(format!(
-                "{} is missing; build it too: cargo build --release -p horizon-client -p horizon-client-lib --bins -p horizon-prepare -p horizon-server",
-                path.display()
-            ));
-        }
+/// Copies the files `route` needs beside `program` (its companion programs and the wasm
+/// runtime) into `out`.
+fn copy_runtime(route: &str, program: &Path, out: &Path) -> Result<(), String> {
+    let inputs = horizon_mod_package::sdk::inputs();
+    let route = inputs.route(route).map_err(|e| e.to_string())?;
+    for path in route.program_files(program) {
         copy_into(&path, out)?;
     }
     Ok(())
@@ -530,6 +613,25 @@ mod tests {
     }
 
     #[test]
+    fn each_worktree_finds_its_own_checkout() {
+        let base = std::env::temp_dir().join(format!("xtask-root-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let [one, two] = ["one", "two"].map(|name| base.join(name));
+        for checkout in [&one, &two] {
+            fs::create_dir_all(checkout.join("xtask")).unwrap();
+            fs::write(checkout.join("xtask/Cargo.toml"), "").unwrap();
+            fs::create_dir_all(checkout.join("crates/horizon-client/src")).unwrap();
+        }
+        assert_eq!(checkout_above(&one), Some(one.clone()));
+        assert_eq!(
+            checkout_above(&two.join("crates/horizon-client/src")),
+            Some(two.clone())
+        );
+        assert_eq!(checkout_above(&base), None);
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
     fn archives_extract_with_their_paths_and_modes() {
         let out = std::env::temp_dir().join(format!("xtask-extract-{}", std::process::id()));
         let _ = fs::remove_dir_all(&out);
@@ -564,6 +666,34 @@ mod tests {
             assert_eq!(mode("tools") & 0o100, 0o100);
         }
         fs::remove_dir_all(&out).unwrap();
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn missing_inputs_are_named_before_the_folder_is_touched() {
+        let base = std::env::temp_dir().join(format!("xtask-preflight-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let bin = base.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        for name in [
+            "horizon-client",
+            "horizon-ctl",
+            "horizon-prepare",
+            "horizon-server",
+        ] {
+            fs::write(bin.join(name), b"").unwrap();
+        }
+        let out = base.join("out");
+        fs::create_dir_all(&out).unwrap();
+        fs::write(out.join("kept"), b"").unwrap();
+        let error = package(&bin.join("horizon-client"), &out).unwrap_err();
+        assert!(error.contains("horizon-wasm-std.wasm"), "{error}");
+        assert!(!error.contains("horizon-ctl,"), "{error}");
+        assert!(
+            out.join("kept").is_file(),
+            "the packager ran before the check"
+        );
+        fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

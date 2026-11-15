@@ -289,7 +289,7 @@ pub fn set_sneeze(m: &mut Mob, sneeze: i32) {
 }
 /// `EAT_COUNTER` from a server: a bite every five.
 pub fn set_eat(m: &mut Mob, eat: i32) {
-    let bite = eat > 0 && eat % 5 == 0 && st(m).eat != eat && m.extra.main_hand.is_some();
+    let bite = eat > 0 && eat % 5 == 0 && st(m).eat != eat && m.extra.main_hand_id().is_some();
     st(m).eat = eat;
     if bite {
         let crumbs = crumbs(m);
@@ -368,7 +368,7 @@ fn rnd(m: &mut Mob, bound: i32) -> i32 {
 }
 /// `Panda.handleEating`: the bite's sound and crumbs, and the end of a meal.
 fn handle_eating(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
-    let holds = m.extra.main_hand.is_some();
+    let holds = m.extra.main_hand_id().is_some();
     if !is_eating(m) && is_sitting(m) && !is_scared(m, w.thundering) && holds && rnd(m, 80) == 1 {
         eat(m, true);
     } else if !holds || !is_sitting(m) {
@@ -389,7 +389,7 @@ fn handle_eating(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     let count = st(m).eat;
     if count > 80 && rnd(m, 20) == 1 {
-        let eats_from_ground = m.extra.main_hand.as_deref().is_some_and(|item| {
+        let eats_from_ground = m.extra.main_hand_id().is_some_and(|item| {
             w.items
                 .and_then(|i| i.item_tags.get("minecraft:panda_eats_from_ground"))
                 .is_some_and(|tag| tag.contains(item))
@@ -621,7 +621,7 @@ pub fn rotations(m: &Mob, partial: f32) -> glam::Mat4 {
 /// space, while it sits and eats.
 pub fn item_offset(m: &Mob, partial: f32) -> Option<glam::Mat4> {
     let s = get(m)?;
-    if m.extra.main_hand.is_none() || s.flags & FLAG_SIT == 0 || s.scared {
+    if m.extra.main_hand_id().is_none() || s.flags & FLAG_SIT == 0 || s.scared {
         return None;
     }
     let (mut y, mut z) = (1.4_f32, -0.6_f32);
@@ -791,7 +791,7 @@ impl Goal for PandaHurtBy {
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         let s = st(m);
         if s.got_bamboo || s.did_bite {
-            m.ai.target = None;
+            m.set_ai_target(cx.w, None);
             false
         } else {
             self.0.can_continue(m, cx)
@@ -834,18 +834,18 @@ impl Goal for PandaSit {
         {
             return false;
         }
-        m.extra.main_hand.is_some() || st(m).food_near
+        m.extra.main_hand_id().is_some() || st(m).food_near
     }
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         rest_goes_on(m)
     }
     fn tick(&mut self, m: &mut Mob, _: &mut Cx) {
-        if !is_sitting(m) && m.extra.main_hand.is_some() {
+        if !is_sitting(m) && m.extra.main_hand_id().is_some() {
             try_to_sit(m);
         }
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if m.extra.main_hand.is_none() {
+        if m.extra.main_hand_id().is_none() {
             if let Some(at) = st(m).food_at {
                 m.nav_move_to_entity(cx.w, at, 0, f64::from(1.2_f32));
             }
@@ -855,7 +855,7 @@ impl Goal for PandaSit {
         self.cooldown = 0;
     }
     fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some(item) = m.extra.main_hand.clone() {
+        if let Some(item) = super::finalize::item(m, super::finalize::MAINHAND) {
             let count = held_count(m);
             cx.events.push(MobEvent::DropItem {
                 mob: m.id,
@@ -937,8 +937,7 @@ impl PandaLook {
     fn target(m: &Mob, cx: &Cx) -> Option<(Vec3, f64)> {
         match get(m)?.look_at? {
             Who::Player => {
-                cx.w.player
-                    .as_ref()
+                cx.w.selected_player()
                     .filter(|p| p.alive)
                     .map(|p| (p.position, p.eye[1]))
             }

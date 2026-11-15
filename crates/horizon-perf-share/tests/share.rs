@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 
 #[test]
+#[ignore = "daily"]
 fn sharing_retries_the_pin_without_reuploading_or_exposing_the_owner_token() {
     let dir = std::env::temp_dir().join(format!("horizon-perf-share-retry-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -124,6 +125,7 @@ fn serve(listener: TcpListener, steps: Vec<(String, u16, serde_json::Value)>) ->
 }
 
 #[test]
+#[ignore = "daily"]
 fn an_upload_the_server_no_longer_has_is_made_again_and_its_receipt_replaced() {
     let dir = std::env::temp_dir().join(format!("horizon-perf-share-gone-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

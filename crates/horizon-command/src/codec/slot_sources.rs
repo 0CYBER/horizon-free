@@ -181,7 +181,7 @@ mod tests {
             r#"{type:"limit_slots",limit:1b,slot_source:"complete:one"}"#,
             r#"{type:"limit_slots",limit:2.5d,slot_source:"complete:one"}"#,
         ] {
-            let (tag, _) = horizon_world::nbt::parse_snbt(input).unwrap();
+            let (tag, _) = horizon_core::nbt::parse_snbt(input).unwrap();
             assert!(decode(&tag, &reg).is_ok(), "{input}");
         }
         for input in [
@@ -191,7 +191,7 @@ mod tests {
             r#"{type:"group",terms:"complete:missing"}"#,
             r#""complete:missing""#,
         ] {
-            let (tag, _) = horizon_world::nbt::parse_snbt(input).unwrap();
+            let (tag, _) = horizon_core::nbt::parse_snbt(input).unwrap();
             assert!(decode(&tag, &reg).is_err(), "{input}");
         }
         // NbtOps.getNumberValue's and ExtraCodecs.POSITIVE_INT's errors (26.3 bytecode).
@@ -215,7 +215,7 @@ mod tests {
         ] {
             // The top level wraps them in element_or_list's either error; only
             // the inner message is checked against the bytecode.
-            let (tag, _) = horizon_world::nbt::parse_snbt(input).unwrap();
+            let (tag, _) = horizon_core::nbt::parse_snbt(input).unwrap();
             let actual = decode(&tag, &reg).unwrap_err();
             assert!(actual.contains(error), "{input}: {actual}");
         }

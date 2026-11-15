@@ -1,6 +1,9 @@
 //! Living effect particle, invisibility and glowing synchronization.
-use crate::{active_effects::ActiveEffects, effect_particles::Particle, java_hash_map::JavaKey};
 use std::sync::Arc;
+use {
+    crate::{active_effects::ActiveEffects, effect_particles::Particle},
+    horizon_core::java_hash_map::JavaKey,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Presence {

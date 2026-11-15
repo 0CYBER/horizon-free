@@ -64,13 +64,13 @@ pub fn on_stop_attacking(m: &Mob, w: &MobWorld, target: Who, events: &mut Vec<Mo
         && !s.alive
         && s.last_damage
             .is_some_and(|d| d.attacker == Some(Who::Player))
-        && w.player.as_ref().is_some_and(|p| {
+        && w.selected_player().is_some_and(|p| {
             m.bounds()
                 .inflate(horizon_core::geometry::Vec3::new(20.0, 20.0, 20.0))
                 .intersects(p.bounds)
         })
     {
-        events.push(MobEvent::AxolotlSupportPlayer { mob: m.id });
+        events.push(w.route_player_event(MobEvent::AxolotlSupportPlayer { mob: m.id }));
     }
 }
 /// BinaryAnimator(10, IN_OUT_SINE), plus the seven exclusive baby animation states.

@@ -3,13 +3,16 @@ use super::{
     FoliageAttachment, Layer, Run, TreeDecoder, TreeFeature, TreeResult, kind, read,
     sample_optional, sample_state, unit_float,
 };
+use crate::native_worldgen_hooks::{self, TreeGrowAccess, WorldgenRandom};
 use crate::registry::BlockStateId;
 use crate::worldgen::{
     DecodeError, Object,
     feature::FeatureWorld,
+    feature_graph::FeatureExecutionError,
     int_range, optional,
     placement::PlacementContext,
     required,
+    structure::processor::ProcessorRandom,
     tree_blocks::{self as tb, Axis, TreeBlocks},
     value_provider::IntProvider,
 };
@@ -46,6 +49,41 @@ enum Kind {
         branch_amount: IntProvider,
     },
 }
+/// The tree's run as the `on_tree_grow` parts read it. A failed read is kept
+/// and returned once the parts answered.
+struct GrowRun<'a, 'w, W: FeatureWorld, R> {
+    run: &'a mut Run<'w, W, R>,
+    error: Option<FeatureExecutionError<W::Error>>,
+}
+impl<W: FeatureWorld, R: RandomSource> TreeGrowAccess for GrowRun<'_, '_, W, R> {
+    fn block_state(&mut self, pos: [i32; 3]) -> Option<BlockStateId> {
+        match read(self.run.world, pos) {
+            Ok(state) => Some(state),
+            Err(error) => {
+                self.error.get_or_insert(error);
+                None
+            }
+        }
+    }
+}
+impl<W: FeatureWorld, R: RandomSource> WorldgenRandom for GrowRun<'_, '_, W, R> {
+    fn next_int_bound(&mut self, bound: i32) -> i32 {
+        ProcessorRandom::int(self.run.random, bound)
+    }
+    fn next_long(&mut self) -> i64 {
+        self.run.random.next_long()
+    }
+    fn next_float(&mut self) -> f32 {
+        self.run.random.next_float()
+    }
+    fn next_double(&mut self) -> f64 {
+        self.run.random.next_double()
+    }
+    fn next_boolean(&mut self) -> bool {
+        self.run.random.next_boolean()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct TrunkPlacer {
     base_height: i32,
@@ -188,14 +226,30 @@ impl TrunkPlacer {
         }
         Ok(())
     }
+    /// `TrunkPlacer.placeBelowTrunkBlock`, after NeoForge's `IBlockExtension.onTreeGrow`:
+    /// the parts of the block at `position` may place their own block there, or none,
+    /// in place of the tree's `below_trunk_provider` and its draws.
     fn place_below_trunk<W: FeatureWorld + PlacementContext, R: RandomSource>(
         run: &mut Run<'_, W, R>,
         tree: &TreeFeature,
         position: [i32; 3],
     ) -> TreeResult<(), W::Error> {
-        if let Some(state) =
-            sample_optional(&tree.below_trunk_provider, run.world, run.random, position)?
-        {
+        let mut grow = GrowRun {
+            run: &mut *run,
+            error: None,
+        };
+        let answered = native_worldgen_hooks::on_tree_grow(&mut grow, position);
+        if let Some(error) = grow.error {
+            return Err(error);
+        }
+        let below = match answered {
+            Some(Some(state)) if !tree.blocks.is_state(state) => {
+                return Err(FeatureExecutionError::InvalidState);
+            }
+            Some(answer) => answer,
+            None => sample_optional(&tree.below_trunk_provider, run.world, run.random, position)?,
+        };
+        if let Some(state) = below {
             run.set(Layer::Trunk, position, state)?;
         }
         Ok(())

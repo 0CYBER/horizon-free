@@ -5,7 +5,7 @@
 //! appearance only: the light look keeps `instance_dialog`.
 use super::*;
 use crate::glass_ui::{self as ui, white};
-use horizon_launcher::instances::{self, Icon, Instance};
+use horizon_launcher::instances::{self, Channel, Icon, Instance};
 use horizon_launcher::loaders::Kind as Loader;
 use horizon_theme::glass::{fill, ink, radius};
 use new_instance::{NewKind, VersionList};
@@ -18,7 +18,7 @@ const LOADERS: [&str; 5] = ["fabric", "quilt", "neoforge", "forge", "liteloader"
 /// Logos offered as icons (the mockup's `LOGO_ICONS`, but Minecraft's, which is Mojang's).
 const LOGO_ICONS: [&str; 4] = ["neoforge", "fabric", "quilt", "forge"];
 /// The colours offered (`ICON_COLORS`).
-const COLOURS: [u32; 8] = [
+pub(super) const COLOURS: [u32; 8] = [
     0x6b4bff, 0x3b82f6, 0x14b8a6, 0x22c55e, 0xeab308, 0xf97316, 0xef4444, 0x8b8a99,
 ];
 
@@ -36,11 +36,14 @@ pub(super) fn choice(id: impl Into<SharedString>, on: bool, t: &Theme) -> Statef
     keyboard(
         div()
             .id(id.into())
+            .relative()
             .flex()
             .rounded(px(radius::POPOVER))
             .cursor_pointer()
             .bg(white(if on { fill::ACTIVE } else { 0.04 }))
-            .when(!on, |d| d.hover(|s| s.bg(white(0.07)))),
+            .when(!on, |d| {
+                d.child(ui::back_tint(radius::POPOVER, white(0.03)))
+            }),
         t,
     )
 }
@@ -87,6 +90,7 @@ pub(super) fn list_choice(id: impl Into<SharedString>, on: bool, t: &Theme) -> S
     keyboard(
         div()
             .id(id.into())
+            .relative()
             .flex()
             .flex_none()
             .items_center()
@@ -95,7 +99,9 @@ pub(super) fn list_choice(id: impl Into<SharedString>, on: bool, t: &Theme) -> S
             .rounded(px(radius::ROW))
             .cursor_pointer()
             .when(on, |d| d.bg(white(0.11)))
-            .when(!on, |d| d.hover(|s| s.bg(white(fill::HOVER)))),
+            .when(!on, |d| {
+                d.child(ui::back_tint(radius::ROW, white(fill::HOVER)))
+            }),
         t,
     )
 }
@@ -156,11 +162,13 @@ pub(super) fn tile_image(image: Arc<gpui::RenderImage>, size: f32) -> AnyElement
         .into_any_element()
 }
 
-/// An icon choice (52 px, round at 15): white at 16 % when chosen, 7 % under the pointer.
+/// An icon choice (52 px, round at 15): white at 16 % in the accent's ring when chosen, 7 % under
+/// the pointer.
 fn icon_choice(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div> {
     keyboard(
         div()
             .id(id.into())
+            .relative()
             .flex()
             .flex_none()
             .items_center()
@@ -168,8 +176,12 @@ fn icon_choice(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div
             .size(px(52.))
             .rounded(px(15.))
             .cursor_pointer()
-            .when(on, |d| d.bg(white(0.16)))
-            .when(!on, |d| d.hover(|s| s.bg(white(0.07)))),
+            .when(on, |d| {
+                d.bg(white(0.16))
+                    .border_2()
+                    .border_color(ui::color(ui::look().accent_soft))
+            })
+            .when(!on, |d| d.child(ui::back_tint(15., white(0.07)))),
         t,
     )
 }
@@ -180,6 +192,10 @@ impl Launcher {
         cx: &mut Context<Self>,
     ) -> Option<Stateful<Div>> {
         let d = self.instances.dialog.as_ref()?;
+        // Editing an instance is the sheet down the right side; a new one is this dialog.
+        if d.editing.is_some() {
+            return self.instance_sheet(cx);
+        }
         let busy = d.busy;
         let editing = d
             .editing
@@ -251,16 +267,35 @@ impl Launcher {
 
     /// The Horizon version an instance plays: the one it keeps, else the one it follows.
     pub(super) fn draft_horizon(&self) -> Option<String> {
-        let pin = self.instances.dialog.as_ref()?.pin.clone();
-        pin.or_else(|| self.followed_version())
+        let d = self.instances.dialog.as_ref()?;
+        d.pin.clone().or_else(|| self.followed_version(d.channel))
     }
 
-    /// The version an instance that keeps none plays: the launcher's, or with none installed
-    /// yet, the newest Nightly, which Create installs.
-    fn followed_version(&self) -> Option<String> {
-        self.launcher_version()
-            .cloned()
-            .or_else(|| self.horizon_choices().into_iter().next())
+    /// The version an instance that keeps none plays: on Stable the newest stable build (Create
+    /// installs it), on Nightly the launcher's, or with none installed yet, the newest Nightly.
+    fn followed_version(&self, channel: Channel) -> Option<String> {
+        let nightly = || {
+            self.launcher_version()
+                .cloned()
+                .or_else(|| self.horizon_choices().into_iter().next())
+        };
+        match channel {
+            Channel::Stable => self
+                .stable_builds()
+                .into_iter()
+                .next()
+                .map(|b| b.tag)
+                .or_else(nightly),
+            Channel::Nightly => nightly(),
+        }
+    }
+
+    /// The Stable channel's builds, newest first (none until the release list is here).
+    pub(super) fn stable_builds(&self) -> Vec<StableBuild> {
+        match &self.releases {
+            Load::Ready(r) => stable_builds(r),
+            _ => Vec::new(),
+        }
     }
 
     /// The Horizon versions the dialog offers (the mockup's `data.nightlies`): see
@@ -384,7 +419,7 @@ impl Launcher {
         );
         let mut summary = match kind {
             NewKind::Horizon => match self.draft_horizon() {
-                Some(tag) => format!("Horizon · {}", version_label(&tag)),
+                Some(tag) => format!("Horizon · {}", self.version_label(&tag)),
                 None => "Horizon".into(),
             },
             NewKind::Vanilla => format!("{} · {minecraft}", tr("Vanilla")),
@@ -463,6 +498,7 @@ impl Launcher {
             keyboard(
                 div()
                     .id("instance-import")
+                    .relative()
                     .flex()
                     .items_center()
                     .gap(px(10.))
@@ -473,9 +509,10 @@ impl Launcher {
                     .font_family(horizon_theme::glass::FONT)
                     .text_size(px(14.))
                     .text_color(white(ink::BODY))
-                    .hover(|s| s.bg(white(fill::ROW_HOVER)).text_color(white(ink::FULL)))
-                    .child(ui::icon("package-01", 18., white(ink::BODY)))
-                    .child(tr("Import a modpack…")),
+                    .hover(|s| s.text_color(white(ink::FULL)))
+                    .child(ui::back_tint(radius::CONTROL, white(fill::ROW_HOVER)))
+                    .child(ui::icon("package-01", 18., white(ink::BODY)).relative())
+                    .child(div().relative().child(tr("Import a modpack…"))),
                 &t,
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -548,6 +585,64 @@ impl Launcher {
     }
 }
 
+/// A build on the Stable channel; `week` is the Monday of its week when it stands for one.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct StableBuild {
+    pub(super) tag: String,
+    pub(super) week: Option<String>,
+}
+
+/// The Stable channel's builds, newest first: the real (non-Nightly, non-pre-release) releases
+/// when any exist; until then the newest Nightly of each Monday to Sunday week. `releases` is
+/// newest first, as GitHub lists them.
+pub(super) fn stable_builds(releases: &[Release]) -> Vec<StableBuild> {
+    let real: Vec<_> = releases
+        .iter()
+        .filter(|r| {
+            r.nightly.is_none()
+                && r.asset.is_some()
+                && !r.prerelease
+                && horizon_launcher::backend::launcher_version(&r.tag).is_none()
+        })
+        .map(|r| StableBuild {
+            tag: r.tag.clone(),
+            week: None,
+        })
+        .collect();
+    if !real.is_empty() {
+        return real;
+    }
+    use chrono::Datelike;
+    // (monday, date, tag): the newest date of a week wins; the first listed on a tie.
+    let mut weeks: Vec<(String, String, String)> = Vec::new();
+    for r in releases
+        .iter()
+        .filter(|r| r.nightly.is_some() && r.asset.is_some())
+    {
+        let Some(date) = horizon_launcher::nightly::date_of(&r.tag) else {
+            continue;
+        };
+        let Ok(day) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
+            continue;
+        };
+        let monday =
+            (day - chrono::Duration::days(day.weekday().num_days_from_monday() as i64)).to_string();
+        match weeks.iter_mut().find(|w| w.0 == monday) {
+            Some(w) if w.1.as_str() < date => *w = (monday, date.into(), r.tag.clone()),
+            Some(_) => {}
+            None => weeks.push((monday, date.into(), r.tag.clone())),
+        }
+    }
+    weeks.sort_by(|a, b| b.0.cmp(&a.0));
+    weeks
+        .into_iter()
+        .map(|(monday, _, tag)| StableBuild {
+            tag,
+            week: Some(monday),
+        })
+        .collect()
+}
+
 /// Every Nightly published with a build for this platform, newest first, then the installed
 /// versions that list lacks (older Nightlies, imported builds). Picking one not installed installs
 /// it on Create.
@@ -565,11 +660,166 @@ pub(super) fn horizon_choices(releases: &[Release], installed: &[String]) -> Vec
     out
 }
 
-/// "Nightly · c9d474d", "Imported · 2026-10-30", or the tag.
-fn version_label(tag: &str) -> String {
-    horizon_launcher::nightly::label(tag)
-        .or_else(|| build_import::label(tag))
-        .unwrap_or_else(|| tag.to_string())
+impl Launcher {
+    /// The mockup's three ways to a new instance, over the form: make one here (this dialog),
+    /// install a modpack (the Mods page's Modpacks) or import one (a file, or another
+    /// launcher's instances, which the Modpacks tab lists).
+    fn new_entry(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let accent = ui::look().accent;
+        let card = |id: &'static str, icon: &'static str, title: &str, note: &str, on: bool| {
+            let id = SharedString::from(id);
+            keyboard(
+                track_hover(
+                    div()
+                        .id(id.clone())
+                        .relative()
+                        .flex()
+                        .flex_1()
+                        .min_w_0()
+                        .items_center()
+                        .gap(px(12.))
+                        .p(px(12.))
+                        .relative()
+                        .rounded(px(radius::LARGE))
+                        .border_1()
+                        .cursor_pointer()
+                        .when(on, |d| {
+                            d.bg(ui::color(accent).opacity(0.14))
+                                .border_color(ui::color(accent).opacity(0.6))
+                        })
+                        .when(!on, |d| {
+                            d.bg(white(0.035))
+                                .border_color(white(ui::edge::REST))
+                                .child(ui::back_edge(radius::LARGE, 0.025, true))
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .justify_center()
+                                .size(px(36.))
+                                .rounded(px(10.))
+                                .bg(white(0.07))
+                                .child(ui::icon(
+                                    icon,
+                                    18.,
+                                    if on {
+                                        ui::color(accent)
+                                    } else {
+                                        white(ink::BODY)
+                                    },
+                                )),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w_0()
+                                .child(
+                                    ui::text(14., FontWeight::SEMIBOLD, ink::FULL)
+                                        .truncate()
+                                        .child(tr(title).to_string()),
+                                )
+                                .child(
+                                    ui::text(12.5, FontWeight::NORMAL, ink::NOTE)
+                                        .truncate()
+                                        .child(tr(note).to_string()),
+                                ),
+                        ),
+                    id,
+                ),
+                &t,
+            )
+        };
+        div()
+            .flex()
+            .gap(px(10.))
+            .child(card(
+                "entry-custom",
+                "plus-sign",
+                "Create custom",
+                "Pick the game and version",
+                true,
+            ))
+            .child(
+                card(
+                    "entry-pack",
+                    "package-01",
+                    "Install a modpack",
+                    "Browse Modrinth and Horizon packs",
+                    false,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.instances.dialog = None;
+                    this.show_modpack(None);
+                    cx.notify();
+                })),
+            )
+            .child(
+                card(
+                    "entry-import",
+                    "download-04",
+                    "Import an instance",
+                    "A file, or another launcher",
+                    false,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.instances.dialog = None;
+                    this.show_modpack(None);
+                    this.choose_pack(false, cx);
+                    cx.notify();
+                })),
+            )
+    }
+}
+
+impl Launcher {
+    /// A version as a player reads it: the Versions page's name for a build of the game ("Nov 13
+    /// update", with its time when another came out that day; its commit stays in the details),
+    /// "Imported · 2026-10-30", a developer build's name, or the tag. Players who don't know what
+    /// a nightly is see the day it came out, not the channel's jargon.
+    pub(super) fn version_label(&self, tag: &str) -> String {
+        if let Some(developer) = horizon_launcher::developer_install::label(tag) {
+            return developer;
+        }
+        // A game built with mods reads as what it was built on: "Nov 13 update, with your mods".
+        if native_mods::is_native(tag) {
+            return match native_base(tag) {
+                Some(base) => trf(
+                    "{version}, with your mods",
+                    &[("version", &self.version_label(&base))],
+                ),
+                None => tr("A build with your mods").to_string(),
+            };
+        }
+        match horizon_launcher::nightly::date_of(tag) {
+            Some(_) => self.version_name(tag),
+            None => build_import::label(tag).unwrap_or_else(|| tag.to_string()),
+        }
+    }
+}
+
+/// The release a native build started from, read once per build: a new build has a new tag.
+fn native_base(tag: &str) -> Option<String> {
+    thread_local! {
+        static BASES: std::cell::RefCell<std::collections::HashMap<String, Option<String>>> =
+            Default::default();
+    }
+    BASES.with(|bases| {
+        bases
+            .borrow_mut()
+            .entry(tag.to_string())
+            .or_insert_with(|| native_mods::about(tag).map(|about| about.base))
+            .clone()
+    })
+}
+
+/// A build's commit, for the details under its name: `4baa571` of `nightly-2026-10-29-4baa571`.
+fn version_commit(tag: &str) -> Option<&str> {
+    horizon_launcher::nightly::date_of(tag)?;
+    tag.get(17..).filter(|c| !c.is_empty())
 }
 
 impl Launcher {
@@ -594,7 +844,7 @@ impl Launcher {
         };
         let sub = match editing {
             Some(_) => tr("Changes apply the next time it starts. Worlds stay where they are."),
-            None => tr("Pick what it plays, then give it a name and an icon."),
+            None => tr("Name it, pick what it plays, then an icon."),
         };
         // The mockup's `clamp(1.6rem, 2.4vw, 2.1rem)`.
         let size = (self.window_width * 0.024).clamp(25.6, 33.6);
@@ -657,19 +907,11 @@ impl Launcher {
             .overflow_y_scroll();
         if let Some(i) = editing {
             body = body.children(self.switch_notice(i));
-        }
-        if kind == NewKind::Horizon {
-            body = body.child(self.horizon_versions(cx));
-            if editing.is_none() {
-                body = body.child(self.start_from(copy, cx));
-            }
         } else {
-            self.load_versions(cx);
-            body = body.child(self.minecraft_versions(cx));
-            if kind == NewKind::Modded {
-                body = body.child(self.loader_choice(cx));
-            }
+            body = body.child(self.new_entry(cx));
         }
+        // The name first, where focus starts: the version lists below are bounded, so it and
+        // the foot's Create are on screen at laptop size without scrolling.
         let name = self
             .field(Field::InstanceName, tr("My instance"), 340., cx)
             .flex_1()
@@ -683,6 +925,18 @@ impl Launcher {
             None,
             div().flex().gap(px(10.)).child(name).child(group),
         ));
+        if kind == NewKind::Horizon {
+            body = body.child(self.horizon_versions(cx));
+            if editing.is_none() {
+                body = body.child(self.start_from(copy, cx));
+            }
+        } else {
+            self.load_versions(cx);
+            body = body.child(self.minecraft_versions(cx));
+            if kind == NewKind::Modded {
+                body = body.child(self.loader_choice(cx));
+            }
+        }
         body = body.child(self.icon_choice(editing, kind, cx));
         // The memory it may use, kept with the instance (not in the mockup, kept here).
         if editing.is_some() {
@@ -699,7 +953,7 @@ impl Launcher {
     }
 
     /// The foot: where the instance lives, Cancel and Create.
-    fn instance_foot(
+    pub(super) fn instance_foot(
         &mut self,
         editing: Option<&Instance>,
         copy: bool,
@@ -718,6 +972,7 @@ impl Launcher {
         let cancel = keyboard(
             div()
                 .id("instance-cancel")
+                .relative()
                 .flex()
                 .items_center()
                 .h(px(48.))
@@ -728,8 +983,9 @@ impl Launcher {
                 .text_size(px(15.))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(white(ink::BODY))
-                .hover(|s| s.bg(white(fill::ROW_HOVER)).text_color(white(ink::FULL)))
-                .child(tr("Cancel")),
+                .hover(|s| s.text_color(white(ink::FULL)))
+                .child(ui::back_tint(radius::ROW, white(fill::ROW_HOVER)))
+                .child(div().relative().child(tr("Cancel"))),
             &t,
         );
         let label = match (editing.is_some(), busy) {
@@ -742,6 +998,7 @@ impl Launcher {
         let save = keyboard(
             div()
                 .id("instance-save")
+                .relative()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -750,12 +1007,12 @@ impl Launcher {
                 .rounded(px(radius::LARGE))
                 .bg(accent)
                 .cursor_pointer()
-                .hover(move |s| s.bg(lit))
+                .child(ui::back_tint(radius::LARGE, lit))
                 .font_family(horizon_theme::glass::FONT)
                 .text_size(px(15.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(ui::color(self.look.on_accent))
-                .child(label),
+                .child(div().relative().child(label)),
             &t,
         );
         let buttons = if busy {
@@ -802,56 +1059,194 @@ impl Launcher {
             .child(buttons.flex_none())
     }
 
-    /// Horizon's versions, the newest first: picking the one the launcher plays lets the
-    /// instance follow it; any other is kept, and installed on Create when it isn't yet.
-    fn horizon_versions(&mut self, cx: &mut Context<Self>) -> Div {
+    /// Horizon's version: the channel (Stable or Nightly), then a dropdown of its builds, newest
+    /// first, under "Latest" (which follows each new one). Any other pick is kept, and installed
+    /// on Create when it isn't yet.
+    pub(super) fn horizon_versions(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let soft = self.look.accent_soft;
-        let follows = self.followed_version();
-        let chosen = self.draft_horizon();
-        let rows: Vec<_> = self
-            .horizon_choices()
+        let Some(d) = self.instances.dialog.as_ref() else {
+            return div();
+        };
+        let (channel, pin) = (d.channel, d.pin.clone());
+        let open = self.version_menu;
+        let stable = self.stable_builds();
+        let all = self.horizon_choices();
+        let nightly = |tag: &String| horizon_launcher::nightly::date_of(tag).is_some();
+        let builds: Vec<String> = match channel {
+            Channel::Stable => stable.iter().map(|b| b.tag.clone()).collect(),
+            Channel::Nightly => all.iter().filter(|t| nightly(t)).cloned().collect(),
+        };
+        // Developer and imported builds, and a kept one this channel doesn't list.
+        let mut others: Vec<String> = all
             .into_iter()
-            .enumerate()
-            .map(|(i, tag)| {
-                let latest = follows.as_ref() == Some(&tag);
-                let newest = i == 0;
-                let on = chosen.as_ref() == Some(&tag);
-                let date = horizon_launcher::nightly::date_of(&tag)
-                    .map(|d| glass_versions::published(d, ""));
-                let pick = tag.clone();
-                list_choice(format!("horizon-version-{tag}"), on, &t)
-                    .py(px(12.))
-                    .child(choice_text(version_label(&tag), date.unwrap_or_default()).flex_1())
-                    .children(newest.then(|| {
-                        ui::text(13., FontWeight::NORMAL, ink::FULL)
-                            .text_color(ui::color(soft))
-                            .child(tr("Newest"))
-                    }))
-                    .child(tick(on, soft))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if let Some(d) = &mut this.instances.dialog {
-                            d.pin = (!latest).then(|| pick.clone());
-                        }
-                        cx.notify();
-                    }))
-            })
+            .filter(|t| !nightly(t) && !builds.contains(t))
             .collect();
-        let list = if rows.is_empty() {
+        if let Some(p) = pin
+            .as_ref()
+            .filter(|p| !builds.contains(p) && !others.contains(p))
+        {
+            others.push(p.clone());
+        }
+        let name = |tag: &str| match stable
+            .iter()
+            .find(|b| b.tag == tag && channel == Channel::Stable)
+            .and_then(|b| b.week.as_deref())
+        {
+            Some(week) => trf(
+                "Week of {date}",
+                &[("date", &glass_versions::published(week, ""))],
+            ),
+            None => self.version_label(tag),
+        };
+        let this = cx.entity().downgrade();
+        let segs = ui::segments(
+            "instance-channel",
+            &[(Channel::Stable, "Stable"), (Channel::Nightly, "Nightly")],
+            channel,
+            &t,
+            move |pick, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(d) = this.instances.dialog.as_mut().filter(|d| d.channel != pick) {
+                        // A kept build of the other channel would be odd: follow its latest.
+                        d.channel = pick;
+                        d.pin = None;
+                    }
+                    this.version_menu = false;
+                    cx.notify();
+                });
+            },
+        );
+        // Latest on Nightly plays the version picked on Versions: an older one Use picked is
+        // named, never called the latest.
+        let held = self
+            .held_version()
+            .filter(|_| channel == Channel::Nightly)
+            .map(|tag| self.version_name(tag));
+        // The way back through Versions is only for an instance following Latest, not one that
+        // keeps its own build.
+        let note =
+            ui::text(13., FontWeight::NORMAL, ink::QUIET)
+                .child(match (channel, held.as_ref().filter(|_| pin.is_none())) {
+                (Channel::Stable, _) => tr("One build a week, fewer surprises").to_string(),
+                (Channel::Nightly, None) => tr("Every day's build: newest, may break").to_string(),
+                (Channel::Nightly, Some(_)) => tr(
+                    "Every day's build. Another version was picked on Versions: press Use on the \
+                     newest there to follow new ones again.",
+                )
+                .to_string(),
+            });
+        let current = match (&pin, &held) {
+            (None, Some(held)) => trf("{version} (picked on Versions)", &[("version", held)]),
+            (None, None) => tr("Latest").to_string(),
+            (Some(p), _) => name(p),
+        };
+        let button = keyboard(
+            div()
+                .id("horizon-version-menu")
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.))
+                .h(px(44.))
+                .px(px(14.))
+                .rounded(px(radius::CONTROL))
+                .border_1()
+                .border_color(white(ui::edge::REST))
+                .bg(white(if open { fill::ACTIVE } else { 0.06 }))
+                .cursor_pointer()
+                .relative()
+                .when(!open, |d| {
+                    d.child(ui::back_edge(radius::CONTROL, 0.06, true))
+                })
+                .child(
+                    ui::text(14., FontWeight::MEDIUM, ink::FULL)
+                        .min_w_0()
+                        .truncate()
+                        .child(trf("Game version: {label}", &[("label", &current)])),
+                )
+                .child(ui::icon("arrow-down-01", 16., white(ink::NOTE)))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.version_menu = !this.version_menu;
+                    cx.notify();
+                })),
+            &t,
+        );
+        let row = |id: String, on: bool, title: String, note: String, pick: Option<String>| {
+            list_choice(id, on, &t)
+                .py(px(10.))
+                .child(choice_text(title, note).flex_1())
+                .child(tick(on, soft))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    if let Some(d) = &mut this.instances.dialog {
+                        d.pin = pick.clone();
+                    }
+                    this.version_menu = false;
+                    cx.notify();
+                }))
+        };
+        let mut rows = vec![row(
+            "horizon-version-latest".into(),
+            pin.is_none(),
+            tr("Latest").into(),
+            match &held {
+                Some(held) => trf(
+                    "Playing {version}, picked on Versions",
+                    &[("version", held)],
+                ),
+                None => tr("Moves to each new one").into(),
+            },
+            None,
+        )];
+        for tag in &builds {
+            rows.push(row(
+                format!("horizon-version-{tag}"),
+                pin.as_ref() == Some(tag),
+                name(tag),
+                version_commit(tag).unwrap_or_default().to_string(),
+                Some(tag.clone()),
+            ));
+        }
+        let mut list = list_box("horizon-versions", 260.).children(rows);
+        if !others.is_empty() {
+            list = list.child(
+                ui::text(12., FontWeight::MEDIUM, ink::QUIET)
+                    .px(px(16.))
+                    .pt(px(10.))
+                    .pb(px(4.))
+                    .child(tr("Other builds")),
+            );
+            for tag in &others {
+                list = list.child(row(
+                    format!("horizon-version-{tag}"),
+                    pin.as_ref() == Some(tag),
+                    self.version_label(tag),
+                    String::new(),
+                    Some(tag.clone()),
+                ));
+            }
+        }
+        if builds.is_empty() && others.is_empty() {
             let empty = match &self.releases {
                 Load::Loading => tr("Loading releases…"),
                 _ => tr("No version installed"),
             };
-            list_box("horizon-versions", 248.).child(
-                ui::text(14., FontWeight::NORMAL, ink::QUIET)
+            list = list.child(
+                ui::text(13., FontWeight::NORMAL, ink::QUIET)
                     .px(px(16.))
-                    .py(px(24.))
+                    .py(px(10.))
                     .child(empty),
-            )
-        } else {
-            list_box("horizon-versions", 248.).children(rows)
-        };
-        section(tr("Version").into(), None, list)
+            );
+        }
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .child(div().flex().child(segs))
+            .child(note)
+            .child(div().mt(px(6.)).child(button))
+            .children(open.then_some(list));
+        section(tr("Version").into(), None, body)
     }
 
     /// Empty, or a copy of the selected instance.
@@ -907,7 +1302,7 @@ impl Launcher {
 
     /// The icons: the instance's own mark, the loaders' logos and the prepared files' blocks and
     /// items, then the colours and Choose image….
-    fn icon_choice(
+    pub(super) fn icon_choice(
         &mut self,
         editing: Option<&Instance>,
         kind: NewKind,
@@ -1063,9 +1458,9 @@ impl Launcher {
             );
         if self.selected().is_none_or(|t| !backend::is_prepared(t)) {
             body = body.child(
-                ui::text(13., FontWeight::NORMAL, ink::FAINT).mt(px(12.)).child(tr(
-                    "Block and item icons come from your prepared game files once a version is prepared.",
-                )),
+                ui::text(13., FontWeight::NORMAL, ink::FAINT)
+                    .mt(px(12.))
+                    .child(tr("More icons appear after the game is installed.")),
             );
         }
         section(tr("Icon").into(), None, body)
@@ -1087,6 +1482,39 @@ mod tests {
             prerelease: false,
             nightly: nightly.then(|| "nightly".into()),
         }
+    }
+
+    #[test]
+    fn stable_is_a_build_a_week_until_real_releases_exist() {
+        // 2026-11-09 is a Monday, 2026-11-08 the Sunday before it.
+        let mut releases = vec![
+            release("nightly-2026-11-13-aaaaaaa", true, true),
+            release("nightly-2026-11-12-bbbbbbb", true, true),
+            release("nightly-2026-11-10-ccccccc", true, true),
+            release("nightly-2026-11-08-ddddddd", true, true),
+            release("nightly-2026-11-03-eeeeeee", true, true),
+            // No build for this platform: not a candidate.
+            release("nightly-2026-11-14-fffffff", true, false),
+        ];
+        let weekly = |tag: &str, week: &str| StableBuild {
+            tag: tag.into(),
+            week: Some(week.into()),
+        };
+        assert_eq!(
+            stable_builds(&releases),
+            [
+                weekly("nightly-2026-11-13-aaaaaaa", "2026-11-09"),
+                weekly("nightly-2026-11-08-ddddddd", "2026-11-02"),
+            ]
+        );
+        releases.insert(0, release("v0.3.0", false, true));
+        assert_eq!(
+            stable_builds(&releases),
+            [StableBuild {
+                tag: "v0.3.0".into(),
+                week: None
+            }]
+        );
     }
 
     #[test]

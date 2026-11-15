@@ -1,0 +1,47 @@
+id = "fnr_beta"
+name = "Function replacement check: beta"
+version = "0.1.0"
+description = "fn-replace: a second mod on the same functions: a lower-priority value, a call site, a wrapper"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+[[native.mixin]]
+id = "plus_one"
+target = "horizon_client::game::autosave::Game<'_>::next_autosave_interval"
+kind = "MODIFY_EXPRESSION_VALUE"
+selector = "autosave_interval(rate)"
+require = 1
+ordinal = 0
+priority = 100
+helper = "src/mixins/plus_one.rs"
+bindings = [{ name = "value", ty = "i64", value = "$value" }]
+
+[[native.mixin]]
+id = "wrapped"
+target = "horizon_client::game::autosave::Game<'_>::next_autosave_interval"
+kind = "WRAP_OPERATION"
+selector = "autosave_interval"
+require = 1
+ordinal = 0
+helper = "src/mixins/wrapped.rs"
+bindings = [
+  { name = "rate", ty = "f32", value = "$arg0" },
+  { name = "operation", ty = "impl FnOnce(f32) -> i64", value = "$operation" },
+]
+
+[[native.mixin]]
+id = "before"
+target = "horizon_client::game::autosave::Game<'_>::on_tick_rate_changed"
+kind = "BEFORE_CALL"
+selector = "self.next_autosave_interval"
+require = 1
+ordinal = 0
+helper = "src/mixins/before.rs"
+bindings = [{ name = "game", ty = "&Game<'_>", value = "&*self" }]

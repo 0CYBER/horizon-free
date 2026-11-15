@@ -20,6 +20,8 @@ pub enum Fluid {
     None,
     Water,
     Lava,
+    /// A mod's world fluid: a fluid to a bucket's ray, neither water nor lava to anything else.
+    Modded,
 }
 #[derive(Clone, Debug)]
 pub struct Sounds {
@@ -31,10 +33,19 @@ pub struct Sounds {
     pub hit: Arc<str>,
     pub fall: Arc<str>,
 }
+/// `SignBlockEntity.createDefaultSignText` of a content sign: the `DyeColor` id and glow.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SignTextDefaults {
+    pub color: u8,
+    pub glowing: bool,
+}
 #[derive(Clone, Debug)]
 pub struct StateFacts {
     pub name: Arc<str>,
     pub emission: u8,
+    /// The block declares `dynamic_light`: its parts' `light_emission` answers what a cell emits
+    /// (`IBlockExtension.hasDynamicLightEmission`); `emission` is the light of a cell without one.
+    pub dynamic_light: bool,
     pub dampening: u8,
     pub skylight_down: bool,
     pub shape_occlusion: bool,
@@ -46,10 +57,16 @@ pub struct StateFacts {
     pub random_ticks: bool,
     pub block_entity: bool,
     pub render_shape: RenderShape,
+    /// Whether the breaking crack is drawn on the block (`false`: a content
+    /// block declared `destroy_overlay: false`).
+    pub destroy_overlay: bool,
     pub full_collision: bool,
     pub friction: f32,
     pub explosion_resistance: f32,
     pub item: Arc<str>,
+    /// The item pick-block takes (`BlockState.getCloneItemStack`): `item` unless the block
+    /// declares its own, as a crop picks its seed.
+    pub pick_item: Arc<str>,
     pub sounds: Sounds,
     pub fluid: Fluid,
     /// Fluid amount 1..=8 (8 = source/falling surface), 0 when there is no fluid.
@@ -283,6 +300,8 @@ pub struct BlockFacts {
     pub air: BlockStateId,
     /// Each sign block's `SignBlock.getWoodType` name.
     pub woods: HashMap<Arc<str>, Arc<str>>,
+    /// The text a new sign of a content block starts with, for the signs that declare it.
+    pub sign_texts: HashMap<Arc<str>, SignTextDefaults>,
 }
 impl BlockFacts {
     pub fn load(root: &Path, registry: &BlockRegistry) -> Result<Self> {
@@ -420,6 +439,21 @@ impl BlockFacts {
                 ))
             })
             .collect();
+        let sign_texts = behaviours["blocks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|b| {
+                let fields = &b["fields"];
+                Some((
+                    Arc::from(b["name"].as_str()?),
+                    SignTextDefaults {
+                        color: u8::try_from(fields["sign_text_color"].as_u64()?).ok()?,
+                        glowing: fields["sign_text_glow"].as_bool()?,
+                    },
+                ))
+            })
+            .collect();
         let mut names: HashMap<String, Arc<str>> = HashMap::new();
         let mut intern = |s: &str| -> Arc<str> {
             if let Some(name) = names.get(s) {
@@ -462,6 +496,14 @@ impl BlockFacts {
                 | "minecraft:seagrass"
                 | "minecraft:tall_seagrass" => (Fluid::Water, 8, false),
                 _ if prop("waterlogged") == Some("true") => (Fluid::Water, 8, false),
+                name if horizon_world::fluid::mod_fluid_named(name).is_some() => {
+                    let level: u8 = prop("level").and_then(|v| v.parse().ok()).unwrap_or(0);
+                    match level {
+                        0 => (Fluid::Modded, 8, false),
+                        1..=7 => (Fluid::Modded, 8 - level, false),
+                        _ => (Fluid::Modded, 8, true),
+                    }
+                }
                 _ => (Fluid::None, 0, false),
             };
             let air = matches!(
@@ -491,6 +533,7 @@ impl BlockFacts {
                 outline_edges,
                 name: intern(&state.name),
                 emission: entry.emission.as_f64().unwrap_or(0.0) as u8,
+                dynamic_light: entry.dynamic_light,
                 dampening: entry.dampening.as_f64().unwrap_or(0.0) as u8,
                 skylight_down: entry.skylight_down,
                 shape_occlusion: entry.shape_occlusion,
@@ -506,10 +549,18 @@ impl BlockFacts {
                     Some("ENTITYBLOCK_ANIMATED") => RenderShape::Animated,
                     _ => RenderShape::Model,
                 },
+                destroy_overlay: !entry.no_destroy_overlay,
                 full_collision: entry.full_collision,
                 friction: entry.friction as f32,
                 explosion_resistance: entry.explosion_resistance as f32,
                 item: intern(entry.item.as_deref().unwrap_or("minecraft:air")),
+                pick_item: intern(
+                    entry
+                        .pick_item
+                        .as_deref()
+                        .or(entry.item.as_deref())
+                        .unwrap_or("minecraft:air"),
+                ),
                 sounds: Sounds {
                     volume: sound.volume as f32,
                     pitch: sound.pitch as f32,
@@ -541,6 +592,7 @@ impl BlockFacts {
                     .default_state("minecraft:air")
                     .ok_or("missing air")?,
                 woods,
+                sign_texts,
             },
             extra,
         ))
@@ -556,6 +608,10 @@ impl BlockFacts {
     /// `SignBlock.getWoodType`'s name for a sign block.
     pub fn wood_type(&self, block: &str) -> Option<&str> {
         self.woods.get(block).map(|wood| &**wood)
+    }
+    /// A content sign's default text, when it declares one.
+    pub fn sign_text(&self, block: &str) -> Option<SignTextDefaults> {
+        self.sign_texts.get(block).copied()
     }
     pub fn is_air(&self, id: BlockStateId) -> bool {
         matches!(

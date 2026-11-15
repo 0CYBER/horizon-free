@@ -3,7 +3,7 @@
 //! camera-relative world (section origins, entity offsets) is built once and
 //! only each view's rotation and lens differ.
 
-use glam::Mat4;
+use glam::{DVec3, Mat4, Vec3};
 
 /// The most views one frame draws.
 const MAX_VIEWS: usize = 2;
@@ -72,6 +72,44 @@ impl ViewSet {
     pub fn cull(&self) -> &View {
         &self.cull
     }
+}
+
+/// Where a perspective `view_proj` sees from, in its own (camera-relative)
+/// space: the point whose clip x, y and w are all 0. `None` for a
+/// projection without one (orthographic).
+pub(super) fn projection_center(view_proj: Mat4) -> Option<Vec3> {
+    let m = view_proj.as_dmat4();
+    let rows = [m.row(0), m.row(1), m.row(3)];
+    let a = glam::DMat3::from_cols(
+        DVec3::new(rows[0].x, rows[1].x, rows[2].x),
+        DVec3::new(rows[0].y, rows[1].y, rows[2].y),
+        DVec3::new(rows[0].z, rows[1].z, rows[2].z),
+    );
+    let det = a.determinant();
+    if !det.is_normal() {
+        return None;
+    }
+    let b = DVec3::new(rows[0].w, rows[1].w, rows[2].w);
+    Some((a.inverse() * -b).as_vec3())
+}
+
+/// `view_proj` mirrored about the horizontal plane at the camera-relative height `plane`:
+/// with F the mirror (y flips and moves to 2 * plane), `view_proj * F` negates column 1
+/// and moves column 3 by 2 * plane times column 1.
+///
+/// `mirror_inverse_view` is the inverse's other side: F * `inverse_view`.
+pub(super) fn mirror_view_projection(view_proj: Mat4, plane: f32) -> Mat4 {
+    let mut m = view_proj.to_cols_array_2d();
+    let col1 = m[1];
+    m[1] = col1.map(|v| -v);
+    m[3] = std::array::from_fn(|i| m[3][i] + 2.0 * plane * col1[i]);
+    Mat4::from_cols_array_2d(&m)
+}
+
+/// The mirror's `inverse_view` (the sky's rays): what the view sees, mirrored about the
+/// horizontal plane at the camera-relative height `plane`, so F * `inverse_view`.
+pub(super) fn mirror_inverse_view(inverse_view: [[f32; 4]; 4], plane: f32) -> [[f32; 4]; 4] {
+    inverse_view.map(|[x, y, z, w]| [x, 2.0 * plane * w - y, z, w])
 }
 
 #[cfg(test)]

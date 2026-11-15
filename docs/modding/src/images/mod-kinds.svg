@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 350" role="img" aria-labelledby="t d" font-family="'Segoe UI', 'Helvetica Neue', Helvetica, Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif">
+  <title id="t">The three kinds of Horizon mod</title>
+  <desc id="d">One .hmod package holds horizon-mod.toml, assets and data. A content mod stops there. A native mod adds a Rust crate that the launcher compiles against the pinned game build. A WebAssembly mod adds mod.wasm, built from the same Rust, which the game runs in its sandbox.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6e7681"/></marker>
+  </defs>
+  <!-- package -->
+  <rect x="20" y="105" width="200" height="140" rx="12" fill="#f1f3f5" stroke="#5c6670" stroke-width="1.5"/>
+  <text x="120" y="132" text-anchor="middle" font-size="17" font-weight="700" fill="#1f2328">my_mod.hmod</text>
+  <g font-family="'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace" font-size="13" fill="#1f2328">
+    <text x="42" y="162">horizon-mod.toml</text>
+    <text x="42" y="184">assets/</text>
+    <text x="42" y="206">data/</text>
+    <text x="42" y="228" fill="#5c6670">+ code, for a code mod</text>
+  </g>
+  <!-- arrows -->
+  <path d="M222 150 C 300 150, 300 60, 372 60" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M222 175 L 372 175" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#a)"/>
+  <path d="M222 200 C 300 200, 300 290, 372 290" fill="none" stroke="#6e7681" stroke-width="2" marker-end="url(#a)"/>
+  <!-- content -->
+  <rect x="375" y="22" width="365" height="76" rx="12" fill="#e7f0ff" stroke="#2b5ea7" stroke-width="1.5"/>
+  <text x="395" y="52" font-size="16" font-weight="700" fill="#1d3f73">Content mod</text>
+  <text x="395" y="76" font-size="13.5" fill="#1f2328">Data files only. The game reads them at start-up.</text>
+  <!-- native -->
+  <rect x="375" y="127" width="365" height="94" rx="12" fill="#fff1e2" stroke="#b8621b" stroke-width="1.5"/>
+  <text x="395" y="155" font-size="16" font-weight="700" fill="#7a3d0b">Native mod</text>
+  <text x="395" y="181" font-size="13.5" fill="#1f2328">Rust crate, compiled by the launcher for the exact</text>
+  <text x="395" y="201" font-size="13.5" fill="#1f2328">game build. Full speed, full trust.</text>
+  <!-- wasm -->
+  <rect x="375" y="243" width="365" height="94" rx="12" fill="#f0eaff" stroke="#6a4bc4" stroke-width="1.5"/>
+  <text x="395" y="271" font-size="16" font-weight="700" fill="#45288f">WebAssembly mod</text>
+  <text x="395" y="297" font-size="13.5" fill="#1f2328">The same Rust, built to mod.wasm and run in</text>
+  <text x="395" y="317" font-size="13.5" fill="#1f2328">the game's sandbox. No compiler needed to play.</text>
+</svg>

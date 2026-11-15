@@ -2832,6 +2832,7 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
     /// The shadow pass runs when a program reads a shadow buffer or `shadow.enabled` says so;
     /// then `shadow`, `shadow_water` and the `shadowcomp` series load, writing shadowcolor0/1.
     #[test]
+    #[ignore = "daily"]
     fn shadow_programs_load_when_a_shadow_buffer_is_read() {
         let reads = "#version 120\nuniform sampler2D shadowtex0;\nvarying vec2 uv;\n\
                      void main() { gl_FragColor = texture2D(shadowtex0, uv); }\n";
@@ -2979,6 +2980,7 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
     /// Without the feature, outputs stop at shadowcolor1 as before. As in Iris 1.11.7 with
     /// probe packs p7951a to c (the PR has the readings).
     #[test]
+    #[ignore = "daily"]
     fn higher_shadowcolor_gives_shadow_programs_eight_buffers() {
         let shadow_vsh = "#version 120\nvoid main() {\ngl_Position = ftransform();\n}\n";
         let writes = |targets: Option<&str>| {
@@ -3492,6 +3494,7 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
     }
 
     #[test]
+    #[ignore = "daily"]
     fn water_falls_back_to_terrain_and_blends() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs/terrain-test");
         let pack = Pack::open(&dir).unwrap();

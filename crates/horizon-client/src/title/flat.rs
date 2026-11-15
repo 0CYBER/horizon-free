@@ -10,7 +10,7 @@ use crate::{
     ui,
 };
 use horizon_assets::item_model::{DisplayContext, ItemEnv};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use serde_json::Value;
 use std::{collections::BTreeSet, path::Path};
 
@@ -340,10 +340,27 @@ fn load(root: &Path) -> (Vec<Preset>, BTreeSet<String>, BTreeSet<String>) {
     let tag_path =
         root.join("data/minecraft/tags/worldgen/flat_level_generator_preset/visible.json");
     if let Ok(text) = std::fs::read_to_string(tag_path)
-        && let Ok(Value::Object(tag)) = serde_json::from_str(&text)
-        && let Some(Value::Array(ids)) = tag.get("values")
+        && let Ok(tag) = serde_json::from_str::<Value>(&text)
     {
-        for id in ids.iter().filter_map(Value::as_str) {
+        fn members(root: &Path, tag: &Value, active: &mut BTreeSet<String>) -> Vec<String> {
+            horizon_world::tag_layers::TagLayers::from_file(tag).build(|id| {
+                if !active.insert(id.to_owned()) {
+                    return Vec::new();
+                }
+                let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+                let file = root.join(format!(
+                    "data/{namespace}/tags/worldgen/flat_level_generator_preset/{path}.json"
+                ));
+                let out = std::fs::read(file)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                    .map(|v| members(root, &v, active))
+                    .unwrap_or_default();
+                active.remove(id);
+                out
+            })
+        }
+        for id in members(root, &tag, &mut BTreeSet::new()) {
             let Some((namespace, path)) = id.split_once(':') else {
                 continue;
             };
@@ -634,9 +651,11 @@ pub(super) fn draw(
     batch: &mut HudBatch,
     cursor: (f32, f32),
     state: &State,
+    phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
 ) {
     let (w, h) = (batch.width.ceil(), batch.height.ceil());
     ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+    phases(crate::screen_draw::RenderPhase::Background, batch);
     match state.page {
         Page::Layers => draw_layers(title, atlas, items, batch, cursor, state, (w, h)),
         Page::Presets => draw_presets(title, atlas, items, batch, cursor, state, (w, h)),
@@ -1128,7 +1147,16 @@ mod tests {
         if !root.join("entity-models.json").exists() {
             return;
         }
-        let renderer = ItemRenderer::load(&root).unwrap();
+        let data = crate::test_resources::item_data(
+            &root,
+            horizon_world::native_load_context::DataLoadOrigin::ClientPreload,
+        )
+        .unwrap();
+        let renderer = ItemRenderer::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            &data,
+        )
+        .unwrap();
         let tinted: Vec<i32> = super::layer_state(&renderer, "minecraft:grass_block")
             .layers
             .iter()

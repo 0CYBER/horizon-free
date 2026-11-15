@@ -8,7 +8,7 @@ use super::fixes_a::block_rename;
 use super::fixes_b::advancements_rename;
 use super::schema::{Key, Ty, key};
 use super::{Cx, FixFn, renamer};
-use crate::nbt::{Compound, JavaString, Tag};
+use horizon_core::nbt::{Compound, JavaString, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(2679, 0), cauldron_rename));

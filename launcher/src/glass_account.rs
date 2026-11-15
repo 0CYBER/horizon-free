@@ -11,6 +11,10 @@ use horizon_theme::glass::{ink, radius};
 impl Launcher {
     pub(super) fn glass_account(&mut self, cx: &mut Context<Self>) -> Div {
         let wide = self.window_width >= crate::glass_home::WIDE;
+        // Signed out, "who plays" would only repeat the Microsoft card's call to sign in.
+        if self.accounts.selected().is_none() {
+            return div().child(self.glass_microsoft_card(cx).w_full());
+        }
         let left = self.glass_who_plays();
         let right = self.glass_microsoft_card(cx);
         if wide {
@@ -47,14 +51,14 @@ impl Launcher {
         };
         let head = div()
             .flex_none()
-            .size(px(80.))
-            .rounded(px(20.))
+            .size(px(56.))
+            .rounded(px(14.))
             .overflow_hidden()
             .child(
                 self.profile_heads
-                    .draw(uuid.as_deref(), 80., self.scale, &t),
+                    .draw(uuid.as_deref(), 56., self.scale, &t),
             );
-        let header = div().flex().items_center().gap(px(20.)).child(head).child(
+        let header = div().flex().items_center().gap(px(16.)).child(head).child(
             div()
                 .flex()
                 .flex_col()
@@ -64,8 +68,10 @@ impl Launcher {
                     div()
                         .font_family(horizon_theme::glass::DISPLAY_FONT)
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(px(32.))
-                        .line_height(px(32.))
+                        // A compact summary: the top bar and the account rows name the
+                        // player too, so this is no page headline.
+                        .text_size(px(22.))
+                        .line_height(px(28.))
                         .text_color(white(ink::FULL))
                         .truncate()
                         .child(name),
@@ -160,6 +166,8 @@ impl Launcher {
             .flex_col()
             .rounded(px(16.))
             .bg(white(0.045))
+            .border_1()
+            .border_color(white(ui::edge::REST))
             .p(px(24.))
             .when(has_accounts, |d| {
                 d.child(rows.mx(px(-16.)).mt(px(-16.)).mb(px(16.)))

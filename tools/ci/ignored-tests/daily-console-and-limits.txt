@@ -1,0 +1,8 @@
+# Part 7 of arismoko/horizon#3744: the console and player-limit tests read the prepared 26.3 data.
+horizon-client game::native_console_tests::a_captured_command_returns_its_feedback lib daily resources
+horizon-client game::native_console_tests::a_nested_capture_leaves_the_outer_one_as_it_was lib daily resources
+horizon-client game::native_console_tests::a_blank_line_or_no_server_runs_nothing lib daily resources
+horizon-client game::native_console_tests::logged_lines_reach_a_listener_but_not_its_own lib daily resources
+horizon-client game::native_console_tests::the_dedicated_consoles_own_commands_are_not_reached lib daily resources
+horizon-client game::native_server_max_players_tests::a_mod_reads_and_sets_the_player_limit lib daily resources
+horizon-client game::native_server_max_players_tests::each_player_limit_refusal_has_its_own_name_and_changes_nothing lib daily resources

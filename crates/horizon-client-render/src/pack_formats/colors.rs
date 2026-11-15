@@ -1,6 +1,6 @@
 //! Polytone's custom colours (`horizon_polytone::colors`, `colors.json` or `color.properties`)
 //! as the engine's pack colours ([`crate::pack_palette::PackColors`]).
-use std::path::Path;
+use crate::resource_source::ResourceSource;
 
 use horizon_polytone::colors::PackColors;
 
@@ -16,8 +16,21 @@ fn fluid(fog: horizon_polytone::colors::FluidFog) -> pack_palette::FluidFog {
 }
 
 /// The colours of every namespace's file under the pack overlay at `root`.
-pub fn read(root: &Path) -> pack_palette::PackColors {
-    let colors = PackColors::read(root);
+pub fn read(root: &ResourceSource) -> pack_palette::PackColors {
+    let colors = PackColors::from_files(root.namespaces("assets").into_iter().map(|ns| {
+        let base = format!("assets/{ns}/polytone");
+        (
+            root.read_to_string(&format!("{base}/color.properties"))
+                .ok(),
+            root.read_to_string(&format!("{base}/colors.json")).ok(),
+        )
+    }));
+    let fogs = horizon_polytone::colors::FluidFogs::from_files(
+        root.list_under("assets", &["polytone/fluid_modifiers"])
+            .into_iter()
+            .filter(|p| p.ends_with(".json"))
+            .filter_map(|p| root.read_to_string(&p).ok().map(|text| (p, text))),
+    );
     let by_dye = |f: &dyn Fn(&str) -> Option<u32>| std::array::from_fn(|i| f(DYES[i].0));
     let env = colors.env;
     pack_palette::PackColors {
@@ -38,8 +51,8 @@ pub fn read(root: &Path) -> pack_palette::PackColors {
             horizon_height: env.horizon_height,
         },
         fluid_fog: pack_palette::FluidFogs {
-            water: colors.fluid_fog.water.map(fluid),
-            lava: colors.fluid_fog.lava.map(fluid),
+            water: fogs.water.map(fluid),
+            lava: fogs.lava.map(fluid),
         },
     }
 }
@@ -60,7 +73,19 @@ mod tests {
             r#"{"dye": {"cyan": {"diffuse": "00ff00", "text": "0000ff"}}, "sheep": {"pink": "2040ff"}, "redstone": {"7": "0x123456"}}"#,
         )
         .unwrap();
-        crate::pack_palette::set(&read(&dir));
+        let fluids = polytone.join("fluid_modifiers/nested");
+        std::fs::create_dir_all(&fluids).unwrap();
+        std::fs::write(
+            fluids.join("water.json"),
+            r#"{"targets":["minecraft:water"],"fog_colormap":"abcdef","fog_radius":0.3}"#,
+        )
+        .unwrap();
+        let colors = read(&ResourceSource::directory(dir.clone()));
+        let water = colors.fluid_fog.water.unwrap();
+        assert_eq!(water.color, Some(0xabcdef));
+        assert_eq!(water.radius, 0.3);
+        assert_eq!(colors.fluid_fog.lava, None);
+        crate::pack_palette::set(&colors);
         let (cyan, pink, purple) = (9, 6, 10);
         assert_eq!(diffuse(cyan), 0x00ff00);
         assert_eq!(text(cyan), 0x0000ff);

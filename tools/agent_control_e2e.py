@@ -74,9 +74,9 @@ class Failed(Exception):
 
 
 def game_env(screen, home=None):
-    """The environment of a game: lab.game_env with HORIZON_HOME `home` (a scratch folder when None), no live-count
-    ping, and on Linux the virtual screen `screen` (macOS and Windows have none)."""
-    extra = {'HORIZON_TELEMETRY_URL': 'off'}  # no live-count ping from test games
+    """The environment of a game: lab.game_env with HORIZON_HOME `home` (a scratch folder when None),
+    and on Linux the virtual screen `screen` (macOS and Windows have none)."""
+    extra = {}
     if home is not None:
         extra['HORIZON_HOME'] = home
     if sys.platform in ('darwin', 'win32'):
@@ -1161,7 +1161,7 @@ def main():
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client', '-p', 'horizon-client-lib', '--bins'],
+        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game', '-p', 'horizon-client-lib', '--bins'],
                        cwd=ROOT, check=True)
         meta = json.loads(subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'], cwd=ROOT,
                                          capture_output=True, text=True, check=True).stdout)

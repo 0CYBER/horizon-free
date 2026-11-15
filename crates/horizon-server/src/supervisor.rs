@@ -5,9 +5,12 @@
 
 use crate::{
     api::{self, Phase, Shared},
-    backup, config,
-    config::Config,
-    engine, signals, update,
+    backup, engine, prune, signals,
+    update::{self, UpdateInstall},
+};
+use horizon_server_launch::{
+    self as launch,
+    config::{self, Config},
 };
 use serde_json::json;
 use std::{
@@ -110,9 +113,13 @@ fn prune_chunks(shared: &Arc<Shared>, dir: &Path, config: &Config) -> Result<(),
                 &format!("Chunk prune: {} (report: {at})", outcome.summary),
             );
         }
-        Err(e) => note(shared, "ERROR", &format!("Chunk prune failed: {e}")),
+        Err(e) => note(
+            shared,
+            "ERROR",
+            &format!("Chunk prune failed; some files may already have been changed: {e}"),
+        ),
     };
-    if settings.mode == prune::Mode::Delete {
+    if settings.mode == horizon_server_launch::prune::Mode::Delete {
         note(
             shared,
             "INFO",
@@ -142,13 +149,13 @@ fn prune_chunks(shared: &Arc<Shared>, dir: &Path, config: &Config) -> Result<(),
 /// Run before every engine start, not only when the one-shot prune setting is still enabled.
 fn prepare_world(shared: &Arc<Shared>, dir: &Path, config: &Config) -> Result<(), String> {
     let world = dir.join(&config.world.name);
-    crate::prune::recover(&world)?;
-    if config.prune_chunks.mode != crate::prune::Mode::Off
+    prune::recover(&world)?;
+    if config.prune_chunks.mode != horizon_server_launch::prune::Mode::Off
         && let Err(e) = prune_chunks(shared, dir, config)
     {
         // A failed region rolls itself back: with no journal left, the world is whole (the regions
         // pruned before it stay pruned) and the server starts. Only a pending recovery stops it.
-        crate::prune::recover(&world)?;
+        prune::recover(&world)?;
         note(
             shared,
             "WARN",
@@ -186,8 +193,8 @@ struct Watch {
 pub fn run(dir: &Path) -> Result<(), String> {
     signals::install();
     let config = Config::load(dir)?;
-    let program = engine::program(&config, dir)?;
-    let resources = engine::resources(&config, dir, Some(&program))?;
+    let program = launch::program(&config, dir)?;
+    let resources = launch::resources(&config, dir, Some(&program))?;
     // Half-copied game files would only crash the engine again at every restart: name what is missing.
     engine::check_prepared(&resources)?;
     // A game the system can't load would only crash again at every restart: say why at once.
@@ -240,8 +247,8 @@ pub fn run(dir: &Path) -> Result<(), String> {
         if let Some(w) = apply_queued(&shared, dir, &config) {
             watch = Some(w);
         }
-        if let Ok(found) = engine::program_in(&config, dir, shared.install.as_ref())
-            && let Ok(found_resources) = engine::resources(&config, dir, Some(&found))
+        if let Ok(found) = launch::program_in(&config, dir, shared.install.as_ref())
+            && let Ok(found_resources) = launch::resources(&config, dir, Some(&found))
         {
             (program, resources) = (found, found_resources);
         }
@@ -446,7 +453,7 @@ fn switch(
         return None;
     }
     if let Err(e) =
-        engine::program_in(config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
+        launch::program_in(config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
     {
         let back = install
             .switch_back(&from, previous.as_deref())
@@ -713,7 +720,7 @@ fn schedule_backups(shared: Arc<Shared>) {
                 let Ok(config) = Config::load(&shared.dir) else {
                     continue;
                 };
-                let Ok(Some(every)) = backup::interval(&config.backups.every) else {
+                let Ok(Some(every)) = config.backups.interval() else {
                     continue;
                 };
                 if last.elapsed() < every || shared.state.lock().unwrap().phase != Phase::Running {
@@ -895,6 +902,7 @@ mod tests {
     /// A restore asked for while the game is stopped is done before the next start (the loop's
     /// head runs `apply_queued`), not left queued for some later restart.
     #[test]
+    #[ignore = "daily"]
     fn a_queued_restore_is_done_before_the_next_start() {
         let dir =
             std::env::temp_dir().join(format!("horizon-server-queued-{}", std::process::id()));
@@ -942,7 +950,7 @@ mod tests {
 
     #[test]
     fn a_prune_that_rolled_back_still_lets_the_server_start() {
-        let (dir, ow) = crate::prune::tests::world("supervisor-rolled-back");
+        let (dir, ow) = prune::tests::world("supervisor-rolled-back");
         // The kept entity record of r.2.0 can't be read: that region fails and rolls back.
         let entity = ow.join("entities/r.2.0.mca");
         let mut broken = std::fs::read(&entity).unwrap();
@@ -951,7 +959,7 @@ mod tests {
         let terrain = std::fs::read(ow.join("region/r.2.0.mca")).unwrap();
         std::fs::write(dir.join("server.toml"), crate::config::TEMPLATE).unwrap();
         let mut config = Config::load(&dir).unwrap();
-        config.prune_chunks.mode = crate::prune::Mode::Delete;
+        config.prune_chunks.mode = horizon_server_launch::prune::Mode::Delete;
         config.prune_chunks.spawn_radius = 4;
         let shared = Shared::with_install(&dir, None);
         prepare_world(&shared, &dir, &config).unwrap();
@@ -969,7 +977,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("server.toml"), crate::config::TEMPLATE).unwrap();
         let config = Config::load(&dir).unwrap();
-        assert_eq!(config.prune_chunks.mode, crate::prune::Mode::Off);
+        assert_eq!(
+            config.prune_chunks.mode,
+            horizon_server_launch::prune::Mode::Off
+        );
         let dimension = dir.join(&config.world.name);
         std::fs::create_dir_all(dimension.join("region")).unwrap();
         let pending = dimension.join(".horizon-prune");
@@ -1019,12 +1030,13 @@ mod tests {
         let dir = root.join("server");
         std::fs::create_dir_all(dir.join("world")).unwrap();
         std::fs::write(dir.join("world/level.dat"), "before").unwrap();
-        let install = update::Install { root };
+        let install = launch::Install { root };
         (Shared::with_install(&dir, Some(install)), dir)
     }
 
     #[cfg(unix)]
     #[test]
+    #[ignore = "daily"]
     fn a_switch_backs_up_then_rolls_back_world_and_release() {
         let (shared, dir) = installed("rollback", &[("v1", 0), ("v2", 0)]);
         let install = shared.install.clone().unwrap();
@@ -1072,6 +1084,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[ignore = "daily"]
     fn a_game_that_comes_up_ends_the_update_and_prunes_old_releases() {
         let (shared, dir) = installed("prune", &[("v1", 0), ("v2", 0), ("v3", 0)]);
         let install = shared.install.clone().unwrap();
@@ -1095,6 +1108,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[ignore = "daily"]
     fn a_game_that_cant_load_is_never_switched_to() {
         let (shared, dir) = installed("unloadable", &[("v1", 0), ("v2", 127)]);
         let install = shared.install.clone().unwrap();
@@ -1180,6 +1194,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[ignore = "daily"]
     fn a_management_stop_ends_the_supervisor_and_a_stop_in_game_keeps_it() {
         let dir = std::env::temp_dir().join(format!("horizon-server-stop-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

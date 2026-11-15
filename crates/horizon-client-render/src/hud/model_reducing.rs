@@ -1,20 +1,22 @@
 //! Resolution fallback for model textures that exceed the shared HUD atlas.
-use super::{HashMap, HashSet, HudAtlas, PackedImage, Path, Result, bitmap_font_textures};
+use super::{
+    HashMap, HashSet, HudAtlas, PackedImage, ResourceSource, Result, bitmap_font_textures,
+};
 
 /// Only model atlas sprites may lose resolution. Font sheets can also be
 /// model textures, so protect both their file names and renamed sources.
 pub(super) fn reducible_model_sprites(
-    root: &Path,
+    root: &ResourceSource,
     images: &[PackedImage],
     bordered: &HashSet<String>,
 ) -> HashSet<String> {
-    use crate::atlas_sources::{self, SpriteOrigin};
+    use crate::atlas_sources::{self, SpriteOrigin, unasked};
     let fonts: HashSet<_> = bitmap_font_textures(root).into_iter().collect();
     let protected = |name: &str| {
         let path = name.split_once(':').map_or(name, |(_, path)| path);
         path.starts_with("gui/")
             || path.starts_with("font/")
-            || fonts.contains(&atlas_sources::texture_path(root, name, "textures"))
+            || fonts.contains(&atlas_sources::texture_resource(name, "textures"))
     };
     let mut models: HashSet<String> = images
         .iter()
@@ -27,7 +29,7 @@ pub(super) fn reducible_model_sprites(
         if atlas != "minecraft:blocks" && atlas != "minecraft:items" {
             continue;
         }
-        for (id, origin) in atlas_sources::list(&sources, &textures) {
+        for (id, origin) in atlas_sources::list(&sources, &textures, &mut unasked) {
             let name = id.strip_prefix("minecraft:").unwrap_or(&id).to_owned();
             if let SpriteOrigin::File(texture) = origin {
                 if protected(&texture) {

@@ -61,6 +61,7 @@ fn pack() -> Post {
 
 #[test]
 fn a_custom_uniform_declared_with_another_type_reads_zero() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let Ok(mut post) = gpu.try_build(pack()) else {
         panic!("the pack runs")

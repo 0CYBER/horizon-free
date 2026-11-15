@@ -1,0 +1,3 @@
+# cargo-horizon-mod's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+cargo-horizon-mod layouts::tests::field_changes_invalidate_the_cached_probe by-hand manual # compiles the real layout probe (minutes cold)
+cargo-horizon-mod write_launcher_actor subprocess manual # fixture writer subprocess only

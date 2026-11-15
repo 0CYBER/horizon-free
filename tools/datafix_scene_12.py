@@ -1870,7 +1870,7 @@ def build_flat(h, force=False):
     module `h` (tools/datafix_worlds.py)."""
     version = '1.12.2'
     jar, data_version, protocol = h.server_jar(version)
-    target = h.SHARED / 'worlds' / (version + '-flat')
+    target = h.worlds_dir(version + '-flat') / (version + '-flat')
     if target.exists() and not force:
         print(f'{version}-flat: kept {target}')
         return []

@@ -120,7 +120,6 @@ def scratch_env(home):
         XDG_DATA_HOME=home / "data",
         XDG_CONFIG_HOME=home / "config",
         HORIZON_LAUNCHER_TRASH=home / "trash",
-        HORIZON_TELEMETRY_URL="off",
     )
 
 

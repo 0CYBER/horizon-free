@@ -15,6 +15,11 @@ use std::{
     },
 };
 
+use horizon_mod_runtime::attachments::{
+    ATTACHMENTS_KEY, AttachmentError, Attachments, Holder, attachment_compound,
+    observer::AttachmentObserver,
+};
+
 type Key = (i32, i32);
 type Columns = FxHashMap<Key, Arc<Chunk>>;
 static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
@@ -52,6 +57,7 @@ pub struct ChunkMap {
     recent_deltas: VecDeque<(u64, ChunkMembershipDelta)>,
     /// The resident chunks generation has not placed its animals in yet.
     fresh: FxHashSet<Key>,
+    attachment_observer: Option<Arc<dyn AttachmentObserver>>,
     /// For each column, how many of the 3×3 columns around it (itself
     /// included) are resident; absent when none is. `surrounded` asks one
     /// map instead of nine every tick, for every ticking chunk.
@@ -66,11 +72,71 @@ impl Default for ChunkMap {
             min_valid_revision: revision,
             recent_deltas: VecDeque::new(),
             fresh: FxHashSet::default(),
+            attachment_observer: None,
             near: FxHashMap::default(),
         }
     }
 }
+// Only residency installation binds saved maps. Lighting COW leaves these shared
+// entries indexed; attachment access below rebinds an extras COW before its write.
+fn bind_saved_attachments(
+    observer: &dyn AttachmentObserver,
+    key: Key,
+    chunk: &mut Arc<Chunk>,
+) -> bool {
+    let Some(saved) = &chunk.saved else {
+        return false;
+    };
+    if !saved.attachments.has_index_entries() && !saved.attachments.has_index_binding() {
+        return false;
+    }
+    let saved = Arc::make_mut(Arc::make_mut(chunk).saved.as_mut().unwrap());
+    observer
+        .bind(Holder::Chunk([key.0, key.1]), &mut saved.attachments)
+        .is_some()
+}
+
+impl Drop for ChunkMap {
+    fn drop(&mut self) {
+        self.unload_attachments();
+    }
+}
+
 impl ChunkMap {
+    /// Install the authoritative dimension's observer, including already loaded
+    /// saved entries before their first read. Client/worker maps have no observer.
+    pub fn observe_attachments(&mut self, observer: Arc<dyn AttachmentObserver>) {
+        self.unload_attachments();
+        for (key, chunk) in &mut self.columns {
+            bind_saved_attachments(&*observer, *key, chunk);
+        }
+        self.attachment_observer = Some(observer);
+    }
+
+    fn unload_attachments(&self) {
+        if let Some(observer) = &self.attachment_observer {
+            for key in self.columns.keys() {
+                observer.unload(Holder::Chunk([key.0, key.1]));
+            }
+        }
+    }
+
+    /// The live map, rebound after extras COW but never merely for lighting COW.
+    pub fn attachments_mut(&mut self, key: &Key) -> Result<&mut Attachments, AttachmentError> {
+        let chunk = self
+            .columns
+            .get_mut(key)
+            .ok_or(AttachmentError::MissingHolder)?;
+        let saved = Arc::make_mut(Arc::make_mut(chunk).saved.get_or_insert_default());
+        attachment_compound(saved.root.get(&ATTACHMENTS_KEY.into()))?;
+        if let Some(observer) = &self.attachment_observer
+            && !saved.attachments.has_index_binding()
+        {
+            let _ = observer.bind(Holder::Chunk([key.0, key.1]), &mut saved.attachments);
+        }
+        Ok(&mut saved.attachments)
+    }
+
     pub fn membership_revision(&self) -> u64 {
         self.revision
     }
@@ -121,7 +187,32 @@ impl ChunkMap {
         }
         Some(slice.copied())
     }
-    pub fn insert(&mut self, key: Key, chunk: Arc<Chunk>) -> Option<Arc<Chunk>> {
+    pub fn insert(&mut self, key: Key, mut chunk: Arc<Chunk>) -> Option<Arc<Chunk>> {
+        let limits = chunk
+            .saved
+            .as_ref()
+            .map(|saved| {
+                saved
+                    .block_entity_sources
+                    .iter()
+                    .filter_map(|(pos, tag)| match tag.get("horizon:stack_limit") {
+                        Some(horizon_core::nbt::Tag::Int(n)) if (1..=99).contains(n) => {
+                            Some((*pos, *n as u32))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if chunk.container_stack_limits != limits {
+            Arc::make_mut(&mut chunk).container_stack_limits = limits;
+        }
+        if let Some(observer) = &self.attachment_observer {
+            let bound = bind_saved_attachments(&**observer, key, &mut chunk);
+            if !bound && self.columns.contains_key(&key) {
+                observer.unload(Holder::Chunk([key.0, key.1]));
+            }
+        }
         if chunk.fresh {
             self.fresh.insert(key);
         } else {
@@ -143,6 +234,9 @@ impl ChunkMap {
         self.fresh.remove(key);
         let previous = self.columns.remove(key);
         if previous.is_some() {
+            if let Some(observer) = &self.attachment_observer {
+                observer.unload(Holder::Chunk([key.0, key.1]));
+            }
             for z in key.1 - 1..=key.1 + 1 {
                 for x in key.0 - 1..=key.0 + 1 {
                     if let Some(n) = self.near.get_mut(&(x, z)) {
@@ -160,6 +254,7 @@ impl ChunkMap {
     }
     pub fn clear(&mut self) {
         if !self.columns.is_empty() {
+            self.unload_attachments();
             self.columns.clear();
             self.fresh.clear();
             self.near.clear();
@@ -225,11 +320,247 @@ impl crate::light::LightWorld for ChunkMap {
     fn layout(&self) -> crate::chunk::ColumnLayout {
         self.columns.layout()
     }
+    fn dynamic_emission(&self, x: i32, y: i32, z: i32) -> Option<u8> {
+        self.columns.dynamic_emission(x, y, z)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_core::nbt::Tag;
+    use horizon_mod_runtime::attachments::{
+        AttachmentCodec, AttachmentType, index::AttachmentIndex,
+        observer::IndexedAttachmentObserver,
+    };
+    use mod_api::{AttachmentHolder, ChunkRef, DimensionKey, LevelRef, WorldEpoch};
+    use std::sync::{Mutex, Weak, atomic::AtomicUsize};
+
+    type Index = Arc<Mutex<AttachmentIndex<AttachmentHolder>>>;
+    static VALUE: AttachmentType<i32> = AttachmentType {
+        namespace: "chunk_test",
+        name: "value",
+        default: || 0,
+        codec: Some(AttachmentCodec {
+            encode: |n| Ok([("n".into(), Tag::Int(*n))].into()),
+            decode: |form| match form.get(&"n".into()) {
+                Some(Tag::Int(n)) => Ok(*n),
+                _ => Err(AttachmentError::Decode),
+            },
+        }),
+        copy_on_death: false,
+        sync: false,
+    };
+    fn observe(map: &mut ChunkMap, index: &Index, dimension: DimensionKey) -> Arc<AtomicUsize> {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let level = LevelRef::new(WorldEpoch::new(42), dimension);
+        map.observe_attachments(Arc::new(IndexedAttachmentObserver::new(
+            index,
+            move |holder| {
+                counter.fetch_add(1, Ordering::Relaxed);
+                match holder {
+                    Holder::Chunk(pos) => Some(AttachmentHolder::Chunk(ChunkRef::new(level, pos))),
+                    _ => None,
+                }
+            },
+        )));
+        calls
+    }
+    fn key() -> horizon_mod_runtime::attachments::index::AttachmentKey {
+        ("chunk_test".into(), "value".into())
+    }
+    fn saved_chunk() -> Arc<Chunk> {
+        let mut source = Attachments::default();
+        VALUE.set(&mut source, Holder::Chunk([3, 5]), 7).unwrap();
+        let form = source.to_nbt();
+        let mut chunk = Chunk::empty(3, 5);
+        chunk.saved = Some(Arc::new(crate::chunk::ChunkExtras {
+            attachments: Attachments::from_nbt(form),
+            ..Default::default()
+        }));
+        Arc::new(chunk)
+    }
+
+    #[test]
+    fn chunk_attachment_residency_load_cow_unload_and_dimension_swap() {
+        let index = Index::default();
+        let other_index = Index::default();
+        let mut map = ChunkMap::default();
+        // Observer installation also handles chunks loaded before level-open.
+        map.insert((3, 5), saved_chunk());
+        let calls = observe(&mut map, &index, DimensionKey::OVERWORLD);
+        let old = index.lock().unwrap().snapshot(&key());
+        assert_eq!(old.len(), 1);
+        assert_eq!(
+            old[0].holder,
+            AttachmentHolder::Chunk(ChunkRef::new(
+                LevelRef::new(WorldEpoch::new(42), DimensionKey::OVERWORLD),
+                [3, 5]
+            ))
+        );
+        let save = map[&(3, 5)].clone();
+        Arc::make_mut(map.get_mut(&(3, 5)).unwrap()).lit = true;
+        crate::light::LightWorld::set_section_light(
+            &mut map,
+            3,
+            0,
+            5,
+            crate::chunk::Light::Uniform(0),
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert!(Arc::ptr_eq(&old, &index.lock().unwrap().snapshot(&key())));
+        VALUE
+            .set(
+                map.attachments_mut(&(3, 5)).unwrap(),
+                Holder::Chunk([3, 5]),
+                9,
+            )
+            .unwrap();
+        let current = index.lock().unwrap().snapshot(&key());
+        assert_eq!(current[0].entry.read(&VALUE), Ok(&9));
+        assert_eq!(old[0].entry.read(&VALUE), Ok(&7));
+        assert_eq!(
+            save.saved
+                .as_ref()
+                .unwrap()
+                .attachments
+                .entry("chunk_test", "value")
+                .unwrap()
+                .unwrap()
+                .read(&VALUE),
+            Ok(&7)
+        );
+        assert!(map.attachments_mut(&(3, 5)).is_ok());
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        let current_save = map[&(3, 5)].clone();
+        // Unrelated extras COW detaches the map; residency must not rely on it.
+        let chunk = Arc::make_mut(map.get_mut(&(3, 5)).unwrap());
+        Arc::make_mut(chunk.saved.as_mut().unwrap()).last_update = 20;
+        let mut other = ChunkMap::default();
+        observe(&mut other, &other_index, DimensionKey::NETHER);
+        other.insert((3, 5), saved_chunk());
+        std::mem::swap(&mut map, &mut other);
+        map.remove(&(3, 5));
+        assert!(other_index.lock().unwrap().snapshot(&key()).is_empty());
+        assert_eq!(index.lock().unwrap().snapshot(&key()).len(), 1);
+        other.remove(&(3, 5));
+        assert!(index.lock().unwrap().snapshot(&key()).is_empty());
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        assert_eq!(current[0].entry.read(&VALUE), Ok(&9));
+        assert_eq!(
+            current_save
+                .saved
+                .as_ref()
+                .unwrap()
+                .attachments
+                .entry("chunk_test", "value")
+                .unwrap()
+                .unwrap()
+                .read(&VALUE),
+            Ok(&9)
+        );
+    }
+
+    #[test]
+    fn untouched_empty_chunks_do_not_register_before_attachment_access() {
+        let index = Index::default();
+        let mut map = ChunkMap::default();
+        let calls = observe(&mut map, &index, DimensionKey::OVERWORLD);
+        map.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        let mut saved_empty = Chunk::empty(1, 0);
+        saved_empty.saved = Some(Arc::default());
+        map.insert((1, 0), Arc::new(saved_empty));
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        VALUE
+            .set(
+                map.attachments_mut(&(0, 0)).unwrap(),
+                Holder::Chunk([0, 0]),
+                5,
+            )
+            .unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let batch = index.lock().unwrap().snapshot(&key());
+        assert_eq!(batch[0].entry.read(&VALUE), Ok(&5));
+    }
+
+    #[test]
+    fn chunk_replacement_clear_and_map_drop_retire_only_resident_rows() {
+        let index = Index::default();
+        let mut map = ChunkMap::default();
+        observe(&mut map, &index, DimensionKey::OVERWORLD);
+        map.insert((3, 5), saved_chunk());
+        let retained = index.lock().unwrap().snapshot(&key());
+        let mut replacement = Chunk::empty(3, 5);
+        let mut extras = crate::chunk::ChunkExtras::default();
+        VALUE
+            .set(&mut extras.attachments, Holder::Chunk([3, 5]), 11)
+            .unwrap();
+        replacement.saved = Some(Arc::new(extras));
+        map.insert((3, 5), Arc::new(replacement));
+        let replaced = index.lock().unwrap().snapshot(&key());
+        assert_eq!(replaced[0].entry.read(&VALUE), Ok(&11));
+        map.insert((3, 5), Arc::new(Chunk::empty(3, 5)));
+        assert!(index.lock().unwrap().snapshot(&key()).is_empty());
+        map.insert((3, 5), saved_chunk());
+        map.clear();
+        assert!(index.lock().unwrap().snapshot(&key()).is_empty());
+        map.insert((3, 5), saved_chunk());
+        drop(map);
+        assert!(index.lock().unwrap().snapshot(&key()).is_empty());
+        assert_eq!(retained[0].entry.read(&VALUE), Ok(&7));
+    }
+
+    #[test]
+    fn chunk_removal_clear_and_drop_release_mod_payloads_unlocked() {
+        #[derive(Clone)]
+        struct Probe {
+            index: Weak<Mutex<AttachmentIndex<AttachmentHolder>>>,
+            drops: Arc<Mutex<Vec<bool>>>,
+        }
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                let unlocked = self.index.upgrade().unwrap().try_lock().is_ok();
+                self.drops.lock().unwrap().push(unlocked);
+            }
+        }
+        static PROBE: AttachmentType<Probe> = AttachmentType {
+            namespace: "chunk_test",
+            name: "value",
+            default: || unreachable!(),
+            codec: None,
+            copy_on_death: false,
+            sync: false,
+        };
+        let index = Index::default();
+        let drops = Arc::new(Mutex::new(Vec::new()));
+        let payload = || {
+            let mut chunk = Chunk::empty(3, 5);
+            let mut extras = crate::chunk::ChunkExtras::default();
+            PROBE
+                .set(
+                    &mut extras.attachments,
+                    Holder::Chunk([3, 5]),
+                    Probe {
+                        index: Arc::downgrade(&index),
+                        drops: drops.clone(),
+                    },
+                )
+                .unwrap();
+            chunk.saved = Some(Arc::new(extras));
+            Arc::new(chunk)
+        };
+        let mut map = ChunkMap::default();
+        observe(&mut map, &index, DimensionKey::OVERWORLD);
+        map.insert((3, 5), payload());
+        drop(map.remove(&(3, 5)));
+        map.insert((3, 5), payload());
+        map.clear();
+        map.insert((3, 5), payload());
+        drop(map);
+        assert_eq!(*drops.lock().unwrap(), [true; 3]);
+    }
+
     #[test]
     fn membership_tokens_track_keys_and_map_replacement_only() {
         let mut map = ChunkMap::default();

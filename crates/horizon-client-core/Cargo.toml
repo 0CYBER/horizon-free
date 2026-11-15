@@ -7,8 +7,14 @@ rust-version.workspace = true
 description = "The client's lowest layer: chat text and translations, SNBT and NBT paths, the scoreboard, boss bars, game rules and the registry and particle tables commands name"
 
 [dependencies]
+horizon-assets = { path = "../horizon-assets" }
+horizon-core = { path = "../horizon-core" }
 horizon-world = { path = "../horizon-world" }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
+
+[features]
+# Mutable thread-local language publication for resource-backed game fixtures only.
+test-language-publication = []
 
 [lints]
 workspace = true

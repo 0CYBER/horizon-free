@@ -273,18 +273,20 @@ impl Loader<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        DATA_VERSION,
-        nbt::Tag,
-        registry::BlockRegistry,
-        worldgen::{
-            anchor::WorldGenerationContext,
-            material_condition::{MaterialConditions, MaterialSurfaceQueries},
-        },
-    };
     use horizon_core::{
         position::BlockPos,
         random::{LegacyRandom, RandomSource},
+    };
+    use {
+        crate::{
+            DATA_VERSION,
+            registry::BlockRegistry,
+            worldgen::{
+                anchor::WorldGenerationContext,
+                material_condition::{MaterialConditions, MaterialSurfaceQueries},
+            },
+        },
+        horizon_core::nbt::Tag,
     };
     struct Surface;
     impl MaterialSurfaceQueries for Surface {

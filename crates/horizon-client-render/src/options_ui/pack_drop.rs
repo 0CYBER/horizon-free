@@ -42,8 +42,10 @@ mod tests {
 
     #[test]
     fn only_resource_packs_receive_drops_and_yes_emits_the_import_request() {
-        let atlas =
-            HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let atlas = HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap();
         let size = (480.0, 270.0);
         let mut ui = OptionsUi::default();
         let mut settings = Settings::default();

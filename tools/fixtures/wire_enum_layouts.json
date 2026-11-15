@@ -1,0 +1,906 @@
+{
+  "base": "5c6c41f19f64c26231e0e49be505c5e2b1439be9",
+  "configuration": "native default features, normal dev opt0, before fieldless const fold",
+  "enums": [
+    {
+      "name": "Activity",
+      "path": "crate::entity::behaviors::Activity",
+      "hash": "6e6c2b6006c771f9",
+      "canonical_path": "crate::entity::behaviors::Activity"
+    },
+    {
+      "name": "ArrowPickup",
+      "path": "crate::item::types::ArrowPickup",
+      "hash": "ff7e924dd8597b70",
+      "canonical_path": "crate::item::types::ArrowPickup"
+    },
+    {
+      "name": "AttributeOperation",
+      "path": "crate::entity::types::AttributeOperation",
+      "hash": "64a38c4e82d17c36",
+      "canonical_path": "crate::entity::types::AttributeOperation"
+    },
+    {
+      "name": "AttributeRegistrationError",
+      "path": "crate::entity::types::AttributeRegistrationError",
+      "hash": "66c4691575174d53",
+      "canonical_path": "crate::entity::types::AttributeRegistrationError"
+    },
+    {
+      "name": "Authority",
+      "path": "crate::command::types::Authority",
+      "hash": "479f1dfbbe325966",
+      "canonical_path": "crate::command::types::Authority"
+    },
+    {
+      "name": "Billboard",
+      "path": "crate::entity::types::Billboard",
+      "hash": "14d111af5924267a",
+      "canonical_path": "crate::entity::types::Billboard"
+    },
+    {
+      "name": "BiomeModifierError",
+      "path": "crate::world::biome_modifier::BiomeModifierError",
+      "hash": "0b6ef7ad92e44de8",
+      "canonical_path": "crate::world::biome_modifier::BiomeModifierError"
+    },
+    {
+      "name": "BiomeSourceKind",
+      "path": "crate::world::dimension::BiomeSourceKind",
+      "hash": "219247775ad8594c",
+      "canonical_path": "crate::world::dimension::BiomeSourceKind"
+    },
+    {
+      "name": "Blend",
+      "path": "crate::client::hud_layout::Blend",
+      "hash": "5027edf2d2f16269",
+      "canonical_path": "crate::client::hud_layout::Blend"
+    },
+    {
+      "name": "BlockEntityError",
+      "path": "crate::block::types::BlockEntityError",
+      "hash": "b775b139eb9c224e",
+      "canonical_path": "crate::block::types::BlockEntityError"
+    },
+    {
+      "name": "BlockFace",
+      "path": "crate::block::types::BlockFace",
+      "hash": "9c686673f8ebf8e5",
+      "canonical_path": "crate::block::types::BlockFace"
+    },
+    {
+      "name": "BlockInteraction",
+      "path": "crate::block::types::BlockInteraction",
+      "hash": "698c2d0d3cd276a7",
+      "canonical_path": "crate::block::types::BlockInteraction"
+    },
+    {
+      "name": "BlockScreenEffect",
+      "path": "crate::block::block_screen_effect::BlockScreenEffect",
+      "hash": "ffa79bd864214500",
+      "canonical_path": "crate::block::block_screen_effect::BlockScreenEffect"
+    },
+    {
+      "name": "BlockShapeKind",
+      "path": "crate::block::types::BlockShapeKind",
+      "hash": "14430ed2bc77c8d0",
+      "canonical_path": "crate::block::types::BlockShapeKind"
+    },
+    {
+      "name": "BonemealSource",
+      "path": "crate::block::types::BonemealSource",
+      "hash": "759fae7094dda123",
+      "canonical_path": "crate::block::types::BonemealSource"
+    },
+    {
+      "name": "BossBarColor",
+      "path": "crate::client::types::BossBarColor",
+      "hash": "87d756cc9820ca5a",
+      "canonical_path": "crate::client::types::BossBarColor"
+    },
+    {
+      "name": "BossBarOverlay",
+      "path": "crate::client::types::BossBarOverlay",
+      "hash": "25f38464d8a1dbc1",
+      "canonical_path": "crate::client::types::BossBarOverlay"
+    },
+    {
+      "name": "BrainMemory",
+      "path": "crate::entity::behaviors::BrainMemory",
+      "hash": "3cd4c774b5a20dcd",
+      "canonical_path": "crate::entity::behaviors::BrainMemory"
+    },
+    {
+      "name": "CameraType",
+      "path": "crate::client::camera::CameraType",
+      "hash": "78dd03e9a2090896",
+      "canonical_path": "crate::client::camera::CameraType"
+    },
+    {
+      "name": "CauldronFire",
+      "path": "crate::block::cauldron_interactions::CauldronFire",
+      "hash": "81acbbcd86849277",
+      "canonical_path": "crate::block::cauldron_interactions::CauldronFire"
+    },
+    {
+      "name": "ChatVisibility",
+      "path": "crate::entity::types::ChatVisibility",
+      "hash": "a41766187068e728",
+      "canonical_path": "crate::entity::types::ChatVisibility"
+    },
+    {
+      "name": "ChunkStatus",
+      "path": "crate::world::types::ChunkStatus",
+      "hash": "1f93f1988b2d0737",
+      "canonical_path": "crate::world::types::ChunkStatus"
+    },
+    {
+      "name": "ClipBlock",
+      "path": "crate::world::types::ClipBlock",
+      "hash": "7debbb35f44e1e9a",
+      "canonical_path": "crate::world::types::ClipBlock"
+    },
+    {
+      "name": "ClipFluid",
+      "path": "crate::world::types::ClipFluid",
+      "hash": "93b5dfaf810e335a",
+      "canonical_path": "crate::world::types::ClipFluid"
+    },
+    {
+      "name": "CommandArgumentKind",
+      "path": "crate::command::command_argument::CommandArgumentKind",
+      "hash": "a5907557541253ff",
+      "canonical_path": "crate::command::command_argument::CommandArgumentKind"
+    },
+    {
+      "name": "ConfigEntryKind",
+      "path": "crate::content::config_files::ConfigEntryKind",
+      "hash": "f41f6f46c3f24fc5",
+      "canonical_path": "crate::content::config_files::ConfigEntryKind"
+    },
+    {
+      "name": "ConfigKind",
+      "path": "crate::game::ConfigKind",
+      "hash": "b9dbdb5c73adc78d",
+      "canonical_path": "crate::game::ConfigKind"
+    },
+    {
+      "name": "Corner",
+      "path": "crate::client::extras::Corner",
+      "hash": "35279684102ee89d",
+      "canonical_path": "crate::client::extras::Corner"
+    },
+    {
+      "name": "CriterionTestError",
+      "path": "crate::world::criteria::CriterionTestError",
+      "hash": "48447796fabf2ddf",
+      "canonical_path": "crate::world::criteria::CriterionTestError"
+    },
+    {
+      "name": "DataLoadOrigin",
+      "path": "crate::world::phase::DataLoadOrigin",
+      "hash": "62bed09fc036dc1a",
+      "canonical_path": "crate::world::phase::DataLoadOrigin"
+    },
+    {
+      "name": "DataMapError",
+      "path": "crate::world::data_maps::DataMapError",
+      "hash": "3c338ccd2a00316e",
+      "contract_change": "arismoko/horizon#4199 appends DataMapError::InvalidKey; ordinals 0, 1, 2 remain unchanged; the frozen hash was 38e6144ff0918aa9",
+      "canonical_path": "crate::world::data_maps::DataMapError"
+    },
+    {
+      "name": "DataMapsUpdateCause",
+      "path": "crate::world::types::DataMapsUpdateCause",
+      "hash": "ef360101a73cd4de",
+      "canonical_path": "crate::world::types::DataMapsUpdateCause"
+    },
+    {
+      "name": "DatapackReadError",
+      "path": "crate::world::datapack_registry_set::DatapackReadError",
+      "hash": "ef5b6c72049e3afc",
+      "canonical_path": "crate::world::datapack_registry_set::DatapackReadError"
+    },
+    {
+      "name": "DatapackRegistrationError",
+      "path": "crate::world::datapack_registry::DatapackRegistrationError",
+      "hash": "26fadc3a9d5df7ae",
+      "canonical_path": "crate::world::datapack_registry::DatapackRegistrationError"
+    },
+    {
+      "name": "DatapackRegistrySync",
+      "path": "crate::world::datapack_registry::DatapackRegistrySync",
+      "hash": "1829cac07b743f68",
+      "canonical_path": "crate::world::datapack_registry::DatapackRegistrySync"
+    },
+    {
+      "name": "DebugGroup",
+      "path": "crate::client::debug_entries::DebugGroup",
+      "hash": "0ed40ec8fd186007",
+      "canonical_path": "crate::client::debug_entries::DebugGroup"
+    },
+    {
+      "name": "Deflection",
+      "path": "crate::entity::types::Deflection",
+      "hash": "16576b3b95bea8d0",
+      "canonical_path": "crate::entity::types::Deflection"
+    },
+    {
+      "name": "Despawn",
+      "path": "crate::world::types::Despawn",
+      "hash": "c9ef660b0bf35fd9",
+      "canonical_path": "crate::world::types::Despawn"
+    },
+    {
+      "name": "DimensionTransitionReason",
+      "path": "crate::world::dimension_transition::DimensionTransitionReason",
+      "hash": "0be038ade14f0468",
+      "canonical_path": "crate::world::dimension_transition::DimensionTransitionReason"
+    },
+    {
+      "name": "DisplayKind",
+      "path": "crate::entity::types::DisplayKind",
+      "hash": "4fe202238c1b186f",
+      "canonical_path": "crate::entity::types::DisplayKind"
+    },
+    {
+      "name": "DragKind",
+      "path": "crate::item::menu::DragKind",
+      "hash": "9a49d47f5d00d805",
+      "canonical_path": "crate::item::menu::DragKind"
+    },
+    {
+      "name": "DragonPhase",
+      "path": "crate::entity::types::DragonPhase",
+      "hash": "0f943821abc06161",
+      "canonical_path": "crate::entity::types::DragonPhase"
+    },
+    {
+      "name": "DrawError",
+      "path": "crate::client::world_draw::DrawError",
+      "hash": "6738751c2f3fac7a",
+      "canonical_path": "crate::client::world_draw::DrawError"
+    },
+    {
+      "name": "EditKey",
+      "path": "crate::client::widgets::EditKey",
+      "hash": "6c13deff5b2c9a7f",
+      "canonical_path": "crate::client::widgets::text_edit::EditKey",
+      "alias_provenance": "rustc E0603 public re-export suggestion from generated direct-type test compilation"
+    },
+    {
+      "name": "EffectApplicable",
+      "path": "crate::entity::types::EffectApplicable",
+      "hash": "f9e6f35173bb69ec",
+      "canonical_path": "crate::entity::types::EffectApplicable"
+    },
+    {
+      "name": "EffectCategory",
+      "path": "crate::entity::effect_category::EffectCategory",
+      "hash": "bcd397bcfb51d77f",
+      "canonical_path": "crate::entity::effect_category::EffectCategory"
+    },
+    {
+      "name": "EntityAttributeError",
+      "path": "crate::entity::types::EntityAttributeError",
+      "hash": "10b52f7e24ceb2a7",
+      "canonical_path": "crate::entity::types::EntityAttributeError"
+    },
+    {
+      "name": "EquipmentSlotGroup",
+      "path": "crate::item::types::EquipmentSlotGroup",
+      "hash": "f569798425580790",
+      "canonical_path": "crate::item::types::EquipmentSlotGroup"
+    },
+    {
+      "name": "ExplosionInteraction",
+      "path": "crate::world::types::ExplosionInteraction",
+      "hash": "1ede2797636bb977",
+      "canonical_path": "crate::world::types::ExplosionInteraction",
+      "baseline_hash": "649673fec35bab1f",
+      "contract_change": "#3929 takes vanilla's five ExplosionInteraction values in vanilla's order: None 0, Block 1, Mob 2, Tnt 3 (was 2), Trigger 4. Hash independently mixed from the five literal variant names using the original FNV layout algorithm."
+    },
+    {
+      "name": "FakeEffect",
+      "path": "crate::block::types::FakeEffect",
+      "hash": "917c126499c5dc24",
+      "canonical_path": "crate::block::types::FakeEffect"
+    },
+    {
+      "name": "FileToIdConverterError",
+      "path": "crate::content::file_to_id_converter::FileToIdConverterError",
+      "hash": "1264ee92f3e87063",
+      "canonical_path": "crate::content::file_to_id_converter::FileToIdConverterError"
+    },
+    {
+      "name": "FireworkShape",
+      "path": "crate::item::recipe_rule::FireworkShape",
+      "hash": "f30055197dbdfd54",
+      "canonical_path": "crate::item::recipe_rule::FireworkShape"
+    },
+    {
+      "name": "Flow",
+      "path": "crate::runtime::Flow",
+      "hash": "95a92f30ef3b92f0",
+      "canonical_path": "crate::runtime::Flow"
+    },
+    {
+      "name": "FluidBoxError",
+      "path": "crate::client::fluid_draw::FluidBoxError",
+      "hash": "d9936318eaa8eaba",
+      "canonical_path": "crate::client::fluid_draw::FluidBoxError"
+    },
+    {
+      "name": "FogType",
+      "path": "crate::client::fog::FogType",
+      "hash": "031dbdacfa581d56",
+      "canonical_path": "crate::client::fog::FogType"
+    },
+    {
+      "name": "GameRuleError",
+      "path": "crate::world::types::GameRuleError",
+      "hash": "b0678faa207c25fa",
+      "canonical_path": "crate::world::types::GameRuleError",
+      "contract_change": "arismoko/horizon#3316 appends GameRuleError::InvalidRange; ordinals 0, 1, 2 remain unchanged; the frozen hash was e76f57d2c9f945cb"
+    },
+    {
+      "name": "Hand",
+      "path": "crate::client::first_person::Hand",
+      "hash": "c758be84f672b97c",
+      "canonical_path": "crate::client::first_person::Hand"
+    },
+    {
+      "name": "HeartKind",
+      "path": "crate::client::hud_layout::HeartKind",
+      "hash": "599ed77c5e7be38c",
+      "canonical_path": "crate::client::hud_layout::HeartKind"
+    },
+    {
+      "name": "Heightmap",
+      "path": "crate::game::Heightmap",
+      "hash": "0d0ca71dff1cbad6",
+      "canonical_path": "crate::game::Heightmap"
+    },
+    {
+      "name": "HeightmapType",
+      "path": "crate::world::structure_type::HeightmapType",
+      "hash": "10750de8f68d44f2",
+      "canonical_path": "crate::world::structure_type::HeightmapType"
+    },
+    {
+      "name": "HookId",
+      "path": "crate::generated::HookId",
+      "canonical_path": "crate::generated::HookId",
+      "baseline_hash": "3a84501fc3f231ba",
+      "comparison": "same_source_generated_variants"
+    },
+    {
+      "name": "HudMode",
+      "path": "crate::client::hud_mode::HudMode",
+      "hash": "ad8b90be10cb9f30",
+      "canonical_path": "crate::client::hud_mode::HudMode"
+    },
+    {
+      "name": "HumanoidPart",
+      "path": "crate::client::posed_parts::HumanoidPart",
+      "hash": "e132abe5802f54d7",
+      "canonical_path": "crate::client::posed_parts::HumanoidPart"
+    },
+    {
+      "name": "IngredientKeysError",
+      "path": "crate::item::crafting::IngredientKeysError",
+      "hash": "eb04a828ac673339",
+      "canonical_path": "crate::item::crafting::IngredientKeysError"
+    },
+    {
+      "name": "InteractionAttempt",
+      "path": "crate::item::types::InteractionAttempt",
+      "hash": "3b478381cc789c53",
+      "canonical_path": "crate::item::types::InteractionAttempt"
+    },
+    {
+      "name": "InteractionKey",
+      "path": "crate::item::types::InteractionKey",
+      "hash": "3ccdf455180ec8c3",
+      "canonical_path": "crate::item::types::InteractionKey"
+    },
+    {
+      "name": "InteractionResult",
+      "path": "crate::item::types::InteractionResult",
+      "hash": "c150152863b150a0",
+      "canonical_path": "crate::item::types::InteractionResult"
+    },
+    {
+      "name": "ItemDisplayContext",
+      "path": "crate::item::types::ItemDisplayContext",
+      "hash": "d37a50595fa2df53",
+      "canonical_path": "crate::item::types::ItemDisplayContext"
+    },
+    {
+      "name": "ItemRarity",
+      "path": "crate::content::resource::ItemRarity",
+      "hash": "a768aee7f6e77966",
+      "canonical_path": "crate::content::resource::ItemRarity"
+    },
+    {
+      "name": "KeyAction",
+      "path": "crate::client::types::KeyAction",
+      "hash": "ffd5c41f3e2a69a5",
+      "canonical_path": "crate::client::types::KeyAction"
+    },
+    {
+      "name": "KeyConflictContext",
+      "path": "crate::client::key_mapping::KeyConflictContext",
+      "hash": "de6d97ae07856faa",
+      "canonical_path": "crate::client::key_mapping::KeyConflictContext"
+    },
+    {
+      "name": "LevelReadError",
+      "path": "crate::world::read_error::LevelReadError",
+      "hash": "ccc8809835020b5e",
+      "canonical_path": "crate::world::read_error::LevelReadError"
+    },
+    {
+      "name": "LightLayer",
+      "path": "crate::world::types::LightLayer",
+      "hash": "8dfa62baa6374475",
+      "canonical_path": "crate::world::types::LightLayer"
+    },
+    {
+      "name": "LoadAccess",
+      "path": "crate::world::phase::LoadAccess",
+      "hash": "37e043538dddbbc7",
+      "canonical_path": "crate::world::phase::LoadAccess"
+    },
+    {
+      "name": "LogicalSide",
+      "path": "crate::item::menu::LogicalSide",
+      "hash": "159ff71dd6275675",
+      "canonical_path": "crate::item::menu::LogicalSide"
+    },
+    {
+      "name": "LoopSide",
+      "path": "crate::world::phase::LoopSide",
+      "hash": "803b4f3ff2293bb8",
+      "canonical_path": "crate::world::phase::LoopSide"
+    },
+    {
+      "name": "MainHand",
+      "path": "crate::entity::types::MainHand",
+      "hash": "d1fa7faf376f15d5",
+      "canonical_path": "crate::entity::types::MainHand"
+    },
+    {
+      "name": "MemoryStatus",
+      "path": "crate::entity::behaviors::MemoryStatus",
+      "hash": "92281af734886b74",
+      "canonical_path": "crate::entity::behaviors::MemoryStatus"
+    },
+    {
+      "name": "MinecartKind",
+      "path": "crate::entity::types::MinecartKind",
+      "hash": "3ee6a888c41a4aa0",
+      "canonical_path": "crate::entity::types::MinecartKind"
+    },
+    {
+      "name": "MoveCause",
+      "path": "crate::entity::types::MoveCause",
+      "hash": "00bec45d5d6aef41",
+      "canonical_path": "crate::entity::types::MoveCause"
+    },
+    {
+      "name": "MobCategory",
+      "path": "crate::world::types::MobCategory",
+      "hash": "663292b422d610b3",
+      "canonical_path": "crate::world::types::MobCategory"
+    },
+    {
+      "name": "ModPhase",
+      "path": "crate::world::phase::ModPhase",
+      "hash": "21ca5a351846af43",
+      "canonical_path": "crate::world::phase::ModPhase"
+    },
+    {
+      "name": "ModelError",
+      "path": "crate::item::types::ModelError",
+      "hash": "115a9626c7ea8f1e",
+      "canonical_path": "crate::item::types::ModelError"
+    },
+    {
+      "name": "ModifierLifetime",
+      "path": "crate::entity::types::ModifierLifetime",
+      "hash": "8fa78975f9aba32a",
+      "canonical_path": "crate::entity::types::ModifierLifetime"
+    },
+    {
+      "name": "MouseButton",
+      "path": "crate::item::menu::MouseButton",
+      "hash": "e66b2cfc8d150d1d",
+      "canonical_path": "crate::item::menu::MouseButton"
+    },
+    {
+      "name": "NoiseBlock",
+      "path": "crate::world::structure_type::NoiseBlock",
+      "hash": "215db540bf767b37",
+      "canonical_path": "crate::world::structure_type::NoiseBlock"
+    },
+    {
+      "name": "NoteInstrument",
+      "path": "crate::client::types::NoteInstrument",
+      "hash": "dd0ed9e1e7b15145",
+      "canonical_path": "crate::client::types::NoteInstrument"
+    },
+    {
+      "name": "PackPosition",
+      "path": "crate::client::pack_finders::PackPosition",
+      "hash": "72fb268b04ced783",
+      "canonical_path": "crate::client::pack_finders::PackPosition"
+    },
+    {
+      "name": "PackSource",
+      "path": "crate::client::pack_finders::PackSource",
+      "hash": "591162fd5bc9ac9c",
+      "canonical_path": "crate::client::pack_finders::PackSource"
+    },
+    {
+      "name": "PackType",
+      "path": "crate::client::pack_finders::PackType",
+      "hash": "bd912057dc38cc2a",
+      "canonical_path": "crate::client::pack_finders::PackType"
+    },
+    {
+      "name": "PackageKind",
+      "path": "crate::world::phase::PackageKind",
+      "hash": "b7d360283d1348c5",
+      "canonical_path": "crate::world::phase::PackageKind"
+    },
+    {
+      "name": "ParticleBlend",
+      "path": "crate::particle_groups::ParticleBlend",
+      "hash": "47bb6488ff677f03",
+      "canonical_path": "crate::particle_groups::ParticleBlend"
+    },
+    {
+      "name": "ParticleStatus",
+      "path": "crate::client::types::ParticleStatus",
+      "hash": "c9c3573440eb9e54",
+      "canonical_path": "crate::client::types::ParticleStatus"
+    },
+    {
+      "name": "PathComputationType",
+      "path": "crate::entity::mobs::PathComputationType",
+      "hash": "08c8a16737797f04",
+      "canonical_path": "crate::entity::mobs::PathComputationType"
+    },
+    {
+      "name": "PathType",
+      "path": "crate::entity::mobs::PathType",
+      "hash": "cd67820cf3224225",
+      "canonical_path": "crate::entity::mobs::PathType"
+    },
+    {
+      "name": "PermissionLevel",
+      "path": "crate::command::types::PermissionLevel",
+      "hash": "8cf4faa1014b6781",
+      "canonical_path": "crate::command::types::PermissionLevel"
+    },
+    {
+      "name": "PhantomSpawnResult",
+      "path": "crate::game::PhantomSpawnResult",
+      "hash": "0a62ed2c2a43904d",
+      "canonical_path": "crate::game::PhantomSpawnResult"
+    },
+    {
+      "name": "PierceLevelError",
+      "path": "crate::entity::types::PierceLevelError",
+      "hash": "5a7efe7e00a2b759",
+      "canonical_path": "crate::entity::types::PierceLevelError"
+    },
+    {
+      "name": "PipelineBlend",
+      "path": "crate::client::render_pipeline::PipelineBlend",
+      "hash": "fba73f96b5a3ba42",
+      "canonical_path": "crate::client::render_pipeline::PipelineBlend"
+    },
+    {
+      "name": "PipelineVertexFormat",
+      "path": "crate::client::render_pipeline::PipelineVertexFormat",
+      "hash": "9fd68d6fbfedbcfb",
+      "canonical_path": "crate::client::render_pipeline::PipelineVertexFormat"
+    },
+    {
+      "name": "Pose",
+      "path": "crate::entity::mobs::Pose",
+      "hash": "a59146be4f337358",
+      "canonical_path": "crate::entity::mobs::Pose"
+    },
+    {
+      "name": "ProgressType",
+      "path": "crate::world::types::ProgressType",
+      "hash": "d15b2cd0e66791ed",
+      "canonical_path": "crate::world::types::ProgressType"
+    },
+    {
+      "name": "ProvidedBy",
+      "path": "crate::ProvidedBy",
+      "hash": "fe10e188155f9b86",
+      "contract_change": "arismoko/horizon#3519 appends ProvidedBy::Block; the frozen hash was 5d265204eef1d102",
+      "canonical_path": "crate::parts::shared::ProvidedBy",
+      "alias_provenance": "rustc E0603 public re-export suggestion from generated direct-type test compilation"
+    },
+    {
+      "name": "PushReaction",
+      "path": "crate::content::content_declarations::PushReaction",
+      "hash": "ca956b109ca86e24",
+      "canonical_path": "crate::content::content_declarations::PushReaction"
+    },
+    {
+      "name": "RaidStatus",
+      "path": "crate::world::types::RaidStatus",
+      "hash": "1b3564307af64391",
+      "canonical_path": "crate::world::types::RaidStatus"
+    },
+    {
+      "name": "RailShape",
+      "path": "crate::block::rail_shape::RailShape",
+      "hash": "d5b1c18674ac3799",
+      "canonical_path": "crate::block::rail_shape::RailShape"
+    },
+    {
+      "name": "Rarity",
+      "path": "crate::content::content_declarations::Rarity",
+      "hash": "52de7b6c1b10c3e0",
+      "canonical_path": "crate::content::content_declarations::Rarity"
+    },
+    {
+      "name": "RecipeLookupError",
+      "path": "crate::item::crafting::RecipeLookupError",
+      "hash": "08831247e6ad0055",
+      "canonical_path": "crate::item::crafting::RecipeLookupError"
+    },
+    {
+      "name": "RecipeTransferResult",
+      "path": "crate::item::recipe_book::RecipeTransferResult",
+      "hash": "197c347f968cca75",
+      "canonical_path": "crate::item::recipe_book::RecipeTransferResult"
+    },
+    {
+      "name": "RemovalReason",
+      "path": "crate::entity::types::RemovalReason",
+      "hash": "57b78b9bade8dd8c",
+      "canonical_path": "crate::entity::types::RemovalReason"
+    },
+    {
+      "name": "RenderLevelStage",
+      "path": "crate::client::world_draw::RenderLevelStage",
+      "hash": "dc0352afd661a02c",
+      "canonical_path": "crate::client::world_draw::RenderLevelStage"
+    },
+    {
+      "name": "RenderPipelineError",
+      "path": "crate::client::render_pipeline::RenderPipelineError",
+      "hash": "4239660a490c9e70",
+      "canonical_path": "crate::client::render_pipeline::RenderPipelineError"
+    },
+    {
+      "name": "RenderShape",
+      "path": "crate::content::content_declarations::RenderShape",
+      "hash": "d3ccfc9ddcb10380",
+      "canonical_path": "crate::content::content_declarations::RenderShape"
+    },
+    {
+      "name": "ScheduleError",
+      "path": "crate::world::scheduler::ScheduleError",
+      "hash": "bd7d79b5cdfd02ab",
+      "canonical_path": "crate::world::scheduler::ScheduleError"
+    },
+    {
+      "name": "ScreenOpening",
+      "path": "crate::client::types::ScreenOpening",
+      "hash": "9ed3c4e52a797d6c",
+      "canonical_path": "crate::client::types::ScreenOpening"
+    },
+    {
+      "name": "Sentiment",
+      "path": "crate::entity::types::Sentiment",
+      "hash": "464ef8a760edfcb8",
+      "canonical_path": "crate::entity::types::Sentiment"
+    },
+    {
+      "name": "Shape",
+      "path": "crate::item::crafting::Shape",
+      "hash": "004a43af941b0c62",
+      "canonical_path": "crate::item::crafting::Shape",
+      "baseline_hash": "a157d010a4183033",
+      "contract_change": "#3737 adds CustomDisplay at ordinal 3; ordinals 0, 1, 2 remain unchanged. Hash independently mixed from the four literal variant names using the original FNV layout algorithm."
+    },
+    {
+      "name": "ShapeEntityKind",
+      "path": "crate::content::content_declarations::ShapeEntityKind",
+      "hash": "931bb4d960537dfe",
+      "canonical_path": "crate::content::content_declarations::ShapeEntityKind"
+    },
+    {
+      "name": "Side",
+      "path": "crate::content::package_side::Side",
+      "hash": "a58ce85f7e9e9c30",
+      "canonical_path": "crate::content::package_side::Side"
+    },
+    {
+      "name": "SleepProblem",
+      "path": "crate::game::SleepProblem",
+      "hash": "e0dbdb9b2c6e63fc",
+      "canonical_path": "crate::game::SleepProblem"
+    },
+    {
+      "name": "SoundAttenuation",
+      "path": "crate::client::types::SoundAttenuation",
+      "hash": "5385e3410288f6a5",
+      "canonical_path": "crate::client::types::SoundAttenuation"
+    },
+    {
+      "name": "SoundSource",
+      "path": "crate::client::types::SoundSource",
+      "hash": "5526d95d7ebf9535",
+      "canonical_path": "crate::client::types::SoundSource"
+    },
+    {
+      "name": "SoundState",
+      "path": "crate::client::types::SoundState",
+      "hash": "9704673967515281",
+      "canonical_path": "crate::client::types::SoundState"
+    },
+    {
+      "name": "SpawnCheck",
+      "path": "crate::world::types::SpawnCheck",
+      "hash": "ae12b2dd0ea7aaec",
+      "canonical_path": "crate::world::types::SpawnCheck"
+    },
+    {
+      "name": "SpawnLight",
+      "path": "crate::world::types::SpawnLight",
+      "hash": "52308115c1bf6d98",
+      "canonical_path": "crate::world::types::SpawnLight"
+    },
+    {
+      "name": "SpawnPlacementError",
+      "path": "crate::world::types::SpawnPlacementError",
+      "hash": "51c72252d1d5d3f7",
+      "canonical_path": "crate::world::types::SpawnPlacementError"
+    },
+    {
+      "name": "SpawnPlacementType",
+      "path": "crate::world::types::SpawnPlacementType",
+      "hash": "8ba0ef8dc68e1bbb",
+      "canonical_path": "crate::world::types::SpawnPlacementType"
+    },
+    {
+      "name": "SpawnReason",
+      "path": "crate::world::types::SpawnReason",
+      "hash": "f2e8034ff82f1b76",
+      "canonical_path": "crate::world::types::SpawnReason"
+    },
+    {
+      "name": "SpawnerKind",
+      "path": "crate::world::custom_spawners::SpawnerKind",
+      "hash": "d2ddf2a44e7883db",
+      "canonical_path": "crate::world::custom_spawners::SpawnerKind"
+    },
+    {
+      "name": "StackError",
+      "path": "crate::item::item_stack::StackError",
+      "hash": "e7f3dc8561be3e31",
+      "canonical_path": "crate::item::item_stack::StackError"
+    },
+    {
+      "name": "StatType",
+      "path": "crate::item::types::StatType",
+      "hash": "24743f4b7e1c51fd",
+      "canonical_path": "crate::item::types::StatType"
+    },
+    {
+      "name": "StructureMirror",
+      "path": "crate::world::structure_template::StructureMirror",
+      "hash": "68f4b52cf288f5d3",
+      "canonical_path": "crate::world::structure_template::StructureMirror"
+    },
+    {
+      "name": "StructureRotation",
+      "path": "crate::world::structure_template::StructureRotation",
+      "hash": "ab5a5b19a338e7c2",
+      "canonical_path": "crate::world::structure_template::StructureRotation"
+    },
+    {
+      "name": "SupportType",
+      "path": "crate::block::types::SupportType",
+      "hash": "4fa1684b5a8bdbbf",
+      "canonical_path": "crate::block::types::SupportType"
+    },
+    {
+      "name": "TerrainMaterial",
+      "path": "crate::client::terrain_draw::TerrainMaterial",
+      "hash": "18126913353c9cd3",
+      "canonical_path": "crate::client::terrain_draw::TerrainMaterial"
+    },
+    {
+      "name": "TerrainShade",
+      "path": "crate::client::terrain_draw::TerrainShade",
+      "hash": "c0b706b669166452",
+      "canonical_path": "crate::client::terrain_draw::TerrainShade"
+    },
+    {
+      "name": "TextAlignment",
+      "path": "crate::entity::types::TextAlignment",
+      "hash": "ec307bca352fee13",
+      "canonical_path": "crate::entity::types::TextAlignment"
+    },
+    {
+      "name": "TextFormError",
+      "path": "crate::text::TextFormError",
+      "hash": "51133c55f6538dd6",
+      "canonical_path": "crate::text::TextFormError"
+    },
+    {
+      "name": "TextRelation",
+      "path": "crate::text::TextRelation",
+      "hash": "66cce943327f8045",
+      "canonical_path": "crate::text::TextRelation"
+    },
+    {
+      "name": "TextureAtlas",
+      "path": "crate::block::block_sprites::TextureAtlas",
+      "hash": "3ced4664bee233c9",
+      "canonical_path": "crate::block::block_sprites::TextureAtlas"
+    },
+    {
+      "name": "ToastKind",
+      "path": "crate::client::types::ToastKind",
+      "hash": "b2ef0bed43ad3826",
+      "canonical_path": "crate::client::types::ToastKind"
+    },
+    {
+      "name": "ToolAbility",
+      "path": "crate::item::types::ToolAbility",
+      "hash": "827369a6d277c284",
+      "canonical_path": "crate::item::types::ToolAbility"
+    },
+    {
+      "name": "TriState",
+      "path": "crate::world::types::TriState",
+      "hash": "25afa4adbad61ffe",
+      "canonical_path": "crate::world::types::TriState"
+    },
+    {
+      "name": "UseItem",
+      "path": "crate::client::camera::UseItem",
+      "hash": "d92fe7e49deeef7f",
+      "canonical_path": "crate::client::camera::UseItem"
+    },
+    {
+      "name": "UsePhase",
+      "path": "crate::item::types::UsePhase",
+      "hash": "1584468fe19180de",
+      "canonical_path": "crate::item::types::UsePhase"
+    },
+    {
+      "name": "WorldDepth",
+      "path": "crate::client::world_draw::WorldDepth",
+      "hash": "4409bd351ad1b1df",
+      "canonical_path": "crate::client::world_draw::WorldDepth"
+    },
+    {
+      "name": "WorldPhase",
+      "path": "crate::world::types::WorldPhase",
+      "hash": "1322c39e2b688618",
+      "canonical_path": "crate::world::types::WorldPhase"
+    }
+  ],
+  "retired_identities": [
+    "crate::client::keyframe_animation::AnimationTarget",
+    "crate::client::keyframe_animation::Interpolation",
+    "crate::content::payloads::ConnectionPhase",
+    "crate::content::payloads::PayloadDirection",
+    "crate::content::payloads::PayloadPhase",
+    "crate::content::payloads::PeerPolicy"
+  ]
+}

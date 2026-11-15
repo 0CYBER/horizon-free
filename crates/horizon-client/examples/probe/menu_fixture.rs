@@ -23,13 +23,22 @@ use std::{
 };
 
 /// The case's maps: (locked, scale) by id, and the next free id.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct CaseMaps {
     maps: RefCell<HashMap<i32, (bool, u8)>>,
     next: Cell<i32>,
 }
 
 impl horizon_client::menu::Maps for CaseMaps {
+    fn with_staged(&self, edit: &mut dyn FnMut(&dyn horizon_client::menu::Maps) -> bool) -> bool {
+        let staged = self.clone();
+        if !edit(&staged) {
+            return false;
+        }
+        self.maps.replace(staged.maps.into_inner());
+        self.next.set(staged.next.get());
+        true
+    }
     fn state(&self, id: i32) -> Option<(bool, u8)> {
         self.maps.borrow().get(&id).copied()
     }
@@ -84,16 +93,34 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: menu_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
-    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
+    let recipes = Recipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items, &PackOverlay::NONE);
-    let banners = horizon_client::banner::Banners::load(root);
-    let station_recipes =
-        horizon_client::stations::StationRecipes::load(root, &items, &PackOverlay::NONE);
-    let enchantments = horizon_client::enchant::Enchantments::load(root);
-    let names = horizon_client::creative::Names::load(root);
+    let banners = horizon_client::banner::Banners::load(root, &defaults);
+    let station_recipes = horizon_client::stations::StationRecipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    );
+    let enchantments = horizon_client::enchant::Enchantments::load(root, &defaults)?;
+    let names = horizon_client::creative::Names::load(
+        &horizon_assets::resource_source::ResourceSource::directory(root.to_path_buf()),
+    );
     let case_maps = CaseMaps::default();
     let env = Env {
+        crafting_remainder: None,
+        player: None,
+        player_entity_id: None,
+        loop_context: &crate::test_resources::loop_context(
+            horizon_world::native_load_context::LoopSide::Server,
+        ),
         items: &items,
         recipes: &recipes,
         brewing: &brewing,
@@ -104,7 +131,9 @@ pub fn main() -> horizon_client::Result<()> {
         trade: None,
         maps: Some(&case_maps),
         limited_crafting: false,
+        can_equip: None,
         known_recipes: None,
+        slot_rules: None,
     };
     // The mob effects' network ids (BeaconMenu.encodeEffect).
     let builtin = horizon_protocol::registry::Builtin::find(root)
@@ -234,7 +263,11 @@ pub fn main() -> horizon_client::Result<()> {
             if let Some(f) = furnace.as_mut() {
                 let before = f.items[0].clone();
                 f.items = [0, 1, 2].map(|i| menu.slot(i).cloned());
-                f.input_clicked(&recipes, before);
+                f.input_clicked(
+                    crate::test_resources::server_loop_context(),
+                    &recipes,
+                    before,
+                );
                 menu.data[2] = f.cooking_timer;
                 menu.data[3] = f.cooking_total;
             }

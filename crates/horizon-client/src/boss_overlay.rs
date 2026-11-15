@@ -50,6 +50,18 @@ impl Event {
     }
 }
 
+/// Snapshot of a displayed bar before conversion to the mod API.
+pub struct ModBar {
+    pub uuid: u128,
+    pub name: Text,
+    pub progress: f32,
+    pub color: mod_api::BossBarColor,
+    pub overlay: mod_api::BossBarOverlay,
+    pub darken_screen: bool,
+    pub play_boss_music: bool,
+    pub create_world_fog: bool,
+}
+
 /// `BossHealthOverlay`: the events, plus `GameRenderer`'s world darkening.
 #[derive(Clone, Debug, Default)]
 pub struct BossOverlay {
@@ -158,12 +170,27 @@ impl BossOverlay {
             })
             .collect()
     }
+    /// The bar at `index` of `bars(now)` as `customize_boss_event_progress`
+    /// hands it to mods.
+    pub fn mod_bar(&self, index: usize, now: u128) -> Option<ModBar> {
+        let e = self.events.get(index)?;
+        Some(ModBar {
+            uuid: e.id,
+            name: e.name.clone(),
+            progress: e.displayed(now),
+            color: mod_api::BossBarColor::ALL[e.color as usize],
+            overlay: mod_api::BossBarOverlay::ALL[e.overlay as usize],
+            darken_screen: e.darken,
+            play_boss_music: e.music,
+            create_world_fog: e.fog,
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
     fn add(id: u128, name: &str, progress: f32, darken: bool, fog: bool) -> BossEvent {
         BossEvent {

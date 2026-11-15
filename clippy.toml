@@ -1,5 +1,19 @@
 # `keys.contains(&KeyCode::ShiftLeft)` reads a mapping by its default key: ask by `Action`, so the
 # mapping is named and every device that can hold it counts.
+#
+# The collide entries are the move gate's (arismoko/horizon#2414): a family that resolves an
+# entity's movement goes through `horizon_client::move_gate` (which arms the
+# move and, from PR 1b on, fires `entity_move` there), so an inline collide
+# cannot compile around the hook. The two convenience wrappers
+# (`SceneCollisions::resolve`, `resolve_in_border`) are listed too: they only
+# delegate to the banned entries, and leaving them free would reopen the door
+# they close.
 disallowed-methods = [
     { path = "horizon_client_input::held::HeldKeys::contains", reason = "use `held(Action::..)`, or `raw` for a key that is no mapping's default", allow-invalid = true },
+    { path = "horizon_client_render::collisions::SceneCollisions::resolve", reason = "go through `horizon_client::move_gate` (arismoko/horizon#2414): arm the move, then resolve through the gate", allow-invalid = true },
+    { path = "horizon_client_render::collisions::SceneCollisions::resolve_in_border", reason = "go through `horizon_client::move_gate` (arismoko/horizon#2414): arm the move, then resolve through the gate", allow-invalid = true },
+    { path = "horizon_client_render::collisions::SceneCollisions::resolve_in_border_with", reason = "go through `horizon_client::move_gate` (arismoko/horizon#2414): arm the move, then resolve through the gate", allow-invalid = true },
+    { path = "horizon_client_render::collisions::SceneCollisions::resolve_with_context", reason = "go through `horizon_client::move_gate` (arismoko/horizon#2414): arm the move, then resolve through the gate", allow-invalid = true },
+    { path = "horizon_client_render::collisions::EntityCollisions::resolve", reason = "go through `horizon_client::move_gate` (arismoko/horizon#2414): arm the move, then resolve through the gate", allow-invalid = true },
+    { path = "horizon_client_render::collisions::EntityCollisions::resolve_with_context", reason = "go through `horizon_client::move_gate` (arismoko/horizon#2414): arm the move, then resolve through the gate", allow-invalid = true },
 ]

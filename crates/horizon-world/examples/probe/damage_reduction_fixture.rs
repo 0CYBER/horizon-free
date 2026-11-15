@@ -131,7 +131,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             let r = if mode == "armor" {
                 damage_reduction::after_armor(&mut w, d)
             } else {
-                damage_reduction::after_magic(&mut w, d)
+                damage_reduction::after_magic(&mut w, d).map(|m| m.damage)
             };
             r.and_then(|v| writeln!(w.out, "float {:08x}", f32_bits(v)))
         };

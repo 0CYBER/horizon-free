@@ -78,8 +78,14 @@ pub fn main() -> horizon_client::Result<()> {
             .ok_or("usage: cauldron_fixture RESOURCES INPUT OUTPUT")?,
     );
     let input = fs::read_to_string(args.get(2).ok_or("missing INPUT")?)?;
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
-    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
+    let recipes = Recipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items, &PackOverlay::NONE);
     // The inventory menu never reads banner patterns.
     let banners = horizon_client::banner::Banners::default();
@@ -87,6 +93,12 @@ pub fn main() -> horizon_client::Result<()> {
     let enchantments = horizon_client::enchant::Enchantments::default();
     let names = horizon_client::creative::Names::default();
     let env = Env {
+        crafting_remainder: None,
+        player: None,
+        player_entity_id: None,
+        loop_context: &crate::test_resources::loop_context(
+            horizon_world::native_load_context::LoopSide::Server,
+        ),
         items: &items,
         recipes: &recipes,
         brewing: &brewing,
@@ -97,7 +109,9 @@ pub fn main() -> horizon_client::Result<()> {
         trade: None,
         maps: None,
         limited_crafting: false,
+        can_equip: None,
         known_recipes: None,
+        slot_rules: None,
     };
     let mut out = String::new();
     for line in input.lines() {

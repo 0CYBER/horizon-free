@@ -27,7 +27,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("usage: subtitle_fixture RESOURCES INPUTS OUTPUT".into());
     };
     lang::set(lang::Language::load(&[root], lang::DEFAULT));
-    let atlas = HudAtlas::build(root)?;
+    let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+        root.to_path_buf(),
+    ))?;
     let mut out = std::io::BufWriter::new(fs::File::create(output)?);
     for line in fs::read_to_string(inputs)?
         .lines()

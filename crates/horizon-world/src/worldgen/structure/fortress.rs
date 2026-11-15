@@ -1,16 +1,20 @@
 //! Nether fortresses: NetherFortressStructure and NetherFortressPieces.
-use super::{
-    BoundingBox,
-    legacy::{LegacyPiece, PieceContext, PieceFrame, Result, make_bounding_box, random_horizontal},
-    stronghold::orient_box,
-};
-use crate::nbt::Tag;
 use crate::registry::BlockStateId;
+use horizon_core::nbt::Tag;
 use horizon_core::{
     geometry::Direction,
     random::{LegacyRandom, RandomSource},
 };
 use std::sync::Mutex;
+use {
+    super::{
+        legacy::{
+            LegacyPiece, PieceContext, PieceFrame, Result, make_bounding_box, random_horizontal,
+        },
+        stronghold::orient_box,
+    },
+    horizon_core::bounding_box::BoundingBox,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
@@ -973,8 +977,8 @@ impl LegacyPiece for FortressPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
     }
-    fn save(&self) -> Option<crate::nbt::Compound> {
-        use crate::nbt::Tag;
+    fn save(&self) -> Option<horizon_core::nbt::Compound> {
+        use horizon_core::nbt::Tag;
         let mut tag = super::legacy::piece_tag(
             self.type_name(),
             self.frame.bounding_box,

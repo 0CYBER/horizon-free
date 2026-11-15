@@ -107,6 +107,7 @@ impl Probe<'_> {
     }
 }
 impl HandWorld for Probe<'_> {
+    type Held = usize;
     fn hit(&mut self) -> Hit {
         let h = &self.step["hit"];
         match h[0].as_str().unwrap() {
@@ -212,12 +213,12 @@ impl HandWorld for Probe<'_> {
         ok
     }
     /// The stack object itself: `destroyingItem` is a reference.
-    fn main_hand_key(&mut self) -> String {
-        self.hands[0].to_string()
+    fn main_hand_key(&mut self) -> usize {
+        self.hands[0]
     }
-    fn same_destroying_item(&mut self, key: &str) -> bool {
-        // ItemStack.EMPTY (index 0) before any break.
-        let then = &self.stacks[key.parse::<usize>().unwrap_or(0)];
+    fn same_destroying_item(&mut self, began: &usize) -> bool {
+        // ItemStack.EMPTY (index 0, the default) before any break.
+        let then = &self.stacks[*began];
         then.effective().0 == self.stack(Hand::Main).effective().0
     }
     fn destroy_stage(&mut self, pos: [i32; 3], stage: Option<i32>) {
@@ -407,6 +408,7 @@ macro_rules! forward {
     };
 }
 impl HandWorld for ResetWorld<'_, '_> {
+    type Held = usize;
     forward! {
         hit() -> Hit;
         is_air(pos: [i32; 3]) -> bool;
@@ -424,8 +426,8 @@ impl HandWorld for ResetWorld<'_, '_> {
         attack_block(pos: [i32; 3]) -> ();
         destroy_progress(pos: [i32; 3]) -> f32;
         destroy_block(pos: [i32; 3]) -> bool;
-        main_hand_key() -> String;
-        same_destroying_item(key: &str) -> bool;
+        main_hand_key() -> usize;
+        same_destroying_item(began: &usize) -> bool;
         destroy_stage(pos: [i32; 3], stage: Option<i32>) -> ();
         swing(hand: Hand, a: SwingAnimation) -> ();
         entity_within_border() -> bool;

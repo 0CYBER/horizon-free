@@ -38,7 +38,7 @@ if __name__ == '__main__':
         'tooltip-display-parity', 'VanillaTooltipDisplayOracle', 'tooltip_display_fixture', cases,
         'Tooltip visibility and styled custom-name colour, italic and bold inheritance',
         sources=[
-            lab.ROOT / 'crates/horizon-client/src/game/stations.rs',
+            lab.ROOT / 'crates/horizon-client/src/game/blocks/stations.rs',
             lab.ROOT / 'crates/horizon-client/src/item_tooltip.rs',
             lab.ROOT / 'crates/horizon-items/src/item_data.rs',
         ],

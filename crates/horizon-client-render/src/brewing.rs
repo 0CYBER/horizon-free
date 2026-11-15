@@ -43,7 +43,7 @@ pub fn potion_name_key(item: &str, potion: Option<&str>) -> String {
 /// `item_name`. None for other items, and for a stack whose contents were
 /// taken off (`!minecraft:potion_contents`), which takes the item's name.
 pub fn contents_name_key(stack: &ItemStack) -> Option<String> {
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
     let item = &*stack.item;
     let named = matches!(
         item,
@@ -87,7 +87,7 @@ pub fn contents_effects(stack: &ItemStack) -> Vec<(&'static str, i32, i32)> {
 /// `PotionContents.getAllEffects`, retaining each custom instance's flags.
 pub fn contents_instances(stack: &ItemStack) -> Vec<crate::effects::EffectInstance> {
     use horizon_client_core::nbt_value::{number, text};
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
     let mut effects: Vec<_> = stack
         .potion()
         .and_then(potion)
@@ -137,7 +137,7 @@ pub fn contents_color(stack: &ItemStack) -> u32 {
 /// `PotionContents.equals(EMPTY)`: colour and custom name also make contents
 /// nonempty, even when there is no registered potion or custom effect.
 pub fn contents_empty(stack: &ItemStack) -> bool {
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
     stack.potion().is_none()
         && stack.data().is_none_or(|d| {
             d.potion_extra
@@ -265,62 +265,21 @@ pub struct Brewing {
     /// Items accepted in the bottle slots (`PotionIngredient.isPotionInput`).
     pub inputs: HashSet<String>,
 }
-/// The files right in `recipe/brewing/`, parsed, by id: taken from the whole
-/// recipe folder's read when another table holds it (the start loads them
-/// together), else read alone. A file that doesn't parse is left out.
-fn brewing_sources(root: &Path) -> Vec<(String, Value)> {
-    let recipe = root.join("data/minecraft/recipe");
-    let (folder, prefix) = match crate::json_folder::held(&recipe) {
-        Some(folder) => (folder, "brewing/"),
-        None => match crate::json_folder::read(&recipe.join("brewing")) {
-            Ok(folder) => (folder, ""),
-            Err(_) => return Vec::new(),
-        },
-    };
-    folder
-        .files
-        .iter()
-        .filter_map(|f| {
-            let name = f.name.strip_prefix(prefix).filter(|n| !n.contains('/'))?;
-            let v = serde_json::from_slice::<Value>(f.bytes().ok()?).ok()?;
-            Some((format!("minecraft:brewing/{name}"), v))
-        })
-        .collect()
-}
 impl Brewing {
     pub fn load(root: &Path, items: &Items, overlay: &PackOverlay) -> Self {
-        // NeoForge's load conditions: a file whose don't hold is silently
-        // absent. Vanilla's brewing recipes carry none; a pack's can.
-        let mods: Vec<String> = {
-            let mut mods = horizon_items::content_namespaces::mod_ids(root);
-            if !mods.iter().any(|m| m == "minecraft") {
-                mods.push("minecraft".to_owned());
-            }
-            mods
-        };
-        let conditions_hold = |v: &Value| {
-            horizon_world::conditions::conditions_hold(v, &|id: &str| mods.iter().any(|m| m == id))
-        };
-        let mut sources: Vec<(String, Value)> = brewing_sources(root);
-        // The world's packs' brewing recipes over the game's own: the top
-        // pack's file for each id replaces it (`SimpleJsonResourceReloadListener`).
-        for (id, files) in overlay.kind("recipe") {
-            if !id.starts_with("minecraft:brewing/") {
-                continue;
-            }
-            let Ok(v) = serde_json::from_slice::<Value>(PackOverlay::top(files)) else {
-                continue;
-            };
-            match sources.iter_mut().find(|(n, _)| n == id) {
-                Some(slot) => slot.1 = v,
-                None => sources.push((id.to_owned(), v)),
-            }
+        let mut sources =
+            horizon_items::recipe_sources::sources(root, overlay).unwrap_or_else(|e| {
+                log::warn!("Horizon: brewing recipes not loaded: {e}");
+                Vec::new()
+            });
+        sources.retain(|(id, _)| {
+            let path = id.split_once(':').map_or(id.as_str(), |(_, path)| path);
+            path.strip_prefix("brewing/")
+                .is_some_and(|name| !name.contains('/'))
+        });
+        for (id, _) in &mut sources {
+            *id = horizon_items::recipe_sources::qualified(id);
         }
-        // The gate answers the merged file, as the crafting loader's does:
-        // a false-conditioned pack file leaves the lower one gone too.
-        // The data's recipe filters, over the final set.
-        let filters = horizon_items::recipe_filters::RecipeFilters::load(root, overlay);
-        sources.retain_mut(|(id, v)| conditions_hold(v) && filters.apply(id, v));
         sources.sort_by(|a, b| a.0.cmp(&b.0));
         let mut recipes = Vec::new();
         for (id, v) in sources {
@@ -406,7 +365,30 @@ impl BrewingStand {
             .any(|b| brewing.find(b, ingredient).is_some())
     }
     /// `BrewingStandBlockEntity.serverTick`.
-    pub fn tick(&mut self, brewing: &Brewing, items: &Items, providers: &Providers) -> BrewTick {
+    pub fn tick(
+        &mut self,
+        brewing: &Brewing,
+        items: &Items,
+        providers: &Providers,
+        remainder: &dyn Fn(&ItemStack) -> Option<ItemStack>,
+    ) -> BrewTick {
+        let (mut out, due) = self.tick_to_brew(brewing, items, providers, remainder);
+        if due {
+            self.brew(brewing, remainder, &mut out);
+        }
+        self.sync_bottles(&mut out);
+        out
+    }
+    /// `serverTick` up to its `doBrew` call: true when the brew is due now.
+    /// A caller asking mods around `doBrew` runs [`Self::brew`] itself, then
+    /// [`Self::sync_bottles`].
+    pub fn tick_to_brew(
+        &mut self,
+        brewing: &Brewing,
+        items: &Items,
+        providers: &Providers,
+        remainder: &dyn Fn(&ItemStack) -> Option<ItemStack>,
+    ) -> (BrewTick, bool) {
         let mut out = BrewTick::default();
         if self.fuel <= 0
             && let Some(fuel) = self.items[4].as_mut()
@@ -415,24 +397,22 @@ impl BrewingStand {
             self.fuel = providers.int_value(&uses);
             self.total_fuel = self.fuel;
             self.speed = providers.float_value(&speed, 1.0);
-            // `Item.getCraftingRemainder`, not the `use_remainder` component.
-            let remainder = items
-                .get(&fuel.item)
-                .and_then(|i| i.crafting_remainder.clone());
+            let remainder = remainder(fuel);
             fuel.count -= 1;
             if fuel.count == 0 {
-                self.items[4] = remainder.map(|r| ItemStack::new(&r, 1));
+                self.items[4] = remainder;
             } else if let Some(r) = remainder {
-                out.drops.push(ItemStack::new(&r, 1));
+                out.drops.push(r);
             }
             out.fuel_taken = true;
         }
         let brewable = self.brewable(brewing);
+        let mut due = false;
         if self.brew_time > 0 {
             self.brew_time -= 1;
             let same = self.items[3].as_ref().map(|s| s.item.clone()) == self.ingredient;
             if self.brew_time == 0 && brewable {
-                self.brew(brewing, items, &mut out);
+                due = true;
             } else if !brewable || !same {
                 self.brew_time = 0;
             }
@@ -443,6 +423,11 @@ impl BrewingStand {
             self.total_brew_time = self.brew_time;
             self.ingredient = self.items[3].as_ref().map(|s| s.item.clone());
         }
+        (out, due)
+    }
+    /// The end of `serverTick`: the `has_bottle_*` block state when the
+    /// bottle slots filled or emptied.
+    pub fn sync_bottles(&mut self, out: &mut BrewTick) {
         let bottles = [
             self.items[0].is_some(),
             self.items[1].is_some(),
@@ -452,7 +437,6 @@ impl BrewingStand {
             self.last_bottles = Some(bottles);
             out.bottles = Some(bottles);
         }
-        out
     }
     pub fn idle(&self) -> bool {
         let bottles = [
@@ -465,7 +449,30 @@ impl BrewingStand {
             && (self.fuel > 0 || self.items[4].is_none())
             && self.last_bottles == Some(bottles)
     }
-    fn brew(&mut self, brewing: &Brewing, items: &Items, out: &mut BrewTick) {
+    /// `doBrew` once `PotionBrewEvent.Pre` asked the mods with `asked`, a
+    /// copy of the five slots, and whether they cancelled: a cancel puts the
+    /// mods' slots in and skips the brew (the caller then fires Post);
+    /// otherwise vanilla brews and the copy is dropped. Without mods (`None`)
+    /// this is `doBrew`.
+    pub fn brew_after_pre(
+        &mut self,
+        asked: Option<([Option<ItemStack>; 5], bool)>,
+        brewing: &Brewing,
+        remainder: &dyn Fn(&ItemStack) -> Option<ItemStack>,
+        out: &mut BrewTick,
+    ) {
+        match asked {
+            Some((stacks, true)) => self.items = stacks,
+            _ => self.brew(brewing, remainder, out),
+        }
+    }
+    /// `BrewingStandBlockEntity.doBrew`.
+    pub fn brew(
+        &mut self,
+        brewing: &Brewing,
+        remainder: &dyn Fn(&ItemStack) -> Option<ItemStack>,
+        out: &mut BrewTick,
+    ) {
         let Some(ingredient) = self.items[3].clone() else {
             return;
         };
@@ -476,16 +483,13 @@ impl BrewingStand {
                 self.items[slot] = Some(r.output.clone());
             }
         }
-        // `Item.getCraftingRemainder`, not the `use_remainder` component.
-        let remainder = items
-            .get(&ingredient.item)
-            .and_then(|i| i.crafting_remainder.clone());
+        let remainder = remainder(&ingredient);
         if let Some(i) = self.items[3].as_mut() {
             i.count -= 1;
             if i.count == 0 {
-                self.items[3] = remainder.map(|r| ItemStack::new(&r, 1));
+                self.items[3] = remainder;
             } else if let Some(r) = remainder {
-                out.drops.push(ItemStack::new(&r, 1));
+                out.drops.push(r);
             }
         }
         out.brewed = true;
@@ -499,11 +503,17 @@ pub fn brewing_fuel(items: &Items, stack: &ItemStack) -> Option<(Value, Value)> 
             return None;
         }
         if let Some(own) = data.other("minecraft:brewing_fuel") {
-            let component = horizon_client_core::scoreboard::tag_to_json(own);
-            return Some((
-                component["uses"].clone(),
-                component["speed_multiplier"].clone(),
-            ));
+            use horizon_core::nbt::Tag;
+            let uses = match own.get("uses")? {
+                Tag::Byte(n) => Value::from(*n),
+                Tag::Short(n) => Value::from(*n),
+                Tag::Int(n) => Value::from(*n),
+                Tag::Long(n) => Value::from(*n),
+                // Named and structured providers remain supported.
+                provider => horizon_core::json_nbt::tag_to_json(provider).ok()?,
+            };
+            let speed = horizon_core::json_nbt::tag_to_json(own.get("speed_multiplier")?).ok()?;
+            return Some((uses, speed));
         }
     }
     items.get(&stack.item).and_then(|i| i.brewing_fuel.clone())
@@ -511,7 +521,121 @@ pub fn brewing_fuel(items: &Items, stack: &ItemStack) -> Option<(Value, Value)> 
 
 #[cfg(test)]
 mod tests {
+    fn data_remainder(items: &super::Items, stack: &super::ItemStack) -> Option<super::ItemStack> {
+        items
+            .get(&stack.item)?
+            .crafting_remainder
+            .as_deref()
+            .map(|id| super::ItemStack::new(id, 1))
+    }
+
     use super::*;
+
+    fn content_brewing_root(name: &str, condition: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-content-brewing-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("data/minecraft/recipe")).unwrap();
+        std::fs::create_dir_all(root.join("data/example/recipe/brewing")).unwrap();
+        std::fs::write(
+            root.join(horizon_items::content_namespaces::MARKER),
+            br#"["example"]"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("data/example/recipe/brewing/test.json"), format!(r#"{{"type":"minecraft:brewing","input":{{"item":"minecraft:potion"}},"reagent":{{"item":"minecraft:nether_wart"}},"output":{{"id":"minecraft:diamond"}}{condition}}}"#)).unwrap();
+        root
+    }
+
+    #[test]
+    fn crafting_remainder_brewing_fuel_and_ingredient_use_current_stack() {
+        use horizon_core::nbt::Tag;
+        let items = Items::for_tests(Default::default());
+        let brewing = Brewing {
+            recipes: Vec::new(),
+            reagents: HashSet::new(),
+            inputs: HashSet::new(),
+        };
+        let mut fuel = ItemStack {
+            damage: 2,
+            ..ItemStack::new("test:tool", 1)
+        };
+        fuel.data_mut().set_loot_component(
+            "minecraft:brewing_fuel",
+            &Some(Tag::compound([
+                ("uses", Tag::Int(7)),
+                ("speed_multiplier", Tag::Float(1.0_f32.to_bits())),
+            ])),
+        );
+        let worn = |s: &ItemStack| {
+            Some(ItemStack {
+                count: 1,
+                damage: s.damage + 1,
+                ..s.clone()
+            })
+        };
+        let mut stand = BrewingStand::new();
+        stand.items[4] = Some(fuel);
+        stand.tick_to_brew(&brewing, &items, &Providers::empty(), &worn);
+        assert_eq!(
+            stand.items[4].as_ref().map(|s| (s.damage, s.count)),
+            Some((3, 1))
+        );
+        assert_eq!(stand.fuel, 7);
+        stand.items[3] = Some(ItemStack {
+            damage: 2,
+            ..ItemStack::new("test:tool", 1)
+        });
+        let mut out = BrewTick::default();
+        stand.brew(&brewing, &worn, &mut out);
+        assert_eq!(
+            stand.items[3].as_ref().map(|s| (s.damage, s.count)),
+            Some((3, 1))
+        );
+        assert!(out.brewed);
+        assert!(out.drops.is_empty());
+    }
+
+    #[test]
+    fn content_brewing_recipe_is_loaded() {
+        let root = content_brewing_root("loaded", "");
+        std::fs::create_dir_all(root.join("data/minecraft/recipe/brewing")).unwrap();
+        std::fs::write(
+            root.join("data/minecraft/recipe/brewing/test.json"),
+            br#"{"type":"minecraft:brewing","output":{"id":"minecraft:emerald"}}"#,
+        )
+        .unwrap();
+        let items = Items::for_tests(Default::default());
+        let recipes = Brewing::load(&root, &items, &PackOverlay::NONE);
+        assert_eq!(recipes.recipes[0].id, "example:brewing/test");
+        assert_eq!(&*recipes.recipes[0].output.item, "minecraft:diamond");
+        assert_eq!(recipes.recipes[1].id, "minecraft:brewing/test");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_brewing_recipe_condition_is_applied() {
+        let root = content_brewing_root(
+            "condition",
+            r#", "neoforge:conditions":[{"type":"neoforge:not","value":{"type":"neoforge:true"}}]"#,
+        );
+        let items = Items::for_tests(Default::default());
+        let recipes = Brewing::load(&root, &items, &PackOverlay::NONE);
+        assert!(recipes.recipes.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn overlay_replaces_content_brewing_recipe() {
+        let root = content_brewing_root("overlay", "");
+        let files = [("recipe/example:brewing/test".to_owned(), vec![br#"{"type":"minecraft:brewing","input":{"item":"minecraft:potion"},"reagent":{"item":"minecraft:nether_wart"},"output":{"id":"minecraft:emerald"}}"#.to_vec()])];
+        let items = Items::for_tests(Default::default());
+        let recipes = Brewing::load(&root, &items, &PackOverlay::new(&files));
+        assert_eq!(recipes.recipes.len(), 1);
+        assert_eq!(&*recipes.recipes[0].output.item, "minecraft:emerald");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn stack_fuel_controls_brew_duration_and_consumption() {
@@ -532,29 +656,44 @@ mod tests {
                 output: ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward"),
             }],
         };
-        let mut fuel = ItemStack::new("minecraft:stone", 2);
-        fuel.data_mut().set_loot_component(
-            "minecraft:brewing_fuel",
-            &serde_json::json!({"uses": 7, "speed_multiplier": 2.5}),
-        );
-        let mut stand = BrewingStand::new();
-        stand.items[0] = Some(ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"));
-        stand.items[3] = Some(ItemStack::new("minecraft:nether_wart", 1));
-        stand.items[4] = Some(fuel);
-        let providers = Providers::empty();
-        stand.tick(&brewing, &items, &providers);
-        assert_eq!((stand.brew_time, stand.fuel, stand.total_fuel), (160, 6, 7));
-        assert_eq!(stand.items[4].as_ref().unwrap().count, 1);
-        for _ in 1..160 {
-            assert!(!stand.tick(&brewing, &items, &providers).brewed);
+        use horizon_core::nbt::Tag;
+        for uses in [Tag::Byte(7), Tag::Short(7), Tag::Int(7), Tag::Long(7)] {
+            let mut fuel = ItemStack::new("minecraft:stone", 2);
+            fuel.data_mut().set_loot_component(
+                "minecraft:brewing_fuel",
+                &Some(Tag::compound([
+                    ("uses", uses),
+                    ("speed_multiplier", Tag::Float(2.5_f32.to_bits())),
+                ])),
+            );
+            let mut stand = BrewingStand::new();
+            stand.items[0] =
+                Some(ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"));
+            stand.items[3] = Some(ItemStack::new("minecraft:nether_wart", 1));
+            stand.items[4] = Some(fuel);
+            let providers = Providers::empty();
+            stand.tick(&brewing, &items, &providers, &|s| data_remainder(&items, s));
+            assert_eq!((stand.brew_time, stand.fuel, stand.total_fuel), (160, 6, 7));
+            assert_eq!(stand.items[4].as_ref().unwrap().count, 1);
+            for _ in 1..160 {
+                assert!(
+                    !stand
+                        .tick(&brewing, &items, &providers, &|s| data_remainder(&items, s))
+                        .brewed
+                );
+            }
+            assert!(
+                stand
+                    .tick(&brewing, &items, &providers, &|s| data_remainder(&items, s))
+                    .brewed
+            );
+            assert_eq!(
+                stand.items[0].as_ref().unwrap().potion(),
+                Some("minecraft:awkward")
+            );
+            assert_eq!(stand.fuel, 6);
+            assert_eq!(stand.items[4].as_ref().unwrap().count, 1);
         }
-        assert!(stand.tick(&brewing, &items, &providers).brewed);
-        assert_eq!(
-            stand.items[0].as_ref().unwrap().potion(),
-            Some("minecraft:awkward")
-        );
-        assert_eq!(stand.fuel, 6);
-        assert_eq!(stand.items[4].as_ref().unwrap().count, 1);
     }
 
     #[test]
@@ -575,7 +714,7 @@ mod tests {
         );
         // A potion or a tipped arrow is named by its contents, over its
         // item_name; one whose contents were taken off is not.
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         let mut swift =
             ItemStack::new("minecraft:potion", 1).with_potion("minecraft:long_swiftness");
         swift
@@ -647,12 +786,15 @@ mod tests {
         stand.items[2] =
             Some(ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward"));
         stand.items[3] = Some(ItemStack::new("minecraft:nether_wart", 2));
-        let first = stand.tick(&brewing, &items, &providers);
+        let first = stand.tick(&brewing, &items, &providers, &|s| data_remainder(&items, s));
         assert_eq!(first.bottles, Some([true, false, true]));
         assert_eq!((stand.brew_time, stand.fuel), (400, 0));
         let mut brewed_at = 0;
         for t in 1..=400 {
-            if stand.tick(&brewing, &items, &providers).brewed {
+            if stand
+                .tick(&brewing, &items, &providers, &|s| data_remainder(&items, s))
+                .brewed
+            {
                 brewed_at = t;
             }
         }
@@ -668,7 +810,7 @@ mod tests {
         );
         assert_eq!(stand.items[3].as_ref().unwrap().count, 1);
         // No fuel left: nothing more brews.
-        stand.tick(&brewing, &items, &providers);
+        stand.tick(&brewing, &items, &providers, &|s| data_remainder(&items, s));
         assert_eq!(stand.brew_time, 0);
     }
 
@@ -737,7 +879,7 @@ mod tests {
             assert!(before.idle(), "{before:?}");
             let mut after = before.clone();
             assert_eq!(
-                after.tick(&brewing, &items, &providers),
+                after.tick(&brewing, &items, &providers, &|s| data_remainder(&items, s)),
                 BrewTick::default()
             );
             assert_eq!(format!("{after:?}"), format!("{before:?}"));
@@ -746,7 +888,7 @@ mod tests {
         let mut brewing_now = stand(true, 5, false);
         brewing_now.items[3] = Some(ItemStack::new("minecraft:nether_wart", 1));
         assert!(!brewing_now.idle());
-        brewing_now.tick(&brewing, &items, &providers);
+        brewing_now.tick(&brewing, &items, &providers, &|s| data_remainder(&items, s));
         assert_eq!(brewing_now.brew_time, 400);
     }
 
@@ -769,6 +911,64 @@ mod tests {
         assert!(lines[1].0.starts_with("Сопротивление III ("), "{lines:?}");
     }
 
+    /// Cancelled pre-hook slots replace the brew without consuming an ingredient.
+    /// Uncancelled pre-hook edits are discarded before vanilla brewing runs.
+    #[test]
+    fn a_cancelled_brew_takes_the_mods_slots_and_an_uncancelled_one_brews() {
+        let set = |ids: &[&str]| ids.iter().map(|s| (*s).to_owned()).collect();
+        let brewing = Brewing {
+            reagents: set(&["minecraft:nether_wart"]),
+            inputs: Default::default(),
+            recipes: vec![BrewingRecipe {
+                id: "awkward".into(),
+                input: PotionIngredient {
+                    items: set(&["minecraft:potion"]),
+                    potions: Some(set(&["minecraft:water"])),
+                },
+                reagent: PotionIngredient {
+                    items: set(&["minecraft:nether_wart"]),
+                    potions: None,
+                },
+                output: ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward"),
+            }],
+        };
+        let items = horizon_items::items::Items::for_tests(Default::default());
+        let water = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water");
+        let awkward = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:awkward");
+        let fresh = || {
+            let mut stand = BrewingStand::new();
+            stand.items[0] = Some(water.clone());
+            stand.items[3] = Some(ItemStack::new("minecraft:nether_wart", 2));
+            stand
+        };
+        for cancel in [true, false] {
+            let mut stand = fresh();
+            let mut edited = stand.items.clone();
+            edited[0] = Some(ItemStack::new("minecraft:diamond", 1));
+            let mut out = BrewTick::default();
+            stand.brew_after_pre(
+                Some((edited, cancel)),
+                &brewing,
+                &|s| data_remainder(&items, s),
+                &mut out,
+            );
+            assert_eq!(out.brewed, !cancel);
+            assert_eq!(
+                stand.items[0],
+                Some(if cancel {
+                    ItemStack::new("minecraft:diamond", 1)
+                } else {
+                    awkward.clone()
+                })
+            );
+            assert!(stand.items[1].is_none());
+            assert_eq!(
+                stand.items[3].as_ref().map(|s| s.count),
+                Some(if cancel { 2 } else { 1 })
+            );
+        }
+    }
+
     #[test]
     fn infinite_effects_say_the_infinite_sign() {
         // MobEffectInstance.isInfiniteDuration: a -1 duration says the
@@ -781,7 +981,7 @@ mod tests {
     }
     #[test]
     fn custom_contents_color_and_empty_semantics() {
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         let mut stack = ItemStack::new("minecraft:tipped_arrow", 1);
         assert!(contents_empty(&stack));
         stack

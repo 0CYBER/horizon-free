@@ -6,13 +6,13 @@ ContainerEventHandler.mouseScrolled	port	crates/horizon-client-render/src/pack_s
 ContainerEventHandler.keyPressed	port	crates/horizon-client-render/src/pack_screen.rs::PackScreen::shortcut	gap: minor: only Ctrl+A/C/V/X here; Backspace is PackScreen::erase
 ContainerEventHandler.keyReleased	skip:other		no widget in the pack screen acts on key release
 ContainerEventHandler.charTyped	port	crates/horizon-client-render/src/pack_screen.rs::PackScreen::type_text	typed text goes to the search box when it has focus
-ContainerEventHandler.preeditUpdated	port	crates/horizon-client/src/game/ime.rs::ime_preedit	WindowEvent::Ime(Preedit) feeds the focused field's composition text
-ContainerEventHandler.getBorderForArrowNavigation	port	crates/horizon-client/src/game/key_focus.rs::edge	the screen border an arrow key is measured against
-ContainerEventHandler.getCurrentFocusPath	inline	crates/horizon-client/src/game/key_focus.rs::drawn_targets	the drawn targets of the open screen are the focus path, resolved per screen
-ContainerEventHandler.nextFocusPath	port	crates/horizon-client/src/game/key_focus.rs::act	a nav key moves focus to the next drawn target, with the screen context deciding what passes on
-ContainerEventHandler.handleTabNavigation	port	crates/horizon-client/src/game/key_focus.rs::tab_step	Tab and Shift+Tab step through the focusable targets in drawing order
-ContainerEventHandler.handleArrowNavigation	port	crates/horizon-client/src/game/key_focus.rs::act	the four directions pick the nearest target that way
-ContainerEventHandler.nextFocusPathVaguelyInDirection	inline	crates/horizon-client/src/game/key_focus.rs::act	the same directional search, without vanilla's vague fallback
+ContainerEventHandler.preeditUpdated	port	crates/horizon-client/src/game/interface/ime.rs::ime_preedit	WindowEvent::Ime(Preedit) feeds the focused field's composition text
+ContainerEventHandler.getBorderForArrowNavigation	port	crates/horizon-client/src/game/interface/key_focus.rs::edge	the screen border an arrow key is measured against
+ContainerEventHandler.getCurrentFocusPath	inline	crates/horizon-client/src/game/interface/key_focus.rs::drawn_targets	the drawn targets of the open screen are the focus path, resolved per screen
+ContainerEventHandler.nextFocusPath	port	crates/horizon-client/src/game/interface/key_focus.rs::act	a nav key moves focus to the next drawn target, with the screen context deciding what passes on
+ContainerEventHandler.handleTabNavigation	port	crates/horizon-client/src/game/interface/key_focus.rs::tab_step	Tab and Shift+Tab step through the focusable targets in drawing order
+ContainerEventHandler.handleArrowNavigation	port	crates/horizon-client/src/game/interface/key_focus.rs::act	the four directions pick the nearest target that way
+ContainerEventHandler.nextFocusPathVaguelyInDirection	inline	crates/horizon-client/src/game/interface/key_focus.rs::act	the same directional search, without vanilla's vague fallback
 SpectatorGui.extractPage	port	crates/horizon-client/src/spectator_menu.rs::SpectatorGui::hotbar	the nine-slot page with its frame and selection
 SpectatorGui.extractSlot	inline	crates/horizon-client/src/spectator_menu.rs::SpectatorGui::hotbar	icon and key label drawn in the hotbar loop
 MenuTabBar.extractWidgetRenderState	port	crates/horizon-client/src/title/create_world.rs::Title::draw_create	header separators and tab row drawn inside draw_create
@@ -34,7 +34,7 @@ TabNavigationBar.updateWidgetNarration	port	crates/horizon-client/src/screen_nar
 TabNavigationBar.narrateListElementPosition	inline	crates/horizon-client/src/screen_narrator.rs::narrate	narrator.position.tab with the tab's index and the tab count, in the same branch
 TabNavigationBar.extractWidgetRenderState	port	crates/horizon-client/src/title/create_world.rs::Title::draw_create	tab row drawn in draw_create
 TabNavigationBar.selectTab	port	crates/horizon-client/src/title.rs::Title::select_create_tab	the tab set by index, the focus cleared, from a click on the row and from Ctrl+number
-TabNavigationBar.setTabActiveState	inline	crates/horizon-client/src/game/stats_screen.rs::Game::stats_tab_active	the Items and Mobs tabs are active only while their list has rows: an inactive tab does not click (stats_screen.rs:582) and its label draws inactive (stats_screen.rs:317-337)
+TabNavigationBar.setTabActiveState	inline	crates/horizon-client/src/game/interface/stats_screen.rs::Game::stats_tab_active	the Items and Mobs tabs are active only while their list has rows: an inactive tab does not click (stats_screen.rs:582) and its label draws inactive (stats_screen.rs:317-337)
 TabNavigationBar.setTabTooltip	missing		minor: the tab row has no per-tab tooltip
 TabNavigationBar.keyPressed	port	crates/horizon-client/src/title.rs::Title::tab_bar_key	Ctrl+1 to Ctrl+0 and Ctrl+Tab (back with Shift) switch the Create World tabs, a digit past the last clamping to it; the rules and experiments screens keep the keys first
 TabNavigationBar.getNextTabIndex	port	crates/horizon-client/src/title/create_world.rs::next_tab_index	the tab Ctrl plus a digit asks for, Ctrl+1 the first and Ctrl+0 the tenth, or one step for Tab, wrapping; the caller clamps to the tabs there are
@@ -42,9 +42,9 @@ TabNavigationBar.currentTabIndex	skip:other		accessor; Horizon keeps the open ta
 TabNavigationBar.currentTabButton	skip:other		accessor; Horizon draws the tabs from options.tab
 TabNavigationBar.Builder.addTab	skip:java		builder
 TabNavigationBar.Builder.build	skip:java		builder
-AdvancementToast.update	port	crates/horizon-client/src/game/advancements.rs::Toast::wants_show	5 s visible, scaled by the notification time option
-AdvancementToast.isChallengeAdvancement	inline	crates/horizon-client/src/game/advancements.rs::Game::draw_toasts	challenge check for the sound when a toast enters a slot
-AdvancementToast.extractRenderState	port	crates/horizon-client/src/game/advancements.rs::Game::draw_toast	gap: player: a long title is one line; vanilla wraps it and fades the frame label into it over 1.5 s
+AdvancementToast.update	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Toast::wants_show	5 s visible, scaled by the notification time option
+AdvancementToast.isChallengeAdvancement	inline	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::draw_toasts	challenge check for the sound when a toast enters a slot
+AdvancementToast.extractRenderState	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::draw_toast	gap: player: a long title is one line; vanilla wraps it and fades the frame label into it over 1.5 s
 FriendToast.update	skip:service		friend toasts belong to the friend-request service; Horizon's friends are an invite code for the open world (horizon-friends), with no requests and no toasts
 FriendToast.extractRenderState	skip:service		no friend toast is drawn: Horizon's friends are an invite code for the open world (horizon-friends)
 FriendToast.add	skip:service		nothing adds a friend toast: no request service, no toast queue entry
@@ -56,8 +56,8 @@ NowPlayingToast.extractToast	port	crates/horizon-client/src/toasts.rs::draw_now_
 NowPlayingToast.tickMusicNotes	port	crates/horizon-client/src/toasts.rs::MusicNotes::tick	the notes change colour every 25 ms while a song plays
 NowPlayingToast.showToast	port	crates/horizon-client/src/toasts.rs::NowPlayingToast::show	slide in and count down over 5000 ms times the notification time
 NowPlayingToast.update	port	crates/horizon-client/src/toasts.rs::NowPlayingToast::update	the slide, the hide when the song ends and the notes ticking
-RecipeToast.update	port	crates/horizon-client/src/game/advancements.rs::Toast::wants_show	recipe toast visibility; the cycling index is Toast::displayed_recipe
-RecipeToast.extractRenderState	port	crates/horizon-client/src/game/advancements.rs::Game::draw_toast	recipe branch: station at 0.6 scale over the cycling result
+RecipeToast.update	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Toast::wants_show	recipe toast visibility; the cycling index is Toast::displayed_recipe
+RecipeToast.extractRenderState	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::draw_toast	recipe branch: station at 0.6 scale over the cycling result
 SystemToast.height	inline	crates/horizon-client/src/toasts.rs::background	the toast's 32 px slot: background() draws the 28 px top and the 4 px bottom strip, and a title alone sits 12 px down inside it
 SystemToast.extractRenderState	port	crates/horizon-client/src/toasts.rs::SystemToast::draw	gap: minor: one line per title and message, no wrapping
 SystemToast.extractTextLines	inline	crates/horizon-client/src/toasts.rs::SystemToast::draw	text lines drawn in draw
@@ -65,16 +65,16 @@ SystemToast.recalculateWidth	inline	crates/horizon-client/src/toasts.rs::SystemT
 SystemToast.onFileDropFailure	missing		gap: minor: a dropped file that is not a data pack is only logged (title.rs::Title::drop_file); no failure toast
 SystemToast.onChunkLoadFailure	port	crates/horizon-client/src/chunk_io.rs::load_failure_toast	the chunk.toast.loadFailure toast with its check-log line
 SystemToast.onChunkSaveFailure	port	crates/horizon-client/src/chunk_io.rs::save_failure_toast	the chunk.toast.saveFailure toast with its check-log line
-ToastManager.findFreeSlotsIndex	port	crates/horizon-client/src/game/advancements.rs::Game::draw_toasts	gap: minor: one 32 px slot per toast; no search for consecutive slots
-ToastManager.getToast	inline	crates/horizon-client/src/game/recipe_book.rs::Game::recipe_toast	only the recipe toast lookup (find is_recipe); system toasts are kept by their owners
+ToastManager.findFreeSlotsIndex	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::draw_toasts	gap: minor: one 32 px slot per toast; no search for consecutive slots
+ToastManager.getToast	inline	crates/horizon-client/src/game/items/recipe_book.rs::Game::recipe_toast	only the recipe toast lookup (find is_recipe); system toasts are kept by their owners
 ToastManager.showNowPlayingToast	port	crates/horizon-client/src/music.rs::MusicManager::show_now_playing_toast_if_needed	gap: player: the request goes to toast_requests and nothing draws it
-ToastManager.initializeMusicToast	inline	crates/horizon-client/src/game/music.rs::Game::set_music_toast_state	the toast is created from the Music Toast setting instead of at start-up
-ToastManager.setMusicToastDisplayState	port	crates/horizon-client/src/game/music.rs::Game::set_music_toast_state	Never drops it; Pause keeps it for a song; Pause and Toast shows it at once while music is audible
+ToastManager.initializeMusicToast	inline	crates/horizon-client/src/game/interface/music.rs::Game::set_music_toast_state	the toast is created from the Music Toast setting instead of at start-up
+ToastManager.setMusicToastDisplayState	port	crates/horizon-client/src/game/interface/music.rs::Game::set_music_toast_state	Never drops it; Pause keeps it for a song; Pause and Toast shows it at once while music is audible
 ToastManager.ToastInstance.resetToast	port	crates/horizon-client/src/toasts.rs::SystemToast::reset	gap: minor: text and display timer restart; the slide-in does not
 ToastManager.ToastInstance.calculateVisiblePortion	port	crates/horizon-client/src/toasts.rs::Slide::update	600 ms, squared ease in and out
-ToastManager.ToastInstance.extractRenderState	port	crates/horizon-client/src/game/advancements.rs::Game::draw_toast	slide x and slot y; system toasts slide in SystemToast::draw
-TutorialToast.update	inline	crates/horizon-client/src/game/tutorial.rs::Game::draw_tutorial_toasts	per frame: a toast whose hint is no longer wanted hides (slide out) and goes, the shown one takes the hint's progress, and the progress bar smooths toward it by the shown portion
-TutorialToast.extractRenderState	port	crates/horizon-client/src/game/tutorial.rs::Game::draw_tutorial_toasts	tutorial/toast/tutorial nine slice 160 wide, the hint icon at (6, 6), the title lines in purple and the description in black from x + 30, and the 154 px progress bar at the bottom in green or red
+ToastManager.ToastInstance.extractRenderState	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::draw_toast	slide x and slot y; system toasts slide in SystemToast::draw
+TutorialToast.update	inline	crates/horizon-client/src/game/interface/tutorial.rs::Game::draw_tutorial_toasts	per frame: a toast whose hint is no longer wanted hides (slide out) and goes, the shown one takes the hint's progress, and the progress bar smooths toward it by the shown portion
+TutorialToast.extractRenderState	port	crates/horizon-client/src/game/interface/tutorial.rs::Game::draw_tutorial_toasts	tutorial/toast/tutorial nine slice 160 wide, the hint icon at (6, 6), the title lines in purple and the description in black from x + 30, and the 154 px progress bar at the bottom in green or red
 AtlasGlyphProvider.Instance.renderSprite	port	crates/horizon-client-render/src/hud/gui_sprite.rs::HudAtlas::inline_object_sprite	the sprite an inline atlas object names, from minecraft:gui's gui/sprites tree or the missing sprite, and HudBatch::draw_inline_object draws it 8 px square at the pen
 CodepointMap.get	skip:java		codepoint lookup table; Horizon uses HashMap and BTreeSet
 CodepointMap.put	skip:java		codepoint lookup table; Horizon uses HashMap and BTreeSet
@@ -87,9 +87,9 @@ FontManager.reload	port	crates/horizon-client-render/src/hud.rs::HudAtlas::pack	
 FontManager.safeLoad	inline	crates/horizon-client-render/src/font.rs::Font::load_set	a TrueType provider that fails to load is dropped; a bitmap sheet that fails warns
 FontManager.resolveProviders	port	crates/horizon-client-render/src/font.rs::providers	reference expansion in order, depth 8; no dependency sort
 FontManager.finalizeProviderLoading	skip:java		prewarm of glyph lookups; the fallback is the missing box that Font::resolve gives
-FontManager.getFontOptions	port	crates/horizon-client/src/game/options.rs::Game::apply_ui_settings	force unicode and japanese flags read from settings
+FontManager.getFontOptions	port	crates/horizon-client/src/game/interface/options.rs::Game::apply_ui_settings	force unicode and japanese flags read from settings
 FontManager.apply	port	crates/horizon-client-render/src/hud.rs::HudAtlas::pack	new font sets replace the old ones with the atlas
-FontManager.updateOptions	port	crates/horizon-client/src/game/options.rs::Game::apply_ui_settings	sets the Font uniform and japanese flags when they change (options.rs:299-301)
+FontManager.updateOptions	port	crates/horizon-client/src/game/interface/options.rs::Game::apply_ui_settings	sets the Font uniform and japanese flags when they change (options.rs:299-301)
 FontManager.loadResourceStack	inline	crates/horizon-client-render/src/font.rs::providers	gap: minor: one fonts.json per font id from the resource root, not a stack of packs
 FontManager.getSpriteFont	inline	crates/horizon-client-render/src/hud.rs::HudBatch::draw_inline_object	sprite objects in text are drawn straight from the HUD atlas at the pen (8 px square, the missing sprite when the atlas lacks it), so no font set is looked up for them
 FontManager.close	skip:java		Rust drop frees the atlas, font sets and providers
@@ -112,13 +112,13 @@ FontSet.DelayedBake.get	skip:java		lazy bake into the atlas; Font::resolve bakes
 FontTexture.dumpContents	skip:debug		writes the atlas to a PNG for debugging
 GlyphRenderTypes.createForGrayscaleTexture	skip:ui		one textured quad path for all glyphs (hud.rs text_styled)
 GlyphRenderTypes.createForColorTexture	skip:ui		one textured quad path for all glyphs (hud.rs text_styled)
-GlyphRenderTypes.select	port	crates/horizon-client/src/game/names.rs::Game::name_tag_geometry	gap: minor: normal and see-through only; polygon-offset text has no draw path
+GlyphRenderTypes.select	port	crates/horizon-client/src/game/interface/names.rs::Game::name_tag_geometry	gap: minor: normal and see-through only; polygon-offset text has no draw path
 GlyphStitcher.reset	port	crates/horizon-client-render/src/font.rs::Font::reset_cache	atlas cursor rewound
 GlyphStitcher.stitch	port	crates/horizon-client-render/src/font.rs::Region::place	rectangle placed in the atlas region
 PlainTextRenderable.render	port	crates/horizon-client-render/src/hud.rs::HudBatch::text_styled	shadow pass first, then the front text
 PlayerGlyphProvider.Instance.renderSprite	port	crates/horizon-client-render/src/hud.rs::HudBatch::draw_inline_object	the face is the resolved skin's 8x8 head sprite (profile id first, then name, else the default skin), drawn at the text pen
 PlayerGlyphProvider.Instance.renderQuad	port	crates/horizon-client-render/src/hud.rs::HudBatch::draw_inline_object	the second quad is the same skin 32 texels right for the hat layer, drawn only when the object asks for the hat
-TextFieldHelper.charTyped	inline	crates/horizon-client/src/game/sign_edit.rs::Game::sign_input	typed-text branch; EditBox::insert_text filters the text
+TextFieldHelper.charTyped	inline	crates/horizon-client/src/game/interface/sign_edit.rs::Game::sign_input	typed-text branch; EditBox::insert_text filters the text
 TextFieldHelper.moveBy	inline	crates/horizon-client-render/src/ui.rs::EditBox::key	arrow keys; Ctrl moves by word
 TextFieldHelper.moveByChars	inline	crates/horizon-client-render/src/ui.rs::EditBox::key	arrow keys, Home and End
 TextFieldHelper.moveByWords	inline	crates/horizon-client-render/src/ui.rs::EditBox::key	Ctrl+arrow word moves
@@ -127,9 +127,9 @@ TextFieldHelper.removeWordsFromCursor	inline	crates/horizon-client-render/src/ui
 TextFieldHelper.removeCharsFromCursor	port	crates/horizon-client-render/src/ui.rs::EditBox::delete_chars	deletes the selection or n characters
 TextFieldHelper.cut	port	crates/horizon-client-input/src/clipboard.rs::apply	Cut arm: copy the selection, then clear it
 TextFieldHelper.paste	port	crates/horizon-client-input/src/clipboard.rs::apply	Paste arm: insert the clipboard text
-TextFieldHelper.getSelected	port	crates/horizon-client-render/src/ui.rs::EditBox::selected_text	
+TextFieldHelper.getSelected	port	crates/horizon-client-render/src/ui.rs::EditBox::selected_text
 TextFieldHelper.deleteSelection	inline	crates/horizon-client-render/src/ui.rs::EditBox::delete_chars	selection branch
-TextFieldHelper.setCursorToEnd	port	crates/horizon-client-render/src/ui.rs::EditBox::move_cursor_to_end	
+TextFieldHelper.setCursorToEnd	port	crates/horizon-client-render/src/ui.rs::EditBox::move_cursor_to_end
 TextFieldHelper.setCursorPos	port	crates/horizon-client-render/src/ui.rs::EditBox::set_cursor	no vanilla caller (callers 0)
 TextFieldHelper.setSelectionRange	skip:other		no vanilla caller; Horizon sets cursor and highlight separately (EditBox::set_cursor)
 BakedSheetGlyph.left	inline	crates/horizon-client-render/src/hud.rs::HudBatch::text_styled	glyph edge with bold thickness and italic shear

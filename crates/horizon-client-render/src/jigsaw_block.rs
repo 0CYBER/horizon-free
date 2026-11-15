@@ -3,7 +3,7 @@
 //! `loadAdditional`).
 use crate::structure_block::parse_identifier;
 use horizon_client_core::nbt_value::{number, string, text};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `JigsawBlockEntity.EMPTY_ID` and `Pools.EMPTY`.
 pub const EMPTY_ID: &str = "minecraft:empty";

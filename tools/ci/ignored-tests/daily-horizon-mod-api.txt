@@ -1,0 +1,9 @@
+# The daily tests of horizon-mod-api: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-mod-api __private::profiler::tests::overflow_tokens_do_not_alias_records_or_lose_crash_owners lib daily child-process
+horizon-mod-api __private::profiler::tests::profiler_drains_in_flight_and_reports_overflow lib daily child-process
+horizon-mod-api __private::profiler::tests::profiler_empty_session_replaces_previous_report lib daily child-process
+horizon-mod-api __private::profiler::tests::profiler_guards_and_threads lib daily child-process
+horizon-mod-api __private::profiler::tests::profiler_stale_epoch_is_rejected lib daily child-process
+horizon-mod-api __private::profiler::tests::profiler_thread_exhaustion lib daily child-process
+horizon-mod-api __private::profiler::tests::profiler_two_full_threads lib daily child-process

@@ -10,10 +10,12 @@ pub fn main() -> horizon_client::Result<()> {
     let mut lines = input.lines();
     let root = Path::new(lines.next().ok_or("no resources root")?);
     let names: Vec<&str> = lines.collect();
-    let mut sprites = horizon_client::sprites::Sprites::default();
+    let mut sprites = horizon_client::sprites::Sprites::new(
+        horizon_client::resource_source::ResourceSource::directory(root.to_owned()),
+    );
     let layers = names
         .iter()
-        .map(|name| sprites.insert(root, name))
+        .map(|name| sprites.insert(name))
         .collect::<horizon_client::Result<Vec<u32>>>()?;
     sprites.finish();
     let size = sprites.size;

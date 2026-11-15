@@ -26,6 +26,7 @@ fn write_base(root: &std::path::Path) -> Biomes {
     std::fs::create_dir_all(&maps).unwrap();
     std::fs::create_dir_all(&biome_dir).unwrap();
     std::fs::write(root.join("registries.json"), "{}").unwrap();
+    std::fs::write(root.join("items.json"), "{}").unwrap();
     for name in ["grass", "foliage", "dry_foliage"] {
         let file = std::fs::File::create(maps.join(format!("{name}.png"))).unwrap();
         let mut png = png::Encoder::new(file, 1, 1);
@@ -37,7 +38,10 @@ fn write_base(root: &std::path::Path) -> Biomes {
     for name in ["plains", "river"] {
         std::fs::write(biome_dir.join(format!("{name}.json")), "{}").unwrap();
     }
-    Biomes::load(root).unwrap()
+    Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+        root.to_path_buf(),
+    ))
+    .unwrap()
 }
 
 #[test]
@@ -47,8 +51,19 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
     let base = write_base(&root);
     let pack: Value = serde_json::from_str(r##"{"effects":{"grass_color":"#123456"}}"##).unwrap();
     let world = base.with_packs([("minecraft:tundra_x", &pack)]);
-    let sync =
-        SyncData::load_with(&root, &horizon_world::loot::PackOverlay::NONE, Some(&world)).unwrap();
+    let defaults = horizon_world::item_defaults::read(&root).unwrap();
+    let sync = SyncData::load_with(
+        &root,
+        &horizon_world::loot::PackOverlay::NONE,
+        Some(&world),
+        &defaults,
+        &horizon_client::crafting::ResolvedSources::load_or_empty(
+            &root,
+            &horizon_world::loot::PackOverlay::NONE,
+            &server_load(),
+        ),
+    )
+    .unwrap();
 
     // The encoder numbers a biome by its place in this list: none may be
     // missing, and the pack's is not the first.
@@ -82,25 +97,111 @@ fn a_pack_biome_is_sent_with_its_data_and_read_back_by_a_client() {
         client.get(client.id("minecraft:plains")).grass
     );
 
-    // Nothing new to a client that knows them all: it keeps its own table.
-    // even when the server sends data for them (another grass colour here).
-    let other: Value = serde_json::from_str(r##"{"effects":{"grass_color":"#654321"}}"##).unwrap();
+    // Data a client already has in its own file is nothing new, sent or not.
+    let own = json_to_tag(&serde_json::from_str::<Value>("{}").unwrap());
+    let same: Vec<_> = received
+        .iter()
+        .filter(|(n, _)| base.contains(n))
+        .map(|(n, _)| (n.clone(), Some(own.clone())))
+        .collect();
+    assert!(client_biomes(&base, &same).is_none());
+
+    // Server data overrides even a locally known biome.
+    let other: Value = serde_json::from_str(r##"{"temperature":1.75,"downfall":0.125,"has_precipitation":false,"effects":{"grass_color":"#654321"}}"##).unwrap();
     let other = json_to_tag(&other);
     let known: Vec<_> = received
         .iter()
         .filter(|(n, _)| base.contains(n))
         .map(|(n, _)| (n.clone(), Some(other.clone())))
         .collect();
-    assert!(client_biomes(&base, &known).is_none());
+    let replaced = client_biomes(&base, &known).unwrap();
+    let climate = replaced.properties("minecraft:plains").unwrap();
+    assert_eq!(climate.temperature, 1.75);
+    assert_eq!(climate.downfall, 0.125);
+    assert!(!climate.has_precipitation);
 
-    // Beside a new biome, a known one keeps the game's colour.
+    // Replacements also survive alongside newly added biomes.
     let mut mixed = known.clone();
     mixed.extend(received.iter().filter(|(n, _)| !base.contains(n)).cloned());
     let client = client_biomes(&base, &mixed).unwrap();
     let plains = base.get(base.id("minecraft:plains")).grass;
     assert_ne!(plains, 0x654321);
-    assert_eq!(client.get(client.id("minecraft:plains")).grass, plains);
+    assert_eq!(client.get(client.id("minecraft:plains")).grass, 0x654321);
     assert_eq!(client.get(client.id("minecraft:tundra_x")).grass, 0x123456);
+}
+
+#[test]
+fn a_server_replacement_of_a_known_biome_keeps_its_id_and_changes_its_data() {
+    let root = std::env::temp_dir().join(format!("horizon-replace-biomes-{}", std::process::id()));
+    let _scratch = Scratch(root.clone());
+    let base = write_base(&root);
+    let replaced: Value = serde_json::from_str(
+        r##"{"effects":{"water_color":"#112233"},"attributes":{"minecraft:visual/ambient_particles":{"argument":[{"particle":{"type":"minecraft:ash"},"probability":0.25}]}}}"##,
+    )
+    .unwrap();
+    let received = vec![
+        ("minecraft:plains".to_owned(), Some(json_to_tag(&replaced))),
+        ("minecraft:river".to_owned(), None),
+    ];
+    let client = client_biomes(&base, &received).expect("plains differs from the client's file");
+    assert_eq!(client.id("minecraft:plains"), base.id("minecraft:plains"));
+    let plains = client.get(client.id("minecraft:plains"));
+    assert_eq!(plains.water, 0x112233);
+    assert_eq!(plains.ambient_particles.len(), 1);
+    assert_eq!(plains.ambient_particles[0].0.name(), "ash");
+    assert_eq!(plains.ambient_particles[0].1, 0.25);
+    // The tables that read the biome's file see the replacement; river is untouched.
+    assert!(client.pack_file("minecraft:plains").is_some());
+    assert!(client.pack_file("minecraft:river").is_none());
+}
+
+#[test]
+fn a_biome_the_mods_modifiers_changed_is_sent_to_a_client_that_knows_the_vanilla_pack() {
+    let root = std::env::temp_dir().join(format!("horizon-modified-biomes-{}", std::process::id()));
+    let _scratch = Scratch(root.clone());
+    let base = write_base(&root);
+    // What `write_state` saves: the modifiers changed plains, and the root holds the result.
+    std::fs::write(
+        root.join("biome-modifiers.json"),
+        r#"{"unmodified":{"minecraft:plains":"{}"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("data/minecraft/worldgen/biome/plains.json"),
+        r##"{"effects":{"grass_color":"#112233"}}"##,
+    )
+    .unwrap();
+    let defaults = horizon_world::item_defaults::read(&root).unwrap();
+    let sync = SyncData::load(
+        &root,
+        &horizon_world::loot::PackOverlay::NONE,
+        &defaults,
+        &horizon_client::crafting::ResolvedSources::load_or_empty(
+            &root,
+            &horizon_world::loot::PackOverlay::NONE,
+            &server_load(),
+        ),
+    )
+    .unwrap();
+    let sent = sync.registry_packets(true, &LevelShapes::VANILLA);
+    let biomes = sent.iter().find(|r| r.registry == BIOME_REGISTRY).unwrap();
+    let entry = |name: &str| biomes.entries.iter().find(|e| e.id == name).unwrap();
+    assert!(
+        entry("minecraft:plains").data.is_some(),
+        "the changed one is sent"
+    );
+    assert!(
+        entry("minecraft:river").data.is_none(),
+        "an unchanged one is not"
+    );
+    // The client takes the server's colour over its own file's.
+    let received: Vec<_> = biomes
+        .entries
+        .iter()
+        .map(|e| (e.id.clone(), e.data.clone()))
+        .collect();
+    let client = client_biomes(&base, &received).expect("plains differs");
+    assert_eq!(client.get(client.id("minecraft:plains")).grass, 0x112233);
 }
 
 #[test]
@@ -118,4 +219,13 @@ fn recolouring_twice_starts_from_the_biome_files_each_time() {
     let lighter = |_: &str, c: &mut BiomeColors| c.grass += 0x10;
     let next = base.recolored_from(&once, lighter).unwrap();
     assert_eq!(grass(&next), grass(&base) + 0x10);
+}
+
+fn server_load() -> horizon_world::native_load_context::LoadContext {
+    use horizon_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs};
+    LoadContext::new(
+        DataLoadOrigin::ServerDataLoad,
+        std::sync::Arc::new(LoadInputs::new(Default::default(), Default::default())),
+        [],
+    )
 }

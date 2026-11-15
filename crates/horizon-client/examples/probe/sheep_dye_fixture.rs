@@ -5,11 +5,12 @@ use horizon_client::{
     mobs::{Anim, Brain, Flags, Mob, MobType, Part, Species, sheep_dye},
 };
 use horizon_core::geometry::Vec3;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::{io::Write, sync::Arc};
 
 fn kind() -> Arc<MobType> {
     Arc::new(MobType {
+        shadow: None,
         id: "minecraft:sheep".into(),
         species: Species::Sheep,
         width: 0.6,
@@ -29,6 +30,7 @@ fn kind() -> Arc<MobType> {
         jump_strength: 0.42,
         attributes: Arc::default(),
         item_stack_limits: Arc::default(),
+        attribute_bounds: Default::default(),
         gravity: 0.08,
         safe_fall_distance: 3.0,
         fall_damage_multiplier: 1.0,
@@ -52,9 +54,10 @@ fn kind() -> Arc<MobType> {
         brain: Brain::Passive,
         anim: Anim::Quadruped,
         sounds: [""; 3],
-        step_sound: None,
+        sound_overrides: Default::default(),
         food: Arc::default(),
         tempt: Arc::default(),
+        passenger_attachments: Vec::new(),
     })
 }
 

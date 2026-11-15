@@ -300,6 +300,7 @@ mod tests {
     /// the other's from it; the session's streams meet and wrong sessions
     /// don't.
     #[test]
+    #[ignore = "daily"]
     fn the_race_connects_and_checks_the_session() {
         let (la, pa) = listen(0).unwrap();
         let (lb, pb) = listen(0).unwrap();

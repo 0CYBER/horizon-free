@@ -1,0 +1,19 @@
+id = "fnr_api_only"
+name = "Function replacement check: an API-only mod"
+version = "0.1.0"
+description = "SDK slices: hooks and an [[inject]] listener, no [native] table row, so alone it takes the API route"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[[inject]]
+id = "listen"
+at = "horizon_client::game::block_entity_ticks::Game<'_>::tick_block_entities"
+kind = "head"
+with = "entry_listener"
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"

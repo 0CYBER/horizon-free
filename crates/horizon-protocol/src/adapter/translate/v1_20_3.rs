@@ -139,12 +139,10 @@ pub(super) fn clientbound(
 pub(super) fn upgrade_block_entity(
     session: &Session,
     old_kind: i32,
-    tag: &mut horizon_world::nbt::Tag,
+    tag: &mut horizon_core::nbt::Tag,
 ) {
-    use horizon_world::{
-        datafix::{self, dynamic as d, schema::Ty},
-        nbt::Tag,
-    };
+    use horizon_core::nbt::Tag;
+    use horizon_world::datafix::{self, dynamic as d, schema::Ty};
     if !matches!(tag, Tag::Compound(_)) {
         return;
     }
@@ -514,7 +512,7 @@ mod tests {
     // DataVersion5023, from3463/3465/3578/3698/3700. All five source versions gave
     // these exact decoded tags, including typed-field remainders and opaque data.
     // Type IDs were checked independently in the old and pinned registry reports.
-    fn block_entity_oracles() -> Vec<(i32, i32, horizon_world::nbt::Tag, horizon_world::nbt::Tag)> {
+    fn block_entity_oracles() -> Vec<(i32, i32, horizon_core::nbt::Tag, horizon_core::nbt::Tag)> {
         [
             // banner
             (19, 20, "0a08000a437573746f6d4e616d6500147b2274657874223a2251412042616e6e6572227d0a00064f70617175650100066e756d6265720700030001780000000103000179000000400300017a00000002080002696400106d696e6563726166743a62616e6e65720900085061747465726e730a000000020800075061747465726e00026273030005436f6c6f720000000e000800075061747465726e0003637265030005436f6c6f720000000b0000", "0a0a000a437573746f6d4e616d6508000474657874000951412042616e6e6572000a00064f70617175650100066e756d62657207000900087061747465726e730a000000020800077061747465726e00176d696e6563726166743a7374726970655f626f74746f6d080005636f6c6f720003726564000800077061747465726e00116d696e6563726166743a63726565706572080005636f6c6f720004626c756500030001780000000103000179000000400300017a00000002080002696400106d696e6563726166743a62616e6e65720900085061747465726e730a000000020800075061747465726e00026273030005436f6c6f720000000e000800075061747465726e0003637265030005436f6c6f720000000b0000"),
@@ -536,7 +534,7 @@ mod tests {
         &[ServerVersion::V1_20_2, ServerVersion::V1_20_3]
     }
 
-    fn old_block_entity_tag(version: ServerVersion, tag: &horizon_world::nbt::Tag, w: &mut Writer) {
+    fn old_block_entity_tag(version: ServerVersion, tag: &horizon_core::nbt::Tag, w: &mut Writer) {
         let _ = version;
         w.nbt(tag);
     }
@@ -585,7 +583,8 @@ mod tests {
 
     #[test]
     fn legacy_chunk_block_entities_use_the_same_forward_datafixes() {
-        use horizon_world::{datafix::dynamic as d, nbt::Tag};
+        use horizon_core::nbt::Tag;
+        use horizon_world::datafix::dynamic as d;
         // Synthetic old packet envelopes exercise the full normalization pipeline;
         // their block-entity goldens above come from the independent vanilla DFU.
         for &version in block_entity_versions() {
@@ -648,7 +647,8 @@ mod tests {
 
     #[test]
     fn block_entity_upgrade_preserves_absent_and_current_tags() {
-        use horizon_world::{datafix::dynamic as d, nbt::Tag};
+        use horizon_core::nbt::Tag;
+        use horizon_world::datafix::dynamic as d;
         let (_, _, old, _) = block_entity_oracles().remove(0);
         for version in [
             ServerVersion::V1_20_6,
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn legacy_removed_block_entity_updates_drop_instead_of_reusing_an_id() {
-        use horizon_world::nbt::Tag;
+        use horizon_core::nbt::Tag;
         for &version in block_entity_versions() {
             for (kind, dropped) in [(1, false), (24, true)] {
                 let mut old = Writer::new();

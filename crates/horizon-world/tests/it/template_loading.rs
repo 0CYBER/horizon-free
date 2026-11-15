@@ -1,6 +1,6 @@
+use horizon_core::nbt::{self, Limits, NamedTag, Tag};
 use horizon_world::{
     compression::Compression,
-    nbt::{self, Limits, NamedTag, Tag},
     registry::{BlockRegistry, BlockStateId},
     worldgen::structure::{StateTransforms, StructureResources, template::StructureTemplate},
 };

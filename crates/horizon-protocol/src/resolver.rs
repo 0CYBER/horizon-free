@@ -180,6 +180,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn literal_address_can_connect_without_dns() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();

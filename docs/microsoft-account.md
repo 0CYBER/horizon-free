@@ -315,7 +315,7 @@ player renderer. Until a skin arrives the default skin for the UUID shows (as to
 26.3's dedicated servers default to `enforce-secure-profile=true`. A client without a chat session
 can join and play, but every chat message and signed command argument is refused with "Chat
 disabled due to missing profile public key. Please try reconnecting." (`SignedMessageChain.Decoder.unsigned`).
-To chat on such servers the game (`auth.rs`, `game/remote_chat.rs`, `horizon_protocol::secure_chat`):
+To chat on such servers the game (`auth.rs`, `game/network/remote_chat.rs`, `horizon_protocol::secure_chat`):
 
 - fetches the profile key pair from the services `player/getCertificates` endpoint with the Minecraft
   token, on a background thread at start and on each join (AccountProfileKeyPairManager): the PKCS#8
@@ -337,11 +337,11 @@ To chat on such servers the game (`auth.rs`, `game/remote_chat.rs`, `horizon_pro
 that issues certificates: online mode with `enforce-secure-profile=true` (signed chat logged as secure,
 a `/msg` whisper delivered, a message flushed from Chat Delay still counted as seen, nothing refused) and
 offline mode (unsigned chat, as before). Both also click commands: `sendUnattendedCommand`'s confirmations
-(`game/remote_chat.rs`) ask before anything but a plain command, and a clicked command with a message argument
+(`game/network/remote_chat.rs`) ask before anything but a plain command, and a clicked command with a message argument
 only reaches the chat box, for the player to send.
 
 Chat from other players is checked as vanilla's client does (`ClientPacketListener.handlePlayerChat`,
-`game/remote.rs`, `secure_chat::MessageValidator`): a wrong global chat index disconnects, and a sender
+`game/network/remote/mod.rs`, `secure_chat::MessageValidator`): a wrong global chat index disconnects, and a sender
 with no list entry or a message its validator refuses shows the red, italic `chat.validation_error`. A
 chat session the services' profile-key keys vouch for makes a keyed validator (the key not past its
 expiry plus 8 hours, the signature, the chain); anything else makes the fallback, which accepts unsigned

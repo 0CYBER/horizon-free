@@ -55,6 +55,7 @@ fn pack() -> Post {
 
 #[test]
 fn snorm_buffers_clamp_and_quantise() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     // The fixture's device asks for no features; SNORM targets need these.
     let wanted = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES

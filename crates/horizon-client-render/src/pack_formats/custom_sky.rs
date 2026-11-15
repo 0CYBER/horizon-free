@@ -3,7 +3,7 @@
 //! and each frame's choice of layers, their brightness and rotation. A pack without
 //! `optifine/sky` has none, and the sky stays vanilla.
 
-use std::path::Path;
+use crate::resource_source::ResourceSource;
 
 use glam::{Mat4, Vec3};
 use horizon_optifine::sky::{Blend, Conditions, Now, Skies, SkyLayer, Transition};
@@ -24,14 +24,18 @@ const TEXEL_BUDGET: u64 = 64 << 20;
 impl CustomSky {
     /// The custom skies of the overlay at `root`. A layer whose texture does not decode is
     /// dropped with a warning.
-    pub fn load(root: &Path) -> Self {
+    pub fn load(root: &ResourceSource) -> Self {
         let skies = Skies::scan(root);
         let mut out = Self::default();
         let mut texels = 0u64;
         for (world, sky) in skies.worlds {
             let mut layers = Vec::new();
             for layer in sky.layers {
-                match crate::hud::decode(&root.join(&layer.source)) {
+                match root
+                    .read(&layer.source)
+                    .map_err(Into::into)
+                    .and_then(|bytes| crate::hud::decode_image_bytes(&bytes))
+                {
                     Ok((width, height, rgba))
                         if texels + u64::from(width) * u64::from(height) <= TEXEL_BUDGET =>
                     {
@@ -186,7 +190,7 @@ mod tests {
             std::fs::write(dir.join(format!("{name}.properties")), text).unwrap();
             std::fs::write(dir.join(format!("{name}.png")), &png).unwrap();
         }
-        let sky = CustomSky::load(&root);
+        let sky = CustomSky::load(&ResourceSource::directory(root.clone()));
         (root, sky)
     }
 

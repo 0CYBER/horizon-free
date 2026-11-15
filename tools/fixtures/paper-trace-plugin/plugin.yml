@@ -1,0 +1,5 @@
+name: PaperTrace
+version: '0.1.0'
+main: PaperTrace
+api-version: '26.3'
+load: STARTUP

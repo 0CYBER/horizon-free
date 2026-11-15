@@ -323,3 +323,74 @@ impl Codec<Commands> for Commands {
         w.varint(v.root);
     }
 }
+
+// Generated retained-allocation traversals; regenerate with protocol-retained-gen.
+impl crate::retained::OwnedHeap for CommandNode {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self {
+            kind,
+            executable,
+            restricted,
+            children,
+            redirect,
+            name,
+            parser,
+            suggestions,
+        } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(kind))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(executable))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(restricted))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(children))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(redirect))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(name))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(parser))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(suggestions))
+    }
+}
+impl crate::retained::OwnedHeap for ArgumentProperties {
+    fn owned_heap_bytes(&self) -> usize {
+        match self {
+            Self::None => 0usize,
+            Self::Integer { min, max } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(min))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(max)),
+            Self::Long { min, max } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(min))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(max)),
+            Self::Float { min, max } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(min))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(max)),
+            Self::Double { min, max } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(min))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(max)),
+            Self::String(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+            Self::Entity {
+                single,
+                players_only,
+            } => 0usize
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(single))
+                .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(players_only)),
+            Self::ScoreHolder { multiple } => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(multiple))
+            }
+            Self::Time { min } => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(min))
+            }
+            Self::Registry(field_0) => {
+                0usize.saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(field_0))
+            }
+        }
+    }
+}
+impl crate::retained::OwnedHeap for Commands {
+    fn owned_heap_bytes(&self) -> usize {
+        let Self { nodes, root } = self;
+        0usize
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(nodes))
+            .saturating_add(crate::retained::OwnedHeap::owned_heap_bytes(root))
+    }
+}
+// End generated retained traversals.

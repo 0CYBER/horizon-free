@@ -1,0 +1,4 @@
+# horizon-mod-api-gen's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-mod-api-gen interface_cache_tests::cached_points_match_full_generation_across_source_changes by-hand manual # full source-tree generation equivalence; run explicitly when changing the cache
+horizon-mod-api-gen patch::census::refusal_census by-hand manual # measurement: prints the census
+horizon-mod-api-gen patch::spike::write_patch_crate by-hand manual # manual: writes a patch crate

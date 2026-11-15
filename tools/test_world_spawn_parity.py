@@ -164,7 +164,7 @@ def main():
     if args.origins_only:
         sys.exit(1 if origin_diffs else 0)
 
-    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+    oh.run_logged(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-game', '--bin', 'horizon-client'], build,
                   'compile-rust', timeout=3600)
     binary = target_dir('fast') / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     # One worker thread: the chunks decorated in a fixed order (see above).

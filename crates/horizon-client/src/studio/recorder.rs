@@ -302,8 +302,8 @@ pub fn generate_recording_filename(name: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_core::nbt::Tag;
     use horizon_protocol::packets::configuration as cfg;
-    use horizon_world::nbt::Tag;
     use std::fs;
 
     #[test]

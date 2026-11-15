@@ -817,6 +817,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_router_trickling_its_answer_runs_out_of_time() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/desc.xml", listener.local_addr().unwrap());
@@ -903,6 +904,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn pcp_maps_renews_and_deletes() {
         let (gw, table) = mock_pmp(false);
         let targets = Targets {
@@ -920,6 +922,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_router_that_grants_no_lifetime_maps_nothing() {
         // Success, the nonce and a port, but a lifetime of 0, for PCP and NAT-PMP alike.
         let s = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -972,6 +975,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn nat_pmp_when_pcp_is_unsupported() {
         let (gw, table) = mock_pmp(true);
         let targets = Targets {
@@ -1055,6 +1059,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn upnp_maps_and_deletes() {
         let (location, table) = mock_igd(false, 0);
         let targets = Targets {
@@ -1075,6 +1080,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn upnp_permanent_leases_and_taken_ports() {
         let (location, table) = mock_igd(true, 25580);
         let targets = Targets {
@@ -1091,6 +1097,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn nothing_answering_says_why() {
         let quiet = UdpSocket::bind("127.0.0.1:0").unwrap();
         let targets = Targets {

@@ -3,8 +3,8 @@ use horizon_client::{
     item_data::StackData,
     items::{ItemStack, Items},
 };
+use horizon_core::nbt::Tag;
 use horizon_world::loot::PackOverlay;
-use horizon_world::nbt::Tag;
 use serde_json::Value;
 use std::{
     fs::File,
@@ -15,7 +15,8 @@ use std::{
 pub fn main() -> Result<()> {
     let args: Vec<_> = crate::args().collect();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
-    let items = Items::catalog(&root, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(&root)?;
+    let items = Items::catalog(&root, &PackOverlay::NONE, &defaults)?;
     let mut out = BufWriter::new(File::create(&args[2])?);
     for line in BufReader::new(File::open(&args[1])?).lines() {
         let row: Value = serde_json::from_str(&line?)?;

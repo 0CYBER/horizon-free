@@ -60,6 +60,7 @@ fn pack() -> Post {
 
 #[test]
 fn only_buffers_drawn_into_or_flipped_get_a_second_texture() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack());
     // Two frames: the second starts from the first one's buffers.

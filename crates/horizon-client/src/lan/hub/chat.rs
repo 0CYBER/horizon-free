@@ -2,56 +2,14 @@
 //! handle it: chat sessions validated against the services' keys, signed
 //! messages checked link by link, the acknowledged window, and messages
 //! relayed with each connection's numbering and signature cache.
-use super::{HostEvent, Hub};
-use horizon_client_core::text::Text;
+use super::{HostEvent, Hub, string};
+use crate::text::Text;
+use horizon_core::nbt::{JavaString, Tag};
 use horizon_protocol::{
     packets::play::{self, Clientbound as C},
     secure_chat::{self, Body, Chain, ChatSession, DecodeError, ProfileKey, Signature, Unpacked},
     text::{literal, translatable},
 };
-use horizon_world::nbt::{JavaString, Tag};
-
-/// A player's chat message is about to be sent to everyone (after the secure-chat chain and the chat
-/// filter took it). A mod may cancel it, which drops it for everybody (the sender is not told, so push
-/// a line to `replies` to answer them), or only answer. It cannot change the text: a signed message
-/// would no longer verify. Once for each message a player sends, on a server. Commands are
-/// `native_player_command`. API 399.
-#[inline(never)]
-pub fn native_player_chat(
-    player: u128,
-    name: &str,
-    message: &str,
-    replies: &mut Vec<Text>,
-    cancel: &mut bool,
-) {
-    crate::native_client_hooks::player_chat(player, name, message, replies, cancel);
-}
-
-/// `native_player_chat` with the sender's permission level (`level`, their operator level, 0
-/// for everyone else): heard after v1, with the same cancel and replies. A mod that uses this
-/// hook need not use v1, and a mod that uses both hears the message twice. It cannot change the
-/// text. Once for each message a player sends, on a server. API 609.
-#[inline(never)]
-pub fn native_player_chat_v2(
-    player: u128,
-    name: &str,
-    level: u8,
-    message: &str,
-    replies: &mut Vec<Text>,
-    cancel: &mut bool,
-) {
-    crate::native_client_hooks::player_chat_v2(player, name, level, message, replies, cancel);
-}
-
-/// The look of a player's chat line as the players see it (the chat decorate hook, as vanilla's
-/// `ChatDecorator`): a mod sets `decorated` to the text that replaces the message in the line.
-/// The signed body stays the original message, so its signature still checks; only the shown
-/// text changes, and it is sent as the unsigned content. Heard after `native_player_chat` let
-/// the message through, on a server. API 607.
-#[inline(never)]
-pub fn native_chat_decorate(player: u128, name: &str, message: &str, decorated: &mut Option<Text>) {
-    crate::native_client_hooks::chat_decorate(player, name, message, decorated);
-}
 
 /// Now, in epoch milliseconds (Instant.now()).
 pub fn now_millis() -> i64 {
@@ -180,14 +138,15 @@ impl Hub {
         update: &play::LastSeenUpdate,
         events: &mut Vec<HostEvent>,
     ) -> Option<Vec<Signature>> {
-        let g = &mut self.guests[i];
-        match g
-            .last_seen
-            .apply_update(update.offset, update.acknowledged, update.checksum)
-        {
+        let result = self.guests.update(i, |g| {
+            g.last_seen
+                .apply_update(update.offset, update.acknowledged, update.checksum)
+        });
+        match result {
             Ok(seen) => Some(seen),
             // Vanilla logs the ValidationException's stack trace after the line.
             Err(_) => {
+                let g = &self.guests[i];
                 events.push(HostEvent::Error(format!(
                     "Failed to validate message acknowledgements from {}",
                     g.name
@@ -204,8 +163,12 @@ impl Hub {
 
     /// handleChatAck.
     pub(super) fn chat_ack(&mut self, i: usize, offset: i32, events: &mut Vec<HostEvent>) {
-        let g = &mut self.guests[i];
-        if g.last_seen.apply_offset(offset).is_err() {
+        if self
+            .guests
+            .update(i, |g| g.last_seen.apply_offset(offset))
+            .is_err()
+        {
+            let g = &self.guests[i];
             events.push(HostEvent::Error(format!(
                 "Failed to validate message acknowledgement offset from {}",
                 g.name
@@ -249,12 +212,16 @@ impl Hub {
             last_seen: &last_seen,
         };
         let signature = c.signature.as_deref().and_then(secure_chat::signature);
-        let g = &mut self.guests[i];
-        let (uuid, name) = (g.uuid, g.name.clone());
-        let mut message = match g
-            .chain
-            .unpack(uuid, signature.as_ref(), &body, enforce, now)
-        {
+        let (uuid, name, unpacked) = self.guests.update(i, |g| {
+            let uuid = g.uuid;
+            (
+                uuid,
+                g.name.clone(),
+                g.chain
+                    .unpack(uuid, signature.as_ref(), &body, enforce, now),
+            )
+        });
+        let message = match unpacked {
             Ok(unpacked) => ChatMessage::new(uuid, unpacked, &body, now),
             Err(e) => return self.decode_failure(i, e, events),
         };
@@ -273,43 +240,49 @@ impl Hub {
         ) {
             return;
         }
-        // The mods may refuse it (a muted player), before anyone sees it.
-        if self.mods_loaded {
-            let (mut cancel, mut replies) = (false, Vec::new());
-            native_player_chat(uuid, &name, &message.content, &mut replies, &mut cancel);
-            let level = self.guests[i].permission;
-            native_player_chat_v2(
-                uuid,
-                &name,
-                level,
-                &message.content,
-                &mut replies,
-                &mut cancel,
-            );
-            for line in replies {
-                self.guests[i].send(&C::SystemChat(play::SystemChat {
-                    content: crate::lan::data::component_nbt(&line.component()),
-                    overlay: false,
-                }));
-            }
-            if cancel {
-                return;
-            }
-            let mut decorated = None;
-            native_chat_decorate(uuid, &name, &message.content, &mut decorated);
-            message.decorate(decorated);
-        }
         let bound = play::ChatTypeBound {
             chat_type: self.chat_type,
             name: self.player_display_name(uuid, &name),
             target: None,
         };
+        // The `ServerChatEvent` counterpart runs here:
+        // the game tells the mods, then broadcasts what they left.
+        if crate::native_client_hooks::has_mods() {
+            events.push(HostEvent::ChatSubmitted {
+                message: Box::new(message),
+                bound: Box::new(bound),
+                name,
+            });
+            return;
+        }
         let line = format!("<{name}> {}", message.content);
-        self.broadcast_chat(&message, &bound, line, events);
+        // No mods here (`has_mods` above), so no `chat_recipient` listener hides anyone.
+        self.broadcast_chat(&message, &bound, line, &[], events);
         events.push(HostEvent::PlayerChat {
             sender: uuid,
             text: message.content,
         });
+    }
+
+    /// Announces a new chat session to everyone. Vanilla runs this on the same
+    /// `chatMessageChain` as chat, so a message that came first is relayed
+    /// first. A message the game still has to hand to the mods
+    /// (`HostEvent::ChatSubmitted`) is relayed when the game reaches it, so
+    /// the announcement then waits behind it: clients would check that
+    /// message against the new session and mark the sender's chain broken.
+    pub(super) fn announce_chat_session(
+        &mut self,
+        update: play::PlayerInfoUpdate,
+        events: &mut Vec<HostEvent>,
+    ) {
+        if events
+            .iter()
+            .any(|e| matches!(e, HostEvent::ChatSubmitted { .. }))
+        {
+            events.push(HostEvent::ChatSessionStarted(Box::new(update)));
+        } else {
+            self.broadcast(&C::PlayerInfoUpdate(update));
+        }
     }
 
     /// handleChatSessionUpdate: a new profile key, validated against the
@@ -350,16 +323,19 @@ impl Hub {
         match ChatSession::validate(p.session, key, keys, uuid) {
             Ok(session) => {
                 let data = session.data();
-                self.guests[i].chain = Chain::keyed(session);
+                self.guests.update(i, |g| g.chain = Chain::keyed(session));
                 // resetPlayerChatState: INITIALIZE_CHAT to every player.
-                self.broadcast(&C::PlayerInfoUpdate(play::PlayerInfoUpdate {
-                    actions: 2,
-                    entries: vec![play::PlayerInfo {
-                        uuid,
-                        chat_session: Some(data),
-                        ..Default::default()
-                    }],
-                }));
+                self.announce_chat_session(
+                    play::PlayerInfoUpdate {
+                        actions: 2,
+                        entries: vec![play::PlayerInfo {
+                            uuid,
+                            chat_session: Some(data),
+                            ..Default::default()
+                        }],
+                    },
+                    events,
+                );
             }
             Err(reason) => {
                 events.push(HostEvent::Error(
@@ -371,18 +347,20 @@ impl Hub {
     }
 
     /// PlayerList.broadcastChatMessage: logged (`[Not Secure]` unless signed
-    /// and fresh), then sent to every player.
+    /// and fresh), then sent to every player but the ones in `hidden` (the
+    /// receivers a mod kept it from, `chat_recipient`).
     pub fn broadcast_chat(
         &mut self,
         message: &ChatMessage,
         bound: &play::ChatTypeBound,
         line: String,
+        hidden: &[u128],
         events: &mut Vec<HostEvent>,
     ) {
         let secure = message.trusted(now_millis());
         events.push(HostEvent::Chat { line, secure });
         for k in 0..self.guests.len() {
-            if self.guests[k].placed {
+            if self.guests[k].placed && !hidden.contains(&self.guests[k].uuid) {
                 self.send_chat(k, message, bound);
             }
         }
@@ -393,39 +371,43 @@ impl Hub {
     /// packed against its cache; a signed message joins the cache and the
     /// messages the player must acknowledge.
     pub fn send_chat(&mut self, k: usize, message: &ChatMessage, bound: &play::ChatTypeBound) {
-        let g = &mut self.guests[k];
-        if g.info.chat_visibility != 0 {
-            return;
-        }
-        let last_seen = message
-            .last_seen
-            .iter()
-            .map(|s| g.signatures.pack(s))
-            .collect();
-        g.send(&C::PlayerChat(play::PlayerChat {
-            global_index: g.chat_index,
-            sender: message.sender,
-            index: message.index,
-            signature: message.signature.map(|s| s.to_vec()),
-            content: message.content.clone(),
-            timestamp: message.timestamp,
-            salt: message.salt,
-            last_seen,
-            unsigned_content: message.unsigned_content.clone(),
-            filter: (0, Vec::new()),
-            chat_type: bound.clone(),
-        }));
-        g.chat_index += 1;
-        if let Some(signature) = &message.signature {
-            g.signatures.push(&message.last_seen, Some(signature));
-            g.last_seen.add_pending(signature);
-            if g.last_seen.tracked_count() > 4096 {
-                let conn = g.conn;
-                self.kick(
-                    conn,
-                    translatable("multiplayer.disconnect.too_many_pending_chats", &[]),
-                );
+        let overflow = self.guests.update(k, |g| {
+            if g.info.chat_visibility != 0 {
+                return false;
             }
+            let last_seen = message
+                .last_seen
+                .iter()
+                .map(|s| g.signatures.pack(s))
+                .collect();
+            g.send(&C::PlayerChat(play::PlayerChat {
+                global_index: g.chat_index,
+                sender: message.sender,
+                index: message.index,
+                signature: message.signature.map(|s| s.to_vec()),
+                content: message.content.clone(),
+                timestamp: message.timestamp,
+                salt: message.salt,
+                last_seen,
+                unsigned_content: message.unsigned_content.clone(),
+                filter: (0, Vec::new()),
+                chat_type: bound.clone(),
+            }));
+            g.chat_index += 1;
+            if let Some(signature) = &message.signature {
+                g.signatures.push(&message.last_seen, Some(signature));
+                g.last_seen.add_pending(signature);
+                if g.last_seen.tracked_count() > 4096 {
+                    return true;
+                }
+            }
+            false
+        });
+        if overflow {
+            self.kick(
+                self.guests[k].conn,
+                translatable("multiplayer.disconnect.too_many_pending_chats", &[]),
+            );
         }
     }
 
@@ -490,7 +472,7 @@ impl Hub {
         events: &mut Vec<HostEvent>,
     ) -> Result<Vec<(String, ChatMessage)>, DecodeError> {
         let (enforce, now) = (self.enforces_secure_chat(), now_millis());
-        let g = &mut self.guests[i];
+        self.guests.update(i, |g| {
         let uuid = g.uuid;
         let mut out = Vec::new();
         if p.arguments.is_empty() {
@@ -540,6 +522,7 @@ impl Hub {
             return Err(mismatch(events));
         }
         Ok(out)
+        })
     }
 
     /// `PlayerList.broadcastChatMessage` for a non-player command source:
@@ -565,14 +548,15 @@ impl Hub {
         }
     }
 
-    /// A message command's chat (SayCommand, EmoteCommands): to everyone,
-    /// bound to `chat_type` and the sender's name.
+    /// A message command's chat (SayCommand, EmoteCommands): to everyone but
+    /// the players in `hidden`, bound to `chat_type` and the sender's name.
     pub fn broadcast_command_chat(
         &mut self,
         i: usize,
         chat_type: &str,
         message: Option<ChatMessage>,
         text: &str,
+        hidden: &[u128],
         events: &mut Vec<HostEvent>,
     ) {
         let (uuid, name) = (self.guests[i].uuid, self.guests[i].name.clone());
@@ -586,7 +570,7 @@ impl Hub {
             _ => format!("* {name} {text}"),
         };
         match message {
-            Some(message) => self.broadcast_chat(&message, &bound, line, events),
+            Some(message) => self.broadcast_chat(&message, &bound, line, hidden, events),
             // An unsigned command packet (no signing context):
             // PlayerChatMessage.system, a disguised chat.
             None => {
@@ -595,7 +579,7 @@ impl Hub {
                     secure: false,
                 });
                 for k in 0..self.guests.len() {
-                    if self.guests[k].placed {
+                    if self.guests[k].placed && !hidden.contains(&self.guests[k].uuid) {
                         self.send_disguised(k, literal(text), bound.clone());
                     }
                 }
@@ -648,6 +632,15 @@ impl Hub {
             .id("minecraft:chat_type", &format!("minecraft:{name}"))
             .unwrap_or(self.chat_type)
     }
+}
+
+/// A yellow translation of player names (`multiplayer.player.joined`).
+pub(super) fn yellow_names(key: &str, names: Vec<Tag>) -> Tag {
+    Tag::compound([
+        ("translate", string(key)),
+        ("with", Tag::List(names)),
+        ("color", string("yellow")),
+    ])
 }
 
 #[cfg(test)]

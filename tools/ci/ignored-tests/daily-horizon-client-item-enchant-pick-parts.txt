@@ -1,0 +1,5 @@
+# ItemPart::is_primary_item_for, apply_enchantments and is_not_replaceable_by_pick_action (arismoko/horizon#3225, part 1).
+horizon-client game::enchant_pick_parts_tests::a_client_refresh_keeps_and_a_world_close_retires_the_servers_answers lib daily resources
+horizon-client game::enchant_pick_parts_tests::apply_enchantments_starts_from_vanilla_and_refuses_another_count lib daily resources
+horizon-client game::enchant_pick_parts_tests::pick_asks_each_hotbar_stack_until_one_may_be_replaced lib daily resources
+horizon-client game::enchant_pick_parts_tests::primary_answers_are_asked_at_install_and_read_by_selection lib daily resources

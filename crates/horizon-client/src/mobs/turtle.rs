@@ -16,10 +16,12 @@ use super::{
     path::PathType,
 };
 use crate::blocks::Fluid;
+use crate::health::DamageLevel;
 use horizon_core::{
     geometry::{Vec3, trig},
     random::RandomSource,
 };
+use horizon_world::move_gate::MoveGate;
 
 /// `Turtle.registerGoals`, and the path maluses and navigation `Turtle` and
 /// `TurtlePathNavigation` give it.
@@ -154,12 +156,18 @@ pub fn move_control(m: &mut Mob) {
 /// `Turtle.travelInWater`: swims at 0.1 move speed with 0.9 drag, and sinks
 /// slowly unless it has a target or is going home and near its home. On
 /// land the usual travel.
-pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
+pub fn travel(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    input: Vec3,
+    events: &mut Vec<MobEvent>,
+) -> bool {
     if !m.fluids.in_water {
         return false;
     }
     m.move_relative(0.1, input);
-    m.do_move(w, events);
+    m.do_move(w, level, events, &mut MoveGate::new());
     m.velocity = m.velocity.scale(0.9);
     if m.ai.target.is_none() && (!going_home(m) || !close_to_home(m, 20.0)) {
         m.velocity.y -= 0.005;
@@ -237,7 +245,7 @@ impl Goal for LayEgg {
             let at = [m.position.x, m.position.y, m.position.z];
             // `TurtleLayEggGoal` plays the sound with the level's random, then
             // draws the egg count from the turtle's own.
-            let pitch = 0.9 + cx.lr.next_float() * 0.2;
+            let pitch = 0.9 + cx.level.random().next_float() * 0.2;
             cx.events
                 .push(MobEvent::Sound("entity.turtle.lay_egg", at, 0.3, pitch));
             // Blocks.TURTLE_EGG with EGGS = nextInt(4) + 1 above the sand.
@@ -703,6 +711,7 @@ mod tests {
     /// random, the egg count from the turtle's, and the egg it sets is
     /// followed by `block_place` from the turtle at the new block.
     #[test]
+    #[ignore = "daily"]
     fn laying_an_egg_posts_block_place_with_the_level_s_pitch_and_its_own_eggs() {
         let ran = crate::mobs::world::with_test_world(&[], |w, _| {
             use horizon_core::random::LegacyRandom;
@@ -711,15 +720,15 @@ mod tests {
             m.extra.flag = true;
             m.extra.counter = 201;
             m.random = horizon_core::random::EntityRandom::own(LegacyRandom::new(7));
-            let mut lr = crate::mobs::world::level_random(11);
-            let mut level = lr.clone();
+            let mut lr = crate::health::TestLevel::new(11);
+            let mut level = lr.random().clone();
             let pitch = 0.9_f32 + level.next_float() * 0.2_f32;
             let mut own = m.random.clone();
             let eggs = own.next_int_bound(4).unwrap() + 1;
             let mut events = Vec::new();
             let mut cx = Cx {
                 w,
-                lr: &mut lr,
+                level: &mut lr.level(),
                 events: &mut events,
             };
             let mut goal = LayEgg(MoveToBlock {
@@ -757,9 +766,9 @@ mod tests {
                 )),
                 "the new egg posts block_place from the turtle: {events:?}"
             );
-            assert_eq!(lr.state(), level.state());
+            assert_eq!(lr.random().state(), level.state());
             assert_eq!(m.random.state(), own.state());
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

@@ -340,10 +340,9 @@ pub(crate) fn search_field(
     }
 }
 
-/// The plate, with the open page's name (or the search's) over its list.
+/// The open page's name (or the search's) and rule, over its already-painted plate.
 pub(crate) fn plate(batch: &mut HudBatch, atlas: &HudAtlas, cols: &Columns, heading: &str) {
     let [px, py, pw, _] = cols.plate;
-    style::sheet(batch, atlas, cols.plate);
     let heading = Text::literal(style::fit(atlas, heading, pw - 24.0));
     batch.text_styled(atlas, &heading, px + 12.0, py + 10.0, style::WHITE, true);
     style::heading_rule(batch, atlas, [px + 8.0, py + 24.0, pw - 16.0, 1.0]);
@@ -1457,7 +1456,18 @@ pub(crate) trait Hosted {
     /// it, as the arrow keys do, rather than press it.
     fn clicks_step(&mut self, on: bool);
     /// `waiting`: the binding the host waits on.
-    fn draw(
+    fn discard_draw(&mut self);
+    fn draw_background(
+        &mut self,
+        s: &Settings,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        in_world: bool,
+        waiting: Option<Capture>,
+    );
+    fn draw_contents(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32));
+    #[cfg(test)]
+    fn draw_test_frame(
         &mut self,
         s: &Settings,
         batch: &mut HudBatch,
@@ -1465,7 +1475,13 @@ pub(crate) trait Hosted {
         cursor: (f32, f32),
         in_world: bool,
         waiting: Option<Capture>,
-    );
+        phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
+    ) {
+        self.draw_background(s, batch, atlas, in_world, waiting);
+        phases(crate::screen_draw::RenderPhase::Background, batch);
+        self.draw_contents(batch, atlas, cursor);
+        phases(crate::screen_draw::RenderPhase::Foreground, batch);
+    }
     /// A press (or a drag with `drag`) at `at`.
     fn click(
         &mut self,
@@ -1588,6 +1604,8 @@ pub(crate) struct Shell<S: Screen> {
     waiting: Option<Capture>,
     /// The rows as last built, and what for.
     built: Option<(Built<S::Page, S::Row>, Rc<View<S::Page, S::Row>>)>,
+    /// This frame's prepared view, consumed before the foreground hook.
+    frame_draw: Option<Rc<View<S::Page, S::Row>>>,
     /// The settings as the screen found them, for Undo (`Screen::undoes`), and whether it
     /// changed them since.
     before: Option<Box<Settings>>,
@@ -1623,6 +1641,7 @@ impl<S: Screen + Default> Default for Shell<S> {
             picked: None,
             waiting: None,
             built: None,
+            frame_draw: None,
             before: None,
             changed: false,
             focus_next: None,
@@ -2243,7 +2262,6 @@ impl<S: Screen> Shell<S> {
         let [x, y, w, _] = cols.dock;
         let left = x + DOCK_INSET;
         let top = y + DOCK_NAME_Y;
-        style::sheet(batch, atlas, cols.dock);
         let row = described.map(|i| &view.rows[i]);
         let why = row.and_then(|row| row.why.as_deref().filter(|_| !row.live));
         let said = row.map(|row| self.strip_text(row));
@@ -2286,15 +2304,18 @@ impl<S: Screen + Default> Hosted for Shell<S> {
     fn open(&mut self) {
         *self = Self::default();
     }
-    fn draw(
+    fn discard_draw(&mut self) {
+        self.frame_draw = None;
+    }
+    fn draw_background(
         &mut self,
         s: &Settings,
         batch: &mut HudBatch,
         atlas: &HudAtlas,
-        cursor: (f32, f32),
         in_world: bool,
         waiting: Option<Capture>,
     ) {
+        self.frame_draw = None;
         self.waiting = waiting;
         self.keep(s);
         let size = (batch.width, batch.height);
@@ -2321,6 +2342,16 @@ impl<S: Screen + Default> Hosted for Shell<S> {
         }
         let cols = view.cols;
         backdrop(batch, atlas, in_world);
+        style::sheet(batch, atlas, cols.plate);
+        style::sheet(batch, atlas, cols.dock);
+        self.frame_draw = Some(view);
+    }
+    fn draw_contents(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
+        let view = self
+            .frame_draw
+            .take()
+            .expect("shell background before contents");
+        let cols = view.cols;
         let current = self.current(&view);
         self::mark(batch, atlas, &cols, &lang::get(self.screen.title()));
         let pages = self.page_list(&view, Some(atlas));

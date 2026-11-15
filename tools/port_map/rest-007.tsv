@@ -1,11 +1,11 @@
-BuildContexts.Continuation.execute	inline	crates/horizon-client/src/game/commands/execute.rs::Game::run_execute	the rest of a modifier chain runs as a loop over the sources in run_execute, not as a queued continuation
-BuildContexts.TopLevel.execute	port	crates/horizon-client/src/game/commands/execute.rs::Game::execute_line	gap: minor: no trace-start event (only the /debug tracer uses it)
-BuildContexts.Unbound.execute	port	crates/horizon-client/src/game/commands/execute.rs::Game::execute_line	gap: minor: no trace-start event (only the /debug tracer uses it)
-CallFunction.execute	port	crates/horizon-client/src/game/functions.rs::Game::run_function	gap: minor: the lines run in one loop, not through the command queue; no tracer onCall
-ContinuationTask.execute	inline	crates/horizon-client/src/game/commands/execute.rs::Game::run_execute	the one-source-at-a-time task queue is the loop over sources in run_execute
-ContinuationTask.schedule	inline	crates/horizon-client/src/game/commands/execute.rs::Game::run_execute	no queue of continuation tasks: run_execute walks the sources in a loop
-net/minecraft/commands/execution/tasks/ExecuteCommand#execute	port	crates/horizon-client/src/game/commands/execute.rs::Game::run_execute	gap: minor: profiler and tracer.onReturn are not reported; forked errors are silenced in the run branch
-IsolatedCall.execute	inline	crates/horizon-client/src/game/functions.rs::Game::run_function	the new depth and the isolated return slot are set up in run_function; if function reaches it through call_function_ref
+BuildContexts.Continuation.execute	inline	crates/horizon-client/src/game/administration/commands/execute.rs::Game::run_execute	the rest of a modifier chain runs as a loop over the sources in run_execute, not as a queued continuation
+BuildContexts.TopLevel.execute	port	crates/horizon-client/src/game/administration/commands/execute.rs::Game::execute_line	gap: minor: no trace-start event (only the /debug tracer uses it)
+BuildContexts.Unbound.execute	port	crates/horizon-client/src/game/administration/commands/execute.rs::Game::execute_line	gap: minor: no trace-start event (only the /debug tracer uses it)
+CallFunction.execute	port	crates/horizon-client/src/game/administration/functions.rs::Game::run_function	gap: minor: the lines run in one loop, not through the command queue; no tracer onCall
+ContinuationTask.execute	inline	crates/horizon-client/src/game/administration/commands/execute.rs::Game::run_execute	the one-source-at-a-time task queue is the loop over sources in run_execute
+ContinuationTask.schedule	inline	crates/horizon-client/src/game/administration/commands/execute.rs::Game::run_execute	no queue of continuation tasks: run_execute walks the sources in a loop
+net/minecraft/commands/execution/tasks/ExecuteCommand#execute	port	crates/horizon-client/src/game/administration/commands/execute.rs::Game::run_execute	gap: minor: profiler and tracer.onReturn are not reported; forked errors are silenced in the run branch
+IsolatedCall.execute	inline	crates/horizon-client/src/game/administration/functions.rs::Game::run_function	the new depth and the isolated return slot are set up in run_function; if function reaches it through call_function_ref
 CommandFunction.shouldConcatenateNextLine	inline	crates/horizon-client-render/src/datapack.rs::parse_function	the trailing-backslash join is the continuation loop in parse_function
 CommandFunction.checkCommandLineLength	missing		minor: no 2,000,000-character limit on a command line; a longer line is not refused
 CommandFunction.parseCommand	port	crates/horizon-client/src/game/functions.rs::Game::admit_store	ordinary lines compile at function permission against actual and candidate registries before the file is admitted; macro lines remain deferred
@@ -60,7 +60,7 @@ BlockPos.subtract	inline	crates/horizon-core/src/position.rs::BlockPos::offset	c
 BlockPos.multiply	skip:other		only the MutableBlockPos override calls it; nothing scales a block position in gameplay
 BlockPos.rotate	skip:other		only the MutableBlockPos override calls it in 26.3; structure rotation is StructureTemplate.transform
 BlockPos.cross	skip:other		no callers in the 26.3 sources
-BlockPos.randomInCube	inline	crates/horizon-world/src/level/tick.rs::Sim::lightning_clear_copper	the 3x3x3 random picks of the lightning copper walk; WeavingMobEffect's cobwebs draw the same way in game/potions.rs
+BlockPos.randomInCube	inline	crates/horizon-world/src/level/tick.rs::Sim::lightning_clear_copper	the 3x3x3 random picks of the lightning copper walk; WeavingMobEffect's cobwebs draw the same way in game/items/potions.rs
 BlockPos.randomBetweenClosed	inline	crates/horizon-world/src/worldgen/projected.rs::SteppedColumnClusterFeature::place	gap: minor: FlyNodeEvaluator.getStarts' random start points are not ported; path.rs Finder::start uses one start
 BlockPos.withinClippedManhattan	skip:other		no callers in the 26.3 sources
 BlockPos.manhattanOrdered	skip:other		only withinClippedManhattan calls it, and nothing calls that
@@ -82,7 +82,7 @@ DefaultedMappedRegistry.getValue	skip:data		registry bookkeeping; Horizon's tabl
 DefaultedMappedRegistry.byId	skip:data		registry bookkeeping; Horizon's tables fix the registry contents
 Direction.makeDirectionArray	skip:java		builds an array of the six directions
 Direction.rotate	port	crates/horizon-assets/src/bake/transform.rs::BlockModelTransform::direction	a facing turned by a block model's rotation, then snapped to the nearest direction
-Direction.getYRot	inline	crates/horizon-client/src/game/ghasts.rs::Game::spawn_ghastling	the facing-to-yaw table is inline there: north 180, east 270, west 90, others 0
+Direction.getYRot	inline	crates/horizon-client/src/game/mobs/ghasts.rs::Game::spawn_ghastling	the facing-to-yaw table is inline there: north 180, east 270, west 90, others 0
 Direction.getFacingAxis	port	crates/horizon-world/src/level/place.rs::Ctx::nearest_looking_vertical	the Y axis only, which is the only axis vanilla asks for
 Direction.getClockWiseX	skip:other		reached only from getClockWise(Axis), which no 26.3 code calls
 Direction.getCounterClockWiseX	skip:other		reached only from getClockWise(Axis), which no 26.3 code calls
@@ -93,7 +93,7 @@ Direction.getNearest	port	crates/horizon-core/src/geometry/mod.rs::Direction::ap
 Direction.verifyVertical	skip:data		codec check for vertical directions
 Direction.get	inline	crates/horizon-world/src/level/portal_travel.rs::largest_rectangle_around	the positive side is negative(axis).opposite() there; the PortalForcer call is not traced
 Direction.Axis.getPositive	inline	crates/horizon-world/src/level/portal_travel.rs::largest_rectangle_around	the positive side is negative(axis).opposite() there
-Direction.Axis.getNegative	port	crates/horizon-world/src/level/portal_travel.rs::negative	
+Direction.Axis.getNegative	port	crates/horizon-world/src/level/portal_travel.rs::negative
 Direction.Axis.getDirections	port	crates/horizon-world/src/level/creaking.rs::axis_directions	gap: minor: returns the negative direction first; vanilla returns the positive one first
 Direction.Axis.getPlane	port	crates/horizon-world/src/level/query.rs::is_horizontal	takes a direction and checks its axis is X or Z
 Direction.Axis.choose	port	crates/horizon-core/src/geometry/mod.rs::Vec3::component	gap: minor: selects a double component of a Vec3; no integer version

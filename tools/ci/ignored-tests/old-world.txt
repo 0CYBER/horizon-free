@@ -1,0 +1,5 @@
+# Disabled by the owner's decision until H077_OLD_WORLD is wired into CI.
+# needs the private old-world fixture: see followups
+horizon-client game::levels::tests::features_write_a_full_neighbour_only_through_its_sections H077_OLD_WORLD needs
+horizon-client game::levels::tests::an_old_chunk_saves_the_heights_its_new_neighbour_calculated H077_OLD_WORLD needs
+horizon-client game::levels::tests::the_overworld_cache_holds_the_edge_chunks_calculated_heights H077_OLD_WORLD needs

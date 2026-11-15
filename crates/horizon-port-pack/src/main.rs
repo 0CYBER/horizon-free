@@ -23,7 +23,7 @@
 //!   browser installs it: carried over into `<out>/carry/`, its classes
 //!   read, and the verdict (Works, Partly, Doesn't run) in
 //!   `<out>/check.json`.
-//! - `events <jar or folder> [--hooks <native-hooks.json>]`: the NeoForge
+//! - `events <jar or folder> [--hooks <hook-counterparts.json>]`: the NeoForge
 //!   events a mod listens to and the capabilities it uses, each with the
 //!   hooks for it (the catalog's `neoforge` names, built in or `--hooks`);
 //!   over a folder of jars, ranked by how many mods use each.
@@ -44,7 +44,7 @@ use std::{
     process::ExitCode,
 };
 
-const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | fetch <work> [--from <folder>] [<mod id>...] | carry <work> [--resources <prepared>] [<mod id>...] | report <work> | check <jar> <out> | port <pack> <work> [--from <folder>] [--resources <prepared>] | upgrade-datapack <pack> (<out> | --world <world>) | events <jar or folder> [--hooks <native-hooks.json>]";
+const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | fetch <work> [--from <folder>] [<mod id>...] | carry <work> [--resources <prepared>] [<mod id>...] | report <work> | check <jar> <out> | port <pack> <work> [--from <folder>] [--resources <prepared>] | upgrade-datapack <pack> (<out> | --world <world>) | events <jar or folder> [--hooks <hook-counterparts.json>]";
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();

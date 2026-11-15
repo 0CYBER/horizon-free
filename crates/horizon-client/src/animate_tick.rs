@@ -20,7 +20,14 @@ use horizon_world::{
     registry::{BlockRegistry, BlockStateId},
     worldgen::tags::TagDefinitions,
 };
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::{
+        OnceLock,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Animate {
@@ -310,8 +317,6 @@ fn candle_offsets(count: u8) -> &'static [[f64; 3]] {
 pub struct AnimateTables {
     kinds: Vec<Animate>,
     impermeable: Vec<bool>,
-    power_provider: Vec<bool>,
-    power_transmitter: Vec<bool>,
     /// `#triggers_ambient_dried_ghast_block_sounds` (soul sand, soul soil).
     dried_ghast_sounds: Vec<bool>,
     /// `#triggers_ambient_desert_sand_block_sounds` (sand, red sand).
@@ -324,13 +329,11 @@ pub struct AnimateTables {
     pale_oak_logs: Vec<bool>,
     /// `FireBlock.canBurn`: states with ignite odds above zero (none waterlogged).
     burnable: Vec<bool>,
-    /// Biome id -> ambient particles and probabilities from the prepared pack.
-    ambient: Vec<Vec<(T, f32)>>,
     /// Per state: 1 for a pointed dripstone, 2 for one whose tip points down.
     dripstone: Vec<u8>,
 }
 impl AnimateTables {
-    pub fn load(root: &Path, registry: &BlockRegistry, biomes: &Biomes) -> crate::Result<Self> {
+    pub fn load(root: &Path, registry: &BlockRegistry) -> crate::Result<Self> {
         let kinds = (0..registry.len() as u32)
             .map(|id| {
                 registry.state(BlockStateId(id)).map_or(Animate::None, |s| {
@@ -371,28 +374,6 @@ impl AnimateTables {
                 })
             })
             .collect();
-        let mut ambient = vec![Vec::new(); biomes.list.len()];
-        for (name, &id) in &biomes.index {
-            let path = root.join(format!(
-                "data/minecraft/worldgen/biome/{}.json",
-                name.trim_start_matches("minecraft:")
-            ));
-            let Ok(bytes) = std::fs::read(path) else {
-                continue;
-            };
-            let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-                continue;
-            };
-            let list = &json["attributes"]["minecraft:visual/ambient_particles"];
-            let entries = list["argument"].as_array().or_else(|| list.as_array());
-            for entry in entries.into_iter().flatten() {
-                let ty = entry["particle"]["type"].as_str().and_then(T::from_name);
-                let probability = entry["probability"].as_f64().unwrap_or(0.0) as f32;
-                if let (Some(ty), Some(slot)) = (ty, ambient.get_mut(id as usize)) {
-                    slot.push((ty, probability));
-                }
-            }
-        }
         let dripstone = (0..registry.len() as u32)
             .map(|id| {
                 registry.state(BlockStateId(id)).map_or(0, |s| {
@@ -413,8 +394,6 @@ impl AnimateTables {
             kinds,
             dripstone,
             impermeable: by_state("minecraft:impermeable"),
-            power_provider: by_state("minecraft:enchantment_power_provider"),
-            power_transmitter: by_state("minecraft:enchantment_power_transmitter"),
             dried_ghast_sounds: by_state("minecraft:triggers_ambient_dried_ghast_block_sounds"),
             desert_sand_sounds: by_state("minecraft:triggers_ambient_desert_sand_block_sounds"),
             poplar_leaf_logs: by_state("minecraft:required_for_poplar_leaf_ambience"),
@@ -424,7 +403,6 @@ impl AnimateTables {
             terracotta: by_state("minecraft:terracotta"),
             pale_oak_logs: by_state("minecraft:pale_oak_logs"),
             burnable,
-            ambient,
         })
     }
     fn kind(&self, state: BlockStateId) -> Animate {
@@ -439,8 +417,44 @@ impl AnimateTables {
     }
 }
 
+/// Per-game enchant answers supplied to ambient workers. Shared resource tables never own
+/// these answers: an integrated server and its client may share resources, but not hook hosts.
+#[derive(Default)]
+pub struct EnchantPower {
+    states: OnceLock<Vec<AtomicU8>>,
+}
+
+impl EnchantPower {
+    /// Rebuild once after parts installation, using the same power and transmitter sources
+    /// as server offers. Atomics permit the existing read-only installation lifecycle, with
+    /// no locking, allocation, host borrowing or mod dispatch during animation.
+    pub fn rebuild(
+        &self,
+        len: usize,
+        answer: impl Fn(BlockStateId) -> f32,
+        transmits: impl Fn(BlockStateId) -> bool,
+    ) {
+        let states = self
+            .states
+            .get_or_init(|| (0..len).map(|_| AtomicU8::new(0)).collect());
+        for (id, entry) in states.iter().enumerate() {
+            let state = BlockStateId(id as u32);
+            let bits = u8::from(answer(state) != 0.0) | (u8::from(transmits(state)) << 1);
+            entry.store(bits, Ordering::Relaxed);
+        }
+    }
+
+    fn has(&self, state: BlockStateId, bit: u8) -> bool {
+        self.states
+            .get()
+            .and_then(|states| states.get(state.0 as usize))
+            .is_some_and(|entry| entry.load(Ordering::Relaxed) & bit != 0)
+    }
+}
+
 /// World access for ambient effects.
 pub struct AnimateContext<'a> {
+    pub enchant_power: &'a EnchantPower,
     pub world: &'a World,
     pub facts: &'a BlockFacts,
     pub collision: &'a BlockCollisionRegistry<'a>,
@@ -587,8 +601,32 @@ pub fn animate_tick(
     player: [i32; 3],
 ) {
     for _ in 0..667 {
-        do_animate_tick(tables, engine, ctx, player, 16);
-        do_animate_tick(tables, engine, ctx, player, 32);
+        do_animate_tick(tables, engine, ctx, player, 16, true);
+        do_animate_tick(tables, engine, ctx, player, 32, true);
+    }
+}
+
+/// `ClientLevel.animateTick` for a screen's scene: `picks` picks among the scene's own
+/// `blocks` (not a radius around a view), each picked block's and fluid's animate tick,
+/// without what belongs to the level rather than its blocks (pack emitters, the creative
+/// marker, biome ambience). The picks come from the engine's random, which the scene
+/// seeds per tick; a scene of no blocks draws none.
+pub fn animate_scene(
+    tables: &AnimateTables,
+    engine: &mut ParticleEngine,
+    ctx: &AnimateContext,
+    blocks: &[[i32; 3]],
+    picks: u32,
+) {
+    let Ok(count) = i32::try_from(blocks.len()) else {
+        return;
+    };
+    if count == 0 {
+        return;
+    }
+    for _ in 0..picks {
+        let pos = blocks[next_int(engine.random(), count) as usize];
+        animate_at(tables, engine, ctx, pos, pos, false);
     }
 }
 fn next_int(r: &mut LegacyRandom, bound: i32) -> i32 {
@@ -600,12 +638,26 @@ fn do_animate_tick(
     ctx: &AnimateContext,
     center: [i32; 3],
     r: i32,
+    level: bool,
 ) {
     let random = engine.random();
     let x = center[0] + next_int(random, r) - next_int(random, r);
     let y = center[1] + next_int(random, r) - next_int(random, r);
     let z = center[2] + next_int(random, r) - next_int(random, r);
-    let pos = [x, y, z];
+    animate_at(tables, engine, ctx, [x, y, z], center, level);
+}
+
+/// One picked position's animate tick: its block's and fluid's, and with `level` the
+/// level's own (pack emitters, the creative marker, biome ambience).
+fn animate_at(
+    tables: &AnimateTables,
+    engine: &mut ParticleEngine,
+    ctx: &AnimateContext,
+    pos: [i32; 3],
+    center: [i32; 3],
+    level: bool,
+) {
+    let [x, y, z] = pos;
     if !ctx.world.loaded(x, z) {
         return;
     }
@@ -615,14 +667,16 @@ fn do_animate_tick(
         block_animate_tick(tables, engine, ctx, state, pos, center);
     }
     // Resource packs' Polytone block emitters (#11486): nothing without such a pack.
-    let level = ParticleLevel {
-        world: ctx.world,
-        facts: ctx.facts,
-        collision: ctx.collision,
-        player: None,
-        cached_chunk: std::cell::Cell::new(None),
-    };
-    engine.polytone_animate(&level, pos);
+    if level {
+        let level = ParticleLevel {
+            world: ctx.world,
+            facts: ctx.facts,
+            collision: ctx.collision,
+            player: None,
+            cached_chunk: std::cell::Cell::new(None),
+        };
+        engine.polytone_animate(&level, pos);
+    }
     let facts = ctx.facts.get(state);
     if facts.fluid != Fluid::None {
         fluid_animate_tick(
@@ -646,6 +700,9 @@ fn do_animate_tick(
             try_spawn_drip(tables, engine, ctx, [x, y - 1, z], drip, top_solid);
         }
     }
+    if !level {
+        return;
+    }
     if let Some((block, options)) = ctx.marker
         && ctx.registry.state(state).is_some_and(|s| s.name == block)
         && let Some(options) = options(state)
@@ -658,15 +715,11 @@ fn do_animate_tick(
             .chunks
             .get(&(x >> 4, z >> 4))
             .map_or(0, |c| c.biome(x, y, z));
-        let info = ctx.biomes.get(biome);
-        let particles: &[(T, f32)] = if ctx.biomes.pack_file(&info.name).is_some() {
-            &info.ambient_particles
-        } else {
-            tables
-                .ambient
-                .get(biome as usize)
-                .map_or(&[][..], Vec::as_slice)
-        };
+        let particles = ctx
+            .biomes
+            .list
+            .get(usize::from(biome))
+            .map_or(&[][..], |info| info.ambient_particles.as_slice());
         for &(ty, probability) in particles {
             // AmbientParticle.canSpawn: random.nextFloat() <= probability.
             let random = engine.random();
@@ -1074,17 +1127,7 @@ fn block_animate_tick(
                         }
                         let provider = ctx.state([pos[0] + ox, pos[1] + oy, pos[2] + oz]);
                         let between = ctx.state([pos[0] + ox / 2, pos[1] + oy, pos[2] + oz / 2]);
-                        if tables
-                            .power_provider
-                            .get(provider.0 as usize)
-                            .copied()
-                            .unwrap_or(false)
-                            && tables
-                                .power_transmitter
-                                .get(between.0 as usize)
-                                .copied()
-                                .unwrap_or(false)
-                        {
+                        if ctx.enchant_power.has(provider, 1) && ctx.enchant_power.has(between, 2) {
                             let r = engine.random();
                             let v = [
                                 f64::from(ox as f32 + r.next_float() - 0.5),
@@ -2054,6 +2097,61 @@ pub fn make_campfire_smoke(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn enchant_power_cache_queries_once_per_state_and_remains_worker_safe() {
+        fn worker_safe<T: Send + Sync>() {}
+        worker_safe::<AnimateTables>();
+        worker_safe::<EnchantPower>();
+        let ambience = crate::ambience::Ambience::new(17);
+        let tables = &ambience.enchant_power;
+        let random_before = ambience.random.clone().next_long();
+        let calls = std::cell::Cell::new(0);
+        let rebuild = |answers: [f32; 3]| {
+            tables.rebuild(
+                3,
+                |state| {
+                    calls.set(calls.get() + 1);
+                    answers[state.0 as usize]
+                },
+                |_| true,
+            )
+        };
+        rebuild([2.0, 0.0, -0.5]);
+        assert_eq!(calls.get(), 3);
+        for _ in 0..100 {
+            assert_eq!(
+                (0..3)
+                    .map(|id| tables.has(BlockStateId(id), 1))
+                    .collect::<Vec<_>>(),
+                [true, false, true],
+            );
+        }
+        assert_eq!(calls.get(), 3);
+        rebuild([0.0; 3]);
+        assert_eq!(calls.get(), 6);
+        assert!((0..3).all(|id| !tables.has(BlockStateId(id), 1)));
+        let other_ambience = crate::ambience::Ambience::new(17);
+        let other_game = &other_ambience.enchant_power;
+        other_game.rebuild(3, |_| 2.0, |_| false);
+        assert!(other_game.has(BlockStateId(0), 1));
+        assert!(!other_game.has(BlockStateId(0), 2));
+        assert!(
+            !tables.has(BlockStateId(0), 1),
+            "another game's rebuild is isolated"
+        );
+        other_game.rebuild(3, |_| 2.0, |_| true);
+        assert!(
+            other_game.has(BlockStateId(0), 2),
+            "transmitter changes rebuild too"
+        );
+        assert_eq!(
+            ambience.random.clone().next_long(),
+            random_before,
+            "cache rebuilds must not draw ambient random"
+        );
+        assert_eq!(other_ambience.random.clone().next_long(), random_before);
+    }
     /// `CampfireBlock.makeParticles` through `ClientLevel.doAddParticle`: the
     /// cosy smoke overrides the limiter, the plain smoke does not, so it is
     /// dropped beyond 32 blocks and at Particles: Minimal, and at Decreased
@@ -2063,7 +2161,11 @@ mod tests {
         use horizon_core::random::RandomSource as _;
         use std::collections::{HashMap, HashSet};
         let run = |level: u8, camera: [f64; 3]| {
-            let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
+            let mut engine = ParticleEngine::new(
+                &crate::resource_source::ResourceSource::indexed(Default::default()),
+                &HashMap::new(),
+                &HashSet::new(),
+            );
             engine.seed_randoms(5, 9, 0);
             engine.created_requests = Some(Vec::new());
             engine.particle_level = level;
@@ -2144,9 +2246,12 @@ mod tests {
         let assets = Assets::load(&root).unwrap();
         let registry = assets.registry;
         let facts = BlockFacts::load(&root, registry).unwrap();
-        let biomes = Biomes::load(&root).unwrap();
+        let biomes = Biomes::load(&crate::resource_source::ResourceRoot::directory(
+            root.clone(),
+        ))
+        .unwrap();
         let collision = crate::collisions::load(&root, registry).unwrap();
-        let tables = AnimateTables::load(&root, registry, &biomes).unwrap();
+        let tables = AnimateTables::load(&root, registry).unwrap();
         let portal = |axis: &str| {
             registry
                 .resolve(&StateSpec {
@@ -2188,8 +2293,13 @@ mod tests {
                 gateway_particles: &no_gateway,
                 thundering: false,
                 ultrawarm: false,
+                enchant_power: &EnchantPower::default(),
             };
-            let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
+            let mut engine = ParticleEngine::new(
+                &crate::resource_source::ResourceSource::directory(Path::new("").to_path_buf()),
+                &HashMap::new(),
+                &HashSet::new(),
+            );
             engine.seed_randoms(5, 9, 0);
             engine.created_requests = Some(Vec::new());
             engine.camera = [0.5, 65.0, 0.5];
@@ -2262,3 +2372,7 @@ mod tests {
         assert!((c[1] - (51.0 / 255.0)).abs() < 0.01);
     }
 }
+
+#[cfg(test)]
+#[path = "animate_tick_biome_tests.rs"]
+mod biome_particle_tests;

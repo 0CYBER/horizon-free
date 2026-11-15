@@ -43,13 +43,20 @@ def main():
     binary = args.binary
     if binary is None:
         with (work / 'build.log').open('w', encoding='utf-8') as log:
-            subprocess.run(['cargo', 'build', '-p', 'horizon-client', '--bin', 'horizon-client'],
+            subprocess.run(['cargo', 'build', '-p', 'horizon-game', '--bin', 'horizon-client'],
                            cwd=lab.ROOT, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=1800)
         binary = lab.cargo_target() / 'debug' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     with tempfile.TemporaryDirectory(prefix='hz-native-particles-') as scratch:
+        # Declare fixture providers before the load-owned particle registry freezes.
+        import zipfile
+        fixture_mod = Path(scratch) / 'fixture.hmod'
+        with zipfile.ZipFile(fixture_mod, 'w') as package:
+            package.writestr('horizon-mod.toml', 'id = "fixture"\nname = "Fixture"\nversion = "0.1.0"\napi = "0.2"\nside = "both"\ncapabilities = ["registries"]\n')
+            for provider in ('encoded', 'spark'):
+                package.writestr(f'assets/fixture/particles/{provider}.json', '{"textures": []}')
         with (work / 'client.log').open('w', encoding='utf-8') as log:
             run_game([str(binary.resolve()), '--headless', '--resources', str(args.resources.resolve()),
-                      '--game-dir', scratch], cwd=scratch,
+                      '--game-dir', scratch, '--dev-mod', str(fixture_mod)], cwd=scratch,
                      env=lab.game_env(HORIZON_NATIVE_CLIENT_PARTICLES_FIXTURE=str(work)),
                      stdout=log, stderr=subprocess.STDOUT, check=True, timeout=180)
     result = json.loads(report.read_text(encoding='utf-8'))

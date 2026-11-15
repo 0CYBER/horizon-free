@@ -1,7 +1,7 @@
 //! `BundleItem` acts on the item **and** its `bundle_contents` component;
 //! `BundleContents.getWeight` on the component alone.
 use super::*;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 fn removed(item: &str) -> ItemStack {
     let mut stack = ItemStack::new(item, 1);

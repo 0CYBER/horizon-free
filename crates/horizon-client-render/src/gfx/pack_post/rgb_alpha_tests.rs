@@ -68,6 +68,7 @@ fn pack() -> Post {
 
 #[test]
 fn three_channel_buffers_read_alpha_1() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack());
     // Twice: the second frame reads buffers that a first frame already used.

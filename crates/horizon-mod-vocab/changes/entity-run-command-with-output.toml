@@ -1,0 +1,2 @@
+ids = ["handle:EntityRef::run_command_with_output"]
+why = "Adds a command result with success and source feedback lines while preserving player chat delivery and the existing bool method."

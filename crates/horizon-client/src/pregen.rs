@@ -174,6 +174,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
     fn sweeps_every_chunk_of_the_area_once() {
         for shape in [Shape::Square, Shape::Circle] {
             for (center, radius) in [((0, 0), 0), ((3, -7), 5), ((-40, 12), 130), ((0, 0), 300)] {

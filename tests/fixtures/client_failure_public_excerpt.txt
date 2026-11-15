@@ -1,0 +1,5 @@
+  failed test: game::commands::knot_identity_tests::a_server_that_starts_tracking_later_shows_the_same_knot
+  panic location withheld (not a bounded tracked Rust location)
+  panic reason: assertion equality failed; payload withheld (resource privacy)
+  assertion operand withheld (private string/blob)
+  assertion operand withheld (private string/blob)

@@ -33,8 +33,9 @@ pub enum Class {
     Urgent,
     /// The chunks around the player: generation, light, meshing.
     Near,
-    /// Far terrain: runs on what the near work leaves, and never on every
-    /// worker at once, so near work that arrives finds a worker free.
+    /// Far terrain and the meshing of levels the player only views: runs on
+    /// what the near work leaves, and never on every worker at once, so near
+    /// work that arrives finds a worker free.
     Far,
 }
 
@@ -204,6 +205,22 @@ impl Pool {
 
     /// [`Pool::new`] whose workers free their buffers after `idle_release`.
     pub fn with_idle_release(threads: usize, name: &str, idle_release: Duration) -> Self {
+        Self::with_spawner(threads, idle_release, |worker, i| {
+            horizon_guest_stack::builder()
+                .name(format!("{name}-{i}"))
+                .spawn(move || {
+                    crate::behind_server();
+                    work(&worker, i);
+                })
+                .map(|_| ())
+        })
+    }
+
+    fn with_spawner(
+        threads: usize,
+        idle_release: Duration,
+        mut spawn: impl FnMut(Arc<Inner>, usize) -> std::io::Result<()>,
+    ) -> Self {
         let inner = Arc::new(Inner {
             sources: RwLock::new(Vec::new()),
             next_id: AtomicU64::new(0),
@@ -218,23 +235,21 @@ impl Pool {
             idle_release,
         });
         let mut started = 0;
+        let mut last_error = None;
         for i in 0..threads.max(1) {
-            let worker = inner.clone();
-            let spawned = std::thread::Builder::new()
-                .name(format!("{name}-{i}"))
-                .spawn(move || {
-                    // Ticks and frames come first.
-                    crate::behind_server();
-                    work(&worker, i);
-                });
-            if spawned.is_ok() {
-                started += 1;
+            match spawn(inner.clone(), i) {
+                Ok(()) => started += 1,
+                Err(error) => last_error = Some(error),
             }
         }
-        inner.threads.store(started.max(1), Ordering::Relaxed);
+        assert!(
+            started > 0,
+            "GuestWorkerUnavailable: no job worker could start: {last_error:?}"
+        );
+        inner.threads.store(started, Ordering::Relaxed);
         Self {
             inner,
-            threads: started.max(1),
+            threads: started,
         }
     }
 
@@ -505,6 +520,14 @@ fn work(inner: &Inner, worker: usize) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[should_panic(expected = "GuestWorkerUnavailable")]
+    fn all_worker_spawn_failures_refuse_the_pool() {
+        super::Pool::with_spawner(2, super::IDLE_RELEASE, |_, _| {
+            Err(std::io::Error::other("injected stack reservation refusal"))
+        });
+    }
+
     use super::*;
     use std::collections::VecDeque;
     use std::sync::mpsc;

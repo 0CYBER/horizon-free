@@ -37,6 +37,7 @@ fn translate(code: &str, path: &str) -> Program {
 }
 
 #[test]
+#[ignore = "daily"]
 fn signed_ids_accept_signed_expressions_in_each_draw_path() {
     for path in ["composite", "gbuffers", "shadow"] {
         for id in ["gl_VertexID", "gl_InstanceID"] {

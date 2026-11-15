@@ -76,33 +76,94 @@ fn one_of(v: &Value, names: &[&str]) -> Result<String> {
     }
 }
 
-impl SpecialModel {
-    /// A special model type of another namespace, which Horizon has no renderer for.
-    pub fn is_foreign(v: &Value) -> bool {
-        v.get("type")
-            .and_then(Value::as_str)
-            .and_then(|t| super::identifier(t).ok())
-            .is_some_and(|t| super::foreign::is_foreign(&t))
+/// `SkullBlock.Type`: vanilla's kinds and those native mods registered
+/// (`register_skull_kinds`).
+fn skull_kind(v: &Value) -> Result<String> {
+    const VANILLA: [&str; 7] = [
+        "skeleton",
+        "wither_skeleton",
+        "player",
+        "zombie",
+        "creeper",
+        "piglin",
+        "dragon",
+    ];
+    let s = string(v)?;
+    if VANILLA.contains(&s.as_str()) || super::is_skull_kind(&s) {
+        Ok(s)
+    } else {
+        Err(err("invalid enum name"))
     }
+}
+
+/// Canonical builtin special-model type identity, shared by decoding and ownership reporting.
+enum BuiltinSpecialType {
+    Bell,
+    Banner,
+    Book,
+    Conduit,
+    Chest,
+    CopperGolemStatue,
+    DecoratedPot,
+    EndCube,
+    Head,
+    PlayerHead,
+    ShulkerBox,
+    Shield,
+    Trident,
+}
+impl BuiltinSpecialType {
+    fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "minecraft:bell" => Some(Self::Bell),
+            "minecraft:banner" => Some(Self::Banner),
+            "minecraft:book" => Some(Self::Book),
+            "minecraft:conduit" => Some(Self::Conduit),
+            "minecraft:chest" => Some(Self::Chest),
+            "minecraft:copper_golem_statue" => Some(Self::CopperGolemStatue),
+            "minecraft:decorated_pot" => Some(Self::DecoratedPot),
+            "minecraft:end_cube" => Some(Self::EndCube),
+            "minecraft:head" => Some(Self::Head),
+            "minecraft:player_head" => Some(Self::PlayerHead),
+            "minecraft:shulker_box" => Some(Self::ShulkerBox),
+            "minecraft:shield" => Some(Self::Shield),
+            "minecraft:trident" => Some(Self::Trident),
+            _ => None,
+        }
+    }
+}
+
+impl SpecialModel {
+    /// Whether `id` belongs to the game's builtin special-model decoder, before mod replacement.
+    pub fn is_builtin_type(id: &str) -> bool {
+        BuiltinSpecialType::from_id(id).is_some()
+    }
+
     pub fn decode(v: &Value) -> Result<Self> {
         let m = object(v)?;
         let float_or = |key: &str, default: f32| get(m, key).map_or(Ok(default), float);
-        let kind = match ident(required(m, "type")?)?.as_str() {
-            "minecraft:bell" => SpecialKind::Bell,
-            "minecraft:banner" => SpecialKind::Banner {
+        let id = ident(required(m, "type")?)?;
+        let builtin = BuiltinSpecialType::from_id(&id).ok_or_else(|| {
+            err(&format!(
+                "unknown special model type {id}: no mod registered it"
+            ))
+        })?;
+        let kind = match builtin {
+            BuiltinSpecialType::Bell => SpecialKind::Bell,
+            BuiltinSpecialType::Banner => SpecialKind::Banner {
                 color: one_of(required(m, "color")?, &DYES)?,
                 wall: match get(m, "attachment") {
                     None => false,
                     Some(a) => one_of(a, &["wall", "ground"])? == "wall",
                 },
             },
-            "minecraft:book" => SpecialKind::Book {
+            BuiltinSpecialType::Book => SpecialKind::Book {
                 open_angle: float(required(m, "open_angle")?)?,
                 page1: float(required(m, "page1")?)?,
                 page2: float(required(m, "page2")?)?,
             },
-            "minecraft:conduit" => SpecialKind::Conduit,
-            "minecraft:chest" => SpecialKind::Chest {
+            BuiltinSpecialType::Conduit => SpecialKind::Conduit,
+            BuiltinSpecialType::Chest => SpecialKind::Chest {
                 texture: ident(required(m, "texture")?)?,
                 openness: float_or("openness", 0.0)?,
                 chest_type: match get(m, "chest_type") {
@@ -110,41 +171,29 @@ impl SpecialModel {
                     Some(t) => one_of(t, &["single", "left", "right"])?,
                 },
             },
-            "minecraft:copper_golem_statue" => SpecialKind::CopperGolemStatue {
+            BuiltinSpecialType::CopperGolemStatue => SpecialKind::CopperGolemStatue {
                 texture: ident(required(m, "texture")?)?,
                 pose: one_of(
                     required(m, "pose")?,
                     &["standing", "sitting", "running", "star"],
                 )?,
             },
-            "minecraft:decorated_pot" => SpecialKind::DecoratedPot,
-            "minecraft:end_cube" => SpecialKind::EndCube {
+            BuiltinSpecialType::DecoratedPot => SpecialKind::DecoratedPot,
+            BuiltinSpecialType::EndCube => SpecialKind::EndCube {
                 effect: one_of(required(m, "effect")?, &["portal", "gateway"])?,
             },
-            "minecraft:head" => SpecialKind::Head {
-                kind: one_of(
-                    required(m, "kind")?,
-                    &[
-                        "skeleton",
-                        "wither_skeleton",
-                        "player",
-                        "zombie",
-                        "creeper",
-                        "piglin",
-                        "dragon",
-                    ],
-                )?,
+            BuiltinSpecialType::Head => SpecialKind::Head {
+                kind: skull_kind(required(m, "kind")?)?,
                 texture: get(m, "texture").map(ident).transpose()?,
                 animation: float_or("animation", 0.0)?,
             },
-            "minecraft:player_head" => SpecialKind::PlayerHead,
-            "minecraft:shulker_box" => SpecialKind::ShulkerBox {
+            BuiltinSpecialType::PlayerHead => SpecialKind::PlayerHead,
+            BuiltinSpecialType::ShulkerBox => SpecialKind::ShulkerBox {
                 texture: ident(required(m, "texture")?)?,
                 openness: float_or("openness", 0.0)?,
             },
-            "minecraft:shield" => SpecialKind::Shield,
-            "minecraft:trident" => SpecialKind::Trident,
-            _ => return Err(err("unknown special model type")),
+            BuiltinSpecialType::Shield => SpecialKind::Shield,
+            BuiltinSpecialType::Trident => SpecialKind::Trident,
         };
         Ok(Self { kind })
     }

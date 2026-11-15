@@ -40,7 +40,7 @@ fn noise_width(vertex_extra: &str, fragment_extra: &str) -> u8 {
         },
         horizon_shaders::GameInputs::default(),
     );
-    let hud = HudBatch::new(SIZE);
+    let hud = HudBatch::scratch(SIZE);
     let mut frame = fixture_frame(&hud);
     frame.title = false;
     let pixels = gpu.render(&mut post, &color, &depth, &frame, &mut |_, _, _, _| {});
@@ -50,6 +50,7 @@ fn noise_width(vertex_extra: &str, fragment_extra: &str) -> u8 {
 
 #[test]
 fn a_fragment_shader_sets_the_noise_resolution() {
+    let _gpu = crate::gfx::test_gpu::lock();
     if Gpu::new().is_none() {
         return;
     }

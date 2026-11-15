@@ -157,28 +157,16 @@ impl<T: Copy> PoiSections<T> {
     }
 }
 
-/// The POI types villagers use.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Poi {
-    /// A job site, by profession index.
-    Job(u8),
-    Home,
-    Meeting,
-}
-impl Poi {
-    /// `PoiType.maxTickets`.
-    pub fn max_tickets(self) -> usize {
-        match self {
-            Poi::Meeting => 32,
-            _ => 1,
-        }
-    }
-    /// `PoiType.validRange`.
-    pub fn valid_range(self) -> i32 {
-        match self {
-            Poi::Meeting => 6,
-            _ => 1,
-        }
+impl<T> PoiSections<T> {
+    /// Drop classification compiled against a previous owning resource snapshot.
+    pub fn clear(&self) {
+        let mut lists = self
+            .sections
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        lists.by_column.clear();
+        lists.len = 0;
+        lists.prune_at = MIN_PRUNE;
     }
 }
 

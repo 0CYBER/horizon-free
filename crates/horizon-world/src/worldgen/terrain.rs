@@ -901,9 +901,9 @@ fn fill_noise_inner<B: TerrainBlockStates>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nbt::Tag;
     use crate::worldgen::aquifer::FluidPicker;
     use horizon_core::density::ConstantSampler;
+    use horizon_core::nbt::Tag;
 
     #[derive(Clone, Copy)]
     struct State(u32);

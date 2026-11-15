@@ -4,13 +4,12 @@ use super::{FORCED_FEATURES_RING, FORCED_FULL_RING, FORCED_TERRAIN_RING, Ranges}
 use crate::fast_hash::FxHashMap;
 use std::collections::HashSet;
 
-/// `Streaming::forced` and `mod_forced` as the Chebyshev distance from each column within
+/// The combined `Streaming::forced` set as the Chebyshev distance from each column within
 /// `REACH` of one to the nearest: `Ranges::in_main_range` answers by one lookup instead of going
 /// through every forced chunk (it is asked for every column, several times a tick). Past `MOST`
 /// forced chunks, and for a reach past `REACH`, their tiles answer.
 pub(super) struct ForcedCover {
     forced: HashSet<(i32, i32)>,
-    mod_forced: HashSet<(i32, i32)>,
     /// None past `MOST`.
     near: Option<FxHashMap<(i32, i32), u8>>,
     tiles: Tiles,
@@ -21,20 +20,13 @@ impl ForcedCover {
     /// Past this many forced chunks the distance map is not made (it holds up to
     /// `(2 * REACH + 1)^2` entries a forced chunk): the tiles answer.
     const MOST: usize = 4096;
-    pub(super) fn refresh(
-        cover: &mut Option<Self>,
-        forced: &HashSet<(i32, i32)>,
-        mod_forced: &HashSet<(i32, i32)>,
-    ) {
-        if cover
-            .as_ref()
-            .is_some_and(|c| c.forced == *forced && c.mod_forced == *mod_forced)
-        {
+    pub(super) fn refresh(cover: &mut Option<Self>, forced: &HashSet<(i32, i32)>) {
+        if cover.as_ref().is_some_and(|c| c.forced == *forced) {
             return;
         }
-        let near = (forced.len() + mod_forced.len() <= Self::MOST).then(|| {
+        let near = (forced.len() <= Self::MOST).then(|| {
             let mut near = FxHashMap::default();
-            for &(fx, fz) in forced.iter().chain(mod_forced) {
+            for &(fx, fz) in forced.iter() {
                 for dx in -Self::REACH..=Self::REACH {
                     for dz in -Self::REACH..=Self::REACH {
                         let d = dx.abs().max(dz.abs()) as u8;
@@ -48,9 +40,8 @@ impl ForcedCover {
         });
         *cover = Some(Self {
             forced: forced.clone(),
-            mod_forced: mod_forced.clone(),
             near,
-            tiles: Tiles::new(forced.iter().chain(mod_forced)),
+            tiles: Tiles::new(forced.iter()),
         });
     }
     /// Whether a forced chunk lies within `reach` of `(x, z)` (Chebyshev).
@@ -116,16 +107,6 @@ impl Tiles {
 }
 
 impl Ranges<'_> {
-    /// Whether a `/forceload` or a native mod's ticket holds the chunk.
-    pub(super) fn is_forced(&self, x: i32, z: i32) -> bool {
-        self.forced.contains(&(x, z)) || self.mod_forced.contains(&(x, z))
-    }
-    /// Every chunk a `/forceload` or a native mod's ticket holds, once each.
-    pub(super) fn forced_chunks(&self) -> impl Iterator<Item = &(i32, i32)> + '_ {
-        self.forced
-            .iter()
-            .chain(self.mod_forced.iter().filter(|c| !self.forced.contains(c)))
-    }
     /// `in_main_range` past the player's circle: whether a forced chunk lies within the ring
     /// `margin` asks for.
     pub(super) fn near_forced(&self, x: i32, z: i32, margin: i32) -> bool {
@@ -147,7 +128,8 @@ impl Ranges<'_> {
         if let Some(cover) = self.forced_cover {
             return cover.within(x, z, reach);
         }
-        self.forced_chunks()
+        self.forced
+            .iter()
             .any(|f| (x - f.0).abs() <= reach && (z - f.1).abs() <= reach)
     }
 }
@@ -175,11 +157,12 @@ mod tests {
         let mut cover = None;
         for case in 0..24 {
             let spread = [3, 12, 40][case % 3];
-            let forced = chunks(&mut seed, 1 + case % 9, spread);
+            let mut forced = chunks(&mut seed, 1 + case % 9, spread);
             // Some mod tickets on forced chunks, some apart.
             let mut mod_forced = chunks(&mut seed, case % 4, spread);
             mod_forced.extend(forced.iter().take(case % 2));
-            ForcedCover::refresh(&mut cover, &forced, &mod_forced);
+            forced.extend(mod_forced);
+            ForcedCover::refresh(&mut cover, &forced);
             let made = cover.as_ref().expect("a few forced chunks get a map");
             let ranges = |forced_cover| Ranges {
                 // The player's circle far away: only the forced chunks answer.
@@ -187,7 +170,6 @@ mod tests {
                 radius: 2,
                 extra: &[],
                 forced: &forced,
-                mod_forced: &mod_forced,
                 cover: None,
                 forced_cover,
                 band: None,
@@ -218,9 +200,9 @@ mod tests {
     fn past_the_most_no_map_is_made() {
         let forced: HashSet<(i32, i32)> = (0..=ForcedCover::MOST as i32).map(|x| (x, 0)).collect();
         let mut cover = None;
-        ForcedCover::refresh(&mut cover, &HashSet::new(), &HashSet::from([(0, 0)]));
+        ForcedCover::refresh(&mut cover, &HashSet::from([(0, 0)]));
         assert!(cover.as_ref().is_some_and(|c| c.near.is_some()));
-        ForcedCover::refresh(&mut cover, &forced, &HashSet::new());
+        ForcedCover::refresh(&mut cover, &forced);
         let made = cover
             .as_ref()
             .expect("a cover is made however many are forced");
@@ -254,44 +236,29 @@ mod tests {
     }
 
     /// Well past `MOST`, and either side of it, the cover answers every reach as the scan of
-    /// every forced chunk does: around forced chunks, between them, on tile edges and far off,
-    /// with some held by both a `/forceload` and a mod's ticket.
+    /// every forced chunk does: around forced chunks, between them, on tile edges and far off.
     #[test]
     fn past_the_most_the_tiles_answer_as_the_scan() {
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let m = ForcedCover::MOST;
-        // Some held both ways past the boundary, none at it (a chunk held both ways counts twice
-        // towards `MOST`, as `refresh` counts them).
-        for (n, both) in [(m, false), (m + 1, false), (6000, true)] {
-            for (kind, all) in sets(&mut seed, n).into_iter().enumerate() {
-                // Every third chunk a mod's ticket; with `both`, every fifth held both ways.
-                let (mut forced, mut mod_forced) = (HashSet::new(), HashSet::new());
-                for (i, &c) in all.iter().enumerate() {
-                    if i % 3 == 0 || (both && i % 5 == 0) {
-                        mod_forced.insert(c);
-                    }
-                    if i % 3 != 0 {
-                        forced.insert(c);
-                    }
-                }
+        for n in [m, m + 1, 6000] {
+            for (kind, forced) in sets(&mut seed, n).into_iter().enumerate() {
                 let mut cover = None;
-                ForcedCover::refresh(&mut cover, &forced, &mod_forced);
+                ForcedCover::refresh(&mut cover, &forced);
                 let made = cover.as_ref().unwrap();
-                let held = forced.len() + mod_forced.len();
-                assert_eq!(made.near.is_some(), held <= m);
+                assert_eq!(made.near.is_some(), forced.len() <= m);
                 let ranges = |forced_cover| Ranges {
                     center: (10_000_000, 10_000_000),
                     radius: 2,
                     extra: &[],
                     forced: &forced,
-                    mod_forced: &mod_forced,
                     cover: None,
                     forced_cover,
                     band: None,
                 };
-                let (scan, map) = (ranges(None), ranges(Some(made)));
-                // The scan goes through every forced chunk: fewer columns for more of them.
-                let near: Vec<_> = all.iter().step_by(all.len() / 40).copied().collect();
+                let map = ranges(Some(made));
+                // Keep every sampled column and reach; reuse its nearest forced chunk below.
+                let near: Vec<_> = forced.iter().step_by(forced.len() / 40).copied().collect();
                 let offsets = chunks(&mut seed, 6, 12);
                 let far = chunks(&mut seed, 12, 3000);
                 let columns = near
@@ -299,6 +266,19 @@ mod tests {
                     .flat_map(|&(x, z)| offsets.iter().map(move |&(dx, dz)| (x + dx, z + dz)))
                     .chain(far);
                 for (x, z) in columns {
+                    // All concentric Chebyshev queries have the same nearest chunk.
+                    // Find it by one independent full scan, instead of rescanning
+                    // thousands of forced chunks for each reach and margin. The
+                    // indexed cover still contains the complete original set.
+                    let nearest = *forced
+                        .iter()
+                        .min_by_key(|&&(fx, fz)| (x - fx).abs().max((z - fz).abs()))
+                        .unwrap();
+                    let nearest = HashSet::from([nearest]);
+                    let scan = Ranges {
+                        forced: &nearest,
+                        ..ranges(None)
+                    };
                     for reach in [-1, 0, 1, 2, 3, 4, 5, 6, 8, 11, 40] {
                         assert_eq!(
                             map.forced_within(x, z, reach),
@@ -350,10 +330,9 @@ mod tests {
         let mut seed = 0x2545_F491_4F6C_DD1Du64;
         for n in [1000, 4000, 4097, 6000, 20_000] {
             for (kind, forced) in sets(&mut seed, n).into_iter().enumerate() {
-                let none = HashSet::new();
                 let started = std::time::Instant::now();
                 let mut cover = None;
-                ForcedCover::refresh(&mut cover, &forced, &none);
+                ForcedCover::refresh(&mut cover, &forced);
                 let made_in = started.elapsed();
                 let made = cover.as_ref().unwrap();
                 let ranges = |forced_cover| Ranges {
@@ -361,7 +340,6 @@ mod tests {
                     radius: 2,
                     extra: &[],
                     forced: &forced,
-                    mod_forced: &none,
                     cover: None,
                     forced_cover,
                     band: None,

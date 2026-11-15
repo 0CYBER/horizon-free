@@ -43,12 +43,28 @@ const INTEGRATED_ONLY: &[&str] = &["publish", "unpublish"];
 /// Commands that check permissions only on dedicated servers
 /// (`checkPermissions` in SeedCommand and VersionCommand).
 const OPEN_WHEN_INTEGRATED: &[&str] = &["seed", "version"];
-/// Game rules of experimental features (minecart improvements), which the
-/// report lists but a vanilla-features world does not register.
-const EXPERIMENTAL_RULES: &[&str] = &["max_minecart_speed", "minecraft:max_minecart_speed"];
-
 pub struct CommandTree {
-    root: Value,
+    pub(super) root: Value,
+}
+
+/// Extend mod commands with game-session tooling, never vanilla's parity tree.
+pub(super) fn with_session_tools(extra: &Value) -> Value {
+    use crate::command::vanilla::{MODPROFILE_ACTIONS, MODPROFILE_PERMISSION};
+    let children: serde_json::Map<_, _> = MODPROFILE_ACTIONS
+        .into_iter()
+        .map(|(name, _)| {
+            (
+                name.to_owned(),
+                serde_json::json!({"type":"literal", "executable":true}),
+            )
+        })
+        .collect();
+    let mut root = extra.clone();
+    root["children"]["modprofile"] = serde_json::json!({
+        "type":"literal", "permissions":{"permission":{"level":MODPROFILE_PERMISSION.1}},
+        "children": children
+    });
+    root
 }
 
 /// A node of the filtered tree.
@@ -60,7 +76,7 @@ struct Node {
     children: Vec<usize>,
     redirect: Option<Vec<String>>,
     parser: Option<(String, Value)>,
-    suggestions: Option<&'static str>,
+    suggestions: Option<String>,
 }
 
 /// PermissionLevel names in the report's requirements.
@@ -103,7 +119,14 @@ impl CommandTree {
         builtin: &Builtin,
         extra: &Value,
     ) -> Commands {
-        self.packet_with_features(level, dedicated, builtin, extra, &[])
+        self.packet_with_features(
+            level,
+            dedicated,
+            builtin,
+            extra,
+            &[],
+            &crate::gamerules::rule_registry(),
+        )
     }
 
     pub fn packet_with_features(
@@ -113,21 +136,7 @@ impl CommandTree {
         builtin: &Builtin,
         extra: &Value,
         features: &[String],
-    ) -> Commands {
-        self.packet_granting(level, dedicated, builtin, extra, features, &[])
-    }
-
-    /// [`CommandTree::packet_with_features`] with root commands the level
-    /// would leave out sent anyway, each as for a player of the level it
-    /// requires: a server mod granted them (`native_player_commands_sent_v2`).
-    pub fn packet_granting(
-        &self,
-        level: u8,
-        dedicated: bool,
-        builtin: &Builtin,
-        extra: &Value,
-        features: &[String],
-        granted: &[String],
+        registry: &crate::gamerules::RuleRegistry,
     ) -> Commands {
         let minecart_improvements = features
             .iter()
@@ -153,23 +162,46 @@ impl CommandTree {
         } else {
             Value::Null
         };
-        // A server mod's root of vanilla's name replaces vanilla's (`replace_vanilla`).
-        let mut vanilla = self.root.clone();
+        let mut root = self.root.clone();
+        if let Some(gamerule) = root.get_mut("children").and_then(|c| c.get_mut("gamerule")) {
+            let mut rules = serde_json::Map::new();
+            for rule in registry.available_rules(minecart_improvements) {
+                let value = match rule.default {
+                    crate::gamerules::Value::Bool(_) => {
+                        serde_json::json!({"type": "argument", "parser": "brigadier:bool", "executable": true})
+                    }
+                    crate::gamerules::Value::Int(_) => {
+                        let mut bounds = serde_json::Map::new();
+                        if rule.min != i32::MIN {
+                            bounds.insert("min".into(), rule.min.into());
+                        }
+                        if rule.max != i32::MAX {
+                            bounds.insert("max".into(), rule.max.into());
+                        }
+                        serde_json::json!({"type": "argument", "parser": "brigadier:integer", "properties": bounds, "executable": true})
+                    }
+                };
+                for name in
+                    std::iter::once(rule.name.as_str()).chain(rule.name.strip_prefix("minecraft:"))
+                {
+                    rules.insert(name.to_owned(), serde_json::json!({"type":"literal", "executable": true, "children": {"value": value}}));
+                }
+            }
+            gamerule["children"] = Value::Object(rules);
+        }
         if let (Some(children), Some(mods)) = (
-            vanilla.get_mut("children").and_then(Value::as_object_mut),
+            root.get_mut("children").and_then(Value::as_object_mut),
             extra.get("children").and_then(Value::as_object),
         ) {
             children.retain(|name, _| !mods.contains_key(name));
         }
-        for root in [&vanilla, extra, &horizon] {
+        for root in [&root, extra, &horizon] {
             fill(
                 root,
                 0,
                 &mut Vec::new(),
                 level,
-                granted,
                 dedicated,
-                minecart_improvements,
                 &suggestions,
                 &mut nodes,
                 &mut paths,
@@ -211,7 +243,7 @@ impl CommandTree {
                         let id = argument_types.and_then(|t| t.id(parser)).unwrap_or(0);
                         (id, properties(parser, props))
                     }),
-                    suggestions: node.suggestions.map(str::to_owned),
+                    suggestions: node.suggestions.clone(),
                 }
             })
             .collect();
@@ -229,9 +261,7 @@ fn fill(
     target: usize,
     path: &mut Vec<String>,
     level: u8,
-    granted: &[String],
     dedicated: bool,
-    minecart_improvements: bool,
     suggestions: &HashMap<&str, &'static str>,
     nodes: &mut Vec<Node>,
     paths: &mut HashMap<Vec<String>, usize>,
@@ -261,18 +291,7 @@ fn fill(
             } else {
                 required_level(child)
             };
-        // A granted root, and what it leads to, as for its own level.
-        let level = if path.is_empty() && granted.contains(name) {
-            level.max(required)
-        } else {
-            level
-        };
-        if required > level
-            || path.len() == 1
-                && path[0] == "gamerule"
-                && !minecart_improvements
-                && EXPERIMENTAL_RULES.contains(&name.as_str())
-        {
+        if required > level {
             continue;
         }
         if path.is_empty()
@@ -287,7 +306,8 @@ fn fill(
         nodes.push(Node {
             name: name.clone(),
             kind: if argument { 2 } else { 1 },
-            executable: child["executable"].as_bool().unwrap_or(false),
+            executable: child["executable"].as_bool().unwrap_or(false)
+                && child["execution_level"].as_u64().unwrap_or(0) <= u64::from(level),
             restricted: required > 0,
             children: Vec::new(),
             redirect: redirect(child),
@@ -297,15 +317,18 @@ fn fill(
                     child["properties"].clone(),
                 )
             }),
-            // A server mod's node with custom suggestions (the report has none)
-            // asks the server.
             suggestions: if argument {
-                suggestions
-                    .get(path.join(" ").as_str())
-                    .copied()
-                    .or(child["suggestions"]
-                        .is_string()
-                        .then_some("minecraft:ask_server"))
+                // A mod's argument type the client does not know asks the server, like a vanilla
+                // argument whose provider is `ask_server`; vanilla's own providers are the
+                // static table by path.
+                child["suggestions"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        suggestions
+                            .get(path.join(" ").as_str())
+                            .map(|s| (*s).to_owned())
+                    })
             } else {
                 None
             },
@@ -317,9 +340,7 @@ fn fill(
             index,
             path,
             level,
-            granted,
             dedicated,
-            minecart_improvements,
             suggestions,
             nodes,
             paths,
@@ -454,7 +475,7 @@ mod tests {
         assert_eq!(properties("brigadier:string", &p), vec![2]);
     }
 
-    /// A mod's root of a vanilla name (`NativeCommand::replace_vanilla`)
+    /// A mod's root of a vanilla name (`mod_api::Command::replace_vanilla`)
     /// takes vanilla's place in the merged tree: the client gets one `stop`,
     /// the mod's, and the vanilla roots the mods don't name stay.
     #[test]
@@ -518,29 +539,145 @@ mod tests {
     }
 
     #[test]
-    fn a_granted_root_comes_with_its_subtree() {
-        let report: Value = serde_json::from_str(
-            r#"{"type":"root","children":{
-                "say":{"type":"literal","children":{"message":{"type":"argument","parser":"minecraft:message","executable":true}},
-                       "permissions":{"type":"minecraft:require","permission":{"type":"minecraft:command_level","level":"gamemasters"}}},
-                "stop":{"type":"literal","executable":true,
-                       "permissions":{"type":"minecraft:require","permission":{"type":"minecraft:command_level","level":"owners"}}},
-                "me":{"type":"literal","children":{"action":{"type":"argument","parser":"minecraft:message","executable":true}}}}}"#,
-        )
-        .unwrap();
-        let tree = CommandTree { root: report };
-        let b = Builtin::default();
-        let names = |p: &Commands| p.nodes.iter().map(|n| n.name.clone()).collect::<Vec<_>>();
-        let plain = tree.packet_granting(0, true, &b, &Value::Null, &[], &[]);
-        assert_eq!(names(&plain), ["", "me", "action"]);
-        let granted = tree.packet_granting(0, true, &b, &Value::Null, &[], &["say".into()]);
-        assert_eq!(names(&granted), ["", "me", "say", "action", "message"]);
-        assert!(granted.nodes[2].restricted);
-        // Nothing granted: the same tree as before.
-        assert_eq!(
-            names(&tree.packet_with_features(0, true, &b, &Value::Null, &[])),
-            names(&plain)
+    fn native_execution_levels_filter_runnable_flags_not_public_children() {
+        let mods = serde_json::json!({"type": "root", "children": {
+            "foo": {"type": "literal", "executable": true, "execution_level": 4,
+                "children": {"bar": {"type": "literal", "executable": true, "execution_level": 0}}}
+        }});
+        let tree = CommandTree { root: Value::Null };
+        for level in 0..=4 {
+            let packet = tree.packet_with(level, true, &Builtin::default(), &mods);
+            let foo = packet.nodes.iter().find(|n| n.name == "foo").unwrap();
+            assert_eq!(foo.executable, level == 4);
+            assert!(!foo.restricted, "public child keeps the root traversable");
+            assert!(
+                packet
+                    .nodes
+                    .iter()
+                    .find(|n| n.name == "bar")
+                    .unwrap()
+                    .executable
+            );
+            let dispatcher =
+                crate::command::network::from_packet(&packet, &crate::command::Dispatcher::new());
+            let registries = crate::command::Registries::default();
+            assert_eq!(
+                dispatcher.parse("foo", &registries).executable().is_ok(),
+                level == 4
+            );
+            assert!(
+                dispatcher
+                    .parse("foo bar", &registries)
+                    .executable()
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn a_mods_custom_argument_is_a_word_that_asks_the_server() {
+        let mut builtin = Builtin::default();
+        builtin.registries.insert(
+            "minecraft:command_argument_type".into(),
+            horizon_protocol::registry::Ids::from_names(
+                horizon_protocol::packets::play::ARGUMENT_TYPES
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect(),
+            ),
         );
+        let mods = serde_json::json!({"type": "root", "children": {
+            "machine": {"type": "literal", "children": {
+                "use": {"type": "literal", "children": {
+                    "mode": {"type": "argument", "parser": "brigadier:string",
+                        "properties": {"type": "word"}, "custom_argument": "test:machine",
+                        "suggestions": "minecraft:ask_server", "executable": true}
+                }}
+            }}
+        }});
+        let tree = CommandTree { root: Value::Null };
+        let packet = tree.packet_with(0, true, &builtin, &mods);
+        let mode_node = packet.nodes.iter().find(|n| n.name == "mode").unwrap();
+        assert_eq!(
+            mode_node.suggestions.as_deref(),
+            Some("minecraft:ask_server")
+        );
+        let (id, properties) = mode_node.parser.as_ref().unwrap();
+        assert_eq!(
+            horizon_protocol::packets::play::ARGUMENT_TYPES[*id as usize],
+            "brigadier:string"
+        );
+        let expected = horizon_protocol::packets::play::ArgumentProperties::String(0);
+        assert_eq!(
+            horizon_protocol::packets::play::ArgumentProperties::decode(*id, properties),
+            Ok(expected),
+            "a vanilla client reads the custom argument as one word"
+        );
+
+        let dispatcher =
+            crate::command::network::from_packet(&packet, &crate::command::Dispatcher::new());
+        let registries = crate::command::Registries::default();
+        assert!(
+            dispatcher
+                .parse("machine use press", &registries)
+                .executable()
+                .is_ok()
+        );
+        let typed = "machine use pr";
+        let (_, _, asks) = dispatcher.client_suggestions_asking(
+            &dispatcher.parse(typed, &registries),
+            typed.len(),
+            &registries,
+        );
+        assert!(asks, "the client asks the server for the type's values");
+    }
+
+    #[test]
+    fn native_argument_alternatives_survive_packet_reconstruction() {
+        let mut builtin = Builtin::default();
+        builtin.registries.insert(
+            "minecraft:command_argument_type".into(),
+            horizon_protocol::registry::Ids::from_names(
+                horizon_protocol::packets::play::ARGUMENT_TYPES
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect(),
+            ),
+        );
+        let mods = serde_json::json!({"type": "root", "children": {
+            "foo": {"type": "literal", "children": {
+                "a": {"type": "argument", "parser": "brigadier:integer", "executable": true, "execution_level": 4,
+                    "children": {"bar": {"type": "literal", "executable": true, "execution_level": 0}}},
+                "b": {"type": "argument", "parser": "brigadier:string", "properties": {"type": "word"}, "executable": true, "execution_level": 0}
+            }},
+            "denied": {"type": "literal", "children": {
+                "a": {"type": "argument", "parser": "brigadier:integer", "executable": true, "execution_level": 4,
+                    "children": {"bar": {"type": "literal", "executable": true, "execution_level": 0}}}
+            }}
+        }});
+        let tree = CommandTree { root: Value::Null };
+        for level in 0..=4 {
+            let packet = tree.packet_with(level, true, &builtin, &mods);
+            let dispatcher =
+                crate::command::network::from_packet(&packet, &crate::command::Dispatcher::new());
+            let registries = crate::command::Registries::default();
+            let parsed = dispatcher.parse("foo 7", &registries);
+            let (context, _) = parsed.executable().unwrap();
+            assert_eq!(context.get("b").is_some(), level < 4);
+            assert!(
+                dispatcher
+                    .parse("foo 7 bar", &registries)
+                    .executable()
+                    .is_ok()
+            );
+            assert_eq!(
+                dispatcher
+                    .parse("denied 7", &registries)
+                    .executable()
+                    .is_ok(),
+                level == 4
+            );
+        }
     }
 
     #[test]
@@ -551,24 +688,16 @@ mod tests {
         .unwrap();
         let mods: Value = serde_json::from_str(
             r#"{"type":"root","children":{"beacon":{"type":"literal","executable":true,"children":{
-                "height":{"type":"argument","parser":"brigadier:integer","properties":{"min":1,"max":64},"executable":true},
-                "who":{"type":"argument","parser":"brigadier:string","properties":{"type":"word"},"suggestions":"horizon:player_names","executable":true}}}}}"#,
+                "height":{"type":"argument","parser":"brigadier:integer","properties":{"min":1,"max":64},"executable":true}}}}}"#,
         )
         .unwrap();
         let tree = CommandTree { root: report };
         let packet = tree.packet_with(0, true, &Builtin::default(), &mods);
         let names: Vec<_> = packet.nodes.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(names, ["", "me", "beacon", "action", "height", "who"]);
-        // A mod's node with custom suggestions asks the server; vanilla's own keep theirs.
-        assert_eq!(
-            packet.nodes[5].suggestions.as_deref(),
-            Some("minecraft:ask_server")
-        );
-        assert_eq!(packet.nodes[4].suggestions, None);
-        assert_eq!(packet.nodes[3].suggestions, None);
+        assert_eq!(names, ["", "me", "beacon", "action", "height"]);
         let beacon = &packet.nodes[2];
         assert!(beacon.executable && !beacon.restricted);
-        assert_eq!(beacon.children, [4, 5]);
+        assert_eq!(beacon.children, [4]);
         let height = packet.nodes[4].parser.as_ref().unwrap();
         assert_eq!(height.1, vec![3, 0, 0, 0, 1, 0, 0, 0, 64]);
         // No mods: vanilla's tree as it is.
@@ -580,3 +709,6 @@ mod tests {
         );
     }
 }
+
+/// Horizon selector metadata sent beside Commands.
+pub mod selector_sync;

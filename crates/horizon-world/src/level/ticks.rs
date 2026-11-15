@@ -16,7 +16,7 @@ use horizon_core::{
 pub struct Ticks {
     /// Block ticks keyed by `BlockId` (vanilla Block registry ID).
     pub blocks: LevelTicks,
-    /// Fluid ticks keyed by vanilla Fluid registry ID (`FluidKind as u32`).
+    /// Fluid ticks keyed by `FluidKind::tick_id`, vanilla's Fluid registry ID for its own.
     pub fluids: LevelTicks,
     sub_tick: i64,
     /// `Level.randValue`, the LCG behind `getBlockRandomPos`.
@@ -218,14 +218,14 @@ impl Ticks {
         if let Some(captured) = &mut self.capture {
             captured.push(CapturedTick {
                 fluid: true,
-                kind: fluid.index() as u32,
+                kind: fluid.tick_id(),
                 pos,
                 delay,
             });
             return ScheduleResult::Added;
         }
         let tick = ScheduledTick {
-            kind: TickTypeId(fluid.index() as u32),
+            kind: TickTypeId(fluid.tick_id()),
             pos,
             trigger_tick: game_time.wrapping_add(i64::from(delay)),
             priority: TickPriority::Normal,
@@ -268,6 +268,7 @@ mod block_event_queue_tests {
             block: BlockId((i % 5) as u16),
             param_a: i % 3,
             param_b: 0,
+            note_override: None,
         }
     }
 

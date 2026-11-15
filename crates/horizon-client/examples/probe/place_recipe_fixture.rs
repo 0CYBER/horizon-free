@@ -35,14 +35,26 @@ pub fn main() -> horizon_client::Result<()> {
     let root = Path::new(args.get(1).ok_or(usage)?);
     let cases = fs::read_to_string(args.get(2).ok_or(usage)?)?;
     let orders = fs::read_to_string(args.get(3).ok_or(usage)?)?;
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
-    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
+    let recipes = Recipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items, &PackOverlay::NONE);
     let banners = horizon_client::banner::Banners::default();
     let station_recipes = horizon_client::stations::StationRecipes::default();
     let enchantments = horizon_client::enchant::Enchantments::default();
     let names = horizon_client::creative::Names::default();
     let env = Env {
+        crafting_remainder: None,
+        player: None,
+        player_entity_id: None,
+        loop_context: &crate::test_resources::loop_context(
+            horizon_world::native_load_context::LoopSide::Server,
+        ),
         items: &items,
         recipes: &recipes,
         brewing: &brewing,
@@ -53,7 +65,9 @@ pub fn main() -> horizon_client::Result<()> {
         trade: None,
         maps: None,
         limited_crafting: false,
+        can_equip: None,
         known_recipes: None,
+        slot_rules: None,
     };
     let mut out = String::new();
     for (line, order) in cases.lines().zip(orders.lines()) {

@@ -71,6 +71,8 @@ impl Scene {
             .enumerate()
             .map(|(i, (tracker, out))| Viewer {
                 entity_id: i as i32 + 1,
+                horizon: true,
+                sources: None,
                 spectator: false,
                 permission: 0,
                 moved: true,

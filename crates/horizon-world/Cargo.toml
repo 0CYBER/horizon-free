@@ -14,10 +14,18 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 postcard = { version = "=1.1.3", default-features = false, features = ["alloc"] }
 horizon-core = { path = "../horizon-core" }
+horizon-assets = { path = "../horizon-assets" }
 horizon-threads = { path = "../horizon-threads" }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 xxhash-rust = { version = "0.8.19", features = ["xxh32"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+cap-std = "3"
+cap-fs-ext = "3"
 
 # The binaries hold no tests (the library does): `cargo test` builds no empty test harness for them, each of which
 # linked the whole crate again. They still build for integration tests (CARGO_BIN_EXE_*) and clippy --all-targets.

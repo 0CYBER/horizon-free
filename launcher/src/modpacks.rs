@@ -171,29 +171,91 @@ impl Imported {
 pub fn row_plain(row: &Row) -> String {
     use crate::i18n::{tr, trf};
     let plain = match row.plain.as_str() {
-        "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run." => tr("Its blocks and items came over and passed Horizon's checks; the mod's own code is not run."),
-        "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what." => tr("Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what."),
+        "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run." => {
+            tr(
+                "Its blocks and items came over and passed Horizon's checks; the mod's own code is not run.",
+            )
+        }
+        "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what." => {
+            tr(
+                "Part of it came over, but something is left out, differs from the original or has not been checked yet; the technical detail says what.",
+            )
+        }
         "It does not come over yet." => tr("It does not come over yet."),
-        "Nothing to port: Horizon has it built in or does not need it." => tr("Nothing to port: Horizon has it built in or does not need it."),
-        "Horizon cannot tell yet what this mod does (it needs its jar or a reviewed entry), so it cannot say whether it will come over." => tr("Horizon cannot tell yet what this mod does (it needs its jar or a reviewed entry), so it cannot say whether it will come over."),
-        "It joins other mods together, so it waits until those are ported." => tr("It joins other mods together, so it waits until those are ported."),
-        "Content only (blocks, items, structures). Its jar is here, but it has not been carried over yet." => tr("Content only (blocks, items, structures). Its jar is here, but it has not been carried over yet."),
-        "Content only (blocks, items, structures). It can come over once its jar is here." => tr("Content only (blocks, items, structures). It can come over once its jar is here."),
-        "Needs what blocks and items do when used, placed, broken or ticked, which Horizon's mod API cannot run from a mod yet, so it does not come over." => tr("Needs what blocks and items do when used, placed, broken or ticked, which Horizon's mod API cannot run from a mod yet, so it does not come over."),
-        "Needs machine-style features (block entities, menus, item, fluid and energy handling, networking) that Horizon's mod API does not have yet, so it does not come over." => tr("Needs machine-style features (block entities, menus, item, fluid and energy handling, networking) that Horizon's mod API does not have yet, so it does not come over."),
-        "Needs mobs, custom rendering and models, dimensions or new game hooks that Horizon's mod API does not have yet, so it does not come over." => tr("Needs mobs, custom rendering and models, dimensions or new game hooks that Horizon's mod API does not have yet, so it does not come over."),
-        "Needs the game's client interfaces (keys, targeting, inventory reading, interface, rendering), so it does not come over yet." => tr("Needs the game's client interfaces (keys, targeting, inventory reading, interface, rendering), so it does not come over yet."),
-        "Horizon has not worked out what this mod needs yet." => tr("Horizon has not worked out what this mod needs yet."),
-        "A library other mods build on. Horizon's mod API and SDK take its place, so there is nothing to port." => tr("A library other mods build on. Horizon's mod API and SDK take its place, so there is nothing to port."),
-        "It makes the game faster. Horizon's own engine does that, so there is nothing to port." => tr("It makes the game faster. Horizon's own engine does that, so there is nothing to port."),
-        "Pack tooling or a game feature that Horizon already has, so there is nothing to port." => tr("Pack tooling or a game feature that Horizon already has, so there is nothing to port."),
-        "Built into Horizon already, so there is nothing to port." => tr("Built into Horizon already, so there is nothing to port."),
+        "Nothing to port: Horizon has it built in or does not need it." => {
+            tr("Nothing to port: Horizon has it built in or does not need it.")
+        }
+        "Horizon cannot tell yet what this mod does (it needs its jar or a reviewed entry), so it cannot say whether it will come over." => {
+            tr(
+                "Horizon cannot tell yet what this mod does (it needs its jar or a reviewed entry), so it cannot say whether it will come over.",
+            )
+        }
+        "It joins other mods together, so it waits until those are ported." => {
+            tr("It joins other mods together, so it waits until those are ported.")
+        }
+        "Content only (blocks, items, structures). Its jar is here, but it has not been carried over yet." => {
+            tr(
+                "Content only (blocks, items, structures). Its jar is here, but it has not been carried over yet.",
+            )
+        }
+        "Content only (blocks, items, structures). It can come over once its jar is here." => {
+            tr("Content only (blocks, items, structures). It can come over once its jar is here.")
+        }
+        "Needs what blocks and items do when used, placed, broken or ticked, which Horizon's mod API cannot run from a mod yet, so it does not come over." => {
+            tr(
+                "Needs what blocks and items do when used, placed, broken or ticked, which Horizon's mod API cannot run from a mod yet, so it does not come over.",
+            )
+        }
+        "Needs machine-style features (block entities, menus, item, fluid and energy handling, networking) that Horizon's mod API does not have yet, so it does not come over." => {
+            tr(
+                "Needs machine-style features (block entities, menus, item, fluid and energy handling, networking) that Horizon's mod API does not have yet, so it does not come over.",
+            )
+        }
+        "Needs mobs, custom rendering and models, dimensions or new game hooks that Horizon's mod API does not have yet, so it does not come over." => {
+            tr(
+                "Needs mobs, custom rendering and models, dimensions or new game hooks that Horizon's mod API does not have yet, so it does not come over.",
+            )
+        }
+        "Needs the game's client interfaces (keys, targeting, inventory reading, interface, rendering), so it does not come over yet." => {
+            tr(
+                "Needs the game's client interfaces (keys, targeting, inventory reading, interface, rendering), so it does not come over yet.",
+            )
+        }
+        "Horizon has not worked out what this mod needs yet." => {
+            tr("Horizon has not worked out what this mod needs yet.")
+        }
+        "A library other mods build on. Horizon's mod API and SDK take its place, so there is nothing to port." => {
+            tr(
+                "A library other mods build on. Horizon's mod API and SDK take its place, so there is nothing to port.",
+            )
+        }
+        "It makes the game faster. Horizon's own engine does that, so there is nothing to port." => {
+            tr(
+                "It makes the game faster. Horizon's own engine does that, so there is nothing to port.",
+            )
+        }
+        "Pack tooling or a game feature that Horizon already has, so there is nothing to port." => {
+            tr(
+                "Pack tooling or a game feature that Horizon already has, so there is nothing to port.",
+            )
+        }
+        "Built into Horizon already, so there is nothing to port." => {
+            tr("Built into Horizon already, so there is nothing to port.")
+        }
         "Nothing to port." => tr("Nothing to port."),
-        "Made for Minecraft 1.20 or older: Horizon ports mods made for 1.21 and later." => tr("Made for Minecraft 1.20 or older: Horizon ports mods made for 1.21 and later."),
+        "Made for Minecraft 1.20 or older: Horizon ports mods made for 1.21 and later." => {
+            tr("Made for Minecraft 1.20 or older: Horizon ports mods made for 1.21 and later.")
+        }
         "Shader packs are not converted yet." => tr("Shader packs are not converted yet."),
-        "Copied as a resource pack; Horizon has not checked how it renders. Turn it on in the game's Resource Packs screen." => tr("Copied as a resource pack; Horizon has not checked how it renders. Turn it on in the game's Resource Packs screen."),
+        "Copied as a resource pack; Horizon has not checked how it renders. Turn it on in the game's Resource Packs screen." => {
+            tr(
+                "Copied as a resource pack; Horizon has not checked how it renders. Turn it on in the game's Resource Packs screen.",
+            )
+        }
         "Not downloaded yet; Port gets it." => tr("Not downloaded yet; Port gets it."),
-        "Horizon could not use this resource pack yet; the technical detail says why." => tr("Horizon could not use this resource pack yet; the technical detail says why."),
+        "Horizon could not use this resource pack yet; the technical detail says why." => {
+            tr("Horizon could not use this resource pack yet; the technical detail says why.")
+        }
         other => other,
     };
     let waiting = match row.waiting {

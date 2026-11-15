@@ -401,15 +401,13 @@ impl NameEntry {
         [(at(1.0), Named::Done), (at(2.0), Named::Back)]
     }
 
-    pub(crate) fn draw(
+    pub(crate) fn draw_contents(
         &mut self,
         batch: &mut HudBatch,
         atlas: &HudAtlas,
         cursor: (f32, f32),
-        in_world: bool,
     ) {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
         let title = Text::literal(lang::get("horizon.radial.name_title"));
         style::title(batch, atlas, &title);
         let field = &mut self.field;
@@ -803,16 +801,26 @@ mod tests {
 
     #[test]
     fn every_string_has_a_horizon_key() {
-        let atlas =
-            HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap();
         let english = lang::Language::load(&[], "en_us");
         let ((), missed) = lang::scoped(english, || {
             let mut s = Settings::default();
             s.controller.bind("key.chat", Some(PadButton::DPadRight));
             let mut shell = Shell::<RadialScreen>::default();
             let draw = |shell: &mut Shell<RadialScreen>, s: &Settings| {
-                let mut batch = HudBatch::new([854, 480]);
-                shell.draw(s, &mut batch, &atlas, (0.0, 0.0), false, None);
+                let mut batch = HudBatch::scratch([854, 480]);
+                shell.draw_test_frame(
+                    s,
+                    &mut batch,
+                    &atlas,
+                    (0.0, 0.0),
+                    false,
+                    None,
+                    &mut |_, _| {},
+                );
             };
             // Every page's rows are built, with what the strip says of each.
             draw(&mut shell, &s);
@@ -823,16 +831,32 @@ mod tests {
             s.controller.radial = Pages::default();
             s.controller.radial.remove(1);
             draw(&mut shell, &s);
-            let mut batch = HudBatch::new([854, 480]);
+            let mut batch = HudBatch::scratch([854, 480]);
             let waiting = Some(Capture::Pad(OPENER));
-            shell.draw(&s, &mut batch, &atlas, (0.0, 0.0), false, waiting);
+            shell.draw_test_frame(
+                &s,
+                &mut batch,
+                &atlas,
+                (0.0, 0.0),
+                false,
+                waiting,
+                &mut |_, _| {},
+            );
             let mut entry = NameEntry::new(0, "Mine");
-            let mut batch = HudBatch::new([854, 480]);
-            entry.draw(&mut batch, &atlas, (0.0, 0.0), false);
+            let mut batch = HudBatch::scratch([854, 480]);
+            entry.draw_contents(&mut batch, &atlas, (0.0, 0.0));
             let mut picker = Shell::<PickScreen>::default();
             picker.screen.open_on((0, 1), &s.controller.radial);
-            let mut batch = HudBatch::new([854, 480]);
-            picker.draw(&s, &mut batch, &atlas, (0.0, 0.0), false, None);
+            let mut batch = HudBatch::scratch([854, 480]);
+            picker.draw_test_frame(
+                &s,
+                &mut batch,
+                &atlas,
+                (0.0, 0.0),
+                false,
+                None,
+                &mut |_, _| {},
+            );
         });
         // Vanilla's own (gui.done...) come from the game's resources, not bundled ones.
         let missed: Vec<_> = missed

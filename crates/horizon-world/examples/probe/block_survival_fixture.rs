@@ -1,16 +1,4 @@
 use horizon_core::geometry::VoxelShape;
-use horizon_world::{
-    block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
-    block_properties::BlockPropertiesRegistry,
-    block_support::BlockSupportRegistry,
-    block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule, SurvivalWorld},
-    collision::CachedCollisionRegistry,
-    dynamic_support::DynamicSupportWorld,
-    fluid::{FluidKind, FluidState, FluidStateTable},
-    nbt::{self, Limits, Tag},
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::tags::TagDefinitions,
-};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -18,6 +6,23 @@ use std::{
     io::{self, BufRead, Write},
     path::Path,
     sync::Arc,
+};
+use {
+    horizon_core::{
+        nbt,
+        nbt::{Limits, Tag},
+    },
+    horizon_world::{
+        block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
+        block_properties::BlockPropertiesRegistry,
+        block_support::BlockSupportRegistry,
+        block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule, SurvivalWorld},
+        collision::CachedCollisionRegistry,
+        dynamic_support::DynamicSupportWorld,
+        fluid::{FluidKind, FluidState, FluidStateTable},
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::tags::TagDefinitions,
+    },
 };
 struct World<'a, W> {
     out: &'a mut W,

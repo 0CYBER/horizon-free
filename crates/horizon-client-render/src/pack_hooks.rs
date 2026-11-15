@@ -4,30 +4,33 @@
 //! own types. The platform installs its formats at startup ([`install`]); with none installed,
 //! packs load as vanilla reads them.
 
-use std::path::Path;
+use crate::resource_source::ResourceSource;
 use std::sync::{Arc, OnceLock};
 
 /// What the pack formats beyond vanilla's add to a pack. Each method reads one overlay of a pack
 /// (its folder at `root`); the default is "nothing in this format".
 pub trait PackFormats: Send + Sync {
     /// The colours the overlay replaces where vanilla hardcodes them.
-    fn colors(&self, _root: &Path) -> Option<crate::pack_palette::PackColors> {
+    fn colors(&self, _root: &ResourceSource) -> Option<crate::pack_palette::PackColors> {
         None
     }
 
     /// The name ending of the overlay's emissive textures (`stone_e.png` beside `stone.png`),
     /// if its format has them.
-    fn emissive_suffix(&self, _root: &Path) -> Option<String> {
+    fn emissive_suffix(&self, _root: &ResourceSource) -> Option<String> {
         None
     }
 
     /// The sky layers the overlay draws over the vanilla sky, if it has any.
-    fn custom_sky(&self, _root: &Path) -> Option<Arc<dyn crate::custom_sky::SkyLayers>> {
+    fn custom_sky(
+        &self,
+        _root: &crate::resource_source::ResourceSource,
+    ) -> Option<Arc<dyn crate::custom_sky::SkyLayers>> {
         None
     }
 
     /// The durability bar colours the overlay sets by item, if any.
-    fn item_bars(&self, _root: &Path) -> Option<Arc<dyn crate::pack_palette::ItemBars>> {
+    fn item_bars(&self, _root: &ResourceSource) -> Option<Arc<dyn crate::pack_palette::ItemBars>> {
         None
     }
 }

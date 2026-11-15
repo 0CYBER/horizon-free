@@ -1103,6 +1103,7 @@ mod tests {
     /// padding fields, and the last word's padding set to all ones: the same
     /// verdict, and the first offending entry named as before.
     #[test]
+    #[ignore = "daily"]
     fn index_check_matches_an_entry_by_entry_scan() {
         fn scan(strategy: Strategy, bits: u8, len: usize, words: &[u64]) -> Result<(), u32> {
             let per = 64 / usize::from(bits);

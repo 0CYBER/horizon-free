@@ -1,0 +1,2 @@
+# ServerPlayer.doTick keeps running before PlayerLoaded (arismoko/horizon#4612).
+horizon-client game::remote::player_tick_tests::guest_ticks_before_player_loaded_and_after_its_timeout lib daily resources

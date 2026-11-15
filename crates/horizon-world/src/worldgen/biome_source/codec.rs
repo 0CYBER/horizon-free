@@ -3,7 +3,9 @@ use crate::worldgen::{
     DecodeError, Object, RawValue,
     climate::{ParameterPoint, decode_parameter_point, unquantize},
     density::identifier,
-    int_range, optional, required,
+    int_range,
+    mod_biome_sources::{LevelBiomeSource, mod_biome_sources},
+    optional, required,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,10 +25,18 @@ impl BiomeSet {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BiomeSourceDefinition {
     Fixed(String),
-    Checkerboard { biomes: BiomeSet, scale: i32 },
+    Checkerboard {
+        biomes: BiomeSet,
+        scale: i32,
+    },
     End,
     MultiNoise(Vec<(ParameterPoint, String)>),
-    Preset { name: String, inline: bool },
+    Preset {
+        name: String,
+        inline: bool,
+    },
+    /// A biome source a mod registered, by its id (`modid:chaos`).
+    Registered(String),
 }
 #[derive(Clone, Debug)]
 pub struct BiomeSourceCatalog {
@@ -40,13 +50,6 @@ impl BiomeSourceCatalog {
         tags: &BTreeMap<String, Vec<String>>,
         presets: &BTreeSet<String>,
     ) -> Result<Self, DecodeError> {
-        if biomes.len() > 8192
-            || tags.len() > 8192
-            || presets.len() > 8192
-            || tags.values().map(Vec::len).sum::<usize>() > 65536
-        {
-            return Err(DecodeError::Field("biome source catalog size"));
-        }
         let biomes = biomes
             .iter()
             .map(|v| identifier(v))
@@ -82,6 +85,14 @@ impl BiomeSourceCatalog {
         Ok(name)
     }
     fn set(&self, raw: &RawValue) -> Result<BiomeSet, DecodeError> {
+        // NeoForge's set objects resolve through the shared decoder, in set order;
+        // a plain list keeps its own order (checkerboard reads it).
+        if raw.get().starts_with('{') {
+            let set: serde_json::Value = serde_json::from_str(raw.get())?;
+            return crate::holder_set::resolve(&set, self)
+                .map(|ids| BiomeSet::Direct(ids.into_iter().collect()))
+                .map_err(DecodeError::Registry);
+        }
         if raw.get().starts_with('"') {
             let name: String = serde_json::from_str(raw.get())?;
             if let Some(name) = name.strip_prefix('#') {
@@ -96,9 +107,6 @@ impl BiomeSourceCatalog {
             return Ok(BiomeSet::Direct(vec![self.biome(raw)?]));
         }
         let values: Vec<Box<RawValue>> = serde_json::from_str(raw.get())?;
-        if values.len() > 8192 {
-            return Err(DecodeError::Field("biome holder set size"));
-        }
         Ok(BiomeSet::Direct(
             values
                 .iter()
@@ -108,7 +116,7 @@ impl BiomeSourceCatalog {
     }
     fn inline(&self, raw: &RawValue) -> Result<BiomeSourceDefinition, DecodeError> {
         let entries: Vec<Object> = serde_json::from_str(raw.get())?;
-        if entries.is_empty() || entries.len() > 65536 {
+        if entries.is_empty() {
             return Err(DecodeError::Field("multi-noise entry count"));
         }
         let mut result = Vec::with_capacity(entries.len());
@@ -176,7 +184,15 @@ impl BiomeSourceCatalog {
                     BiomeSourceDefinition::Preset { name, inline: true }
                 }
             }
-            _ => return Err(DecodeError::Field("unknown biome source")),
+            _ => {
+                // A mod's source: its possible biomes must be the world's.
+                LevelBiomeSource::resolve(&kind, mod_biome_sources(), 0, |name| {
+                    self.biomes.contains(name).then_some(())
+                })
+                .ok_or_else(|| DecodeError::Registry(format!("unknown biome source {kind}")))?
+                .map_err(DecodeError::Registry)?;
+                BiomeSourceDefinition::Registered(kind)
+            }
         })
     }
     /// Encode definitions in the vanilla canonical shape; decoding the result
@@ -225,6 +241,11 @@ impl BiomeSourceCatalog {
                 };
                 ("multi_noise", format!(",\"preset\":{value}"))
             }
+            BiomeSourceDefinition::Registered(id) => {
+                let json = format!("{{\"type\":{}}}", quoted(id));
+                self.decode(&json)?;
+                return Ok(json);
+            }
         };
         let json = format!("{{\"type\":\"minecraft:{kind}\"{fields}}}");
         self.decode(&json)?;
@@ -259,4 +280,29 @@ fn point_json(point: &ParameterPoint) -> String {
         serde_json::to_string(&unquantize(point.offset)).expect("finite offset")
     ));
     format!("{{{}}}", fields.join(","))
+}
+
+impl crate::holder_set::HolderLookup for BiomeSourceCatalog {
+    type Id = String;
+    fn what(&self) -> &str {
+        "biome"
+    }
+    fn entry(&self, id: &str) -> Result<Vec<String>, String> {
+        let id = identifier(id).map_err(|e| e.to_string())?;
+        if self.biomes.contains(&id) {
+            Ok(vec![id])
+        } else {
+            Err(format!("unknown biome {id}"))
+        }
+    }
+    fn tag(&self, tag: &str) -> Result<Vec<String>, String> {
+        let tag = identifier(tag).map_err(|e| e.to_string())?;
+        self.tags
+            .get(&tag)
+            .cloned()
+            .ok_or_else(|| format!("unknown biome tag #{tag}"))
+    }
+    fn all(&self) -> Result<Vec<String>, String> {
+        Ok(self.biomes.iter().cloned().collect())
+    }
 }

@@ -28,6 +28,15 @@
 //!     as for n < 32.
 //!   - Beyond |x| = 2^19 * pi/2 the reduction is not modelled: the `libm`
 //!     crate's `sin` and `cos` answer there, and may differ in the last bit.
+//!
+//! The separate strict modules supply the non-FMA fdlibm `sin`, `cos`, `tan`,
+//! `exp` and `pow`, including full argument reduction. They are linked locally
+//! on native and wasm; the engine's platform-selected Math paths are unchanged.
+
+mod strict_exp_pow;
+mod strict_trig;
+pub use strict_exp_pow::{exp, pow};
+pub use strict_trig::{cos, sin, tan};
 
 /// High 32 bits of `x`, as a signed int (fdlibm's `__HI(x)`).
 fn high_word(x: f64) -> i32 {

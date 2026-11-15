@@ -10,8 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-const LAUNCHER_HINT: &str =
-    "Horizon does not download the game: play {version} once in the launcher you play \
+const LAUNCHER_HINT: &str = "Horizon does not download the game: play {version} once in the launcher you play \
 Minecraft Java Edition with so it downloads the game's files, then rerun. Horizon reads the \
 official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher, MultiMC, \
 the Modrinth App or GDLauncher, prepare from the Horizon launcher, which finds their files. If your launcher keeps \
@@ -1565,6 +1564,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn imported_files_are_reused_without_the_official_install() {
         let fixture = Imports::new();
         fs::write(
@@ -1643,6 +1643,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn reuse_rejects_corrupt_imports() {
         for file in [
             "manifest.json",
@@ -1660,6 +1661,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn reuse_checks_the_target_pins() {
         let fixture = Imports::new();
         let mut lock = Lock::read(&fixture.target).unwrap();
@@ -1676,6 +1678,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn reuse_skips_a_bad_sibling_and_repairs_bad_current_imports() {
         let fixture = Imports::new();
         let bad = fixture.directory.join("a-bad");
@@ -1734,6 +1737,7 @@ mod tests {
     /// id and jars, its own fields, #1772) is refused with what to do, and Mojang's own copy saved
     /// as the imported one is then used.
     #[test]
+    #[ignore = "daily"]
     fn a_rewritten_version_file_falls_back_to_mojangs() {
         let root = std::env::temp_dir().join(format!("horizon-rewritten-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -1777,6 +1781,7 @@ mod tests {
     /// Prism Launcher keeps its Minecraft component as `meta/net.minecraft/<version>.json`, not
     /// in a folder of that version. Both are read; the folder's file wins when both exist.
     #[test]
+    #[ignore = "daily"]
     fn the_prism_version_file_is_found_flat_or_in_its_folder() {
         let root = std::env::temp_dir().join(format!("horizon-prism-meta-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -1811,6 +1816,7 @@ mod tests {
     /// names and never downloads Netty's native transport, which the game runs without. Preparing
     /// still checks every other library, and the transport whenever the launcher has it.
     #[test]
+    #[ignore = "daily"]
     fn a_prism_install_without_netty_natives_prepares() {
         let fixture = Imports::new();
         let old = fixture.imported(&fixture.source);
@@ -1842,9 +1848,14 @@ mod tests {
         let netty = |arch: &str| {
             library(
                 &format!("io.netty:netty-transport-native-kqueue:1:osx-{arch}"),
-                &format!("io/netty/netty-transport-native-kqueue/1/netty-transport-native-kqueue-1-osx-{arch}.jar"),
+                &format!(
+                    "io/netty/netty-transport-native-kqueue/1/netty-transport-native-kqueue-1-osx-{arch}.jar"
+                ),
                 &sha1(b"kqueue"),
-                &format!(r#","rules":[{{"action":"allow","os":{{"name":"{}"}}}}]"#, rule_system()),
+                &format!(
+                    r#","rules":[{{"action":"allow","os":{{"name":"{}"}}}}]"#,
+                    rule_system()
+                ),
             )
         };
         let client_sha1 = digest(&old.join("jars/client.jar"), "sha1").unwrap();
@@ -1931,6 +1942,7 @@ mod tests {
     /// `minecraft` folder, Maven libraries, assets and the LWJGL component are read as they are;
     /// the client jar stands in for the server side, so nothing is downloaded.
     #[test]
+    #[ignore = "daily"]
     fn a_prism_install_prepares_without_a_server_jar() {
         let fixture = Imports::new();
         let old = fixture.imported(&fixture.source);
@@ -2074,6 +2086,7 @@ mod tests {
     /// a library; its folder, or one of its instances, prepares like the official launcher's,
     /// with the same pins.
     #[test]
+    #[ignore = "daily"]
     fn an_atlauncher_install_prepares() {
         let fixture = Imports::new();
         let old = fixture.imported(&fixture.source);
@@ -2144,6 +2157,7 @@ mod tests {
     /// A launcher with a layout of its own names each file (`--version-json`, `--client-jar`,
     /// `--libraries-dir`): they prepare with the same pins, from no Minecraft folder at all.
     #[test]
+    #[ignore = "daily"]
     fn named_inputs_prepare_without_a_minecraft_folder() {
         let fixture = Imports::new();
         let old = fixture.imported(&fixture.source);
@@ -2207,6 +2221,7 @@ mod tests {
     /// With no launcher's files in the chosen folder, the error names where Horizon looked and
     /// the launchers it reads.
     #[test]
+    #[ignore = "daily"]
     fn the_error_names_the_folders_looked_in() {
         let fixture = Imports::new();
         let empty = fixture.directory.join("instances/empty");
@@ -2237,6 +2252,7 @@ mod tests {
     /// A folder with the version JSON and jar but a library missing loses to a later folder that
     /// has them all, and is still picked, for the error to name the library, when none has (#13872).
     #[test]
+    #[ignore = "daily"]
     fn a_folder_missing_a_library_loses_to_a_complete_one() {
         let fixture = Imports::new();
         let old = fixture.imported(&fixture.source);

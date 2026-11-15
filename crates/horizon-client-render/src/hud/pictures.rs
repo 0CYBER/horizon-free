@@ -16,14 +16,17 @@ pub struct Picture {
 
 #[derive(Default)]
 pub(super) struct Cache {
-    roots: [PathBuf; 2],
+    roots: Vec<crate::resource_source::ResourceSource>,
     entries: HashMap<String, Option<Weak<Picture>>>,
 }
 
 impl Cache {
-    pub(super) fn new(root: &Path, defaults: &Path) -> Self {
+    pub(super) fn new(
+        root: &crate::resource_source::ResourceSource,
+        defaults: &crate::resource_source::ResourceSource,
+    ) -> Self {
         Self {
-            roots: [root.into(), defaults.into()],
+            roots: vec![root.clone(), defaults.clone()],
             entries: HashMap::new(),
         }
     }
@@ -38,15 +41,14 @@ impl Cache {
             .roots
             .iter()
             .find_map(|root| {
-                let path = root.join(format!("assets/minecraft/textures/{name}.png"));
-                let image = decode(&path).ok()?;
-                let flags = horizon_core::prepared_files::read_to_string(
-                    &path.with_extension("png.mcmeta"),
-                )
-                .ok()
-                .as_deref()
-                .and_then(TextureFlags::from_mcmeta)
-                .unwrap_or_default();
+                let path = crate::atlas_sources::texture_resource(name, "textures");
+                let image = decode_resource(root, &path).ok()?;
+                let flags = root
+                    .read_to_string(&format!("{path}.mcmeta"))
+                    .ok()
+                    .as_deref()
+                    .and_then(TextureFlags::from_mcmeta)
+                    .unwrap_or_default();
                 Some((image, flags))
             })
             .map(|((width, height, pixels), flags)| {

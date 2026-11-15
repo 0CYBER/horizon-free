@@ -38,16 +38,11 @@ pub(super) fn resolve(m: &mut Mob, source: &Damage) {
 }
 /// The species' hooks that run before `LivingEntity.hurtServer`'s guards:
 /// `Guardian.hurtServer`'s spikes answer its attacker even for a blow the
-/// guardian then refuses. Answers whether `Enderman.hurtServer`'s teleport
-/// applies, which `super.hurtServer` then runs after.
-pub(super) fn before_hurt(m: &mut Mob, source: &Damage) -> bool {
+/// guardian then refuses.
+pub(super) fn before_hurt(m: &mut Mob, source: &Damage) {
     if matches!(m.species(), Species::Guardian | Species::ElderGuardian) {
         super::guardian::hurt_server(m, source);
     }
-    // Enderman.hurtServer: past `isInvulnerableTo`, the teleport draw follows
-    // `super.hurtServer` whatever it answered (a hurt cooldown, a dead
-    // enderman), its hurt sound's pitch included.
-    m.species() == Species::Enderman && !m.removed && !m.is_invulnerable_to(source)
 }
 /// `LivingEntity.baseTick`'s hurt timers: `hurtTime` and `invulnerableTime`
 /// count down, and the mob that hurt it is forgotten once it is not alive or

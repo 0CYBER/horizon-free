@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 
 #[test]
 fn mid_tex_coord_follows_each_quads_mapped_corners() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let instance = crate::gfx::test_gpu::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
         return;
@@ -128,6 +129,7 @@ fn mid_tex_coord_follows_each_quads_mapped_corners() {
 /// sprite's own pixels, so a corner is half the sprite's own side from `mc_midTexCoord`.
 #[test]
 fn flat_draws_map_uvs_onto_a_stitched_sprite() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let instance = crate::gfx::test_gpu::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
         return;
@@ -178,6 +180,7 @@ fn flat_draws_map_uvs_onto_a_stitched_sprite() {
 /// below a grid line: Iris reads plants offset by 9/15 exactly on a half block.
 #[test]
 fn terrain_vertices_go_down_to_the_32768th_below_them() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let instance = crate::gfx::test_gpu::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
         return;
@@ -250,6 +253,7 @@ fn terrain_vertices_go_down_to_the_32768th_below_them() {
 /// (`separateAo`), two more, and a slab's top kept as its vertices (`packed::FULL`).
 #[test]
 fn compact_records_feed_a_pack_the_vertices_they_hold() {
+    let _gpu = crate::gfx::test_gpu::lock();
     use crate::mesher::packed;
     let instance = crate::gfx::test_gpu::instance();
     let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {

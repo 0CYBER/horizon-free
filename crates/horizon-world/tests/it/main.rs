@@ -2,6 +2,8 @@
 //! dependencies again for every file. A new test file goes in this folder with a `mod` line here.
 
 mod biome_data;
+mod biome_direct_lists;
+mod biome_points_selection;
 mod biome_predicate_bounds;
 mod biome_region;
 mod block_collision_scan;
@@ -25,6 +27,7 @@ mod native_load_hooks;
 mod placement_bounds;
 mod placement_queries;
 mod processor_bounds;
+mod registered_biome_source;
 mod retrogen_biomes;
 mod rule_test_bounds;
 mod snbt_unicode_order;

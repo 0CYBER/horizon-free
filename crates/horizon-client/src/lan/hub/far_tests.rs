@@ -9,9 +9,11 @@ fn far_hub(
     let (mut hub, rx) = hub_with_a_guest();
     hub.config.view_distance = 8;
     hub.ticks = 3;
-    hub.guests[0].center = Some((0, 0));
-    hub.guests[0].info.view_distance = 24;
-    hub.guests[0].chunks_per_tick = 2.0;
+    hub.guests.update(0, |g| {
+        g.center = Some((0, 0));
+        g.info.view_distance = 24;
+        g.chunks_per_tick = 2.0;
+    });
     hub.far = Some(Far::reading(24, Arc::new(move |_, x, z| read(x, z))));
     let save = Arc::new(crate::save::SaveDir::new(
         std::env::temp_dir().join("horizon-far-send-test"),
@@ -87,7 +89,9 @@ fn far_buffer_edge_sends_all_light_and_live_block_entities_without_neighbours() 
         (193, 70, 2),
         crate::containers::BlockEntity::Sign(crate::signs::SignData::default()),
     );
-    hub.guests[0].far_queue = vec![(12, 0)];
+    hub.guests.update(0, |g| {
+        g.far_queue = vec![(12, 0)];
+    });
     send_chunks(&mut hub, &mut world);
     let packets = received(&rx);
     assert_eq!(packets.len(), 1);
@@ -117,7 +121,9 @@ fn far_scan_passes_more_than_a_ticks_worth_of_waiting_columns() {
         world.chunks.insert((x, z), Arc::new(Chunk::empty(x, z)));
     }
     lit(&mut world, last);
-    hub.guests[0].far_queue = queue;
+    hub.guests.update(0, |g| {
+        g.far_queue = queue;
+    });
     send_chunks(&mut hub, &mut world);
     assert!(
         received(&rx).is_empty(),
@@ -147,7 +153,9 @@ fn missing_far_column_retries_after_a_change_without_player_movement() {
     let (mut hub, rx) = far_hub(move |_, _| ready.load(Ordering::Relaxed).then(|| body.clone()));
     // An unlit resident column must not mask a usable saved copy.
     world.chunks.insert((12, 0), Arc::new(Chunk::empty(12, 0)));
-    hub.guests[0].far_queue = vec![(12, 0)];
+    hub.guests.update(0, |g| {
+        g.far_queue = vec![(12, 0)];
+    });
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         send_chunks(&mut hub, &mut world);
@@ -182,16 +190,20 @@ fn wrapped_far_scan_removes_only_sent_columns_and_keeps_the_near_quota() {
     for key in keys.into_iter().chain([(0, 0)]) {
         lit(&mut world, key);
     }
-    hub.guests[0].chunks_per_tick = 3.0;
-    hub.guests[0].chunk_queue = vec![(0, 0)];
-    hub.guests[0].far_queue = keys.into();
-    hub.guests[0].far_cursor = 3;
+    hub.guests.update(0, |g| {
+        g.chunks_per_tick = 3.0;
+        g.chunk_queue = vec![(0, 0)];
+        g.far_queue = keys.into();
+        g.far_cursor = 3;
+    });
     send_chunks(&mut hub, &mut world);
     assert_eq!(
         received(&rx).iter().map(|p| (p.x, p.z)).collect::<Vec<_>>(),
         [(0, 0), (12, 0), (15, 0)]
     );
-    hub.guests[0].unacknowledged = 0;
+    hub.guests.update(0, |g| {
+        g.unacknowledged = 0;
+    });
     send_chunks(&mut hub, &mut world);
     assert_eq!(
         received(&rx).iter().map(|p| (p.x, p.z)).collect::<Vec<_>>(),

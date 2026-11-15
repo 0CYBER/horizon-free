@@ -170,6 +170,8 @@ pub enum Dimension {
     Overworld,
     Nether,
     End,
+    /// A custom dimension, with no private identifier published.
+    Other,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -393,6 +395,9 @@ mod tests {
         }
         fn published(&self, open: bool) {
             self.0.lock().unwrap().push(format!("published {open}"));
+        }
+        fn shutdown(&self) {
+            self.0.lock().unwrap().push("shutdown".into());
         }
         fn activity(&self, now: Activity) {
             self.0.lock().unwrap().push(format!("{now:?}"));
@@ -640,6 +645,7 @@ mod tests {
                 "published false",
                 "Menus",
                 "World { play: Singleplayer, dimension: Nether, mode: Creative }",
+                "shutdown",
                 "frame 4"
             ]
         );

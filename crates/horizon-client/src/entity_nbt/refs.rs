@@ -2,7 +2,7 @@
 //! the level.
 use super::{Who, number, uuid_from_tag};
 use crate::mobs::Mob;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::collections::HashMap;
 
 /// `LivingEntity.readAdditionalSaveData`: `last_hurt_by_mob` is a lazy
@@ -50,7 +50,7 @@ mod tests {
     }
 
     fn load(snbt: &str) -> Mob {
-        let tag = horizon_world::nbt::parse_snbt(snbt).unwrap().0;
+        let tag = horizon_core::nbt::parse_snbt(snbt).unwrap().0;
         mob_from_nbt(&tag, &types(), 7, None).unwrap()
     }
 

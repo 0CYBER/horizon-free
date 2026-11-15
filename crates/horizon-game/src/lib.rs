@@ -5,12 +5,11 @@
 //! An executable built on it:
 //!
 //! ```ignore
-//! #[global_allocator]
-//! static ALLOCATOR: horizon_game::Allocator = horizon_game::ALLOCATOR;
-//! static MOD_API_LEVEL: [u8; horizon_game::MOD_API_LEVEL.len()] = horizon_game::MOD_API_LEVEL;
+//! static GAME_IDENTITY: [u8; horizon_game::GAME_IDENTITY.len()] = horizon_game::GAME_IDENTITY;
 //!
 //! fn main() {
-//!     std::hint::black_box(&MOD_API_LEVEL);
+//!     horizon_game::prepare_main_stack();
+//!     std::hint::black_box(&GAME_IDENTITY);
 //!     my_crate::register();
 //!     horizon_game::main();
 //! }
@@ -19,17 +18,19 @@
 //! The platform's own parts register here, in [`main`], as they leave the engine (layer plan M6).
 #![forbid(unsafe_code)]
 
-/// The game's allocator (mimalloc, with its thread tags), for the executable's
-/// `#[global_allocator]`.
-pub use horizon_threads::{ALLOCATOR, Allocator};
-
-/// The mod API level this game serves. The executable keeps it in the program, where the
-/// launcher reads it without running it (`horizon_mods::api_level::MARK`): a `static` its
-/// `main` reads, so the linker keeps it.
-pub const MOD_API_LEVEL: [u8; horizon_mods::api_level::MARK.len()] = horizon_mods::api_level::MARK;
+/// Identifies an executable as the game for launcher imports, without an API version or build id.
+pub const GAME_IDENTITY: [u8; horizon_mod_package::game_identity::MARK.len()] =
+    horizon_mod_package::game_identity::MARK;
 
 /// Runs the game with the hooks registered so far, and returns when it ends. Register hooks
 /// (`horizon_platform::hooks::register`) before calling it.
 pub fn main() {
-    horizon_client::entry::main();
+    horizon_guest_stack::prepare_main();
+    horizon_mod_host::exit_if_compile_child();
+    let startup = horizon_client::entry::prepare();
+    std::hint::black_box(&horizon_mod_package::holder::CAPABILITY);
+    horizon_mod_host::main_with(Vec::new(), &[], &[], startup);
 }
+
+/// Establish the executable main thread stack before initialization.
+pub use horizon_guest_stack::prepare_main as prepare_main_stack;

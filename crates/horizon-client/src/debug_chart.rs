@@ -48,6 +48,10 @@ impl SampleLogger {
     pub fn reset(&mut self) {
         self.samples.clear();
     }
+    /// The newest primary sample, if any, without copying the history.
+    pub fn latest(&self) -> Option<i64> {
+        self.samples.back().map(|sample| sample[0])
+    }
     fn get(&self, index: usize, dimension: usize) -> i64 {
         self.samples[index][dimension]
     }

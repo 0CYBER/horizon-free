@@ -23,7 +23,7 @@ public final class VanillaBlockSupportOracle {
    }
    var cachedIds=new com.google.gson.JsonArray();for(int i=0;i<mapping.length;i++)if(mapping[i]>=0)cachedIds.add(i);Files.writeString(dir.resolve("support-cached-states.json"),cachedIds.toString());
    var root=new CompoundTag();root.putInt("DataVersion",net.minecraft.SharedConstants.getCurrentVersion().dataVersion().version());root.putString("Kind","block_support");root.put("states",states);root.put("shapes",shapes);root.putIntArray("cached_shapes",mapping);
-   try(var out=new DataOutputStream(Files.newOutputStream(dir.resolve("cached-support.nbt")))){NbtIo.write(root,out);}return;
+   try(var out=new DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(dir.resolve("cached-support.nbt"))))){NbtIo.write(root,out);}return;
   }
   try(var out=new PrintWriter(Files.newBufferedWriter(dir.resolve(args[0]+".txt")))) {
    for(var state:Block.BLOCK_STATE_REGISTRY){int id=Block.getId(state);if(cache.get(state)==null){out.println("state "+id+" uncached");continue;}

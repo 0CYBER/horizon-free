@@ -410,7 +410,7 @@ fn check(sampler: &str, stage: Stage, scene: Scene, expected: [u8; 4]) {
             glint_uv: [0.; 2],
         }
     });
-    let hud = HudBatch::new(SIZE);
+    let hud = HudBatch::scratch(SIZE);
     let mut frame = fixture_frame(&hud);
     if hand {
         frame.hand = &quad;
@@ -426,6 +426,7 @@ fn check(sampler: &str, stage: Stage, scene: Scene, expected: [u8; 4]) {
 
 #[test]
 fn hand_is_in_depth1_and_excluded_from_depth2() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "all",
         Stage::Fragment,
@@ -438,6 +439,7 @@ fn hand_is_in_depth1_and_excluded_from_depth2() {
 }
 #[test]
 fn depth2_only_without_hand_excludes_water() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex2",
         Stage::Fragment,
@@ -450,6 +452,7 @@ fn depth2_only_without_hand_excludes_water() {
 }
 #[test]
 fn depth1_only_without_hand_excludes_water_control() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex1",
         Stage::Fragment,
@@ -462,6 +465,7 @@ fn depth1_only_without_hand_excludes_water_control() {
 }
 #[test]
 fn water_only_program_populates_both_opaque_snapshots() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "all",
         Stage::Fragment,
@@ -471,6 +475,7 @@ fn water_only_program_populates_both_opaque_snapshots() {
 }
 #[test]
 fn deferred_depth2_only_excludes_hand() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex2",
         Stage::Deferred,
@@ -483,6 +488,7 @@ fn deferred_depth2_only_excludes_hand() {
 }
 #[test]
 fn deferred_depth1_contains_hand_control() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex1",
         Stage::Deferred,
@@ -495,6 +501,7 @@ fn deferred_depth1_contains_hand_control() {
 }
 #[test]
 fn direct_fragment_gets_world_depth_control() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex0",
         Stage::Fragment,
@@ -504,6 +511,7 @@ fn direct_fragment_gets_world_depth_control() {
 }
 #[test]
 fn attached_compute_gets_world_depth() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex0",
         Stage::Attached,
@@ -513,6 +521,7 @@ fn attached_compute_gets_world_depth() {
 }
 #[test]
 fn compute_only_gets_world_depth_control() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex0",
         Stage::ComputeOnly,
@@ -522,6 +531,7 @@ fn compute_only_gets_world_depth_control() {
 }
 #[test]
 fn earlier_compute_child_gets_world_depth() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex0",
         Stage::EarlierCompute,
@@ -531,6 +541,7 @@ fn earlier_compute_child_gets_world_depth() {
 }
 #[test]
 fn attached_compute_depth1_without_hand_excludes_water() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex1",
         Stage::Attached,
@@ -543,6 +554,7 @@ fn attached_compute_depth1_without_hand_excludes_water() {
 }
 #[test]
 fn attached_compute_depth2_without_hand_excludes_water() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "depthtex2",
         Stage::Attached,
@@ -555,6 +567,7 @@ fn attached_compute_depth2_without_hand_excludes_water() {
 }
 #[test]
 fn attached_compute_preserves_distinct_hand_snapshots() {
+    let _gpu = crate::gfx::test_gpu::lock();
     check(
         "all",
         Stage::Attached,
@@ -775,7 +788,7 @@ fn shadow_depth_map_reads(
             contents: bytemuck::cast_slice(&positions),
             usage: wgpu::BufferUsages::VERTEX,
         });
-    let hud = HudBatch::new(SIZE);
+    let hud = HudBatch::scratch(SIZE);
     let frame = fixture_frame(&hud);
     Some(
         gpu.render(&mut post, &color, &depth, &frame, &mut |rp, list, _, _| {
@@ -789,6 +802,7 @@ fn shadow_depth_map_reads(
 
 #[test]
 fn shadow_depth_is_read_linearly_through_a_plain_sampler() {
+    let _gpu = crate::gfx::test_gpu::lock();
     // Iris 1.11.7 filters both (probe packs of our own; the PR has the readings).
     if let Some(pixels) = shadow_depth_filtering("") {
         all_pixels(&pixels, [255, 255, 0, 255], "shadowtex linear");
@@ -797,6 +811,7 @@ fn shadow_depth_is_read_linearly_through_a_plain_sampler() {
 
 #[test]
 fn shadow_depth_reads_filter_directly_and_with_a_texel_offset() {
+    let _gpu = crate::gfx::test_gpu::lock();
     // texture2D on the sampler itself, and textureOffset one texel to the right: both a quarter
     // texel past a centre, so each moves a quarter of the way to the next texel.
     let reads = "void main() {\n\
@@ -815,6 +830,7 @@ fn shadow_depth_reads_filter_directly_and_with_a_texel_offset() {
 
 #[test]
 fn shadow_depth_filter_weights_are_256ths_as_in_our_iris_readings() {
+    let _gpu = crate::gfx::test_gpu::lock();
     // The map is at the far plane but for texel (8, 8), which is nearer. Reads between texels
     // (7, 7) and (8, 8) give (8, 8)'s weight: Iris 1.11.7's filtered reads on our NVIDIA GPU
     // fit weights of 1/256 along each axis, rounded half up, and a corner's product weight
@@ -849,6 +865,7 @@ fn shadow_depth_filter_weights_are_256ths_as_in_our_iris_readings() {
 
 #[test]
 fn shadowtex_nearest_settings_read_the_nearest_texel() {
+    let _gpu = crate::gfx::test_gpu::lock();
     for (line, expected) in [
         ("const bool shadowtex0Nearest = true;", [0, 255, 0, 255]),
         ("const bool shadowtexNearest = true;", [0, 255, 0, 255]),
@@ -865,10 +882,10 @@ fn shadowtex_nearest_settings_read_the_nearest_texel() {
 /// The sky program covers the horizon and downward viewing directions too.
 /// This original probe reports sky colour in RGB and window depth in alpha.
 #[test]
-#[ignore = "requires a host GPU"]
+#[ignore = "daily"]
 fn sky_covers_the_horizon_without_writing_depth_or_overpainting_terrain() {
-    let gpu = Gpu::new().expect("GPU required for the sky coverage regression");
-    assert_ne!(gpu.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+    let _gpu = crate::gfx::test_gpu::lock();
+    let gpu = Gpu::new().expect("graphics adapter required for the sky coverage regression");
     let color = gpu.texture(T::Rgba8Unorm);
     let depth = gpu.texture(T::Depth32Float);
     let files = vec![
@@ -897,7 +914,7 @@ fn sky_covers_the_horizon_without_writing_depth_or_overpainting_terrain() {
             ..Default::default()
         },
     );
-    let hud = HudBatch::new(SIZE);
+    let hud = HudBatch::scratch(SIZE);
     let mut frame = fixture_frame(&hud);
     frame.title = false;
     frame.skybox = true;

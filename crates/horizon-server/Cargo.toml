@@ -7,10 +7,9 @@ rust-version.workspace = true
 description = "Host a Horizon server: server.toml, the CLI and the supervisor that runs the game headless (docs/server.md)"
 
 [dependencies]
-# The engine, through the platform's public API (docs/layers.md): server.properties and the user lists, the
-# version `server/status` reports, and region files for [prune_chunks] (prune.rs), read and rewritten as vanilla's
-# RegionFile does.
 horizon-platform = { path = "../horizon-platform", features = ["server-files", "world"] }
+# Shared server configuration and launch command used by the native-mod launcher.
+horizon-server-launch = { path = "../horizon-server-launch" }
 # `horizon-server mcp`: the Model Context Protocol, shared with horizon-ctl and the launcher.
 horizon-mcp = { path = "../horizon-mcp" }
 # server.toml's [anticheat], which the game reads: checked here before every start.
@@ -25,8 +24,6 @@ getrandom = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
-# Edits server.toml in place, keeping the owner's comments and order.
-toml_edit = "0.25"
 # Updates: the release from GitHub, checked against the SHA-256 in its signed checksums (both already in the
 # lockfile, ureq through horizon-server-files).
 horizon-release-sign = { path = "../horizon-release-sign" }

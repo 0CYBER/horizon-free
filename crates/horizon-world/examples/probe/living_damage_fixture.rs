@@ -1,6 +1,6 @@
 use crate::support::common::f32_bits;
 use horizon_world::{
-    living_damage::{self, DamageStat, DamageWorld},
+    living_damage::{self, DamageContainer, DamageStat, DamageWorld, MagicAbsorb},
     living_health::{self, HealthWorld},
 };
 use serde_json::Value;
@@ -66,9 +66,19 @@ impl DamageWorld for World<'_> {
         self.query(&format!("armor {:08x}", f32_bits(v)))?;
         Ok(single(&self.state()["armor"]))
     }
-    fn after_magic(&mut self, v: f32) -> io::Result<f32> {
+    fn bypasses_armor(&mut self) -> io::Result<bool> {
+        unreachable!("the oracle registers no reduction modifier")
+    }
+    fn after_magic(&mut self, v: f32) -> io::Result<MagicAbsorb> {
         self.query(&format!("magic {:08x}", f32_bits(v)))?;
-        Ok(single(&self.state()["magic"]))
+        // The oracle answers the whole step; the split only names the reductions.
+        Ok(MagicAbsorb {
+            damage: single(&self.state()["magic"]),
+            mob_effects: 0.0,
+            resisted: false,
+            after_effects: 0.0,
+            protection: None,
+        })
     }
     fn absorption(&mut self) -> io::Result<f32> {
         self.query("absorption")?;
@@ -162,9 +172,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             recorded: 0.,
         };
         w.reset();
+        let damage = single(&f["damage"]);
         let result = living_damage::actually_hurt(
             &mut w,
-            single(&f["damage"]),
+            &mut DamageContainer::new(damage),
+            damage,
             f["player"].as_bool().unwrap(),
         );
         writeln!(

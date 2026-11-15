@@ -217,16 +217,14 @@ impl SplitProfiles {
         buttons
     }
 
-    pub fn draw(
+    pub(crate) fn draw_contents(
         &mut self,
         batch: &mut HudBatch,
         atlas: &HudAtlas,
         cursor: (f32, f32),
-        in_world: bool,
         glyphs: Glyphs,
-    ) {
+    ) -> Option<String> {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
         let grey = rgba(160, 160, 160, 255);
         let line = |batch: &mut HudBatch, text: &str, y: f32, color: u32| {
             ui::centered_text(batch, atlas, &Text::literal(text), 0.0, y, w, color);
@@ -373,9 +371,7 @@ impl SplitProfiles {
                 }
             }
         }
-        if let Some(tip) = tip {
-            ui::tooltip(batch, atlas, &[Text::literal(tip)], cursor);
-        }
+        tip
     }
 
     /// Under the title: the bumpers as keys, as the prompts over a player's view draw them (the
@@ -607,7 +603,10 @@ mod tests {
     }
 
     fn atlas() -> HudAtlas {
-        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+        HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            (std::path::Path::new("/nonexistent/horizon-test-assets")).to_owned(),
+        ))
+        .unwrap()
     }
 
     fn page() -> SplitProfiles {

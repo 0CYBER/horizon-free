@@ -1,8 +1,22 @@
 //! Crash reports, laid out like vanilla's CrashReport.getFriendlyReport: a comment, the time,
 //! a description, the error with its stack, then the details of the game and the machine.
 //! Written to `crash-reports/crash-<yyyy-MM-dd_HH.mm.ss>-client.txt` in the game folder when
-//! the main thread panics or `main` gets an error back. It leaves the machine only scrubbed, and
-//! only if the player allows crash reports (`telemetry`).
+//! the main thread panics or `main` gets an error back. It stays a local file: the player
+//! reads it and shares it by hand.
+pub use mod_api::content::crash::{
+    ConvertedCall, ConvertedPackage, ConvertedPackageGuard, ConvertedPackages, ModCall, ModGuard,
+    current_converted_call, current_native_mod,
+};
+// Tests run without the executable's startup: the platform's versions install the crash
+// backend on first use and keep details, as the started game's do.
+#[cfg(not(test))]
+use mod_api::content::crash::details;
+#[cfg(not(test))]
+pub use mod_api::content::crash::{clear_detail, enter_native_mod, set_detail};
+#[cfg(test)]
+use mod_platform::content::crash::details;
+#[cfg(test)]
+pub use mod_platform::content::crash::{clear_detail, enter_native_mod, set_detail};
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -13,8 +27,6 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local};
 use horizon_system::{command_output, machine_arch};
 
-/// What the game is doing, set as it goes: graphics adapter, settings, packs, world.
-static DETAILS: Mutex<Vec<(&'static str, String)>> = Mutex::new(Vec::new());
 static REPORTED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
@@ -22,58 +34,36 @@ thread_local! {
     static CONTAINED: Cell<u32> = const { Cell::new(0) };
     /// The message of the last panic `contain` caught on this thread, from the hook.
     static CAUGHT: RefCell<Option<String>> = const { RefCell::new(None) };
-    /// The native mod hook this thread is inside, for the panic hook to name.
-    static IN_NATIVE_MOD: Cell<Option<NativeModCall>> = const { Cell::new(None) };
 }
 
-/// A call into one hook of a native mod.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NativeModCall {
-    /// The mod's `[mod] id`, None in a build that didn't name its mods.
-    pub id: Option<&'static str>,
-    /// Its place in dispatch order, which names it then.
-    pub index: usize,
-    pub hook: &'static str,
-}
-
-/// Marks this thread as inside `call` until the guard drops, which also happens while a panic
-/// unwinds. A hook called from a hook is named by the inner call.
-pub fn enter_native_mod(call: NativeModCall) -> NativeModGuard {
-    NativeModGuard {
-        outer: IN_NATIVE_MOD.with(|c| c.replace(Some(call))),
-    }
-}
-
-/// The native mod call this thread is currently inside, if any.
-pub fn current_native_mod() -> Option<NativeModCall> {
-    IN_NATIVE_MOD.with(Cell::get)
-}
-
-/// Puts back the call that `enter_native_mod` found.
-#[must_use]
-pub struct NativeModGuard {
-    outer: Option<NativeModCall>,
-}
-
-impl Drop for NativeModGuard {
-    fn drop(&mut self) {
-        IN_NATIVE_MOD.with(|c| c.set(self.outer));
-    }
-}
-
-/// `message`, with the native mod hook this thread is inside, if any.
+/// `message`, with the native mod hook this thread is inside, if any, and the converted package
+/// the hook's runtime is executing.
 fn attributed(message: String) -> String {
-    match IN_NATIVE_MOD.with(Cell::get) {
-        Some(NativeModCall {
-            id: Some(id), hook, ..
-        }) => format!("{message}\nin native mod {id}, hook {hook}"),
-        Some(NativeModCall {
-            id: None,
-            index,
-            hook,
-        }) => format!("{message}\nin native mod #{index}, hook {hook}"),
-        None => message,
+    let Some(call) = mod_api::content::crash::current_native_call() else {
+        return message;
+    };
+    let part = call
+        .part
+        .map(|part| format!(", part {part}"))
+        .unwrap_or_default();
+    let mut out = format!(
+        "{message}\nin native mod {}, hook {}{part}",
+        call.id, call.hook
+    );
+    if let Some(scoped) = mod_api::content::crash::current_converted_call()
+        && scoped.runtime == call.id
+    {
+        // `export` and `site` come from the runtime, and for wasm from module bytes: a name
+        // with a newline could forge another line of this report, so keep each on one line.
+        let _ = write!(
+            out,
+            "\nin converted package {}, export {}, call site {}",
+            scoped.package,
+            scoped.export.escape_debug(),
+            scoped.site.escape_debug()
+        );
     }
+    out
 }
 
 /// Runs `f`, and returns a panic in it as an error with the panic's message instead of letting
@@ -114,27 +104,6 @@ fn contained_panic(info: &std::panic::PanicHookInfo) -> bool {
     true
 }
 
-/// Sets one line of the report's details (replacing the last value under `key`).
-pub fn set_detail(key: &'static str, value: impl Into<String>) {
-    let mut details = DETAILS.lock().unwrap_or_else(|e| e.into_inner());
-    let value = value.into();
-    match details.iter_mut().find(|(k, _)| *k == key) {
-        Some(entry) => entry.1 = value,
-        None => details.push((key, value)),
-    }
-}
-
-pub fn clear_detail(key: &'static str) {
-    DETAILS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .retain(|(k, _)| *k != key);
-}
-
-fn details() -> Vec<(&'static str, String)> {
-    DETAILS.lock().unwrap_or_else(|e| e.into_inner()).clone()
-}
-
 /// Vanilla picks a line from a list of jokes; these only say what happened.
 const COMMENTS: &[&str] = &[
     "Something went wrong.",
@@ -146,6 +115,8 @@ const COMMENTS: &[&str] = &[
 /// One crash, ready to be written.
 pub struct Report {
     pub time: DateTime<Local>,
+    /// The lines mods put under the title (`Registrar::crash_header`), `<mod id>: <text>`.
+    pub headers: Vec<String>,
     pub description: String,
     /// The error's message, first line of the stack section.
     pub error: String,
@@ -169,6 +140,9 @@ impl Report {
         let comment = COMMENTS[self.time.timestamp().rem_euclid(COMMENTS.len() as i64) as usize];
         let mut out = String::new();
         let _ = writeln!(out, "---- Horizon Crash Report ----");
+        for header in &self.headers {
+            let _ = writeln!(out, "{header}");
+        }
         let _ = writeln!(out, "// {comment}\n");
         let _ = writeln!(out, "Time: {}", self.time.format("%Y-%m-%d %H:%M:%S"));
         let _ = writeln!(out, "Description: {}\n", self.description);
@@ -366,7 +340,103 @@ pub fn system_details(side: &str) -> Vec<(String, String)> {
             .filter(|(k, _)| side != "server" || *k != "Render Settings")
             .map(|(k, v)| (k.to_owned(), v)),
     );
+    out.extend(mod_lines(false));
     out
+}
+
+/// The lines mods put under a report's title, `<mod id>: <text>`.
+fn mod_headers() -> Vec<String> {
+    mod_lines(true)
+        .into_iter()
+        .map(|(name, text)| format!("{name}: {text}"))
+        .collect()
+}
+
+/// How long a report waits for the mods' lines, all of them together: a line waiting on a lock the
+/// crashing thread holds must not keep the report from being written.
+const MOD_LINES_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The mods' `Registrar::crash_header` lines (`headers`) or `crash_section` lines, in registration
+/// order, as `(<mod id>: <label>, text)`, or `(<mod id>, text)` for a header. Each is asked once,
+/// under [`contain`], on a guest-sized thread of its own: this runs inside the panic hook, where a
+/// second panic would end the process before any catch could. A line that panics, traps or misses
+/// [`MOD_LINES_WAIT`] reads `~~ERROR~~`; one that answers `None` is left out, as are the lines of
+/// the mod this thread's crash is attributed to. No mod line, no thread.
+fn mod_lines(headers: bool) -> Vec<(String, String)> {
+    let faulted = current_native_mod();
+    let lines: Vec<_> = mod_api::__private::game::mod_crash_lines()
+        .into_iter()
+        .filter(|(owner, label, _)| label.is_none() == headers && Some(*owner) != faulted)
+        .collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let (send, answers) = std::sync::mpsc::channel();
+    let asked: Vec<_> = lines
+        .iter()
+        .map(|(owner, _, line)| (*owner, line.clone()))
+        .collect();
+    // A thread that doesn't start drops `send`: every line then reads as an error.
+    let _ = horizon_guest_stack::spawn("Crash report lines".into(), move || {
+        let failures = horizon_mod_runtime::dispatch_failures::dispatch_failure_counter();
+        for (owner, line) in asked {
+            let before = failures.get();
+            let answer = contain(|| {
+                let _mod = enter_native_mod(ModCall {
+                    id: owner,
+                    hook: "crash_section",
+                    part: None,
+                });
+                line.value()
+            });
+            // A wasm line that traps answers `None` through its proxy; the failed call tells.
+            if send
+                .send(answer.ok().filter(|_| failures.get() == before))
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    let deadline = std::time::Instant::now() + MOD_LINES_WAIT;
+    let mut waiting = true;
+    lines
+        .into_iter()
+        .filter_map(|(owner, label, _)| {
+            // After one line misses the wait, a later answer would belong to that line, not this.
+            let answer = waiting
+                .then(|| {
+                    answers
+                        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                        .ok()
+                })
+                .flatten();
+            waiting = answer.is_some();
+            let text = match answer {
+                Some(Some(None)) => return None,
+                Some(Some(Some(text))) => one_line(&text),
+                _ => "~~ERROR~~".to_owned(),
+            };
+            let name = match label {
+                Some(label) => format!("{owner}: {}", one_line(&label)),
+                None => owner.to_owned(),
+            };
+            Some((name, text))
+        })
+        .collect()
+}
+
+/// `text` on one line, so no mod line passes for one of the report's own: control characters
+/// become spaces, and it is cut to 4096 bytes at a character boundary.
+fn one_line(text: &str) -> String {
+    let mut end = text.len().min(4096);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end]
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// The thread's name as vanilla's reports say it: the main thread is the client's "Render thread"
@@ -526,6 +596,7 @@ pub fn report_watchdog(
         home,
         Report {
             time: Local::now(),
+            headers: mod_headers(),
             description: "Watching Server".into(),
             error: format!("{message} (Watching Server)"),
             stack,
@@ -535,6 +606,30 @@ pub fn report_watchdog(
             log: crate::logging::recent_lines(),
         },
     )
+}
+
+/// The report for a game that went over the player's RAM limit (`ram_limit`), written by the
+/// watcher thread: it says nothing about where the memory went, so it carries no stack. The player
+/// chose this limit, and the game keeps running, over its limit, until the report is written.
+pub fn report_memory_limit(home: &Path, side: &'static str, message: String) {
+    if REPORTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let report = Report {
+        time: Local::now(),
+        headers: mod_headers(),
+        description: "RAM limit reached".into(),
+        error: message,
+        stack: String::new(),
+        thread: thread_name(side),
+        side,
+        details: system_details(side),
+        log: crate::logging::recent_lines(),
+    };
+    match report.save(home) {
+        Ok(path) => eprintln!("{SAVED_LINE}{}", path.display()),
+        Err(e) => eprintln!("Horizon: could not save a crash report: {e}"),
+    }
 }
 
 fn payload_text(payload: &(dyn std::any::Any + Send)) -> String {
@@ -634,6 +729,7 @@ fn short_path<'a>(path: &'a str, root: &str) -> &'a str {
 pub fn panic_report(info: &std::panic::PanicHookInfo, side: &'static str) -> Report {
     Report {
         time: Local::now(),
+        headers: mod_headers(),
         description: "Unexpected error".into(),
         error: panic_message(info),
         stack: stack_lines(
@@ -645,6 +741,16 @@ pub fn panic_report(info: &std::panic::PanicHookInfo, side: &'static str) -> Rep
         details: system_details(side),
         log: crate::logging::recent_lines(),
     }
+}
+
+/// Shared with the integrated server spawn so reporting follows its exact name.
+pub const INTEGRATED_SERVER_THREAD: &str = "Server thread";
+
+static SERVER_CRASHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the server has already delivered the fatal report.
+pub fn server_crashed() -> bool {
+    SERVER_CRASHED.load(std::sync::atomic::Ordering::Acquire)
 }
 
 /// Whether `name` is one of the shared worker pool's threads (`horizon_threads::jobs`), vanilla's
@@ -664,7 +770,7 @@ pub fn worker_panic_report(info: &std::panic::PanicHookInfo, side: &'static str)
 }
 
 /// Reports panics: on the main thread a crash report (the panic then ends the game, exit code
-/// 101); on a worker thread (`Util.onThreadException`) a crash report too, and the game ends
+/// 101); on the integrated server thread a server report relayed to the window; on a worker thread (`Util.onThreadException`) a crash report too, and the game ends
 /// with it; on other threads the error goes to the log, as vanilla's uncaught exception handler
 /// does. The default hook still prints the panic. A panic inside `contain` is only logged. A
 /// panic inside a native mod's hook names the mod and the hook.
@@ -676,7 +782,16 @@ pub fn install(home: PathBuf, side: &'static str) {
         }
         default(info);
         let main = std::thread::current().name() == Some("main");
-        if main {
+        if std::thread::current().name() == Some(INTEGRATED_SERVER_THREAD) {
+            // `MinecraftServer.runServer` saves its own `-server.txt` report before
+            // `onServerCrash` hands it to the client, which then only prints its path.
+            let report = Report {
+                description: "Exception in server tick loop".into(),
+                ..panic_report(info, "server")
+            };
+            deliver(&home, report);
+            SERVER_CRASHED.store(true, std::sync::atomic::Ordering::Release);
+        } else if main {
             deliver(&home, panic_report(info, side));
         } else if is_worker_thread(std::thread::current().name()) {
             deliver(&home, worker_panic_report(info, side));
@@ -732,6 +847,7 @@ pub fn report_error(
             home,
             Report {
                 time: Local::now(),
+                headers: mod_headers(),
                 description: DebugCrash::MESSAGE.into(),
                 error: DebugCrash::MESSAGE.into(),
                 stack: debug.stack.clone(),
@@ -752,6 +868,7 @@ pub fn report_error(
         home,
         Report {
             time: Local::now(),
+            headers: mod_headers(),
             description: "Fatal error".into(),
             error: message,
             stack: String::new(),
@@ -789,6 +906,92 @@ pub fn debug_crash_after() -> Option<std::time::Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mod_api::__private::game::*;
+
+    /// The panic hook is process-wide: tests that swap it hold this so they never overlap.
+    static PANIC_HOOK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn reporting_threads_write_once_and_contained_server_panics_write_nothing() {
+        let _lock = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+        for (name, native, contained, count, title) in [
+            (
+                "Server thread",
+                false,
+                false,
+                1,
+                "Exception in server tick loop",
+            ),
+            (
+                "Server thread",
+                true,
+                false,
+                1,
+                "Exception in server tick loop",
+            ),
+            ("Server thread", false, true, 0, ""),
+            ("main", false, false, 1, "Unexpected error"),
+        ] {
+            let scratch = tempfile::tempdir().unwrap();
+            let home = scratch.path().to_path_buf();
+            let previous = std::panic::take_hook();
+            REPORTED.store(false, Ordering::SeqCst);
+            install(
+                home.clone(),
+                if name == "main" { "server" } else { "client" },
+            );
+            let result = std::thread::Builder::new()
+                .name(name.into())
+                .spawn(move || {
+                    let crash = || {
+                        let _guard = native.then(|| {
+                            enter_native_mod(ModCall {
+                                id: "example:broken",
+                                hook: "server_tick",
+                                part: None,
+                            })
+                        });
+                        panic!("posted server crash 3494");
+                    };
+                    if contained {
+                        assert!(contain(crash).is_err());
+                    } else {
+                        crash();
+                    }
+                })
+                .unwrap()
+                .join();
+            std::panic::set_hook(previous);
+            assert_eq!(result.is_ok(), contained);
+            let reports: Vec<_> = std::fs::read_dir(home.join("crash-reports"))
+                .into_iter()
+                .flatten()
+                .map(|p| p.unwrap().path())
+                .collect();
+            assert_eq!(reports.len(), count);
+            if count == 1 {
+                // Both are server reports: `main` is installed as a dedicated server here,
+                // and the integrated server thread writes its own even under a client install.
+                let file = reports[0]
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                assert!(file.ends_with("-server.txt"), "{file}");
+                let text = std::fs::read_to_string(&reports[0]).unwrap();
+                assert!(text.contains(&format!("Description: {title}")));
+                assert!(text.contains("posted server crash 3494"));
+                if name == "Server thread" {
+                    assert!(text.contains("Server thread"));
+                }
+                if native {
+                    assert!(text.contains("in native mod example:broken, hook server_tick"));
+                }
+            }
+            REPORTED.store(false, Ordering::SeqCst);
+            SERVER_CRASHED.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
 
     static EMERGENCY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -901,26 +1104,155 @@ mod tests {
 
     #[test]
     fn a_panic_in_a_native_mods_hook_names_it() {
-        let outer = enter_native_mod(NativeModCall {
-            id: None,
-            index: 1,
+        let outer = enter_native_mod(ModCall {
+            id: "outer",
             hook: "render",
+            part: None,
         });
-        let inner = enter_native_mod(NativeModCall {
-            id: Some("b"),
-            index: 0,
+        let inner = enter_native_mod(ModCall {
+            id: "b",
             hook: "tick",
+            part: None,
         });
         assert!(attributed("boom".into()).ends_with("\nin native mod b, hook tick"));
         drop(inner);
-        assert!(attributed("boom".into()).ends_with("\nin native mod #1, hook render"));
+        assert!(attributed("boom".into()).ends_with("\nin native mod outer, hook render"));
         drop(outer);
         assert_eq!(attributed("boom".into()), "boom");
+        let part = enter_native_mod(ModCall {
+            id: "c",
+            hook: "analog_output",
+            part: Some("c::Gauge"),
+        });
+        assert!(
+            attributed("boom".into())
+                .ends_with("\nin native mod c, hook analog_output, part c::Gauge")
+        );
+        drop(part);
+    }
+
+    #[test]
+    fn a_panic_in_a_converted_package_names_the_runtime_package_export_and_site() {
+        let runtime = enter_native_mod(ModCall {
+            id: "converter_runtime",
+            hook: "client_tick_pre",
+            part: None,
+        });
+        let packages = ConvertedPackages::new("converter_runtime", ["example:mod"]);
+        let package = packages.package("example:mod").unwrap();
+        let scope = package
+            .enter("tick", "com.example.Foo.tick(Foo.java:42)")
+            .unwrap();
+        assert!(attributed("boom".into()).ends_with(
+            "\nin native mod converter_runtime, hook client_tick_pre\n\
+             in converted package example:mod, export tick, \
+             call site com.example.Foo.tick(Foo.java:42)"
+        ));
+        // Another mod's hook inside the package keeps its own attribution: the runtime's
+        // package is not named for a crash in somebody else's code.
+        let other = enter_native_mod(ModCall {
+            id: "other",
+            hook: "tick",
+            part: None,
+        });
+        assert_eq!(
+            attributed("boom".into()),
+            "boom\nin native mod other, hook tick"
+        );
+        drop(other);
+        assert!(
+            attributed("boom".into()).contains("\nin converted package example:mod, export tick")
+        );
+        drop(scope);
+        assert!(
+            attributed("boom".into())
+                .ends_with("\nin native mod converter_runtime, hook client_tick_pre")
+        );
+        drop(runtime);
+        assert_eq!(attributed("boom".into()), "boom");
+    }
+
+    #[test]
+    fn a_guest_export_cannot_forge_a_report_line() {
+        let runtime = enter_native_mod(ModCall {
+            id: "converter_runtime",
+            hook: "client_tick_pre",
+            part: None,
+        });
+        let packages = ConvertedPackages::new("converter_runtime", ["example:mod"]);
+        let scope = packages
+            .package("example:mod")
+            .unwrap()
+            .enter(
+                "tick\nin native mod forged, hook render",
+                "Foo.tick(\nforged)",
+            )
+            .unwrap();
+        let report = attributed("boom".into());
+        // One attributed line each: the guest's text stays inside them, escaped.
+        assert_eq!(
+            report
+                .lines()
+                .filter(|line| line.starts_with("in native mod"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            report
+                .lines()
+                .filter(|line| line.starts_with("in converted package"))
+                .count(),
+            1
+        );
+        assert!(report.contains(r"export tick\nin native mod forged, hook render"));
+        assert!(report.contains(r"call site Foo.tick(\nforged)"));
+        drop(scope);
+        drop(runtime);
+    }
+
+    #[test]
+    fn a_panic_in_a_converted_package_becomes_a_report() {
+        let caught = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink = caught.clone();
+        let _hook = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if panic_message(info).contains("the guest crash") {
+                *sink.lock().unwrap() = Some(panic_report(info, "client"));
+            }
+        }));
+        let _runtime = enter_native_mod(ModCall {
+            id: "runtime",
+            hook: "dispatch",
+            part: None,
+        });
+        let packages = ConvertedPackages::new("runtime", ["example:mod"]);
+        let package = packages.package("example:mod").unwrap();
+        let _ = std::panic::catch_unwind(|| {
+            let _scope = package.enter("tick", "Foo.tick(Foo.java:42)").unwrap();
+            panic!("the guest crash");
+        });
+        std::panic::set_hook(previous);
+        let report = caught.lock().unwrap().take().expect("the hook saw it");
+        assert!(
+            report.error.ends_with(
+                "\nin native mod runtime, hook dispatch\n\
+                 in converted package example:mod, export tick, call site Foo.tick(Foo.java:42)"
+            ),
+            "{}",
+            report.error
+        );
+        // The scope is gone once the report is written.
+        assert_eq!(
+            attributed("boom".into()),
+            "boom\nin native mod runtime, hook dispatch"
+        );
     }
 
     fn report() -> Report {
         Report {
             time: chrono::TimeZone::with_ymd_and_hms(&Local, 2026, 10, 14, 9, 5, 7).unwrap(),
+            headers: Vec::new(),
             description: "Unexpected error".into(),
             error: "panicked at src/game.rs:10:5:\nboom".into(),
             stack: "horizon_client::game::frame (src/game.rs:10:5)\n".into(),
@@ -1029,8 +1361,9 @@ mod tests {
     #[test]
     fn a_panic_becomes_a_report() {
         // A real panic through a hook, as the game's would be.
-        let caught = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let caught = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = caught.clone();
+        let _hook = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             if panic_message(info).contains("the test crash") {
@@ -1040,10 +1373,10 @@ mod tests {
         let _ = std::panic::catch_unwind(|| panic!("the test crash"));
         // The same panic inside a native mod's hook, which the hook sees before the unwind.
         let _ = std::panic::catch_unwind(|| {
-            let _guard = enter_native_mod(NativeModCall {
-                id: Some("a"),
-                index: 0,
+            let _guard = enter_native_mod(ModCall {
+                id: "a",
                 hook: "tick",
+                part: None,
             });
             panic!("the test crash")
         });
@@ -1084,5 +1417,124 @@ mod tests {
                 .ends_with("-client.txt")
         );
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    struct Quiet;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Quiet {}
+
+    struct Broken;
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Broken {
+        fn component_types(
+            &self,
+            _context: &mod_api::RegistrationContext,
+            _event: &mut mod_api::ComponentTypesEvent<'_>,
+        ) {
+            panic!("a broken mod");
+        }
+    }
+
+    struct Line(Option<&'static str>);
+    impl mod_api::CrashSection for Line {
+        fn value(&self) -> Option<String> {
+            self.0.map(str::to_owned)
+        }
+    }
+
+    struct Panics;
+    impl mod_api::CrashSection for Panics {
+        fn value(&self) -> Option<String> {
+            panic!("a broken crash line")
+        }
+    }
+
+    struct Lines;
+    impl mod_api::Hooks for Lines {
+        fn subscribed(&self) -> &'static [Option<mod_api::HookId>] {
+            &[]
+        }
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            r.crash_section(
+                "caches",
+                std::sync::Arc::new(Line(Some("3 caches\n\tHorizon Version: forged"))),
+            );
+            r.crash_section("idle", std::sync::Arc::new(Line(None)));
+            r.crash_section("worker", std::sync::Arc::new(Panics));
+            r.crash_header(std::sync::Arc::new(Line(Some("modded"))));
+        }
+    }
+
+    #[test]
+    fn mod_lines_are_asked_when_the_report_is_written() {
+        let _hook = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+        let mods: mod_api::Mods =
+            std::sync::Arc::from([mod_api::ModEntry::new("test", Box::new(Lines))]);
+        mod_platform::testing::with_mods(mods.clone(), || {
+            mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
+            let details = system_details("client");
+            let lines: Vec<_> = details
+                .iter()
+                .filter(|(key, _)| key.starts_with("test"))
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect();
+            assert_eq!(
+                lines,
+                [
+                    ("test: caches", "3 caches  Horizon Version: forged"),
+                    ("test: worker", "~~ERROR~~"),
+                ]
+            );
+            let text = Report {
+                headers: mod_headers(),
+                ..report()
+            }
+            .text();
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(
+                lines[..2],
+                ["---- Horizon Crash Report ----", "test: modded"]
+            );
+            assert!(lines[2].starts_with("// "));
+        });
+    }
+
+    #[test]
+    fn a_panic_in_a_hook_names_the_mod_and_the_hook() {
+        let mods: Vec<mod_api::ModEntry> = vec![
+            mod_api::ModEntry::new("quiet", Box::new(Quiet)),
+            mod_api::ModEntry::new("broken", Box::new(Broken)),
+        ];
+        let caught = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = caught.clone();
+        let _hook = PANIC_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let error = panic_report(info, "client").error;
+            if error.contains("a broken mod") {
+                sink.lock().unwrap().push(error);
+            }
+        }));
+        let unwound = mod_platform::testing::with_mods(mods.into(), || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                mod_api::dispatch_component_types(
+                    &mod_api::RegistrationContext::new(),
+                    &mut Vec::new(),
+                )
+            }))
+        });
+        // Once the dispatch has unwound, the thread is in no mod.
+        let _ = std::panic::catch_unwind(|| panic!("a broken mod's caller"));
+        std::panic::set_hook(previous);
+        // The game stops as before: the panic goes on to the dispatch's caller.
+        assert!(unwound.is_err());
+        let errors = caught.lock().unwrap();
+        assert_eq!(errors.len(), 2);
+        assert!(
+            errors[0].ends_with("\nin native mod broken, hook component_types"),
+            "{}",
+            errors[0]
+        );
+        assert!(!errors[1].contains("in native mod"), "{}", errors[1]);
     }
 }

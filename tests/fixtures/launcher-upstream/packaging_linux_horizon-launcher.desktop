@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Horizon
+GenericName=Game launcher
+Comment=Install, prepare and play Horizon, Minecraft: Java Edition 26.3 rewritten in Rust
+Exec=horizon-launcher
+Icon=horizon
+Terminal=false
+Categories=Game;
+StartupWMClass=horizon-launcher

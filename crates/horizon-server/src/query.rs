@@ -16,6 +16,7 @@ use crate::{
     supervisor::note,
 };
 use horizon_platform::server_files::properties::{ServerProperties, SystemEntropy};
+use horizon_server_launch::config;
 use std::{
     collections::HashMap,
     io,
@@ -221,7 +222,7 @@ enum Setup {
 }
 
 fn setup(dir: &Path) -> Result<Setup, String> {
-    let file = crate::config::read_properties(&dir.join(crate::config::PROPERTIES))?;
+    let file = config::read_properties(&dir.join(config::PROPERTIES))?;
     let p = ServerProperties::new(file, &mut SystemEntropy::default())?;
     if !p.enable_query {
         return Ok(Setup::Off);
@@ -246,7 +247,7 @@ fn setup(dir: &Path) -> Result<Setup, String> {
 /// log, not a server that doesn't start.
 pub fn start(shared: Arc<Shared>) -> Result<Option<SocketAddr>, String> {
     // The file the game reads, as server.toml makes it.
-    crate::config::Config::load(&shared.dir)?
+    config::Config::load(&shared.dir)?
         .write_properties(&shared.dir)
         .map_err(|e| format!("server.properties: {e}"))?;
     let (host, port) = match setup(&shared.dir)? {
@@ -301,7 +302,7 @@ fn read_info(shared: &Shared) -> Option<Info> {
     if shared.state.lock().ok()?.phase != Phase::Running {
         return None;
     }
-    let file = crate::config::read_properties(&shared.dir.join(crate::config::PROPERTIES)).ok()?;
+    let file = config::read_properties(&shared.dir.join(config::PROPERTIES)).ok()?;
     let p = ServerProperties::new(file, &mut SystemEntropy::default()).ok()?;
     let status = engine::Control::connect(&shared.dir)
         .and_then(|mut game| game.ask("server-status"))
@@ -722,6 +723,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_listener_on_a_real_socket_answers_the_handshake_and_both_stats() {
         let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let server = socket.local_addr().unwrap();
@@ -756,7 +758,7 @@ mod tests {
     fn an_invalid_port_leaves_the_query_off_with_vanillas_warning() {
         let dir = std::env::temp_dir().join(format!("horizon-query-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let write = |text: &str| std::fs::write(dir.join(crate::config::PROPERTIES), text).unwrap();
+        let write = |text: &str| std::fs::write(dir.join(config::PROPERTIES), text).unwrap();
         write("enable-query=false\nquery.port=0\n");
         assert!(matches!(setup(&dir), Ok(Setup::Off)));
         for port in ["0", "65536", "-3"] {

@@ -34,7 +34,7 @@ method-by-method reading misses:
     python3 tools/port_ledger.py build                         # index into .local/port-ledger/ledger.json
     python3 tools/port_ledger.py where KineticWeapon.damageEntities
     python3 tools/port_ledger.py where ShulkerBulletRenderer   # a whole class
-    python3 tools/port_ledger.py what crates/horizon-client/src/game/spear.rs:150
+    python3 tools/port_ledger.py what crates/horizon-client/src/game/items/spear.rs:150
     python3 tools/port_ledger.py class Shulker                 # every method: ported where, or not
     python3 tools/port_ledger.py issue 3123                    # the classes, code and gaps a report points at
     python3 tools/port_ledger.py blame blaze v                 # what computes a field a parity trace shows differ

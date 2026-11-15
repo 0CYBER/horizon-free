@@ -3,14 +3,16 @@
 extern crate horizon_client_lib as horizon_client;
 use horizon_client::{Result, models::StateModels, sprites::Sprites};
 use horizon_core::position::BlockPos;
-use horizon_world::{
-    DATA_VERSION,
-    chunk::BlockState,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, hint::black_box, path::PathBuf, time::Instant};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        chunk::BlockState,
+        registry::{BlockRegistry, BlockStateId},
+    },
+};
 
 struct Fixture {
     root: PathBuf,
@@ -92,16 +94,31 @@ impl Fixture {
     }
     fn load(&self, reuse: bool) -> Result<(StateModels, Sprites)> {
         // The first parse and block filtering match models::prepare in both paths.
-        let mut sprites = Sprites::default();
+        let mut sprites = Sprites::new(horizon_client::resource_source::ResourceSource::directory(
+            self.root.clone(),
+        ));
         let catalog = if reuse {
             let facts = self.facts()?;
             let blocks = self.block_names(facts.keys());
-            StateModels::from_facts(&self.root, &self.registry, &blocks, &mut sprites, &facts)?
+            StateModels::from_facts(
+                &horizon_assets::resource_source::ResourceSource::directory(
+                    self.root.to_path_buf(),
+                ),
+                &self.registry,
+                &blocks,
+                &mut sprites,
+                &facts,
+            )?
         } else {
             let facts: serde_json::Map<String, Value> =
                 serde_json::from_slice(&fs::read(self.root.join("model-states.json"))?)?;
             let blocks = self.block_names(facts.keys());
-            StateModels::load(&self.root, &self.registry, &blocks, &mut sprites)?
+            StateModels::load(
+                &horizon_assets::resource_source::ResourceRoot::directory(self.root.to_path_buf()),
+                &self.registry,
+                &blocks,
+                &mut sprites,
+            )?
         };
         Ok((catalog, sprites))
     }
@@ -213,19 +230,27 @@ mod tests {
                 serde_json::to_vec(facts)?,
             )?;
             let a = StateModels::load(
-                &fixture.root,
+                &horizon_assets::resource_source::ResourceRoot::directory(
+                    fixture.root.to_path_buf(),
+                ),
                 &fixture.registry,
                 &blocks,
-                &mut Sprites::default(),
+                &mut Sprites::new(horizon_client::resource_source::ResourceSource::directory(
+                    fixture.root.clone(),
+                )),
             )
             .err()
             .ok_or("expected load error")?
             .to_string();
             let b = StateModels::from_facts(
-                &fixture.root,
+                &horizon_assets::resource_source::ResourceSource::directory(
+                    fixture.root.to_path_buf(),
+                ),
                 &fixture.registry,
                 &blocks,
-                &mut Sprites::default(),
+                &mut Sprites::new(horizon_client::resource_source::ResourceSource::directory(
+                    fixture.root.clone(),
+                )),
                 facts,
             )
             .err()
@@ -252,38 +277,52 @@ mod tests {
         fs::remove_file(fixture.root.join("model-states.json"))?;
         // A parsed document remains usable without reopening its source file.
         StateModels::from_facts(
-            &fixture.root,
+            &horizon_assets::resource_source::ResourceSource::directory(fixture.root.to_path_buf()),
             &fixture.registry,
             &blocks,
-            &mut Sprites::default(),
+            &mut Sprites::new(horizon_client::resource_source::ResourceSource::directory(
+                fixture.root.clone(),
+            )),
             &good,
         )?;
         assert!(
             StateModels::load(
-                &fixture.root,
+                &horizon_assets::resource_source::ResourceRoot::directory(
+                    fixture.root.to_path_buf()
+                ),
                 &fixture.registry,
                 &blocks,
-                &mut Sprites::default()
+                &mut Sprites::new(horizon_client::resource_source::ResourceSource::directory(
+                    fixture.root.clone()
+                ))
             )
             .is_err()
         );
         fs::write(fixture.root.join("model-states.json"), b"null")?;
         assert!(
             StateModels::load(
-                &fixture.root,
+                &horizon_assets::resource_source::ResourceRoot::directory(
+                    fixture.root.to_path_buf()
+                ),
                 &fixture.registry,
                 &blocks,
-                &mut Sprites::default()
+                &mut Sprites::new(horizon_client::resource_source::ResourceSource::directory(
+                    fixture.root.clone()
+                ))
             )
             .is_err()
         );
         fs::write(fixture.root.join("model-states.json"), b"{")?;
         assert!(
             StateModels::load(
-                &fixture.root,
+                &horizon_assets::resource_source::ResourceRoot::directory(
+                    fixture.root.to_path_buf()
+                ),
                 &fixture.registry,
                 &blocks,
-                &mut Sprites::default()
+                &mut Sprites::new(horizon_client::resource_source::ResourceSource::directory(
+                    fixture.root.clone()
+                ))
             )
             .is_err()
         );

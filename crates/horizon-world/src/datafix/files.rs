@@ -10,8 +10,11 @@ use super::schema::Ty;
 use super::world_upgrader::worker_threads;
 use super::{CURRENT, update};
 use crate::compression::Compression;
-use crate::nbt::{self, Compound, JavaString, Limits, NamedTag, Tag};
 use crate::region::{ChunkRecord, RegionFile, RegionWriter};
+use horizon_core::{
+    nbt,
+    nbt::{Compound, JavaString, Limits, NamedTag, Tag},
+};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

@@ -1,0 +1,3 @@
+ids = ["method:ConfigFiles::list", "type:ConfigFileError"]
+why = "ConfigFiles::list is now paginated with an exclusive name cursor and a bounded page size. ConfigFileError inserts NoWorld and InvalidPage, changing its Wire encoding. Checked paths reject nonportable names and normalized aliases; Wire decoding accepts the explicit empty ConfigPath root for bulk-data listing and stat."
+migrate = "Pass None and a limit in 1..=CONFIG_LIST_MAX for the first list page, then pass the last returned name until an empty page. Handle NoWorld and InvalidPage and rebuild both native and wasm users for the new enum encoding. Use ConfigPath::root() for the bulk root and checked portable path components for entries."

@@ -1,0 +1,2 @@
+horizon-client game::native_mob_wanted_position_tests::wanted_position_moves_and_navigation_replaces_the_wish lib daily resources
+horizon-client game::native_mob_wanted_position_tests::wanted_position_names_invalid_inputs_and_refuses_unavailable_mobs lib daily resources

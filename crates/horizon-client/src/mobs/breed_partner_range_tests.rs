@@ -17,7 +17,7 @@ fn courtship(mates: &[[f64; 3]]) -> Option<(bool, Option<[i32; 3]>)> {
         .map(|(i, [x, y, z])| {
             let mut p = Mob::new(i as u32 + 2, kind.clone(), Vec3::new(*x, *y, *z), 0.0);
             p.extra.in_love = 600;
-            p.seen(None)
+            p.seen(None, &crate::items::Items::empty())
         })
         .collect();
     let mut out = None;
@@ -25,11 +25,11 @@ fn courtship(mates: &[[f64; 3]]) -> Option<(bool, Option<[i32; 3]>)> {
         let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
         m.extra.in_love = 600;
         m.on_ground = true;
-        let mut lr = crate::mobs::world::level_random(0);
+        let mut damage = crate::health::TestLevel::new(0);
         let mut events = Vec::new();
         let mut cx = Cx {
             w,
-            lr: &mut lr,
+            level: &mut damage.level(),
             events: &mut events,
         };
         let mut goals = std::mem::take(&mut m.ai.goals);
@@ -62,6 +62,7 @@ fn shelf(world: &mut crate::world::World, registry: &horizon_world::registry::Bl
 /// passes, and `TargetingConditions.test` rejects a target whose
 /// `distanceToSqr` is above 8 squared.
 #[test]
+#[ignore = "daily"]
 fn a_mate_outside_the_eight_block_sphere_is_ignored() {
     // 7,0,5 apart: squared 74, inside the box, outside the sphere.
     let Some((running, target)) = courtship(&[[7.5, 64.0, 5.5]]) else {
@@ -80,6 +81,7 @@ fn a_mate_outside_the_eight_block_sphere_is_ignored() {
 /// The other half of the same predicate: the sphere keeps a diagonal mate
 /// and one exactly eight blocks away, and the nearest of two still wins.
 #[test]
+#[ignore = "daily"]
 fn a_mate_inside_the_eight_block_sphere_is_courted() {
     // 5,0,5 apart: squared 50.
     let Some((running, target)) = courtship(&[[5.5, 64.0, 5.5]]) else {

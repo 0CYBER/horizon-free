@@ -1,0 +1,8 @@
+# The daily tests of horizon-shaders: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-shaders global_constant_division::lowered_multidimensional_array_preserves_its_type test:it daily slow
+horizon-shaders legacy_texture_size::modern_size_controls_keep_the_same_results test:it daily slow
+horizon-shaders post::tests::higher_shadowcolor_gives_shadow_programs_eight_buffers lib daily slow
+horizon-shaders post::tests::shadow_programs_load_when_a_shadow_buffer_is_read lib daily slow
+horizon-shaders post::tests::water_falls_back_to_terrain_and_blends lib daily slow
+horizon-shaders signed_builtin_indices::signed_ids_accept_signed_expressions_in_each_draw_path test:it daily slow

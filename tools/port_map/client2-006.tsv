@@ -37,7 +37,7 @@ AshParticle.Provider.createParticle	port	crates/horizon-client-render/src/partic
 AttackSweepParticle.tick	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::tick_particle	SweepAttack uses the HugeExplosion behaviour: age, then sprite from age
 AttackSweepParticle.Provider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	SweepAttack arm: size from xAux
 BaseAshSmokeParticle.<init>	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	Smoke, Ash, WhiteAsh and DustPlume arms: motion, GrowIn size, lifetime
-BreakingItemParticle.CobwebProvider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	ItemCobweb arm; the layer comes from item_sprites (game/item_particles.rs)
+BreakingItemParticle.CobwebProvider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	ItemCobweb arm; the layer comes from item_sprites (game/items/item_particles.rs)
 BreakingItemParticle.ItemParticleProvider.getSprite	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	Item arms pick a layer with the engine random; ItemCobweb, ItemSlime and ItemSnowball read item_sprites
 BreakingItemParticle.Provider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	Item arm
 BreakingItemParticle.SlimeProvider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	ItemSlime arm
@@ -87,9 +87,9 @@ DustParticle.Provider.createParticle	port	crates/horizon-client-render/src/parti
 DustParticleBase.randomizeColor	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	Dust and DustColorTransition arms: the randomize closure
 DustParticleBase.getQuadSize	port	crates/horizon-client-render/src/particles.rs::Particle::quad_size	GrowIn size curve
 DustPlumeParticle.Provider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	DustPlume arm, base 1.0
-ElderGuardianParticleGroup.extractRenderState	port	crates/horizon-client/src/game/mob_blocks.rs::Game::elder_apparition_geometry	gap: minor: one apparition timer that a new curse resets, so two curses show one ghost
-ElderGuardianParticleGroup.ElderGuardianParticleRenderState.fromParticle	port	crates/horizon-client/src/game/mob_blocks.rs::Game::elder_apparition_geometry	fade, camera pose and offsets
-ElderGuardianParticleGroup.State.submit	port	crates/horizon-client/src/game/mob_blocks.rs::Game::elder_apparition_geometry	draws the guardian model
+ElderGuardianParticleGroup.extractRenderState	port	crates/horizon-client/src/game/mobs/mob_blocks.rs::Game::elder_apparition_geometry	gap: minor: one apparition timer that a new curse resets, so two curses show one ghost
+ElderGuardianParticleGroup.ElderGuardianParticleRenderState.fromParticle	port	crates/horizon-client/src/game/mobs/mob_blocks.rs::Game::elder_apparition_geometry	fade, camera pose and offsets
+ElderGuardianParticleGroup.State.submit	port	crates/horizon-client/src/game/mobs/mob_blocks.rs::Game::elder_apparition_geometry	draws the guardian model
 EmissiveRisingParticle.getLightCoords	port	crates/horizon-client-render/src/particles.rs::Particle::light_coords	Block15 for sculk soul only (the SculkSoul arm)
 EmissiveRisingParticle.EmissiveProvider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	SculkSoul arm of the Soul arms
 EmissiveRisingParticle.Provider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	Soul arm
@@ -112,8 +112,8 @@ FireworkParticles.FlashProvider.createParticle	port	crates/horizon-client-render
 FireworkParticles.SparkProvider.createParticle	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::make	Firework arm, alpha 0.99
 FireworkParticles.Starter.tick	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::tick_starters	launch sound, a burst every 2 ticks, flash, twinkle sound at the end
 FireworkParticles.Starter.isFarAwayFromCamera	inline	crates/horizon-client-render/src/particles.rs::ParticleEngine::fireworks	gap: minor: the distance is taken when the rocket is launched, not on each tick
-FireworkParticles.Starter.createParticleBall	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::spark_ball	
-FireworkParticles.Starter.createParticleShape	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::spark_shape	
+FireworkParticles.Starter.createParticleBall	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::spark_ball
+FireworkParticles.Starter.createParticleShape	port	crates/horizon-client-render/src/particles.rs::ParticleEngine::spark_shape
 FireworkParticles.Starter.createParticleBurst	inline	crates/horizon-client-render/src/particles.rs::ParticleEngine::tick_starters	Burst shape arm of tick_starters
 FlameParticle.move	port	crates/horizon-client-render/src/particles.rs::Particle::move_by	free_move: moves the box without collision
 FlameParticle.getQuadSize	port	crates/horizon-client-render/src/particles.rs::Particle::quad_size	Flame size curve

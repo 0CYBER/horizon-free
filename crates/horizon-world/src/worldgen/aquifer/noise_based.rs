@@ -753,8 +753,8 @@ fn similarity(a: i32, b: i32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nbt::Tag;
     use crate::worldgen::aquifer::GlobalFluidPicker;
+    use horizon_core::nbt::Tag;
     use horizon_core::{density::DensitySampler, random::LegacyPositionalRandom};
     use std::sync::Arc;
 

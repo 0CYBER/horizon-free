@@ -15,6 +15,7 @@ import lab
 
 def check(binary):
     binary = Path(binary).resolve()
+    prefix = binary.stem
     # An imported DLL makes the bait discriminating: an unhardened launcher fails before main.
     imports = {name.lower() for name in pe_imports(binary.read_bytes())}
     if not imports.intersection(("version.dll", "winmm.dll")):
@@ -33,18 +34,18 @@ def check(binary):
         def version(exe):
             result = subprocess.run([str(exe), "--version"], cwd=cwd, env=env,
                                     capture_output=True, text=True, timeout=30, check=True)
-            if not result.stdout.startswith("horizon-launcher "):
+            if not result.stdout.startswith(prefix + " "):
                 raise RuntimeError(f"unexpected launcher version: {result.stdout!r}")
             return result.stdout
 
-        exe = exe_dir / "horizon-launcher.exe"
+        exe = exe_dir / f"{prefix}.exe"
         shutil.copyfile(binary, exe)
         expected = version(exe)
         # Invalid DLLs fail immediately if Windows consults either untrusted folder.
         for directory in (exe_dir, cwd):
             for name in ("version.dll", "winmm.dll"):
                 (directory / name).write_bytes(b"unrelated injector DLL fixture\n")
-        for name in ("horizon-launcher.exe", "horizon-launcher-setup.exe"):
+        for name in (f"{prefix}.exe", f"{prefix}-setup.exe"):
             target = exe_dir / name
             if target != exe:
                 shutil.copyfile(binary, target)

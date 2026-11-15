@@ -7,6 +7,7 @@
 //! `continueDestroyBlock`, `stopDestroyBlock`).
 //!
 //! What those read and do in the world is behind [`HandWorld`].
+pub use mod_api::client::first_person::Hand;
 
 /// The ranged item state read by the first-person hand renderer.
 #[derive(Clone, Copy, Debug)]
@@ -37,7 +38,7 @@ pub enum ItemPose {
     /// A spear being charged (`ItemUseAnimation.SPEAR`): the time held and
     /// the ticks since its last hit's feedback.
     Spear {
-        kinetic: crate::spear::Kinetic,
+        timing: crate::spear::UseTiming,
         time_held: f32,
         ticks_since_hit: f32,
     },
@@ -89,13 +90,13 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     }
     // The spear's own place in the hand, without the equip height.
     if let ItemPose::Spear {
-        kinetic,
+        timing,
         time_held,
         ticks_since_hit,
     } = pose
     {
         return Mat4::from_translation(Vec3::new(invert * 0.56, -0.52, -0.72))
-            * crate::spear::first_person_use(&kinetic, ticks_since_hit, time_held, !left);
+            * crate::spear::first_person_use(&timing, ticks_since_hit, time_held, !left);
     }
     if matches!(pose, ItemPose::Stab) {
         return m * crate::spear::first_person_attack(attack, !left);
@@ -461,16 +462,6 @@ pub fn hands_to_render(held: [Option<(&str, bool)>; 2], using: Option<(Hand, &st
     }
 }
 
-/// `InteractionHand`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Hand {
-    Main,
-    Off,
-}
-impl Hand {
-    pub const BOTH: [Hand; 2] = [Hand::Main, Hand::Off];
-}
-
 /// `SwingAnimation`: its type (`SwingAnimationType` ordinal) and duration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SwingAnimation {
@@ -695,6 +686,7 @@ impl HandSway {
     /// The degrees the hands turn about X, then Y, before either is drawn:
     /// `(viewXRot - xBob) * 0.1` and `(viewYRot - yBob) * 0.1`, the bobs
     /// interpolated as `extractRenderState` does.
+    #[horizon_mod_api_macros::replaceable]
     pub fn rotation(&self, partial: f32, view_x_rot: f32, view_y_rot: f32) -> [f32; 2] {
         let x_bob = crate::camera::lerp(partial, self.x_bob_o, self.x_bob);
         let y_bob = crate::camera::lerp(partial, self.y_bob_o, self.y_bob);
@@ -741,8 +733,12 @@ impl UseResult {
     }
 }
 pub use horizon_items::use_animation::consumable_animation;
+
 /// What the click handling reads and does in the world.
 pub trait HandWorld {
+    /// What a break keeps of the main-hand stack it began with
+    /// (`destroyingItem`): the stack itself in the game.
+    type Held: Clone + Default + PartialEq;
     fn hit(&mut self) -> Hit;
     fn is_air(&mut self, pos: [i32; 3]) -> bool;
     /// `MultiPlayerGameMode.localPlayerMode`.
@@ -779,13 +775,13 @@ pub trait HandWorld {
     fn destroy_progress(&mut self, pos: [i32; 3]) -> f32;
     /// `MultiPlayerGameMode.destroyBlock`.
     fn destroy_block(&mut self, pos: [i32; 3]) -> bool;
-    /// A key for the main-hand stack, kept as `destroyingItem`.
-    fn main_hand_key(&mut self) -> String;
+    /// The main-hand stack, kept as `destroyingItem`.
+    fn main_hand_key(&mut self) -> Self::Held;
     /// `ItemStack.isSameItemSameComponents(selected, destroyingItem)` for
-    /// the stack `main_hand_key` gave when the break started. Vanilla keeps
-    /// a reference to that stack, so it compares what it holds now.
-    fn same_destroying_item(&mut self, key: &str) -> bool {
-        self.main_hand_key() == key
+    /// what `main_hand_key` gave when the break started. Vanilla keeps a
+    /// reference to that stack, so it compares what it holds now.
+    fn same_destroying_item(&mut self, began: &Self::Held) -> bool {
+        self.main_hand_key() == *began
     }
     /// Breaking progress shown (`destroyBlockProgress`), or cleared with `None`.
     fn destroy_stage(&mut self, pos: [i32; 3], stage: Option<i32>);
@@ -807,33 +803,32 @@ pub trait HandWorld {
     fn release_using(&mut self);
 }
 
-/// `MultiPlayerGameMode`'s block breaking.
+/// `MultiPlayerGameMode`'s block breaking; `H` is the `HandWorld`'s `Held`.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Destroying {
+pub struct Destroying<H = String> {
     pub delay: i32,
     pub active: bool,
     pub pos: [i32; 3],
     pub face: u8,
-    pub item: String,
+    pub item: H,
     pub progress: f32,
     pub ticks: f32,
 }
-impl Default for Destroying {
-    /// `destroyBlockPos` starts at (-1, -1, -1) and `destroyingItem` empty
-    /// (an empty key).
+impl<H: Default> Default for Destroying<H> {
+    /// `destroyBlockPos` starts at (-1, -1, -1) and `destroyingItem` empty.
     fn default() -> Self {
         Destroying {
             delay: 0,
             active: false,
             pos: [-1; 3],
             face: 0,
-            item: String::new(),
+            item: H::default(),
             progress: 0.0,
             ticks: 0.0,
         }
     }
 }
-impl Destroying {
+impl<H> Destroying<H> {
     /// `getDestroyStage`.
     pub fn stage(&self) -> i32 {
         if self.progress > 0.0 {
@@ -842,11 +837,11 @@ impl Destroying {
             -1
         }
     }
-    fn same_target(&self, w: &mut impl HandWorld, pos: [i32; 3]) -> bool {
+    fn same_target(&self, w: &mut impl HandWorld<Held = H>, pos: [i32; 3]) -> bool {
         pos == self.pos && w.same_destroying_item(&self.item)
     }
     /// `startDestroyBlock`.
-    pub fn start(&mut self, w: &mut impl HandWorld, pos: [i32; 3], face: u8) -> bool {
+    pub fn start(&mut self, w: &mut impl HandWorld<Held = H>, pos: [i32; 3], face: u8) -> bool {
         if w.block_action_restricted(pos) || !w.within_border(pos) {
             return false;
         }
@@ -873,7 +868,7 @@ impl Destroying {
         true
     }
     /// `stopDestroyBlock`.
-    pub fn stop(&mut self, w: &mut impl HandWorld) {
+    pub fn stop(&mut self, w: &mut impl HandWorld<Held = H>) {
         if self.active {
             self.active = false;
             self.progress = 0.0;
@@ -882,7 +877,12 @@ impl Destroying {
         }
     }
     /// `continueDestroyBlock`: true while the hand keeps swinging.
-    pub fn continue_destroy(&mut self, w: &mut impl HandWorld, pos: [i32; 3], face: u8) -> bool {
+    pub fn continue_destroy(
+        &mut self,
+        w: &mut impl HandWorld<Held = H>,
+        pos: [i32; 3],
+        face: u8,
+    ) -> bool {
         if self.delay > 0 {
             self.delay -= 1;
             return true;
@@ -917,15 +917,15 @@ impl Destroying {
 
 /// `Minecraft`'s attack and use handling.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Clicks {
+pub struct Clicks<H = String> {
     pub miss_time: i32,
     pub right_click_delay: i32,
-    pub destroying: Destroying,
+    pub destroying: Destroying<H>,
 }
-impl Clicks {
+impl<H> Clicks<H> {
     /// `Minecraft.startAttack`: whether the click ended the attack (broke
     /// the block outright).
-    pub fn start_attack(&mut self, w: &mut impl HandWorld) -> bool {
+    pub fn start_attack(&mut self, w: &mut impl HandWorld<Held = H>) -> bool {
         if self.miss_time > 0 || w.hands_busy() {
             return false;
         }
@@ -968,7 +968,7 @@ impl Clicks {
         end
     }
     /// `Minecraft.continueAttack`.
-    pub fn continue_attack(&mut self, w: &mut impl HandWorld, down: bool) {
+    pub fn continue_attack(&mut self, w: &mut impl HandWorld<Held = H>, down: bool) {
         if !down {
             self.miss_time = 0;
         }
@@ -986,7 +986,7 @@ impl Clicks {
         }
     }
     /// `Minecraft.startUseItem`.
-    pub fn start_use_item(&mut self, w: &mut impl HandWorld) {
+    pub fn start_use_item(&mut self, w: &mut impl HandWorld<Held = H>) {
         if self.destroying.active {
             return;
         }
@@ -1048,7 +1048,7 @@ impl Clicks {
     /// the mouse grabbed.
     pub fn tick(
         &mut self,
-        w: &mut impl HandWorld,
+        w: &mut impl HandWorld<Held = H>,
         attack_clicks: u32,
         use_clicks: u32,
         attack_down: bool,
@@ -1099,7 +1099,7 @@ mod tests {
                 }))
                 .unwrap(),
             );
-            models.prototypes.insert(
+            std::sync::Arc::make_mut(&mut models.prototypes).insert(
                 item.into(),
                 [("minecraft:item_model".into(), json!(item))].into(),
             );
@@ -1587,17 +1587,26 @@ mod action_result_tests {
         assert!(!UseResult::Success { swing: true }.should_swing(2, 3));
     }
     #[test]
-    fn consumption_pose_requires_eat_or_drink_animation() {
-        use horizon_world::consumable::UseAnimation::*;
+    fn a_consumable_names_its_use_animation() {
+        use horizon_core::use_animation::UseAnimation::*;
         assert_eq!(consumable_animation(&serde_json::json!({})), Eat);
-        assert_eq!(
-            consumable_animation(&serde_json::json!({"animation":"drink"})),
-            Drink
-        );
-        for animation in ["none", "block", "bow", "brush"] {
+        for (name, expected) in [
+            ("drink", Drink),
+            ("block", Block),
+            ("bow", Bow),
+            ("trident", Trident),
+            ("crossbow", Crossbow),
+            ("spyglass", Spyglass),
+            ("toot_horn", TootHorn),
+            ("brush", Brush),
+            ("bundle", Bundle),
+            ("spear", Spear),
+            ("none", None),
+        ] {
             assert_eq!(
-                consumable_animation(&serde_json::json!({"animation":animation})),
-                None
+                consumable_animation(&serde_json::json!({"animation":name})),
+                expected,
+                "{name}"
             );
         }
     }

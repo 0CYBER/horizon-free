@@ -5,6 +5,7 @@
 //!
 //! The rules and the tile geometry are `horizon_optifine::ctm`'s.
 
+use crate::resource_source::ResourceSource;
 use crate::sprites::Sprites;
 use horizon_optifine::ctm::{
     self, Connect, Method, Orient, Rule, Tile,
@@ -12,7 +13,7 @@ use horizon_optifine::ctm::{
 };
 use horizon_world::block_state_properties::BlockProperties;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
-use std::{collections::HashMap, path::Path};
+use std::collections::HashMap;
 
 /// A tile as the mesher draws it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,17 +130,17 @@ impl ConnectedTextures {
     /// The sprites `rules` match by name (`matchTiles`, `connectTiles`), for
     /// [`Sprites::keep_apart`]: before the models insert theirs.
     pub fn matched_sprites(rules: &[Rule]) -> Vec<String> {
-        (rules.iter())
+        rules
+            .iter()
             .flat_map(|r| r.match_tiles.iter().chain(&r.connect_tiles))
             .map(|t| sprite_name(t))
             .collect()
     }
 
-    /// `rules` (`ctm::load` under `root`), with their tiles inserted into `sprites` (before it
-    /// finishes). `face_layer` answers a block state's sprite on a side, for rules that connect
-    /// by tile.
+    /// Loaded rules with their tiles inserted into `sprites` (before it finishes).
+    /// `face_layer` answers a block state's sprite on a side, for rules that connect by tile.
     pub fn load(
-        root: &Path,
+        _root: &ResourceSource,
         mut rules: Vec<Rule>,
         registry: &BlockRegistry,
         sprites: &mut Sprites,
@@ -162,7 +163,7 @@ impl ConnectedTextures {
                 _ => None,
             })
             .collect();
-        sprites.prefetch(root, tiles.iter().map(String::as_str));
+        sprites.prefetch(tiles.iter().map(String::as_str));
         let loaded = rules
             .into_iter()
             .filter_map(|rule| {
@@ -175,8 +176,8 @@ impl ConnectedTextures {
                         Tile::Texture(path) => {
                             // A tile among the textures is that sprite, under its own name.
                             let layer = match sprite_name(path) {
-                                name if name != *path => sprites.insert(root, &name)?,
-                                _ => sprites.insert_file(root, path)?,
+                                name if name != *path => sprites.insert(&name)?,
+                                _ => sprites.insert_file(path)?,
                             };
                             Ok(TileLayer::Layer {
                                 layer: u16::try_from(layer)?,

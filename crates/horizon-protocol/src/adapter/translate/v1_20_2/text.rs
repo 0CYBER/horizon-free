@@ -7,7 +7,8 @@ use crate::{
     ids,
     packets::play,
 };
-use horizon_world::{datafix::json, nbt::Tag};
+use horizon_core::nbt::Tag;
+use horizon_world::datafix::json;
 
 pub(crate) fn read_component(r: &mut Reader) -> Result<Tag> {
     let value = r.string(262144)?;

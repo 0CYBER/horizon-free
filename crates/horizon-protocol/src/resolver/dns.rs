@@ -324,6 +324,7 @@ mod tests {
     /// A local name server: a silent one first, then one that answers truncated
     /// over UDP and in full over TCP, like a real server with a big answer.
     #[test]
+    #[ignore = "daily"]
     fn asks_each_server_in_turn_and_retries_truncated_replies_over_tcp() {
         let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
         let (udp, tcp) = loop {

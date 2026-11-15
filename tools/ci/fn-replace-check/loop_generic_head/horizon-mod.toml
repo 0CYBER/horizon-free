@@ -1,0 +1,20 @@
+id = "fnr_loop_generic_head"
+name = "Function replacement check: a mixin on a loop's function, no slot"
+version = "0.1.0"
+description = "fn-replace: a HEAD mixin on the published loop's generic function with no [[native.loop]] row, so its copy is the game's own loop with the empty slot"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+# No mod fills the loop: the copy is compiled for the empty slot `()`.
+[[native.mixin]]
+id = "head"
+target = "horizon_client::game::block_entity_ticks::Game<'_>::tick_block_entities_with"
+kind = "HEAD"
+helper = "src/mixins/head.rs"

@@ -3,16 +3,18 @@
 //! Java's no-context BlockState.getCollisionShape uses its cache when present.
 //! The overload taking CollisionContext always calls block behavior instead.
 //! This module covers the cached branch only; uncached states remain explicit.
-use crate::{
-    DATA_VERSION,
-    chunk::BlockSection,
-    collision_context::EntityContextKind,
-    compression::invalid,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId, BlockTable},
-};
+use crate::collision_context::EntityContextKind;
 use horizon_core::geometry::{Axis, VoxelShape};
 use std::{collections::HashMap, io};
+use {
+    crate::{
+        DATA_VERSION,
+        chunk::BlockSection,
+        compression::invalid,
+        registry::{BlockRegistry, BlockStateId, BlockTable},
+    },
+    horizon_core::nbt::Tag,
+};
 
 /// `PipeBlock`'s shape for `size` pixels across (`makeShapes`): the core
 /// cube, with an arm from the centre out to each joined side (`sides` by

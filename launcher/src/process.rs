@@ -1,5 +1,11 @@
 //! The programs the launcher runs in the background: on Windows they open no console window
 //! (the launcher has none to share), and keep the streams their caller gives them.
+pub mod leases;
+#[cfg(test)]
+mod output_tests;
+#[cfg(unix)]
+pub mod supervisor;
+
 use std::ffi::OsStr;
 use std::process::Command;
 

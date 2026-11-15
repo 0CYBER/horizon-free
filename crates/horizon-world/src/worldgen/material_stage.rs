@@ -629,11 +629,10 @@ mod tests {
     use crate::{
         DATA_VERSION,
         heightmap::{HeightmapState, HeightmapType},
-        nbt::Tag,
         registry::{BlockRegistry, BlockStateId},
         worldgen::terrain::{PreLightChunkStage, TerrainBlockStates},
     };
-    use horizon_core::position::ChunkPos;
+    use horizon_core::{nbt::Tag, position::ChunkPos};
 
     const STONE: BlockStateId = BlockStateId(2);
 

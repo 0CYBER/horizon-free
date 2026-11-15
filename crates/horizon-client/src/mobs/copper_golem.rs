@@ -167,7 +167,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, animations: &HashMap<String, Anim
     p.xrot("head", s.x_rot.to_radians());
     p.yrot("head", s.y_rot.to_radians());
     let get = |n: &str| animations.get(&format!("CopperGolemAnimation.COPPER_GOLEM_{n}"));
-    let holding = m.extra.main_hand.is_some() || m.extra.off_hand.is_some();
+    let holding = m.extra.main_hand_id().is_some() || m.extra.off_hand_id().is_some();
     if holding {
         if let Some(a) = get("WALK_ITEM") {
             a.apply_walk(s.pos, s.speed, 2.0, 2.5, p);

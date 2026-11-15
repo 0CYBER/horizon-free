@@ -196,8 +196,7 @@ def armor_stands(ox, oz):
 
 
 def avatars(ox, oz):
-    """300 mannequins, the player model (20 x 15, 1.5 blocks apart): what cosmetics cost on many players
-    (docs/cosmetics.md: `HORIZON_COSMETICS=1 HORIZON_COSMETICS_LOCAL=<items>` dresses every mannequin)."""
+    """300 mannequins, the player model (20 x 15, 1.5 blocks apart): a crowd of players for stress runs."""
     return [f"summon mannequin {num(ox + 0.5 - 14.25 + 1.5 * col)} {FLOOR_Y + 1} {num(oz + 6 + 1.5 * row)} "
             "{NoGravity:1b,Silent:1b,Rotation:[180f,0f]}"
             for row in range(15) for col in range(20)]

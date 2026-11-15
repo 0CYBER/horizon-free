@@ -1,0 +1,2 @@
+# horizon-telemetry's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-telemetry payload::tests::what_this_machine_sends by-hand manual # prints what this machine would send; run with --ignored --nocapture

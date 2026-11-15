@@ -1,27 +1,29 @@
 //! Feature world transport retaining ordered mutations and partial failures.
 use crate::support::common::tag;
 use horizon_core::random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom};
-use horizon_world::{
-    DATA_VERSION,
-    heightmap::HeightmapType,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::{
-        anchor::WorldGenerationContext,
-        block_feature::FeatureBlockBindings,
-        feature::{FeatureBlocks, FeatureWorld},
-        feature_catalog::FeatureCatalog,
-        feature_graph::FeatureDefinition,
-        placement::{FeaturePlacer, PlacementContext, PlacementModifier, PlacementQueryError},
-        tags::TagDefinitions,
-    },
-};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        heightmap::HeightmapType,
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::{
+            anchor::WorldGenerationContext,
+            block_feature::FeatureBlockBindings,
+            feature::{FeatureBlocks, FeatureWorld},
+            feature_catalog::FeatureCatalog,
+            feature_graph::FeatureDefinition,
+            placement::{FeaturePlacer, PlacementContext, PlacementModifier, PlacementQueryError},
+            tags::TagDefinitions,
+        },
+    },
 };
 struct World<'a, W> {
     states: BTreeMap<[i32; 3], BlockStateId>,

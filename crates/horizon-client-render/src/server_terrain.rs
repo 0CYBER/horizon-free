@@ -18,16 +18,18 @@ use crate::{
     streaming::{LodDetail, LodSampler, LodSource},
 };
 use horizon_core::position::ChunkPos;
-use horizon_world::{
-    DATA_VERSION,
-    compression::Compression,
-    nbt::{Limits, NamedTag, Tag},
-    region::{ChunkRecord, RegionFile},
-    registry::BlockStateId,
-};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+};
+use {
+    horizon_core::nbt::{Limits, NamedTag, Tag},
+    horizon_world::{
+        DATA_VERSION,
+        compression::Compression,
+        region::{ChunkRecord, RegionFile},
+        registry::BlockStateId,
+    },
 };
 
 /// Bumped when the summary layout changes; older records are ignored.

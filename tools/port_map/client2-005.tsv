@@ -10,7 +10,7 @@ OitRenderPassProvider.createTransmittancePass	inline	crates/horizon-client-rende
 OitRenderPassProvider.createAccumulatePass	inline	crates/horizon-client-render/src/gfx/oit.rs::Oit::run	Accumulate arm: the accumulation target cleared to transparent, the world depth read only
 PreparedRenderType.drawFromBufferOit	inline	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	the draw closure runs once per stage: flat draws take oit.flat, the rest oit.terrain
 PreparedRenderType.draw	inline	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	gap: minor: the indexed draw runs in the gfx/ pass modules that draw_frame calls; RenderSetup scissor not seen
-RenderSetup.toString	skip:debug		
+RenderSetup.toString	skip:debug
 RenderSetup.prepareTextures	inline	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	overlay and lightmap samplers are bound per pass in gfx/
 RenderSetup.RenderSetupBuilder.withTexture	skip:java		builder
 RenderSetup.RenderSetupBuilder.setOutline	skip:java		builder setter; outline behaviour is in gfx/entity_outline.rs
@@ -18,7 +18,7 @@ RenderSetup.RenderSetupBuilder.createRenderSetup	skip:java		builder
 RenderType.calculateHasBlending	skip:other		blend flag from the pipeline colour targets; Horizon picks blend per pipeline in gfx.rs
 RenderType.prepare	inline	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	gap: minor: texture and overlay/lightmap binding folded into the frame passes
 RenderType.writeDynamicTransforms	inline	crates/horizon-client-render/src/gfx.rs::Renderer::draw_frame	gap: minor: no per-render-type layering offset found (only perspective layering scale)
-RenderTypes.createMovingBlockSetup	inline	crates/horizon-client/src/game/moving_pistons.rs::Game::moving_piston_geometry	block atlas and lightmap for moving blocks; gap: minor: crumbling and outline flags not checked here
+RenderTypes.createMovingBlockSetup	inline	crates/horizon-client/src/game/blocks/moving_pistons.rs::Game::moving_piston_geometry	block atlas and lightmap for moving blocks; gap: minor: crumbling and outline flags not checked here
 RenderTypes.breezeWind	inline	crates/horizon-client/src/mobs/render.rs::layers	the breeze's wind layer scrolls by 0.02 of the texture a tick (scroll_offset, scroll_u)
 BannerSpecialRenderer.submit	port	crates/horizon-client/src/item_render/special.rs::submit	Banner arm: flag, base and up to 16 pattern layers
 BannerSpecialRenderer.Unbaked.bake	inline	crates/horizon-client/src/item_render/special.rs::load_parts	models are baked once from entity-models.json
@@ -124,7 +124,7 @@ SpriteContents.createAnimatedTexture	port	crates/horizon-client-render/src/sprit
 SpriteContents.createAnimationState	inline	crates/horizon-client-render/src/sprites.rs::Sprites::finish	animation frames laid out per layer
 SpriteContents.getAdditionalMetadata	skip:java		generic metadata lookup
 SpriteContents.close	skip:java		image release; Rust drop
-SpriteContents.toString	skip:debug		
+SpriteContents.toString	skip:debug
 SpriteContents.isTransparent	inline	crates/horizon-client-render/src/sprites.rs::Sprites::region_opaque	gap: minor: single-texel alpha query is not kept; region_opaque tests alpha 255 over a UV box
 SpriteContents.uploadFirstFrame	inline	crates/horizon-client-render/src/sprites.rs::Sprites::finish	first frame copied into the layer pixels
 SpriteContents.AnimatedTexture.createAnimationState	inline	crates/horizon-client-render/src/sprites.rs::Sprites::finish	animation frames laid out per layer
@@ -142,4 +142,4 @@ Stitcher.addToStorage	inline	crates/horizon-client/src/item_render/glint_atlas.r
 Stitcher.expand	inline	crates/horizon-client/src/item_render/glint_atlas.rs::stitch	power-of-two GUI item-atlas expansion
 Stitcher.Region.add	port	crates/horizon-client/src/item_render/glint_atlas.rs::Region::add	first-fit region splitting, no rotation
 Stitcher.Region.walk	inline	crates/horizon-client/src/item_render/glint_atlas.rs::Region::gather	gathers GUI glint atlas rectangles
-Stitcher.Region.toString	skip:debug		
+Stitcher.Region.toString	skip:debug

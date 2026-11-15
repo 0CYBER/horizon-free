@@ -1,0 +1,2 @@
+# horizon-perf's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-perf write_the_pacing_fixture by-hand manual # rewrites tests/fixtures/pacing_slow_frames.hzperf

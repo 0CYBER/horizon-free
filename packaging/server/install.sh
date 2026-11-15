@@ -75,7 +75,7 @@ else
   RAWTAG=$TAG
   # A Nightly installs under its date and commit, as `horizon-server update` names it:
   # "Nightly 2026-10-28 · 0c02067" is nightly-2026-10-28-0c02067. Its signature is checked for exactly that
-  # version, so the title must name it (as horizon_release_sign::nightly_title_version reads it, strictly).
+  # version, so the title must name it (as horizon_release_sign::build_title_version reads it, strictly).
   NAME=
   case "$TAG" in
     nightly|nightly-*)

@@ -1,0 +1,18 @@
+[package]
+name = "horizon-modding-examples"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "The Rust the modding book includes, so it compiles with the mod API"
+
+[lib]
+name = "modding_examples"
+path = "src/lib.rs"
+
+[dependencies]
+horizon-mod-api = { path = "../../../crates/horizon-mod-api" }
+horizon-mod-points = { path = "../../../crates/horizon-mod-points" }
+
+[lints]
+workspace = true

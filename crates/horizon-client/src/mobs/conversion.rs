@@ -2,6 +2,7 @@
 //! of a different type in its place, keeping what the old one had. [`common`]
 //! is also what a cube mob's split children get (`SPLIT_ON_DEATH`).
 use super::Mob;
+use horizon_core::random::RandomSource;
 
 /// `ConversionParams` of a `SINGLE` conversion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +59,18 @@ impl After {
     }
 }
 
+/// `Pig.thunderHit`'s completion after `single`: choose the converted pig's
+/// weapon from the source pig's RNG and prevent the result from despawning.
+pub fn pig_thunder_hit(from: &mut Mob, to: &mut Mob) {
+    let spear = from.random.next_int_bound(20).unwrap_or(1) == 0;
+    to.extra.set_main_hand(Some(if spear {
+        "minecraft:golden_spear".into()
+    } else {
+        "minecraft:golden_sword".into()
+    }));
+    to.persistent = true;
+}
+
 /// `ConversionType.SINGLE.convert` and `ConversionType.convertCommon`: `to`
 /// is a fresh mob (`EntityType.create(level, CONVERSION)`, no spawn
 /// finalization) that takes `from`'s place, motion, ride, lead, equipment,
@@ -77,17 +90,10 @@ pub fn single(from: &Mob, to: &mut Mob, params: Params) {
     to.extra.passenger = from.extra.passenger;
     if params.keep_equipment {
         // Every slot, copyAndClear, and setDropChance from the old mob.
-        to.extra.set_main_hand(from.extra.main_hand.clone());
-        if let Some(stack) = from.extra.main_hand_stack() {
-            to.extra.set_main_hand_stack(Some(stack.clone()));
+        for slot in horizon_items::equipment::MAINHAND..=horizon_items::equipment::BODY {
+            to.extra
+                .set_slot_stack(slot, from.extra.slot_stack(slot).cloned());
         }
-        to.extra.off_hand = from.extra.off_hand.clone();
-        to.extra.head = from.extra.head.clone();
-        to.extra.body = from.extra.body.clone();
-        to.extra.chest = from.extra.chest.clone();
-        to.extra.legs = from.extra.legs.clone();
-        to.extra.feet = from.extra.feet.clone();
-        to.extra.armor = from.extra.armor.clone();
         to.extra.gear = from.extra.gear.clone();
         to.extra.drop_chances = from.extra.drop_chances.clone();
     }
@@ -102,23 +108,40 @@ pub fn single(from: &Mob, to: &mut Mob, params: Params) {
     to.extra.leash_pending = from.extra.leash_pending;
     to.extra.leash_player = from.extra.leash_player;
     common(from, to, params.preserve_can_pick_up_loot);
+    // A zombie that turns into another zombie keeps canBreakDoors.
+    if super::doors::is_zombie(from.species()) && super::doors::is_zombie(to.species()) {
+        super::doors::set_can_break_doors(to, from.extra.can_break_doors);
+    }
 }
 
 /// `ConversionType.convertCommon`, what every conversion carries over (`SINGLE` and `SPLIT_ON_DEATH`):
 /// absorption, effects, babyhood and age, the flags, the custom name. `preserve_can_pick_up_loot`
 /// is the params' `preserveCanPickUpLoot`.
 pub fn common(from: &Mob, to: &mut Mob, preserve_can_pick_up_loot: bool) {
-    // convertCommon, in its order: the absorption first, then the effects.
-    to.absorption = from.absorption;
-    to.extra.effects = from.extra.effects.clone();
-    to.extra.effect_fallbacks = from.extra.effect_fallbacks.clone();
+    // convertCommon, in its order: the absorption first, then the effects. setAbsorptionAmount clamps to
+    // the fresh mob's max_absorption.
+    let maximum = *to
+        .kind
+        .attributes
+        .get("minecraft:max_absorption")
+        .unwrap_or(&0.0) as f32;
+    to.absorption = from.absorption.clamp(0.0, maximum);
+    // addEffect for each: Absorption's onEffectStarted raises it again.
+    for effect in &from.extra.effects {
+        to.add_effect(effect.id, effect.duration, effect.amplifier);
+        // `new MobEffectInstance(effect)` copies its icon flag too.
+        if let Some(copy) = to.extra.effects.iter_mut().find(|e| e.id == effect.id) {
+            copy.show_icon = effect.show_icon;
+        }
+    }
     to.extra.hidden_effects = from.extra.hidden_effects.clone();
+    to.extra.effect_chains = from.extra.effect_chains.clone();
     to.extra.ambient_effects = from.extra.ambient_effects.clone();
     if to
         .extra
         .effects
         .iter()
-        .any(|e| e.0 == "minecraft:health_boost")
+        .any(|e| e.id == "minecraft:health_boost")
     {
         super::finalize::health_boost_changed(to);
     }
@@ -127,7 +150,7 @@ pub fn common(from: &Mob, to: &mut Mob, preserve_can_pick_up_loot: bool) {
     }
     // An ageable pair keeps the exact age, an adult's breeding cooldown too.
     if super::finalize::ageable(from.species()) && super::finalize::ageable(to.species()) {
-        super::finalize::set_age(to, from.extra.age);
+        super::finalize::set_age(to, from.extra.age, None);
         to.extra.forced_age = from.extra.forced_age;
         to.extra.forced_age_timer = from.extra.forced_age_timer;
     }
@@ -146,10 +169,6 @@ pub fn common(from: &Mob, to: &mut Mob, preserve_can_pick_up_loot: bool) {
     // COMPONENTS_TO_COPY: the custom name.
     to.custom_name = from.custom_name.clone();
     to.custom_name_text = from.custom_name_text.clone();
-    // A zombie that turns into another zombie keeps canBreakDoors.
-    if super::doors::is_zombie(from.species()) && super::doors::is_zombie(to.species()) {
-        super::doors::set_can_break_doors(to, from.extra.can_break_doors);
-    }
 }
 
 #[cfg(test)]
@@ -160,78 +179,151 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn a_frozen_skeleton_becomes_a_stray_that_keeps_its_bow_and_name() {
-        with_test_world(&[], |_, types| {
-            let mob = |id, kind: &str| {
-                Mob::new(
-                    id,
-                    Arc::new(types.types[kind].clone()),
-                    Vec3::new(3.5, 70.0, -2.5),
-                    0.0,
-                )
-            };
-            let mut s = mob(1, "minecraft:skeleton");
-            s.yaw = 90.0;
-            s.custom_name = Some("Frosty".into());
-            s.no_ai = true;
-            s.extra
-                .set_main_hand_stack(Some(ItemStack::new("minecraft:bow", 1)));
-            s.extra.chest = Some("minecraft:chainmail_chestplate".into());
-            s.extra.leash = Some(crate::mobs::leash::Holder::Knot([3, 71, -3]));
-            s.extra.mount = Some(7);
-            s.extra.passenger = true;
-            let mut st = mob(2, "minecraft:stray");
-            single(&s, &mut st, Params::KEEP_ALL);
-            assert_eq!(st.custom_name.as_deref(), Some("Frosty"));
-            assert!(st.no_ai);
-            assert_eq!(st.yaw, 90.0);
-            assert_eq!(
-                st.extra.main_hand_stack().map(|s| &*s.item),
-                Some("minecraft:bow")
-            );
-            assert_eq!(
-                st.extra.chest.as_deref(),
-                Some("minecraft:chainmail_chestplate")
-            );
-            assert_eq!(
-                st.extra.leash,
-                Some(crate::mobs::leash::Holder::Knot([3, 71, -3]))
-            );
-            assert_eq!(st.extra.mount, Some(7));
-            // Health is the new type's own, not copied.
-            assert_eq!(st.health, mob(3, "minecraft:stray").health);
-            // Without keepEquipment the gear stays behind.
-            let mut bare = mob(4, "minecraft:stray");
-            single(
-                &s,
-                &mut bare,
-                Params {
-                    keep_equipment: false,
-                    preserve_can_pick_up_loot: false,
-                },
-            );
-            assert!(bare.extra.main_hand.is_none() && bare.extra.chest.is_none());
-            assert_eq!(bare.custom_name.as_deref(), Some("Frosty"));
-        });
+    #[ignore = "daily"]
+    fn absorption_is_clamped_then_restarted_by_a_copied_absorption_effect() {
+        assert!(
+            with_test_world(&[], |_, types| {
+                let mob = |id, kind: &str| {
+                    Mob::new(id, Arc::new(types.types[kind].clone()), Vec3::ZERO, 0.0)
+                };
+                let mut s = mob(1, "minecraft:skeleton");
+                s.absorption = 3.5;
+                let mut plain = mob(2, "minecraft:stray");
+                single(&s, &mut plain, Params::KEEP_ALL);
+                assert_eq!(plain.absorption, 0.0);
+                // AbsorptionMobEffect.onEffectStarted: 4 per level, amplifier 1.
+                s.extra.effects.push(crate::mobs::StoredEffect::new(
+                    "minecraft:absorption",
+                    600,
+                    1,
+                ));
+                let mut boosted = mob(3, "minecraft:stray");
+                single(&s, &mut boosted, Params::KEEP_ALL);
+                assert_eq!(boosted.absorption, 8.0);
+                assert_eq!(
+                    boosted.extra.effects,
+                    vec![crate::mobs::StoredEffect::new(
+                        "minecraft:absorption",
+                        600,
+                        1
+                    )]
+                );
+            }),
+            "vanilla data is missing"
+        );
     }
-    /// `ConversionType.convertCommon` copies `getAbsorptionAmount`, so the
-    /// golden hearts an apple left on a zombie survive its turn into a drowned.
     #[test]
+    #[ignore = "daily"]
+    fn a_frozen_skeleton_becomes_a_stray_that_keeps_its_bow_and_name() {
+        assert!(
+            with_test_world(&[], |_, types| {
+                let mob = |id, kind: &str| {
+                    Mob::new(
+                        id,
+                        Arc::new(types.types[kind].clone()),
+                        Vec3::new(3.5, 70.0, -2.5),
+                        0.0,
+                    )
+                };
+                let mut s = mob(1, "minecraft:skeleton");
+                s.yaw = 90.0;
+                s.custom_name = Some("Frosty".into());
+                s.no_ai = true;
+                s.absorption = 3.5;
+                s.extra
+                    .set_main_hand_stack(Some(ItemStack::new("minecraft:bow", 1)));
+                s.extra.set_slot_id(
+                    horizon_items::equipment::CHEST,
+                    Some("minecraft:chainmail_chestplate".into()),
+                );
+                let mut offhand = ItemStack::new("minecraft:shield", 2);
+                offhand.damage = 5;
+                crate::mobs::finalize::set_item_stack(
+                    &mut s,
+                    crate::mobs::finalize::OFFHAND,
+                    offhand.clone(),
+                );
+                let mut armor = ItemStack::new("minecraft:wolf_armor", 1);
+                armor.damage = 7;
+                armor.data_mut().custom_name = Some(horizon_core::nbt::Tag::String("kept".into()));
+                s.extra.set_body_stack(Some(armor));
+                s.extra.leash = Some(crate::mobs::leash::Holder::Knot([3, 71, -3]));
+                s.extra.mount = Some(7);
+                s.extra.passenger = true;
+                let mut st = mob(2, "minecraft:stray");
+                single(&s, &mut st, Params::KEEP_ALL);
+                assert_eq!(st.custom_name.as_deref(), Some("Frosty"));
+                assert!(st.no_ai);
+                assert_eq!(st.absorption, 0.0);
+                assert_eq!(st.yaw, 90.0);
+                assert_eq!(
+                    st.extra.main_hand_stack().map(|s| &*s.item),
+                    Some("minecraft:bow")
+                );
+                assert_eq!(
+                    st.extra.slot_id(horizon_items::equipment::CHEST),
+                    Some("minecraft:chainmail_chestplate")
+                );
+                assert_eq!(
+                    st.extra.leash,
+                    Some(crate::mobs::leash::Holder::Knot([3, 71, -3]))
+                );
+                assert_eq!(st.extra.mount, Some(7));
+                assert_eq!(st.extra.body_id(), Some("minecraft:wolf_armor"));
+                assert_eq!(st.extra.body_damage(), 7);
+                assert_eq!(st.equipment_stacks()[1], Some(offhand));
+                assert_eq!(st.extra.body_stack(), s.extra.body_stack());
+                // Health is the new type's own, not copied.
+                assert_eq!(st.health, mob(3, "minecraft:stray").health);
+                // Without keepEquipment the gear stays behind.
+                let mut bare = mob(4, "minecraft:stray");
+                single(
+                    &s,
+                    &mut bare,
+                    Params {
+                        keep_equipment: false,
+                        preserve_can_pick_up_loot: false,
+                    },
+                );
+                assert!(
+                    bare.extra.main_hand_id().is_none()
+                        && bare
+                            .extra
+                            .slot_stack(horizon_items::equipment::CHEST)
+                            .is_none()
+                        && bare.extra.body_id().is_none()
+                );
+                assert_eq!(bare.custom_name.as_deref(), Some("Frosty"));
+            }),
+            "vanilla data is missing"
+        );
+    }
+    /// `ConversionType.convertCommon` copies absorption through the target's
+    /// setter, so it survives when the target's max absorption permits it.
+    #[test]
+    #[ignore = "daily"]
     fn a_converting_mob_keeps_its_absorption() {
-        with_test_world(&[], |_, types| {
-            let mob = |id, kind: &str| {
-                Mob::new(
-                    id,
-                    Arc::new(types.types[kind].clone()),
-                    Vec3::new(3.5, 70.0, -2.5),
-                    0.0,
-                )
-            };
-            let mut z = mob(1, "minecraft:zombie");
-            z.absorption = 3.0;
-            let mut d = mob(2, "minecraft:drowned");
-            single(&z, &mut d, Params::KEEP_ALL);
-            assert_eq!(d.absorption, 3.0, "the absorption crosses the conversion");
-        });
+        assert!(
+            with_test_world(&[], |_, types| {
+                let mob = |id, kind: &str| {
+                    Mob::new(
+                        id,
+                        Arc::new(types.types[kind].clone()),
+                        Vec3::new(3.5, 70.0, -2.5),
+                        0.0,
+                    )
+                };
+                let mut z = mob(1, "minecraft:zombie");
+                z.absorption = 3.0;
+                let mut d = mob(2, "minecraft:drowned");
+                // LivingEntity.setAbsorptionAmount clamps to the new mob's maximum
+                // before effects are copied. An unmodified drowned has maximum 0.
+                Arc::make_mut(&mut Arc::make_mut(&mut d.kind).attributes)
+                    .insert("minecraft:max_absorption".into(), 3.0);
+                single(&z, &mut d, Params::KEEP_ALL);
+                assert_eq!(d.absorption, 3.0, "the absorption crosses the conversion");
+            }),
+            "vanilla data is missing"
+        );
     }
 }

@@ -565,9 +565,13 @@ impl SplitUi {
         }
     }
 
-    pub fn draw(&self, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32), in_world: bool) {
+    pub(crate) fn draw_contents(
+        &self,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        cursor: (f32, f32),
+    ) -> Option<String> {
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
         graphics_style::title(
             batch,
             atlas,
@@ -587,7 +591,7 @@ impl SplitUi {
             for b in &self.buttons(w, h) {
                 self.draw_button(batch, atlas, cursor, b);
             }
-            return;
+            return None;
         }
         let (monitors, windows, tiles) = self.map(w, h);
         let grey = rgba(160, 160, 160, 255);
@@ -668,7 +672,7 @@ impl SplitUi {
             let label = Text::literal(tr("monitor", &[&(n + 1)]));
             batch.text_styled(atlas, &label, x + 1.0, y + mh + 2.0, grey, true);
         }
-        self.draw_notes(batch, atlas, cursor, &buttons);
+        self.draw_notes(batch, atlas, cursor, &buttons)
     }
 
     fn draw_button(
@@ -758,7 +762,7 @@ impl SplitUi {
         atlas: &HudAtlas,
         cursor: (f32, f32),
         buttons: &[Button],
-    ) {
+    ) -> Option<String> {
         let (w, h) = (batch.width, batch.height);
         let held = self.held.as_ref().map(|h| {
             let who = self
@@ -805,19 +809,11 @@ impl SplitUi {
         }
         // What the pointer's button does (disabled ones too, to say why), as the options screens
         // show theirs. Not the selected player's tile: the pointer is still on it after the click.
-        let help = buttons
+        buttons
             .iter()
             .filter(|b| ui::hovered(cursor, b.0[0], b.0[1], b.0[2], b.0[3]))
             .filter(|b| !matches!(b.2, Target::Player(i) if Some(i) == self.selected))
-            .find_map(|b| self.help(b));
-        if let Some(help) = help {
-            ui::tooltip(
-                batch,
-                atlas,
-                &atlas.font.split(&Text::literal(help), 170.0),
-                cursor,
-            );
-        }
+            .find_map(|b| self.help(b))
     }
     /// A press at `(x, y)` on a screen `w` x `h`, or the mouse moving with it held (`drag`).
     pub fn click(&mut self, (x, y): (f32, f32), (w, h): (f32, f32), drag: bool) -> Click {
@@ -1512,13 +1508,15 @@ mod tests {
     #[test]
     fn done_is_declared_off_while_a_player_is_held() {
         use crate::widgets::{Action, end_frame, last_actions, set_action_screen};
-        let atlas =
-            HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+            (std::path::Path::new("/nonexistent/horizon-test-assets")).to_owned(),
+        ))
+        .unwrap();
         let mut ui = screen(2);
         ui.size = SIZE;
         let done = |ui: &SplitUi, frame: u64| {
-            let mut batch = HudBatch::new([427, 300]);
-            ui.draw(&mut batch, &atlas, (0.0, 0.0), false);
+            let mut batch = HudBatch::scratch([427, 300]);
+            ui.draw_contents(&mut batch, &atlas, (0.0, 0.0));
             set_action_screen(9);
             end_frame(frame);
             last_actions(9)
@@ -1565,6 +1563,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn locale_switch_and_pack_overrides_keep_the_same_draft() {
         // The language table is process-wide. Run this test alone in a child so
         // other UI tests cannot observe its temporary French language.
@@ -1573,6 +1572,7 @@ mod tests {
             let module = module_path!().split_once("::").unwrap().1;
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--include-ignored",
                     "--exact",
                     &format!("{module}::locale_switch_and_pack_overrides_keep_the_same_draft"),
                     "--nocapture",
@@ -1612,51 +1612,59 @@ mod tests {
         }
         let mut ui = screen(2);
         ui.names[1] = "Élodie %s".into();
-        lang::set(lang::Language::load(&[], "en_us"));
-        press(&mut ui, "Élodie %s");
-        assert!(labels(&ui).contains(&"New window".to_owned()));
-        lang::set(lang::Language::load(&[], "fr_fr"));
-        assert!(labels(&ui).contains(&"Nouvelle fenêtre".to_owned()));
-        assert!(labels(&ui).contains(&"Appliquer".to_owned()));
-        assert!(labels(&ui).contains(&"Noms : Désactivé".to_owned()));
-        assert!(labels(&ui).contains(&"2 par fenêtre : Auto".to_owned()));
-        assert!(
-            labels(&ui).contains(&"Élodie %s".to_owned()),
-            "player names remain literal"
-        );
-        press(&mut ui, "Nouvelle fenêtre");
-        let draft = ui.edit.clone().unwrap();
-        assert_eq!(draft.players, [1, 2]);
-        lang::set(lang::Language::load(&[&Pack], "fr_fr"));
-        let translated = labels(&ui);
-        assert!(translated.contains(&"Créer une fenêtre".to_owned()));
-        assert!(translated.contains(&"Occuper Écran personnalisé 2".to_owned()));
-        assert_eq!(
-            ui.edit,
-            Some(draft),
-            "a language change must not reset the arrangement"
-        );
-        ui.place(0, Spot::Window(2));
-        assert!(
-            ui.warnings()
-                .contains(&"Fenêtre principale masquée".to_owned())
-        );
-        press(&mut ui, "Appliquer");
-        assert_eq!(ui.apply.take().unwrap().players, [2, 2]);
-        ui.on = false;
-        assert_eq!(
-            ui.status(),
-            "off",
-            "agent protocol states stay language independent"
-        );
-        assert_eq!(
-            ui.status_lines().unwrap()[0],
-            "L'écran partagé est désactivé."
-        );
-        assert!(labels(&ui).contains(&"Écran partagé : Désactivé".to_owned()));
-        // German translates it now; a key a language lacks still falls back to the bundled
-        // English (lang's `layers_selected_language_over_english`).
-        lang::set(lang::Language::load(&[], "de_de"));
-        assert_eq!(ui.status_lines().unwrap()[0], "Splitscreen ist aus.");
+        lang::scoped(lang::Language::load(&[], "en_us"), || {
+            press(&mut ui, "Élodie %s");
+            assert!(labels(&ui).contains(&"New window".to_owned()));
+        });
+        let draft = lang::scoped(lang::Language::load(&[], "fr_fr"), || {
+            assert!(labels(&ui).contains(&"Nouvelle fenêtre".to_owned()));
+            assert!(labels(&ui).contains(&"Appliquer".to_owned()));
+            assert!(labels(&ui).contains(&"Noms : Désactivé".to_owned()));
+            assert!(labels(&ui).contains(&"2 par fenêtre : Auto".to_owned()));
+            assert!(
+                labels(&ui).contains(&"Élodie %s".to_owned()),
+                "player names remain literal"
+            );
+            press(&mut ui, "Nouvelle fenêtre");
+            let draft = ui.edit.clone().unwrap();
+            assert_eq!(draft.players, [1, 2]);
+            draft
+        })
+        .0;
+        lang::scoped(lang::Language::load(&[&Pack], "fr_fr"), || {
+            let translated = labels(&ui);
+            assert!(translated.contains(&"Créer une fenêtre".to_owned()));
+            assert!(translated.contains(&"Occuper Écran personnalisé 2".to_owned()));
+            assert_eq!(
+                ui.edit,
+                Some(draft),
+                "a language change must not reset the arrangement"
+            );
+            ui.place(0, Spot::Window(2));
+            assert!(
+                ui.warnings()
+                    .contains(&"Fenêtre principale masquée".to_owned())
+            );
+            press(&mut ui, "Appliquer");
+            assert_eq!(ui.apply.take().unwrap().players, [2, 2]);
+            ui.on = false;
+            assert_eq!(
+                ui.status(),
+                "off",
+                "agent protocol states stay language independent"
+            );
+            assert_eq!(
+                ui.status_lines().unwrap()[0],
+                "L'écran partagé est désactivé."
+            );
+            assert!(labels(&ui).contains(&"Écran partagé : Désactivé".to_owned()));
+        });
+        lang::scoped(lang::Language::load(&[], "de_de"), || {
+            assert_eq!(
+                ui.status_lines().unwrap()[0],
+                "Splitscreen ist aus.",
+                "German translation"
+            );
+        });
     }
 }

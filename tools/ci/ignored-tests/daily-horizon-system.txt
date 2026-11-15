@@ -1,0 +1,4 @@
+# The daily tests of horizon-system: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-system tests::this_machine_is_described lib daily child-process
+horizon-system tests::this_process_is_measured lib daily child-process

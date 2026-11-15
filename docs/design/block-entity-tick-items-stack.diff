@@ -1,0 +1,10 @@
+--- baseline
++++ unscoped_item_entity_stack
+@@ -56,7 +56,6 @@
+ call   TARGET
+ jmp    TARGET
+ movq   $0x0,(%rbx)
+-mov    %rbx,%rax
+ add    $0x20,%rsp
+ pop    %rbx
+ pop    %r12

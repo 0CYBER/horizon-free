@@ -1,0 +1,400 @@
+//! Falling block entities (`FallingBlockEntity.tick`): one block's tick (`tick_one_falling`), its move
+//! (`fall_step`) and the item entity it leaves as a drop (`drop_falling_block`, `Entity.spawnAtLocation`).
+use super::*;
+
+impl Game<'_> {
+    /// Cache only model-dependent work, never an entity's seed, light or pose.
+    pub(super) fn falling_model_vertices(
+        &self,
+        state: BlockStateId,
+        start_pos: BlockPos,
+        origin: glam::Vec3,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        // `FallingBlockRenderer`: the model is picked by the block's starting position.
+        let seed = horizon_core::random::position_seed(start_pos);
+        let Ok(models) = self.pack.render.model_catalog.collect_seeded(state, seed) else {
+            return;
+        };
+        // Baked models live at stable addresses until the pack is replaced.
+        // Keep multipart order and duplicates: both affect the emitted vertices.
+        let mut cache = self.falling_vertices.borrow_mut();
+        let entries = cache.entry(state).or_default();
+        let index = entries.iter().position(|(ptrs, _)| {
+            ptrs.iter()
+                .copied()
+                .eq(models.iter().map(|(_, m)| *m as *const _ as usize))
+        });
+        let index = index.unwrap_or_else(|| {
+            let mut vertices = Vec::new();
+            self.block_model_vertices(state, seed, glam::Mat4::IDENTITY, 0, false, &mut vertices);
+            // Preserve the original coordinates, including signed zero, rather
+            // than composing an identity transform with the frame's translation.
+            let positions = models.iter().flat_map(|(_, model)| {
+                model
+                    .faces
+                    .iter()
+                    .filter(|face| {
+                        self.pack
+                            .layer_names
+                            .get(&face.layer)
+                            .is_some_and(|name| self.gui.atlas.sprites.contains_key(name))
+                    })
+                    .flat_map(|face| face.quad.positions)
+            });
+            for (vertex, pos) in vertices.iter_mut().zip(positions) {
+                vertex.pos = pos;
+            }
+            let ptrs = models
+                .iter()
+                .map(|(_, m)| *m as *const _ as usize)
+                .collect();
+            entries.push((ptrs, vertices));
+            entries.len() - 1
+        });
+        let start = out.len();
+        out.extend_from_slice(&entries[index].1);
+        let matrix = glam::Mat4::from_translation(origin);
+        for vertex in &mut out[start..] {
+            vertex.pos = matrix
+                .transform_point3(glam::Vec3::from_array(vertex.pos))
+                .to_array();
+            vertex.light = light;
+        }
+        self.lit_entity(start..out.len());
+    }
+    /// The end of a piston's `Entity.move(MoverType.PISTON, …)` for falling
+    /// block `i` after a step of `moved`: `checkFallDamage` adds the drop and,
+    /// on the ground, runs fallOn and posts HIT_GROUND after a fall, then
+    /// forgets it, so its own next tick does not land again.
+    pub(super) fn finish_falling_piston_move(&mut self, i: usize, moved: Vec3) {
+        let mut f = self.falling[i].clone();
+        if moved.y < 0.0 {
+            f.fall_distance -= f64::from(moved.y as f32);
+        }
+        if f.on_ground {
+            self.falling_block_landed(&mut f);
+        }
+        self.falling.update(i, |block| *block = f);
+    }
+    /// `Entity.checkFallDamage` on the ground: after a fall, the block it lands
+    /// on runs `fallOn`, whose `causeFallDamage` distance the falling block
+    /// hurts by (`FallingBlockEntity.causeFallDamage`), then HIT_GROUND; the
+    /// fall is forgotten.
+    fn falling_block_landed(&mut self, f: &mut FallingBlock) {
+        if f.fall_distance > 0.0 {
+            let bounds = horizon_client::falling_block::bounds(f.position);
+            if let Some(distance) =
+                self.non_living_fall_on(f.id, f.position, bounds, f.fall_distance)
+            {
+                self.falling_block_impact(f, distance);
+            }
+            self.post_landing_event(f.position, bounds, false);
+        }
+        f.fall_distance = 0.0;
+    }
+    /// FallingBlockEntity.tick: fall with 0.04 gravity and 0.98F drag, then land.
+    /// One falling block's `tick`: places or drops its block in its own tick,
+    /// so a block falling onto one that just landed lands on top of it. `i` is
+    /// its place in the list; the caller has checked it is ticking.
+    /// `entities` are the boxes that stop its move.
+    pub(in crate::game) fn tick_one_falling(&mut self, i: usize, entities: &[Aabb]) -> Result<()> {
+        let entity_drops = self
+            .ui
+            .rules
+            .bool_at(horizon_client::gamerules::vanilla::ENTITY_DROPS);
+        let _save_lease = horizon_client::join_seq::visibility::PassLease::enter();
+        let mut f = self.falling.extract(self.falling[i].join).unwrap();
+        let original = f.clone();
+        let (id, join) = (f.id, f.join);
+        let step = self.fall_step(&mut f, entity_drops, entities);
+        // Its move is filed at once, also for one that lands or drops.
+        if step.is_ok() {
+            let (from, to) = (original.position, f.position);
+            self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
+        }
+        match step {
+            Ok(FallStep::Falling) => {
+                let state = f.state;
+                self.falling.put_back(i.min(self.falling.len()), f);
+                self.note_falling_tick(id, join, state);
+                return Ok(());
+            }
+            Ok(FallStep::Gone) => {}
+            Ok(FallStep::Dropped(at)) => self.drop_falling_block(f.state, at),
+            Ok(FallStep::Landed(pos)) => self.finish_falling_block(f, pos),
+            Err(error) => {
+                horizon_client::join_seq::store_back(&mut f, original);
+                self.falling.put_back(i.min(self.falling.len()), f);
+                return Err(error);
+            }
+        }
+        // Gone, dropped and landed owners have completed their terminal work;
+        // unlike a continuing fall, they will never be put back into the list.
+        self.falling.retire_extracted(id, join);
+        Ok(())
+    }
+    /// One `FallingBlockEntity.tick` move of `f`.
+    pub(super) fn fall_step(
+        &mut self,
+        f: &mut FallingBlock,
+        entity_drops: bool,
+        entities: &[Aabb],
+    ) -> Result<FallStep> {
+        if self.res.facts().is_air(f.state) {
+            return Ok(FallStep::Gone);
+        }
+        f.previous = f.position;
+        f.age = f.age.wrapping_add(1);
+        f.velocity.y -= horizon_client::entity_rules::EntityRules::get_gravity(f);
+        let wanted = f.velocity;
+        // The falling block's Entity.move goes through the move gate (arismoko/horizon#2414),
+        // armed before the stuck multiplier of the move itself; PR 1a records
+        // the movement unchanged.
+        let mut gate = horizon_client::move_gate::armed(
+            &self.loop_context,
+            f.id,
+            "minecraft:falling_block",
+            MoverType::SelfMovement,
+            wanted,
+        );
+        let mut wanted = gate.delta();
+        // Entity.move: a cobweb it was in scales this move, which then
+        // starts from rest.
+        if f.stuck.length_squared() > 1.0e-7 {
+            wanted = wanted.multiply(f.stuck);
+            f.stuck = Vec3::ZERO;
+            f.velocity = Vec3::ZERO;
+        }
+        let scene = collisions::SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: Some(collisions::PowderSnowSubject {
+                fall_distance: f.fall_distance,
+                falling_block: true,
+                ..Default::default()
+            }),
+        };
+        // Entity.isDescending: only sneaking entities descend through
+        // scaffolding. Falling blocks do not sneak, so descending is always
+        // false (Entity.isDescending returns isShiftKeyDown, fixes #7553).
+        let context = CollisionContext::for_entity(
+            CollisionEntity {
+                identity: EntityIdentity(0),
+                kind: horizon_world::collision_context::EntityContextKind::Other,
+                y: f.position.y,
+                descending: false,
+                main_hand: None,
+            },
+            false,
+        );
+        // On an error the caller keeps the block as it was before this tick.
+        // Entity.collide: the world border's walls and the entities that
+        // `canBeCollidedWith` it (a boat, a shulker) stop it too.
+        let mut collisions = collisions::EntityCollisions {
+            blocks: scene,
+            entities,
+            border: Some((self.border.geometry(), [f.position.x, f.position.z])),
+        };
+        let movement = horizon_client::move_gate::entities_resolve_with_context(
+            &mut gate,
+            &mut collisions,
+            horizon_client::falling_block::bounds(f.position),
+            wanted,
+            0.0,
+            false,
+            context,
+        )?;
+        let next = Vec3::new(
+            f.position.x + movement.x,
+            f.position.y + movement.y,
+            f.position.z + movement.z,
+        );
+        let on_ground = wanted.y < 0.0 && movement.y != wanted.y;
+        f.on_ground = on_ground;
+        if movement.y < 0.0 {
+            f.fall_distance -= f64::from(movement.y as f32);
+        }
+        let from = f.position;
+        f.position = next;
+        // Entity.move stops it on the axes it collided on.
+        if movement.x != wanted.x {
+            f.velocity.x = 0.0;
+        }
+        if movement.y != wanted.y {
+            f.velocity.y = 0.0;
+        }
+        if movement.z != wanted.z {
+            f.velocity.z = 0.0;
+        }
+        if on_ground {
+            self.falling_block_landed(f);
+        }
+        // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
+        // (Entity.makeStuckInBlock), BubbleColumnBlock.entityInside lifts or
+        // drags it. Entity.move records the move unless it was blocked short
+        // of a tiny one.
+        let moved = movement.length_squared();
+        let recorded = moved > 1.0e-7 || wanted.length_squared() - moved < 1.0e-7;
+        let world = &self.world;
+        let facts = self.res.facts();
+        let (registry, collision) = (self.pack.assets.registry, self.collision);
+        let mut tops = Vec::new();
+        let stuck = horizon_client::falling_block::apply_effects_from_blocks(
+            from,
+            f.position,
+            recorded.then_some(wanted),
+            &mut f.velocity,
+            &mut f.fall_distance,
+            &mut tops,
+            |p| {
+                use horizon_client::falling_block::Inside;
+                if &*facts.get(world.block(p.x, p.y, p.z)).name == "minecraft:cobweb" {
+                    Inside::Cobweb
+                } else if let Some(column) =
+                    horizon_client::motion::bubble_column_at(world, registry, facts, collision, p)
+                {
+                    Inside::BubbleColumn(column)
+                } else {
+                    Inside::Nothing
+                }
+            },
+        );
+        if let Some(multiplier) = stuck {
+            f.stuck = multiplier;
+        }
+        for pos in tops {
+            self.bubble_column_particles(pos);
+        }
+        self.entity_powder_snow_particles(
+            from,
+            f.position,
+            horizon_client::falling_block::bounds(f.position),
+            f.velocity,
+            false,
+        );
+        // FallingBlockEntity.tick handles its portal after the move's block
+        // effects, before placing/dropping on the floor under an End portal.
+        let teleported = self.falling_through_portal(f);
+        // FallingBlockEntity.forceTickAfterTeleportToDuplicate: crossing
+        // either way through the End deliberately keeps the source's final
+        // placement/drop branch, even though the source entity was removed.
+        if let Some(target) = teleported
+            && self.dim != Dim::End
+            && target != Dim::End
+        {
+            return Ok(FallStep::Gone);
+        }
+        let y = next.y.floor() as i32;
+        let outside = y <= self.world.bottom_y() || y >= self.world.top_y();
+        if !on_ground && (f.age > 100 && outside || f.age > 600) {
+            return Ok(if f.drop_item && entity_drops {
+                FallStep::Dropped(next)
+            } else {
+                FallStep::Gone
+            });
+        }
+        if on_ground {
+            return Ok(FallStep::Landed([
+                f.position.x.floor() as i32,
+                f.position.y.floor() as i32,
+                f.position.z.floor() as i32,
+            ]));
+        }
+        // Entity.scale(getAirDrag()): 0.98F, widened before it scales motion.
+        f.velocity = horizon_client::entity_rules::scale_air_drag(f.velocity);
+        Ok(if teleported.is_some() {
+            FallStep::Gone
+        } else {
+            FallStep::Falling
+        })
+    }
+    /// `Entity.spawnAtLocation`: an item entity where the block was.
+    pub(super) fn drop_falling_block(&mut self, state: BlockStateId, at: Vec3) {
+        // Entity.spawnAtLocation: an item entity where the block was.
+        let item = self.res.facts().get(state).item.clone();
+        if &*item != "minecraft:air" {
+            // new ItemEntity(level, x, y, z, stack): the motion is from the
+            // item's own random, not the level's.
+            let stack = ItemStack {
+                item,
+                count: 1,
+                damage: 0,
+                extra: None,
+            };
+            self.spawn_item_own(stack, [at.x, at.y, at.z], 10);
+        }
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "daily"]
+    fn falling_model_cache_matches_direct_vertices() {
+        // Geometry belongs to the client resource graph; server packs have no models.
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            for frame in 0..2 {
+                for (name, pos, origin, light) in [
+                    (
+                        "minecraft:sand",
+                        BlockPos::new(1, 80, 3),
+                        glam::Vec3::new(-3.25, 12.5, 0.0),
+                        0x7010,
+                    ),
+                    (
+                        "minecraft:sand",
+                        BlockPos::new(9, 90, -4),
+                        glam::Vec3::new(8.125, -0.0, -9.5),
+                        0xf020,
+                    ),
+                    (
+                        "minecraft:gravel",
+                        BlockPos::new(-2, 70, 5),
+                        glam::Vec3::new(-0.0, -17.75, 2.5),
+                        0x5080,
+                    ),
+                ] {
+                    let state = game.pack.assets.registry.default_state(name).unwrap();
+                    let seed = horizon_core::random::position_seed(pos);
+                    let mut expected = Vec::new();
+                    game.block_model_vertices(
+                        state,
+                        seed,
+                        glam::Mat4::from_translation(origin),
+                        light,
+                        false,
+                        &mut expected,
+                    );
+                    let mut actual = Vec::new();
+                    game.falling_model_vertices(state, pos, origin, light, &mut actual);
+                    let (_, tint) = game.falling_block_face_sprite(state).unwrap();
+                    let tint = horizon_client::mobs::render::abgr(tint);
+                    for vertices in [&mut expected, &mut actual] {
+                        for v in vertices {
+                            v.color = horizon_client::hud_layout::multiply(v.color, tint);
+                        }
+                    }
+                    assert!(!expected.is_empty());
+                    assert_eq!(actual.len(), expected.len());
+                    for (a, b) in actual.iter().zip(&expected) {
+                        assert_eq!(
+                            a.pos.map(f32::to_bits),
+                            b.pos.map(f32::to_bits),
+                            "frame {frame}"
+                        );
+                        assert_eq!(a.uv.map(f32::to_bits), b.uv.map(f32::to_bits));
+                        assert_eq!(a.glint_uv.map(f32::to_bits), b.glint_uv.map(f32::to_bits));
+                        assert_eq!(
+                            (a.color, a.light, a.normal, a.layer),
+                            (b.color, b.light, b.normal, b.layer)
+                        );
+                    }
+                }
+            }
+        });
+    }
+}

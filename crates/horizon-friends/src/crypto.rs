@@ -297,6 +297,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn same_code_same_key_and_frames_flow() {
         let (hk, gk, h, g) = keys("3XPD", "3XPD");
         assert_eq!(hk.0, gk.0);
@@ -326,6 +327,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_wrong_secret_is_refused_on_both_ends() {
         let (hk, gk, h, g) = keys("3XPD", "3XPE");
         assert_ne!(hk.0, gk.0);
@@ -338,6 +340,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_session_is_part_of_the_key() {
         let (mut h, mut g) = pair();
         let (hk, gk) = both(

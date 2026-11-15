@@ -1,18 +1,4 @@
 //! Template pools, pool elements and JigsawPlacement.
-use super::{
-    BoundingBox, LazyTemplate, Mirror, Rotation, StructureResources, StructureTemplate,
-    processor::{PlaceSettings, Processor, ProcessorList, place_in_world},
-};
-use crate::{
-    heightmap::HeightmapType,
-    nbt::{Compound, Tag},
-    worldgen::{
-        DecodeError,
-        block_feature::FeatureBlockBindings,
-        feature::FeatureWorld,
-        placement::{PlacementContext, PlacementQueryError},
-    },
-};
 use horizon_core::{
     geometry::Direction,
     position::BlockPos,
@@ -24,6 +10,25 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     rc::Rc,
     sync::{Arc, Mutex, OnceLock, RwLock},
+};
+use {
+    super::{
+        LazyTemplate, Mirror, Rotation, StructureResources, StructureTemplate,
+        processor::{PlaceSettings, Processor, ProcessorList, place_in_world},
+    },
+    horizon_core::bounding_box::BoundingBox,
+};
+use {
+    crate::{
+        heightmap::HeightmapType,
+        worldgen::{
+            DecodeError,
+            block_feature::FeatureBlockBindings,
+            feature::FeatureWorld,
+            placement::{PlacementContext, PlacementQueryError},
+        },
+    },
+    horizon_core::nbt::{Compound, Tag},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -340,7 +345,8 @@ impl PoolElement {
         }
     }
 }
-/// StructureTemplate.getJigsaws: palette chosen by a position-seeded random.
+/// `StructureTemplate.getJigsaws`: palette chosen by a position-seeded random.
+/// Connector states use plain `BlockState.rotate`, not the placement-only rotate Part.
 fn template_jigsaws<'a>(
     resources: &StructureResources,
     template: &'a StructureTemplate,
@@ -362,6 +368,7 @@ fn template_jigsaws<'a>(
         .iter()
         .map(|j| {
             let relative = StructureTemplate::transform(j.info.pos, Mirror::None, rotation, [0; 3]);
+            let pos = std::array::from_fn(|i| relative[i] + position[i]);
             let state = resources.transforms.rotate(j.info.state, rotation);
             let orientation = resources
                 .registry
@@ -370,7 +377,7 @@ fn template_jigsaws<'a>(
                 .unwrap_or_default();
             let (front, top) = orientation.split_once('_').unwrap_or(("north", "up"));
             Jigsaw {
-                pos: std::array::from_fn(|i| relative[i] + position[i]),
+                pos,
                 front: direction(front),
                 top: direction(top),
                 rollable: j.rollable,
@@ -429,10 +436,10 @@ impl Pool {
     /// YUNG's API's pick: `nextInt` of the entries' total weight, walked in
     /// `order` (indices into `raw`); the entry that takes it below zero.
     fn weighted(&self, order: &[usize], random: &mut impl RandomSource) -> Option<usize> {
-        let total: i32 = order.iter().map(|&i| self.raw[i].1).sum();
-        let mut pick = random.next_int_bound(total).ok()?;
+        let total: i64 = order.iter().map(|&i| i64::from(self.raw[i].1)).sum();
+        let mut pick = crate::worldgen::weighted::draw(total, random)?;
         order.iter().position(|&i| {
-            pick -= self.raw[i].1;
+            pick -= i64::from(self.raw[i].1);
             pick < 0
         })
     }
@@ -1509,6 +1516,38 @@ impl Placer<'_, '_> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn wide_weights_jigsaw() {
+        use horizon_core::random::LegacyRandom;
+        for weights in [[1, 1, 1], [0, 2, 5], [7, 0, 1]] {
+            for seed in -20..20 {
+                let mut old = LegacyRandom::new(seed);
+                let mut new = old.clone();
+                let small = pool(&weights.map(|w| (w, json!({}))));
+                let mut at = old.next_int_bound(weights.iter().sum()).unwrap();
+                let expected = weights.iter().position(|w| {
+                    at -= w;
+                    at < 0
+                });
+                assert_eq!(small.weighted(&[0, 1, 2], &mut new), expected);
+                assert_eq!(new.next_long(), old.next_long());
+            }
+        }
+        let mut p = pool(&[(1, json!({})), (1, json!({})), (1, json!({}))]);
+        for (_, weight) in &mut Arc::get_mut(&mut p).unwrap().raw {
+            *weight = i32::MAX;
+        }
+        for seed in 0..30 {
+            assert!(
+                p.weighted(
+                    &[0, 1, 2],
+                    &mut horizon_core::random::LegacyRandom::new(seed)
+                )
+                .is_some()
+            );
+        }
+    }
 
     /// A pool of empty elements, told apart by identity, with these limits.
     fn pool(entries: &[(i32, Value)]) -> Arc<Pool> {

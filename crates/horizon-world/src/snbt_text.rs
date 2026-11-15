@@ -1,44 +1,9 @@
 //! `StringTagVisitor` (compact SNBT, `Tag.toString`) and Java's number
 //! formatting, below the text-component layer so that the protocol can hash
 //! a tag's string form.
-use crate::nbt::Tag;
+use horizon_core::nbt::Tag;
 
-/// `Double.toString`.
-pub fn java_double(v: f64) -> String {
-    java_float_text(v, &format!("{v}"), &format!("{v:e}"))
-}
-/// `Float.toString`.
-pub fn java_float(v: f32) -> String {
-    java_float_text(f64::from(v), &format!("{v}"), &format!("{v:e}"))
-}
-fn java_float_text(v: f64, plain: &str, sci: &str) -> String {
-    if v.is_nan() {
-        return "NaN".into();
-    }
-    if v.is_infinite() {
-        return if v > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    if v == 0.0 {
-        return if v.is_sign_negative() { "-0.0" } else { "0.0" }.into();
-    }
-    let a = v.abs();
-    if (1.0e-3..1.0e7).contains(&a) {
-        if plain.contains('.') {
-            plain.to_owned()
-        } else {
-            format!("{plain}.0")
-        }
-    } else {
-        let (mantissa, exponent) = sci.split_once('e').unwrap_or((sci, "0"));
-        if !mantissa.contains('.') {
-            // Java also considers two-digit decimals when one digit round-trips,
-            // choosing the closest value. Padding Rust's choice loses that step
-            // for tiny subnormals (Float.MIN_VALUE is 1.4E-45, not 1.0E-45).
-            return format!("{v:.1e}").replace('e', "E");
-        }
-        format!("{mantissa}E{exponent}")
-    }
-}
+use horizon_core::java_number::{double_to_string, float_to_string};
 
 /// `SnbtGrammar.escapeControlCharacters`.
 fn escape_control(c: char) -> Option<&'static str> {
@@ -94,7 +59,7 @@ fn unquoted_key(key: &str) -> bool {
     // `[A-Za-z._]+[A-Za-z0-9._+-]*`
     first_ok && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
 }
-pub fn string_of(t: &crate::nbt::JavaString) -> String {
+pub fn string_of(t: &horizon_core::nbt::JavaString) -> String {
     t.to_string_lossy()
 }
 
@@ -112,11 +77,11 @@ fn visit(tag: &Tag, out: &mut String) {
         Tag::Int(v) => out.push_str(&v.to_string()),
         Tag::Long(v) => out.push_str(&format!("{v}L")),
         Tag::Float(v) => {
-            out.push_str(&java_float(f32::from_bits(*v)));
+            out.push_str(&float_to_string(f32::from_bits(*v)));
             out.push('f');
         }
         Tag::Double(v) => {
-            out.push_str(&java_double(f64::from_bits(*v)));
+            out.push_str(&double_to_string(f64::from_bits(*v)));
             out.push('d');
         }
         Tag::String(s) => out.push_str(&quote_and_escape(&string_of(s))),
@@ -193,7 +158,7 @@ mod tests {
             for (sign, prefix) in [(0, ""), (1 << 31, "-")] {
                 let bits = bits | sign;
                 assert_eq!(
-                    java_float(f32::from_bits(bits)),
+                    float_to_string(f32::from_bits(bits)),
                     format!("{prefix}{expected}")
                 );
                 assert_eq!(to_snbt(&Tag::Float(bits)), format!("{prefix}{expected}f"));
@@ -208,7 +173,7 @@ mod tests {
             for (sign, prefix) in [(0, ""), (1 << 63, "-")] {
                 let bits = bits | sign;
                 assert_eq!(
-                    java_double(f64::from_bits(bits)),
+                    double_to_string(f64::from_bits(bits)),
                     format!("{prefix}{expected}")
                 );
                 assert_eq!(to_snbt(&Tag::Double(bits)), format!("{prefix}{expected}d"));

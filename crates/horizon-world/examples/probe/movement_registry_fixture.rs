@@ -1,20 +1,25 @@
 use crate::support::common::position;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::movement_support::{self as support, MovementLocation};
-use horizon_world::{
-    movement_properties::{
-        MovementBlockProvider, MovementProperties, MovementTags, RegistryMovementWorld,
-    },
-    nbt::{self, Limits, Tag},
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::tags::TagDefinitions,
-};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::{
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::{
+        nbt,
+        nbt::{Limits, Tag},
+    },
+    horizon_world::{
+        movement_properties::{
+            MovementBlockProvider, MovementProperties, MovementTags, RegistryMovementWorld,
+        },
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::tags::TagDefinitions,
+    },
 };
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
@@ -134,6 +139,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut bound = RegistryMovementWorld {
             properties: &bindings[f["tags"].as_u64().unwrap() as usize],
             world: &mut world,
+            edits: &horizon_world::movement_properties::NoFactorEdits,
         };
         let mode = f["mode"].as_u64().unwrap();
         if mode < 4 {

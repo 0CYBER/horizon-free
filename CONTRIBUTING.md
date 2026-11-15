@@ -1,8 +1,7 @@
 # Contributing to Horizon
 
 Thanks for helping. Horizon is Minecraft: Java Edition 26.3 rewritten in Rust, and the one rule that shapes
-everything is that **it plays like vanilla**: first exactly like it, then better where players gain from it
-([vanilla first, then better](#vanilla-first-then-better)). This page is the short version of how we work; questions are
+everything is that **it plays exactly like vanilla**. This page is the short version of how we work; questions are
 welcome on [Discord](https://discord.gg/playhorizon).
 
 This repository holds the game and the launcher, plus the tools, tests and docs that build, check and release them.
@@ -32,15 +31,12 @@ here.
 
   ```sh
   cargo run --release -p horizon-prepare -- --prepare --server-jar ~/Downloads/server.jar
-  cargo run --release -p horizon-client
+  cargo run --release -p horizon-game
   ```
 
 - **Launcher:** its own Cargo workspace in `launcher/` (`cd launcher && cargo run`; on NixOS, `nix-shell` first).
 
-## Vanilla first, then better
-
-Horizon gets there in two stages. First it plays exactly like vanilla; that is what parity work is for. Then it
-improves on vanilla where players gain from it, mostly speed: FPS, TPS, loading, memory.
+## Vanilla first
 
 Wherever vanilla has a feature, vanilla is the specification, down to the order of random calls. "Parity" here means
 Horizon gives the same results as the pinned 26.3 client and server for the same inputs, checked by a **harness**: a
@@ -53,19 +49,13 @@ and compares their outputs.
 - **One version: 26.3.** Parity work targets 26.3 until its parity is good, redstone first. Don't open pull requests
   that move Horizon to a newer Minecraft version for now; to join servers on a newer version, put a Via proxy
   (ViaVersion, ViaProxy) in front of them.
-- **Ports of vanilla behaviour come with a harness**, new or extended, so the next change can't silently break
-  them. [The parity workflow](docs/parity-workflow.md) shows how harnesses run; copy a nearby one. Where vanilla
-  has nothing to compare (Horizon's own features, performance work, refactors), no harness is needed: one Rust
-  test of the changed behaviour, or the numbers before and after.
+- **Gameplay changes come with a harness**, new or extended, so the next change can't silently break them.
+  [The parity workflow](docs/parity-workflow.md) shows how harnesses run; copy a nearby one.
 - **Horizon's own features** (the launcher, the new menus) follow [the design system](docs/design-system.md) and are
   off by default wherever they would change the vanilla look.
-- **Three layers: engine, platform, Horizon.**
-  - Vanilla code never depends on the platform (mods, shader packs, HDR, the settings system) or on Horizon
-    (its extras, cosmetics, the shop, official servers, telemetry).
-  - The platform never depends on Horizon.
-  - Horizon uses only the platform, never the engine: it will live in its own repository.
-
-  [docs/layers.md](docs/layers.md) says where a new feature goes; CI checks the dependencies.
+- **Three layers: engine, platform, Horizon.** Vanilla code never depends on the platform (mods, shader packs,
+  Horizon-only settings) or on Horizon (cosmetics, the shop, official servers, telemetry), and the platform never
+  depends on Horizon. [docs/layers.md](docs/layers.md) says where a new feature goes; CI checks the dependencies.
 - **Everything players run is Rust.** Python and Java are fine for dev tools and harness drivers in `tools/`, never
   for player-facing code.
 - **No game files in the repo.** Never commit game files, decompiled source or prepared resources (`.local/`):
@@ -73,32 +63,45 @@ and compares their outputs.
   The pre-push hook checks the full history reachable from the branches and tags being pushed. Run
   `python3 tools/check_public_tree.py --history` to audit the history of all local refs.
 
-### When it doesn't have to be 1:1
+## Only original code, or code whose license allows it
 
-Parity is about what players and the vanilla game see, not about copying vanilla's internals. Performance work (a
-multithreaded server tick, rendering, chunk loading, memory) doesn't have to keep vanilla's internal order or its
-exact random calls. It has to work together with normal Minecraft:
+Horizon is MIT. Its code is written from Minecraft 26.3 itself and from public documentation. Since 30 October 2026
+another project's source may also be read and used, **only when that project's license allows it**:
 
-- **Vanilla clients and servers still work with it.** A vanilla 26.3 client plays on a Horizon server, Horizon joins
-  vanilla servers, and saves and worlds open in both, as before.
-- **The game still plays the same.** Farms, redstone, mobs and drops work the way players know from vanilla. A
-  difference may only show where no player can rely on it, such as which of two mobs ticks first or exactly which
-  random number a mob gets.
-- **Vanilla's slow paths aren't copied.** When vanilla spends a lot of FPS or TPS on something that can reach the
-  same result faster, Horizon does it faster. Copying a performance problem isn't parity.
-- **Say what changes.** The pull request names the vanilla behaviour it no longer reproduces exactly, why players
-  won't notice it or why it's worth it, and how it was checked: numbers before and after, and the harnesses that
-  still pass. A change players could notice, such as a different tick order on a busy server, goes behind a setting.
+- **Allowed:** MIT, MIT-0, BSD-2-Clause, BSD-3-Clause, 0BSD, ISC, zlib, Apache-2.0, Unlicense, and the CC0-1.0
+  public-domain dedication. That code may be read, copied or adapted.
+- **Off limits, even to read:** GPL, LGPL (Iris), AGPL, MPL, EPL, Polyform (Sodium), the Creative Commons licenses
+  (CC BY, CC BY-SA, CC BY-NC and the others; CC0 is a public-domain dedication, not one of them), custom or
+  "source available" licenses, all rights reserved (OptiFine), and any project with no license or an unclear one.
+  Don't read, copy, translate or paraphrase their source, and don't send code an AI tool wrote from it. Being able
+  to download a mod or a pack does not give you the right to read its files.
+- **Java's own library is GPL too.** OpenJDK's source (`java.lang.Math`, `StrictMath`, `FdLibm`, `HashMap`, the
+  sorts, `Double.toString`, HotSpot's intrinsics...) is GPL-2.0, so it is off limits like the rest. Reproduce Java's
+  behaviour from its API documentation (the Javadoc) and from what a JVM returns, or from a permissive original such
+  as Sun's fdlibm C sources (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)); see horizon-rust/horizon#6741.
+- **Check the license yourself.** Read the LICENSE file at the commit you use and the header of each file you take:
+  some repositories mix licenses, and a file under another license is off limits. A license that changed: the one at
+  your commit counts. In doubt, don't: ask in #contributors first.
+- **Say it in the pull request:** the project, a link to the commit, its license, and what you read or copied. A
+  pull request that used another project's source without saying so is closed.
+- **Copied or adapted code** keeps its copyright line and license notice at the top of the file, and gets an entry
+  in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Apache-2.0 code also keeps its NOTICE text and says what
+  was changed.
+
+User documentation and file formats are fine to read, and packs and mods are fine to run and observe, whatever their
+license. Shader packs are a clean-room rewrite of the pack format, produced from a written description of it (see
+arismoko/horizon#1561): the [specification and its provenance log](docs/cleanroom/README.md) are public. They carry no foreign
+source, and the rules above still apply to anything you read while working on them. A shader-pack pull request
+names its sources: the sections of that specification, the documentation pages and the packs it ran.
 
 ## Vendor libraries and Java mods
 
-- **Upscalers and latency tools.** AMD FSR (MIT) may go in the repository.
+- **Upscalers and latency tools.** AMD FSR (MIT) may go in the repository, like any code under an allowed license.
   NVIDIA's DLSS, Reflex and any other library under an NVIDIA license may not: they ship only as an optional native mod
   that downloads NVIDIA's files itself, on the player's machine. No NVIDIA binaries, headers or SDK files in the
   repository.
 - **The JVM bridge** (running Java mods) is only ever a separate, optional download, never installed or on by
-  default. The game may offer to turn it on when it finds a Java mod; the player decides. It is promoted out of beta
-  only after MSPT and RAM benchmarks against the Java client with the same mods ([#13914](https://github.com/horizon-rust/horizon/issues/13914)).
+  default. The game may offer to turn it on when it finds a Java mod; the player decides. Promotion out of beta requires MSPT and RAM benchmarks against Java with the same mods ([horizon-rust/horizon#13914](https://github.com/horizon-rust/horizon/issues/13914)).
 
 ## Before asking for review
 
@@ -112,7 +115,48 @@ It looks at what your branch changes and runs what matters: rustfmt, clippy with
 crates you touched (and the launcher's), generated files, `Cargo.lock` and the Python tests. Like CI, it runs the
 vanilla harnesses only when your branch changes a harness, an oracle, a probe or the runner; otherwise it lists the
 ones your change can affect, and main's parity run checks them after the merge. `--harnesses` runs them on your
-machine anyway (it needs the vanilla data). It exits non-zero when something fails.
+machine anyway, and a change to mod content, assets, blocks or items also runs the `#[ignore]`d content-root tests;
+both need the prepared vanilla data and are reported as not run without it. `--quick` never runs the harnesses.
+It exits non-zero when something fails.
+
+### CI tiers
+
+CI is split by how long a test takes and what it needs. Pull requests and main run only quick checks and unit tests;
+every test that boots the game runs once a day. Existing tests that need prepared resources, a child process or the
+network and are still in `verify` are being moved by the next change of arismoko/horizon#4022.
+
+| Tier | Runs on | What |
+| --- | --- | --- |
+| Push | every pull request push, pushes to main | `checks`: `verify` (format, lint, unit tests only, the test-tier and mod API surface checks), `launcher` |
+| Daily | once a day on main's head | the ignored tests that need no vanilla data (slow, child process, network), the wasm guest stacks, `fn-replace-check` and the linkage probe, on GitHub's runners; those that need the data run when a machine with it runs the shards without `--without-data` |
+
+**A unit test** uses no prepared resources, boots no game, starts no child process, uses no network and no compiled
+wasm fixture, and finishes in under 2 seconds. Any other test is a daily test: it carries `#[ignore]` and a row in
+`tools/ci/ignored-tests/` (the format is in that folder's README). `verify` fails a unit test that takes over 5
+seconds and one that boots the game; existing tests over 2 seconds and those that boot the game are
+already daily tests, and the existing ones that need resources or a child process are being moved over.
+In Linux `verify`, test binaries run normally under an inet guard: opening, binding or connecting an IPv4/IPv6
+socket or calling libc name-resolution APIs (`getaddrinfo`, `gethostbyname`/`gethostbyname2`/`gethostbyaddr`, their reentrant
+variants, or `getnameinfo`) fails the test by its full name, even if it handles the refusal. Unix sockets remain
+allowed. Only binaries recording violations are rerun per test to name the culprits; an unreproducible violation
+still fails by binary name. Move a network test with `tools/ci/move_to_daily.py`, using reason `network`; daily runs without the guard.
+
+- A pull request is reviewed and merged on the push and gate tiers. Nothing else is asked of you.
+- Write a quick test where a quick test can catch the mistake. A test that needs the game or prepared resources is
+  welcome: mark it `#[ignore]` with its policy row, and say in the pull request that it has not run if you could not
+  run it.
+- If a daily run fails on a test your pull request added or touched, an issue is filed that names the test, where it
+  panicked. The fix is an ordinary pull request.
+
+Two kinds of build: the **nightly** is built from a commit of main whose checks and parity-main passed, together with
+the mod SDK of that commit, and is published at once; a **release** is cut from a nightly. The daily run does not
+hold either back.
+
+Reviews on this fork read the diff, the design and CI; they do not run your change. So for anything a player or a
+mod author can see, please start the game once and try it (single player is enough:
+`cargo build --profile fast -p horizon-game`, or `horizon-ctl` for agents) and say in one line what you did, under
+"Tried in game" in the template. It is not a gate: "no, could not run it here" is an acceptable answer, and it tells
+the reviewer where to look harder.
 
 For the game workspace, Clippy checks all targets of the touched crates and their transitive workspace dependents,
 including examples. The dependency scope includes optional, platform, build and development dependencies. Tests run
@@ -123,9 +167,7 @@ For a quick check while you work, `python3 tools/check_changed.py` runs rustfmt,
 
 ### Translations
 
-Most of Horizon's translations were written by machine and stay marked unreviewed until someone who speaks the
-language checks them. To report a wrong string or review your language, see [docs/translations.md](docs/translations.md)
-and #translations on Horizon's Discord. Never mark machine-written text as reviewed.
+Most translations are machine-written and remain unreviewed until a speaker checks them. See [docs/translations.md](docs/translations.md). Never mark machine-written text as reviewed.
 
 ## Claim before you start
 
@@ -144,21 +186,12 @@ it (edited on every push, never repeated): talk to its author in the thread befo
 
 ## Pull requests
 
-- **One change per pull request**, under about 3000 lines of code; split bigger work into pieces that each make
-  sense alone. Smaller pull requests get reviewed and merged faster. Bigger than that:
-  [large pull requests](#large-pull-requests). What counts: lines added plus lines removed, outside Markdown (`.md`)
-  files and test files (any `tests/` or `test/` folder, and `test_*.py`). Tests inside a source file
-  (`#[cfg(test)]` modules) don't count, and neither do lines moved unchanged (same text, whitespace ignored, runs of
-  3 or more lines), so a refactor that moves code can be far bigger than 3000 lines.
-  pr_ready counts it the same way and warns when a pull request is over.
+- **One change.** One concern per pull request (a hook, a handle, a feature or a fix), at whatever size it
+  needs. There's no line limit; split by concern, never by size, and don't bundle unrelated changes.
 - **Fill in the template**: what and why, the vanilla reference, the pr_ready block, screenshots for anything you
   can see.
-- **Tick "Allow edits by maintainers".** When something small is left (a lint, a rebase, a nit) we push the fixup
-  ourselves instead of sending it back to you; only design questions come back.
-- **Once we've pushed to your branch, merge main into it; don't rebase or force-push.** A rebase or force-push
-  replaces our commits with yours and erases the fixes we added (it happened on #5188 and #5203). Tell your agent
-  too: `git merge origin/main`, never `git rebase` or `git push --force` on a branch a maintainer has touched. If
-  our fixes get erased anyway, we finish the work in our own pull request that keeps your commits and credits you.
+- **Keep your branch yours.** You can push to it as you like. If you want to bring it up to date, `git merge
+  origin/main` is the safe way; a rebase or force-push is fine too, since nothing of ours lives on your branch.
 - **Title: `kind(area): what changes`**, so the queue reads at a glance: `parity(mobs): a ghast's fireball uses its
   ExplosionPower`, `perf(launcher): download the game's files in parallel`, `bug(saves): keep /attribute modifiers
   through a save`. The kind is one of the words below; the area is an area label, several with commas
@@ -175,13 +208,12 @@ it (edited on every push, never repeated): talk to its author in the thread befo
 Who reviews and merges: the Horizon Team, on CI for ordinary pull requests; risky ones (saves, network, world
 generation, the launcher's updates) wait for a local proof first ([merging](docs/release-flow.md#merging)).
 
-Every merge to main is released automatically ([release flow](docs/release-flow.md)), so main always stays playable.
+Merges reach players through the nightly ([release flow](docs/release-flow.md)).
 How agents, checks, releases and signed updates keep this safe: [security](docs/security.md).
 
 ### Large pull requests
 
-3000 lines of code ([what counts](#pull-requests)) stays the default. A pull request that can't be split below it
-starts from a spec:
+A change too big to review as one concern starts from a spec:
 
 1. **Open an issue with the spec** before the code: what changes, the files it touches, the behaviour players and
    other code will see, and the tests or harnesses that prove it.
@@ -194,7 +226,8 @@ starts from a spec:
 
 ## Parity checks on forks
 
-The `verify` check (formatting, lints, tests) runs on every pull request. The `parity` check runs the affected
+A pull request from a fork gets the push tier ([CI tiers](#ci-tiers)). The
+`parity` check runs the affected
 harnesses on a maintainer's machine, which holds the game files, so it never runs a fork's code on its own: a
 maintainer reads your change, then adds the `run-parity` label, which runs it once on your current commit. After
 new pushes, we add it again.

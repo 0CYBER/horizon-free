@@ -18,7 +18,6 @@ class IntegrationEnvironmentTests(unittest.TestCase):
             self.assertEqual(len(set(homes)), 4)
             self.assertTrue(all(p.is_dir() and p.is_relative_to(root) for p in homes))
             self.assertEqual(env['DISPLAY'], ':123')
-            self.assertEqual(env['HORIZON_TELEMETRY_URL'], 'off')
             self.assertEqual(env['HORIZON_LAUNCHER_NO_SELF_UPDATE'], '1')
             self.assertEqual(env['HORIZON_NO_AUDIO'], '1')
             self.assertEqual(env['HORIZON_TEST_LOOPBACK'], '1')

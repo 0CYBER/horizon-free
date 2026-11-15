@@ -22,13 +22,13 @@
 //! new geometry.
 
 use super::{Mob, MobType, Part, Polygon, Species};
+use horizon_assets::resource_source::ResourceSource;
 use horizon_optifine::cem::{
     files::{atlas_name, jem_files, load_jem},
     model::{Bone, EntityModel, MAX_BYTES},
 };
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    path::Path,
     sync::Arc,
 };
 
@@ -75,7 +75,7 @@ const FALLBACK_STEPS: usize = 3;
 impl CemModels {
     /// The `.jem` files under `root` applied to the layers of `types`, and the layers the
     /// packs' pre-1.21.5 mob textures paint ([`LEGACY`]).
-    pub fn load(root: &Path, types: &HashMap<String, Arc<MobType>>) -> Self {
+    pub fn load(root: &ResourceSource, types: &HashMap<String, Arc<MobType>>) -> Self {
         let files = jem_files(root);
         let (models, standing) = Self::from_files(root, &files, &vanilla_layers(types));
         set_rule_species(standing);
@@ -85,7 +85,7 @@ impl CemModels {
     /// `files` ([`jem_files`]) applied to the `vanilla` layers; also the species ids whose
     /// rules read the standing block, for the per-tick gate.
     fn from_files(
-        root: &Path,
+        root: &ResourceSource,
         files: &BTreeMap<String, Vec<String>>,
         vanilla: &HashMap<&str, (&Arc<Part>, &str)>,
     ) -> (Self, Vec<String>) {
@@ -205,16 +205,6 @@ fn set_rule_species(species: Vec<String>) {
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(species.into_iter().collect());
 }
 
-/// A pack file's text, None when it's missing or larger than a model may read: its size is
-/// checked before anything is read.
-fn read_small(path: &Path) -> Option<String> {
-    let len = std::fs::metadata(path).ok()?.len();
-    if len > MAX_BYTES as u64 {
-        return None;
-    }
-    std::fs::read_to_string(path).ok()
-}
-
 /// One `optifine/cem/<name>.properties` random-model rule: `models.<n>` selects the model
 /// variant (the base file, for Fresh Animations), `blocks.<n>` and `nbt.<n>.<key>` the
 /// conditions, all of which must hold for the rule's number to become the animations'
@@ -249,9 +239,13 @@ pub fn tracks_standing(id: &str) -> bool {
 
 /// The random-model rules beside the `.jem` at `path` (`cow.properties` beside `cow.jem`),
 /// which the layer that file shapes reads for its `rule_index`.
-fn load_rules(root: &Path, path: &str) -> Vec<Rule> {
+fn load_rules(root: &ResourceSource, path: &str) -> Vec<Rule> {
     path.strip_suffix(".jem")
-        .and_then(|properties| read_small(&root.join(format!("{properties}.properties"))))
+        .and_then(|properties| {
+            root.read_limited(&format!("{properties}.properties"), MAX_BYTES as u64)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+        })
         .map(|text| parse_rules(&text))
         .unwrap_or_default()
 }
@@ -746,7 +740,7 @@ impl Legacy {
     /// through a `.jem`'s 64x32 UVs, and cold pigs and mooshrooms vanilla's textures.
     fn layers(
         &self,
-        root: &Path,
+        root: &ResourceSource,
         vanilla: &HashMap<&str, (&Arc<Part>, &str)>,
         own: &HashMap<String, (&str, &str, &EntityModel)>,
         layers: &mut HashMap<String, CemLayer>,
@@ -756,10 +750,7 @@ impl Legacy {
             .textures
             .iter()
             .copied()
-            .filter(|(_, old)| {
-                root.join(format!("assets/minecraft/textures/{old}.png"))
-                    .is_file()
-            })
+            .filter(|(_, old)| root.contains(&format!("assets/minecraft/textures/{old}.png")))
             .collect();
         let adult = format!("{}#main", self.model);
         let Some(&(part, _)) = vanilla.get(adult.as_str()) else {
@@ -897,6 +888,7 @@ fn part(
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
 
     fn plane(name: &str, children: Vec<Part>) -> Part {
         Part {
@@ -917,6 +909,24 @@ mod tests {
                 .or_else(|| p.children.iter().find_map(|c| walk(c, name)))
         }
         walk(part, name).unwrap()
+    }
+
+    #[test]
+    fn model_rules_read_resolved_resources_and_enforce_the_byte_limit() {
+        use horizon_assets::resource_source::Resource;
+        let source = ResourceSource::indexed(std::collections::BTreeMap::from([
+            (
+                "assets/minecraft/optifine/cem/cow.properties".into(),
+                Resource::bytes(b"models.2=1\nblocks.2=grass_block\n".to_vec()),
+            ),
+            (
+                "assets/minecraft/optifine/cem/large.properties".into(),
+                Resource::bytes(vec![b' '; MAX_BYTES + 1]),
+            ),
+        ]));
+        assert!(!load_rules(&source, "assets/minecraft/optifine/cem/cow.jem").is_empty());
+        assert!(load_rules(&source, "assets/minecraft/optifine/cem/large.jem").is_empty());
+        assert!(load_rules(&source, "assets/minecraft/optifine/cem/missing.jem").is_empty());
     }
 
     #[test]
@@ -1065,7 +1075,13 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let (models, _) = CemModels::from_files(&root, &jem_files(&root), &vanilla);
+        let (models, _) = CemModels::from_files(
+            &ResourceSource::directory(root.clone()),
+            &jem_files(&horizon_assets::resource_source::ResourceSource::directory(
+                root.to_owned(),
+            )),
+            &vanilla,
+        );
         fs::remove_dir_all(&root).unwrap();
 
         let adult = models.layer("zombie#main").unwrap();
@@ -1182,7 +1198,13 @@ mod tests {
             .iter()
             .map(|k| (*k, (&tree, "minecraft:test")))
             .collect();
-        let (models, _) = CemModels::from_files(&root, &jem_files(&root), &vanilla);
+        let (models, _) = CemModels::from_files(
+            &ResourceSource::directory(root.clone()),
+            &jem_files(&horizon_assets::resource_source::ResourceSource::directory(
+                root.to_owned(),
+            )),
+            &vanilla,
+        );
         fs::remove_dir_all(&root).unwrap();
         models
     }
@@ -1404,6 +1426,8 @@ mod tests {
             blinks: Default::default(),
             pois: Default::default(),
             species_placements: Default::default(),
+            mod_spawns: Default::default(),
+            resolved: Default::default(),
         };
         // Sprite i spans u and v from 0.2 i to 0.2 i + 0.1.
         let atlas = |name: &str| -> Option<[f32; 4]> {
@@ -1549,9 +1573,9 @@ mod tests {
             0.0,
         );
         mob.extra.tame = true;
-        mob.extra.body = Some("minecraft:wolf_armor".into());
+        mob.extra.set_body(Some("minecraft:wolf_armor".into()));
         // Worn through: the high cracks.
-        mob.extra.body_damage = WOLF_ARMOR_DURABILITY;
+        mob.extra.set_body_damage(WOLF_ARMOR_DURABILITY);
         let sprites = [
             "entity/wolf/custom_armor",
             "entity/equipment/wolf_body/armadillo_scute",
@@ -1568,7 +1592,7 @@ mod tests {
     /// there is one a baby model name maps to, and so are the parts a sample of part names is
     /// renamed to.
     #[test]
-    #[ignore = "requires prepared entity models in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn names_reach_horizons_models() {
         let root = std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES");
         let types: HashMap<String, Arc<MobType>> = super::super::MobTypes::load(Path::new(&root))
@@ -1595,6 +1619,10 @@ mod tests {
             let Some((model, layer)) = key.split_once('#') else {
                 continue;
             };
+            // Humanoid equipment slots are internal render layers, not CEM models.
+            if matches!(layer, "helmet" | "chestplate" | "leggings" | "boots") {
+                continue;
+            }
             let Some(adult) = model.strip_suffix("_baby") else {
                 continue;
             };

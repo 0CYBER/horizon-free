@@ -1,7 +1,7 @@
 //! `Registries.PREDICATE` for block loot tables: a table's string condition
 //! is a predicate id (`LootItemCondition.CODEC`, a `RegistryFileCodec`), so a
 //! pack replaces `minecraft:tool/can_silk_touch` and adds its own ids.
-use crate::items::{ItemStack, Items};
+use crate::items::{BlockLootRoll, ItemStack, Items};
 use horizon_core::random::LegacyRandom;
 use horizon_world::loot::PackOverlay;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
@@ -51,14 +51,32 @@ fn block_tables_resolve_predicate_ids_from_the_packs() {
             vec![match_tool("minecraft:shears")],
         ),
     ];
-    let items = Items::catalog(&root, &PackOverlay { files: &pack }).unwrap();
+    let defaults = horizon_world::item_defaults::shared(&root).unwrap();
+    let items = Items::catalog(
+        &root,
+        &PackOverlay {
+            files: &pack,
+            ..PackOverlay::NONE
+        },
+        &defaults,
+    )
+    .unwrap();
     let facts = br#"{"defaults":{"minecraft:air":0,"minecraft:stone":1},
         "states":[["air",true,false,"","minecraft:air"],
                   ["stone",false,false,"","minecraft:stone"]]}"#;
     let registry = BlockRegistry::from_facts_json(&facts[..]).unwrap();
     let drops = |items: &Items, held: Option<&ItemStack>| -> Vec<String> {
         items
-            .block_drops(&registry, BlockStateId(1), held, &mut LegacyRandom::new(7))
+            .block_drops(
+                &registry,
+                BlockStateId(1),
+                BlockLootRoll {
+                    held,
+                    ..Default::default()
+                },
+                &mut LegacyRandom::new(7),
+                None,
+            )
             .into_iter()
             .map(|s| s.item.to_string())
             .collect()
@@ -74,7 +92,7 @@ fn block_tables_resolve_predicate_ids_from_the_packs() {
     assert_eq!(drops(&items, Some(&shears)), ["minecraft:emerald"]);
     assert_eq!(drops(&items, None), ["minecraft:cobblestone"]);
     // Without the pack the root's own predicate file is the id's content.
-    let base = Items::catalog(&root, &PackOverlay::NONE).unwrap();
+    let base = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
     assert_eq!(drops(&base, Some(&pick)), ["minecraft:diamond"]);
     assert_eq!(drops(&base, Some(&stick)), ["minecraft:cobblestone"]);
     fs::remove_dir_all(root).unwrap();
@@ -100,7 +118,16 @@ fn the_games_own_silk_touch_predicate_still_drops_stone() {
     };
     let drops = |held: &ItemStack| -> Vec<String> {
         items
-            .block_drops(&registry, stone, Some(held), &mut LegacyRandom::new(7))
+            .block_drops(
+                &registry,
+                stone,
+                BlockLootRoll {
+                    held: Some(held),
+                    ..Default::default()
+                },
+                &mut LegacyRandom::new(7),
+                None,
+            )
             .into_iter()
             .map(|s| s.item.to_string())
             .collect()

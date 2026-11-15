@@ -1,120 +1,118 @@
 //! A mod crate's view of the mod API: `Hooks` is implemented with the names `mod_api` exports.
-//! The test is that this file builds; #7044's mod could not name `key`'s event.
-use horizon_client::mod_api::{
-    Hooks, Host, InputKeyEvent, KeyEvent, MovementInputEvent, dispatch_movement_input, winit,
+//! The test is that this file builds with the exported event types.
+use mod_api::{
+    self, ClientHost, Hooks, InputKeyEvent, KeyAction, ModEntry, ScreenExclusionAreasEvent,
 };
 
+#[derive(Default)]
 struct Keys;
 
-#[test]
-fn a_mod_observes_the_applied_chat_suggestion() {
-    use horizon_client::mod_api::{ChatSuggestionAppliedEvent, dispatch_chat_suggestion_applied};
-    use std::sync::{Arc, Mutex};
-
-    struct TestHost;
-    impl Host for TestHost {}
-    struct Listener(Arc<Mutex<Vec<String>>>);
-    impl Hooks for Listener {
-        fn chat_suggestion_applied(
-            &self,
-            _host: &dyn Host,
-            event: &mut ChatSuggestionAppliedEvent<'_>,
-        ) {
-            assert_eq!(event.original, "😀 hi st");
-            assert_eq!((event.start, event.end), (6, 8));
-            assert_eq!(event.suggestion, "Steve");
-            assert_eq!(event.input, "😀 hi Steve");
-            self.0.lock().unwrap().push(event.input.to_owned());
-        }
-    }
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Listener(calls.clone()))];
-    dispatch_chat_suggestion_applied(&TestHost, &mods, "😀 hi st", 6, 8, "Steve", "😀 hi Steve");
-    assert_eq!(*calls.lock().unwrap(), ["😀 hi Steve"]);
-}
-
+#[mod_api::horizon_mod]
 impl Hooks for Keys {
-    fn key(&self, _host: &mut dyn Host, event: &mut KeyEvent<'_>) {
-        let _ = (event.key, event.pressed);
-    }
-
-    fn input_key(&self, _host: &mut dyn Host, event: &mut InputKeyEvent<'_>) {
-        let _: &winit::event::KeyEvent = event.event;
+    fn input_key(&self, host: &mut dyn ClientHost, event: &mut InputKeyEvent<'_>) {
+        let _: (&str, KeyAction) = (event.key, event.action);
+        if let Some(menu) = host
+            .local_player()
+            .and_then(|player| player.container_menu(host))
+        {
+            let _ = menu.slot_count(host);
+            let _ = menu.slot(host, 0);
+            let _ = menu.carried(host);
+        }
     }
 }
 
 #[test]
 fn a_mod_implements_the_key_hooks() {
-    let _: Box<dyn Hooks> = Box::new(Keys);
+    let _: ModEntry = ModEntry::new("keys", hooks());
 }
 
-#[test]
-fn movement_input_writes_back_all_fields() {
-    struct TestHost;
-    impl Host for TestHost {}
-    struct Movement;
-    impl Hooks for Movement {
-        fn movement_input(&self, _host: &dyn Host, event: &mut MovementInputEvent) {
-            event.forward = -0.5;
-            event.strafe = 0.25;
-            event.jump = true;
-            event.sneak = true;
-        }
-    }
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Movement)];
-    let (mut forward, mut strafe, mut jump, mut sneak) = (1.0, 0.0, false, false);
-    dispatch_movement_input(
-        &TestHost,
-        &mods,
-        &mut forward,
-        &mut strafe,
-        &mut jump,
-        &mut sneak,
-    );
-    assert_eq!((forward, strafe, jump, sneak), (-0.5, 0.25, true, true));
-}
+mod sidebar {
+    use super::*;
 
-#[test]
-fn recipe_book_categories_accept_mod_declarations() {
-    use horizon_client::mod_api::{
-        RecipeBookCategoriesEvent, RecipeBookCategory, dispatch_recipe_book_categories,
-    };
-    struct TestHost;
-    impl Host for TestHost {}
-    struct Categories;
-    impl Hooks for Categories {
-        fn recipe_book_categories(
+    #[derive(Default)]
+    struct Sidebar;
+
+    #[mod_api::horizon_mod]
+    impl Hooks for Sidebar {
+        fn screen_exclusion_areas(
             &self,
-            _host: &dyn Host,
-            event: &mut RecipeBookCategoriesEvent<'_>,
+            _host: &dyn ClientHost,
+            event: &mut ScreenExclusionAreasEvent<'_>,
         ) {
-            event.categories.push(RecipeBookCategory {
-                id: "mymod:crushing".into(),
-                recipe_type: "mymod:crusher".into(),
-                icon: "minecraft:stone".into(),
-            });
+            if event.screen.id == "inventory" {
+                event.areas.push([0.0, 0.0, 40.0, event.screen.rect[3]]);
+            }
         }
     }
-    let mut declarations = Vec::new();
-    dispatch_recipe_book_categories(&TestHost, &[], &mut declarations);
-    assert!(declarations.is_empty());
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Categories)];
-    dispatch_recipe_book_categories(&TestHost, &mods, &mut declarations);
-    assert_eq!(declarations.len(), 1);
-    assert_eq!(declarations[0].id, "mymod:crushing");
-    assert_eq!(declarations[0].recipe_type, "mymod:crusher");
-    assert_eq!(declarations[0].icon, "minecraft:stone");
+
+    #[test]
+    fn a_mod_adds_screen_exclusion_areas() {
+        let _: ModEntry = ModEntry::new("sidebar", hooks());
+    }
 }
 
 #[test]
-fn layer_definitions_collect_each_mods_layers_in_order() {
-    use horizon_client::mod_api::{
-        CubeListBuilder, LayerDefinition, LayerDefinitionsEvent, MeshDefinition, PartPose,
-        dispatch_layer_definitions,
+fn client_packet_hands_a_mod_the_type_and_custom_payload() {
+    use mod_api::{
+        ClientPacket, ClientPacketEvent, ClientPayload, Identifier, dispatch_client_packet,
     };
+    use mod_platform::testing::FakeHost;
+    use std::sync::Mutex;
+    static HEARD: Mutex<Vec<(String, Vec<u8>)>> = Mutex::new(Vec::new());
+    // A plugin-channel listener using only the mod API's plain data.
+    #[derive(Default)]
+    struct Channels;
+    #[mod_api::horizon_mod]
+    impl Hooks for Channels {
+        fn client_packet(&self, _host: &mut dyn ClientHost, event: &mut ClientPacketEvent<'_>) {
+            if let Some(p) = &event.packet.custom_payload {
+                HEARD
+                    .lock()
+                    .unwrap()
+                    .push((p.channel.clone(), p.data.clone()));
+            }
+        }
+    }
+    mod_platform::testing::with_mods(vec![ModEntry::new("channels", hooks())].into(), || {
+        dispatch_client_packet(
+            &mut FakeHost::new(),
+            &ClientPacket::new(Identifier::parse("minecraft:ping").unwrap(), None),
+        );
+        let payload = ClientPayload::new("voicechat:secret".into(), vec![1, 2, 3]);
+        dispatch_client_packet(
+            &mut FakeHost::new(),
+            &ClientPacket::new(
+                Identifier::parse("minecraft:custom_payload").unwrap(),
+                Some(payload),
+            ),
+        );
+    });
+    assert_eq!(
+        *HEARD.lock().unwrap(),
+        [("voicechat:secret".to_string(), vec![1, 2, 3])]
+    );
+}
+
+// Fluid acceptance is scoped to a FLUIDS provider, not a global Hooks method.
+// Its default/refused/accepted writes are covered with a real Game backend in
+// game/blocks/machines/native_fluids.rs::tests::a_scoped_tank_can_refuse_a_fluid.
+
+mod model_layers {
+    use mod_api::{
+        CubeListBuilder, Hooks, LayerDefinition, MeshDefinition, ModEntry, PartPose,
+        RegisterLayerDefinitionsEvent, RegistrationContext,
+    };
+
     struct Golem(&'static str);
+    #[mod_api::__subscriptions]
     impl Hooks for Golem {
-        fn layer_definitions(&self, event: &mut LayerDefinitionsEvent<'_>) {
+        // ANCHOR: register_layer_definitions
+        fn register_layer_definitions(
+            &self,
+            _context: &RegistrationContext,
+            event: &mut RegisterLayerDefinitionsEvent<'_>,
+        ) {
             let mut mesh = MeshDefinition::new();
             let root = mesh.root();
             let head = CubeListBuilder::create()
@@ -125,702 +123,221 @@ fn layer_definitions_collect_each_mods_layers_in_order() {
                 .layers
                 .push((self.0.into(), LayerDefinition::create(mesh, 64, 32)));
         }
+        // ANCHOR_END: register_layer_definitions
     }
-    let mods: Vec<Box<dyn Hooks>> = vec![
-        Box::new(Golem("first:golem#main")),
-        Box::new(Golem("second:golem#main")),
-    ];
-    let mut layers = Vec::new();
-    dispatch_layer_definitions(&mods, &mut layers);
-    let ids: Vec<_> = layers.iter().map(|(id, _)| id.as_str()).collect();
-    assert_eq!(ids, ["first:golem#main", "second:golem#main"]);
-    let model = layers[0].1.bake_root();
-    let head = model.get_child("head").expect("the head part");
-    assert_eq!((head.y, head.polygons.len()), (6.0, 6));
-}
 
-#[test]
-fn received_chat_is_replaced_in_order_and_cancel_stops_later_mods() {
-    use horizon_client::mod_api::{ClientChatReceivedEvent, Flow, dispatch_client_chat_received};
-    use horizon_client::text::Text;
-    struct TestHost;
-    impl Host for TestHost {}
-    struct Tag;
-    impl Hooks for Tag {
-        fn client_chat_received(
-            &self,
-            _host: &mut dyn Host,
-            event: &mut ClientChatReceivedEvent<'_>,
-        ) -> Flow {
-            if event.message.plain().contains("drop") {
-                return Flow::Cancel;
-            }
-            let who = if event.system { "server" } else { "player" };
-            *event.message = Text::literal(format!("[{who}] {}", event.message.plain()));
-            Flow::Continue
-        }
-    }
-    struct Shout;
-    impl Hooks for Shout {
-        fn client_chat_received(
-            &self,
-            _host: &mut dyn Host,
-            event: &mut ClientChatReceivedEvent<'_>,
-        ) -> Flow {
-            *event.message = Text::literal(event.message.plain().to_uppercase());
-            Flow::Continue
-        }
-    }
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Tag), Box::new(Shout)];
-    let receive = |system: bool, text: &str| {
-        let (mut message, mut cancel) = (Text::literal(text), false);
-        let chat_type = (!system).then_some("minecraft:chat");
-        dispatch_client_chat_received(
-            &mut TestHost,
-            &mods,
-            system,
-            false,
-            7,
-            chat_type,
-            &mut message,
-            &mut cancel,
+    #[test]
+    fn register_layer_definitions_collect_each_mods_layers_in_order() {
+        // The harness supplies the engine-owned context; the listener above uses only public API.
+        use mod_api::__private::game::RegistrationContextNew;
+        mod_platform::testing::with_mods(
+            vec![
+                ModEntry::new("first", Box::new(Golem("first:golem#main"))),
+                ModEntry::new("second", Box::new(Golem("second:golem#main"))),
+            ]
+            .into(),
+            || {
+                let mut layers = Vec::new();
+                mod_api::dispatch_register_layer_definitions(
+                    &RegistrationContext::new(),
+                    &mut layers,
+                );
+                let ids: Vec<_> = layers.iter().map(|(id, _)| id.as_str()).collect();
+                assert_eq!(ids, ["first:golem#main", "second:golem#main"]);
+                let model = layers[0].1.bake_root();
+                let head = model.get_child("head").expect("the head part");
+                assert_eq!((head.y, head.polygons.len()), (6.0, 6));
+            },
         );
-        (message.plain(), cancel)
-    };
-    assert_eq!(receive(true, "hi"), ("[SERVER] HI".to_owned(), false));
-    assert_eq!(receive(false, "hi"), ("[PLAYER] HI".to_owned(), false));
-    // A cancelled line keeps its text: the second mod never ran.
-    assert_eq!(receive(false, "drop me"), ("drop me".to_owned(), true));
-}
-
-#[test]
-fn client_packet_hands_a_mod_the_decoded_packet() {
-    use horizon_client::mod_api::{
-        ClientPacketEvent, ClientboundPlayPacket, dispatch_client_packet,
-    };
-    use horizon_protocol::packets::configuration::{CustomPayload, Ping};
-    use std::sync::Mutex;
-    static HEARD: Mutex<Vec<(String, Vec<u8>)>> = Mutex::new(Vec::new());
-    struct TestHost;
-    impl Host for TestHost {}
-    // A plugin-channel listener, matching the packet by the name `mod_api` exports.
-    struct Channels;
-    impl Hooks for Channels {
-        fn client_packet(&self, _host: &mut dyn Host, event: &mut ClientPacketEvent<'_>) {
-            if let ClientboundPlayPacket::CustomPayload(p) = event.packet {
-                HEARD
-                    .lock()
-                    .unwrap()
-                    .push((p.channel.clone(), p.data.clone()));
-            }
-        }
     }
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Channels)];
-    dispatch_client_packet(
-        &mut TestHost,
-        &mods,
-        &ClientboundPlayPacket::Ping(Ping { id: 7 }),
-    );
-    let payload = CustomPayload {
-        channel: "voicechat:secret".into(),
-        data: vec![1, 2, 3],
-    };
-    dispatch_client_packet(
-        &mut TestHost,
-        &mods,
-        &ClientboundPlayPacket::CustomPayload(payload),
-    );
-    assert_eq!(
-        *HEARD.lock().unwrap(),
-        [("voicechat:secret".to_string(), vec![1, 2, 3])]
-    );
 }
 
-/// #9036, part of #9873: a landing's block change (farmland trampled into
-/// dirt, a turtle egg broken) goes through a hook a mod can cancel, before its
-/// neighbour updates - so a claims mod can keep the crop above standing.
-#[test]
-fn a_landing_change_a_mod_cancels_keeps_the_block_as_it_was() {
-    use horizon_client::mod_api::{
-        EntityChangeBlockV2Event, Flow, Hooks, Host, dispatch_entity_change_block_v2,
-    };
-    struct TestHost;
-    impl Host for TestHost {}
-    struct Claims;
-    impl Hooks for Claims {
-        fn entity_change_block_v2(
+mod skull_models {
+    use mod_api::{CreateSkullModelsEvent, Hooks, ModEntry, RegistrationContext, SkullModel};
+
+    struct Heads(&'static str);
+    #[mod_api::__subscriptions]
+    impl Hooks for Heads {
+        // ANCHOR: create_skull_models
+        fn create_skull_models(
             &self,
-            _host: &mut dyn Host,
-            event: &mut EntityChangeBlockV2Event<'_>,
-        ) -> Flow {
-            // A guest's landing: who trampled, the position and both states.
-            assert_eq!(event.player, Some(7));
-            assert_eq!(event.entity, None);
-            assert_eq!(event.kind, "minecraft:player");
-            assert_eq!(event.pos, [0, 64, 0]);
-            assert_eq!(event.from, "minecraft:farmland");
-            assert_eq!(event.to, "minecraft:dirt");
-            Flow::Cancel
+            _context: &RegistrationContext,
+            event: &mut CreateSkullModelsEvent<'_>,
+        ) {
+            event.models.push(SkullModel {
+                kind: format!("{}:goblin", self.0),
+                layer: format!("{}:goblin_head#main", self.0),
+                texture: format!("{}:entity/goblin", self.0),
+            });
         }
+        // ANCHOR_END: create_skull_models
     }
-    struct Unreached;
-    impl Hooks for Unreached {
-        fn entity_change_block_v2(
-            &self,
-            _host: &mut dyn Host,
-            _event: &mut EntityChangeBlockV2Event<'_>,
-        ) -> Flow {
-            panic!("a cancelled change is not offered to later mods");
-        }
+
+    #[test]
+    fn create_skull_models_collects_each_mods_types_in_order() {
+        use mod_api::__private::game::RegistrationContextNew;
+        mod_platform::testing::with_mods(
+            vec![
+                ModEntry::new("first", Box::new(Heads("first"))),
+                ModEntry::new("second", Box::new(Heads("second"))),
+            ]
+            .into(),
+            || {
+                let mut models = Vec::new();
+                mod_api::dispatch_create_skull_models(&RegistrationContext::new(), &mut models);
+                let kinds: Vec<_> = models.iter().map(|m| m.kind.as_str()).collect();
+                assert_eq!(kinds, ["first:goblin", "second:goblin"]);
+                assert_eq!(models[1].layer, "second:goblin_head#main");
+                assert_eq!(models[1].texture, "second:entity/goblin");
+            },
+        );
     }
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Claims), Box::new(Unreached)];
-    let mut host = TestHost;
-    let mut cancel = false;
-    dispatch_entity_change_block_v2(
-        &mut host,
-        &mods,
-        Some(7),
-        None,
-        "minecraft:player",
-        [0, 64, 0],
-        "minecraft:farmland",
-        "minecraft:dirt",
-        &mut cancel,
-    );
-    assert!(cancel, "the farmland stays");
-    // No mods: the change goes ahead.
-    let mut cancel = false;
-    dispatch_entity_change_block_v2(
-        &mut host,
-        &[],
-        Some(7),
-        None,
-        "minecraft:player",
-        [0, 64, 0],
-        "minecraft:farmland",
-        "minecraft:dirt",
-        &mut cancel,
-    );
-    assert!(!cancel);
 }
 
-#[test]
-fn a_tank_hook_can_refuse_a_fluid() {
-    use horizon_client::mod_api::{
-        BlockEntityAcceptsFluidEvent, Flow, dispatch_block_entity_accepts_fluid,
-    };
-    struct TestHost;
-    impl Host for TestHost {}
-    struct WaterTank;
-    impl Hooks for WaterTank {
-        fn block_entity_accepts_fluid(
-            &self,
-            _host: &dyn Host,
-            event: &mut BlockEntityAcceptsFluidEvent<'_>,
-        ) -> Flow {
-            if event.block == "mymod:water_tank" && event.fluid != "minecraft:water" {
-                Flow::Cancel
-            } else {
-                Flow::Continue
-            }
-        }
-    }
-    let mut cancel = false;
-    dispatch_block_entity_accepts_fluid(
-        &TestHost,
-        &[],
-        "mymod:water_tank",
-        0,
-        "create:chocolate",
-        &mut cancel,
-    );
-    assert!(!cancel, "every tank takes every fluid without a mod");
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(WaterTank)];
-    let mut cancel = false;
-    dispatch_block_entity_accepts_fluid(
-        &TestHost,
-        &mods,
-        "mymod:water_tank",
-        0,
-        "create:chocolate",
-        &mut cancel,
-    );
-    assert!(cancel, "the water tank refuses the mod's fluid");
-    let mut cancel = false;
-    dispatch_block_entity_accepts_fluid(
-        &TestHost,
-        &mods,
-        "mymod:water_tank",
-        0,
-        "minecraft:water",
-        &mut cancel,
-    );
-    assert!(!cancel, "the water tank takes water");
-}
-
-/// `AnvilUpdateEvent`: each mod changes the result after the one before it,
-/// vanilla's stays readable, and a cancel stops the mods after it.
+/// Each mod changes the prior answer, vanilla's stays readable, and cancel
+/// stops later mods. The fork's existing typed event owns this moment.
 #[test]
 fn an_anvil_update_is_changed_in_turn_and_cancel_stops_later_mods() {
-    use horizon_client::items::ItemStack;
-    use horizon_client::mod_api::{AnvilUpdateEvent, Flow, dispatch_anvil_update};
+    use mod_api::item::menu::AnvilUpdate;
+    use mod_api::item::stations::AnvilResult;
+    use mod_api::{AnvilUpdateEvent, Flow, Host, HostSide, ItemStack, ServerHost};
+    fn key(id: &str) -> mod_api::ItemKey {
+        mod_api::__private::item_key(id).unwrap()
+    }
     struct TestHost;
     impl Host for TestHost {}
-    // An anvil recipe of its own: iron and an emerald give a diamond.
-    struct Recipe;
-    impl Hooks for Recipe {
-        fn anvil_update(&self, _host: &mut dyn Host, event: &mut AnvilUpdateEvent<'_>) -> Flow {
-            if event.item_name == Some("void") {
-                return Flow::Cancel;
-            }
-            if &*event.left.item == "minecraft:iron_ingot"
-                && event.right.is_some_and(|r| &*r.item == "minecraft:emerald")
-            {
-                *event.output = Some(ItemStack::new("minecraft:diamond", 1));
-                event.xp_cost = 5;
-                event.material_cost = 1;
-            }
-            Flow::Continue
-        }
-    }
-    // A level off whatever the mods before it charge.
-    struct Discount;
-    impl Hooks for Discount {
-        fn anvil_update(&self, _host: &mut dyn Host, event: &mut AnvilUpdateEvent<'_>) -> Flow {
-            assert_eq!(event.vanilla_xp_cost, 3, "vanilla's cost stays readable");
-            event.xp_cost -= 1;
-            Flow::Continue
-        }
-    }
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Recipe), Box::new(Discount)];
-    let update = |left: &str, right: Option<&str>, item_name: Option<&str>| {
-        let (left, right) = (ItemStack::new(left, 1), right.map(|r| ItemStack::new(r, 4)));
-        let vanilla = ItemStack::new("minecraft:iron_sword", 1);
-        let mut output = Some(vanilla.clone());
-        let (mut xp_cost, mut material_cost, mut canceled) = (3, 0, false);
-        dispatch_anvil_update(
-            &mut TestHost,
-            &mods,
-            7,
-            "Steve",
-            &left,
-            right.as_ref(),
-            item_name,
-            Some(&vanilla),
-            3,
-            0,
-            &mut output,
-            &mut xp_cost,
-            &mut material_cost,
-            &mut canceled,
-        );
-        (
-            output.map(|o| o.item.to_string()),
-            xp_cost,
-            material_cost,
-            canceled,
-        )
-    };
-    let diamond = Some("minecraft:diamond".to_owned());
-    let sword = Some("minecraft:iron_sword".to_owned());
-    assert_eq!(
-        update("minecraft:iron_ingot", Some("minecraft:emerald"), None),
-        (diamond, 4, 1, false)
-    );
-    // Other inputs keep vanilla's result, less the discount.
-    assert_eq!(
-        update("minecraft:iron_sword", None, Some("")),
-        (sword.clone(), 2, 0, false)
-    );
-    // A cancel: the discount never ran, and the caller empties the result.
-    assert_eq!(
-        update("minecraft:iron_sword", None, Some("void")),
-        (sword, 3, 0, true)
-    );
-}
-
-#[test]
-fn tooltip_render_pre_intercepts_rendering_and_draws_gui_items() {
-    use horizon_client::hud::HudBatch;
-    use horizon_client::items::ItemStack;
-    use horizon_client::mod_api::{
-        Flow, KeyCode, TooltipRenderPreEvent, dispatch_tooltip_render_pre,
-    };
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-
-    struct TestHost {
-        draw_count: AtomicU32,
-        with_text_seen: AtomicBool,
-    }
-    impl Host for TestHost {
-        fn gui_draw_item(&self, _batch: &mut HudBatch, stack: &ItemStack, at: [f32; 2]) {
-            if &*stack.item == "minecraft:shulker_box" && at == [16.0, 32.0] {
-                self.draw_count.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-        fn gui_draw_item_with(
-            &self,
-            _batch: &mut HudBatch,
-            stack: &ItemStack,
-            at: [f32; 2],
-            text: Option<&str>,
-        ) {
-            if &*stack.item == "minecraft:diamond" && at == [20.0, 40.0] && text == Some("5") {
-                self.with_text_seen.store(true, Ordering::SeqCst);
-            }
-        }
-        fn has_shift_down(&self) -> bool {
-            true
-        }
-        fn has_control_down(&self) -> bool {
-            false
-        }
-        fn has_alt_down(&self) -> bool {
-            false
-        }
-        fn is_key_down(&self, key: KeyCode) -> bool {
-            key == KeyCode::ShiftLeft
-        }
-    }
-
-    struct ShulkerPreviewMod;
-    impl Hooks for ShulkerPreviewMod {
-        fn tooltip_render_pre(
-            &self,
-            host: &mut dyn Host,
-            event: &mut TooltipRenderPreEvent<'_>,
-        ) -> Flow {
-            if &*event.stack.item == "minecraft:shulker_box"
-                && host.has_shift_down()
-                && host.is_key_down(KeyCode::ShiftLeft)
-            {
-                host.gui_draw_item(event.batch, event.stack, [event.x, event.y]);
-                let inner = ItemStack::new("minecraft:diamond", 5);
-                host.gui_draw_item_with(event.batch, &inner, [20.0, 40.0], Some("5"));
-                return Flow::Cancel;
-            }
-            Flow::Continue
-        }
-    }
-
-    let mut host = TestHost {
-        draw_count: AtomicU32::new(0),
-        with_text_seen: AtomicBool::new(false),
-    };
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(ShulkerPreviewMod)];
-    let shulker = ItemStack::new("minecraft:shulker_box", 1);
-    assert_eq!(shulker.container().len(), 0);
-    assert!(shulker.custom_data().is_none());
-
-    let mut batch = HudBatch::new([800, 600]);
-    let mut cancel = false;
-    dispatch_tooltip_render_pre(
-        &mut host,
-        &mods,
-        &shulker,
-        &mut batch,
-        16.0,
-        32.0,
-        &mut cancel,
-    );
-
-    assert!(cancel, "tooltip_render_pre cancelled vanilla tooltip");
-    assert_eq!(
-        host.draw_count.load(Ordering::SeqCst),
-        1,
-        "gui_draw_item was called"
-    );
-    assert!(
-        host.with_text_seen.load(Ordering::SeqCst),
-        "gui_draw_item_with was called"
-    );
-
-    let stone = ItemStack::new("minecraft:stone", 64);
-    let mut cancel_stone = false;
-    dispatch_tooltip_render_pre(
-        &mut host,
-        &mods,
-        &stone,
-        &mut batch,
-        16.0,
-        32.0,
-        &mut cancel_stone,
-    );
-    assert!(
-        !cancel_stone,
-        "unhandled stack continues to vanilla tooltip"
-    );
-}
-
-/// #10563: a right-click on an entity hears the point clicked before the
-/// entity's own interact; a claim ends it before the mods after.
-#[test]
-fn entity_interact_specific_hears_the_click_point_and_a_claim_ends_it() {
-    use horizon_client::items::ItemStack;
-    use horizon_client::mod_api::{
-        EntityInteractSpecificEvent, Flow, dispatch_entity_interact_specific,
-    };
-    use std::sync::{Arc, Mutex};
-
-    struct TestHost;
-    impl Host for TestHost {}
-
+    mod_api::impl_host_areas!(TestHost);
+    mod_api::impl_server_host_areas!(TestHost);
+    impl ServerHost for TestHost {}
     #[derive(Default)]
-    struct Log {
-        calls: Vec<(String, i32, String, [f64; 3])>,
-    }
-
-    struct Recorder {
-        name: String,
-        log: Arc<Mutex<Log>>,
-    }
-    impl Hooks for Recorder {
-        fn entity_interact_specific(
-            &self,
-            _host: &mut dyn Host,
-            event: &mut EntityInteractSpecificEvent<'_>,
-        ) -> Flow {
-            self.log.lock().unwrap().calls.push((
-                self.name.clone(),
-                event.entity,
-                event.kind.to_string(),
-                event.location,
-            ));
+    struct Recipe;
+    #[mod_api::__subscriptions]
+    impl Hooks for Recipe {
+        fn anvil_update(&self, _: HostSide<'_>, event: &mut AnvilUpdateEvent<'_>) -> Flow {
+            let update = &mut *event.update;
+            if update.name.as_deref() == Some("void") {
+                return Flow::Cancel;
+            }
+            if update.left.item() == key("minecraft:iron_ingot")
+                && update
+                    .right
+                    .as_ref()
+                    .is_some_and(|r| r.item() == key("minecraft:emerald"))
+            {
+                update.output = Some(ItemStack::of(key("minecraft:diamond")));
+                update.xp_cost = 5;
+                update.material_cost = 1;
+            }
             Flow::Continue
         }
     }
-
-    struct Claims;
-    impl Hooks for Claims {
-        fn entity_interact_specific(
-            &self,
-            _host: &mut dyn Host,
-            _event: &mut EntityInteractSpecificEvent<'_>,
-        ) -> Flow {
-            Flow::Cancel
+    #[derive(Default)]
+    struct Discount;
+    #[mod_api::__subscriptions]
+    impl Hooks for Discount {
+        fn anvil_update(&self, _: HostSide<'_>, event: &mut AnvilUpdateEvent<'_>) -> Flow {
+            assert_eq!(
+                event.update.vanilla.xp_cost, 3,
+                "vanilla's cost stays readable"
+            );
+            event.update.xp_cost -= 1;
+            Flow::Continue
         }
     }
-
-    let held = ItemStack::new("minecraft:stick", 1);
-
-    // No claim: both mods hear the call in order, and the second sees the
-    // entity, kind and point the caller passed.
-    let log = Arc::new(Mutex::new(Log::default()));
-    let mods: Vec<Box<dyn Hooks>> = vec![
-        Box::new(Recorder {
-            name: "first".into(),
-            log: log.clone(),
-        }),
-        Box::new(Recorder {
-            name: "second".into(),
-            log: log.clone(),
-        }),
-    ];
-    let mut host = TestHost;
-    let mut claimed = false;
-    dispatch_entity_interact_specific(
-        &mut host,
-        &mods,
-        7,
-        "minecraft:cow",
-        Some(&held),
-        [0.25, 1.5, -0.125],
-        &mut claimed,
-    );
-    assert!(!claimed, "no mod claimed the click");
-    let calls = log.lock().unwrap();
-    assert_eq!(calls.calls.len(), 2, "both mods heard the click");
-    assert_eq!(calls.calls[0].0.as_str(), "first");
-    assert_eq!(calls.calls[1].0.as_str(), "second");
-    assert_eq!(calls.calls[1].1, 7);
-    assert_eq!(calls.calls[1].2.as_str(), "minecraft:cow");
-    assert_eq!(calls.calls[1].3, [0.25, 1.5, -0.125]);
-    drop(calls);
-
-    // A claim stops later mods and sets `claimed`.
-    let log = Arc::new(Mutex::new(Log::default()));
-    let mods: Vec<Box<dyn Hooks>> = vec![
-        Box::new(Claims),
-        Box::new(Recorder {
-            name: "second".into(),
-            log: log.clone(),
-        }),
-    ];
-    let mut host = TestHost;
-    let mut claimed = false;
-    dispatch_entity_interact_specific(
-        &mut host,
-        &mods,
-        7,
-        "minecraft:cow",
-        Some(&held),
-        [0.25, 1.5, -0.125],
-        &mut claimed,
-    );
-    assert!(claimed, "the first mod claimed the click");
-    assert!(
-        log.lock().unwrap().calls.is_empty(),
-        "the second mod was skipped"
-    );
-}
-
-#[test]
-fn a_screen_background_hook_can_cancel_vanilla_gradient() {
-    use horizon_client::mod_api::{
-        Flow, Hooks, Host, ScreenTransparentBackgroundEvent, dispatch_screen_transparent_background,
-    };
-    struct TestHost;
-    impl Host for TestHost {}
-    struct BlurMod;
-    impl Hooks for BlurMod {
-        fn screen_transparent_background(
-            &self,
-            _host: &dyn Host,
-            event: &mut ScreenTransparentBackgroundEvent<'_>,
-        ) -> Flow {
-            if event.screen == "inventory" {
-                Flow::Cancel
-            } else {
-                Flow::Continue
-            }
-        }
-    }
-    let mut batch = horizon_client::hud::HudBatch::new([800, 600]);
-    let mut cancel = false;
-    dispatch_screen_transparent_background(&TestHost, &[], "inventory", &mut batch, &mut cancel);
-    assert!(!cancel, "vanilla gradient drawn without mods");
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(BlurMod)];
-    let mut cancel = false;
-    dispatch_screen_transparent_background(&TestHost, &mods, "chest", &mut batch, &mut cancel);
-    assert!(!cancel, "other screens keep vanilla background");
-    let mut cancel = false;
-    dispatch_screen_transparent_background(&TestHost, &mods, "inventory", &mut batch, &mut cancel);
-    assert!(
-        cancel,
-        "inventory cancels vanilla gradient for blur/custom draw"
-    );
+    let mods: mod_api::Mods = vec![
+        ModEntry::new("recipe", Box::new(Recipe)),
+        ModEntry::new("discount", Box::new(Discount)),
+    ]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        mod_platform::__private::install_parts(
+            &[],
+            &mod_platform::__private::part_tests::rule_schema(),
+            |_| false,
+        )
+        .unwrap();
+        mod_api::__private::resolve_items([
+            "minecraft:iron_sword",
+            "minecraft:iron_ingot",
+            "minecraft:emerald",
+            "minecraft:diamond",
+        ])
+        .unwrap();
+        let update = |left: &str, right: Option<&str>, name: Option<&str>| {
+            let vanilla = AnvilResult {
+                result: Some(ItemStack::of(key("minecraft:iron_sword"))),
+                cost: 3,
+                repair_item_count_cost: 0,
+                only_renaming: false,
+            };
+            let mut update = AnvilUpdate::new(
+                ItemStack::of(key(left)),
+                right.map(|r| ItemStack::new(key(r), 4).unwrap()),
+                name.map(str::to_owned),
+                &vanilla,
+            );
+            let mut cancel = false;
+            mod_api::dispatch_anvil_update(
+                HostSide::Server(&mut TestHost),
+                7,
+                1,
+                [0, 64, 0],
+                &mut update,
+                &mut cancel,
+            );
+            (
+                update.output.map(|o| {
+                    mod_api::__private::item_key_id(o.item())
+                        .unwrap()
+                        .to_owned()
+                }),
+                update.xp_cost,
+                update.material_cost,
+                cancel,
+            )
+        };
+        let sword = Some("minecraft:iron_sword".to_owned());
+        assert_eq!(
+            update("minecraft:iron_ingot", Some("minecraft:emerald"), None),
+            (Some("minecraft:diamond".to_owned()), 4, 1, false)
+        );
+        assert_eq!(
+            update("minecraft:iron_sword", None, Some("")),
+            (sword.clone(), 2, 0, false)
+        );
+        assert_eq!(
+            update("minecraft:iron_sword", None, Some("void")),
+            (sword, 3, 0, true)
+        );
+    });
 }
 
 #[test]
 fn wind_burst_filter_preserves_order_and_context() {
-    use horizon_client::mod_api::{WindBurstEvent, dispatch_wind_burst};
+    use mod_api::{Host, ServerHost, WindBurstEvent, dispatch_wind_burst};
     struct TestHost;
     impl Host for TestHost {}
+    mod_api::impl_host_areas!(TestHost);
+    mod_api::impl_server_host_areas!(TestHost);
+    impl ServerHost for TestHost {}
     struct Claims;
+    #[mod_api::__subscriptions]
     impl Hooks for Claims {
-        fn wind_burst(&self, _host: &mut dyn Host, event: &mut WindBurstEvent<'_>) {
+        fn wind_burst(&self, _host: &mut dyn ServerHost, event: &mut WindBurstEvent<'_>) {
             assert_eq!(event.dimension, "minecraft:the_nether");
             assert_eq!(event.center, [1.5, 70.0, -2.5]);
             event.blocks.retain(|p| p[0] != 1);
         }
     }
-    let original = vec![[3, 70, -2], [1, 70, -2], [2, 70, -2]];
-    let mut blocks = original.clone();
-    dispatch_wind_burst(
-        &mut TestHost,
-        &[],
-        "minecraft:the_nether",
-        [1.5, 70.0, -2.5],
-        &mut blocks,
-    );
-    assert_eq!(blocks, original);
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Claims)];
-    dispatch_wind_burst(
-        &mut TestHost,
-        &mods,
-        "minecraft:the_nether",
-        [1.5, 70.0, -2.5],
-        &mut blocks,
-    );
-    assert_eq!(blocks, vec![[3, 70, -2], [2, 70, -2]]);
-}
-
-#[test]
-fn a_protection_hook_can_deny_a_build() {
-    use horizon_client::mod_api::{CanBuildEvent, Flow, dispatch_can_build};
-    struct TestHost;
-    impl Host for TestHost {}
-    struct Spawn;
-    impl Hooks for Spawn {
-        fn can_build(&self, _host: &dyn Host, event: &mut CanBuildEvent<'_>) -> Flow {
-            if event.pos[0].abs() < 16 && event.action == "break" {
-                Flow::Cancel
-            } else {
-                Flow::Continue
-            }
-        }
-    }
-    let ask = |mods: &[Box<dyn Hooks>], pos, action| {
-        let mut cancel = false;
-        dispatch_can_build(
-            &TestHost,
-            mods,
-            1,
-            "Alex",
-            "minecraft:overworld",
-            pos,
-            action,
-            &mut cancel,
+    let mods: mod_api::Mods = vec![ModEntry::new("claims", Box::new(Claims))].into();
+    mod_platform::testing::with_mods(mods, || {
+        let mut blocks = vec![[3, 70, -2], [1, 70, -2], [2, 70, -2]];
+        dispatch_wind_burst(
+            &mut TestHost,
+            "minecraft:the_nether",
+            [1.5, 70.0, -2.5],
+            &mut blocks,
         );
-        !cancel
-    };
-    assert!(ask(&[], [0, 64, 0], "break"), "no mod allows it");
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Spawn)];
-    assert!(!ask(&mods, [0, 64, 0], "break"), "the mod denies it");
-    assert!(ask(&mods, [0, 64, 0], "place"), "it only denies breaking");
-    assert!(ask(&mods, [100, 64, 0], "break"), "it allows elsewhere");
-}
-
-#[test]
-fn a_physical_trigger_hook_cancels_for_the_player_it_names() {
-    use horizon_client::mod_api::{
-        Flow, LevelHost, PlayerPhysicalTriggerEvent, dispatch_player_physical_trigger,
-    };
-    use horizon_core::position::BlockPos;
-    use horizon_world::{level::Dimension, registry::BlockStateId};
-    struct TestLevel;
-    impl LevelHost for TestLevel {
-        fn block_state(&self, _pos: [i32; 3]) -> BlockStateId {
-            BlockStateId(0)
-        }
-        fn is_client_side(&self) -> bool {
-            false
-        }
-        fn state_with_property(&self, _: BlockStateId, _: &str, _: &str) -> Option<BlockStateId> {
-            None
-        }
-    }
-    struct Claims;
-    impl Hooks for Claims {
-        fn player_physical_trigger(
-            &self,
-            _level: &dyn LevelHost,
-            event: &mut PlayerPhysicalTriggerEvent<'_>,
-        ) -> Flow {
-            assert_eq!(event.pos, BlockPos::new(3, 64, -2));
-            assert_eq!(event.block, "minecraft:stone_pressure_plate");
-            if event.player == 7 {
-                Flow::Cancel
-            } else {
-                Flow::Continue
-            }
-        }
-    }
-    let mods: Vec<Box<dyn Hooks>> = vec![Box::new(Claims)];
-    let ask = |mods: &[Box<dyn Hooks>], player| {
-        let mut cancel = false;
-        dispatch_player_physical_trigger(
-            &TestLevel,
-            mods,
-            Dimension::Overworld,
-            player,
-            BlockPos::new(3, 64, -2),
-            "minecraft:stone_pressure_plate",
-            &mut cancel,
-        );
-        cancel
-    };
-    assert!(ask(&mods, 7), "the named player does not set it off");
-    assert!(!ask(&mods, 8), "another player still does");
-    assert!(!ask(&[], 7), "without mods nothing is cancelled");
+        assert_eq!(blocks, vec![[3, 70, -2], [2, 70, -2]]);
+    });
 }

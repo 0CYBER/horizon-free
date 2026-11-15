@@ -788,6 +788,7 @@ fn run(args: &[&str]) -> Option<i32> {
 }
 
 #[test]
+#[ignore = "daily"]
 fn by_is_checked_against_the_vocabulary_of_its_op() {
     let dir = TempDir::new("by");
     let file = standard(&dir);

@@ -210,7 +210,9 @@ fn chest_model(chest_type: &str) -> &'static str {
         _ => "chest",
     }
 }
-fn skull_layer(kind: &str) -> &'static str {
+/// The head model of a skull `kind`: vanilla's layer, or a native mod's kind, under which the
+/// renderer keeps the head that mod registered (`create_skull_models`).
+fn skull_layer(kind: &str) -> &str {
     match kind {
         "skeleton" => "skeleton",
         "wither_skeleton" => "wither_skeleton",
@@ -218,11 +220,12 @@ fn skull_layer(kind: &str) -> &'static str {
         "creeper" => "creeper",
         "dragon" => "dragon",
         "piglin" => "piglin",
+        mod_kind if mod_kind.contains(':') => mod_kind,
         _ => "player",
     }
 }
-/// `SkullBlockRenderer.SKIN_BY_TYPE`.
-fn skull_texture(kind: &str) -> &'static str {
+/// `SkullBlockRenderer.SKIN_BY_TYPE`, with the kinds native mods registered.
+fn skull_texture<'a>(renderer: &ItemRenderer, kind: &'a str) -> &'a str {
     match kind {
         "skeleton" => "entity/skeleton/skeleton",
         "wither_skeleton" => "entity/skeleton/wither_skeleton",
@@ -230,6 +233,11 @@ fn skull_texture(kind: &str) -> &'static str {
         "creeper" => "entity/creeper/creeper",
         "dragon" => "entity/enderdragon/dragon",
         "piglin" => "entity/piglin/piglin",
+        mod_kind if mod_kind.contains(':') => renderer
+            .skull_textures
+            .get(mod_kind)
+            .copied()
+            .unwrap_or_default(),
         _ => "entity/player/wide/steve",
     }
 }
@@ -544,7 +552,10 @@ pub(super) fn submit(
             let skin = texture
                 .as_deref()
                 .map(|t| format!("entity/{}", t.strip_prefix("minecraft:").unwrap_or(t)))
-                .unwrap_or_else(|| skull_texture(kind).to_owned());
+                .map_or_else(
+                    || std::borrow::Cow::Borrowed(skull_texture(renderer, kind)),
+                    Into::into,
+                );
             part(
                 skull_layer(kind),
                 &skull_pose(kind, *animation),
@@ -764,7 +775,17 @@ mod tests {
         )
         .unwrap();
         let library = crate::model_library::ParsedModels::default().into_item_library();
-        let renderer = ItemRenderer::load_with_library(&root, library).unwrap();
+        let data = crate::test_resources::item_data(
+            &root,
+            horizon_world::native_load_context::DataLoadOrigin::ClientPreload,
+        )
+        .unwrap();
+        let renderer = ItemRenderer::load_with_library(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            library,
+            &data,
+        )
+        .unwrap();
         let _ = std::fs::remove_dir_all(&root);
         let textures = [
             "entity/shield/shield_base",
@@ -854,7 +875,16 @@ mod tests {
         if !root.join("entity-models.json").exists() {
             return;
         }
-        let renderer = ItemRenderer::load(&root).unwrap();
+        let data = crate::test_resources::item_data(
+            &root,
+            horizon_world::native_load_context::DataLoadOrigin::ClientPreload,
+        )
+        .unwrap();
+        let renderer = ItemRenderer::load(
+            &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+            &data,
+        )
+        .unwrap();
         let sprite = Rect {
             u0: 0.25,
             v0: 0.125,

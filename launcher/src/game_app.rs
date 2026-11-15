@@ -93,10 +93,34 @@ pub fn ensure(version: &Path) -> io::Result<PathBuf> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => remove_if_present(&to)?,
         Err(e) => return Err(e),
     }
-    for name in ["native-data", "native-content"] {
+    for name in ["native-data", "native-content", "horizon-native-mods"] {
         sync_native_directory(version, &programs, name)?;
     }
+    for entry in fs::read_dir(version)? {
+        let entry = entry?;
+        if runtime_library(&entry.file_name().to_string_lossy()) {
+            let to = programs.join(entry.file_name());
+            if !same_file(&entry.path(), &to) {
+                replace_link(&to, |temp| fs::hard_link(entry.path(), temp))?;
+            }
+        }
+    }
+    // Remove retired runtime links, without touching unexpected directories.
+    for entry in fs::read_dir(&programs)? {
+        let entry = entry?;
+        if runtime_library(&entry.file_name().to_string_lossy())
+            && !version.join(entry.file_name()).exists()
+        {
+            remove_if_present(&entry.path())?;
+        }
+    }
     Ok(programs.join(PROGRAMS[0]))
+}
+
+// Runtime libraries installed by the native routes, the game's and each mod's own library; keep
+// bundle discovery in one place.
+fn runtime_library(name: &str) -> bool {
+    name.ends_with(".dylib")
 }
 
 fn sync_native_directory(version: &Path, programs: &Path, name: &str) -> io::Result<()> {
@@ -171,6 +195,41 @@ mod tests {
         fs::create_dir_all(&version).unwrap();
         fs::write(version.join("horizon-client"), "unchanged signed game").unwrap();
         version
+    }
+
+    #[test]
+    fn runtime_libraries_and_packages_follow_reinstalls() {
+        let version = native_version("runtime");
+        let library = version.join("libhorizon_mod_host.dylib");
+        fs::write(&library, b"old").unwrap();
+        fs::write(version.join("libstd-test.dylib"), b"std").unwrap();
+        fs::write(version.join("libhorizon_client.dylib"), b"game").unwrap();
+        fs::write(version.join("libexample.dylib"), b"mod").unwrap();
+        fs::create_dir_all(version.join("horizon-native-mods/example")).unwrap();
+        let program = ensure(&version).unwrap();
+        let bundled = program.with_file_name("libhorizon_mod_host.dylib");
+        assert!(same_file(&library, &bundled));
+        assert!(program.with_file_name("libstd-test.dylib").exists());
+        assert!(program.with_file_name("libhorizon_client.dylib").exists());
+        // A mod's library is found beside the bundled executable too.
+        assert!(program.with_file_name("libexample.dylib").exists());
+        assert!(program
+            .with_file_name("horizon-native-mods/example")
+            .is_dir());
+        fs::remove_file(&library).unwrap();
+        fs::write(&library, b"new").unwrap();
+        ensure(&version).unwrap();
+        assert_eq!(fs::read(&bundled).unwrap(), b"new");
+        fs::remove_file(&library).unwrap();
+        fs::rename(
+            version.join("horizon-native-mods"),
+            version.join("old-mods"),
+        )
+        .unwrap();
+        ensure(&version).unwrap();
+        assert!(!bundled.exists());
+        assert!(!program.with_file_name("horizon-native-mods").exists());
+        fs::remove_dir_all(version).unwrap();
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! brightness and rotation ([`SkyLayers::draws`]), and `gfx::custom_sky` draws them over the
 //! vanilla sky. A pack without layers keeps the vanilla sky.
 
-use std::path::Path;
+use crate::resource_source::ResourceSource;
 use std::sync::Arc;
 
 use glam::Mat4;
@@ -108,7 +108,7 @@ impl SkyLayers for NoLayers {
 }
 
 /// The custom sky layers of the overlay at `root`, from the installed pack formats.
-pub fn load(root: &Path) -> Arc<dyn SkyLayers> {
+pub fn load(root: &ResourceSource) -> Arc<dyn SkyLayers> {
     crate::pack_hooks::formats()
         .custom_sky(root)
         .unwrap_or_else(|| Arc::new(NoLayers))

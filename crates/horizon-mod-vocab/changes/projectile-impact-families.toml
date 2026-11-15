@@ -1,0 +1,3 @@
+ids = ["hook:projectile_impact"]
+why = "Version 2 also fires for flying fishing bobbers and fireworks. Canceling a bobber skips hooking and hit-point redirection, while its normal movement still collides with solid blocks. Canceling a rocket skips the impact explosion, not its normal lifetime; bobbers notify before deflection and rockets after deflection."
+migrate = "Request hook_version = 2 for named injections. To retain the earlier event family set, filter out kind minecraft:fishing_bobber and minecraft:firework_rocket in the listener."

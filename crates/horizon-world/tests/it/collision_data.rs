@@ -1,9 +1,11 @@
-use horizon_world::{
-    DATA_VERSION,
-    chunk::BlockSection,
-    collision::CachedCollisionRegistry,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        chunk::BlockSection,
+        collision::CachedCollisionRegistry,
+        registry::{BlockRegistry, BlockStateId},
+    },
 };
 
 fn fixture() -> (Tag, Tag) {
@@ -273,9 +275,12 @@ fn registry_scan_binding_requires_complete_canonical_metadata() {
 /// (`block-properties.nbt`'s `occlusion`) is checked the same way.
 #[test]
 fn streamed_tables_check_states_while_reading() {
-    use horizon_world::{
-        nbt::{self, Limits, NamedTag},
-        registry::{BlockTable, BlockTableFile},
+    use {
+        horizon_core::{
+            nbt,
+            nbt::{Limits, NamedTag},
+        },
+        horizon_world::registry::{BlockTable, BlockTableFile},
     };
     let (registry_tag, collision_tag) = fixture();
     let registry = BlockRegistry::from_nbt(&registry_tag).unwrap();

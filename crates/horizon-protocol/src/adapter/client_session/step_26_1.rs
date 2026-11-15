@@ -142,7 +142,7 @@ mod tests {
         adapter::{ServerVersion, Session},
         packets::play,
     };
-    use horizon_world::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
     use packet_ids::play::clientbound as cb;
 

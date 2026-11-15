@@ -239,25 +239,72 @@ impl StartCache {
     }
 }
 
-fn biome_set(data: &GeneratorData, value: &Value) -> Result<BTreeSet<BiomeId>, super::DecodeError> {
-    let names: Vec<&str> = match value {
-        Value::String(s) => vec![s.as_str()],
-        Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
-        _ => Vec::new(),
+/// A structure's biome holder set in any form `crate::holder_set` reads. An
+/// absent field, an unknown biome or tag names nothing, and a list may also
+/// hold tags, as this reader always allowed.
+fn biome_set(
+    lookup: &impl crate::holder_set::HolderLookup<Id = BiomeId>,
+    value: &Value,
+) -> Result<BTreeSet<BiomeId>, super::DecodeError> {
+    let resolve = |set: &Value| {
+        crate::holder_set::resolve(set, lookup)
+            .map(|ids| ids.into_iter().collect::<BTreeSet<_>>())
+            .map_err(super::DecodeError::Registry)
     };
-    let mut out = BTreeSet::new();
-    for name in names {
-        match name.strip_prefix('#') {
-            Some(tag) => {
-                for biome in data.biome_tags.get(tag).into_iter().flatten() {
-                    out.extend(data.biome_id(biome));
-                }
-            }
-            None => out.extend(data.biome_id(name)),
-        }
+    match value {
+        Value::Array(list) => list.iter().filter(|value| value.is_string()).try_fold(
+            BTreeSet::new(),
+            |mut out, set| {
+                out.extend(resolve(set)?);
+                Ok::<_, super::DecodeError>(out)
+            },
+        ),
+        set @ (Value::String(_) | Value::Object(_)) => resolve(set),
+        _ => Ok(BTreeSet::new()),
     }
-    Ok(out)
 }
+struct StructureBiomes<'a>(&'a GeneratorData);
+impl crate::holder_set::HolderLookup for StructureBiomes<'_> {
+    type Id = BiomeId;
+    fn what(&self) -> &str {
+        "biome"
+    }
+    fn entry(&self, id: &str) -> Result<Vec<BiomeId>, String> {
+        Ok(self.0.biome_id(id).into_iter().collect())
+    }
+    fn tag(&self, tag: &str) -> Result<Vec<BiomeId>, String> {
+        let members = self.0.biome_tags.get(tag).into_iter().flatten();
+        Ok(members.filter_map(|biome| self.0.biome_id(biome)).collect())
+    }
+    fn all(&self) -> Result<Vec<BiomeId>, String> {
+        Ok((0..self.0.biome_names().len() as u32)
+            .map(BiomeId)
+            .collect())
+    }
+}
+impl GeneratorData {
+    pub(super) fn structure_biome_set(
+        &self,
+        value: &Value,
+    ) -> Result<BTreeSet<BiomeId>, super::DecodeError> {
+        biome_set(&StructureBiomes(self), value)
+    }
+    pub(in crate::worldgen) fn structure_block_bindings(
+        &self,
+    ) -> Result<FeatureBlockBindings<'static>, super::DecodeError> {
+        let mut bindings = self.feature_block_bindings()?;
+        // Processors that test what a block is made of read canOcclude.
+        if let Some(blocks) = self
+            .feature_resources
+            .as_ref()
+            .and_then(|r| r.blocks.as_ref())
+        {
+            bindings = bindings.with_block_properties(&blocks.properties)?;
+        }
+        Ok(bindings)
+    }
+}
+
 impl StructureState {
     pub(super) fn new(
         data: &Arc<GeneratorData>,
@@ -267,10 +314,13 @@ impl StructureState {
         let (Some(resources), Some(raw)) = (&data.structures, &data.structure_resources) else {
             return Ok(None);
         };
-        let registry =
-            StructureRegistry::new(&raw.structures, &raw.sets, raw.pools.clone(), &|value| {
-                biome_set(data, value)
-            })?;
+        let registry = StructureRegistry::new(
+            &raw.structures,
+            &raw.sets,
+            raw.pools.clone(),
+            &|value| biome_set(&StructureBiomes(data), value),
+            super::structure::mod_types::mod_structure_types(),
+        )?;
         let possible_sets = registry
             .sets
             .iter()
@@ -286,15 +336,7 @@ impl StructureState {
         for (i, def) in registry.structures.iter().enumerate() {
             by_step[def.step].push(i);
         }
-        let mut bindings = data.feature_block_bindings()?;
-        // Processors that test what a block is made of read canOcclude.
-        if let Some(blocks) = data
-            .feature_resources
-            .as_ref()
-            .and_then(|r| r.blocks.as_ref())
-        {
-            bindings = bindings.with_block_properties(&blocks.properties)?;
-        }
+        let bindings = data.structure_block_bindings()?;
         let zone_reach = registry.zone_reach();
         Ok(Some(Self {
             zone_reach,
@@ -514,31 +556,48 @@ impl StructureState {
                     chunk,
                     references: 0,
                     pieces: Vec::new(),
-                    bounding_box: crate::worldgen::structure::BoundingBox::new(
+                    bounding_box: horizon_core::bounding_box::BoundingBox::new(
                         [x0, y0, z0],
                         [x1, y1, z1],
                     ),
+                    has_piece_beardifier: false,
                 }))
             })
             .collect();
         Arc::new(starts)
     }
-    /// A saved piece: `PoolPiece::from_saved` for the jigsaw ids,
-    /// `saved_legacy::read` for the legacy pieces that read their own tags.
-    /// `None` for any other piece or one that does not decode, which leaves
-    /// the whole start to the fallback above.
-    fn saved_piece(&self, piece: &crate::nbt::Tag, def: &StructureDef) -> Option<Piece> {
-        if saved_piece_id(piece).is_some() {
-            return PoolPiece::from_saved(&tag_json(piece), &self.resources, &self.bindings)
-                .ok()
-                .map(Piece::Pool);
+    /// A saved `minecraft:jigsaw` piece, or `None` for any other piece or one that does not decode.
+    fn saved_pool_piece(&self, piece: &horizon_core::nbt::Tag) -> Option<Piece> {
+        saved_piece_id(piece)?;
+        PoolPiece::from_saved(&tag_json(piece), &self.resources, &self.bindings)
+            .ok()
+            .map(Piece::Pool)
+    }
+    /// A saved piece, as `StructureStart.loadStaticStart` loads it: a jigsaw
+    /// piece from `PoolPiece::from_saved`, a vanilla legacy piece that reads its
+    /// own tags from `saved_legacy::read`, a mod type's piece from its
+    /// `load_piece` (the `StructurePieceType` is the loader), none otherwise.
+    /// `None` leaves the whole start to the fallback above.
+    fn saved_piece(&self, piece: &horizon_core::nbt::Tag, def: &StructureDef) -> Option<Piece> {
+        if let Some(pool) = self.saved_pool_piece(piece) {
+            return Some(pool);
         }
-        let crate::nbt::Tag::String(id) = piece.get("id")? else {
+        let horizon_core::nbt::Tag::Compound(map) = piece else {
             return None;
         };
-        let id = id.to_string_lossy();
-        let id = id.strip_prefix("minecraft:").unwrap_or(&id);
-        super::structure::saved_legacy::read(id, piece, def).map(Piece::Legacy)
+        let id = match map.get(&"id".into()) {
+            Some(horizon_core::nbt::Tag::String(s)) => s.to_string_lossy(),
+            _ => return None,
+        };
+        let vanilla = id.strip_prefix("minecraft:").unwrap_or(&id);
+        if let Some(legacy) = super::structure::saved_legacy::read(vanilla, piece, def) {
+            return Some(Piece::Legacy(legacy));
+        }
+        let types = super::structure::mod_types::mod_structure_types();
+        types
+            .get(&*id)?
+            .load_piece(self.resources.registry, map)
+            .map(Piece::Legacy)
     }
     pub(super) fn set_saved_starts(&self, source: Arc<super::generator::SavedStructureStarts>) {
         let _ = self.saved.set(source);
@@ -864,7 +923,7 @@ impl StructureState {
 
 /// The union of the pieces' boxes as `[min x, min y, min z, max x, max y, max z]`.
 fn pieces_box(pieces: &[Piece]) -> Option<[i32; 6]> {
-    let mut union: Option<crate::worldgen::structure::BoundingBox> = None;
+    let mut union: Option<horizon_core::bounding_box::BoundingBox> = None;
     for piece in pieces {
         let b = piece.bounding_box();
         match union.as_mut() {
@@ -880,12 +939,12 @@ pub(super) fn read_saved_start(
     index: usize,
     def: &StructureDef,
     chunk: ChunkPos,
-    tag: &crate::nbt::Tag,
+    tag: &horizon_core::nbt::Tag,
     seed: i64,
     resources: &StructureResources,
     bindings: &FeatureBlockBindings<'_>,
 ) -> Option<StructureStart> {
-    use crate::nbt::Tag;
+    use horizon_core::nbt::Tag;
     if !matches!(tag.get("id"), Some(Tag::String(id)) if id.to_string_lossy() == def.name) {
         return None;
     }
@@ -948,7 +1007,7 @@ pub(super) fn read_saved_start(
 /// `minecraft:bastionremnant`, `minecraft:runtime`) are read as `minecraft:jigsaw`,
 /// which is what vanilla's table maps them to. `None` for a piece of another type
 /// (its NBT is not a pool piece's) and for one with no id.
-fn saved_piece_id(piece: &crate::nbt::Tag) -> Option<&'static str> {
+fn saved_piece_id(piece: &horizon_core::nbt::Tag) -> Option<&'static str> {
     match saved_piece_name(piece)?.as_str() {
         "minecraft:jigsaw"
         | "minecraft:nvi"
@@ -960,11 +1019,11 @@ fn saved_piece_id(piece: &crate::nbt::Tag) -> Option<&'static str> {
 }
 /// `PiecesContainer.load`'s piece id: lowercased, and with `minecraft:` filled in for an id
 /// with no namespace (`Identifier.parse`).
-fn saved_piece_name(piece: &crate::nbt::Tag) -> Option<String> {
-    let crate::nbt::Tag::Compound(map) = piece else {
+fn saved_piece_name(piece: &horizon_core::nbt::Tag) -> Option<String> {
+    let horizon_core::nbt::Tag::Compound(map) = piece else {
         return None;
     };
-    let crate::nbt::Tag::String(id) = map.get(&"id".into())? else {
+    let horizon_core::nbt::Tag::String(id) = map.get(&"id".into())? else {
         return None;
     };
     let id = id.to_string_lossy().to_lowercase();
@@ -972,8 +1031,8 @@ fn saved_piece_name(piece: &crate::nbt::Tag) -> Option<String> {
 }
 /// A saved piece's tag as the JSON `PoolPiece::from_saved` reads: compounds and lists as they
 /// are, numbers as numbers.
-pub(crate) fn tag_json(tag: &crate::nbt::Tag) -> Value {
-    use crate::nbt::Tag;
+pub(crate) fn tag_json(tag: &horizon_core::nbt::Tag) -> Value {
+    use horizon_core::nbt::Tag;
     match tag {
         Tag::Byte(v) => Value::from(i64::from(*v)),
         Tag::Short(v) => Value::from(i64::from(*v)),
@@ -1000,17 +1059,58 @@ mod tests {
     use crate::worldgen::structure::stronghold::{ring_positions, ring_searches};
 
     #[test]
+    fn structure_biome_plain_lists_and_scalar_fields_keep_their_leniency() {
+        struct Biomes;
+        impl crate::holder_set::HolderLookup for Biomes {
+            type Id = BiomeId;
+            fn what(&self) -> &str {
+                "biome"
+            }
+            fn entry(&self, id: &str) -> Result<Vec<BiomeId>, String> {
+                Ok((id == "minecraft:plains")
+                    .then_some(BiomeId(0))
+                    .into_iter()
+                    .collect())
+            }
+            fn tag(&self, id: &str) -> Result<Vec<BiomeId>, String> {
+                self.entry(id)
+            }
+            fn all(&self) -> Result<Vec<BiomeId>, String> {
+                Ok(vec![BiomeId(0), BiomeId(1)])
+            }
+        }
+        assert_eq!(
+            biome_set(
+                &Biomes,
+                &serde_json::json!(["#minecraft:plains", false, 19, {}])
+            )
+            .unwrap(),
+            BTreeSet::from([BiomeId(0)])
+        );
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!(19),
+            serde_json::json!(false),
+        ] {
+            assert!(biome_set(&Biomes, &value).unwrap().is_empty());
+        }
+        assert_eq!(
+            biome_set(&Biomes, &serde_json::json!({"type":"neoforge:any"})).unwrap(),
+            BTreeSet::from([BiomeId(0), BiomeId(1)])
+        );
+    }
+
+    #[test]
     fn saved_jigsaw_round_trip_and_whole_start_fallback() {
         use crate::{
-            nbt::Tag,
             registry::BlockRegistry,
             worldgen::structure::{
-                BoundingBox, Rotation, StateTransforms,
+                Rotation, StateTransforms,
                 jigsaw::{Junction, PoolElement, Projection},
                 start::StructureKind,
             },
         };
-        use horizon_core::density::TerrainAdjustment;
+        use horizon_core::{bounding_box::BoundingBox, density::TerrainAdjustment, nbt::Tag};
         let names = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
         let registry = Box::leak(Box::new(
             BlockRegistry::from_nbt(&Tag::compound([
@@ -1141,9 +1241,9 @@ mod tests {
     #[test]
     fn an_old_saves_jigsaw_piece_ids_are_read_as_jigsaw() {
         let piece = |id: &str| {
-            crate::nbt::Tag::compound([
-                ("id", crate::nbt::Tag::String(id.into())),
-                ("PosX", crate::nbt::Tag::Int(16)),
+            horizon_core::nbt::Tag::compound([
+                ("id", horizon_core::nbt::Tag::String(id.into())),
+                ("PosX", horizon_core::nbt::Tag::Int(16)),
             ])
         };
         for id in [
@@ -1170,13 +1270,13 @@ mod tests {
         }
         // No id, or not a compound at all: nothing to read.
         assert_eq!(
-            saved_piece_id(&crate::nbt::Tag::compound([(
+            saved_piece_id(&horizon_core::nbt::Tag::compound([(
                 "PosX",
-                crate::nbt::Tag::Int(16)
+                horizon_core::nbt::Tag::Int(16)
             )])),
             None
         );
-        assert_eq!(saved_piece_id(&crate::nbt::Tag::Int(1)), None);
+        assert_eq!(saved_piece_id(&horizon_core::nbt::Tag::Int(1)), None);
     }
 
     /// The start cache keeps the first starts built for a chunk, spreads a

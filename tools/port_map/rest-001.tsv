@@ -93,8 +93,8 @@ AdvancementProgress.hasProgress	inline	crates/horizon-client/src/advancements.rs
 AdvancementProgress.grantProgress	port	crates/horizon-client/src/advancements.rs::Progress::grant	records the criterion date; false when already obtained
 AdvancementProgress.revokeProgress	port	crates/horizon-client/src/advancements.rs::Progress::revoke	removes the criterion; false when not obtained
 AdvancementProgress.isCriterionDone	port	crates/horizon-client/src/advancements.rs::Progress::has	criterion obtained
-AdvancementProgress.getPercent	port	crates/horizon-client/src/game/advancements_screen.rs::Game::adv_draw_hover	obtained over total requirement groups, drives the progress bar and icon frame
-AdvancementProgress.getProgressText	port	crates/horizon-client/src/game/advancements_screen.rs::Game::adv_draw_hover	advancements.progress text, only when there are more than one group
+AdvancementProgress.getPercent	port	crates/horizon-client/src/game/interface/advancements_screen.rs::Game::adv_draw_hover	obtained over total requirement groups, drives the progress bar and icon frame
+AdvancementProgress.getProgressText	port	crates/horizon-client/src/game/interface/advancements_screen.rs::Game::adv_draw_hover	advancements.progress text, only when there are more than one group
 AdvancementProgress.getRemainingCriteria	missing		minor: /advancement test is not implemented; cmd_advancement only grants and revokes
 AdvancementProgress.getCompletedCriteria	missing		minor: /advancement test is not implemented; cmd_advancement only grants and revokes
 AdvancementProgress.getFirstProgressDate	skip:java		used only by compareTo, which has no caller
@@ -104,12 +104,12 @@ AdvancementRequirements.count	port	crates/horizon-client/src/advancements.rs::Pr
 AdvancementRequirements.anyMatch	inline	crates/horizon-client/src/advancements.rs::Progress::done	the any() over one group
 AdvancementRequirements.validate	missing		minor: shipped advancement requirements are already valid
 AdvancementRequirements.names	skip:java		builds a name set to pre-create progress entries; Horizon creates them on grant
-AdvancementRewards.grant	port	crates/horizon-client/src/game/advancements.rs::Game::award	function reward wired through run_advancement_reward_function; existing XP/recipe/loot paths retained, loot-context gap H292 remains
+AdvancementRewards.grant	port	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::award	function reward wired through run_advancement_reward_function; existing XP/recipe/loot paths retained, loot-context gap H292 remains
 AdvancementRewards.Builder.build	skip:data		datagen builder; rewards come from advancement JSON
-AdvancementTree.remove	inline	crates/horizon-client/src/game/advancements.rs::Game::remote_advancements	gap: minor: removes the ids the server lists; children are not walked here
+AdvancementTree.remove	inline	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::remote_advancements	gap: minor: removes the ids the server lists; children are not walked here
 AdvancementTree.tryInsert	inline	crates/horizon-client/src/advancements.rs::Tree::children	the pass that inserts an advancement once its parent is in
 AdvancementTree.get	port	crates/horizon-client/src/advancements.rs::Tree::get	lookup by id
-AdvancementType.createAnnouncement	inline	crates/horizon-client/src/game/advancements.rs::Game::award	the chat line is built in award from the frame's key
+AdvancementType.createAnnouncement	inline	crates/horizon-client/src/game/interface/advancements/mod.rs::Game::award	the chat line is built in award from the frame's key
 DisplayInfo.serializeToNetwork	port	crates/horizon-client/src/lan/advancements.rs::ServerAdvancements::write_advancement	writes title, description, icon, frame, flags and background
 DisplayInfo.fromNetwork	port	crates/horizon-protocol/src/packets/play/advancements.rs::UpdateAdvancements::read	reads the display and its flags
 TreeNodePosition.addChild	port	crates/horizon-client/src/advancements.rs::Layout::add_child	adds visible children in order

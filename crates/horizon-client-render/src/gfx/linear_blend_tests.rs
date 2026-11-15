@@ -215,6 +215,7 @@ fn assert_near(got: [f32; 4], want: [f32; 3], what: &str) {
 // (0.4606, 0.2200, 0.1965), the pack's (0.4590, 0.1467, 0.4132).
 #[test]
 fn translucent_draws_blend_in_the_light_the_frame_holds() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = gpu() else {
         eprintln!("linear blend GPU unavailable");
         return;
@@ -238,6 +239,7 @@ fn translucent_draws_blend_in_the_light_the_frame_holds() {
 // the clear colour, gamma (0.8, 0.2, 0.5), to (0.6121, 0.0290, 0.2176).
 #[test]
 fn stages_read_the_same_light_under_either_blend() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = gpu() else {
         eprintln!("linear blend GPU unavailable");
         return;
@@ -270,6 +272,7 @@ fn stages_read_the_same_light_under_either_blend() {
 // 0.5 a mix in light gives; under "gamma" the result is already gamma, 0.5 * 0.8 + 0.5 * 0.2.
 #[test]
 fn a_fading_section_mixes_toward_the_fog_in_gamma() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = gpu() else {
         eprintln!("linear blend GPU unavailable");
         return;

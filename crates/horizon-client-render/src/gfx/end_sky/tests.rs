@@ -6,7 +6,7 @@ use glam::Mat4;
 #[test]
 fn geometry_matches_pre_residency_vertex_snapshots() {
     use sha2::{Digest, Sha256};
-    // Captured from game/end.rs at 34c3c1cf for full, tiled and non-binary UVs.
+    // Captured from game/world/end.rs at 34c3c1cf for full, tiled and non-binary UVs.
     // Quantize positions only, avoiding platform sin/cos rounding differences;
     // quad order, UVs, tint, material and light retain their exact byte values.
     for (uv, expected) in [
@@ -45,6 +45,7 @@ fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
 
 #[test]
 fn resident_buffer_survives_frames_and_refreshes_with_the_atlas() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, _)) = device() else {
         eprintln!("no GPU adapter: skipped");
         return;
@@ -85,6 +86,7 @@ fn resident_buffer_survives_frames_and_refreshes_with_the_atlas() {
 /// vertex stream with a resident sky draw followed by a separate flash draw.
 #[test]
 fn separate_draws_match_combined_celestial_pixels() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some((device, queue)) = device() else {
         eprintln!("no GPU adapter: skipped");
         return;

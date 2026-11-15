@@ -5,10 +5,10 @@ use crate::{
     font::Font,
     hud::HudVertex,
     hud_layout::{GuiDraw, PoseOp, fill},
-    java_text,
     text::Text,
 };
 use horizon_client_render::gfx::pack_timing::{Counters, DetailSupport, PartsMode, PassCounters};
+use horizon_core::java_number;
 use std::time::{Duration, Instant};
 
 /// `extractLines`'s background: ARGB 0x90505050.
@@ -252,9 +252,9 @@ pub fn position(
     vec![
         format!(
             "XYZ: {} / {} / {}",
-            java_text::format_fixed(pos[0], 3),
-            java_text::format_fixed(pos[1], 5),
-            java_text::format_fixed(pos[2], 3),
+            java_number::format_fixed(pos[0], 3),
+            java_number::format_fixed(pos[1], 5),
+            java_number::format_fixed(pos[2], 3),
         ),
         format!("Block: {} {} {}", block[0], block[1], block[2]),
         format!(
@@ -266,8 +266,8 @@ pub fn position(
         ),
         format!(
             "Facing: {direction} ({towards}) ({} / {})",
-            java_text::format_fixed(wrap_degrees(yaw) as f64, 1),
-            java_text::format_fixed(wrap_degrees(pitch) as f64, 1),
+            java_number::format_fixed(wrap_degrees(yaw) as f64, 1),
+            java_number::format_fixed(wrap_degrees(pitch) as f64, 1),
         ),
         format!("{dimension} FC: {forced}"),
         format!(
@@ -484,8 +484,8 @@ pub fn local_difficulty_line(effective: f32) -> String {
     };
     format!(
         "Local Difficulty: {} // {}",
-        java_text::format_fixed(effective as f64, 2),
-        java_text::format_fixed(special as f64, 2),
+        java_number::format_fixed(effective as f64, 2),
+        java_number::format_fixed(special as f64, 2),
     )
 }
 

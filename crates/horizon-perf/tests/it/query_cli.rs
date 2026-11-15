@@ -20,6 +20,7 @@ fn run(args: &[&str]) -> (Option<i32>, String, String) {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_query_prints_one_json_line_and_exits_zero() {
     let dir = TempDir::new("qcli");
     let file = save(&dir, "run.hzperf", &capture(&Names::new(&NAMES)));
@@ -33,6 +34,7 @@ fn a_query_prints_one_json_line_and_exits_zero() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_failed_query_still_prints_its_error_as_json_and_exits_one() {
     let dir = TempDir::new("qcli-fail");
     let file = save(&dir, "run.hzperf", &capture(&Names::new(&NAMES)));
@@ -44,6 +46,7 @@ fn a_failed_query_still_prints_its_error_as_json_and_exits_one() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn without_a_file_a_query_reads_the_latest_capture_of_the_directory() {
     let dir = TempDir::new("qcli-latest");
     save(
@@ -58,6 +61,7 @@ fn without_a_file_a_query_reads_the_latest_capture_of_the_directory() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn bad_filters_are_usage_errors() {
     for args in [
         vec!["query"],
@@ -74,6 +78,7 @@ fn bad_filters_are_usage_errors() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn summary_takes_a_thread_and_the_slow_switch() {
     let dir = TempDir::new("scli");
     let file = save(&dir, "run.hzperf", &capture(&Names::new(&NAMES)));

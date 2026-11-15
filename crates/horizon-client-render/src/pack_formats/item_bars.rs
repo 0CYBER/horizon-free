@@ -1,5 +1,7 @@
 //! Polytone's item modifiers' durability bar colours, on the engine's
 //! [`crate::pack_palette::ItemBars`].
+use crate::resource_source::ResourceSource;
+#[cfg(test)]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -28,33 +30,20 @@ impl crate::pack_palette::ItemBars for Bars {
 /// Reads the packs' item modifiers' durability bar colours under a pack overlay root: an
 /// `<item>_bar.png` alone, or a json whose `bar_color` is `damage` with its `<name>_bar.png` (or
 /// `<name>.png`) beside it. Colormap ids and inline colormaps aren't read. `None` without any.
-pub fn read(root: &Path) -> Option<Arc<dyn crate::pack_palette::ItemBars>> {
-    let mut bars = Vec::new();
-    for namespace in std::fs::read_dir(root.join("assets"))
+pub fn read(root: &ResourceSource) -> Option<Arc<dyn crate::pack_palette::ItemBars>> {
+    let bars: Vec<_> = root
+        .list_under("assets", &["polytone/item_modifiers"])
         .into_iter()
-        .flatten()
-        .flatten()
-    {
-        let base = namespace.path().join("polytone/item_modifiers");
-        let mut stack = vec![base.clone()];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if let Some(bar) = item_bar(root, &base, &path) {
-                    bars.push(bar);
-                }
-            }
-        }
-    }
+        .filter_map(|path| item_bar(root, &path))
+        .collect();
     (!bars.is_empty()).then(|| Arc::new(Bars(bars)) as _)
 }
 
-fn item_bar(root: &Path, base: &Path, path: &Path) -> Option<DamageBar> {
-    let name = path.file_name()?.to_str()?;
-    let row = |png: &Path| {
-        let (width, _, rgba) = crate::sprites::read_rgba(png).ok()?;
+fn item_bar(root: &ResourceSource, path: &str) -> Option<DamageBar> {
+    let (parent, name) = path.rsplit_once('/')?;
+    let row = |png: &str| {
+        let bytes = root.read(png).ok()?;
+        let (width, _, rgba) = crate::hud::decode_image_bytes(&bytes).ok()?;
         let row: Vec<u32> = rgba[..width as usize * 4]
             .as_chunks::<4>()
             .0
@@ -65,12 +54,15 @@ fn item_bar(root: &Path, base: &Path, path: &Path) -> Option<DamageBar> {
     };
     if let Some(stem) = name.strip_suffix("_bar.png") {
         // A json of the same name owns its png.
-        if path.with_file_name(format!("{stem}.json")).exists() {
+        if root.read(&format!("{parent}/{stem}.json")).is_ok() {
             return None;
         }
-        let relative = path.parent()?.strip_prefix(base).ok()?.join(stem);
-        let namespace = base.parent()?.parent()?.file_name()?.to_str()?;
-        let id = format!("{namespace}:{}", relative.to_str()?.replace('\\', "/"));
+        let namespace = path.strip_prefix("assets/")?.split('/').next()?;
+        let relative = path
+            .split_once("/polytone/item_modifiers/")?
+            .1
+            .strip_suffix("_bar.png")?;
+        let id = format!("{namespace}:{relative}");
         let targets = horizon_polytone::Targets::parse(None, Some(&id)).ok()?;
         return Some(DamageBar {
             targets,
@@ -78,16 +70,15 @@ fn item_bar(root: &Path, base: &Path, path: &Path) -> Option<DamageBar> {
         });
     }
     let stem = name.strip_suffix(".json")?;
-    let json: serde_json::Value = horizon_world::json_file::read(path).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&root.read(path).ok()?).ok()?;
     if json.get("bar_color")?.as_str()? != "damage" {
         return None;
     }
     let png = [format!("{stem}_bar.png"), format!("{stem}.png")]
         .into_iter()
-        .map(|png| path.with_file_name(png))
-        .find(|png| png.exists())?;
-    let relative = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
-    let implicit = horizon_polytone::implicit_id(&relative, "item_modifiers");
+        .map(|png| format!("{parent}/{png}"))
+        .find(|png| root.read(png).is_ok())?;
+    let implicit = horizon_polytone::implicit_id(path, "item_modifiers");
     let targets =
         horizon_polytone::Targets::parse(json.get("targets"), implicit.as_deref()).ok()?;
     Some(DamageBar {
@@ -128,7 +119,7 @@ mod tests {
         )
         .unwrap();
         png_row(&modifiers.join("tools_bar.png"), &[[1, 2, 3], [4, 5, 6]]);
-        let bars = read(&dir).unwrap();
+        let bars = read(&ResourceSource::directory(dir.clone())).unwrap();
         // The real mod: damage 200 of 1561 shows the first pixel, 1400 the last.
         assert_eq!(
             bars.color("minecraft:diamond_pickaxe", 200.0 / 1561.0),
@@ -140,7 +131,7 @@ mod tests {
         );
         assert_eq!(bars.color("minecraft:iron_axe", 0.9), Some(0x040506));
         assert_eq!(bars.color("minecraft:diamond_shovel", 0.5), None);
-        assert!(read(&dir.join("none")).is_none());
+        assert!(read(&ResourceSource::directory(dir.join("none"))).is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

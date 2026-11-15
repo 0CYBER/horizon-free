@@ -25,9 +25,9 @@ impl<T> WeightedList<T> {
             if *weight < 0 {
                 return Err(DecodeError::Field("negative weight"));
             }
-            total = total
-                .checked_add(*weight)
-                .ok_or(DecodeError::Field("total weight"))?;
+            total = total.checked_add(*weight).ok_or(DecodeError::Field(
+                "total weight exceeds vanilla maximum 2147483647",
+            ))?;
             cumulative.push(total);
         }
         if total == 0 && !allow_empty {
@@ -101,5 +101,48 @@ impl<T> OptionalWeightedList<T> {
         decode: impl FnMut(&RawValue) -> Result<T, DecodeError>,
     ) -> Result<Self, DecodeError> {
         WeightedList::decode_inner(raw, decode, true).map(Self)
+    }
+}
+
+/// Keep vanilla's bounded-int draw exactly; oversized extension pools consume
+/// one nextLong and reduce its unsigned bits modulo the positive total.
+pub(crate) fn draw(total: i64, random: &mut impl RandomSource) -> Option<i64> {
+    if total <= 0 {
+        None
+    } else if total <= i64::from(i32::MAX) {
+        random.next_int_bound(total as i32).ok().map(i64::from)
+    } else {
+        Some(((random.next_long() as u64) % total as u64) as i64)
+    }
+}
+
+#[cfg(test)]
+mod wide_weight_tests {
+    use super::*;
+    use horizon_core::random::LegacyRandom;
+
+    #[test]
+    fn wide_weights_draw_and_preserve_small_rng() {
+        for seed in -20..20 {
+            for total in [1, 2, 7, 100, i32::MAX] {
+                let mut old = LegacyRandom::new(seed);
+                let mut new = LegacyRandom::new(seed);
+                assert_eq!(
+                    draw(i64::from(total), &mut new),
+                    Some(i64::from(old.next_int_bound(total).unwrap()))
+                );
+                assert_eq!(new.next_long(), old.next_long());
+            }
+            let total = 3 * i64::from(i32::MAX);
+            let mut rng = LegacyRandom::new(seed);
+            assert!((0..total).contains(&draw(total, &mut rng).unwrap()));
+        }
+    }
+
+    #[test]
+    fn wide_weights_decode_refuses_vanilla_overflow() {
+        let raw = RawValue::from_string(format!("[{{\"data\":0,\"weight\":{0}}},{{\"data\":1,\"weight\":{0}}},{{\"data\":2,\"weight\":{0}}}]", i32::MAX)).unwrap();
+        let error = WeightedList::decode(&raw, |_| Ok(())).unwrap_err();
+        assert!(error.to_string().contains("vanilla maximum"));
     }
 }

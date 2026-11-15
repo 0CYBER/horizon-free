@@ -49,7 +49,7 @@ F3 shows three vanilla memory lines on Linux and Windows, read every half second
 `alloc-count` makes the game's allocator count blocks. Each thread owns a slot of four counters (allocations, bytes allocated, frees, bytes freed) that only it writes, so counting is two loads and stores per allocation and per free, with no atomic read-modify-write and no shared cache line. A `realloc` counts as a free of the old size and an allocation of the new one, so a growing `Vec` shows as churn. Slots are never reused: a finished thread's counts stay in the total. Beyond 1023 threads the rest share slot 0.
 
 ```sh
-cargo build --profile fast -p horizon-client --features alloc-count
+cargo build --profile fast -p horizon-game --features alloc-count
 ```
 
 Without the feature `horizon_threads::GameAllocator` is plain mimalloc: nothing is counted and nothing is added to the allocation path. `alloc-census` includes `alloc-count`. With `system-allocator` nothing counts, and `alloc` is `null` as in a build without the feature.
@@ -86,7 +86,7 @@ On the game, three alternating runs of `--benchmark standard` with and without t
 Build it and read it:
 
 ```sh
-cargo build --profile fast -p horizon-client --features alloc-census
+cargo build --profile fast -p horizon-game --features alloc-census
 target/fast/horizon-client --resources .local/horizon-client/26.3 --world T &
 target/fast/horizon-ctl memory | jq '.heap_by_tag_mb'
 ```
@@ -143,6 +143,6 @@ See [Graphics](graphics.md) for how the spans are used to chase a slow frame.
 `--features system-allocator` sends Rust's allocations to the system heap instead of mimalloc, so profilers that replace `malloc` (heaptrack, valgrind's massif) see them. Use it on small probes only: the whole game is far too large for them (heaptrack needed more than 7 GB to follow it), and the system heap is slower than mimalloc. `system-allocator` wins over `alloc-census` when both are given.
 
 ```sh
-cargo build --profile fast -p horizon-client --features system-allocator
+cargo build --profile fast -p horizon-game --features system-allocator
 heaptrack target/fast/horizon-client --resources .local/horizon-client/26.3 --world T
 ```

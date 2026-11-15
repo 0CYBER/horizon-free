@@ -12,7 +12,8 @@
 //! use horizon_client_render::hud_kit::hint::{self, HintRow};
 //! use horizon_client_render::pad_glyph::{Glyph, Glyphs};
 //!
-//! let atlas = HudAtlas::build(std::path::Path::new("/nonexistent")).unwrap();
+//! let source = horizon_client_render::resource_source::ResourceSource::directory("/nonexistent".into());
+//! let atlas = HudAtlas::build(&source).unwrap();
 //! let back = Glyph::menu(MenuJob::Back, Glyphs::default());
 //! let row = HintRow::new([back], "Leave");
 //! // Its glyph, the gap, then the caption.
@@ -208,7 +209,10 @@ mod tests {
     use crate::pad_glyph::Glyphs;
 
     fn atlas() -> HudAtlas {
-        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+        HudAtlas::build(&crate::resource_source::ResourceSource::directory(
+            "/nonexistent/horizon-test-assets".into(),
+        ))
+        .unwrap()
     }
 
     fn glyph(job: MenuJob) -> Glyph {
@@ -216,7 +220,7 @@ mod tests {
     }
 
     fn batch() -> HudBatch {
-        HudBatch::new([400, 300])
+        HudBatch::scratch([400, 300])
     }
 
     /// The vertices' positions and colours: what the frame shows.

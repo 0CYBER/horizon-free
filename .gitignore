@@ -30,8 +30,16 @@
 /servers.dat
 /screenshots/
 /.horizon-cache/
+# The same cache real-Game tests write, from the crate's own directory.
+/crates/horizon-client/.horizon-cache/
+/crates/horizon-client/horizon-player.txt
 /crash-reports/
 /debug/
 
 # Release-only compiled original exporter bundle.
 /exporters/
+# A local build's Microsoft client ID (launcher/build.rs): never committed.
+/launcher/.msa-client-id
+
+# Visual Studio editor state.
+.vs/

@@ -1,0 +1,63 @@
+#![allow(dead_code, unused_variables, non_snake_case)]
+#[derive(Clone, Copy, Default)]
+struct Vec3 { x: f64, y: f64, z: f64 }
+impl Vec3 { fn new(x: f64, y: f64, z: f64) -> Self { Self { x, y, z } } }
+#[derive(PartialEq)]
+enum Species { SulfurCube, Ordinary }
+struct Attributes { knockback_resistance: f64 }
+struct Random;
+impl Random { fn next_double(&self) -> f64 { panic!("nonzero fixture direction must not draw randomness") } }
+struct Mob {
+    gear_knockback_resistance: Option<f64>, attrs: Attributes,
+    needs_sync: bool, random: Random, velocity: Vec3, on_ground: bool,
+}
+impl Mob {
+    fn species(&self) -> Species { Species::Ordinary }
+    fn new() -> Self { Self { gear_knockback_resistance: None, attrs: Attributes { knockback_resistance: 0.0 }, needs_sync: false, random: Random, velocity: Vec3::default(), on_ground: true } }
+}
+struct Damage { attacker: Option<()>, from: Option<[f64; 3]> }
+pub struct DamageLevel<'a> { heard: &'a mut usize, scale: f64, cancel: bool }
+impl DamageLevel<'_> {
+    fn knockback_canceled(&mut self, _: health::Hurting<'_>, knock: &mut health::Knock) -> bool { *self.heard += 1; knock.strength *= self.scale; self.cancel }
+    fn through_short_knockback<R>(&mut self, push: impl FnOnce(&mut Self) -> R) -> R { push(self) }
+}
+mod mod_api { #[derive(Clone, Copy)] pub enum KnockbackEntry { Short, Full } }
+mod health {
+    pub struct Knock { pub strength: f64, pub x: f64, pub z: f64 }
+    pub enum Hurting<'a> { Mob(&'a super::Mob, &'a super::Damage), Player(i32, super::HurtSource<'a>) }
+    pub use super::DamageLevel;
+}
+mod sulfur_cube {
+    pub fn has_body(_: &super::Mob) -> bool { false }
+    pub fn knockback(_: &mut super::Mob, _: (f64, f64), _: Option<[f64; 3]>, _: f32, _: Option<f64>) -> bool { panic!("ordinary mob") }
+}
+extern crate self as horizon_client;
+use health::{Knock, Hurting};
+#[derive(Clone, Copy)]
+struct HurtSource<'a>(&'a str);
+struct Attack { attacker: i32 }
+enum Who { Mob(u32) }
+struct Ground { on_ground: bool }
+mod motion {
+    use super::*;
+    pub struct PlayerMotion { pub velocity: Vec3, pub ground: Ground, pub entity_id: i32 }
+    impl PlayerMotion { pub fn attribute(&self, _: &str) -> Option<f64> { Some(0.0) } }
+}
+struct Game<'a> { player: Option<motion::PlayerMotion>, level: DamageLevel<'a> }
+impl Game<'_> {
+    fn player_hurt_by(&self) -> Option<(Who, ())> { None }
+    fn attack_of(&self, _: i32) -> Attack { Attack { attacker: 0 } }
+    fn legacy_rules(&self) -> bool { false }
+}
+impl DamageLevel<'_> { fn random(&mut self) -> Random { Random } }
+mod legacy_combat {
+    pub fn resists(_: f64, _: f64) -> bool { panic!("modern fixture") }
+    pub fn knockback(_: [f64; 3], _: f64, _: (f64, f64)) -> [f64; 3] { panic!("modern fixture") }
+}
+#[macro_export]
+macro_rules! damage_level_of { ($game:ident, $attack:ident) => { &mut $game.level }; }
+mod game { pub mod entity { pub(crate) use crate::damage_level_of; } }
+mod creaking {
+    pub fn is_creaking(_: &super::Mob) -> bool { false }
+    pub fn can_move(_: &super::Mob) -> bool { true }
+}

@@ -1,3 +1,4 @@
+import io
 import json
 import os
 from pathlib import Path
@@ -6,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from tools import check_addresses
+from tools import check_addresses, merge_base
 
 
 def strings(source):
@@ -98,6 +99,120 @@ class CheckTests(unittest.TestCase):
         config = dict(CONFIG, allowed=moved["allowed"])
         found = {("crates/horizon-telemetry/src/upload.rs", "telemetry.playhorizon.dev")}
         self.assertEqual(check_addresses.check(config, found, {"allowed": CONFIG["allowed"]}), ([], []))
+
+
+class UpstreamRestorationTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Fixture")
+        self.git("config", "user.email", "fixture@example.invalid")
+        (self.root / "tools").mkdir()
+        (self.root / "tools/addresses.json").write_text('{"allowed": []}')
+        self.git("add", "tools")
+        self.git("commit", "-q", "-m", "base")
+        self.base = self.git("rev-parse", "HEAD").strip()
+        self.row = "crates/service/src/lib.rs telemetry.playhorizon.dev"
+        self.git("checkout", "-q", "-b", "upstream")
+        (self.root / "tools/addresses.json").write_text(json.dumps({"allowed": [self.row]}))
+        self.git("commit", "-q", "-am", "upstream address")
+        remote = self.root / "remote.git"
+        self.git("init", "-q", "--bare", str(remote))
+        self.git("push", "-q", str(remote), "HEAD:refs/heads/main")
+        self.git("checkout", "-q", "-b", "work", self.base)
+        (self.root / "fork").write_text("fork")
+        self.git("add", "fork")
+        self.git("commit", "-q", "-m", "fork")
+        self.git("merge", "-q", "--no-edit", "upstream")
+        for patch in (mock.patch.object(check_addresses, "ROOT", self.root),
+                      mock.patch.object(merge_base, "ROOT", self.root),
+                      mock.patch.dict(os.environ, {"HORIZON_UPSTREAM_URL": str(remote)})):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def git(self, *args):
+        return subprocess.run(["git", *args], cwd=self.root, check=True,
+                              capture_output=True, text=True).stdout
+
+    def problems(self, row):
+        upstream, errors = check_addresses.restored_upstream_rows(self.base)
+        self.assertEqual(errors, [])
+        found = {tuple(row.split(" ", 1))}
+        return check_addresses.check({"allowed": [row]}, found, {"allowed": []}, upstream)[0]
+
+    def test_verbatim_upstream_row_with_verified_sync_passes(self):
+        self.assertEqual(self.problems(self.row), [])
+
+    def test_fork_only_row_fails(self):
+        self.assertTrue(self.problems("crates/fork/src/lib.rs fork.playhorizon.dev"))
+
+    def test_one_character_change_to_upstream_row_fails(self):
+        self.assertTrue(self.problems(self.row.replace("service/", "service2/")))
+
+    def test_forged_sync_provenance_cannot_restore_rows(self):
+        self.git("reset", "-q", "--hard", "HEAD^")
+        self.git("checkout", "-q", "-b", "forgery", self.base)
+        (self.root / "tools/addresses.json").write_text(json.dumps({"allowed": [self.row]}))
+        self.git("commit", "-q", "-am", "forged upstream address")
+        self.git("checkout", "-q", "work")
+        self.git("merge", "-q", "--no-edit", "forgery")
+        rows, errors = check_addresses.restored_upstream_rows(self.base)
+        self.assertEqual(rows, set())
+        self.assertEqual(errors, [])
+
+    def test_verbatim_row_without_a_merge_of_upstream_fails(self):
+        self.git("reset", "-q", "--hard", "HEAD^")
+        self.assertTrue(self.problems(self.row))
+
+
+class PullRequestMergeTests(unittest.TestCase):
+    def test_a_pull_request_merge_is_checked_against_main_as_merged(self):
+        """main allowed a new address after the branch left it: a pull request merged into that main didn't add it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t.invalid",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t.invalid")
+
+            def run(*args):
+                return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, env=env,
+                                      text=True).stdout.strip()
+
+            def config(allowed):
+                return json.dumps({"homes": [], "vanilla": {}, "not_addresses": {}, "allowed": allowed})
+
+            run("init", "-q", "-b", "main")
+            (root / "tools").mkdir()
+            (root / "tools/addresses.json").write_text(config([]))
+            (root / "tools/layers.json").write_text('{"crates": {}}')
+            (root / "crates/a/src").mkdir(parents=True)
+            (root / "crates/a/src/lib.rs").write_text("pub fn a() {}\n")
+            run("add", ".")
+            run("commit", "-q", "-m", "base")
+            base = run("rev-parse", "HEAD")
+            run("checkout", "-q", "-b", "work")
+            (root / "crates/a/src/lib.rs").write_text("pub fn a() -> u8 { 1 }\n")
+            run("commit", "-q", "-am", "unrelated change")
+            run("checkout", "-q", "main")
+            (root / "crates/x/src").mkdir(parents=True)
+            (root / "crates/x/src/lib.rs").write_text('pub const URL: &str = "https://relay.playhorizon.dev";\n')
+            (root / "tools/addresses.json").write_text(config(["crates/x/src/lib.rs relay.playhorizon.dev"]))
+            run("add", ".")
+            run("commit", "-q", "-m", "main allows an address")
+            run("checkout", "-q", "--detach", "main")
+            run("merge", "-q", "--no-ff", "-m", "merge work", "work")
+            fetch = mock.Mock(return_value=["no network"])
+            with mock.patch.object(check_addresses, "ROOT", root), mock.patch.object(merge_base, "ROOT", root), \
+                    mock.patch.object(merge_base, "fetch_upstream_main", fetch), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                self.assertEqual(check_addresses.main(["--base", base, "--pull-request-merge"]), 0)
+                fetch.assert_not_called()  # a merge and no violation never reaches the network
+                # Against the branch's old base, main's new entry was charged to the pull request, and only that
+                # violation looks for an upstream inventory that could excuse it.
+                self.assertEqual(check_addresses.main(["--base", base]), 1)
+                fetch.assert_called_once()
+            self.assertIn("relay.playhorizon.dev", out.getvalue())
 
 
 class BaseConfigTests(unittest.TestCase):

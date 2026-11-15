@@ -31,7 +31,7 @@ pub struct Entry {
     pub removed: bool,
     pub local: bool,
 }
-/// What the screen shows (game/social.rs fills it).
+/// What the screen shows (game/network/social.rs fills it).
 #[derive(Clone, Debug, Default)]
 pub struct SocialView {
     pub page: Page,
@@ -288,20 +288,10 @@ impl TooltipDelay {
         }
     }
 }
-pub fn draw(
-    batch: &mut HudBatch,
-    atlas: &HudAtlas,
-    cursor: (f32, f32),
-    view: &SocialView,
-    search: &mut ui::EditBox,
-    tooltip: &mut TooltipDelay,
-    in_world: bool,
-) {
+/// `SocialInteractionsScreen.extractBackground`: the menu, panel and search icon.
+pub fn draw_background(batch: &mut HudBatch, atlas: &HudAtlas, in_world: bool) {
     let (w, h) = (batch.width, batch.height);
     ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
-    let title = Text::translate(TITLE, &[]);
-    let tw = atlas.font.width_text(&title);
-    batch.text_styled(atlas, &title, ((w - tw) / 2.0).floor(), 15.0, WHITE, true);
     // `extractBackground`: the panel and the search icon.
     let mx = margin_x(w) + 3.0;
     ui::blit_sprite(
@@ -323,6 +313,21 @@ pub fn draw(
         12.0,
         WHITE,
     );
+}
+
+/// Draw the widgets and return the delayed tooltip for the screen's overlay pass.
+pub fn draw_contents(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    cursor: (f32, f32),
+    view: &SocialView,
+    search: &mut ui::EditBox,
+    tooltip: &mut TooltipDelay,
+) -> Option<Text> {
+    let (w, h) = (batch.width, batch.height);
+    let title = Text::translate(TITLE, &[]);
+    let tw = atlas.font.width_text(&title);
+    batch.text_styled(atlas, &title, ((w - tw) / 2.0).floor(), 15.0, WHITE, true);
     batch.text_styled(
         atlas,
         &view.server_label,
@@ -508,9 +513,9 @@ pub fn draw(
             );
         }
     }
-    if let Some(tip) = tooltip.shown(tip_at((w, h), cursor, view), Instant::now()) {
-        ui::tooltip(batch, atlas, &[tip.text()], cursor);
-    }
+    tooltip
+        .shown(tip_at((w, h), cursor, view), Instant::now())
+        .map(Tip::text)
 }
 
 #[cfg(test)]

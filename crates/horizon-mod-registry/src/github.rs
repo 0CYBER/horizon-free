@@ -3,7 +3,7 @@
 //! alone, an entry, the `staging` release, a branch, a file, a pull request.
 //! Blocking (ureq): called from tokio's blocking pool.
 use base64::{Engine, engine::general_purpose::STANDARD};
-use horizon_mods::index::{Revoked, registry::Entry};
+use horizon_mod_package::index::{Revoked, registry::Entry};
 use serde_json::{Value, json};
 use std::{path::Path, time::Duration};
 

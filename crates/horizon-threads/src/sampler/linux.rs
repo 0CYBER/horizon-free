@@ -93,6 +93,39 @@ pub fn thread_cpu_ns() -> u64 {
     ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
 }
 
+// Only a dedicated, unregistered calibration thread sets this slot. Reuse the
+// sampler's once-installed handler; never swap a process-global signal handler.
+#[cfg(any(test, feature = "sampling-test-support"))]
+thread_local! {
+    static CALIBRATION: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(any(test, feature = "sampling-test-support"))]
+pub(super) fn measure_cpu_hz() -> io::Result<f64> {
+    install_handler()?;
+    let target = Target::current().ok_or(io::ErrorKind::Unsupported)?;
+    CALIBRATION.with(|count| count.set(Some(0)));
+    let timer = arm(&target, 1000)?;
+    let started = thread_cpu_ns();
+    let mut value = 1u64;
+    // CPU work, not a sleep/retry: measure deliveries over actual thread CPU time.
+    while thread_cpu_ns() - started < 300_000_000 {
+        for _ in 0..1024 {
+            value = std::hint::black_box(value.wrapping_mul(6364136223846793005).wrapping_add(1));
+        }
+    }
+    let elapsed = thread_cpu_ns() - started;
+    disarm(timer);
+    let signals = CALIBRATION.with(|count| count.replace(None).unwrap());
+    std::hint::black_box(value);
+    if signals == 0 || elapsed == 0 {
+        return Err(io::Error::other(
+            "CPU timer calibration delivered no signals",
+        ));
+    }
+    Ok(signals as f64 * 1_000_000_000.0 / elapsed as f64)
+}
+
 #[cfg(target_arch = "x86_64")]
 fn registers(uc: &libc::ucontext_t) -> super::Regs {
     let g = &uc.uc_mcontext.gregs;
@@ -119,6 +152,21 @@ fn registers(uc: &libc::ucontext_t) -> super::Regs {
 extern "C" fn handler(signal: libc::c_int, _: *mut libc::siginfo_t, uc: *mut libc::c_void) {
     // SAFETY: errno is thread-local; saving it keeps the interrupted code's value (async-signal-safe practice).
     let errno = unsafe { *libc::__errno_location() };
+    #[cfg(any(test, feature = "sampling-test-support"))]
+    if signal == libc::SIGPROF
+        && CALIBRATION.with(|count| {
+            if let Some(n) = count.get() {
+                count.set(Some(n + 1));
+                true
+            } else {
+                false
+            }
+        })
+    {
+        // SAFETY: restore this thread's errno before returning to interrupted work.
+        unsafe { *libc::__errno_location() = errno };
+        return;
+    }
     // SAFETY: the kernel passes a valid ucontext_t to an SA_SIGINFO handler.
     let regs = registers(unsafe { &*(uc as *const libc::ucontext_t) });
     super::on_sample(regs, signal != libc::SIGPROF);

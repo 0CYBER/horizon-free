@@ -17,9 +17,13 @@ fn kind(fields: Value) -> StructureKind {
         structure[key] = value.clone();
     }
     let structures = BTreeMap::from([("x:test".to_owned(), structure.to_string())]);
-    let registry = StructureRegistry::new(&structures, &BTreeMap::new(), BTreeMap::new(), &|_| {
-        Ok(BTreeSet::new())
-    })
+    let registry = StructureRegistry::new(
+        &structures,
+        &BTreeMap::new(),
+        BTreeMap::new(),
+        &|_| Ok(BTreeSet::new()),
+        &horizon_world::worldgen::structure::mod_types::ModStructureTypes::new(),
+    )
     .expect("the structure decodes");
     registry.structures.into_iter().next().unwrap().kind
 }

@@ -123,9 +123,6 @@ impl Launcher {
                     if result.is_ok() {
                         self.github.text.set(String::new());
                         self.github.newer.clear();
-                        // The review above was the trust notice; the Mods page offers Build.
-                        self.settings.native_mods_noticed = true;
-                        self.save_settings();
                     }
                     self.instance_mods_changed();
                     self.github.message = Some(result);
@@ -164,7 +161,11 @@ impl Launcher {
     }
 
     /// Downloads and checks what the player agreed to; installs it unless there is a choice.
-    fn github_install(&mut self, found: Resolved, only: Option<String>) {
+    pub(super) fn github_install(&mut self, found: Resolved, only: Option<String>) {
+        if self.settings.native_mods_allowed_at.is_none() {
+            self.pending_consent = Some(PendingConsent::Github(found, only));
+            return;
+        }
         self.github.stage =
             Stage::Working(trf("Downloading {source}…", &[("source", &found.label())]));
         let tx = self.github.tx.clone();
@@ -298,16 +299,12 @@ impl Launcher {
     /// The warning, the exact source, and the only way forward: saying they trust it.
     fn github_review(&self, found: &Resolved, only: Option<String>, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let what = match (&found.asset, &found.content_only) {
-            (Some(asset), _) => trf(
+        let what = match &found.asset {
+            Some(asset) => trf(
                 "The release file {file} ({source}).",
                 &[("file", &asset.name), ("source", &found.label())],
             ),
-            (None, Some(file)) => trf(
-                "The source of {source}. Its release ships {file}, a content mod: installing those from GitHub is not supported yet.",
-                &[("source", &found.label()), ("file", file)],
-            ),
-            (None, None) => trf(
+            None => trf(
                 "The source at commit {commit}.",
                 &[("commit", &found.commit)],
             ),
@@ -397,7 +394,7 @@ impl Launcher {
     }
 
     /// GitHub-specific actions, shared by both installed-mod lists.
-    fn github_actions(&self, origin: &Origin, busy: bool, cx: &Context<Self>) -> Div {
+    pub(super) fn github_actions(&self, origin: &Origin, busy: bool, cx: &Context<Self>) -> Div {
         let t = self.theme;
         let id = origin.id.clone();
         let mut right = div().flex().flex_wrap().items_center().gap(px(8.));
@@ -469,26 +466,55 @@ impl Launcher {
         let home = self.mods.home();
         let on = horizon_launcher::browser::java::is_enabled(&home, &row.id);
         let id = row.id.clone();
-        right = right.child(
-            switch(format!("native-switch-{id}"), on, &t).on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
-                    let home = this.mods.home();
-                    // An update holds the folder: the window doesn't wait for it.
-                    let Some(_lock) = horizon_launcher::browser::try_lock_home(&home) else {
-                        this.mods.message =
-                            Some(Err(tr("Wait for the current operation to finish.").into()));
-                        cx.notify();
-                        return;
-                    };
-                    this.mods.message =
-                        horizon_launcher::browser::java::set_enabled(&home, &id, !on)
-                            .err()
-                            .map(Err);
-                    this.instance_mods_changed();
+        // A mod the stop names is decided on the panel: turning it off here would skip the
+        // backup that keeps its worlds' content.
+        let named = self.stop_names(&id);
+        let reason = tr("Choose what to do about your worlds first");
+        let flip = switch(format!("native-switch-{id}"), on, &t);
+        right = right.child(if named {
+            self.with_reason(disabled(flip), reason)
+        } else {
+            flip.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                if !on && this.settings.native_mods_allowed_at.is_none() {
+                    this.pending_consent = Some(PendingConsent::Local(id.clone()));
                     cx.notify();
-                },
-            )),
-        );
+                    return;
+                }
+                let home = this.mods.home();
+                // An update holds the folder: the window doesn't wait for it.
+                let Some(_lock) = horizon_launcher::browser::try_lock_home(&home) else {
+                    this.mods.message =
+                        Some(Err(tr("Wait for the current operation to finish.").into()));
+                    cx.notify();
+                    return;
+                };
+                this.mods.message = horizon_launcher::browser::java::set_enabled(&home, &id, !on)
+                    .err()
+                    .map(Err);
+                this.instance_mods_changed();
+                cx.notify();
+            }))
+        });
+        right = right.child(blocks::badge(tr("NATIVE"), t.muted, &t));
+        if self.settings.native_mods_allowed_at.is_none() {
+            let id = row.id.clone();
+            right = right
+                .child(blocks::badge(tr("Needs permission"), t.muted, &t))
+                .child(
+                    button(
+                        SharedString::from(format!("native-allow-{id}")),
+                        "Allow native mods",
+                        Kind::Secondary,
+                        &t,
+                    )
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.pending_consent = Some(PendingConsent::Local(id.clone()));
+                            cx.notify();
+                        },
+                    )),
+                );
+        }
         let confirming = self.github.confirm_remove.as_deref() == Some(&row.file);
         let row = row.clone();
         let remove = button(
@@ -502,12 +528,20 @@ impl Launcher {
             &t,
         )
         .when(confirming, |b| b.text_color(t.danger));
-        right = right.child(if busy {
+        right = right.child(if named {
+            self.with_reason(disabled(remove), reason)
+        } else if busy {
             disabled(remove)
         } else {
             remove.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if this.github.confirm_remove.as_deref() == Some(&row.file) {
                     let home = this.mods.home();
+                    let Some(_lock) = horizon_launcher::browser::try_lock_home(&home) else {
+                        this.mods.message =
+                            Some(Err(tr("Wait for the current operation to finish.").into()));
+                        cx.notify();
+                        return;
+                    };
                     let result = if row.origin.is_some() {
                         github_mods::remove(&home, &row.id).map(|_| ())
                     } else {

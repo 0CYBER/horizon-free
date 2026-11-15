@@ -1,7 +1,7 @@
 //! FoodData fields in a vanilla player NBT compound.
-use crate::{
-    food::FoodData,
-    nbt::{Compound, JavaString, Tag},
+use {
+    crate::food::FoodData,
+    horizon_core::nbt::{Compound, JavaString, Tag},
 };
 fn int(tag: Option<&Tag>, default: i32) -> i32 {
     match tag {

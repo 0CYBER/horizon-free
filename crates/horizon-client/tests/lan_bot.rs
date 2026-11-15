@@ -10,6 +10,7 @@ use horizon_client::{
         chunks::ChunkEncoder,
         data::SyncData,
         entity::EntityState,
+        guest::InboxItem,
         hub::{HostEvent, Hub, HubConfig, TickCtx},
     },
     world::World,
@@ -218,9 +219,20 @@ fn server(resources: &Path) -> Server {
 }
 
 fn server_with(resources: &Path, net: NetConfig) -> Server {
+    let defaults = horizon_world::item_defaults::read(resources).expect("item defaults");
     server_sync(
         Arc::new(
-            SyncData::load(resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
+            SyncData::load(
+                resources,
+                &horizon_world::loot::PackOverlay::NONE,
+                &defaults,
+                &horizon_client::crafting::ResolvedSources::load_or_empty(
+                    resources,
+                    &horizon_world::loot::PackOverlay::NONE,
+                    &server_load(),
+                ),
+            )
+            .expect("sync data"),
         ),
         net,
     )
@@ -258,7 +270,11 @@ fn server_sync(sync: Arc<SyncData>, net: NetConfig) -> Server {
             seed: 1234,
             max_players: 8,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
+        Arc::new(
+            server_load().loop_context(horizon_world::native_load_context::LoopSide::Server, []),
+        ),
     );
     Server {
         hub,
@@ -383,7 +399,11 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
                 &[book, u8::from(open), u8::from(filtering)],
             )
             .unwrap();
-            s.hub.guests[0].inbox.push_back((packet, 0));
+            s.hub
+                .guests
+                .inbox_mut(0)
+                .unwrap()
+                .push_back(InboxItem::Packet(packet, None));
             s.tick(&[]);
             let settings = &s.hub.guests[0].recipe_book;
             for i in 0..4 {
@@ -480,10 +500,17 @@ fn neoforge_shapes_items_reach_two_guests() {
             ],
         ),
     ];
+    let defaults = horizon_world::item_defaults::read(&resources).expect("item defaults");
     let sync = Arc::new(
         SyncData::load(
             &resources,
-            &horizon_world::loot::PackOverlay { files: &packs },
+            &horizon_world::loot::PackOverlay::new(&packs),
+            &defaults,
+            &horizon_client::crafting::ResolvedSources::load_or_empty(
+                &resources,
+                &horizon_world::loot::PackOverlay::new(&packs),
+                &server_load(),
+            ),
         )
         .expect("sync data"),
     );
@@ -518,44 +545,24 @@ fn read_join_recipes(bot: &mut Bot, expected: (i32, i32), who: &str) -> Result<(
     for _ in 0..400 {
         let packet = bot.recv_play().map_err(|e| format!("{who}: {e}"))?;
         match packet {
-            C::Unknown(id, payload)
-                if id == horizon_protocol::ids::play::clientbound::UPDATE_RECIPES =>
-            {
-                let mut r = horizon_protocol::buf::Reader::new(&payload);
-                let mut furnace_input = None;
-                let mut stonecutting = Vec::new();
-                for _ in 0..r.varint().map_err(|e| e.to_string())? {
-                    let key = r.string(64).map_err(|e| e.to_string())?;
-                    let ids: Vec<i32> = (0..r.varint().map_err(|e| e.to_string())?)
-                        .map(|_| r.varint().unwrap_or(-1))
-                        .collect();
-                    if key == "minecraft:furnace_input" {
-                        furnace_input = Some(ids);
-                    }
-                }
-                let furnace_input = furnace_input.expect("furnace_input set");
+            C::UpdateRecipes(update) => {
+                let furnace_input = &update
+                    .properties
+                    .iter()
+                    .find(|(key, _)| key == "minecraft:furnace_input")
+                    .expect("furnace_input set")
+                    .1;
                 assert!(
                     furnace_input.contains(&raw_copper) && furnace_input.contains(&redstone),
                     "{who}: furnace_input holds the compound: first ids {:?}",
                     &furnace_input[..furnace_input.len().min(8)]
                 );
-                for _ in 0..r.varint().map_err(|e| e.to_string())? {
-                    if let horizon_protocol::packets::recipes::HolderSet::Items(ids) =
-                        horizon_protocol::packets::recipes::HolderSet::read(&mut r)
-                            .map_err(|e| e.to_string())?
-                    {
-                        stonecutting.push(ids);
-                    }
-                    // The result's ItemStackSlotDisplay: its type, the item,
-                    // the count and the two empty component lists.
-                    for _ in 0..5 {
-                        r.varint().map_err(|e| e.to_string())?;
-                    }
-                }
                 assert!(
-                    stonecutting
-                        .iter()
-                        .any(|ids| ids.contains(&raw_copper) && ids.contains(&redstone)),
+                    update.stonecutter.iter().any(|(input, _)| {
+                        matches!(input,
+                            horizon_protocol::packets::recipes::HolderSet::Items(ids)
+                            if ids.contains(&raw_copper) && ids.contains(&redstone))
+                    }),
                     "{who}: a stonecutting input holds the compound"
                 );
                 sets_ok = true;
@@ -610,24 +617,33 @@ fn sprint_commands_survive_keyboard_input_changes() {
         thread::yield_now();
     }
     let id = s.hub.guests[0].entity_id;
-    s.hub.guests[0].loaded = true;
-    s.hub.guests[0].load_timeout = 0;
-    s.hub.guests[0].inbox.push_back((
-        S::PlayerCommand(play::PlayerCommand {
-            id,
-            action: 1,
-            data: 0,
-        }),
-        0,
-    ));
+    s.hub.guests.update(0, |g| g.loaded = true);
+    s.hub.guests.update(0, |g| g.load_timeout = 0);
+    s.hub
+        .guests
+        .inbox_mut(0)
+        .unwrap()
+        .push_back(InboxItem::Packet(
+            S::PlayerCommand(play::PlayerCommand {
+                id,
+                action: 1,
+                data: 0,
+            }),
+            None,
+        ));
     s.tick(&[]);
     assert!(s.hub.guests[0].sprinting);
     // LocalPlayer keeps sprinting after Ctrl is released while W remains
     // down. Double-tap sprint also sends forward without the sprint key.
     for flags in [65, 1, 0, 33] {
-        s.hub.guests[0]
-            .inbox
-            .push_back((S::PlayerInput(play::PlayerInput { flags }), 0));
+        s.hub
+            .guests
+            .inbox_mut(0)
+            .unwrap()
+            .push_back(InboxItem::Packet(
+                S::PlayerInput(play::PlayerInput { flags }),
+                None,
+            ));
         s.tick(&[]);
         let g = &s.hub.guests[0];
         assert!(
@@ -637,19 +653,28 @@ fn sprint_commands_survive_keyboard_input_changes() {
         assert_eq!(g.input, flags);
         assert_eq!(g.sneaking, flags & 32 != 0);
     }
-    s.hub.guests[0].inbox.push_back((
-        S::PlayerCommand(play::PlayerCommand {
-            id,
-            action: 2,
-            data: 0,
-        }),
-        0,
-    ));
+    s.hub
+        .guests
+        .inbox_mut(0)
+        .unwrap()
+        .push_back(InboxItem::Packet(
+            S::PlayerCommand(play::PlayerCommand {
+                id,
+                action: 2,
+                data: 0,
+            }),
+            None,
+        ));
     s.tick(&[]);
     assert!(!s.hub.guests[0].sprinting);
-    s.hub.guests[0]
-        .inbox
-        .push_back((S::PlayerInput(play::PlayerInput { flags: 65 }), 0));
+    s.hub
+        .guests
+        .inbox_mut(0)
+        .unwrap()
+        .push_back(InboxItem::Packet(
+            S::PlayerInput(play::PlayerInput { flags: 65 }),
+            None,
+        ));
     s.tick(&[]);
     assert!(
         !s.hub.guests[0].sprinting,
@@ -671,8 +696,8 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
         assert!(Instant::now() < deadline, "guest did not join");
         thread::yield_now();
     }
-    s.hub.guests[0].loaded = true;
-    s.hub.guests[0].load_timeout = 0;
+    s.hub.guests.update(0, |g| g.loaded = true);
+    s.hub.guests.update(0, |g| g.load_timeout = 0);
     let at = s.hub.guests[0].position;
     let below = [
         at[0].floor() as i32,
@@ -681,25 +706,25 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
     ];
     // A creative break as the client sends it in one tick: the dig, the arm swing,
     // then the move into the block it predicted gone.
-    let inbox = &mut s.hub.guests[0].inbox;
-    inbox.push_back((
+    let inbox = s.hub.guests.inbox_mut(0).unwrap();
+    inbox.push_back(InboxItem::Packet(
         S::PlayerAction(play::PlayerAction {
             action: 0,
             pos: below,
             direction: 1,
             sequence: 1,
         }),
-        0,
+        None,
     ));
-    inbox.push_back((S::Punch(Empty), 0));
-    inbox.push_back((
+    inbox.push_back(InboxItem::Packet(S::Punch(Empty), None));
+    inbox.push_back(InboxItem::Packet(
         S::MovePlayerPos(play::MovePlayerPos {
             x: at[0],
             y: at[1] - 0.0784,
             z: at[2],
             flags: 0,
         }),
-        0,
+        None,
     ));
     s.tick(&[]);
     // The game breaks the block after the hub's pass: the move waits, or it would be
@@ -707,7 +732,10 @@ fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
     let g = &s.hub.guests[0];
     assert_eq!(g.position, at, "the move was handled before the dig");
     assert!(
-        matches!(g.inbox.back(), Some((S::MovePlayerPos(_), _))),
+        matches!(
+            g.inbox.back(),
+            Some(InboxItem::Packet(S::MovePlayerPos(_), _))
+        ),
         "the move left the queue"
     );
 }
@@ -742,8 +770,19 @@ fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
     let Some(resources) = resources() else {
         return;
     };
+    let defaults = horizon_world::item_defaults::read(&resources).expect("item defaults");
     let sync = Arc::new(
-        SyncData::load(&resources, &horizon_world::loot::PackOverlay::NONE).expect("sync data"),
+        SyncData::load(
+            &resources,
+            &horizon_world::loot::PackOverlay::NONE,
+            &defaults,
+            &horizon_client::crafting::ResolvedSources::load_or_empty(
+                &resources,
+                &horizon_world::loot::PackOverlay::NONE,
+                &server_load(),
+            ),
+        )
+        .expect("sync data"),
     );
     let net = NetConfig {
         online: Some(Arc::new(OnlineMode::generate(false).unwrap())),
@@ -777,10 +816,10 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
         assert!(Instant::now() < deadline, "guest did not join");
         thread::yield_now();
     }
-    s.hub.guests[0].loaded = true;
-    s.hub.guests[0].load_timeout = 0;
+    s.hub.guests.update(0, |g| g.loaded = true);
+    s.hub.guests.update(0, |g| g.load_timeout = 0);
     // The join's teleport accepted: the hub takes moves.
-    s.hub.guests[0].awaiting_teleport = None;
+    s.hub.guests.update(0, |g| g.awaiting_teleport = None);
     let at = s.hub.guests[0].position;
     let below = [
         at[0].floor() as i32,
@@ -789,8 +828,8 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
     ];
     // A jump up a pillar as the client sends it in one tick: the click on the block
     // below from where the player was, the arm swing, then the move up the jump.
-    let inbox = &mut s.hub.guests[0].inbox;
-    inbox.push_back((
+    let inbox = s.hub.guests.inbox_mut(0).unwrap();
+    inbox.push_back(InboxItem::Packet(
         S::UseItemOn(play::UseItemOn {
             hand: 0,
             pos: below,
@@ -800,17 +839,17 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
             world_border: false,
             sequence: 1,
         }),
-        0,
+        None,
     ));
-    inbox.push_back((S::Punch(Empty), 0));
-    inbox.push_back((
+    inbox.push_back(InboxItem::Packet(S::Punch(Empty), None));
+    inbox.push_back(InboxItem::Packet(
         S::MovePlayerPos(play::MovePlayerPos {
             x: at[0],
             y: at[1] + 0.42,
             z: at[2],
             flags: 0,
         }),
-        0,
+        None,
     ));
     s.tick(&[]);
     // The game places the block after the hub's pass: BlockItem.canPlace sees the
@@ -819,7 +858,10 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
     let g = &s.hub.guests[0];
     assert_eq!(g.position, at, "the move was handled before the use");
     assert!(
-        matches!(g.inbox.back(), Some((S::MovePlayerPos(_), _))),
+        matches!(
+            g.inbox.back(),
+            Some(InboxItem::Packet(S::MovePlayerPos(_), _))
+        ),
         "the move left the queue"
     );
 }
@@ -838,23 +880,29 @@ fn a_move_behind_an_attack_and_its_swing_waits_for_the_next_tick() {
         assert!(Instant::now() < deadline, "guest did not join");
         thread::yield_now();
     }
-    s.hub.guests[0].loaded = true;
-    s.hub.guests[0].load_timeout = 0;
-    s.hub.guests[0].awaiting_teleport = None;
-    s.hub.guests[0].on_ground = false;
+    s.hub.guests.update(0, |g| g.loaded = true);
+    s.hub.guests.update(0, |g| g.load_timeout = 0);
+    s.hub.guests.update(0, |g| g.awaiting_teleport = None);
+    s.hub.guests.update(0, |g| g.on_ground = false);
     // A falling attack sharing a server tick with the landing move behind it:
     // the attack, the arm swing, then the landing move.
-    let inbox = &mut s.hub.guests[0].inbox;
-    inbox.push_back((S::Attack(play::Attack { id: 1 }), 0));
-    inbox.push_back((S::Punch(Empty), 0));
-    inbox.push_back((S::MovePlayerStatus(play::MovePlayerStatus { flags: 1 }), 0));
+    let inbox = s.hub.guests.inbox_mut(0).unwrap();
+    inbox.push_back(InboxItem::Packet(S::Attack(play::Attack { id: 1 }), None));
+    inbox.push_back(InboxItem::Packet(S::Punch(Empty), None));
+    inbox.push_back(InboxItem::Packet(
+        S::MovePlayerStatus(play::MovePlayerStatus { flags: 1 }),
+        None,
+    ));
     s.tick(&[]);
     // The game runs the attack after the hub's pass: the landing move waits so
     // critical_attack still sees the player off the ground.
     let g = &s.hub.guests[0];
     assert!(!g.on_ground, "the landing move ran before the attack");
     assert!(
-        matches!(g.inbox.back(), Some((S::MovePlayerStatus(_), _))),
+        matches!(
+            g.inbox.back(),
+            Some(InboxItem::Packet(S::MovePlayerStatus(_), _))
+        ),
         "the move left the queue"
     );
     s.tick(&[]);
@@ -1041,6 +1089,7 @@ fn guests_see_each_other_and_the_world_entities() {
         minecart_steps: None,
         data: 0,
         meta: Vec::new(),
+        forced_meta: [0; 4],
         defaults: Vec::new(),
         equipment: Vec::new(),
         attributes: Vec::new(),
@@ -1158,7 +1207,9 @@ fn guests_see_each_other_and_the_world_entities() {
 /// A menu opened with extra data (a mod menu type's, NeoForge's `openMenu`
 /// with an extra-data writer) reaches the client as a `horizon:menu_extra`
 /// payload naming the window and the block, right before that window's
-/// `OpenScreen`; a menu without it sends no payload.
+/// `OpenScreen`; a menu without it sends no payload. The bot answers no
+/// revision query, so the server serves it the legacy layout — the bytes a
+/// Horizon client has always read for a block's menu.
 #[test]
 fn menu_extra_data_comes_right_before_its_menu() {
     use horizon_client::{items::ItemStack, lan::menu::Slots};
@@ -1192,7 +1243,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
         loop {
             match bot.recv_play()? {
                 C::CustomPayload(p) if p.channel == menu_extra::CHANNEL => {
-                    let message = menu_extra::decode(&p.data).map_err(|e| e.to_string())?;
+                    let message = menu_extra::decode_legacy(&p.data).map_err(|e| e.to_string())?;
                     extras.push((message, true));
                 }
                 C::OpenScreen(p) => return Ok((bot, extras, p.container)),
@@ -1232,7 +1283,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
         [(
             menu_extra::Message {
                 window,
-                pos: [3, 70, -5],
+                pos: Some([3, 70, -5]),
                 data: vec![7, 0, 255],
             },
             true
@@ -1252,11 +1303,11 @@ fn a_spectators_container_click_is_taken_back() {
         fn items(&self) -> &horizon_client::items::Items {
             unreachable!("a spectator's click never reaches the menu")
         }
+        fn enchantments(&self) -> &horizon_client::enchant::Enchantments {
+            unreachable!("a spectator's click never reaches the menu")
+        }
         fn max_stack(&self, _: &str) -> u32 {
             64
-        }
-        fn armor_index(&self, _: &str) -> Option<usize> {
-            None
         }
     }
     let Some(resources) = resources() else {
@@ -1413,11 +1464,11 @@ fn a_click_past_the_menu_is_ignored() {
         fn items(&self) -> &horizon_client::items::Items {
             unreachable!("a click past the menu never reaches it")
         }
+        fn enchantments(&self) -> &horizon_client::enchant::Enchantments {
+            unreachable!("a click past the menu never reaches it")
+        }
         fn max_stack(&self, _: &str) -> u32 {
             64
-        }
-        fn armor_index(&self, _: &str) -> Option<usize> {
-            None
         }
     }
     let Some(resources) = resources() else {
@@ -1454,7 +1505,7 @@ fn a_click_past_the_menu_is_ignored() {
         None,
     );
     let stone = Some(ItemStack::new("minecraft:stone", 64));
-    s.hub.guests[0].inventory[9] = stone.clone();
+    s.hub.guests.update(0, |g| g.inventory[9] = stone.clone());
     let window = s.hub.guests[0].menu.as_ref().unwrap().window;
     // AbstractContainerMenu.isValidSlotIndex: the chest's menu has 63 slots. Throwing
     // the whole stack (THROW, button 1) from slot 63 reached the inventory's slot 9.
@@ -1496,19 +1547,22 @@ fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
         assert!(Instant::now() < deadline, "guest did not join");
         thread::yield_now();
     }
-    s.hub.guests[0].loaded = true;
-    s.hub.guests[0].load_timeout = 0;
+    s.hub.guests.update(0, |g| g.loaded = true);
+    s.hub.guests.update(0, |g| g.load_timeout = 0);
     let at = s.hub.guests[0].position;
     // The server's tick ends with a ping; the client answers it before its next tick.
     s.hub.anticheat_ping();
     let pinged = s.hub.ticks;
-    let inbox = &mut s.hub.guests[0].inbox;
-    inbox.push_back((
+    let inbox = s.hub.guests.inbox_mut(0).unwrap();
+    inbox.push_back(InboxItem::Packet(
         S::Pong(horizon_protocol::packets::configuration::Ping { id: pinged as i32 }),
-        0,
+        None,
     ));
-    inbox.push_back((S::PlayerInput(play::PlayerInput { flags: 1 }), 0));
-    inbox.push_back((
+    inbox.push_back(InboxItem::Packet(
+        S::PlayerInput(play::PlayerInput { flags: 1 }),
+        None,
+    ));
+    inbox.push_back(InboxItem::Packet(
         S::MovePlayerPosRot(play::MovePlayerPosRot {
             x: at[0],
             y: at[1],
@@ -1517,11 +1571,11 @@ fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
             pitch: 5.0,
             flags: 1,
         }),
-        0,
+        None,
     ));
-    inbox.push_back((S::ClientTickEnd(Empty), 0));
+    inbox.push_back(InboxItem::Packet(S::ClientTickEnd(Empty), None));
     // A tick without a move.
-    inbox.push_back((S::ClientTickEnd(Empty), 0));
+    inbox.push_back(InboxItem::Packet(S::ClientTickEnd(Empty), None));
     s.tick(&[]);
     let record = s.hub.guests[0]
         .record
@@ -1540,12 +1594,16 @@ fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
         (None, 1, 45.0)
     );
     // An answer to a ping never sent changes nothing.
-    s.hub.guests[0].inbox.push_back((
-        S::Pong(horizon_protocol::packets::configuration::Ping {
-            id: (pinged + 100) as i32,
-        }),
-        0,
-    ));
+    s.hub
+        .guests
+        .inbox_mut(0)
+        .unwrap()
+        .push_back(InboxItem::Packet(
+            S::Pong(horizon_protocol::packets::configuration::Ping {
+                id: (pinged + 100) as i32,
+            }),
+            None,
+        ));
     s.tick(&[]);
     let record = s.hub.guests[0].record.as_deref().unwrap();
     assert_eq!(record.seen(), Some(pinged));
@@ -1553,16 +1611,40 @@ fn the_prediction_records_each_client_tick_and_the_server_ticks_it_had_seen() {
 
 /// A mod block entity reaches the players that see its chunk as vanilla's do
 /// (`BlockEntityInfo.create`, then `sendBlockUpdated` and
-/// `ChunkHolder.broadcastChanges`): in the chunk with its block's own type
+/// `ChunkHolder.broadcastChanges`): in the chunk with its declared type
 /// and its mod's update tag, then once per tick however often it is synced,
 /// with no `BlockEntityData` for one whose mod gives no tag.
 #[test]
+#[ignore = "daily"]
 fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
-    use horizon_client::containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields};
-    use horizon_world::nbt::{Compound, JavaString, Tag};
+    use horizon_client::block_entity_types::{self, BlockEntityTypes};
+    use horizon_client::containers::{BlockEntity, ModBlockEntity};
+    use horizon_core::nbt::{Compound, JavaString, Tag};
     let Some(resources) = resources() else {
         return;
     };
+    const CHILD: &str = "HORIZON_TEST_LAN_DECLARED_ENTITY";
+    if std::env::var_os(CHILD).is_none() {
+        assert!(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--include-ignored",
+                    "--exact",
+                    "a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap()
+                .success()
+        );
+        return;
+    }
+    block_entity_types::install(BlockEntityTypes::new(
+        [("test:machine".into(), "test:machine_entity".into())].into(),
+        vec!["test:machine_entity".into()],
+    ))
+    .unwrap();
     const MACHINE: u32 = 3;
     let mut s = server(&resources);
     let states = [
@@ -1573,7 +1655,7 @@ fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
     ]
     .map(|n| (Arc::<str>::from(n), false));
     let builtin = horizon_protocol::registry::Builtin::parse(
-        r#"{"minecraft:block_entity_type": {"entries": {"test:machine": {"protocol_id": 60}}}}"#,
+        r#"{"minecraft:block_entity_type": {"entries": {"test:machine_entity": {"protocol_id": 60}}}}"#,
     )
     .unwrap();
     s.hub.encoder = ChunkEncoder::new(states, &builtin, &[], &[]);
@@ -1587,10 +1669,7 @@ fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
         s.world
             .set(pos.0, pos.1, pos.2, BlockStateId(MACHINE))
             .unwrap();
-        let mut machine = ModBlockEntity::new(ModBlockEntityFields {
-            id: "test:machine".into(),
-            ..Default::default()
-        });
+        let mut machine = ModBlockEntity::new("test:machine_entity".into(), Default::default());
         if let Some(on) = on {
             machine.nbt.insert("on".into(), Tag::Byte(on));
         }
@@ -1683,7 +1762,7 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
         assert!(Instant::now() < deadline, "guest did not join");
         thread::yield_now();
     }
-    s.hub.guests[0].load_timeout = 0;
+    s.hub.guests.update(0, |g| g.load_timeout = 0);
     assert!(s.hub.guests[0].client_loaded());
     let border = horizon_client::worldborder::WorldBorder::default();
     let at = [8.5, f64::from(MIN_Y + 5), 8.5];
@@ -1704,7 +1783,7 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
         border: &border,
         streaming: None,
     };
-    s.hub.respawn(0, at, [0.0; 2], &ctx);
+    s.hub.respawn(0, at, None, &ctx);
     assert!(
         !s.hub.guests[0].client_loaded(),
         "a respawn unloads the client"
@@ -1717,7 +1796,11 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
         "a level change keeps the cleared state from the respawn"
     );
     // The client's ServerboundPlayerLoadedPacket once the new level is in.
-    s.hub.guests[0].inbox.push_back((S::PlayerLoaded(Empty), 0));
+    s.hub
+        .guests
+        .inbox_mut(0)
+        .unwrap()
+        .push_back(InboxItem::Packet(S::PlayerLoaded(Empty), None));
     s.tick(&[]);
     assert!(
         s.hub.guests[0].client_loaded(),
@@ -1742,17 +1825,18 @@ fn a_boat_floating_too_long_kicks_its_driver() {
         assert!(Instant::now() < deadline, "guest did not join");
         thread::yield_now();
     }
-    let g = &mut s.hub.guests[0];
-    (g.vehicle, g.vehicle_floating, g.vehicle_gravity) = (Some(7), true, 0.04);
+    s.hub.guests.update(0, |g| {
+        (g.vehicle, g.vehicle_floating, g.vehicle_gravity) = (Some(7), true, 0.04);
+    });
     for _ in 0..100 {
         s.tick(&[]);
     }
     assert_eq!(s.hub.guests[0].above_ground_vehicle_ticks, 100);
     // The boat touched water: the next floating move counts from zero.
-    s.hub.guests[0].vehicle_floating = false;
+    s.hub.guests.update(0, |g| g.vehicle_floating = false);
     s.tick(&[]);
     assert_eq!(s.hub.guests[0].above_ground_vehicle_ticks, 0);
-    s.hub.guests[0].vehicle_floating = true;
+    s.hub.guests.update(0, |g| g.vehicle_floating = true);
     for _ in 0..160 {
         s.tick(&[]);
     }
@@ -1766,6 +1850,15 @@ fn a_boat_floating_too_long_kicks_its_driver() {
         !s.hub.guests[0].left_reason.is_empty(),
         "the 161st floating tick kicks the driver"
     );
+}
+
+fn server_load() -> horizon_world::native_load_context::LoadContext {
+    use horizon_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs};
+    LoadContext::new(
+        DataLoadOrigin::ServerDataLoad,
+        std::sync::Arc::new(LoadInputs::new(Default::default(), Default::default())),
+        [],
+    )
 }
 
 /// A client that numbers its packets as `version` does, from the protocol adapter's own tables: for 26.2 its
@@ -1912,7 +2005,7 @@ fn join_with(
             }
             cfg::Clientbound::Disconnect(d) => {
                 return Ok(Err(match d.reason {
-                    horizon_world::nbt::Tag::String(s) => s.to_string_lossy(),
+                    horizon_core::nbt::Tag::String(s) => s.to_string_lossy(),
                     other => format!("{other:?}"),
                 }));
             }

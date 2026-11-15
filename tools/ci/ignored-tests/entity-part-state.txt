@@ -1,0 +1,7 @@
+# Entity Part state (arismoko/horizon#796 stage 3) on a real Game, each in a fresh child process.
+horizon-client game::entity_part_state_tests::entity_part_state_is_per_entity_through_edits_transactions_and_panics lib daily child-process
+horizon-client game::entity_part_state_tests::a_removed_or_unloaded_entity_is_stale_and_a_reloaded_one_reads_its_saved_value lib daily child-process
+horizon-client game::entity_part_state_tests::a_spawn_or_removal_inside_an_aborted_action_keeps_the_bindings lib daily child-process
+horizon-client game::entity_part_state_tests::a_lone_mob_or_general_row_moves_under_a_new_id_and_a_ridden_pig_keeps_its_handle lib daily network
+horizon-client game::entity_part_state_tests::a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity lib daily child-process
+horizon-client game::entity_part_state_tests::entity_part_state_on_a_player_a_vanilla_family_or_an_unknown_type_refuses_the_load lib daily child-process

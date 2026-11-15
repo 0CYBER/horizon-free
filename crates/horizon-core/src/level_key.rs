@@ -67,6 +67,20 @@ impl LevelKey {
     }
 }
 
+/// The level's `namespace:path`: how a key crosses the wasm interface.
+impl From<&LevelKey> for String {
+    fn from(key: &LevelKey) -> Self {
+        key.0.to_owned()
+    }
+}
+
+impl TryFrom<String> for LevelKey {
+    type Error = String;
+    fn try_from(text: String) -> Result<Self, String> {
+        Self::parse(&text)
+    }
+}
+
 impl fmt::Debug for LevelKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.0)

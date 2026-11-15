@@ -189,7 +189,7 @@ def main():
     harness.differential(
         'rust-options-parity', 'VanillaOptionsOracle', 'options_probe', make_cases, scope,
         sources=[lab.ROOT / 'crates/horizon-client-render/src/options_file.rs', lab.ROOT / 'crates/horizon-client-render/src/options_fixes.rs',
-                 lab.ROOT / 'crates/horizon-client-render/src/java_text.rs', lab.ROOT / 'crates/horizon-client-input/src/key_names.rs',
+                 lab.ROOT / 'crates/horizon-client-render/src/java_text.rs', lab.ROOT / 'crates/horizon-core/src/java_number.rs', lab.ROOT / 'crates/horizon-client-input/src/key_names.rs',
                  lab.ROOT / 'crates/horizon-client-input/src/keybinds.rs'])
 
 

@@ -421,6 +421,7 @@ mod tests {
 
     #[test]
     fn a_pack_fragment_shader_colours_the_outline() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             eprintln!("no GPU: skipping");
             return;
@@ -434,6 +435,7 @@ mod tests {
     /// is not used, and the outline draws natively, rather than failing at the draw.
     #[test]
     fn a_pack_block_bigger_than_vanillas_falls_back() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, _)) = device() else {
             return;
         };
@@ -450,6 +452,7 @@ mod tests {
     /// fragment shader.
     #[test]
     fn vanillas_lines_vertex_shader_takes_a_packs_fragment_shader() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let root = std::env::var_os("HORIZON_RESOURCES")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {

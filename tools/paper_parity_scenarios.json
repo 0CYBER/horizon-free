@@ -1,0 +1,33 @@
+{
+  "chunk_load": {
+    "seed": 12345,
+    "gamerules": {"respawn_radius": 0, "spawn_mobs": false, "random_tick_speed": 0, "player_movement_check": false},
+    "setup": ["setworldspawn 0 -60 0"],
+    "bot": {"behaviour": "explore", "speed": 4, "distance": 128, "height": 24},
+    "duration": 90,
+    "hooks": ["chunk_load"],
+    "tolerance": "set(dimension,x,z,new); ignore order and tick; server-start observation <= event < quit on both sides, including spawn warm-up before join; no spatial exclusions"
+  },
+  "hotbar": {
+    "seed": 12345,
+    "gamerules": {"respawn_radius": 0, "spawn_mobs": false, "random_tick_speed": 0, "player_movement_check": false},
+    "setup": ["setworldspawn 0 -60 0"],
+    "bot": {"behaviour": "hotbar", "height": 0, "speed": 4, "distance": 1, "script": [[40, 3], [60, 7], [80, 3]], "quit_tick": 100},
+    "duration": 120,
+    "hooks": ["player_switch_hotbar_slot_pre"],
+    "cancel": {"player_switch_hotbar_slot_pre": {"new": 7}},
+    "tolerance": "exact (old,new,cancelled) sequence; relative to first event, +/-1 server tick versus script and between servers; cancel 7 leaves 3 selected, last request is a no-op; Horizon post only for accepted changes"
+  },
+  "moisture": {
+    "seed": 12345,
+    "gamerules": {"respawn_radius": 0, "spawn_mobs": false, "random_tick_speed": 0, "player_movement_check": false},
+    "setup": ["setworldspawn 0 -60 0", "forceload add 0 0", "weather clear 1000000", "fill 2 -60 2 4 -60 2 minecraft:farmland[moisture=7]", "fill 1 -60 9 4 -60 12 minecraft:stone", "fill 2 -60 10 3 -60 10 minecraft:farmland[moisture=0]", "fill 2 -60 11 3 -60 11 minecraft:water"],
+    "bot": {"behaviour": "idle", "height": 0, "speed": 4, "distance": 1},
+    "duration": 40,
+    "hooks": ["moisture_change"],
+    "cancel": {"moisture_change": {"pos": [4, -60, 2]}},
+    "window_ticks": 400,
+    "positions": [[2, -60, 2], [3, -60, 2], [4, -60, 2], [2, -60, 10], [3, -60, 10]],
+    "tolerance": "random_tick_speed=1024 for 400 server ticks after 40 settle ticks; compare set(pos,from,to,cancelled) and final blocks (dry=dirt or grass after natural spread, wet=7, cancelled=7); ignore tick and repeated cancelled attempts, whose multiset is random"
+  }
+}

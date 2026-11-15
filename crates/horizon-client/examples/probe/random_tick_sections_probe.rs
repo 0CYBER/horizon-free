@@ -25,6 +25,7 @@ struct Air {
     random: LegacyRandom,
     speed: i32,
 }
+impl horizon_world::level::BlockEntityNeighbors for Air {}
 impl LevelAccess for Air {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.reads.borrow_mut().push(pos);

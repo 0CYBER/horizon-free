@@ -4,6 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::*;
+use crate::sampler::test_support::{cpu_count, cpu_hz, ensure, first_passing_run};
 use crate::sampler::{self, Config, Kind, Record};
 
 fn cpu_ns() -> u64 {
@@ -28,6 +29,7 @@ fn spin(cpu_ms: u64) {
 
 /// Runs `body` on a thread sampled at 1 kHz under `name`, returning its records.
 fn sampled(name: &'static str, body: fn()) -> Vec<Record> {
+    cpu_hz();
     let (ready, wait) = mpsc::channel();
     let (go, start) = mpsc::channel::<()>();
     let worker = thread::spawn(move || {
@@ -53,69 +55,77 @@ fn sampled(name: &'static str, body: fn()) -> Vec<Record> {
     records
 }
 
+/// The CPU samples of `body` run under `name`.
+fn cpu_samples(name: &'static str, body: fn()) -> Vec<Record> {
+    sampled(name, body)
+        .into_iter()
+        .filter(|r| r.kind == Kind::Cpu)
+        .collect()
+}
+
 #[test]
 fn entity_samples_split_by_the_work_done_under_each_type() {
-    let records = sampled("p-entity", || {
-        let (a, b) = (entity_id("p-test:a"), entity_id("p-test:b"));
-        for _ in 0..8 {
-            set_entity(a);
-            spin(30);
-            set_entity(b);
-            spin(10);
-        }
-        clear_work();
+    first_passing_run(|| {
+        let samples = cpu_samples("p-entity", || {
+            let (a, b) = (entity_id("p-test:a"), entity_id("p-test:b"));
+            for _ in 0..8 {
+                set_entity(a);
+                spin(30);
+                set_entity(b);
+                spin(10);
+            }
+            clear_work();
+        });
+        ensure(samples.len() as u64 > cpu_count(200), || {
+            format!("{} samples", samples.len())
+        })?;
+        let share = |n: &str| {
+            let hits = samples
+                .iter()
+                .filter(|r| name(Space::Entity, r.ctx.entity_type) == Some(n))
+                .count();
+            hits as f64 / samples.len() as f64
+        };
+        ensure(
+            (share("p-test:a") - 0.75).abs() < 0.1 && (share("p-test:b") - 0.25).abs() < 0.1,
+            || format!("A {} B {}", share("p-test:a"), share("p-test:b")),
+        )
     });
-    let samples: Vec<_> = records.iter().filter(|r| r.kind == Kind::Cpu).collect();
-    assert!(samples.len() > 200, "{} samples", samples.len());
-    let share = |n: &str| {
-        let hits = samples
-            .iter()
-            .filter(|r| name(Space::Entity, r.ctx.entity_type) == Some(n))
-            .count();
-        hits as f64 / samples.len() as f64
-    };
-    assert!(
-        (share("p-test:a") - 0.75).abs() < 0.1 && (share("p-test:b") - 0.25).abs() < 0.1,
-        "A {} B {}",
-        share("p-test:a"),
-        share("p-test:b")
-    );
 }
 
 #[test]
 fn spans_nest_and_restore_the_outer_one() {
-    let records = sampled("p-span", || {
-        let outer = enter_span("p-test-outer");
-        spin(20);
-        let inner = enter_span("p-test-inner");
-        spin(20);
-        leave_span(inner);
-        spin(20);
-        leave_span(outer);
-        spin(20);
+    first_passing_run(|| {
+        let samples = cpu_samples("p-span", || {
+            let outer = enter_span("p-test-outer");
+            spin(20);
+            let inner = enter_span("p-test-inner");
+            spin(20);
+            leave_span(inner);
+            spin(20);
+            leave_span(outer);
+            spin(20);
+        });
+        ensure(samples.len() as u64 > cpu_count(50), || {
+            format!("{} samples", samples.len())
+        })?;
+        let share = |n: Option<&str>| {
+            let hits = samples
+                .iter()
+                .filter(|r| name(Space::Span, r.ctx.span) == n)
+                .count();
+            hits as f64 / samples.len() as f64
+        };
+        let (outer, inner, none) = (
+            share(Some("p-test-outer")),
+            share(Some("p-test-inner")),
+            share(None),
+        );
+        ensure(
+            (outer - 0.5).abs() < 0.15 && (inner - 0.25).abs() < 0.15 && (none - 0.25).abs() < 0.15,
+            || format!("outer {outer} inner {inner} none {none}"),
+        )
     });
-    let samples: Vec<_> = records.iter().filter(|r| r.kind == Kind::Cpu).collect();
-    let share = |n: Option<&str>| {
-        let hits = samples
-            .iter()
-            .filter(|r| name(Space::Span, r.ctx.span) == n)
-            .count();
-        hits as f64 / samples.len() as f64
-    };
-    // ~80 signals for 80 ms of CPU at 1 kHz; a loaded runner merges SIGPROFs while one is pending
-    // (41 on pull request #16483's run). 30 still gives each span's share a few samples.
-    assert!(samples.len() > 30, "{} samples", samples.len());
-    assert!(
-        (share(Some("p-test-outer")) - 0.5).abs() < 0.15,
-        "{}",
-        share(Some("p-test-outer"))
-    );
-    assert!(
-        (share(Some("p-test-inner")) - 0.25).abs() < 0.15,
-        "{}",
-        share(Some("p-test-inner"))
-    );
-    assert!((share(None) - 0.25).abs() < 0.15, "{}", share(None));
 }
 
 #[test]

@@ -5,11 +5,11 @@ use super::*;
 use horizon_world::{
     entity_fluid::{
         CurrentTarget, EntityFluidInteraction, FluidInteractionWorld, FluidMembership,
-        FluidSections, FluidTagId, ModFluidImmersion,
+        FluidSections, FluidTagId,
     },
     entity_fluid_tick::{self, EntityFluidTickWorld},
     fluid::{FluidHeightWorld, FluidKind, FluidState, FluidStateTable},
-    fluid_flow::{FluidFlowWorld, flow_at},
+    fluid_flow::FluidFlowWorld,
     fluid_shape::FluidShapeCache,
     water_splash::{self, SplashParticle, WaterSplashWorld},
 };
@@ -137,26 +137,6 @@ impl PlayerMotion {
     /// `Entity.isInLava`.
     pub fn is_in_lava(&self) -> bool {
         !self.fluids.first_tick && self.fluids.interaction.is_in_fluid(&FluidTags, LAVA)
-    }
-    /// The mod fluid the player is deepest in (`isInFluidType`), if any: the
-    /// player moves in it as in water, with its numbers.
-    pub fn mod_fluid(&self) -> Option<ModFluidImmersion> {
-        self.fluids
-            .interaction
-            .mod_fluids()
-            .filter(|m| m.height > 0.0)
-            .max_by(|a, b| a.height.total_cmp(&b.height))
-    }
-    /// That mod fluid when it `canSwim`: the player swims and rises in it.
-    pub fn swim_fluid(&self) -> Option<ModFluidImmersion> {
-        self.mod_fluid().filter(|m| m.fluid.info().entity.can_swim)
-    }
-    /// Whether the eyes are in a mod fluid that `canDrown`.
-    pub fn eye_in_drowning_fluid(&self) -> bool {
-        self.fluids
-            .interaction
-            .mod_fluids()
-            .any(|m| m.eyes_inside && m.fluid.info().entity.can_drown)
     }
 }
 /// `BubbleColumnBlock.entityInside` for an entity that is not the player (a mob,
@@ -312,19 +292,18 @@ impl MotionWorld<'_, '_, '_> {
         // the server's copy of a guest who boards a boat while swimming is not
         // left in the swimming box (eye 0.4) in the seat, at the waterline,
         // where the boat drowned and suffocated them (#4427).
-        // A mod fluid that `canSwim` keeps and starts a swim as water does.
-        let swim = self.player.swim_fluid();
-        let feet = self
-            .fluid_at(BlockPos::containing(self.player.position))
-            .kind();
         self.player.swimming = !self.player.flying
             && !self.player.is_passenger
             && self.player.sprinting
             && if self.player.swimming {
-                self.player.fluids.was_touching_water || swim.is_some()
+                self.player.fluids.was_touching_water
             } else {
-                self.player.is_under_water() && is_tagged(feet, WATER)
-                    || swim.is_some_and(|m| m.eyes_inside && feet.source() == m.fluid)
+                self.player.is_under_water()
+                    && is_tagged(
+                        self.fluid_at(BlockPos::containing(self.player.position))
+                            .kind(),
+                        WATER,
+                    )
             };
         self.tick_remaining_fire()?;
         if self.player.is_in_lava() {
@@ -435,7 +414,7 @@ impl FluidInteractionWorld for MotionWorld<'_, '_, '_> {
         f.camera_height_at(self, [p.x, p.y, p.z])
     }
     fn flow(&mut self, f: FluidState, p: BlockPos) -> Result<Vec3> {
-        flow_at(self, f, p)
+        super::pushing_flow(self.loop_context, self, f, p)
     }
 }
 impl EntityFluidTickWorld for MotionWorld<'_, '_, '_> {
@@ -445,10 +424,6 @@ impl EntityFluidTickWorld for MotionWorld<'_, '_, '_> {
     }
     fn reset_fall_distance(&mut self) -> Result<()> {
         self.player.fall_distance = 0.0;
-        Ok(())
-    }
-    fn scale_fall_distance(&mut self, by: f32) -> Result<()> {
-        self.player.fall_distance *= f64::from(by);
         Ok(())
     }
     fn was_touching_water(&self) -> bool {

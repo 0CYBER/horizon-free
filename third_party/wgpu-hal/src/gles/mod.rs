@@ -117,7 +117,7 @@ use alloc::{boxed::Box, string::String, string::ToString as _, sync::Arc, vec::V
 use core::{
     fmt,
     ops::Range,
-    sync::atomic::{AtomicU32, AtomicU8},
+    sync::atomic::{AtomicU8, AtomicU32},
 };
 use parking_lot::Mutex;
 

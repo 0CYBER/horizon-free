@@ -318,17 +318,22 @@ def admit(f):
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--binary',type=Path,required=True);p.add_argument('--build',default='h234-machine-recipe-placement');p.add_argument('--side',choices=['java','native'],required=True)
-    args=p.parse_args();lock,build,java,native,client=net.sides(args.build,args.binary)
+    p=argparse.ArgumentParser(description=__doc__)
+    # tools/parity.py runs every harness with no arguments: build the Horizon binary and run both sides.
+    p.add_argument('--binary',type=Path,help='A Horizon client binary; built when omitted')
+    p.add_argument('--build',default='h234-machine-recipe-placement')
+    p.add_argument('--side',choices=['java','native','both'],default='both')
+    args=p.parse_args();lock,build,java,native,client=net.sides(args.build,args.binary.resolve() if args.binary else None)
     net.PROPERTIES['force-gamemode']='false'
     (build/'program.json').write_text(json.dumps(program(),indent=2)+'\n')
-    if args.side=='java':
+    if args.side in ('java','both'):
         world=generate(java,build);actual=run('java',java,client,build,world);admit(actual)
         (build/'reference.json').write_text(json.dumps(actual,indent=2)+'\n');print('JAVA ADMITTED',len(actual))
-    else:
+    if args.side in ('native','both'):
         actual=run('native',native,client,build,build/'generate/world');reference=json.loads((build/'reference.json').read_text())
         diff={k:dict(java=v,native=actual.get(k)) for k,v in reference.items() if actual.get(k)!=v}
-        (build/'native-facts.json').write_text(json.dumps(actual,indent=2)+'\n');(build/'diff.json').write_text(json.dumps(diff,indent=2)+'\n');print('EXACT',len(reference)-len(diff),'/',len(reference),'DIFF',json.dumps(diff,indent=2));return bool(diff)
+        (build/'native-facts.json').write_text(json.dumps(actual,indent=2)+'\n');(build/'diff.json').write_text(json.dumps(diff,indent=2)+'\n');print('EXACT',len(reference)-len(diff),'/',len(reference),'DIFF',json.dumps(diff,indent=2))
+        return 1 if diff else 0
     return 0
 
 if __name__=='__main__':raise SystemExit(main())

@@ -629,6 +629,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn search_matches_the_reference_with_ties_and_wrapping() {
         let mut rng = Rng(0x9997);
         let mut built = 0;

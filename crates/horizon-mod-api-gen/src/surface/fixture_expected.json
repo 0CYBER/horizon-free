@@ -1,0 +1,878 @@
+{
+  "schema": 2,
+  "hash": "*",
+  "hooks": [
+    {
+      "id": "hook:ping",
+      "hash": "*",
+      "doc": "Something pinged.",
+      "engine": {
+        "target": "horizon_client::game::Game::ping"
+      },
+      "counterparts": {
+        "neoforge": [
+          "PingEvent"
+        ]
+      },
+      "version": 1,
+      "side": "server",
+      "contract": "cancel",
+      "arguments": [
+        {
+          "name": "who",
+          "type": "entity::EntityRef"
+        },
+        {
+          "name": "lines",
+          "type": "&'a mut Vec<(Text, u32)>"
+        }
+      ],
+      "output": {
+        "name": "cancelled",
+        "type": "bool"
+      },
+      "refs": [
+        "type:PingEvent",
+        "type:Text",
+        "type:entity::EntityRef"
+      ],
+      "fields": [
+        {
+          "id": "hook:ping.who",
+          "hash": "*",
+          "type": "entity::EntityRef",
+          "refs": [
+            "hook:ping",
+            "type:entity::EntityRef"
+          ]
+        },
+        {
+          "id": "hook:ping.lines",
+          "hash": "*",
+          "type": "&'a mut Vec<(Text, u32)>",
+          "refs": [
+            "hook:ping",
+            "type:Text"
+          ]
+        },
+        {
+          "id": "hook:ping.cancelled",
+          "hash": "*",
+          "type": "bool",
+          "refs": [
+            "hook:ping"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hook:tick_block",
+      "hash": "*",
+      "doc": "A block ticks.",
+      "engine": {
+        "target": "horizon_client::game::GameLevel::tick_block"
+      },
+      "counterparts": {
+        "neoforge": [
+          "none"
+        ]
+      },
+      "version": 1,
+      "side": "server",
+      "contract": "listen",
+      "scope": {
+        "kind": "block",
+        "key": "pos"
+      },
+      "arguments": [
+        {
+          "name": "pos",
+          "type": "Point"
+        }
+      ],
+      "refs": [
+        "type:Point",
+        "type:TickBlockEvent"
+      ],
+      "fields": [
+        {
+          "id": "hook:tick_block.pos",
+          "hash": "*",
+          "type": "Point",
+          "refs": [
+            "hook:tick_block",
+            "type:Point"
+          ]
+        }
+      ]
+    }
+  ],
+  "traits": [
+    {
+      "id": "trait:BlockPart",
+      "hash": "*",
+      "doc": "A block's part.",
+      "paths": [
+        "BlockPart"
+      ],
+      "role": "none",
+      "side": "both",
+      "methods": []
+    },
+    {
+      "id": "trait:DataMap",
+      "hash": "*",
+      "doc": "Data with an entry type.",
+      "paths": [
+        "DataMap"
+      ],
+      "role": "none",
+      "side": "both",
+      "required": [
+        {
+          "name": "Entry",
+          "signature": "type Entry"
+        }
+      ],
+      "methods": [],
+      "associated": [
+        {
+          "id": "assoc:DataMap::Entry",
+          "hash": "*",
+          "doc": "Its entry.",
+          "kind": "type",
+          "signature": "type Entry",
+          "required": true,
+          "refs": [
+            "trait:DataMap"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "trait:FluidHandler",
+      "hash": "*",
+      "doc": "Fluids, through a handler.",
+      "paths": [
+        "FluidHandler"
+      ],
+      "role": "none",
+      "side": "both",
+      "methods": []
+    },
+    {
+      "id": "trait:Hooks",
+      "hash": "*",
+      "doc": "What a mod answers.",
+      "paths": [
+        "Hooks"
+      ],
+      "role": "implement",
+      "side": "both",
+      "required": [
+        {
+          "name": "name",
+          "signature": "fn name(&self) -> &'static str"
+        }
+      ],
+      "methods": [
+        {
+          "id": "method:Hooks::name",
+          "hash": "*",
+          "doc": "Must be written.",
+          "signature": "fn name(&self) -> &'static str",
+          "required": true,
+          "wasm": true,
+          "refs": [
+            "trait:Hooks"
+          ]
+        },
+        {
+          "id": "method:Hooks::ping",
+          "hash": "*",
+          "doc": "Pinged.",
+          "signature": "fn ping(&self, _: &mut dyn ServerHost, _: &mut PingEvent<'_>)",
+          "required": false,
+          "wasm": true,
+          "refs": [
+            "trait:Hooks",
+            "trait:ServerHost",
+            "type:PingEvent"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "trait:Host",
+      "hash": "*",
+      "doc": "The game.",
+      "paths": [
+        "Host"
+      ],
+      "role": "call",
+      "side": "both",
+      "methods": [
+        {
+          "id": "method:Host::time",
+          "hash": "*",
+          "doc": "The time.",
+          "signature": "fn time(&self) -> u64",
+          "required": true,
+          "wasm": true,
+          "refs": [
+            "trait:Host"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "trait:Registrar",
+      "hash": "*",
+      "doc": "Where Parts are attached.",
+      "paths": [
+        "Registrar"
+      ],
+      "role": "none",
+      "side": "both",
+      "methods": []
+    },
+    {
+      "id": "trait:ServerHost",
+      "hash": "*",
+      "doc": "The server's game.",
+      "paths": [
+        "ServerHost"
+      ],
+      "role": "call",
+      "side": "server",
+      "bounds": [
+        "Host"
+      ],
+      "refs": [
+        "trait:Host"
+      ],
+      "methods": [
+        {
+          "id": "method:ServerHost::save",
+          "hash": "*",
+          "doc": "Saves.\n\nNot on wasm: it writes\nfiles.",
+          "wasm_reason": "it writes files.",
+          "signature": "fn save(&mut self, _: u8)",
+          "required": true,
+          "wasm": false,
+          "refs": [
+            "trait:ServerHost"
+          ]
+        },
+        {
+          "id": "method:ServerHost::send",
+          "hash": "*",
+          "doc": "Sends a text.",
+          "wasm_reason": "Text does not cross",
+          "signature": "fn send(&mut self, _: Text) -> bool",
+          "required": true,
+          "wasm": false,
+          "refs": [
+            "trait:ServerHost",
+            "type:Text"
+          ]
+        }
+      ]
+    }
+  ],
+  "handles": [
+    {
+      "id": "handle:Host::draw",
+      "hash": "*",
+      "doc": "Draws.",
+      "signature": "fn draw(&self)",
+      "wasm": true,
+      "refs": [
+        "trait:Host"
+      ]
+    },
+    {
+      "id": "handle:Point::ORIGIN",
+      "hash": "*",
+      "doc": "The origin.",
+      "signature": "const ORIGIN: Point",
+      "wasm": true,
+      "refs": [
+        "type:Point"
+      ]
+    },
+    {
+      "id": "handle:Point::inner_from",
+      "hash": "*",
+      "doc": "Moves from.",
+      "signature": "fn inner_from(&self)",
+      "wasm": true,
+      "refs": [
+        "type:Point"
+      ]
+    },
+    {
+      "id": "handle:Point::move_from",
+      "hash": "*",
+      "doc": "Moves from.",
+      "signature": "fn move_from(&self)",
+      "wasm": true,
+      "refs": [
+        "type:Point"
+      ]
+    },
+    {
+      "id": "handle:Point::move_to",
+      "hash": "*",
+      "doc": "Moves to.",
+      "signature": "fn move_to(&self)",
+      "wasm": true,
+      "refs": [
+        "type:Point"
+      ]
+    },
+    {
+      "id": "handle:Point::outer_to",
+      "hash": "*",
+      "doc": "Moves to.",
+      "signature": "fn outer_to(&self)",
+      "wasm": true,
+      "refs": [
+        "type:Point"
+      ]
+    },
+    {
+      "id": "handle:Registrar::attach",
+      "hash": "*",
+      "doc": "Attaches a part to the block `key` names.",
+      "signature": "fn attach(&mut self, _: SlotKey)",
+      "wasm": true,
+      "refs": [
+        "trait:Registrar",
+        "type:SlotKey"
+      ]
+    },
+    {
+      "id": "handle:Registrar::draw",
+      "hash": "*",
+      "doc": "Draws.",
+      "signature": "fn draw(&self)",
+      "wasm": true,
+      "refs": [
+        "trait:Registrar"
+      ]
+    },
+    {
+      "id": "handle:entity::EntityRef::id",
+      "hash": "*",
+      "doc": "Its id.",
+      "signature": "fn id(self) -> u32",
+      "wasm": true,
+      "refs": [
+        "type:entity::EntityRef"
+      ]
+    },
+    {
+      "id": "handle:entity::EntityRef::path",
+      "hash": "*",
+      "doc": "Its file.\n\nNot on wasm: it reads a file.",
+      "wasm_reason": "it reads a file.",
+      "signature": "fn path(self) -> Outcome<String>",
+      "wasm": false,
+      "refs": [
+        "type:Outcome",
+        "type:entity::EntityRef"
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "id": "fn:first",
+      "hash": "*",
+      "doc": "The first part.",
+      "paths": [
+        "first"
+      ],
+      "signature": "fn first<'a>(_: &'a Text) -> &'a Text",
+      "wasm": true,
+      "refs": [
+        "type:Text"
+      ]
+    },
+    {
+      "id": "fn:ground",
+      "hash": "*",
+      "doc": "Finds the ground.",
+      "paths": [
+        "ground"
+      ],
+      "signature": "fn ground(_: entity::EntityRef) -> Option<Point>",
+      "wasm": true,
+      "refs": [
+        "type:Point",
+        "type:entity::EntityRef"
+      ]
+    }
+  ],
+  "macros": [
+    {
+      "id": "macro:Wire",
+      "hash": "*",
+      "doc": "The derive.",
+      "kind": "derive",
+      "attributes": [
+        "wire"
+      ]
+    },
+    {
+      "id": "macro:horizon_mod",
+      "hash": "*",
+      "doc": "Marks the mod.",
+      "kind": "attribute"
+    },
+    {
+      "id": "macro:key",
+      "hash": "*",
+      "doc": "Makes a key.",
+      "kind": "declarative"
+    }
+  ],
+  "types": [
+    {
+      "id": "type:CapabilityKey",
+      "hash": "*",
+      "doc": "A capability key.",
+      "shape": null,
+      "paths": [
+        "CapabilityKey"
+      ],
+      "fields_hash": "*",
+      "kind": "struct",
+      "generics": "<T: ?Sized>",
+      "wire": false,
+      "constructible": true,
+      "fields": [
+        {
+          "id": "type:CapabilityKey.name",
+          "hash": "*",
+          "type": "&'static str",
+          "refs": [
+            "type:CapabilityKey"
+          ]
+        },
+        {
+          "id": "type:CapabilityKey.handler",
+          "hash": "*",
+          "type": "PhantomData<T>",
+          "refs": [
+            "type:CapabilityKey"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:Colour",
+      "hash": "*",
+      "doc": "A colour.",
+      "shape": null,
+      "paths": [
+        "Colour"
+      ],
+      "kind": "enum",
+      "wire": false,
+      "constructible": false,
+      "non_exhaustive": true,
+      "variants": [
+        {
+          "id": "type:Colour.Red",
+          "hash": "*",
+          "refs": [
+            "type:Colour"
+          ]
+        },
+        {
+          "id": "type:Colour.Rgb",
+          "hash": "*",
+          "fields": [
+            {
+              "name": "0",
+              "type": "u8"
+            },
+            {
+              "name": "1",
+              "type": "u8"
+            },
+            {
+              "name": "2",
+              "type": "u8"
+            }
+          ],
+          "refs": [
+            "type:Colour"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:Context",
+      "hash": "*",
+      "doc": "Context that crosses by a hand-written impl alone.",
+      "shape": null,
+      "paths": [
+        "Context"
+      ],
+      "fields_hash": "*",
+      "kind": "unit_struct",
+      "wire": true,
+      "wire_form": "manual",
+      "constructible": true
+    },
+    {
+      "id": "type:Ident",
+      "hash": "*",
+      "doc": "An identifier, encoded by hand.",
+      "shape": "*",
+      "paths": [
+        "Ident"
+      ],
+      "fields_hash": "*",
+      "kind": "struct",
+      "wire": true,
+      "wire_form": "fields",
+      "constructible": false,
+      "fields": [
+        {
+          "id": "type:Ident.namespace",
+          "hash": "*",
+          "type": "String",
+          "refs": [
+            "type:Ident"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:Limits",
+      "hash": "*",
+      "doc": "Limits a mod reads but cannot build.",
+      "shape": null,
+      "paths": [
+        "Limits"
+      ],
+      "fields_hash": "*",
+      "kind": "struct",
+      "wire": false,
+      "constructible": false,
+      "non_exhaustive": true,
+      "fields": [
+        {
+          "id": "type:Limits.max",
+          "hash": "*",
+          "type": "u32",
+          "refs": [
+            "type:Limits"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:Mode",
+      "hash": "*",
+      "doc": "A mode.",
+      "shape": null,
+      "paths": [
+        "Mode"
+      ],
+      "kind": "enum",
+      "wire": false,
+      "constructible": true,
+      "members": [
+        "On",
+        "Off { reason: String }"
+      ],
+      "variants": [
+        {
+          "id": "type:Mode.On",
+          "hash": "*",
+          "refs": [
+            "type:Mode"
+          ]
+        },
+        {
+          "id": "type:Mode.Off",
+          "hash": "*",
+          "fields": [
+            {
+              "name": "reason",
+              "type": "String"
+            }
+          ],
+          "named": true,
+          "refs": [
+            "type:Mode"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:Name",
+      "hash": "*",
+      "doc": "A name that crosses as a string.",
+      "shape": "*",
+      "paths": [
+        "Name"
+      ],
+      "fields_hash": "*",
+      "kind": "tuple_struct",
+      "wire": true,
+      "wire_form": "via:String",
+      "constructible": false
+    },
+    {
+      "id": "type:Outcome",
+      "hash": "*",
+      "doc": "A result of the fixture.",
+      "shape": null,
+      "paths": [
+        "Outcome"
+      ],
+      "kind": "alias",
+      "generics": "<T>",
+      "wire": false,
+      "constructible": false,
+      "target": "Result<T, Colour>",
+      "refs": [
+        "type:Colour"
+      ]
+    },
+    {
+      "id": "type:PingEvent",
+      "hash": "*",
+      "doc": "The event of `ping`.",
+      "shape": null,
+      "fields_hash": "*",
+      "kind": "struct",
+      "generics": "<'a>",
+      "wire": false,
+      "constructible": true,
+      "fields": [
+        {
+          "id": "type:PingEvent.who",
+          "hash": "*",
+          "type": "entity::EntityRef",
+          "refs": [
+            "type:PingEvent",
+            "type:entity::EntityRef"
+          ]
+        },
+        {
+          "id": "type:PingEvent.lines",
+          "hash": "*",
+          "type": "&'a mut Vec<(Text, u32)>",
+          "refs": [
+            "type:PingEvent",
+            "type:Text"
+          ]
+        },
+        {
+          "id": "type:PingEvent.cancelled",
+          "hash": "*",
+          "type": "bool",
+          "refs": [
+            "type:PingEvent"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:Point",
+      "hash": "*",
+      "doc": "A point.",
+      "shape": "*",
+      "paths": [
+        "Point"
+      ],
+      "impls": [
+        "Clone",
+        "Copy",
+        "Default"
+      ],
+      "fields_hash": "*",
+      "kind": "struct",
+      "wire": true,
+      "wire_form": "derive",
+      "constructible": true,
+      "fields": [
+        {
+          "id": "type:Point.x",
+          "hash": "*",
+          "type": "i32",
+          "refs": [
+            "type:Point"
+          ]
+        },
+        {
+          "id": "type:Point.y",
+          "hash": "*",
+          "type": "i32",
+          "refs": [
+            "type:Point"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:SlotKey",
+      "hash": "*",
+      "doc": "A key whose Wire impl a macro writes.",
+      "shape": "*",
+      "paths": [
+        "SlotKey"
+      ],
+      "fields_hash": "*",
+      "kind": "tuple_struct",
+      "wire": true,
+      "wire_form": "fields",
+      "constructible": false
+    },
+    {
+      "id": "type:Text",
+      "hash": "*",
+      "doc": "A text: parts of parts.",
+      "shape": "*",
+      "paths": [
+        "Text"
+      ],
+      "impls": [
+        "Clone",
+        "Debug"
+      ],
+      "fields_hash": "*",
+      "kind": "struct",
+      "wire": true,
+      "wire_form": "derive",
+      "constructible": false,
+      "fields": [
+        {
+          "id": "type:Text.parts",
+          "hash": "*",
+          "type": "Vec<Text>",
+          "refs": [
+            "type:Text"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:TickBlockEvent",
+      "hash": "*",
+      "doc": "The event of `tick_block`.",
+      "shape": null,
+      "fields_hash": "*",
+      "kind": "struct",
+      "wire": false,
+      "constructible": true,
+      "fields": [
+        {
+          "id": "type:TickBlockEvent.pos",
+          "hash": "*",
+          "type": "Point",
+          "refs": [
+            "type:Point",
+            "type:TickBlockEvent"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "type:entity::EntityRef",
+      "hash": "*",
+      "doc": "A live entity.",
+      "shape": "*",
+      "paths": [
+        "EntityRef",
+        "entity::EntityRef"
+      ],
+      "impls": [
+        "Clone",
+        "Copy"
+      ],
+      "fields_hash": "*",
+      "kind": "tuple_struct",
+      "wire": true,
+      "wire_form": "derive",
+      "constructible": false
+    },
+    {
+      "id": "type:shared::Thing",
+      "hash": "*",
+      "doc": "A thing.",
+      "shape": null,
+      "paths": [
+        "s1::Thing",
+        "s10::Thing",
+        "s11::Thing",
+        "s12::Thing",
+        "s13::Thing",
+        "s14::Thing",
+        "s15::Thing",
+        "s16::Thing",
+        "s17::Thing",
+        "s2::Thing",
+        "s3::Thing",
+        "s4::Thing",
+        "s5::Thing",
+        "s6::Thing",
+        "s7::Thing",
+        "s8::Thing",
+        "shared::Thing"
+      ],
+      "fields_hash": "*",
+      "kind": "unit_struct",
+      "wire": false,
+      "constructible": true
+    }
+  ],
+  "parts": [
+    {
+      "id": "part:block",
+      "hash": "*",
+      "doc": "A block's part.",
+      "hooks": [
+        "hook:tick_block"
+      ],
+      "trait": "trait:BlockPart"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "capability:fixture:fluids",
+      "hash": "*",
+      "doc": "Fluids.",
+      "kind": "block",
+      "constant": "FLUIDS",
+      "handler": "dyn FluidHandler",
+      "refs": [
+        "trait:FluidHandler"
+      ]
+    },
+    {
+      "id": "capability:fixture:more_fluids",
+      "hash": "*",
+      "doc": "Fluids, made by a constructor.",
+      "kind": "block",
+      "constant": "MORE_FLUIDS",
+      "handler": "dyn FluidHandler",
+      "refs": [
+        "trait:FluidHandler"
+      ]
+    },
+    {
+      "id": "capability:registries",
+      "hash": "*",
+      "doc": "New registries.",
+      "kind": "manifest"
+    }
+  ],
+  "behaviours": []
+}

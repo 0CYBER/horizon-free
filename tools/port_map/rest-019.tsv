@@ -17,7 +17,7 @@ PackFormat.IntermediaryFormat.validateOldFormat	port	crates/horizon-client-rende
 PackFormat.IntermediaryFormat.validatePackFormatForRange	port	crates/horizon-client-render/src/packs.rs::validate_pack_format_for_range	a pack_format outside min to max is refused, and a multi-version pack may not support below format 15
 PackMetadataSection.codecForPackType	skip:java		codec for the pack section; packs.rs::pack reads the same fields
 PackMetadataSection.forPackType	skip:java		picks the section type per pack type; Horizon reads one pack section
-BuiltInPackSource.loadPacks	port	crates/horizon-client-render/src/packs.rs::discover	built-in Programmer Art and High Contrast packs; the vanilla pack is added by game/packs.rs::pack_infos
+BuiltInPackSource.loadPacks	port	crates/horizon-client-render/src/packs.rs::discover	built-in Programmer Art and High Contrast packs; the vanilla pack is added by game/world/packs/mod.rs::pack_infos
 BuiltInPackSource.listBundledPacks	inline	crates/horizon-client-render/src/packs.rs::discover	the two bundled ids, found in the resources folder
 BuiltInPackSource.discoverPacksInPath	inline	crates/horizon-client-render/src/packs.rs::discover	bundled folder scan, folded into discover
 FolderRepositorySource.loadPacks	port	crates/horizon-client-render/src/packs.rs::discover	resourcepacks/ folder: folders and zips, sorted by id
@@ -29,9 +29,9 @@ Pack.readPackMetadata	inline	crates/horizon-client-render/src/packs.rs::pack	gap
 Pack.equals	skip:java		identity by pack id; the selection model compares ids
 PackDetector.detectPackResources	inline	crates/horizon-client-render/src/packs.rs::discover	gap: minor: no symlink validation; a folder without pack.mcmeta is dropped by pack()
 PackRepository.displayPackList	skip:debug		pack ids for the system report (MinecraftServer)
-PackRepository.reload	port	crates/horizon-client/src/game/packs.rs::Game::refresh_pack_lists	re-discovers the packs and resets the selection
+PackRepository.reload	port	crates/horizon-client/src/game/world/packs/mod.rs::Game::refresh_pack_lists	re-discovers the packs and resets the selection
 PackRepository.discoverAvailable	port	crates/horizon-client-render/src/packs.rs::discover	scans the sources for packs
-PackRepository.isAbleToClearAnyPack	port	crates/horizon-client-render/src/packs.rs::able_to_clear_any_pack	a failed reload drops every selected pack and toasts (game/packs.rs::selection_reload_failed), as clearResourcePacksOnError does
+PackRepository.isAbleToClearAnyPack	port	crates/horizon-client-render/src/packs.rs::able_to_clear_any_pack	a failed reload drops every selected pack and toasts (game/world/packs/mod.rs::selection_reload_failed), as clearResourcePacksOnError does
 PackRepository.addPack	inline	crates/horizon-client-render/src/packs.rs::SelectionModel::activate	gap: minor: vanilla appends by id with no position rules
 PackRepository.removePack	inline	crates/horizon-client-render/src/packs.rs::SelectionModel::activate	gap: minor: vanilla removes by id even when the pack is required; the screen never offers that
 PackRepository.getAvailablePacks	inline	crates/horizon-client-render/src/packs.rs::SelectionModel::rebuild	rebuild also adds required packs (vanilla and active downloaded server packs from Game::pack_infos)
@@ -65,20 +65,20 @@ MultiPackResourceManager.listResources	skip:other		same overlay folder listing
 MultiPackResourceManager.listResourceStacks	skip:other		same overlay folder listing
 MultiPackResourceManager.checkTrailingDirectoryPath	skip:java		argument check for the resource listing API, which Horizon lacks
 ProfiledReloadInstance	skip:debug		reload timing log (profiler), which Horizon does not keep
-ReloadableResourceManager.createReload	port	crates/horizon-client/src/game/packs.rs::Game::spawn_pack_reload	starts the reload worker; stage_pack builds the new overlay root and resources
+ReloadableResourceManager.createReload	port	crates/horizon-client/src/game/world/packs/mod.rs::Game::spawn_pack_reload	starts the reload worker; stage_pack builds the new overlay root and resources
 Resource	skip:other		lazy stream and sidecar metadata; Horizon reads host files and each feature reads its own .png.mcmeta
 ResourceFilterSection.isNamespaceFiltered	inline	crates/horizon-client-render/src/packs.rs::Filter::blocks	gap: minor: no namespace-only test; blocks checks the namespace inside a file path
 ResourceFilterSection.isPathFiltered	port	crates/horizon-client-render/src/packs.rs::Filter::blocks	path test of a filter entry
-ResourceManagerReloadListener.reload	port	crates/horizon-client/src/game/packs.rs::Game::apply_staged_pack	the render-thread apply of a reload
+ResourceManagerReloadListener.reload	port	crates/horizon-client/src/game/world/packs/mod.rs::Game::apply_staged_pack	the render-thread apply of a reload
 ResourceMetadata.fromJsonStream	port	crates/horizon-client-render/src/packs.rs::read_meta	gap: minor: reads pack.mcmeta only; sections are read by key in pack()
 ResourceMetadata.of	skip:java		map-backed metadata constructor
 ResourceMetadata.getTypedSections	skip:java		typed view over sections; Horizon reads sections by key
 ResourceProvider.getResourceOrThrow	skip:java		Option instead of a thrown FileNotFound
 SimpleJsonResourceReloadListener.prepare	port	crates/horizon-client-render/src/datapack.rs::DataStore::load	functions and function tags are parsed, and the content tables' files (recipe, recipe_filter, loot_table, advancement, trade_set, villager_trade, dialog, data_maps, tags) are kept by id in `files` for those tables to merge over the resource root
-SimplePreparableReloadListener.reload	port	crates/horizon-client/src/game/packs.rs::stage_pack	gap: minor: the prepare half; apply_staged_pack does the apply
-SimpleReloadInstance.of	port	crates/horizon-client/src/game/packs.rs::PackReload::spawn	stage then apply, in one call: the worker stages, drive_pack_reload applies
-SimpleReloadInstance.startTasks	inline	crates/horizon-client/src/game/packs.rs::Game::reload_packs	defers while a world or rest loads; errors go to Options
-SimpleReloadInstance.prepareTasks	port	crates/horizon-client/src/game/packs.rs::stage_pack	gap: minor: one staging pass, no per-listener barrier chain
+SimplePreparableReloadListener.reload	port	crates/horizon-client/src/game/world/packs/mod.rs::stage_pack	gap: minor: the prepare half; apply_staged_pack does the apply
+SimpleReloadInstance.of	port	crates/horizon-client/src/game/world/packs/mod.rs::PackReload::spawn	stage then apply, in one call: the worker stages, drive_pack_reload applies
+SimpleReloadInstance.startTasks	inline	crates/horizon-client/src/game/world/packs/mod.rs::Game::reload_packs	defers while a world or rest loads; errors go to Options
+SimpleReloadInstance.prepareTasks	port	crates/horizon-client/src/game/world/packs/mod.rs::stage_pack	gap: minor: one staging pass, no per-listener barrier chain
 SimpleReloadInstance.getActualProgress	skip:ui		progress fraction of the reload screen
 SimpleReloadInstance.weightProgress	skip:ui		progress weights of the reload screen
 SimpleReloadInstance.create	skip:debug		chooses profiled or plain reload
@@ -98,19 +98,19 @@ CachedUserNameToIdResolver.lookupGameProfile	port	crates/horizon-server-files/sr
 CachedUserNameToIdResolver.getTopMRUProfiles	inline	crates/horizon-server-files/src/user_cache.rs::UserCache::to_json	the 1000 most recently used entries
 CachedUserNameToIdResolver.writeGameProfile	inline	crates/horizon-server-files/src/user_cache.rs::UserCache::to_json	entry JSON with expiresOn
 CachedUserNameToIdResolver.readGameProfile	port	crates/horizon-server-files/src/user_cache.rs::UserCache::parse	reads entries with their expiry dates
-IpBanList.isBanned	port	crates/horizon-client/src/game/dedicated.rs::Lists::can_login	the IP ban branch of the login check
-IpBanList.getIpFromAddress	inline	crates/horizon-client/src/game/dedicated.rs::Lists::can_login	gap: minor: the address comes from IpAddr, not a cut of the text
-IpBanList.add	port	crates/horizon-client/src/game/dedicated.rs::Game::console_command	ban-ip: adds, replies, kicks matching players; gap: minor: no JSON-RPC ipBanned notice
-IpBanList.remove	port	crates/horizon-client/src/game/dedicated.rs::Game::console_command	pardon-ip: removes and replies; gap: minor: no JSON-RPC ipUnbanned notice
+IpBanList.isBanned	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Lists::can_login	the IP ban branch of the login check
+IpBanList.getIpFromAddress	inline	crates/horizon-client/src/game/interface/dedicated/mod.rs::Lists::can_login	gap: minor: the address comes from IpAddr, not a cut of the text
+IpBanList.add	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_command	ban-ip: adds, replies, kicks matching players; gap: minor: no JSON-RPC ipBanned notice
+IpBanList.remove	port	crates/horizon-client/src/game/interface/dedicated/mod.rs::Game::console_command	pardon-ip: removes and replies; gap: minor: no JSON-RPC ipUnbanned notice
 IpBanList.clear	skip:server		only the JSON-RPC ban API calls clear (MinecraftBanListServiceImpl); Horizon has no JSON-RPC server
 IpBanListEntry.createIpInfo	port	crates/horizon-server-files/src/user_lists.rs::BanEntry::from_json	reads the ip field of an entry
 IpBanListEntry.serialize	port	crates/horizon-server-files/src/user_lists.rs::BanEntry::serialize	writes the ip field and the ban fields
-OldUsersConverter.readOldListFormat	missing		the server reads `ops.json`, `whitelist.json` and `banned-players.json` (`game/dedicated.rs:439-441`); the pre-1.7 text lists have no reader
+OldUsersConverter.readOldListFormat	missing		the server reads `ops.json`, `whitelist.json` and `banned-players.json` (`game/interface/dedicated/mod.rs:439-441`); the pre-1.7 text lists have no reader
 OldUsersConverter.lookupPlayers	missing		part of the old list conversion, which has no counterpart: names are resolved by the json lists' own uuids
-OldUsersConverter.convertUserBanlist	missing		no conversion of an old `banned-players.txt`: the ban list is `banned-players.json` (`game/dedicated.rs:441`)
+OldUsersConverter.convertUserBanlist	missing		no conversion of an old `banned-players.txt`: the ban list is `banned-players.json` (`game/interface/dedicated/mod.rs:441`)
 OldUsersConverter.convertIpBanlist	missing		no conversion of an old `banned-ips.txt`
-OldUsersConverter.convertOpsList	missing		no conversion of an old `ops.txt`: the op list is `ops.json` (`game/dedicated.rs:439`)
-OldUsersConverter.convertWhiteList	missing		no conversion of an old `whitelist.txt`: the whitelist is `whitelist.json` (`game/dedicated.rs:440`)
+OldUsersConverter.convertOpsList	missing		no conversion of an old `ops.txt`: the op list is `ops.json` (`game/interface/dedicated/mod.rs:439`)
+OldUsersConverter.convertWhiteList	missing		no conversion of an old `whitelist.txt`: the whitelist is `whitelist.json` (`game/interface/dedicated/mod.rs:440`)
 OldUsersConverter.convertMobOwnerIfNecessary	missing		a name owner on an old tamed mob is not turned into a uuid; the datafix handles `OwnerUUID` only
 OldUsersConverter.convertPlayers	missing		old `world/players/*.dat` files are not moved into `playerdata`
 OldUsersConverter.ensureDirectoryExists	skip:other		helper of the file moves, which Horizon does not do

@@ -5,7 +5,7 @@
 //! observers for the parity harness; this is the same data with the lookup a
 //! slot needs, and no observer (vanilla's own player uses the plain class).
 use crate::items::ItemStack;
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -34,23 +34,28 @@ impl UseCooldown {
     }
     /// The component as a stack's saved `components` holds it.
     pub fn from_tag(t: &Tag) -> Option<Self> {
+        let (seconds, group) = Self::fields_from_tag(t)?;
+        Some(Self {
+            seconds,
+            group: group.and_then(|tag| match tag {
+                Tag::String(s) => Some(Arc::from(s.to_string_lossy())),
+                _ => None,
+            }),
+        })
+    }
+    /// Borrow the persistent record fields, using `NbtOps`' boxed-number float conversion.
+    /// Codec validation belongs to the caller; this also serves existing saved-stack readers.
+    pub fn fields_from_tag(t: &Tag) -> Option<(f32, Option<&Tag>)> {
         let Tag::Compound(c) = t else {
             return None;
         };
-        let text = |k: &str| match c.get(&horizon_world::nbt::JavaString::from(k)) {
-            Some(Tag::String(s)) => Some(s.to_string_lossy()),
-            _ => None,
+        let field = |name: &str| {
+            c.iter()
+                .find(|(key, _)| key.0.iter().copied().eq(name.encode_utf16()))
+                .map(|(_, value)| value)
         };
-        // NbtOps.getNumberValue: any numeric tag (vanilla's codec reads a
-        // positive float).
-        let seconds = horizon_world::datafix::dynamic::as_number(
-            c.get(&horizon_world::nbt::JavaString::from("seconds"))?,
-        )?
-        .float_value();
-        Some(Self {
-            seconds,
-            group: text("cooldown_group").map(Arc::from),
-        })
+        let seconds = horizon_world::datafix::dynamic::as_number(field("seconds")?)?.float_value();
+        Some((seconds, field("cooldown_group")))
     }
 }
 
@@ -117,6 +122,12 @@ impl Cooldowns {
     }
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+    /// Each group still cooling down and its ticks left, in no set order.
+    pub fn remaining(&self) -> impl Iterator<Item = (&Arc<str>, i32)> {
+        self.entries
+            .iter()
+            .map(|(group, (_, end))| (group, end.wrapping_sub(self.tick_count)))
     }
 }
 

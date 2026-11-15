@@ -11,6 +11,7 @@ use horizon_core::{
     jmath,
     random::RandomSource,
 };
+use mod_api::Pose;
 use std::collections::HashMap;
 
 // `variant3` is the pose, `variant` the pose the animations last saw,
@@ -166,7 +167,7 @@ pub(super) fn jump_vector(
 /// `LongJumpUtil.isClearTransition`: the box of `Pose.LONG_JUMPING` fits at
 /// points no further apart than nine tenths of its smaller side.
 fn clear_transition(m: &Mob, w: &MobWorld, from: Vec3, to: Vec3) -> bool {
-    let (width, height, _) = m.awake_dims_in(true);
+    let (width, height, _) = m.dims_in_pose(Pose::LongJumping);
     let (width, height) = (width as f32, height as f32);
     let d = to.subtract(from);
     let min = f64::from(width.min(height));
@@ -204,8 +205,8 @@ pub(super) fn optimal_jump_vector(m: &mut Mob, target: Vec3) -> Option<Vec3> {
             .extra
             .effects
             .iter()
-            .find(|e| e.0 == "minecraft:jump_boost")
-            .map_or(0, |e| e.2);
+            .find(|e| e.id == "minecraft:jump_boost")
+            .map_or(0, |e| e.amplifier);
         // LivingEntity.getJumpBoostPower
         let boost = f64::from(0.1_f32 * (amp + 1) as f32);
         return Some(v.add_vector(Vec3::new(0.0, v.normalize().y * boost, 0.0)));
@@ -435,6 +436,7 @@ mod ground_particle_tests {
     /// feet, of the block it stands in or else the one it stands on; none as a
     /// passenger or over a block that draws nothing (air).
     #[test]
+    #[ignore = "daily"]
     fn a_breeze_crumbles_the_block_under_its_feet() {
         use crate::mobs::world::with_built_test_world;
         let ran = with_built_test_world(
@@ -508,7 +510,7 @@ mod ground_particle_tests {
         );
         // Without the vanilla data under .local/horizon-client there is no world
         // to crumble: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 
@@ -529,6 +531,8 @@ mod invulnerability_tests {
     /// Breeze takes normal damage from player, generic damage, fall damage.
     #[test]
     fn breeze_takes_normal_damage_from_player_fall_and_generic() {
+        let mut fixture = crate::health::TestLevel::new(0);
+        let mut level = fixture.level();
         let mut b = test_breeze(1);
         let initial_health = b.health;
         assert!(initial_health > 0.0);
@@ -536,7 +540,7 @@ mod invulnerability_tests {
         // Player attack
         let player_hit = Damage::player([0.0, 0.0, 0.0]);
         assert!(
-            b.damage(2.0, player_hit),
+            b.damage(&mut level, 2.0, player_hit),
             "player attack should hurt breeze"
         );
         assert_eq!(b.health, initial_health - 2.0);
@@ -545,7 +549,7 @@ mod invulnerability_tests {
         b.invulnerable = 0;
         let health_before_fall = b.health;
         assert!(
-            b.damage(3.0, Damage::fall()),
+            b.damage(&mut level, 3.0, Damage::fall()),
             "fall damage should hurt breeze"
         );
         assert_eq!(b.health, health_before_fall - 3.0);
@@ -554,7 +558,7 @@ mod invulnerability_tests {
         b.invulnerable = 0;
         let health_before_generic = b.health;
         assert!(
-            b.damage(1.0, Damage::of(DamageKind::Generic)),
+            b.damage(&mut level, 1.0, Damage::of(DamageKind::Generic)),
             "generic damage should hurt breeze"
         );
         assert_eq!(b.health, health_before_generic - 1.0);
@@ -565,13 +569,15 @@ mod invulnerability_tests {
     /// returning `false` from `m.damage(...)` and taking no damage.
     #[test]
     fn breeze_rejects_damage_from_another_breeze() {
+        let mut fixture = crate::health::TestLevel::new(0);
+        let mut level = fixture.level();
         let mut b = test_breeze(1);
         let initial_health = b.health;
 
         // Direct mob attack from another breeze
         let other_breeze_mob = Damage::mob(2, [0.0, 0.0, 0.0]).with_species(Species::Breeze);
         assert!(
-            !b.damage(5.0, other_breeze_mob),
+            !b.damage(&mut level, 5.0, other_breeze_mob),
             "breeze should reject damage from another breeze"
         );
         assert_eq!(b.health, initial_health, "health must not change");
@@ -584,7 +590,7 @@ mod invulnerability_tests {
             attacker_species: Some(Species::Breeze),
         };
         assert!(
-            !b.damage(3.0, other_breeze_proj),
+            !b.damage(&mut level, 3.0, other_breeze_proj),
             "breeze should reject projectile damage from another breeze"
         );
         assert_eq!(b.health, initial_health, "health must remain intact");
@@ -598,6 +604,8 @@ mod invulnerability_tests {
     /// Breeze accepts damage from other mob species (e.g. Zombie, Skeleton) when `source.attacker_species` is Zombie/Skeleton.
     #[test]
     fn breeze_accepts_damage_from_other_mob_species() {
+        let mut fixture = crate::health::TestLevel::new(0);
+        let mut level = fixture.level();
         let mut b = test_breeze(1);
         let initial_health = b.health;
 
@@ -608,7 +616,7 @@ mod invulnerability_tests {
             "breeze accepts damage from zombie"
         );
         assert!(
-            b.damage(4.0, zombie_hit),
+            b.damage(&mut level, 4.0, zombie_hit),
             "breeze must take damage from zombie"
         );
         assert_eq!(b.health, initial_health - 4.0);
@@ -621,7 +629,7 @@ mod invulnerability_tests {
             "breeze accepts damage from skeleton"
         );
         assert!(
-            b.damage(2.0, skeleton_hit),
+            b.damage(&mut level, 2.0, skeleton_hit),
             "breeze must take damage from skeleton"
         );
         assert_eq!(b.health, initial_health - 6.0);
@@ -632,6 +640,8 @@ mod invulnerability_tests {
     /// and verify bypasses_invulnerability behavior if applicable.
     #[test]
     fn breeze_rejects_self_damage_and_respects_invulnerability_flags() {
+        let mut fixture = crate::health::TestLevel::new(0);
+        let mut level = fixture.level();
         let mut b = test_breeze(1);
         let initial_health = b.health;
 
@@ -642,7 +652,7 @@ mod invulnerability_tests {
             "breeze rejects self-hit even without species"
         );
         assert!(
-            !b.damage(5.0, self_hit_no_species),
+            !b.damage(&mut level, 5.0, self_hit_no_species),
             "breeze takes no damage from itself"
         );
         assert_eq!(b.health, initial_health);
@@ -655,7 +665,7 @@ mod invulnerability_tests {
             "breeze rejects self-hit with species"
         );
         assert!(
-            !b.damage(5.0, self_hit_with_species),
+            !b.damage(&mut level, 5.0, self_hit_with_species),
             "breeze takes no damage from itself"
         );
         assert_eq!(b.health, initial_health);
@@ -665,7 +675,7 @@ mod invulnerability_tests {
         // Normal damage does not bypass invulnerability flag
         let normal_player = Damage::player([0.0, 0.0, 0.0]);
         assert!(
-            !b.damage(5.0, normal_player),
+            !b.damage(&mut level, 5.0, normal_player),
             "invulnerable_flag blocks normal player damage"
         );
         assert_eq!(b.health, initial_health);
@@ -674,7 +684,7 @@ mod invulnerability_tests {
         let kill_damage = Damage::of(DamageKind::GenericKill);
         assert!(kill_damage.kind.bypasses_invulnerability());
         assert!(
-            b.damage(1.0, kill_damage),
+            b.damage(&mut level, 1.0, kill_damage),
             "GenericKill bypasses invulnerability flag"
         );
         assert_eq!(b.health, initial_health - 1.0);
@@ -687,7 +697,7 @@ mod invulnerability_tests {
             "Breeze.isInvulnerableTo rejects breeze attacker even for GenericKill"
         );
         assert!(
-            !b.damage(1.0, breeze_kill),
+            !b.damage(&mut level, 1.0, breeze_kill),
             "breeze takes no damage from breeze GenericKill"
         );
     }

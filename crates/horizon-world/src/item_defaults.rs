@@ -1,29 +1,28 @@
-//! Items' default components, as everything in the game reads them: the
-//! resource root's `items.json` (vanilla's default-component report, with a
-//! content mod's items), then what native mods change in it
-//! ([`native_modify_default_components`], NeoForge's `ModifyDefaultComponentsEvent`).
-//! The item table, loot, enchanting, item models and the other readers all
-//! come through [`read`], so a mod's change reaches each of them, and stacks
-//! are saved and sent against the changed defaults as against vanilla's.
+//! A shared snapshot of the item defaults loaded after registries freeze.
+//! Native changes are applied by the owning load, never by metadata readers.
 
+use crate::native_load_context::LoadContext;
 use serde_json::{Map, Value};
 use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
-    sync::{Arc, Condvar, Mutex, OnceLock, Weak},
+    sync::{
+        Arc, Condvar, Mutex, OnceLock, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// An immutable default-component snapshot. Kept only while a resource load
 /// holds it: a later load reads the files and applies native hooks afresh.
 pub type Defaults = BTreeMap<String, Value>;
-static SHARED: Mutex<Vec<(PathBuf, Weak<Defaults>)>> = Mutex::new(Vec::new());
+static SHARED: Mutex<Vec<(PathBuf, Weak<ItemDefaults>)>> = Mutex::new(Vec::new());
 
 /// A resource load already reading and applying hooks to `items.json` for a
 /// root. Several startup tables ask for defaults in parallel; without this
 /// gate they can all miss `SHARED` and rerun the native hook for every item.
 struct InFlight {
-    result: Mutex<Option<Result<Arc<Defaults>, (io::ErrorKind, String)>>>,
+    result: Mutex<Option<Result<Arc<ItemDefaults>, (io::ErrorKind, String)>>>,
     ready: Condvar,
 }
 static IN_FLIGHT: OnceLock<Mutex<std::collections::HashMap<PathBuf, Arc<InFlight>>>> =
@@ -35,7 +34,7 @@ fn in_flight() -> &'static Mutex<std::collections::HashMap<PathBuf, Arc<InFlight
 
 /// Share parsed defaults with the other tables built during this load. Callers
 /// that need a fresh read regardless of other loads can still use [`read`].
-pub fn shared(root: &Path) -> io::Result<Arc<Defaults>> {
+pub fn shared(root: &Path) -> io::Result<Arc<ItemDefaults>> {
     let held = || {
         SHARED
             .lock()
@@ -124,45 +123,103 @@ fn stack_size(value: &Value, max: i64) -> Option<i64> {
     value.as_f64().map(|n| (n as i64).clamp(1, max))
 }
 
-/// Hook point for native mods (docs/native-mods.md, listed in `native-hooks.json`
-/// with those of `horizon-client/src/game/native_hooks.rs`): `components` holds
-/// `item`'s default components in `items.json`'s form (`"minecraft:max_stack_size": 16`,
-/// `"minecraft:food": {"nutrition": 4, "saturation": 2.4}`); insert or replace one to
-/// set it, remove it to take it away (a stack size outside 1 to `i32::MAX` is
-/// brought back into it, and one that is not a number leaves the data pack's
-/// own). Asked for every item each time the game reads the defaults, from any
-/// thread, several times as resources load and again when a world's data packs
-/// load: answer the same each time. Client and server each ask their own mods,
-/// as NeoForge does, so both sides need the mod.
-/// 79.
-#[inline(never)]
-pub fn native_modify_default_components(item: &str, components: &mut Map<String, Value>) {
-    crate::native_load_hooks::modify_default_components(item, components);
+// Root-keyed caches must also distinguish two snapshots of the same files.
+fn next_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-/// Every item's default components at `root`, by item id, with the mods'
-/// changes applied. A data pack's own stack size is kept to vanilla's 1 to 99
-/// (`ExtraCodecs.intRange`); a mod's, which no codec decodes, to 1 to
-/// [`MAX_STACK_SIZE`], the count the wire and the save carry.
-pub fn read(root: &Path) -> io::Result<BTreeMap<String, Value>> {
-    let mut items: BTreeMap<String, Value> =
-        serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
-    for (item, components) in &mut items {
-        if let Value::Object(components) = components {
-            // A data pack's own value goes through vanilla's codec.
-            if let Some(size) = components
-                .get(STACK_SIZE)
-                .and_then(|size| stack_size(size, VANILLA_MAX_STACK_SIZE))
-            {
-                components.insert(STACK_SIZE.into(), size.into());
-            }
+/// Hook point for NeoForge's `ModifyDefaultComponentsEvent`: asked once per
+/// item after registries freeze. Metadata readers share the resulting snapshot;
+/// a datapack reload does not replay this event.
+#[inline(never)]
+pub fn native_modify_default_components(
+    context: &LoadContext,
+    item: &str,
+    components: &mut Map<String, Value>,
+) {
+    crate::native_load_hooks::modify_default_components(context, item, components);
+}
+
+type Prototypes = BTreeMap<String, BTreeMap<String, Value>>;
+
+/// One owning load's published defaults and metadata, shared across loader workers.
+pub struct ItemData {
+    root: PathBuf,
+    context: LoadContext,
+    defaults: ItemDefaults,
+    prototypes: Result<Arc<Prototypes>, Arc<serde_json::Error>>,
+}
+
+impl ItemData {
+    pub fn load(root: &Path, context: LoadContext) -> io::Result<Self> {
+        let mut defaults = read(root)?;
+        defaults.apply_native(&context);
+        let prototypes = defaults
+            .entries()
+            .iter()
+            .map(|(item, components)| {
+                serde_json::from_value(components.clone())
+                    .map(|components| (item.clone(), components))
+            })
+            .collect::<serde_json::Result<Prototypes>>()
+            .map(Arc::new)
+            .map_err(Arc::new);
+        Ok(Self {
+            root: root.to_owned(),
+            context,
+            defaults,
+            prototypes,
+        })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn defaults(&self) -> &ItemDefaults {
+        &self.defaults
+    }
+
+    pub fn context(&self) -> &LoadContext {
+        &self.context
+    }
+
+    /// Borrow the canonical table; conversion errors retain their renderer-load timing.
+    pub fn prototypes(&self) -> io::Result<&Arc<Prototypes>> {
+        self.prototypes
+            .as_ref()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, Arc::clone(error)))
+    }
+}
+
+/// One resource generation's default components. The owning loader applies
+/// native changes before publishing this; consumers only borrow its entries.
+pub struct ItemDefaults {
+    entries: BTreeMap<String, Value>,
+    generation: u64,
+}
+
+impl ItemDefaults {
+    pub fn entries(&self) -> &BTreeMap<String, Value> {
+        &self.entries
+    }
+
+    /// Identity for caches of metadata derived from this snapshot.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Apply the registration-time event before the snapshot is shared.
+    pub(crate) fn apply_native(&mut self, context: &LoadContext) {
+        for (item, components) in &mut self.entries {
+            let Value::Object(components) = components else {
+                continue;
+            };
             let pack = components.get(STACK_SIZE).cloned();
-            native_modify_default_components(item, components);
-            // The hook bypasses the codec, and a size of 0 would break stack
-            // arithmetic; keep whatever it leaves a number every reader can
-            // use. A mod that takes the component away keeps it away, and a
-            // value that is not a number falls back to the data pack's (each
-            // table would otherwise read its own default from it).
+            native_modify_default_components(context, item, components);
+            // Hooks bypass the codec. Preserve removal, bound numeric sizes
+            // to the wire/save range, and keep the pack value for a non-number.
             match components.get(STACK_SIZE).cloned() {
                 None => {}
                 Some(size) => match stack_size(&size, MAX_STACK_SIZE) {
@@ -180,8 +237,27 @@ pub fn read(root: &Path) -> io::Result<BTreeMap<String, Value>> {
                 },
             }
         }
+        self.generation = next_generation();
     }
-    Ok(items)
+}
+
+/// Decode a default-component report, keeping a data pack's stack sizes in
+/// vanilla's `1..=99`. This is a codec, not a native firing boundary: the owning
+/// loader calls `apply_native` once, then publishes the immutable snapshot.
+pub fn read(root: &Path) -> io::Result<ItemDefaults> {
+    let mut entries: BTreeMap<String, Value> =
+        serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
+    for components in entries.values_mut() {
+        if let Some(value) = components.get_mut(STACK_SIZE)
+            && let Some(size) = stack_size(value, VANILLA_MAX_STACK_SIZE)
+        {
+            *value = size.into();
+        }
+    }
+    Ok(ItemDefaults {
+        entries,
+        generation: next_generation(),
+    })
 }
 
 #[cfg(test)]
@@ -204,21 +280,24 @@ mod tests {
         let first = super::shared(&root).unwrap();
         write(64);
         let second = super::shared(&root).unwrap();
-        assert_eq!(second["test:item"]["minecraft:max_stack_size"], 16);
+        assert_eq!(
+            second.entries()["test:item"]["minecraft:max_stack_size"],
+            16
+        );
         // Explicit fresh reads remain available even while a load owns its snapshot.
         assert_eq!(
-            super::read(&root).unwrap()["test:item"]["minecraft:max_stack_size"],
+            super::read(&root).unwrap().entries()["test:item"]["minecraft:max_stack_size"],
             64
         );
         drop((first, second));
         let next = super::shared(&root).unwrap();
-        assert_eq!(next["test:item"]["minecraft:max_stack_size"], 64);
+        assert_eq!(next.entries()["test:item"]["minecraft:max_stack_size"], 64);
         drop(next);
         fs::write(root.join("items.json"), "broken").unwrap();
         assert!(super::shared(&root).is_err());
         write(2);
         assert_eq!(
-            super::shared(&root).unwrap()["test:item"]["minecraft:max_stack_size"],
+            super::shared(&root).unwrap().entries()["test:item"]["minecraft:max_stack_size"],
             2
         );
         fs::remove_dir_all(root).unwrap();
@@ -238,7 +317,7 @@ mod tests {
         fs::write(root.join("items.json"), items).unwrap();
         let items = super::read(&root).unwrap();
         fs::remove_dir_all(&root).unwrap();
-        let size = |id: &str| items[id].get("minecraft:max_stack_size").cloned();
+        let size = |id: &str| items.entries()[id].get("minecraft:max_stack_size").cloned();
         assert_eq!(
             ["a:none", "a:less", "a:many", "a:some", "a:unset"].map(size),
             [
@@ -255,29 +334,7 @@ mod tests {
     /// leaves the data pack's, and a removed component stays removed.
     #[test]
     fn mod_sizes_are_sanitised() {
-        let _ = crate::native_load_hooks::install(crate::native_load_hooks::NativeLoadHooks {
-            loot_table_load: |_, _| {},
-            modify_default_components: |item, components| match item {
-                "a:raised" => {
-                    components.insert(super::STACK_SIZE.into(), 500.into());
-                }
-                "a:zero" => {
-                    components.insert(super::STACK_SIZE.into(), 0.into());
-                }
-                "a:huge" => {
-                    components.insert(super::STACK_SIZE.into(), u64::MAX.into());
-                }
-                "a:string" => {
-                    components.insert(super::STACK_SIZE.into(), "500".into());
-                }
-                "a:removed" => {
-                    components.remove(super::STACK_SIZE);
-                }
-                _ => {}
-            },
-            loot_function: |_, _, _, _| {},
-            loot_condition: |_, _, _, _| {},
-        });
+        crate::native_load_hooks::testing::install();
         let root = std::env::temp_dir().join(format!("horizon-mod-sizes-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let items = r#"{"a:raised": {"minecraft:max_stack_size": 64},
@@ -286,9 +343,17 @@ mod tests {
             "a:string": {"minecraft:max_stack_size": 16},
             "a:removed": {"minecraft:max_stack_size": 64}}"#;
         fs::write(root.join("items.json"), items).unwrap();
-        let items = super::read(&root).unwrap();
+        let inputs =
+            crate::native_load_context::LoadInputs::new(Default::default(), root.join("settings"));
+        let context = crate::native_load_context::LoadContext::new(
+            crate::native_load_context::DataLoadOrigin::ServerDataLoad,
+            std::sync::Arc::new(inputs),
+            [],
+        );
+        let mut items = super::read(&root).unwrap();
+        items.apply_native(&context);
         fs::remove_dir_all(&root).unwrap();
-        let size = |id: &str| items[id].get("minecraft:max_stack_size").cloned();
+        let size = |id: &str| items.entries()[id].get("minecraft:max_stack_size").cloned();
         assert_eq!(
             ["a:raised", "a:zero", "a:huge", "a:string", "a:removed"].map(size),
             [

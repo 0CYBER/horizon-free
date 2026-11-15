@@ -4,11 +4,11 @@
 //! sequence), `Mob.dropCustomDeathLoot` (equipment by drop chance, with the
 //! entity random), the species' extra drops (an enderman's carried block) and
 //! the experience orbs.
-use super::{Mob, Species, equine, gear, raider, render::DYE_NAMES, species};
+use super::{Mob, Species, equine, gear, raider, render::DYE_NAMES};
 use crate::random_sequences::RandomSequences;
 use horizon_core::random::{LegacyRandom, LevelRandom, RandomSource};
 use horizon_world::{
-    loot::{EntityLootParams, LootDamage, LootData, LootEntity, LootStack},
+    loot::{EnchantedLevel, EntityLootParams, LootDamage, LootData, LootEntity, LootStack},
     registry::BlockStateId,
 };
 
@@ -25,12 +25,13 @@ pub enum Drop {
     /// horse's chest), with its damage, name and components, dropped as it is.
     Stack(crate::items::ItemStack),
     /// `Enderman.dropCustomDeathLoot`: the carried block's own drops, rolled
-    /// with `enderman::carried_block_tool` (`enderman::carried_block_drops`).
+    /// with `enderman::carried_block_tool` (`enderman::carried_block_roll`).
     CarriedBlock(BlockStateId),
-    /// An experience orb of this value.
-    Orb(i32),
-    /// An item spawned with the `age` its `ItemEntity` starts at, not 0:
-    /// `ItemEntity.setExtendedLifetime` (`age = -6000`) doubles its lifetime.
+    /// The experience the mob is worth (`getExperienceReward`), before
+    /// `ExperienceOrb.award` splits it into orbs.
+    Experience(i32),
+    /// A custom death drop with an explicit initial item-entity age.
+    /// Bypasses stack-only table modifiers; joins the captured living drops.
     Aged(LootStack, i32),
 }
 
@@ -52,6 +53,35 @@ pub struct Death<'a> {
     /// The `doMobLoot` game rule.
     pub mob_drops: bool,
     pub world_seed: i64,
+}
+
+/// What a death's loot rolls with: the world's random sequences, the level's
+/// random and, when a mod listens, the game's answer to
+/// `enchanted_entity_loot`, asked in the middle of a roll.
+pub trait DeathRolls {
+    fn sequences(&mut self) -> &mut RandomSequences;
+    fn level_random(&mut self) -> &mut LegacyRandom;
+    /// Whether [`Self::enchanted_level`] is to be asked at all.
+    fn asks_enchanted_level(&self) -> bool {
+        false
+    }
+    /// The level a loot table uses of `enchantment`, given the attacker's.
+    fn enchanted_level(&mut self, _enchantment: &str, level: i32) -> i32 {
+        level
+    }
+}
+/// A death's randoms and nothing else: no mod is asked.
+pub struct PlainRolls<'a> {
+    pub sequences: &'a mut RandomSequences,
+    pub level_random: &'a mut LegacyRandom,
+}
+impl DeathRolls for PlainRolls<'_> {
+    fn sequences(&mut self) -> &mut RandomSequences {
+        self.sequences
+    }
+    fn level_random(&mut self) -> &mut LegacyRandom {
+        self.level_random
+    }
 }
 
 /// `instanceof Monster` (Monster.shouldDropLoot/shouldDropExperience).
@@ -187,19 +217,28 @@ fn is_raider(s: Species) -> bool {
 /// sun-protection slot is the body): the equines (a horse's armour, a llama's
 /// carpet, a camel's harness) and the wolf, happy ghast, nautilus and sulfur cube.
 pub fn body_slot_species(s: Species) -> bool {
-    species::body_slot(s) || equine::is_equine(s)
+    super::species::body_slot(s) || equine::is_equine(s)
 }
 
 /// The item a mob has in an `EquipmentSlot` (by name), with its enchantments.
 pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
     let (item, index) = match slot {
-        "mainhand" => (m.extra.main_hand.as_deref(), Some(gear::MAIN)),
-        "offhand" => (m.extra.off_hand.as_deref(), Some(gear::OFF)),
-        "head" => (m.extra.head.as_deref(), Some(gear::HEAD)),
-        "chest" => (m.extra.chest.as_deref(), Some(gear::CHEST)),
-        "legs" => (m.extra.legs.as_deref(), Some(gear::LEGS)),
-        "feet" => (m.extra.feet.as_deref(), Some(gear::FEET)),
-        "body" => (m.extra.body.as_deref(), None),
+        "mainhand" => (m.extra.main_hand_id(), Some(gear::MAIN)),
+        "offhand" => (m.extra.off_hand_id(), Some(gear::OFF)),
+        "head" => (m.extra.head_id(), Some(gear::HEAD)),
+        "chest" => (
+            m.extra.slot_id(horizon_items::equipment::CHEST),
+            Some(gear::CHEST),
+        ),
+        "legs" => (
+            m.extra.slot_id(horizon_items::equipment::LEGS),
+            Some(gear::LEGS),
+        ),
+        "feet" => (
+            m.extra.slot_id(horizon_items::equipment::FEET),
+            Some(gear::FEET),
+        ),
+        "body" => (m.extra.body_id(), None),
         "saddle" => {
             let saddle = m.saddle_item()?;
             let mut stack = loot_stack(&saddle.item, 1);
@@ -219,7 +258,7 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
     };
     let mut stack = loot_stack(item?, count as i32);
     if slot == "body" && m.species() == Species::Wolf {
-        stack.damage = m.extra.body_damage;
+        stack.damage = m.extra.body_damage();
     }
     if let Some(full) = stored_slot_stack(m, slot) {
         stack.damage = full.damage as i32;
@@ -232,8 +271,7 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
             stack.enchantments.push((e.to_string(), *l as i32));
         }
         if let Some(trim) = &g.trims[index] {
-            let trim =
-                horizon_client_core::scoreboard::tag_to_json(&crate::item_data::trim::to_nbt(trim));
+            let trim = Some(crate::item_data::trim::to_nbt(trim));
             stack.components.push(("minecraft:trim".to_owned(), trim));
         }
     }
@@ -254,15 +292,10 @@ fn slot_index(slot: &str) -> Option<usize> {
 }
 /// The whole stack the mob kept in `slot` (by name), when it kept one.
 fn stored_slot_stack(m: &Mob, slot: &str) -> Option<crate::items::ItemStack> {
-    if let Some(index) = slot_index(slot) {
-        return super::finalize::stored_stack(m, index);
-    }
-    // The body armour and the saddle keep their components in their own
-    // fields, so a named saddle or wolf's armor drops as the stack it is.
     match slot {
         "body" => m.equipment_stacks()[6].clone(),
         "saddle" => m.saddle_item(),
-        _ => None,
+        _ => super::finalize::stored_stack(m, slot_index(slot)?),
     }
 }
 /// `EnchantmentHelper.has(stack, EnchantmentEffectComponents.PREVENT_EQUIPMENT_DROP)`
@@ -295,33 +328,29 @@ pub fn clear_slot(m: &mut Mob, slot: &str) {
             gear::MAIN
         }
         "offhand" => {
-            m.extra.off_hand = None;
+            m.extra
+                .set_slot_stack(horizon_items::equipment::OFFHAND, None);
             gear::OFF
         }
         "head" => {
-            m.extra.head = None;
-            m.extra.armor[0] = None;
+            m.extra.set_slot_stack(horizon_items::equipment::HEAD, None);
             gear::HEAD
         }
         "chest" => {
-            m.extra.chest = None;
-            m.extra.armor[1] = None;
+            m.extra
+                .set_slot_stack(horizon_items::equipment::CHEST, None);
             gear::CHEST
         }
         "legs" => {
-            m.extra.legs = None;
-            m.extra.armor[2] = None;
+            m.extra.set_slot_stack(horizon_items::equipment::LEGS, None);
             gear::LEGS
         }
         "feet" => {
-            m.extra.feet = None;
-            m.extra.armor[3] = None;
+            m.extra.set_slot_stack(horizon_items::equipment::FEET, None);
             gear::FEET
         }
         "body" => {
-            m.extra.body = None;
-            m.extra.body_damage = 0;
-            m.extra.body_extra = None;
+            m.extra.set_body_stack(None);
             return;
         }
         "saddle" => {
@@ -363,7 +392,7 @@ pub fn drop_chance(m: &Mob, slot: &str) -> f32 {
         // always drops; a body item elsewhere came from a command or a save.
         "saddle" => 2.0,
         "body" if body_slot_species(m.species()) => 2.0,
-        "head" if is_raider(m.species()) && m.extra.head.as_deref() == Some(raider::BANNER) => 2.0,
+        "head" if is_raider(m.species()) && m.extra.head_id() == Some(raider::BANNER) => 2.0,
         "mainhand" if m.species() == Species::Vex => 0.0,
         _ => DEFAULT_DROP_CHANCE,
     }
@@ -374,7 +403,7 @@ pub fn is_preserved(m: &Mob, slot: &str) -> bool {
 }
 /// `Mob.dropPreservedEquipment`: drops any equipped items whose drop chance is > 1.0.
 pub fn drop_preserved_equipment(m: &mut Mob) -> Vec<crate::items::ItemStack> {
-    use horizon_world::player_inventory::EquipmentSlot;
+    use horizon_core::equipment_slot::EquipmentSlot;
     let mut dropped = Vec::new();
     for &slot in &SLOTS {
         if is_preserved(m, slot) {
@@ -439,16 +468,6 @@ pub fn loot_entity(m: &Mob, vehicle: Option<LootEntity>) -> LootEntity {
         .collect();
     e
 }
-/// `ExperienceOrb.getExperienceValue`.
-pub fn orb_value(amount: i32) -> i32 {
-    for v in [2477, 1237, 617, 307, 149, 73, 37, 17, 7, 3] {
-        if amount >= v {
-            return v;
-        }
-    }
-    1
-}
-
 /// What a mob clears on itself in `LivingEntity.die`, before any loot is
 /// rolled: `Wolf.die` drops the wet flag and the shake animation, so a wolf
 /// killed mid-shake does not shake on the ground.
@@ -456,6 +475,27 @@ pub fn death_state(m: &mut Mob) {
     if m.species() == Species::Wolf {
         super::tame::die(m);
     }
+}
+/// What `roll_death` collected, for `finish_death`.
+pub struct Rolled {
+    out: Vec<Drop>,
+    skulls: bool,
+    this: LootEntity,
+    allay_load: Option<(std::sync::Arc<str>, i32)>,
+    table_rolled: bool,
+}
+/// What a mod may change about the chance of one equipment slot
+/// (`GetEquipmentDropChanceEvent`), asked before its roll.
+pub struct EquipmentChoice<'a> {
+    pub slot: usize,
+    /// The stack that would drop (the mob's whole stack, damage as it is).
+    pub stack: &'a Drop,
+    /// `DropChances.byEquipment`, before the enchantments.
+    pub original: f32,
+    /// Whether the slot is preserved: it drops without a player kill.
+    pub preserved: bool,
+    /// The chance after the enchantments of the killer and the victim.
+    pub chance: f32,
 }
 /// `LivingEntity.die`'s drops for `m` (equipment it loses is removed from
 /// it). Returns the drops in spawn order and whether a charged creeper
@@ -468,7 +508,21 @@ pub fn die(
     sequences: &mut RandomSequences,
     level_random: &mut LevelRandom,
 ) -> (Vec<Drop>, bool) {
+    let rolled = roll_death(
+        m,
+        d,
+        &mut PlainRolls {
+            sequences,
+            level_random,
+        },
+    );
+    finish_death(m, d, rolled, None)
+}
+/// The first half of `die`: `dropFromLootTable`, which uses the world's
+/// random sequences, and what comes before it.
+pub fn roll_death(m: &mut Mob, d: &Death, rolls: &mut dyn DeathRolls) -> Rolled {
     let mut out = Vec::new();
+    let mut table_rolled = false;
     death_state(m);
     let this = loot_entity(m, d.vehicle.clone());
     let mut skulls = false;
@@ -484,14 +538,7 @@ pub fn die(
             player: None,
             luck: 0.0,
         };
-        let items = roll(
-            d,
-            "minecraft:charged_creeper/root",
-            &params,
-            sequences,
-            0,
-            level_random,
-        );
+        let items = roll(d, "minecraft:charged_creeper/root", &params, rolls, 0);
         skulls = items.iter().any(|i| !i.is_empty());
         out.extend(items.into_iter().filter(|i| !i.is_empty()).map(Drop::Item));
     }
@@ -506,46 +553,68 @@ pub fn die(
     }
     // `LivingEntity.dropAllDeathLoot`'s `shouldDropLoot`: the loot table and
     // `dropCustomDeathLoot` only; `dropEquipment` below always runs.
-    let death_table = death_loot_table(m, d.mob_drops);
-    if let Some(table) = death_table.as_deref() {
+    // Allay: what it carries (`ints[1]` of the held item) is its inventory.
+    let allay_load = (s == Species::Allay)
+        .then(|| {
+            super::finalize::item(m, super::finalize::MAINHAND).map(|item| (item, m.extra.ints[1]))
+        })
+        .flatten();
+    if let Some(table) = death_loot_table(m, d.mob_drops) {
         let params = EntityLootParams {
             this: this.clone(),
             damage: d.damage.clone(),
             player: d.player.clone().filter(|_| killed_by_player),
             luck: if killed_by_player { d.luck } else { 0.0 },
         };
-        let items = roll(
-            d,
-            table,
-            &params,
-            sequences,
-            m.extra.death_loot_seed,
-            level_random,
-        );
+        let items = roll(d, &table, &params, rolls, m.extra.death_table_seed);
         out.extend(items.into_iter().filter(|i| !i.is_empty()).map(Drop::Item));
+        table_rolled = true;
+    }
+    Rolled {
+        out,
+        skulls,
+        this,
+        allay_load,
+        table_rolled,
+    }
+}
+/// The second half of `die`: `Mob.dropCustomDeathLoot` (each slot's chance,
+/// roll and clear, in order, with `choose` asked for a slot just before its
+/// roll), the species' extras and the experience.
+pub fn finish_death(
+    m: &mut Mob,
+    d: &Death,
+    rolled: Rolled,
+    mut choose: Option<&mut dyn FnMut(EquipmentChoice<'_>) -> f32>,
+) -> (Vec<Drop>, bool) {
+    let Rolled {
+        mut out,
+        skulls,
+        this,
+        allay_load,
+        table_rolled,
+    } = rolled;
+    let killed_by_player = d.player_killed;
+    let s = m.species();
+    if table_rolled {
         // Mob.dropCustomDeathLoot.
-        let damage_params = EntityLootParams {
-            this: this.clone(),
-            damage: d.damage.clone(),
-            player: None,
-            luck: 0.0,
-        };
-        let living_attacker = d
-            .damage
-            .as_ref()
-            .and_then(|x| x.source.as_ref())
-            .is_some_and(|a| a.living);
-        for slot in SLOTS {
+        let damage_params = damage_context(this.clone(), d);
+        for (index, slot) in SLOTS.iter().enumerate() {
             let stack = slot_item(m, slot);
-            let mut chance = drop_chance(m, slot);
-            if chance == 0.0 {
+            let Some((mut chance, preserve)) = slot_chance(m, d, &damage_params, slot) else {
                 continue;
-            }
-            let preserve = chance > 1.0;
-            if living_attacker {
-                chance = d.loot.equipment_drop_chance(&damage_params, chance);
-            }
+            };
             let Some(mut stack) = stack else { continue };
+            if let Some(choose) = choose.as_mut() {
+                let considered = slot_drop(m, slot, stack.clone());
+                chance = choose(EquipmentChoice {
+                    slot: index,
+                    stack: &considered,
+                    original: drop_chance(m, slot),
+                    preserved: preserve,
+                    chance,
+                });
+            }
             if d.loot.prevents_equipment_drop(&stack) || !(killed_by_player || preserve) {
                 continue;
             }
@@ -586,10 +655,23 @@ pub fn die(
             clear_slot(m, "mainhand");
         }
     }
-    // Piglin.dropCustomDeathLoot, inside `shouldDropLoot`: everything in its
-    // inventory, as the whole stacks it kept (`removeAllItems`, with no
-    // vanishing curse check).
-    if s == Species::Piglin && death_table.is_some() {
+    // Allay.dropEquipment: its inventory, then the main-hand item unless it
+    // prevents equipment drops.
+    if let Some((item, carried)) = allay_load {
+        if carried > 0 {
+            out.push(Drop::Item(loot_stack(&item, carried)));
+        }
+        if let Some(stack) = slot_item(m, "mainhand")
+            && !d.loot.prevents_equipment_drop(&stack)
+        {
+            out.push(slot_drop(m, "mainhand", stack));
+            clear_slot(m, "mainhand");
+        }
+    }
+    // Piglin.dropCustomDeathLoot, inside `shouldDropLoot` (`table_rolled`):
+    // everything in its inventory, as the whole stacks it kept
+    // (`removeAllItems`, with no vanishing curse check).
+    if s == Species::Piglin && table_rolled {
         for stack in m.extra.inventory.drain(..) {
             if stack.count > 0 {
                 out.push(Drop::Stack(stack));
@@ -610,14 +692,44 @@ pub fn die(
     }
     // dropExperience.
     if killed_by_player && drops_experience(m) && d.mob_drops {
-        let mut amount = base_experience(m);
-        while amount > 0 {
-            let value = orb_value(amount);
-            amount -= value;
-            out.push(Drop::Orb(value));
-        }
+        out.push(Drop::Experience(base_experience(m)));
     }
     (out, skulls)
+}
+/// The loot parameters of the damage that killed `m`, as the equipment drop
+/// chance enchantments read them (no luck, no killing player).
+fn damage_context(this: LootEntity, d: &Death) -> EntityLootParams {
+    EntityLootParams {
+        this,
+        damage: d.damage.clone(),
+        player: None,
+        luck: 0.0,
+    }
+}
+/// `Mob.dropCustomDeathLoot`'s chance for `slot` before the roll, and whether
+/// the slot is preserved: none when `dropChances` is 0 (the slot is skipped),
+/// else the chance after `EnchantmentHelper.processEquipmentDropChance`.
+fn slot_chance(
+    m: &Mob,
+    d: &Death,
+    damage_params: &EntityLootParams,
+    slot: &str,
+) -> Option<(f32, bool)> {
+    let chance = drop_chance(m, slot);
+    if chance == 0.0 {
+        return None;
+    }
+    let living_attacker = d
+        .damage
+        .as_ref()
+        .and_then(|x| x.source.as_ref())
+        .is_some_and(|a| a.living);
+    let after = if living_attacker {
+        d.loot.equipment_drop_chance(damage_params, chance)
+    } else {
+        chance
+    };
+    Some((after, chance > 1.0))
 }
 /// The loot table `die` rolls for `m` (`LivingEntity.getLootTable`), when it
 /// rolls one: none with `doMobLoot` off, nor for a baby that isn't a monster.
@@ -639,22 +751,61 @@ fn roll(
     d: &Death,
     table: &str,
     params: &EntityLootParams,
-    sequences: &mut RandomSequences,
+    rolls: &mut dyn DeathRolls,
     seed: i64,
-    level_random: &mut LevelRandom,
 ) -> Vec<LootStack> {
     if seed != 0 {
-        return d
-            .loot
-            .roll_entity(table, &mut LegacyRandom::new(seed), params);
+        let random = &mut LegacyRandom::new(seed);
+        return if rolls.asks_enchanted_level() {
+            let ask = &mut |_: &mut LegacyRandom, id: &str, level| rolls.enchanted_level(id, level);
+            d.loot.roll_death_entity(table, random, params, ask)
+        } else {
+            d.loot.roll_entity(table, random, params)
+        };
     }
     match d.loot.random_sequence(table) {
-        Some(id) => {
-            let random = sequences.get(id, d.world_seed);
-            d.loot.roll_entity(table, random, params)
-        }
-        None => d.loot.roll_entity(table, level_random, params),
+        Some(id) => roll_live(d, table, params, rolls, |r| {
+            r.sequences().get(id, d.world_seed)
+        }),
+        None => roll_live(d, table, params, rolls, |r| r.level_random()),
     }
+}
+/// A roll on a random the game keeps (`home` finds it), with `roll` given the
+/// question to ask at each level it reads. A listener asked in the middle of
+/// the roll can reach that random, so it is back home while the listener runs,
+/// and the roll carries on from wherever the listener left it.
+pub fn roll_asked<R: Clone, T>(
+    rolls: &mut dyn DeathRolls,
+    home: impl for<'r> Fn(&'r mut dyn DeathRolls) -> &'r mut R,
+    roll: impl FnOnce(&mut R, &mut EnchantedLevel<'_, R>) -> T,
+) -> T {
+    let mut random = home(&mut *rolls).clone();
+    let rolled =
+        roll(&mut random, &mut |random: &mut R,
+                                enchantment: &str,
+                                level| {
+            *home(&mut *rolls) = random.clone();
+            let level = rolls.enchanted_level(enchantment, level);
+            *random = home(&mut *rolls).clone();
+            level
+        });
+    *home(rolls) = random;
+    rolled
+}
+/// A death's roll on a random the game keeps: asked when a mod listens.
+fn roll_live<R: RandomSource + Clone>(
+    d: &Death,
+    table: &str,
+    params: &EntityLootParams,
+    rolls: &mut dyn DeathRolls,
+    home: impl for<'r> Fn(&'r mut dyn DeathRolls) -> &'r mut R,
+) -> Vec<LootStack> {
+    if !rolls.asks_enchanted_level() {
+        return d.loot.roll_entity(table, home(rolls), params);
+    }
+    roll_asked(rolls, home, |random, ask| {
+        d.loot.roll_death_entity(table, random, params, ask)
+    })
 }
 /// `LivingEntity.shouldDropExperience`: babies drop none, except monsters and
 /// hoglins; tadpoles never do.
@@ -724,7 +875,8 @@ mod death_loot_table_tests {
         let table = br#"{"type":"minecraft:entity","pools":[{"rolls":1,
             "entries":[{"type":"minecraft:item","name":"minecraft:diamond"}]}]}"#;
         let packs = [("loot_table/pack:boss".to_owned(), vec![table.to_vec()])];
-        let loot = LootData::load(&root, &PackOverlay { files: &packs }).unwrap();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let loot = LootData::load(&root, &PackOverlay::new(&packs), &defaults).unwrap();
         let death = Death {
             loot: &loot,
             damage: None,
@@ -741,7 +893,7 @@ mod death_loot_table_tests {
             if own {
                 m.extra.death_loot_table = Some("pack:boss".into());
             }
-            m.extra.death_loot_seed = seed;
+            m.extra.death_table_seed = seed;
             let mut sequences = RandomSequences::default();
             let (out, _) = die(&mut m, &death, &mut sequences, &mut level_random(7));
             out.into_iter()
@@ -755,6 +907,164 @@ mod death_loot_table_tests {
         assert_eq!(items(42, true), ["minecraft:diamond"]);
         // Without one, the type's table (a cow's beef and leather).
         assert!(items(0, false).iter().all(|i| i != "minecraft:diamond"));
+    }
+
+    /// A listener of `enchanted_entity_loot` draws from the level's random in
+    /// the middle of a roll on that random: the roll carries on after its
+    /// draw, as vanilla's one shared random does.
+    #[test]
+    fn a_draw_made_while_asked_keeps_its_place_in_the_roll() {
+        struct Drawing<'a>(PlainRolls<'a>, bool);
+        impl DeathRolls for Drawing<'_> {
+            fn sequences(&mut self) -> &mut RandomSequences {
+                self.0.sequences()
+            }
+            fn level_random(&mut self) -> &mut LegacyRandom {
+                self.0.level_random()
+            }
+            fn asks_enchanted_level(&self) -> bool {
+                true
+            }
+            fn enchanted_level(&mut self, _: &str, level: i32) -> i32 {
+                if self.1 {
+                    self.0.level_random.next_int();
+                }
+                level
+            }
+        }
+        let root = std::env::temp_dir().join(format!("loot-drops-{}", std::process::id()));
+        let dir = root.join("data/minecraft/loot_table");
+        std::fs::create_dir_all(&dir).unwrap();
+        let table = r#"{"pools":[{"rolls":1,"entries":[{"type":"minecraft:item",
+            "name":"minecraft:stone","modifier":[
+            {"type":"minecraft:enchanted_count_increase","enchantment":"minecraft:looting",
+             "count":0.0},
+            {"type":"minecraft:set_count",
+             "count":{"type":"minecraft:uniform","min":1.0,"max":60.0}}]}]}]}"#;
+        std::fs::write(dir.join("test.json"), table).unwrap();
+        std::fs::write(root.join("items.json"), "{}").unwrap();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let loot = LootData::load(&root, &PackOverlay::NONE, &defaults).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let death = Death {
+            loot: &loot,
+            damage: None,
+            player: None,
+            player_killed: false,
+            luck: 0.0,
+            vehicle: None,
+            mob_drops: true,
+            world_seed: 0,
+        };
+        let run = |mut level_random: LegacyRandom, draws: bool| {
+            let mut sequences = RandomSequences::default();
+            let mut rolls = Drawing(
+                PlainRolls {
+                    sequences: &mut sequences,
+                    level_random: &mut level_random,
+                },
+                draws,
+            );
+            let params = EntityLootParams::default();
+            let items = roll(&death, "minecraft:test", &params, &mut rolls, 0);
+            (items[0].count, level_random.next_long())
+        };
+        // The draw comes before the roll's only one, as if made just before it.
+        let mut ahead = LegacyRandom::new(7);
+        ahead.next_int();
+        assert_eq!(run(LegacyRandom::new(7), true), run(ahead, false));
+    }
+
+    /// `GetEquipmentDropChanceEvent`: a slot is asked at its own point of
+    /// `Mob.dropCustomDeathLoot` (with the stack, the original chance and the
+    /// preserved flag), the chance a mod chooses replaces vanilla's, and the
+    /// roll is drawn from the mob's random either way.
+    #[test]
+    fn a_chosen_equipment_drop_chance_replaces_the_roll_only() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("data").exists() {
+            return;
+        }
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let loot = LootData::load(&root, &PackOverlay::new(&[]), &defaults).unwrap();
+        let death = Death {
+            loot: &loot,
+            damage: None,
+            player: Some(LootEntity::new("minecraft:player")),
+            player_killed: true,
+            luck: 0.0,
+            vehicle: None,
+            mob_drops: true,
+            world_seed: 0,
+        };
+        let run = |chosen: Option<f32>| {
+            let kind = crate::mobs::sensor_scan_tests::kind();
+            let mut m = Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0);
+            m.extra.set_slot_id(
+                horizon_items::equipment::MAINHAND,
+                Some("minecraft:stick".into()),
+            );
+            m.extra.set_slot_id(
+                horizon_items::equipment::FEET,
+                Some("minecraft:apple".into()),
+            );
+            let mut sequences = RandomSequences::default();
+            let rolled = roll_death(
+                &mut m,
+                &death,
+                &mut PlainRolls {
+                    sequences: &mut sequences,
+                    level_random: &mut LegacyRandom::new(7),
+                },
+            );
+            let mut asked = Vec::new();
+            let mut ask = |c: EquipmentChoice<'_>| {
+                let stack = match c.stack {
+                    Drop::Item(s) => s.item.to_string(),
+                    other => format!("{other:?}"),
+                };
+                asked.push((c.slot, stack, c.original, c.preserved, c.chance));
+                chosen.unwrap_or(c.chance)
+            };
+            let (out, _) = finish_death(&mut m, &death, rolled, Some(&mut ask));
+            let dropped = |item: &str| {
+                out.iter()
+                    .any(|d| matches!(d, Drop::Item(s) if s.item == item))
+            };
+            (dropped("minecraft:stick"), asked, m.random.next_float())
+        };
+        let (always, asked, after_always) = run(Some(1.0));
+        let (never, _, after_never) = run(Some(0.0));
+        let (_, _, after_default) = run(None);
+        // Asked per item-holding slot, in order, before its roll.
+        assert_eq!(
+            asked
+                .iter()
+                .map(|a| (a.0, a.1.as_str(), a.2, a.3, a.4))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    0,
+                    "minecraft:stick",
+                    DEFAULT_DROP_CHANCE,
+                    false,
+                    DEFAULT_DROP_CHANCE
+                ),
+                (
+                    2,
+                    "minecraft:apple",
+                    DEFAULT_DROP_CHANCE,
+                    false,
+                    DEFAULT_DROP_CHANCE
+                ),
+            ]
+        );
+        assert!(always && !never);
+        // The mob's random is where vanilla's roll leaves it, whatever is chosen.
+        assert_eq!(after_always, after_never);
+        assert_eq!(after_never, after_default);
     }
 }
 #[cfg(test)]
@@ -779,9 +1089,12 @@ mod slot_tests {
     #[test]
     fn a_wolfs_slots_read_apart() {
         let mut wolf = mob("minecraft:wolf", Species::Wolf);
-        wolf.extra.body = Some("minecraft:wolf_armor".into());
-        wolf.extra.body_damage = 9;
-        wolf.extra.head = Some("minecraft:iron_helmet".into());
+        wolf.extra.set_body(Some("minecraft:wolf_armor".into()));
+        wolf.extra.set_body_damage(9);
+        wolf.extra.set_slot_id(
+            horizon_items::equipment::HEAD,
+            Some("minecraft:iron_helmet".into()),
+        );
         let body = slot_item(&wolf, "body").unwrap();
         let head = slot_item(&wolf, "head").unwrap();
         assert_eq!(
@@ -798,7 +1111,7 @@ mod slot_tests {
     #[test]
     fn a_zombies_body_item_drops_by_the_default_chance() {
         let mut zombie = mob("minecraft:zombie", Species::Zombie);
-        zombie.extra.body = Some("minecraft:iron_helmet".into());
+        zombie.extra.set_body(Some("minecraft:iron_helmet".into()));
         assert_eq!(drop_chance(&zombie, "body"), DEFAULT_DROP_CHANCE);
         let body = slot_item(&zombie, "body").unwrap();
         assert_eq!(body.item, "minecraft:iron_helmet");
@@ -814,7 +1127,8 @@ mod slot_tests {
             std::env::temp_dir().join(format!("horizon-guest-left-xp-{}", std::process::id()));
         std::fs::create_dir_all(root.join("data/minecraft/loot_table")).unwrap();
         std::fs::write(root.join("items.json"), "{}").unwrap();
-        let loot = LootData::load(&root, &PackOverlay::default()).unwrap();
+        let defaults = horizon_world::item_defaults::read(&root).unwrap();
+        let loot = LootData::load(&root, &PackOverlay::default(), &defaults).unwrap();
         let death = |player_killed| Death {
             loot: &loot,
             damage: None,
@@ -828,12 +1142,19 @@ mod slot_tests {
         let zombie = |helmet: bool| {
             let mut m = mob("minecraft:zombie", Species::Zombie);
             if helmet {
-                m.extra.head = Some("minecraft:iron_helmet".into());
+                m.extra.set_slot_id(
+                    horizon_items::equipment::HEAD,
+                    Some("minecraft:iron_helmet".into()),
+                );
                 m.extra.drop_chances = Some(Box::new([1.0; 8]));
             }
             m
         };
-        let orbs = |out: &[Drop]| out.iter().filter(|d| matches!(d, Drop::Orb(_))).count();
+        let orbs = |out: &[Drop]| {
+            out.iter()
+                .filter(|d| matches!(d, Drop::Experience(_)))
+                .count()
+        };
         let helmet = |out: &[Drop]| {
             out.iter().any(|d| match d {
                 Drop::Item(s) => s.item == "minecraft:iron_helmet",
@@ -882,12 +1203,15 @@ mod slot_tests {
     #[test]
     fn preserved_equipment_drops_when_chance_exceeds_one() {
         let mut m = mob("minecraft:zombie", Species::Zombie);
-        m.extra.head = Some("minecraft:iron_helmet".into());
+        m.extra.set_slot_stack(
+            horizon_items::equipment::HEAD,
+            Some(crate::items::ItemStack::new("minecraft:iron_helmet", 1)),
+        );
         m.extra.drop_chances = Some(Box::new([2.0; 8]));
         let drops = drop_preserved_equipment(&mut m);
         assert_eq!(drops.len(), 1);
         assert_eq!(drops[0].item.as_ref(), "minecraft:iron_helmet");
-        assert_eq!(m.extra.head, None);
+        assert_eq!(m.extra.slot_stack(horizon_items::equipment::HEAD), None);
     }
 }
 

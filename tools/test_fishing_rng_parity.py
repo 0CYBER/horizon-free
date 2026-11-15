@@ -6,6 +6,7 @@ The Rust side compares seeded cast velocity, bobbing and dry-ground ticks, catch
 transitions and the rod's fallback loot path, plus named-sequence loot and XP.
 It does not yet cover the UUID-to-seed relationship.
 """
+import argparse
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,41 @@ try:
     from . import lab
 except ImportError:
     import lab
+
+
+def prepare_reference(work):
+    """Generate this fixture's real Java inputs without building or running the Rust parity suite."""
+    work = work.resolve()
+    work.mkdir(parents=True, exist_ok=True)
+    reference = work / "fishing-reference.json"
+    casts = work / "fishing-casts-reference.json"
+    for path in (reference, casts):
+        path.unlink(missing_ok=True)
+    env = lab.game_env(
+        JAVA_TOOL_OPTIONS=os.environ.get("JAVA_TOOL_OPTIONS", "") + " -Dhorizon.fishingReference=true",
+        HORIZON_HOME=work / "home",
+        HORIZON_LAUNCHER_HOME=work / "launcher",
+        XDG_DATA_HOME=work / "data",
+        XDG_CONFIG_HOME=work / "config",
+    )
+    # The producer can report vanilla values on failure. Keep all of its output
+    # beside the private reference files, never in the public Actions log.
+    log = work / "prepare-reference.log"
+    with log.open("w", encoding="utf-8") as output:
+        result = subprocess.run(
+            [sys.executable, str(lab.ROOT / "tools/test_command_exec_parity.py"),
+             "--only", "scoreboard", "--reference-only", "--work-dir", str(work)],
+            cwd=lab.ROOT, env=env, stdout=output, stderr=subprocess.STDOUT, timeout=900,
+        )
+    if result.returncode:
+        raise SystemExit(f"Fishing reference producer failed ({result.returncode}); private log: {log}")
+    if not all(path.is_file() for path in (reference, casts)):
+        raise SystemExit("Fishing reference producer did not write both required inputs")
+    return {
+        "HORIZON_FISHING_RESOURCES": str(lab.RESOURCES),
+        "HORIZON_FISHING_REFERENCE": str(reference),
+        "HORIZON_FISHING_CAST_REFERENCE": str(casts),
+    }
 
 
 def main():
@@ -32,7 +68,7 @@ def main():
         XDG_DATA_HOME=str(work / "data"),
         XDG_CONFIG_HOME=str(work / "config"),
     )
-    subprocess.run(["cargo", "build", "--profile", "fast", "-p", "horizon-client", "--bin", "horizon-client"],
+    subprocess.run(["cargo", "build", "--profile", "fast", "-p", "horizon-game", "--bin", "horizon-client"],
                    cwd=lab.ROOT, env=env, check=True)
     binary = lab.cargo_target() / "fast" / ("horizon-client.exe" if os.name == "nt" else "horizon-client")
     subprocess.run([sys.executable, str(lab.ROOT / "tools/test_command_exec_parity.py"),
@@ -91,4 +127,20 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--prepare-reference", type=Path,
+                        help="generate only the named Rust test's vanilla inputs in this private directory")
+    parser.add_argument("--env-file", type=Path,
+                        help="append the three generated input paths to an environment file")
+    args = parser.parse_args()
+    if args.prepare_reference:
+        if not args.env_file:
+            parser.error("--prepare-reference requires --env-file")
+        environment = prepare_reference(args.prepare_reference)
+        with args.env_file.open("a", encoding="utf-8") as output:
+            for key, value in environment.items():
+                output.write(f"{key}={value}\n")
+    else:
+        if args.env_file:
+            parser.error("--env-file requires --prepare-reference")
+        main()

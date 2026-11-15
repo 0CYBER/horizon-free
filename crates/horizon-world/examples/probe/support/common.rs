@@ -1,6 +1,6 @@
 //! Number formats and JSON readers several probes share.
+use horizon_core::nbt::Tag;
 use horizon_core::position::BlockPos;
-use horizon_world::nbt::Tag;
 use serde_json::Value;
 
 /// An f64's bits, every NaN as Java's canonical one (Double.doubleToLongBits).

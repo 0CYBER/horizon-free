@@ -1,0 +1,4 @@
+# Tests that need a graphics adapter (REFERENCE is the ignore reason's word).
+horizon-client-render gfx::crumbling_tests::crack_samples_stay_aligned_between_stages adapter gpu
+horizon-client-render gfx::pack_uniforms::initial_history_tests::core_matrix_inputs_render_provider_values adapter gpu
+horizon-client-render gfx::weather::tests::weather_shader_uvs_match_legacy_bits adapter gpu

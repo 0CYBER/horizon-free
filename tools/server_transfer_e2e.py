@@ -37,7 +37,7 @@ itself once the player is out, without writing its file again, and C's file hold
 The engines run in a fresh folder with fresh HORIZON_HOME and XDG folders (lab.game_env), on free ports, with no
 window. Every request, reply (records shortened) and check goes to --out/steps.json, with both servers' logs.
 Build first:
-    cargo build --profile fast -p horizon-client --bin horizon-client
+    cargo build --profile fast -p horizon-game --bin horizon-client
     cargo build --profile fast -p horizon-bots
 """
 import argparse

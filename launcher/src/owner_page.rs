@@ -8,16 +8,22 @@ impl Launcher {
     /// Whether the screen covers the window: no owner, and either Play was refused or the player
     /// hasn't read it yet. The data question comes first.
     pub(crate) fn asking_owner(&self) -> bool {
-        (self.owner == Some(false) || sign_in_preview())
+        (!horizon_launcher::developer_offline::selected() || sign_in_preview())
+            && (self.owner == Some(false) || sign_in_preview())
             && (self.owner_screen_open || !self.settings.owner_notice_seen || sign_in_preview())
             && !self.asking_consent()
             && self.opening.is_none()
     }
 
-    /// Opens the screen and starts the sign-in on it.
+    /// Opens the screen and starts the sign-in on it; a sign-in already under way (its code on
+    /// screen, or Microsoft still answering) is shown as it is, not started over.
     pub(crate) fn sign_in_to_play(&mut self) {
         self.owner_screen_open = true;
-        self.start_sign_in();
+        let under_way = self.sign_in.is_some()
+            && !matches!(self.sign_in_state, None | Some(SignInState::Done(_)));
+        if !under_way {
+            self.start_sign_in();
+        }
     }
 
     /// Closes it; it comes back with the next refused Play.

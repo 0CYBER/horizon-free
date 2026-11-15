@@ -8,7 +8,7 @@
 //! `collectImplicitComponents`) leaves its NBT; the rest goes to
 //! `minecraft:block_entity_data`, tagged with the type's id.
 use crate::block_entity_nbt::{self, canonical};
-use horizon_world::nbt::{Compound, JavaString, Tag};
+use horizon_core::nbt::{Compound, JavaString, Tag};
 
 pub const BLOCK_ENTITY_DATA: &str = "minecraft:block_entity_data";
 
@@ -323,6 +323,8 @@ fn item_default(component: &str) -> Option<Tag> {
     })
 }
 
+const SIGN_TEXT: [&str; 2] = ["minecraft:sign_text_front", "minecraft:sign_text_back"];
+
 const METADATA: [&str; 6] = ["id", "x", "y", "z", "keepPacked", "components"];
 
 /// `saveCustomOnly`: the saved NBT without its id, position and components.
@@ -450,7 +452,15 @@ pub fn place(saved: &Tag, components: &Compound, game_master: bool) -> Tag {
         match *part {
             Part::Same(key, component) => {
                 read.push(component);
-                set(key, get(component));
+                // A sign item that carries no text leaves the block's own: a content
+                // sign's declared colour and glow (`createDefaultSignText`).
+                let keeps_text = SIGN_TEXT.contains(&component)
+                    && !components.contains_key(&JavaString::from(component))
+                    && !components
+                        .contains_key(&JavaString::from(format!("!{component}").as_str()));
+                if !keeps_text {
+                    set(key, get(component));
+                }
             }
             Part::Items(size) => {
                 read.push(CONTAINER);
@@ -521,7 +531,7 @@ mod tests {
     use super::*;
 
     fn snbt(text: &str) -> Tag {
-        horizon_world::nbt::parse_snbt(text).expect("snbt").0
+        horizon_core::nbt::parse_snbt(text).expect("snbt").0
     }
     fn saved(text: &str) -> Tag {
         canonical(&snbt(text)).expect("known type")
@@ -605,6 +615,80 @@ mod tests {
         // Data of another type is ignored.
         let chest = saved("{id:\"minecraft:chest\",x:0,y:0,z:0}");
         assert_eq!(place(&chest, &patch, true), chest);
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_mod_block_entity_rides_its_item() {
+        // The declared types are frozen once per process: install them in a fresh one.
+        const CHILD: &str = "HORIZON_TEST_MOD_BLOCK_ENTITY_ITEM";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--include-ignored",
+                    "--exact",
+                    "block_entity_item::tests::a_mod_block_entity_rides_its_item",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "test=block_entity_item::tests::a_mod_block_entity_rides_its_item exit_code={:?} category=fixture-child-failed",
+                output.status.code()
+            );
+            return;
+        }
+        use crate::block_entity_types::{self, BlockEntityTypes};
+        block_entity_types::install(BlockEntityTypes::new(
+            [
+                ("example:crate".into(), "example:crate".into()),
+                ("example:tank".into(), "example:tank".into()),
+            ]
+            .into(),
+            vec!["example:crate".into(), "example:tank".into()],
+        ))
+        .unwrap();
+        // A named crate: its custom name is its own component patch.
+        let tank = saved(
+            "{id:\"example:crate\",x:3,y:4,z:5,Fluid:\"minecraft:water\",Amount:2000,\
+             components:{\"minecraft:custom_name\":\"Box\"}}",
+        );
+        let patch = pick(&tank);
+        let data = patch
+            .get(&JavaString::from(BLOCK_ENTITY_DATA))
+            .expect("data");
+        assert_eq!(data.get("Amount"), Some(&Tag::Int(2000)));
+        assert_eq!(data.get("id"), Some(&Tag::String("example:crate".into())));
+        // `saveCustomOnly`: no position and no components in the data; the
+        // patch goes to the item's own components (`collectComponents`).
+        assert_eq!(data.get("x"), None);
+        assert_eq!(data.get("components"), None);
+        assert_eq!(
+            patch.get(&JavaString::from("minecraft:custom_name")),
+            Some(&Tag::String("Box".into()))
+        );
+        let fresh = saved("{id:\"example:crate\",x:9,y:9,z:9}");
+        let placed = place(&fresh, &patch, false);
+        assert_eq!(placed.get("Amount"), Some(&Tag::Int(2000)));
+        assert_eq!(placed.get("x"), Some(&Tag::Int(9)));
+        // The item's name becomes the block entity's own component again.
+        assert_eq!(
+            placed
+                .get("components")
+                .and_then(|c| c.get("minecraft:custom_name")),
+            Some(&Tag::String("Box".into()))
+        );
+        // An item without a patch places no empty one, as a chunk saves it.
+        let mut bare = patch.clone();
+        bare.remove(&JavaString::from("minecraft:custom_name"));
+        assert_eq!(place(&fresh, &bare, false).get("components"), None);
+        // Another type's data is ignored.
+        let other = saved("{id:\"example:tank\",x:9,y:9,z:9}");
+        assert_eq!(place(&other, &patch, false).get("Amount"), None);
+        // An undeclared type has no saved form.
+        assert_eq!(canonical(&snbt("{id:\"example:nope\",x:0,y:0,z:0}")), None);
     }
 
     #[test]
@@ -764,5 +848,26 @@ mod tests {
         assert_eq!(keys, ["minecraft:sign_text_front", "minecraft:waxed"]);
         let fresh = saved("{id:\"minecraft:sign\",x:0,y:0,z:0}");
         assert_eq!(place(&fresh, &patch, false), sign);
+    }
+
+    /// A content sign's block entity starts with its declared colour and glow. An item with
+    /// no sign text leaves them; an item with sign text replaces them.
+    #[test]
+    fn a_placed_sign_keeps_the_declared_text_unless_the_item_carries_text() {
+        let declared = saved(
+            "{id:\"minecraft:sign\",x:0,y:0,z:0,\
+             front_text:{messages:[\"\",\"\",\"\",\"\"],color:\"light_blue\",has_glowing_text:1b}}",
+        );
+        let bare = place(&declared, &Compound::new(), false);
+        let color = |tag: &Tag| tag.get("front_text").and_then(|t| t.get("color")).cloned();
+        assert_eq!(color(&bare), color(&declared));
+        assert_eq!(color(&bare), Some(Tag::String("light_blue".into())));
+
+        let written = saved(
+            "{id:\"minecraft:sign\",x:0,y:0,z:0,\
+             front_text:{messages:[\"a\",\"\",\"\",\"\"],color:\"red\"}}",
+        );
+        let placed = place(&declared, &pick(&written), false);
+        assert_eq!(color(&placed), Some(Tag::String("red".into())));
     }
 }

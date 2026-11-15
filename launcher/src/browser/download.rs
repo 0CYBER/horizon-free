@@ -13,13 +13,13 @@ const HOSTS: [&str; 5] = [
     "https://cdn.modrinth.com/",
     "https://edge.forgecdn.net/",
     "https://mediafilez.forgecdn.net/",
-    horizon_mods::index::FILE_HOST,
+    horizon_mod_package::index::FILE_HOST,
     // The registry's files at their address before the move to horizon-rust (GitHub redirects it).
     "https://github.com/ludovic111/horizon-mods/releases/download/",
 ];
 /// `https://github.com/<owner>/<repo>/releases/download/<tag>/<name>`: a release asset of a mod's
 /// own repository, which the registry's index lists once its release passed the registry's checks
-/// (docs/api/mod-index.md). Only the address is vouched for here; the index's SHA-256 is what
+/// (docs/modding/src/reference/registry-index.md). Only the address is vouched for here; the index's SHA-256 is what
 /// pins the bytes, and [`save`] refuses any other.
 pub fn github_release_asset(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://github.com/") else {
@@ -50,8 +50,10 @@ pub(super) fn agent(url: &str) -> ureq::Agent {
     horizon_port_pack::net::keep("browser", spec.as_deref(), |proxy| {
         let builder = ureq::AgentBuilder::new()
             .user_agent(&format!(
-                "horizon-rust/horizon horizon-launcher/{} (github.com/horizon-rust/horizon)",
-                crate::backend::VERSION
+                "{} horizon-launcher/{} (github.com/{})",
+                crate::backend::REPO,
+                crate::backend::VERSION,
+                crate::backend::REPO
             ))
             .timeout_connect(std::time::Duration::from_secs(15))
             .timeout_read(std::time::Duration::from_secs(60));

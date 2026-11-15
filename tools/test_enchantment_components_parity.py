@@ -70,7 +70,7 @@ def main():
     sources = [Path(__file__), Path(lab.__file__), Path(base.__file__), oracle,
                oracle.with_name('ParityData.java'), probe, lab.ROOT / 'Cargo.lock',
                lab.ROOT / 'crates/horizon-items/src/item_nbt.rs',
-               lab.ROOT / 'crates/horizon-world/src/nbt.rs',
+               lab.ROOT / 'crates/horizon-core/src/nbt.rs',
                lab.ROOT / 'crates/horizon-world/src/datafix/dynamic.rs',
                lab.ROOT / 'crates/horizon-client-core/src/lang.rs',
                lab.ROOT / 'crates/horizon-items/src/item_data.rs',

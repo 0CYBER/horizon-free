@@ -306,7 +306,9 @@ impl super::block_predicate::PredicateBlockResolver for FeatureBlockBindings<'_>
         self.fluids.resolve(json)
     }
     fn predicate_block_set(&self, json: &str) -> Result<Arc<BTreeSet<BlockStateId>>, DecodeError> {
-        if let Ok(name) = serde_json::from_str::<String>(json) {
+        let set: serde_json::Value = serde_json::from_str(json)?;
+        // A plain id or tag shares the bound set; other forms resolve anew.
+        if let Some(name) = set.as_str() {
             if let Some(tag) = name.strip_prefix('#') {
                 return self
                     .tags
@@ -318,27 +320,54 @@ impl super::block_predicate::PredicateBlockResolver for FeatureBlockBindings<'_>
             }
             return self
                 .blocks
-                .get(&identifier(&name)?)
+                .get(&identifier(name)?)
                 .cloned()
                 .ok_or_else(|| DecodeError::Registry(format!("unknown predicate block {name}")));
         }
-        let names: Vec<String> = serde_json::from_str(json)?;
-        if names.len() > 8192 {
-            return Err(DecodeError::Field("predicate block list size"));
+        let lookup = BlockSetLookup {
+            bindings: self,
+            unknown_tags_empty: false,
+        };
+        crate::holder_set::resolve(&set, &lookup)
+            .map(|ids| Arc::new(ids.into_iter().collect()))
+            .map_err(DecodeError::Registry)
+    }
+}
+
+/// Feature blocks as a holder-set registry: a block stands for all its states.
+pub(crate) struct BlockSetLookup<'a, 'r> {
+    pub(crate) bindings: &'a FeatureBlockBindings<'r>,
+    /// Structure processors read a tag no pack defines as empty.
+    pub(crate) unknown_tags_empty: bool,
+}
+impl crate::holder_set::HolderLookup for BlockSetLookup<'_, '_> {
+    type Id = BlockStateId;
+    fn what(&self) -> &str {
+        "block"
+    }
+    fn entry(&self, id: &str) -> Result<Vec<BlockStateId>, String> {
+        let name = identifier(id).map_err(|e| e.to_string())?;
+        self.bindings
+            .blocks
+            .get(&name)
+            .map(|states| states.iter().copied().collect())
+            .ok_or_else(|| format!("unknown block {id}"))
+    }
+    fn tag(&self, tag: &str) -> Result<Vec<BlockStateId>, String> {
+        let name = super::tags::identifier(tag).map_err(|e| e.to_string())?;
+        match self.bindings.tags.get(&name) {
+            Some(states) => Ok(states.iter().copied().collect()),
+            None if self.unknown_tags_empty => Ok(Vec::new()),
+            None => Err(format!("unknown block tag {tag}")),
         }
-        let mut states = BTreeSet::new();
-        for name in names {
-            states.extend(
-                self.blocks
-                    .get(&identifier(&name)?)
-                    .ok_or_else(|| {
-                        DecodeError::Registry(format!("unknown predicate block {name}"))
-                    })?
-                    .iter()
-                    .copied(),
-            );
-        }
-        Ok(Arc::new(states))
+    }
+    fn all(&self) -> Result<Vec<BlockStateId>, String> {
+        Ok(self
+            .bindings
+            .blocks
+            .values()
+            .flat_map(|states| states.iter().copied())
+            .collect())
     }
 }
 #[derive(Clone, Debug)]
@@ -456,9 +485,6 @@ pub(crate) fn decode_targets(
 ) -> Result<BlockReplacements, DecodeError> {
     let values: Vec<Box<serde_json::value::RawValue>> =
         serde_json::from_str(required(object, "targets")?.get())?;
-    if values.len() > 8192 {
-        return Err(DecodeError::Field("replacement targets"));
-    }
     values
         .iter()
         .map(|value| {
@@ -482,8 +508,39 @@ pub(crate) fn decode_targets(
 #[cfg(test)]
 mod bound_tag_tests {
     use super::*;
-    use crate::nbt::Tag;
+    use horizon_core::nbt::Tag;
 
+    #[test]
+    fn block_holder_ceiling() {
+        let registry = registry();
+        let bindings = FeatureBlockBindings::new(&registry, BTreeSet::new()).unwrap();
+        let json = serde_json::to_string(&vec!["minecraft:stone"; 8193]).unwrap();
+        let predicate = format!(r#"{{"type":"matching_blocks","blocks":{json}}}"#);
+        assert!(
+            super::super::block_predicate::BlockPredicate::from_json_with_blocks(
+                &predicate, &bindings,
+            )
+            .is_ok()
+        );
+    }
+    #[test]
+    fn replacement_target_ceiling() {
+        let registry = registry();
+        let bindings = FeatureBlockBindings::new(&registry, BTreeSet::new()).unwrap();
+        let target =
+            r#"{"target":{"predicate_type":"always_true"},"state":{"id":"minecraft:stone"}}"#;
+        let json = format!(
+            r#"{{"type":"replace_single_block","targets":[{}]}}"#,
+            vec![target; 8193].join(",")
+        );
+        assert_eq!(
+            ReplaceBlockFeature::from_json(&json, &bindings)
+                .unwrap()
+                .targets
+                .len(),
+            8193
+        );
+    }
     fn registry() -> BlockRegistry {
         let state = |id: &str| Tag::compound([("id", Tag::String(id.into()))]);
         let log = |axis: &str| {
@@ -505,6 +562,8 @@ mod bound_tag_tests {
                     log("x"),
                     log("y"),
                     state("minecraft:dirt"),
+                    state("minecraft:cave_air"),
+                    state("minecraft:void_air"),
                 ]),
             ),
             (
@@ -514,6 +573,8 @@ mod bound_tag_tests {
                     ("minecraft:stone", Tag::Int(1)),
                     ("minecraft:oak_log", Tag::Int(3)),
                     ("minecraft:dirt", Tag::Int(4)),
+                    ("minecraft:cave_air", Tag::Int(5)),
+                    ("minecraft:void_air", Tag::Int(6)),
                 ]),
             ),
         ]))

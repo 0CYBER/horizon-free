@@ -1,0 +1,41 @@
+# Allow-list of engine types the scaffold may mirror or wrap. One [[type]] per type.
+#   kind    = "struct" | "enum" (value mirror) | "handle" (an `XRef`, name defaults to <Engine>Ref)
+#   domain  = world | block | item | entity | client | command | text | content | wire
+#   topic   = file stem in crates/horizon-mod-vocab/src/<domain> (an existing file is appended to; lib is refused)
+#   fields  = ["x: i32", ...] for a struct; variants = [...] for an enum
+#   exhaustive = "reason" keeps a struct exhaustive with public fields; otherwise it is non_exhaustive + new()
+#   engine_read / engine_new = how to read each field off the engine value and build it, when the engine
+#     fields are private (engine_new uses {field} placeholders)
+#   methods = [{ name, ret, doc }] for a handle: emitted as a `<Name>Backend` host area
+
+[[type]]
+engine = "horizon_core::geometry::Aabb"
+kind = "struct"
+domain = "world"
+topic = "aabb"
+doc = "An axis-aligned box of doubles, as vanilla's `AABB`: the corner with the smaller coordinates first."
+exhaustive = "a box is its two corners, as vanilla's `AABB`"
+fields = ["min_x: f64", "min_y: f64", "min_z: f64", "max_x: f64", "max_y: f64", "max_z: f64"]
+engine_read = [
+  "self.min(horizon_core::geometry::Axis::X)", "self.min(horizon_core::geometry::Axis::Y)",
+  "self.min(horizon_core::geometry::Axis::Z)", "self.max(horizon_core::geometry::Axis::X)",
+  "self.max(horizon_core::geometry::Axis::Y)", "self.max(horizon_core::geometry::Axis::Z)",
+]
+engine_new = "horizon_core::geometry::Aabb::new(horizon_core::geometry::Vec3::new({min_x}, {min_y}, {min_z}), horizon_core::geometry::Vec3::new({max_x}, {max_y}, {max_z}))"
+
+[[type]]
+engine = "horizon_client::game::entities::boats::Boat"
+kind = "handle"
+domain = "entity"
+topic = "boat"
+doc = "A vanilla `Boat` of an open world; it reads as stale once that world closes."
+methods = [
+  { name = "is_underwater", ret = "Option<bool>", doc = "Whether the boat is underwater (`Boat.isUnderWater`), or None for a stale handle." },
+]
+
+[[type]]
+engine = "horizon_client::game::blocks::maps::MapData"
+kind = "handle"
+domain = "world"
+topic = "map_data"
+doc = "A vanilla `MapItemSavedData` of an open world; it reads as stale once that world closes."

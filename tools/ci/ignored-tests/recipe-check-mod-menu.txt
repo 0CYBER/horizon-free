@@ -1,0 +1,1 @@
+horizon-client game::recipe_book::check_mod_menu_tests::a_remote_non_grid_menu_can_request_a_recipe_check_only_in_an_eligible_screen lib daily resources

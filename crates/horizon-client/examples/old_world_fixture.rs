@@ -7,11 +7,11 @@
 //! old_world_fixture <source world> <destination world> <x0,z0,x1,z1>
 extern crate horizon_client_lib as horizon_client;
 use horizon_core::position::ChunkPos;
-use horizon_world::{
-    nbt::{Limits, Tag},
-    region::{ChunkRecord, RegionFile},
-};
 use std::{fs, path::Path};
+use {
+    horizon_core::nbt::{Limits, Tag},
+    horizon_world::region::{ChunkRecord, RegionFile},
+};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 

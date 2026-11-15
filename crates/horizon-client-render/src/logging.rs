@@ -27,28 +27,9 @@ const RECENT: usize = 50;
 const FLOOD_LINES: u32 = 100;
 const FLOOD_WINDOW: Duration = Duration::from_secs(60);
 
-/// The platform data folder (what the `dirs` crate's data_dir gives).
+/// The platform data folder, shared with launcher command preparation.
 pub fn data_dir() -> PathBuf {
-    let env = |k: &str| {
-        std::env::var_os(k)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    let home = env("HOME").or_else(|| env("USERPROFILE"));
-    if cfg!(windows) {
-        if let Some(d) = env("APPDATA") {
-            return d;
-        }
-    } else if cfg!(target_os = "macos") {
-        if let Some(h) = &home {
-            return h.join("Library/Application Support");
-        }
-    } else if let Some(d) = env("XDG_DATA_HOME") {
-        return d;
-    } else if let Some(h) = &home {
-        return h.join(".local/share");
-    }
-    std::env::temp_dir()
+    horizon_mod_package::selection::data_dir_with(|key| std::env::var_os(key))
 }
 
 /// `--home DIR`, set once at start; it wins over `HORIZON_HOME`.
@@ -274,8 +255,6 @@ enum Out {
         date: NaiveDate,
         lines: Vec<String>,
         stderr: Option<String>,
-        /// The message's level, thread and text, for the [`set_line_hook`] callback.
-        record: (log::Level, String, String),
     },
     /// Answer once everything before is written.
     Flush(mpsc::SyncSender<()>),
@@ -295,14 +274,12 @@ struct Writer {
 impl Writer {
     fn run(mut self, out: mpsc::Receiver<Out>) {
         let stderr = io::stderr();
-        let mut hook_alive = true;
         for msg in out {
             match msg {
                 Out::Write {
                     date,
                     lines,
                     stderr: message,
-                    record: (level, thread, text),
                 } => {
                     if let Some(message) = message {
                         let _ = writeln!(stderr.lock(), "{message}");
@@ -322,12 +299,6 @@ impl Writer {
                         let mut text = lines.join("\n");
                         text.push('\n');
                         let _ = latest.file.write_all(text.as_bytes());
-                    }
-                    // After the file has it. A callback that panics is not called again: the
-                    // panic's own log line would reach it next.
-                    if let Some(hook) = LINE_HOOK.get().filter(|_| hook_alive) {
-                        let call = || hook(level.as_str(), &thread, &text, &lines.join("\n"));
-                        hook_alive = std::panic::catch_unwind(call).is_ok();
                     }
                 }
                 Out::Flush(done) => {
@@ -405,16 +376,83 @@ impl Floods {
 
 static LOGGER: std::sync::OnceLock<Logger> = std::sync::OnceLock::new();
 
-/// What [`set_line_hook`] installed: level (`INFO`, `WARN`, `ERROR`), thread, message, and the
-/// lines as `latest.log` got them.
-type LineHook = fn(&str, &str, &str, &str);
-static LINE_HOOK: std::sync::OnceLock<LineHook> = std::sync::OnceLock::new();
+/// The most lines the tap keeps between two drains (`take_tapped`); older ones are dropped.
+pub const TAP_LINES: usize = 4096;
 
-/// Calls `hook` on the log's writer thread for each message written to the log, once the file
-/// has it, so the thread that logged never waits on it. Once per process; a second call keeps
-/// the first.
-pub fn set_line_hook(hook: LineHook) {
-    let _ = LINE_HOOK.set(hook);
+/// The most bytes of a line's message the tap keeps; the rest is cut off at a character boundary.
+pub const TAP_MESSAGE_BYTES: usize = 8192;
+/// The most bytes of a thread name the tap keeps; the rest is cut off at a character boundary.
+pub const TAP_THREAD_BYTES: usize = 128;
+
+/// A line the log tap kept: its level, the thread it names and the message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TappedLine {
+    pub level: log::Level,
+    pub thread: String,
+    pub message: String,
+}
+
+/// Whether the tap keeps lines (`set_tap`), read before its lock is taken.
+static TAPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The lines kept for the native mods' `console_line` hook, oldest first.
+static TAP: Mutex<VecDeque<TappedLine>> = Mutex::new(VecDeque::new());
+
+thread_local! {
+    /// Set while this thread runs `untapped`: its lines are not kept.
+    static UNTAPPED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keeps every line logged from now on for `take_tapped` (`on`), or stops and forgets them.
+pub fn set_tap(on: bool) {
+    TAPPING.store(on, std::sync::atomic::Ordering::Relaxed);
+    if !on {
+        TAP.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
+/// The lines the tap kept since the last call, oldest first.
+pub fn take_tapped() -> Vec<TappedLine> {
+    TAP.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .drain(..)
+        .collect()
+}
+
+/// Runs `f` without tapping the lines this thread logs meanwhile (a `console_line`
+/// listener's own lines).
+pub fn untapped<T>(f: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            UNTAPPED.set(self.0);
+        }
+    }
+    let _restore = Restore(UNTAPPED.replace(true));
+    f()
+}
+
+/// `text` cut to at most `max` bytes, at a character boundary.
+fn capped(text: &str, max: usize) -> String {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
+}
+
+fn tap(thread: &str, level: log::Level, message: &str) {
+    if !TAPPING.load(std::sync::atomic::Ordering::Relaxed) || UNTAPPED.get() {
+        return;
+    }
+    let mut lines = TAP.lock().unwrap_or_else(|e| e.into_inner());
+    if lines.len() >= TAP_LINES {
+        lines.pop_front();
+    }
+    lines.push_back(TappedLine {
+        level,
+        thread: capped(thread, TAP_THREAD_BYTES),
+        message: capped(message, TAP_MESSAGE_BYTES),
+    });
 }
 
 fn ours(target: &str) -> bool {
@@ -465,6 +503,7 @@ impl log::Log for Logger {
             _ => {}
         }
         let stderr = horizon.then(|| message.clone());
+        tap(thread, level, &message);
         self.send(thread, level, &message, stderr);
         if gate == Gate::Last {
             self.write(
@@ -516,7 +555,6 @@ impl Logger {
             date: now.date_naive(),
             lines,
             stderr,
-            record: (level, thread.to_owned(), message.to_owned()),
         };
         if let Err(mpsc::SendError(Out::Write {
             stderr: Some(message),
@@ -529,25 +567,12 @@ impl Logger {
     }
 }
 
-/// The `latest.log` this run writes, once `init` opened it.
-static LATEST_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-/// The `latest.log` this run writes, absolute; None before `init` and when it logs to the
-/// terminal only.
-pub fn latest_path() -> Option<PathBuf> {
-    LATEST_PATH.get().cloned()
-}
-
 /// Starts the log in `home/logs`. The main thread shows as `main_thread` in it. Messages are
 /// still printed when the file cannot be opened.
 pub fn init(home: &Path, main_thread: &'static str) {
     let dir = logs_dir(home);
     let file = match open_latest(&dir) {
-        Ok(Some(latest)) => {
-            let path = dir.join("latest.log");
-            let _ = LATEST_PATH.set(std::path::absolute(&path).unwrap_or(path));
-            Some(latest)
-        }
+        Ok(Some(latest)) => Some(latest),
         Ok(None) => {
             eprintln!(
                 "Horizon: another game is writing {}; this one logs to the terminal only",
@@ -590,12 +615,14 @@ pub fn init(home: &Path, main_thread: &'static str) {
 
 /// A line in the log from code that prints it elsewhere itself (the dedicated server console).
 pub fn write_only(level: log::Level, message: &str) {
+    let current = std::thread::current();
+    let main = LOGGER.get().map_or("main", |logger| logger.main_thread);
+    let thread = match current.name() {
+        Some("main") | None => main,
+        Some(name) => name,
+    };
+    tap(thread, level, message);
     if let Some(logger) = LOGGER.get() {
-        let current = std::thread::current();
-        let thread = match current.name() {
-            Some("main") | None => logger.main_thread,
-            Some(name) => name,
-        };
         logger.write(thread, level, message);
     }
 }
@@ -603,6 +630,7 @@ pub fn write_only(level: log::Level, message: &str) {
 /// Writes `message` to the log file only, under the thread vanilla names for it (`Server thread` for
 /// a login refused on a connection's own thread), as the console line beside it shows.
 pub fn write_as(thread: &str, level: log::Level, message: &str) {
+    tap(thread, level, message);
     if let Some(logger) = LOGGER.get() {
         logger.write(thread, level, message);
     }
@@ -655,6 +683,57 @@ pub fn newest_crash_report(home: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tap keeps lines only while on, never a line logged inside `untapped`, and at most
+    /// `TAP_LINES`, dropping the oldest.
+    #[test]
+    fn the_tap_keeps_lines_while_on_and_skips_untapped_ones() {
+        let probes = |lines: Vec<TappedLine>| -> Vec<String> {
+            lines
+                .into_iter()
+                .filter(|l| l.message.starts_with("tap probe"))
+                .map(|l| format!("{}/{}: {}", l.thread, l.level, l.message))
+                .collect()
+        };
+        write_as("Server thread", log::Level::Info, "tap probe off");
+        set_tap(true);
+        write_as("Server thread", log::Level::Warn, "tap probe 1");
+        untapped(|| write_as("Server thread", log::Level::Info, "tap probe hidden"));
+        write_only(log::Level::Error, "tap probe 2");
+        let thread = std::thread::current().name().unwrap_or("main").to_owned();
+        assert_eq!(
+            probes(take_tapped()),
+            [
+                "Server thread/WARN: tap probe 1".to_owned(),
+                format!("{thread}/ERROR: tap probe 2"),
+            ]
+        );
+        for i in 0..TAP_LINES + 5 {
+            write_as("Server thread", log::Level::Info, &format!("tap probe {i}"));
+        }
+        let kept = take_tapped();
+        assert!(kept.len() <= TAP_LINES);
+        assert_eq!(
+            kept.last().unwrap().message,
+            format!("tap probe {}", TAP_LINES + 4)
+        );
+        // An oversized line is cut to the stated caps, at a character boundary: the message
+        // ends in a three-byte character that straddles the cap, the thread name is long.
+        let long = format!("tap probe long {}", "\u{20ac}".repeat(TAP_MESSAGE_BYTES));
+        write_as(&"t".repeat(TAP_THREAD_BYTES + 50), log::Level::Info, &long);
+        let kept = take_tapped();
+        let line = kept.last().unwrap();
+        assert_eq!(line.thread, "t".repeat(TAP_THREAD_BYTES));
+        assert!(line.message.starts_with("tap probe long \u{20ac}"));
+        assert!(line.message.len() <= TAP_MESSAGE_BYTES);
+        assert!(
+            TAP_MESSAGE_BYTES - line.message.len() < 3,
+            "cut at the last whole character"
+        );
+        set_tap(false);
+        write_as("Server thread", log::Level::Info, "tap probe after");
+        assert!(probes(take_tapped()).is_empty());
+    }
 
     #[test]
     fn native_mod_records_reach_the_file_with_their_targets() {
@@ -723,20 +802,19 @@ mod tests {
                     .target(target)
                     .build(),
             );
-            let Out::Write {
-                stderr,
-                record: (_, _, message),
-                ..
-            } = receive.try_recv().unwrap()
-            else {
+            let Out::Write { stderr, lines, .. } = receive.try_recv().unwrap() else {
                 panic!("a diagnostic must write a record")
             };
             if ours(target) {
                 assert_eq!(stderr.as_deref(), Some("diagnostic"));
-                assert_eq!(message, "diagnostic");
+                assert!(lines.iter().any(|line| line.ends_with("diagnostic")));
             } else {
                 assert!(stderr.is_none());
-                assert_eq!(message, format!("[{target}] diagnostic"));
+                assert!(
+                    lines
+                        .iter()
+                        .any(|line| line.ends_with(&format!("[{target}] diagnostic")))
+                );
             }
         }
     }

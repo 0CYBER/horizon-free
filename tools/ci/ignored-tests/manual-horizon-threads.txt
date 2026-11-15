@@ -1,0 +1,4 @@
+# horizon-threads's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-threads sampler::tests::handler_cost_per_sample by-hand manual # measurement: cargo test -p horizon-threads --release handler_cost -- --ignored --nocapture
+horizon-threads sampler::tests::unwind_cost_per_sample by-hand manual # measurement: cargo test -p horizon-threads --release unwind_cost -- --ignored --nocapture
+horizon-threads work::tests::store_cost by-hand manual # measurement: cargo test -p horizon-threads --release store_cost -- --ignored --nocapture

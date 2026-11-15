@@ -56,8 +56,8 @@ def main():
         "item may be tried afterward. "
         "Game-mode side effects and world simulation are controlled fixtures.",
         sources=[lab.ROOT / "crates/horizon-client-input/src/interaction_input.rs",
-                 lab.ROOT / "crates/horizon-client/src/game/remote.rs",
-                 lab.ROOT / "crates/horizon-client/src/game/hand.rs",
+                 lab.ROOT / "crates/horizon-client/src/game/network/remote/mod.rs",
+                 lab.ROOT / "crates/horizon-client/src/game/items/hand.rs",
                  lab.ROOT / "mods/horizon/src/test/java/dev/horizonlab/parity/ParityData.java"])
 
 

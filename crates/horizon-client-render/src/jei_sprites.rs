@@ -29,6 +29,10 @@ pub(crate) const SPRITES: &[(&str, &[u8])] = &[
     ),
     ("slot", include_bytes!("jei_recipes/slot.png")),
     (
+        "icons/config_button",
+        include_bytes!("jei_recipes/config_button.png"),
+    ),
+    (
         "icons/list_badge",
         include_bytes!("jei_recipes/icons/list_badge.png"),
     ),

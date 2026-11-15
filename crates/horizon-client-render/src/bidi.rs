@@ -4,7 +4,9 @@
 //! joined presentation forms (ICU's `ArabicShaping` with `LETTERS_SHAPE`), the
 //! text is reordered by the Unicode bidirectional algorithm, and characters in
 //! right-to-left runs are mirrored. Left-to-right text comes back unchanged.
+mod sequence;
 use crate::text::{Span, Text};
+pub use sequence::visual_characters;
 use std::borrow::Cow;
 use unicode_bidi::{
     BidiClass, Direction, Level, ParagraphBidiInfo, bidi_class, get_base_direction,
@@ -243,7 +245,7 @@ fn unchanged(mut chars: impl Iterator<Item = char>, default_rtl: bool) -> bool {
 /// character's position in the shaped text. A character's style is the one at
 /// its position in the shaped text, as `SubStringSource` takes it (the text
 /// shrinks at a lam-alef ligature).
-fn reorder(chars: &[char], default_rtl: bool) -> Vec<(char, usize)> {
+fn reorder(chars: &[char], default_rtl: bool) -> Vec<(char, usize, u8)> {
     let shaped = shape(chars);
     let plain: String = shaped.iter().collect();
     // DEFAULT_RTL only changes text without a strong character.
@@ -259,7 +261,7 @@ fn reorder(chars: &[char], default_rtl: bool) -> Vec<(char, usize)> {
             } else {
                 shaped[i]
             };
-            (c, i)
+            (c, i, levels[i].number())
         })
         .collect()
 }
@@ -272,18 +274,21 @@ pub fn visual(text: &Text) -> Cow<'_, Text> {
         return Cow::Borrowed(text);
     }
     let chars: Vec<char> = text.chars().map(|(c, _)| c).collect();
-    let styles: Vec<_> = text.chars().map(|(_, style)| style).collect();
-    let mut out = Text::default();
-    for (c, at) in reorder(&chars, default_rtl) {
-        match out.spans.last_mut() {
-            Some(span) if span.style == *styles[at] => span.text.push(c),
-            _ => out.spans.push(Span {
-                text: c.to_string(),
-                style: styles[at].clone(),
-            }),
+    let spans: Vec<_> = text
+        .spans
+        .iter()
+        .flat_map(|span| span.text.chars().map(move |_| span))
+        .collect();
+    let mut out: Vec<Span> = Vec::new();
+    for (c, at, _) in reorder(&chars, default_rtl) {
+        match out.last_mut() {
+            Some(span) if span.style == spans[at].style && span.origin() == spans[at].origin() => {
+                span.text.push(c)
+            }
+            _ => out.push(spans[at].with_text(c.to_string())),
         }
     }
-    Cow::Owned(out)
+    Cow::Owned(Text::from_spans(out))
 }
 
 /// The same for a plain string.
@@ -296,7 +301,21 @@ pub fn visual_str(s: &str) -> Cow<'_, str> {
     Cow::Owned(
         reorder(&chars, default_rtl)
             .into_iter()
-            .map(|(c, _)| c)
+            .map(|(c, _, _)| c)
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+    #[test]
+    fn visual_order_preserves_origin_when_equal_styles_cross() {
+        let text = Text::literal("א").append(Text::untrusted("ב"));
+        let reordered = visual(&text);
+        assert_eq!(reordered.plain(), "בא");
+        assert_eq!(reordered.spans.len(), 2);
+        assert_eq!(reordered.spans[0].origin(), crate::text::Origin::Remote);
+        assert_eq!(reordered.spans[1].origin(), crate::text::Origin::Local);
+    }
 }

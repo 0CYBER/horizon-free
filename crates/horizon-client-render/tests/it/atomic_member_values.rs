@@ -106,7 +106,8 @@ fn run(device: &wgpu::Device, queue: &wgpu::Queue, source: &str, start: [u32; 2]
 #[test]
 #[ignore = "requires a host GPU; run with --ignored --nocapture"]
 fn reads_of_atomic_members_see_the_atomic_updates() {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
     let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
     eprintln!("Atomic member GPU: {}", adapter.get_info().name);
     // Pack buffers sit in bind group 4, as in the game.

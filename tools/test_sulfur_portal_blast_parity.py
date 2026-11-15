@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Check vanilla's portal calculator and Horizon's isolated sulfur-cube blast regression.
+"""Check vanilla's portal calculator and Horizon's actual arrival/explosion paths.
 
 The Java side calls the actual pinned calculator without creating a server. Rust
-runs the production teleport, persistence, mob-event and explosion paths. This is
-scoped contract coverage, not a full cross-dimension vanilla server transcript.
+runs portal and explicit-teleport item merging, TNT's transient portal state and
+blasts, plus the sulfur-cube regression. This is scoped contract coverage, not a
+full cross-dimension vanilla server transcript.
 """
 import os
 import json
@@ -58,7 +59,7 @@ def compile_tests(build, scratch):
         result.check_returncode()
 
 
-def main(rust_filter="portal_blast_sulfur_cube_", rust_tests=1):
+def main(rust_filters=("portal_blast_sulfur_cube_", "portal_arrival_effects_"), rust_tests=8):
     lock, jars, libraries = base.verify_artifacts()
     resources = Path(os.environ.get("HORIZON_TEST_RESOURCES", lab.RESOURCES)).resolve()
     if not (resources / "movement-properties.nbt").exists():
@@ -108,13 +109,14 @@ def main(rust_filter="portal_blast_sulfur_cube_", rust_tests=1):
     with tempfile.TemporaryDirectory(prefix="horizon-portal-game-dir-") as directory:
         scratch = Path(directory)
         with (build / "rust.log").open("w", encoding="utf-8") as log:
-            subprocess.run([str(binary), rust_filter, "--include-ignored", "--color", "never"],
+            subprocess.run([str(binary), *rust_filters, "--include-ignored", "--color", "never",
+                            "--test-threads", "1"],
                            cwd=scratch, env=child_env(scratch, resources),
                            check=True, stdout=log, stderr=subprocess.STDOUT)
     result = (build / "rust.log").read_text(encoding="utf-8")
     banner = f"running {rust_tests} test" + ("" if rust_tests == 1 else "s")
     if banner not in result or f"{rust_tests} passed; 0 failed" not in result:
-        raise AssertionError(f"Expected all {rust_tests} portal-blast regressions to execute")
+        raise AssertionError(f"Expected all {rust_tests} portal arrival/blast regressions to execute")
     if binary_hash != lab.digest(binary, "sha256"):
         raise RuntimeError("Test executable changed during validation")
     base.ensure_sources_unchanged(sources, hashes)
@@ -126,7 +128,7 @@ def main(rust_filter="portal_blast_sulfur_cube_", rust_tests=1):
                            "rust_log_sha256": lab.digest(build / "rust.log", "sha256"),
                            "vanilla_calculator_calls": 6, "rust_tests": rust_tests,
                            "scope": __doc__})
-    print(f"Portal blast: 6 vanilla calculator queries and {rust_tests} production regressions passed")
+    print(f"Portal arrivals/blasts: 6 vanilla calculator queries and {rust_tests} production regressions passed")
 
 
 if __name__ == "__main__":

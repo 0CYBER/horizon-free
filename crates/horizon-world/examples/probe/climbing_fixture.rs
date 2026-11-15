@@ -1,15 +1,17 @@
 use horizon_core::position::BlockPos;
-use horizon_world::{
-    climbing::{ClimbingRegistry, ClimbingWorld, on_climbable},
-    nbt::{self, Limits},
-    registry::{BlockRegistry, BlockStateId},
-};
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::{nbt, nbt::Limits},
+    horizon_world::{
+        climbing::{ClimbingRegistry, ClimbingWorld, on_climbable},
+        registry::{BlockRegistry, BlockStateId},
+    },
 };
 fn pos(v: &Value) -> BlockPos {
     BlockPos::new(

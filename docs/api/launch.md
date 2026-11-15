@@ -8,7 +8,7 @@ reference implementation. Proposed in horizon-rust/horizon#3545.
 
 | | |
 | --- | --- |
-| Version | 0.1.0, printed by `horizon-client --launch-api` and `horizon-prepare --launch-api` |
+| Version | 0.1.1, printed by `horizon-client --launch-api` and `horizon-prepare --launch-api` |
 | Level | experimental ([stability.md](stability.md)): preview once preparing and the guide are covered too |
 | Covers | starting `horizon-client`: its options, the session JSON, the exit codes, the crash report's path; preparing with `horizon-prepare`: `--launch-api`, `--output`, `--check`, `--complete`, `--progress json` |
 | Not yet | finding a build (see Not there yet) |
@@ -35,7 +35,7 @@ The whole way, from picking a build to playing: [launch-guide.md](launch-guide.m
 
 ## Reference
 
-[launch-reference.md](launch-reference.md), generated from `crates/horizon-client/src/game/launch_api.rs`: every
+[launch-reference.md](launch-reference.md), generated from `crates/horizon-client/src/game/runtime/launch_api.rs`: every
 option, the `--launch-api` reply and the exit codes.
 
 ### The session JSON
@@ -120,6 +120,9 @@ test keeps the contract and the code together.
 
 ## Changelog
 
+- 0.1.1: `horizon-client` advertises `--developer-single-player` and the
+  `developer_single_player` capability for unsigned developer launches; the shared preparer
+  version moves with the game's Launch API.
 - 0.1.0 (not released yet, so still one version): `horizon-client`'s `--game-dir`, `--home`, `--player-dir`, `--fullscreen`,
   `--session-stdin`, `--launch-api` (with `content`), exit code 2 for a refused command line; `horizon-prepare`'s `--launch-api`,
   `--output`, `--check`, `--complete`, `--progress json`, `--version-json`, `--client-jar`, `--libraries-dir`,

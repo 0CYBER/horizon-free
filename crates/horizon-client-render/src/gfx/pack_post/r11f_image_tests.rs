@@ -8,6 +8,7 @@ use wgpu::TextureFormat as T;
 
 #[test]
 fn an_r11f_image_is_stored_into_and_read_back() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else { return };
     let files = vec![
         (
@@ -49,7 +50,7 @@ fn an_r11f_image_is_stored_into_and_read_back() {
         },
         horizon_shaders::GameInputs::default(),
     );
-    let hud = HudBatch::new(SIZE);
+    let hud = HudBatch::scratch(SIZE);
     let mut frame = fixture_frame(&hud);
     frame.title = false;
     let pixels = gpu.render(&mut post, &color, &depth, &frame, &mut |_, _, _, _| {});

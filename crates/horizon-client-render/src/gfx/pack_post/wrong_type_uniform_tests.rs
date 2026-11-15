@@ -46,6 +46,7 @@ fn pack() -> Post {
 
 #[test]
 fn built_ins_declared_with_another_type_read_zero() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack());
     // 8 pixels wide; post programs read `fogShape` -1. composite reads 0, 0 and 0 (+1 = 1);

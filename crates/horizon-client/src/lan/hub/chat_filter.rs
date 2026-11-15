@@ -3,13 +3,13 @@
 //! its list, mutes and escalation. A refused text reaches nobody; the sender is told in private, and the
 //! game logs it and bans when the escalation says so (`HostEvent::ChatFiltered`).
 use super::{HostEvent, Hub, chat::now_millis};
+use horizon_core::nbt::{JavaString, Tag};
 use horizon_protocol::{
     packets::play::{self, Clientbound as C},
     text::literal,
 };
 pub use horizon_server_files::chat_guard::Place;
 use horizon_server_files::chat_guard::{Action, ChatGuard, Mute, duration_text};
-use horizon_world::nbt::{JavaString, Tag};
 
 /// What the sender reads when their text held a slur.
 pub fn notice(place: Place, action: Action, now: i64) -> String {
@@ -160,6 +160,24 @@ impl Hub {
     /// `/unmute <player>`: the name as it was muted, if they were.
     pub fn unmute(&mut self, name: &str) -> Option<String> {
         self.chat_filter.as_deref_mut()?.unmute(name)
+    }
+
+    /// Writes a refused text to the filter's own log, when it keeps one; `Err` says why it couldn't.
+    #[allow(clippy::too_many_arguments)]
+    pub fn log_chat_filtered(
+        &mut self,
+        now: i64,
+        name: &str,
+        uuid: u128,
+        place: Place,
+        count: u32,
+        action: Action,
+        text: &str,
+    ) -> Result<(), String> {
+        match self.chat_filter.as_deref_mut() {
+            Some(guard) => guard.log(now, name, uuid, place, count, action, text),
+            None => Ok(()),
+        }
     }
 }
 

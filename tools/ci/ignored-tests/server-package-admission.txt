@@ -1,0 +1,2 @@
+# side = "server" package admission through the real loader (arismoko/horizon#4138): resource-backed, in a child process.
+horizon-client game::mods::tests::a_server_package_is_refused_at_load_for_registry_files_and_loads_with_assets lib daily child-process

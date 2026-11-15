@@ -1,14 +1,4 @@
 use horizon_world::{
-    active_effects::{ActiveEffects, EffectHooks},
-    effect_notifications::{
-        self as notify, EffectPacket, EligibilityWorld, ImmunityTag, NotificationWorld,
-        RestrictedEffect,
-    },
-    java_hash_map::JavaKey,
-    object_open_set::{CursorError, ObjectKey, ObjectOpenSet},
-    status_effect::{BlendState, Details, EffectInstance},
-};
-use horizon_world::{
     attribute_updates::{self, UpdateWorld, UpdatedAttribute},
     living_health::{self, HealthWorld, SyncedFloat},
 };
@@ -18,6 +8,18 @@ use std::{
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::java_hash_map::JavaKey,
+    horizon_world::{
+        active_effects::{ActiveEffects, EffectHooks},
+        effect_notifications as notify,
+        effect_notifications::{
+            EffectPacket, EligibilityWorld, ImmunityTag, NotificationWorld, RestrictedEffect,
+        },
+        object_open_set::{CursorError, ObjectKey, ObjectOpenSet},
+        status_effect::{BlendState, Details, EffectInstance},
+    },
 };
 #[derive(Clone)]
 struct Key {

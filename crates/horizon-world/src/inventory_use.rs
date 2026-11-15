@@ -1,13 +1,16 @@
 //! Living item-use lifecycle bound to player inventory, shared stack identity
 //! and synchronized using/offhand bytes. Item effects and level services remain
 //! explicit so their callbacks can observe or mutate the same stored state.
-use crate::{
-    item_stack_refs::StackRef,
-    item_use_lifecycle::{UseLifecycleWorld, UseState},
-    living_use_flags,
-    player_equipment::{self, InteractionHand},
-    player_inventory::{EquipmentSlot, PlayerInventory},
-    synced_values::{DataError, DataValue, Observer, SyncedValues},
+use {
+    crate::{
+        item_stack_refs::StackRef,
+        item_use_lifecycle::{UseLifecycleWorld, UseState},
+        living_use_flags, player_equipment,
+        player_equipment::InteractionHand,
+        player_inventory::PlayerInventory,
+        synced_values::{DataError, DataValue, Observer, SyncedValues},
+    },
+    horizon_core::equipment_slot::EquipmentSlot,
 };
 pub type ActiveStack<I, K, V> = UseState<StackRef<I, K, V>>;
 pub struct UseView<'a, I, K, V> {

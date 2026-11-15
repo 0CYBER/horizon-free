@@ -61,8 +61,8 @@ def main():
         for path in sources
         if path.is_file()
     }
-    environment = dict(os.environ, RUSTUP_TOOLCHAIN='stable')
-    subprocess.run(['cargo', 'build', '--locked', '-p', 'horizon-client'],
+    environment = dict(os.environ, RUSTUP_TOOLCHAIN=(lab.ROOT / 'tools/ci/rust-version').read_text().strip())
+    subprocess.run(['cargo', 'build', '--locked', '-p', 'horizon-game'],
                    cwd=lab.ROOT, env=environment, check=True, timeout=3600)
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'],

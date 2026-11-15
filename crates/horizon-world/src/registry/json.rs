@@ -28,7 +28,7 @@ impl<'a> BlockStateJsonCodec<'a> {
             }
         }
         let mut counts = BTreeMap::new();
-        for state in &registry.states {
+        for state in &registry.data.states {
             *counts.entry(state.name.clone()).or_insert(0) += 1;
         }
         Ok(Self {

@@ -13,8 +13,10 @@ use super::{
     path::PathType,
     trader::MoveTowardsRestriction,
 };
+use crate::health::DamageLevel;
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_world::move_gate::MoveGate;
 use std::f32::consts::PI;
 
 // Guardian state: `flag` an active beam target (DATA_ID_ATTACK_TARGET),
@@ -61,8 +63,7 @@ pub fn register(m: &mut Mob) {
     m.ai.targets.add(
         1,
         NearestTarget::player(true).when(|m, w| {
-            w.player
-                .as_ref()
+            w.selected_player()
                 .is_some_and(|p| p.position.distance_squared(m.position) > 9.0)
         }),
     );
@@ -104,9 +105,9 @@ impl Goal for GuardianAttack {
             m.look_at_speed([t.position.x, t.eye_y, t.position.z], 90.0, 90.0);
         }
     }
-    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.extra.flag = false;
-        m.ai.target = None;
+        m.set_ai_target(cx.w, None);
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let (Some(who), Some(t)) = (m.ai.target, m.target_info(cx.w)) else {
@@ -115,7 +116,7 @@ impl Goal for GuardianAttack {
         m.ai.nav.stop();
         m.look_at_speed([t.position.x, t.eye_y, t.position.z], 90.0, 90.0);
         if !m.sees(cx.w, who) {
-            m.ai.target = None;
+            m.set_ai_target(cx.w, None);
             return;
         }
         self.attack_time += 1;
@@ -138,11 +139,13 @@ impl Goal for GuardianAttack {
                 + if is_elder(m) { 2.0 } else { 0.0 };
             let from = [m.position.x, m.position.y, m.position.z];
             match who {
-                Who::Player => cx.events.push(MobEvent::DamagePlayer {
-                    amount: magic,
-                    from,
-                    kind: "minecraft:indirect_magic",
-                }),
+                Who::Player => cx
+                    .events
+                    .push(cx.w.route_player_event(MobEvent::DamagePlayer {
+                        amount: magic,
+                        from,
+                        kind: "minecraft:indirect_magic",
+                    })),
                 Who::Mob(id) => cx.events.push(MobEvent::DamageMob {
                     target: id,
                     amount: magic,
@@ -155,7 +158,7 @@ impl Goal for GuardianAttack {
                 }),
             }
             super::ai::do_hurt_target(m, who, cx);
-            m.ai.target = None;
+            m.set_ai_target(cx.w, None);
         }
     }
 }
@@ -213,12 +216,18 @@ pub fn move_control(m: &mut Mob) {
     m.extra.flag2 = true;
 }
 /// `Guardian.travelInWater`; on land the usual travel.
-pub fn travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<MobEvent>) -> bool {
+pub fn travel(
+    m: &mut Mob,
+    w: &MobWorld,
+    level: &mut DamageLevel<'_>,
+    input: Vec3,
+    events: &mut Vec<MobEvent>,
+) -> bool {
     if !m.fluids.in_water {
         return false;
     }
     m.move_relative(0.1, input);
-    m.do_move(w, events);
+    m.do_move(w, level, events, &mut MoveGate::new());
     m.velocity = m.velocity.scale(0.9);
     if !m.extra.flag2 && m.ai.target.is_none() {
         m.velocity.y -= 0.005;
@@ -292,7 +301,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     // The eye follows the active target, else the player (the camera).
     let look = match m.target_info(w).filter(|_| m.extra.flag) {
         Some(t) => Some([t.position.x, t.eye_y, t.position.z]),
-        None => w.player.as_ref().map(|p| p.eye),
+        None => w.selected_player().map(|p| p.eye),
     };
     if let Some(look) = look {
         look_at(m, look);
@@ -389,68 +398,78 @@ mod elder_home_tests {
     /// `ElderGuardian.customServerAiStep`: with no home yet, `setHomeTo(blockPosition(), 16)`,
     /// the restriction its wandering goals read (`Mob::restricted`); a home it has is kept.
     #[test]
+    #[ignore = "daily"]
     fn an_elder_guardian_homes_where_it_stands() {
-        with_test_world(&[], |w, types| {
-            let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
-            let mut lr = crate::mobs::world::level_random(0);
-            let mut events = Vec::new();
-            let mut m = Mob::new(1, kind.clone(), Vec3::new(10.7, 64.2, -20.9), 0.0);
-            elder_server_ai_step(
-                &mut m,
-                &mut Cx {
-                    w,
-                    lr: &mut lr,
-                    events: &mut events,
-                },
-            );
-            assert_eq!(m.ai.home, Some(([10, 64, -21], 16)));
-            assert!(!m.restricted(0.0, [20, 64, -21]));
-            assert!(m.restricted(0.0, [27, 64, -21]));
+        assert!(
+            with_test_world(&[], |w, types| {
+                let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
+                let mut test_level = crate::health::TestLevel::new(0);
+                let mut level = test_level.level();
+                let mut events = Vec::new();
+                let mut m = Mob::new(1, kind.clone(), Vec3::new(10.7, 64.2, -20.9), 0.0);
+                elder_server_ai_step(
+                    &mut m,
+                    &mut Cx {
+                        w,
+                        level: &mut level,
+                        events: &mut events,
+                    },
+                );
+                assert_eq!(m.ai.home, Some(([10, 64, -21], 16)));
+                assert!(!m.restricted(0.0, [20, 64, -21]));
+                assert!(m.restricted(0.0, [27, 64, -21]));
 
-            let mut kept = Mob::new(2, kind, Vec3::new(10.0, 64.0, 20.0), 0.0);
-            kept.ai.home = Some(([100, 50, 100], 24));
-            elder_server_ai_step(
-                &mut kept,
-                &mut Cx {
-                    w,
-                    lr: &mut lr,
-                    events: &mut events,
-                },
-            );
-            assert_eq!(kept.ai.home, Some(([100, 50, 100], 24)));
-        });
+                let mut kept = Mob::new(2, kind, Vec3::new(10.0, 64.0, 20.0), 0.0);
+                kept.ai.home = Some(([100, 50, 100], 24));
+                elder_server_ai_step(
+                    &mut kept,
+                    &mut Cx {
+                        w,
+                        level: &mut level,
+                        events: &mut events,
+                    },
+                );
+                assert_eq!(kept.ai.home, Some(([100, 50, 100], 24)));
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `ElderGuardian.customServerAiStep`: on its minute (`(tickCount + getId()) % 1200 == 0`)
     /// the curse goes out with `isSilent() ? 0.0F : 1.0F`, and
     /// `ClientPacketListener.handleGameEvent` plays the curse sound only for 1.
     #[test]
+    #[ignore = "daily"]
     fn a_silent_elder_guardian_curses_without_the_sound() {
-        with_test_world(&[], |w, types| {
-            let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
-            let mut lr = crate::mobs::world::level_random(0);
-            for silent in [false, true] {
-                let mut events = Vec::new();
-                let mut m = Mob::new(1200, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
-                m.silent = silent;
-                elder_server_ai_step(
-                    &mut m,
-                    &mut Cx {
-                        w,
-                        lr: &mut lr,
-                        events: &mut events,
-                    },
-                );
-                let curses: Vec<_> = events
-                    .iter()
-                    .filter_map(|e| match e {
-                        MobEvent::ElderCurse { silent, .. } => Some(*silent),
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(curses, [silent]);
-            }
-        });
+        assert!(
+            with_test_world(&[], |w, types| {
+                let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
+                let mut fixture = crate::health::TestLevel::new(0);
+                let mut level = fixture.level();
+                for silent in [false, true] {
+                    let mut events = Vec::new();
+                    let mut m = Mob::new(1200, kind.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
+                    m.silent = silent;
+                    elder_server_ai_step(
+                        &mut m,
+                        &mut Cx {
+                            w,
+                            level: &mut level,
+                            events: &mut events,
+                        },
+                    );
+                    let curses: Vec<_> = events
+                        .iter()
+                        .filter_map(|e| match e {
+                            MobEvent::ElderCurse { silent, .. } => Some(*silent),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(curses, [silent]);
+                }
+            }),
+            "vanilla data is missing"
+        );
         assert_eq!(elder_curse_param(false), 1.0);
         assert_eq!(elder_curse_param(true), 0.0);
     }
@@ -625,6 +644,7 @@ mod tests {
     /// `Guardian.aiStep`: a guardian out of water flops, and the flop is heard
     /// (the elder's own sound) unless the guardian is silent (`!isSilent()`).
     #[test]
+    #[ignore = "daily"]
     fn a_silent_guardian_flops_without_a_sound() {
         for (kind, sound) in [
             ("minecraft:guardian", "entity.guardian.flop"),

@@ -6,25 +6,22 @@
 //! stamp in `horizon-resources.json` against the pinned version), copied beside its destination, and
 //! moved in with a rename. The previous copy is put back if any step fails.
 
-use crate::engine::{self, GAME_VERSION};
+use crate::engine;
+use horizon_server_launch::{GAME_VERSION, Install, config};
 use std::{
     io,
     path::{Path, PathBuf},
 };
 
 /// Where the prepared files go: the first place the server reads them from
-/// (`engine::resource_candidates`). That is `[engine] resources` when `server.toml` sets it, else
+/// (`horizon_server_launch::resource_candidates`). That is `[engine] resources` when `server.toml` sets it, else
 /// `resources/` in the server folder when it exists or there is no installer, else the installer's
 /// `game-files/horizon-client/<version>` (what the release's `.local/horizon-client` links to).
 pub fn destination(dir: &Path) -> PathBuf {
-    let configured = crate::config::Config::load(dir)
+    let configured = config::Config::load(dir)
         .map(|c| c.engine.resources)
         .unwrap_or_default();
-    destination_for(
-        dir,
-        &configured,
-        crate::update::Install::find().map(|i| i.root),
-    )
+    destination_for(dir, &configured, Install::find().map(|i| i.root))
 }
 
 fn destination_for(dir: &Path, configured: &str, installer: Option<PathBuf>) -> PathBuf {

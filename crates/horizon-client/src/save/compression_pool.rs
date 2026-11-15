@@ -8,7 +8,8 @@ use std::{
     },
 };
 
-use horizon_world::{compression::Compression, nbt::Limits, region::ChunkRecord};
+use horizon_core::nbt::Limits;
+use horizon_world::{compression::Compression, region::ChunkRecord};
 
 use super::Record;
 
@@ -177,6 +178,12 @@ pub fn compress_records_with_pool(
     }
     let compression = Compression::selected();
     let compress = move |record: &Record| {
+        if let Record::Chunk(_, encoding, _) | Record::Proto(_, encoding) = record {
+            encoding
+                .biomes
+                .ensure_saveable()
+                .map_err(io::Error::other)?;
+        }
         record
             .tag()
             .map(|tag| ChunkRecord::from_nbt(&tag, compression, timestamp, Limits::saved()))

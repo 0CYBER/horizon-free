@@ -2,7 +2,10 @@
 //! uncompressed `servers.dat`: `{servers: [{name, ip, icon?, acceptTextures?,
 //! acceptedCodeOfConduct?, hidden}]}`. Hidden entries (servers joined by
 //! Direct Connection or quick play) are not shown but keep their settings.
-use horizon_world::nbt::{self, JavaString, NamedTag, Tag};
+use horizon_core::{
+    nbt,
+    nbt::{JavaString, NamedTag, Tag},
+};
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq)]

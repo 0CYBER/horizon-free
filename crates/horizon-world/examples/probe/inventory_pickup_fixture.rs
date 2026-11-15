@@ -1,13 +1,16 @@
-use horizon_world::{
-    component_patch::{Patch, Prototype},
-    item_stack_refs::{ItemStacks, StackRef},
-    player_inventory::{EntityEquipment, EquipmentSlot, InventoryRules, PlayerInventory},
-};
 use serde_json::Value;
 use std::{
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::equipment_slot::EquipmentSlot,
+    horizon_world::{
+        component_patch::{Patch, Prototype},
+        item_stack_refs::{ItemStacks, StackRef},
+        player_inventory::{EntityEquipment, InventoryRules, PlayerInventory},
+    },
 };
 type Stack = StackRef<u8, usize, i32>;
 type Inventory = PlayerInventory<u8, usize, i32>;

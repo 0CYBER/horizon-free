@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the native wind-burst block-filter regression without a display or server.
 
-Build `cargo build -p horizon-client --example wind_burst_hook_probe`, then pass
+Build `cargo build -p horizon-mod-host --example wind_burst_hook_probe`, then pass
 --binary and --resources. Uses only temporary synthetic fixture worlds.
 """
 import argparse

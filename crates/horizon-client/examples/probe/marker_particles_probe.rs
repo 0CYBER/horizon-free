@@ -68,9 +68,28 @@ pub fn main() -> Result<()> {
     let root = Path::new(".local/horizon-client/26.3");
     let assets = Assets::load(root)?;
     let facts = BlockFacts::load(root, assets.registry)?;
-    let biomes = Biomes::load(root)?;
+    let biomes = Biomes::load(&horizon_assets::resource_source::ResourceRoot::directory(
+        root.to_path_buf(),
+    ))?;
     let collision = collisions::load(root, assets.registry)?;
-    let tables = AnimateTables::load(root, assets.registry, &biomes)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = horizon_client::items::Items::tags_only(
+        root,
+        &horizon_world::loot::PackOverlay::NONE,
+        &defaults,
+    )?;
+    let tables = AnimateTables::load(root, assets.registry)?;
+    let enchant_power = horizon_client::animate_tick::EnchantPower::default();
+    enchant_power.rebuild(
+        assets.registry.len(),
+        |state| items.default_enchant_power(&facts.get(state).name),
+        |state| {
+            items.block_in_tag(
+                "minecraft:enchantment_power_transmitter",
+                &facts.get(state).name,
+            )
+        },
+    );
     let mut world = World::new(facts.air, 0);
     let barrier = assets
         .registry
@@ -90,7 +109,11 @@ pub fn main() -> Result<()> {
             }
         }
     }
-    let mut engine = ParticleEngine::new(root, &HashMap::new(), &Default::default());
+    let mut engine = ParticleEngine::new(
+        &horizon_assets::resource_source::ResourceSource::directory(root.to_path_buf()),
+        &HashMap::new(),
+        &Default::default(),
+    );
     // One all-of-that-block world per state the tick cases name: the whole
     // animateTick loop samples inside the box the barriers already fill.
     let mut tick_worlds: HashMap<String, World> = HashMap::new();
@@ -141,6 +164,7 @@ pub fn main() -> Result<()> {
                 jitter.then(|| column_offset(x, z))
             };
             let ctx = AnimateContext {
+                enchant_power: &enchant_power,
                 world,
                 facts: &facts,
                 collision: &collision,
@@ -190,6 +214,7 @@ pub fn main() -> Result<()> {
         if kind == "campfire" || kind == "make" {
             let seed = case["seed"].as_i64().ok_or("seed")?;
             let ctx = AnimateContext {
+                enchant_power: &enchant_power,
                 world: &world,
                 facts: &facts,
                 collision: &collision,
@@ -261,6 +286,7 @@ pub fn main() -> Result<()> {
             ParticleOptions::block(ParticleType::BlockMarker, "item/barrier".into(), 0xFFFFFF);
         let options = |_| Some(options.clone());
         let ctx = AnimateContext {
+            enchant_power: &enchant_power,
             world: &world,
             facts: &facts,
             collision: &collision,

@@ -1,25 +1,30 @@
 //! Structure processors (`worldgen/processor_list`) and template placement.
-use super::{BlockInfo, BoundingBox, Mirror, Rotation, StructureResources, StructureTemplate};
-use crate::{
-    fluid::FluidKind,
-    heightmap::HeightmapType,
-    nbt::{Compound, JavaString, Tag},
-    registry::BlockStateId,
-    worldgen::{
-        DecodeError,
-        block_feature::FeatureBlockBindings,
-        feature::FeatureWorld,
-        placement::{PlacementContext, PlacementQueryError},
-        rule_test::RuleTest,
-        value_provider::IntProvider,
-    },
-};
 use horizon_core::{
     position::BlockPos,
     random::{LegacyRandom, PositionalRandom, RandomSource, position_seed},
 };
 use serde_json::Value;
 use std::{collections::BTreeSet, sync::Arc};
+use {
+    super::{BlockInfo, Mirror, Rotation, StructureResources, StructureTemplate},
+    horizon_core::bounding_box::BoundingBox,
+};
+use {
+    crate::{
+        fluid::FluidKind,
+        heightmap::HeightmapType,
+        registry::BlockStateId,
+        worldgen::{
+            DecodeError,
+            block_feature::FeatureBlockBindings,
+            feature::FeatureWorld,
+            placement::{PlacementContext, PlacementQueryError},
+            rule_test::RuleTest,
+            value_provider::IntProvider,
+        },
+    },
+    horizon_core::nbt::{Compound, JavaString, Tag},
+};
 
 mod litho;
 mod pillars;
@@ -671,40 +676,29 @@ impl SpawnerMobs {
     }
 }
 
+/// A block holder set in any form `crate::holder_set` reads; a tag no pack
+/// defines holds no blocks.
 fn holder_set(
     value: &Value,
     bindings: &FeatureBlockBindings<'_>,
 ) -> Result<Arc<BTreeSet<BlockStateId>>, DecodeError> {
-    let names: Vec<&str> = match value {
-        Value::String(s) => vec![s.as_str()],
-        Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
-        _ => return Err(DecodeError::Field("block holder set")),
+    let lookup = super::super::block_feature::BlockSetLookup {
+        bindings,
+        unknown_tags_empty: true,
     };
-    let mut out = BTreeSet::new();
-    for name in names {
-        if let Some(tag) = name.strip_prefix('#') {
-            let tag = super::super::tags::identifier(tag)?;
-            out.extend(
-                bindings
-                    .tags
-                    .get(&tag)
-                    .map(|s| s.iter().copied())
-                    .into_iter()
-                    .flatten(),
-            );
-        } else {
-            let name = super::super::tags::identifier(name)?;
-            out.extend(
-                bindings
-                    .blocks
-                    .get(&name)
-                    .ok_or_else(|| DecodeError::Registry(format!("unknown block {name}")))?
-                    .iter()
-                    .copied(),
-            );
+    let ids = match value {
+        Value::Array(list) => {
+            let mut ids = Vec::new();
+            for value in list.iter().filter(|value| value.is_string()) {
+                ids.extend(
+                    crate::holder_set::resolve(value, &lookup).map_err(DecodeError::Registry)?,
+                );
+            }
+            ids
         }
-    }
-    Ok(Arc::new(out))
+        _ => crate::holder_set::resolve(value, &lookup).map_err(DecodeError::Registry)?,
+    };
+    Ok(Arc::new(ids.into_iter().collect()))
 }
 pub(super) fn json_to_nbt(value: &Value) -> Tag {
     match value {
@@ -1546,8 +1540,9 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
         } else {
             None
         };
-        let state = resources.transforms.rotate(
+        let state = resources.transforms.rotate_at(
             resources.transforms.mirror(info.state, settings.mirror),
+            info.pos,
             settings.rotation,
         );
         if info.nbt.is_some() {
@@ -1564,6 +1559,9 @@ pub fn place_in_world<W: FeatureWorld + PlacementContext>(
                     None => settings.random.as_deref_mut().map_or(0, |r| r.long()),
                 };
                 nbt.insert("LootTableSeed".into(), Tag::Long(seed));
+            }
+            if let Some(transform) = resources.registry.structure_block_entity_transform.get() {
+                transform.transform(info.pos, &mut nbt, settings.rotation, settings.mirror);
             }
             world.set_block_entity(info.pos, *nbt)?;
         }
@@ -1803,6 +1801,25 @@ fn update_shape_at_edge<W: PlacementContext>(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn plain_block_lists_expand_tags_and_ignore_non_strings() {
+        let (mut tag, _) = horizon_core::nbt::parse_snbt(r#"{DataVersion:0,states:[{id:"minecraft:air"},{id:"minecraft:cave_air"},{id:"minecraft:void_air"},{id:"minecraft:oak_log"}],defaults:{"minecraft:air":0,"minecraft:cave_air":1,"minecraft:void_air":2,"minecraft:oak_log":3}}"#).unwrap();
+        *tag.get_mut("DataVersion").unwrap() = Tag::Int(crate::DATA_VERSION);
+        let registry = crate::registry::BlockRegistry::from_nbt(&tag).unwrap();
+        let tags = BTreeMap::from([("minecraft:logs".into(), vec!["minecraft:oak_log".into()])]);
+        let bindings = FeatureBlockBindings::with_tags(&registry, BTreeSet::new(), &tags).unwrap();
+        assert_eq!(
+            *holder_set(&json!(["#minecraft:logs", 19, false, {}]), &bindings).unwrap(),
+            BTreeSet::from([BlockStateId(3)])
+        );
+        assert!(
+            holder_set(&json!(["#minecraft:missing", null]), &bindings)
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     fn spawner(value: Value) -> SpawnerMobs {
         SpawnerMobs::decode(&value, |v| {

@@ -1,5 +1,5 @@
 //! Item cooldown storage with native hash-map expiry order and callback prefixes.
-use crate::java_hash_map::{CursorError, JavaHashMap, JavaKey};
+use horizon_core::java_hash_map::{CursorError, JavaHashMap, JavaKey};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CooldownInstance {
     pub start: i32,

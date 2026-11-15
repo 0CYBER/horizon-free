@@ -1,0 +1,7 @@
+# The daily tests of horizon-bench: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+horizon-bench compare::tests::a_report_with_ab_round_trips_and_old_ones_still_parse lib daily child-process
+horizon-bench hardware::tests::detects_this_machine lib daily child-process
+horizon-bench tests::rejects_other_formats_and_newer_versions lib daily child-process
+horizon-bench tests::round_trip_and_upload_strips_local_fields lib daily child-process
+horizon-bench tests::writes_into_a_folder lib daily child-process

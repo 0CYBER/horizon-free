@@ -1,5 +1,5 @@
 //! What real packs write that GL drivers accept, reduced to asset-free fragments: each test is
-//! one construct a pack on Modrinth needed (`tests/real_packs.rs` finds them).
+//! one construct a pack on Modrinth needed (`tests/it/real_packs.rs` finds them).
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};

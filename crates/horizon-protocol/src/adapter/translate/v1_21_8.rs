@@ -230,15 +230,15 @@ mod tests {
         for (index, tag) in [
             (
                 19,
-                horizon_world::nbt::Tag::compound([
+                horizon_core::nbt::Tag::compound([
                     (
                         "id",
-                        horizon_world::nbt::Tag::String("minecraft:parrot".into()),
+                        horizon_core::nbt::Tag::String("minecraft:parrot".into()),
                     ),
-                    ("Variant", horizon_world::nbt::Tag::Int(3)),
+                    ("Variant", horizon_core::nbt::Tag::Int(3)),
                 ]),
             ),
-            (20, horizon_world::nbt::Tag::Compound(Default::default())),
+            (20, horizon_core::nbt::Tag::Compound(Default::default())),
         ] {
             w.u8(index);
             w.varint(16);

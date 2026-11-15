@@ -48,3 +48,38 @@ pub const STUN_SERVERS: &[&str] = &["stun.cloudflare.com:3478", "stun.l.google.c
 /// Play with Friends' troubleshooting page, shown to hosts nobody can reach.
 pub const FRIENDS_HELP: &str =
     "https://github.com/horizon-rust/horizon/blob/main/docs/play-with-friends.md#troubleshooting";
+
+/// Horizon community invite used by launcher defaults.
+pub const COMMUNITY_DISCORD: &str = "https://discord.gg/playhorizon";
+
+/// The sponsoring hosting provider’s referral page.
+pub const HOSTING_PARTNER: &str = "https://my.sculkhosting.com/ref/horizon";
+
+/// The official cosmetics shop.
+pub const SHOP: &str = "https://playhorizon.dev/shop";
+
+/// The GitHub profile of who made the launcher's look, credited in Settings' About (its picture is
+/// `<this>.png`).
+pub const LAUNCHER_LOOK_CREDIT: &str = "https://github.com/Xmilon";
+
+/// The official launcher installer's product home.
+pub const LAUNCHER_ABOUT: &str = "https://playhorizon.dev";
+
+/// Cargo's canonical source identity for the crates.io registry.
+pub const CARGO_CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+/// The pinned horizon-mixins archive the launcher downloads for `[[native.mixin]]` builds.
+pub const HORIZON_MIXINS_SOURCE: &str =
+    "https://codeload.github.com/horizon-rust/horizon-mixins/tar.gz";
+
+/// Where the fork releases the prebuilt horizon-mixins tool; a release's tag and file follow.
+pub const MIXINS_TOOL_RELEASES: &str = "https://github.com/horizon-rust/horizon/releases/download";
+
+/// Where the fork publishes each game build's mod SDK (`sdk-<build id>`) and the game releases
+/// whose `sdk.json` names their build; a release's tag and file follow. `HORIZON_SDK_BASE`
+/// overrides it.
+pub const SDK_RELEASES: &str = "https://github.com/horizon-rust/horizon/releases/download";
+
+/// The fork's newest releases, which `cargo horizon-mod` reads to find the one SDK a short sha names.
+pub const SDK_RELEASE_LIST: &str =
+    "https://api.github.com/repos/horizon-rust/horizon/releases?per_page=100";

@@ -815,6 +815,7 @@ mod tests {
 
     #[test]
     fn culling_uses_the_next_taa_size_before_the_first_jitter_or_resize() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, _)) = test_device() else {
             return;
         };
@@ -839,6 +840,7 @@ mod tests {
 
     #[test]
     fn baked_light_changes_and_returning_from_a_pack_reject_taa_history() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, _)) = test_device() else {
             eprintln!("TAA baked-light GPU skipped: no test device");
             return;
@@ -899,6 +901,7 @@ mod tests {
 
     #[test]
     fn world_post_pipelines_compile_or_fall_back() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, _)) = test_device() else {
             return;
         };

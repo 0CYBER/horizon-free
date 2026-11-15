@@ -1442,7 +1442,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn startup_and_turn_failures_release_lanes_and_preserve_payload() {
         let (sent, finished) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -1533,7 +1533,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn verification_detects_snapshot_and_gaussian_only_differences() {
         use horizon_core::random::RandomSource;
         let mut game = super::super::super::native_machines::tests::server_game();
@@ -1687,7 +1687,7 @@ mod tests {
 
     /// Exercise the actual Mob/Seen-to-reach conversion, not just hand-built planner boxes.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn actual_reaches_cover_links_villages_and_bounded_moves() {
         let mut game = super::super::super::native_machines::tests::server_game();
         game.spawn_mob("minecraft:cow", [0.5, 65.0, 0.5], true)
@@ -1846,7 +1846,7 @@ mod tests {
     /// A later id is visible frozen without waiting; an earlier id waits for its publication,
     /// and a lane that unwinds without publishing releases the lookup instead of hanging it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn foreign_lookup_observes_serial_visibility_and_unwind() {
         let mut game = super::super::super::native_machines::tests::server_game();
         game.spawn_mob("minecraft:cow", [0.5, 65.0, 0.5], true)
@@ -1921,7 +1921,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn moved_riders_use_loaded_and_ticking_state_at_their_turn() {
         let mut game = super::super::super::native_machines::tests::server_game();
         game.spawn_mob("minecraft:cow", [0.5, 65.0, 0.5], true)
@@ -2097,7 +2097,7 @@ mod tests {
     /// other, some with brains that draw from the level random (no villagers: their village reads
     /// reach the next herd).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn islands_tick_their_mobs_as_one_thread_does() {
         struct Reset;
         impl Drop for Reset {
@@ -2276,7 +2276,7 @@ mod tests {
     /// it with the herd around its owner, and the herd far from both still ticks in a group of its
     /// own.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn a_pet_teleports_to_its_owner_while_a_far_herd_ticks_apart() {
         let mut game = separated_herds_game();
         // Keep the neighbors in place while pets cross the 96-block gap.
@@ -2311,7 +2311,7 @@ mod tests {
     /// herd tick in groups beside the other herds and leave the mobs and the level random as the
     /// serial loop does, since the serial loop draws the same way while the switch is on.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn villagers_on_their_own_random_tick_in_groups_as_serial() {
         struct Reset;
         impl Drop for Reset {
@@ -2364,7 +2364,7 @@ mod tests {
     /// the level's stream, so no lane waits for it: the school leaders' rolls, which move the
     /// level random otherwise, leave it where a tick without them does.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn mobs_on_their_own_random_leave_the_level_stream_alone() {
         assert_ne!(
             level_random_after_ticks(false, 3),
@@ -2380,7 +2380,7 @@ mod tests {
     /// The raiders of one raid order their hurts across it (`raids.rs`): one in each of two herds
     /// joins them, and the herd between ticks in a group of its own.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn a_raid_shares_one_group_beside_a_herd() {
         let mut game = separated_herds_game();
         for x in [2.5, 194.5] {
@@ -2399,7 +2399,7 @@ mod tests {
     /// item's diameter, a fall of any length: 85 blocks above one herd, it joins that herd's
     /// island, and the two others tick apart.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn a_fox_eating_chorus_fruit_joins_the_herd_below() {
         let mut game = separated_herds_game();
         for m in &mut game.mobs {
@@ -2444,7 +2444,7 @@ mod tests {
     /// 96 blocks on: its locomotion bound joins that herd, not the one past it, and the pushes
     /// at the destination come out as serially.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "needs the upstream-parallel-mobs feature and prepared resources"]
     fn a_fast_mob_joins_only_the_herds_its_bound_reaches() {
         let mut game = separated_herds_game();
         for m in &mut game.mobs {

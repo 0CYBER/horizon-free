@@ -5,11 +5,12 @@
 //! `horizon_cit:minecraft/optifine/cit/swords/flame`). A file already under `textures/` (or
 //! `models/`) keeps its vanilla id, so it is not packed twice.
 
+use crate::resource_source::ResourceSource;
 use horizon_assets::model::{CuboidModel, TextureSlot};
 use horizon_optifine::cit::{Kind, Rule};
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
 use std::fs;
-use std::path::Path;
 
 /// The namespace of CIT files outside `textures/` and `models/`.
 pub const NAMESPACE: &str = "horizon_cit";
@@ -125,7 +126,7 @@ const MAX_PARENTS: usize = 16;
 /// the ids of the files beside them. Only `horizon_cit` models: the others are in the model
 /// library already. A file that does not read or parse is left out, and a rule's layer that
 /// names it (or a model whose parents reach it) keeps its vanilla model.
-pub fn load_models(root: &Path, rules: &[Rule]) -> BTreeMap<String, CuboidModel> {
+pub fn load_models(root: &ResourceSource, rules: &[Rule]) -> BTreeMap<String, CuboidModel> {
     let mut out = BTreeMap::new();
     let mut seen = BTreeSet::new();
     for rule in rules.iter().filter(|r| r.kind == Kind::Item) {
@@ -138,7 +139,7 @@ pub fn load_models(root: &Path, rules: &[Rule]) -> BTreeMap<String, CuboidModel>
 }
 
 fn load_model(
-    root: &Path,
+    root: &ResourceSource,
     resource: &str,
     depth: usize,
     seen: &mut BTreeSet<String>,
@@ -154,7 +155,8 @@ fn load_model(
     if !ours || depth > MAX_PARENTS || !seen.insert(id.clone()) {
         return;
     }
-    let model = fs::read_to_string(root.join(resource))
+    let model = root
+        .read_to_string(resource)
         .map_err(|e| e.to_string())
         .and_then(|text| CuboidModel::from_json(&text).map_err(|e| e.to_string()));
     let mut model = match model {
@@ -300,7 +302,7 @@ mod tests {
             root.join(p).is_file()
         })
         .unwrap();
-        let models = load_models(&root, &[rule]);
+        let models = load_models(&ResourceSource::directory(root.clone()), &[rule]);
         let _ = fs::remove_dir_all(&root);
         let cit = |p: &str| format!("horizon_cit:minecraft/optifine/cit/{p}");
         assert_eq!(

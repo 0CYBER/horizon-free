@@ -4,30 +4,30 @@
 //! entities' models.
 
 use super::model::{EntityModel, MAX_BYTES, parse_jem};
-use std::{collections::BTreeMap, fs, path::Path};
+use horizon_assets::resource_source::ResourceSource;
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::fs;
 
 /// Every `.jem` of the CEM folders by model name, sorted, each name's files best first:
 /// `emf/cem` before `optifine/cem` whichever form either uses, and within one folder the flat
 /// `<name>.jem` before `<name>/<name>.jem`.
-pub fn jem_files(root: &Path) -> BTreeMap<String, Vec<String>> {
+pub fn jem_files(root: &ResourceSource) -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for base in ["assets/minecraft/emf/cem", "assets/minecraft/optifine/cem"] {
-        let Ok(entries) = fs::read_dir(root.join(base)) else {
-            continue;
-        };
         let (mut flat, mut nested) = (Vec::new(), Vec::new());
-        for e in entries.flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if let Some(model) = name.strip_suffix(".jem") {
-                // A directory named `x.jem` isn't a model.
-                if e.path().is_file() {
-                    flat.push((model.to_owned(), format!("{base}/{name}")));
-                }
-            } else {
-                let path = format!("{base}/{name}/{name}.jem");
-                if root.join(&path).is_file() {
-                    nested.push((name, path));
-                }
+        for path in root.list(&format!("{base}/")) {
+            let relative = &path[base.len() + 1..];
+            if let Some(model) = relative
+                .strip_suffix(".jem")
+                .filter(|model| !model.contains('/'))
+            {
+                flat.push((model.to_owned(), path));
+            } else if let Some((model, file)) = relative.split_once('/')
+                && !model.ends_with(".jem")
+                && file == format!("{model}.jem")
+            {
+                nested.push((model.to_owned(), path));
             }
         }
         for (model, path) in flat.into_iter().chain(nested) {
@@ -39,12 +39,12 @@ pub fn jem_files(root: &Path) -> BTreeMap<String, Vec<String>> {
 
 /// The `.jem` at `path`, its warnings logged; None, with a warning, when it can't be read or
 /// parsed.
-pub fn load_jem(root: &Path, path: &str) -> Option<EntityModel> {
-    let Some(text) = read_small(&root.join(path)) else {
+pub fn load_jem(root: &ResourceSource, path: &str) -> Option<EntityModel> {
+    let Some(text) = read_small(root, path) else {
         log::warn!("Horizon: custom entity model {path}: unreadable or over {MAX_BYTES} bytes");
         return None;
     };
-    let jem = match parse_jem(path, &text, &mut |p: &str| read_small(&root.join(p))) {
+    let jem = match parse_jem(path, &text, &mut |p: &str| read_small(root, p)) {
         Ok(jem) => jem,
         Err(e) => {
             log::warn!("Horizon: custom entity model {e}");
@@ -60,7 +60,7 @@ pub fn load_jem(root: &Path, path: &str) -> Option<EntityModel> {
                 "Horizon: custom entity model {path}: its texture {texture} is outside \
                  assets/minecraft/textures/, so not in the atlas: the vanilla one draws"
             );
-        } else if !root.join(texture).is_file() {
+        } else if !root.contains(texture) {
             log::warn!(
                 "Horizon: custom entity model {path}: its texture {texture} doesn't exist, \
                  so not in the atlas: the vanilla one draws"
@@ -70,14 +70,9 @@ pub fn load_jem(root: &Path, path: &str) -> Option<EntityModel> {
     Some(jem)
 }
 
-/// A pack file's text, None when it's missing or larger than a model may read: its size is
-/// checked before anything is read.
-fn read_small(path: &Path) -> Option<String> {
-    let len = fs::metadata(path).ok()?.len();
-    if len > MAX_BYTES as u64 {
-        return None;
-    }
-    fs::read_to_string(path).ok()
+/// A pack file's text, bounded while reading and inflating archive entries.
+fn read_small(root: &ResourceSource, path: &str) -> Option<String> {
+    String::from_utf8(root.read_limited(path, MAX_BYTES as u64).ok()?).ok()
 }
 
 /// The atlas name of a texture resource path: `assets/minecraft/textures/entity/x.png` is
@@ -110,7 +105,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "{}").unwrap();
         }
-        let files = jem_files(&root);
+        let files = jem_files(&ResourceSource::directory(root.clone()));
         fs::remove_dir_all(&root).unwrap();
         let paths = |paths: &[&str]| {
             paths

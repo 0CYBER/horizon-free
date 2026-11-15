@@ -2,7 +2,7 @@
 //! air, the visual fire flag and the fall distance.
 use super::{flag, float, int_value, put};
 use crate::projectiles::{Projectile, ProjectileKind};
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// Fireballs, skulls and wind charges all go through `Entity.load` and
 /// `Entity.saveWithoutId`, so they keep their own fire and air.

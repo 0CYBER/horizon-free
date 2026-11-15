@@ -2,10 +2,10 @@
 //! of `FallingBlockEntity.tick` over the case's block map through
 //! `horizon_world::level::Behaviours::falling_block_landed` and prints the same
 //! decision, changed blocks and numeric level events as the Java oracle.
-use horizon_core::{position::BlockPos, random::LegacyRandom};
+use horizon_core::{dimension::Dimension, position::BlockPos, random::LegacyRandom};
 use horizon_world::{
     fluid::FluidKind,
-    level::{Behaviours, Dimension, Landing, LevelAccess, LevelEvent, Ticks, data::load_registry},
+    level::{Behaviours, Landing, LevelAccess, LevelEvent, Ticks, data::load_registry},
     registry::BlockStateId,
 };
 use serde_json::Value;
@@ -21,6 +21,7 @@ struct Cells {
     random: LegacyRandom,
     events: Vec<String>,
 }
+impl horizon_world::level::BlockEntityNeighbors for Cells {}
 impl LevelAccess for Cells {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.cells.get(&pos).copied().unwrap_or(self.air)
@@ -53,7 +54,7 @@ impl LevelAccess for Cells {
         Dimension::Overworld
     }
     fn emit(&mut self, event: LevelEvent) {
-        if let LevelEvent::LevelEvent { id, pos, data } = event
+        if let LevelEvent::LevelEvent { id, pos, data, .. } = event
             && id == 1031
         {
             self.events

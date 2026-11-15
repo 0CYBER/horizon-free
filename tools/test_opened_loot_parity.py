@@ -34,7 +34,7 @@ def main():
     sources = [Path(__file__), lab.ROOT / 'tools/lab.py', lab.ROOT / 'tools/oracle_harness.py',
                lab.ROOT / 'tools/test_rust_parity.py', lab.ROOT / 'tools/integration_env.py',
                lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock',
-               lab.ROOT / 'crates/horizon-client/src/game/commands.rs',
+               lab.ROOT / 'crates/horizon-client/src/game/administration/commands/mod.rs',
                lab.ROOT / 'crates/horizon-client/src/save.rs',
                lab.ROOT / 'crates/horizon-client/src/save/loot_tests.rs',
                lab.ROOT / 'crates/horizon-client-render/src/chunk.rs',

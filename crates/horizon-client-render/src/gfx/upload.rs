@@ -179,6 +179,7 @@ mod tests {
 
     #[test]
     fn belt_uploads_match_queue_writes_on_every_mip_level() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             eprintln!("no GPU adapter: skipped");
             return;
@@ -266,6 +267,7 @@ mod tests {
     /// frame, all of them kept, until the game ran out of memory.
     #[test]
     fn growing_large_writes_reuse_the_belt_buffers() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             eprintln!("no GPU adapter: skipped");
             return;
@@ -322,6 +324,7 @@ mod tests {
 
     #[test]
     fn belt_buffer_writes_land_in_order_at_their_offsets() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue)) = device() else {
             eprintln!("no GPU adapter: skipped");
             return;

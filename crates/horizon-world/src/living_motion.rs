@@ -20,6 +20,10 @@ pub trait LivingMotionWorld {
     fn speed(&mut self) -> Result<f32, Self::Error>;
     fn omnidirectional_air_mover(&mut self) -> Result<bool, Self::Error>;
     fn air_drag_modifier(&mut self) -> Result<f64, Self::Error>;
+    /// The last word on `LivingEntity.getJumpPower` before `jumpFromGround` uses it.
+    fn adjust_jump_power(&mut self, power: f32) -> f32 {
+        power
+    }
 }
 pub fn jump_boost_power<W: LivingMotionWorld>(world: &mut W) -> Result<f32, W::Error> {
     Ok(if world.has_jump_boost()? {
@@ -31,7 +35,8 @@ pub fn jump_boost_power<W: LivingMotionWorld>(world: &mut W) -> Result<f32, W::E
 pub fn jump_power<W: LivingMotionWorld>(world: &mut W, scale: f32) -> Result<f32, W::Error> {
     let strength = world.jump_strength()? as f32 * scale;
     let strength = strength * world.block_jump_factor()?;
-    Ok(strength + jump_boost_power(world)?)
+    let power = strength + jump_boost_power(world)?;
+    Ok(world.adjust_jump_power(power))
 }
 /// Native addDeltaMovement ignores nonfinite additions, but does not reject
 /// a nonfinite existing velocity or overflow in the resulting sum.

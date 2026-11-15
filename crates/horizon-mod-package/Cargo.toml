@@ -1,0 +1,70 @@
+[package]
+name = "horizon-mod-package"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Horizon's mod files: content mods, modpacks and the registry index (docs/modding/src/how-to/content-mods.md)"
+
+[dependencies]
+horizon-mod-vocab = { path = "../horizon-mod-vocab" }
+horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
+horizon-mod-point-shape = { path = "../horizon-mod-point-shape" }
+horizon-core = { path = "../horizon-core" }
+# The uses table's file name and limit (`USES`, `MAX_USES`).
+horizon-mod-surface = { path = "../horizon-mod-surface" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = { version = "1", features = ["serde"] }
+toml = "1.1.6"
+log = "0.4"
+png = "0.18"
+wasmparser = "0.261"
+# `[wasm]` and `[[jar]]` hashes (SHA-512), and the registry index's SHA-256.
+sha2 = "0.10"
+# The registry index's minisign signatures (feature `index`; no dependencies of its own).
+minisign-verify = { version = "0.3", optional = true }
+# A shader pack's check (kind `shader`): the one the game runs before it loads a pack.
+horizon-shader-api = { path = "../horizon-shader-api", optional = true }
+# A build's surface (`surface.json`) and a mod's uses table, read with the SDK (feature
+# `prebuilt`): the launcher's fit test.
+
+# Bounded, checksummed prebuilt metadata; used only by the launcher and mod tools.
+cap-std = { version = "3.4.6", optional = true }
+cap-fs-ext = { version = "3.4.6", optional = true }
+os_pipe = { version = "1.2.3", optional = true }
+getrandom = { version = "0.4", optional = true }
+subtle = { version = "2.6", optional = true }
+libc = { version = "0.2", optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
+# The SDK's `.tar.xz` assets (`sdk::unpack`): pure Rust, streaming through a bounded dictionary.
+xz4rust = { version = "0.2.3", default-features = false, features = ["std", "crc64"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+socket2 = { version = "0.6", optional = true }
+rustix = { version = "1.1", features = ["fs", "net"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_Security_Authorization", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Threading"], optional = true }
+
+[[example]]
+name = "holder_actor"
+required-features = ["runtime-process"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
+
+
+[features]
+runtime-process = ["dep:cap-std", "dep:cap-fs-ext", "dep:os_pipe", "dep:libc", "dep:windows-sys", "dep:getrandom", "dep:subtle", "dep:socket2", "dep:rustix"]
+prebuilt = ["dep:cap-std", "dep:tar", "dep:xz4rust"]
+# The mod registry's index (docs/modding/src/reference/registry-index.md): the launcher, the registry server and its CI.
+index = ["dep:minisign-verify", "dep:horizon-shader-api"]
+
+[dev-dependencies]
+horizon-mod-api = { path = "../horizon-mod-api" }
+wat = "1"
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

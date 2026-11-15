@@ -1,0 +1,2 @@
+ids = ["method:DrawContext::push_clip", "method:DrawContext::pop_clip", "type:GuiClipRefusal"]
+why = "Mod screens can clip what they draw: DrawContext::push_clip and pop_clip (GuiGraphics.enableScissor and disableScissor), refusing with GuiClipRefusal."

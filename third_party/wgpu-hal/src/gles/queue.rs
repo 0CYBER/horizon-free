@@ -51,6 +51,123 @@ fn get_z_offset(target: u32, base: &crate::TextureCopyBase) -> u32 {
 }
 
 impl super::Queue {
+    /// Attaches one mip level and layer (or 3D slice, or cube face) of `texture` to
+    /// `attachment` of the framebuffer bound at `fbo_target`.
+    unsafe fn attach_copy_level(
+        gl: &glow::Context,
+        fbo_target: u32,
+        attachment: u32,
+        texture: Option<glow::Texture>,
+        target: u32,
+        base: &crate::TextureCopyBase,
+    ) {
+        if is_layered_target(target) {
+            unsafe {
+                gl.framebuffer_texture_layer(
+                    fbo_target,
+                    attachment,
+                    texture,
+                    base.mip_level as i32,
+                    get_z_offset(target, base) as i32,
+                )
+            };
+        } else {
+            unsafe {
+                gl.framebuffer_texture_2d(
+                    fbo_target,
+                    attachment,
+                    get_2d_target(target, base.array_layer),
+                    texture,
+                    base.mip_level as i32,
+                )
+            };
+        }
+    }
+
+    /// `CopyTextureToTexture` for depth and stencil: `glBlitFramebuffer` from `copy_fbo`
+    /// (read) to `draw_fbo` (draw), with the textures on their depth or stencil attachments.
+    /// A render pass leaves its attachments on `draw_fbo` until the next pass's
+    /// `ResetFramebuffer`, so every attachment of both framebuffers is taken off first: a
+    /// stale image (say a multisampled colour target of an earlier multi-target pass) would
+    /// make the blit's framebuffer incomplete and the blit write nothing. The copy's own
+    /// images are detached after.
+    unsafe fn blit_depth_stencil(
+        &self,
+        gl: &glow::Context,
+        src: glow::Texture,
+        src_target: u32,
+        dst: glow::Texture,
+        dst_target: u32,
+        copy: &crate::TextureCopy,
+    ) {
+        let aspect = copy.src_base.aspect;
+        let depth = aspect.contains(crate::FormatAspects::DEPTH);
+        let stencil = aspect.contains(crate::FormatAspects::STENCIL);
+        let (attachment, mask) = match (depth, stencil) {
+            (true, true) => (
+                glow::DEPTH_STENCIL_ATTACHMENT,
+                glow::DEPTH_BUFFER_BIT | glow::STENCIL_BUFFER_BIT,
+            ),
+            (true, false) => (glow::DEPTH_ATTACHMENT, glow::DEPTH_BUFFER_BIT),
+            _ => (glow::STENCIL_ATTACHMENT, glow::STENCIL_BUFFER_BIT),
+        };
+        let fbos = [
+            (
+                glow::READ_FRAMEBUFFER,
+                self.copy_fbo,
+                src,
+                src_target,
+                &copy.src_base,
+            ),
+            (
+                glow::DRAW_FRAMEBUFFER,
+                self.draw_fbo,
+                dst,
+                dst_target,
+                &copy.dst_base,
+            ),
+        ];
+        for &(fbo_target, fbo, texture, target, base) in &fbos {
+            unsafe { gl.bind_framebuffer(fbo_target, Some(fbo)) };
+            unsafe { self.detach_all(gl, fbo_target) };
+            unsafe {
+                Self::attach_copy_level(gl, fbo_target, attachment, Some(texture), target, base)
+            };
+        }
+        let (src, dst) = (copy.src_base.origin, copy.dst_base.origin);
+        let (width, height) = (copy.size.width as i32, copy.size.height as i32);
+        unsafe {
+            gl.blit_framebuffer(
+                src.x as i32,
+                src.y as i32,
+                src.x as i32 + width,
+                src.y as i32 + height,
+                dst.x as i32,
+                dst.y as i32,
+                dst.x as i32 + width,
+                dst.y as i32 + height,
+                mask,
+                glow::NEAREST,
+            )
+        };
+        for &(fbo_target, _, _, target, base) in &fbos {
+            unsafe { Self::attach_copy_level(gl, fbo_target, attachment, None, target, base) };
+        }
+        unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None) };
+        unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.draw_fbo)) };
+    }
+
+    /// Takes every image off the framebuffer bound at `fbo_target`: its depth and stencil
+    /// attachments and each colour slot, as `ResetFramebuffer` does for `draw_fbo`. A null
+    /// texture detaches whatever is attached there, a renderbuffer included.
+    unsafe fn detach_all(&self, gl: &glow::Context, fbo_target: u32) {
+        let colours =
+            (0..self.shared.limits.max_color_attachments).map(|i| glow::COLOR_ATTACHMENT0 + i);
+        for attachment in [glow::DEPTH_STENCIL_ATTACHMENT].into_iter().chain(colours) {
+            unsafe { gl.framebuffer_texture_2d(fbo_target, attachment, glow::TEXTURE_2D, None, 0) };
+        }
+    }
+
     /// Performs a manual shader clear, used as a workaround for a clearing bug on mesa
     unsafe fn perform_shader_clear(&self, gl: &glow::Context, draw_buffer: u32, color: [f32; 4]) {
         let shader_clear = self
@@ -706,6 +823,15 @@ impl super::Queue {
                 dst_target,
                 ref copy,
             } => {
+                // Depth and stencil can't go through `glCopyTexSubImage*`, which reads the read
+                // buffer's colour: GLES refuses a depth destination and a depth source on
+                // COLOR_ATTACHMENT0 reads nothing. Blit between the framebuffers instead.
+                // Horizon patch (#2386); WebGPU copies need the same format on both sides.
+                let aspect = copy.src_base.aspect;
+                if aspect.intersects(crate::FormatAspects::DEPTH | crate::FormatAspects::STENCIL) {
+                    unsafe { self.blit_depth_stencil(gl, src, src_target, dst, dst_target, copy) };
+                    return;
+                }
                 //TODO: handle 3D copies
                 unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.copy_fbo)) };
                 if is_layered_target(src_target) {

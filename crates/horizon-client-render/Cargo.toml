@@ -7,8 +7,13 @@ rust-version.workspace = true
 description = "The client's world data, rendering and screens: chunks, meshing, light, streaming, the renderer, the HUD, menus and settings; no gameplay"
 
 [dependencies]
+horizon-guest-stack = { path = "../horizon-guest-stack" }
 # The settings stores of the crates above the engine (docs/layers.md, "Platform registries").
 horizon-hooks = { path = "../horizon-hooks" }
+horizon-mod-runtime = { path = "../horizon-mod-runtime" }
+mod_api = { package = "horizon-mod-vocab", path = "../horizon-mod-vocab" }
+horizon-mod-api-macros = { path = "../horizon-mod-api-macros" }
+horizon-engine-slots = { path = "../horizon-engine-slots" }
 # The GUI atlas's pixels, kept compressed once uploaded (hud.rs `pack_pixels`).
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 horizon-assets = { path = "../horizon-assets" }
@@ -18,6 +23,7 @@ horizon-command = { path = "../horizon-command" }
 horizon-core = { path = "../horizon-core" }
 horizon-hdr = { path = "../horizon-hdr" }
 horizon-items = { path = "../horizon-items" }
+horizon-mod-package = { path = "../horizon-mod-package" }
 # The narrator option's status and whether the narrator is there (Options.narrator).
 horizon-narrator = { path = "../horizon-narrator" }
 # OptiFine-format pack files: random entity textures (hud.rs), connected textures
@@ -81,9 +87,32 @@ alloc-count = ["horizon-threads/alloc-count"]
 [lints]
 workspace = true
 
+# Each installs the process-wide render slots and must run in its own process.
+[[test]]
+name = "render_slots"
+path = "tests/render_slots.rs"
+
+[[test]]
+name = "world_view_slots"
+path = "tests/world_view_slots.rs"
+
+[[test]]
+name = "standard_pack_gpu_entities"
+path = "tests/standard_pack_gpu_entities.rs"
+
+[[example]]
+name = "standard_pack_gpu_entities"
+path = "examples/standard_pack_gpu_entities.rs"
+
 [dev-dependencies]
+tempfile = "3"
+mod_platform = { package = "horizon-mod-api", path = "../horizon-mod-api", features = ["testing"] }
 horizon-perf = { path = "../horizon-perf" }
 # Tests: a TrueType font to load, and the design system the menus' motion curves match.
 horizon-theme = { path = "../horizon-theme" }
 horizon-items = { path = "../horizon-items", features = ["test-support"] }
 naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out", "glsl-out", "msl-out", "spv-out"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Independently calibrate CPU timer delivery for live sampling assertions.
+horizon-threads = { path = "../horizon-threads", features = ["sampling-test-support"] }

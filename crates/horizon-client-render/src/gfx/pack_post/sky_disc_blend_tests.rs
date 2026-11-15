@@ -61,7 +61,7 @@ fn picture(gpu: &Gpu, blend: &str) -> Vec<[u8; 4]> {
         },
     );
     assert!(post.sky.is_some(), "{:?}", post.notes);
-    let hud = HudBatch::new(SIZE);
+    let hud = HudBatch::scratch(SIZE);
     let mut frame = fixture_frame(&hud);
     frame.title = false;
     frame.skybox = true;
@@ -71,6 +71,7 @@ fn picture(gpu: &Gpu, blend: &str) -> Vec<[u8; 4]> {
 /// The top four rows see the sky disc (sky_depth_tests); final repeats them in rows 8 to 11.
 #[test]
 fn the_sky_disc_keeps_what_the_program_wrote() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else { return };
     let width = SIZE[0] as usize;
     let pixels = picture(&gpu, "");

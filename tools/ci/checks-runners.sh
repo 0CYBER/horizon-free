@@ -154,9 +154,7 @@ EOF
       echo "LANG=C.UTF-8"
       echo "HOME=$dir/home"
       echo "ACTIONS_RUNNER_HOOK_JOB_STARTED=$shared/job-started.sh"
-      echo "HORIZON_TELEMETRY_URL=off"
       echo "HORIZON_NO_AUDIO=1"
-      echo "HORIZON_NO_HEARTBEAT=1"
       echo "HORIZON_LAUNCHER_NO_SELF_UPDATE=1"
       echo "GH_PROMPT_DISABLED=1"
       if [ "$label" = playhorizon-ci ]; then

@@ -6,7 +6,11 @@
 //! `current`; the supervisor then restarts the game on it and switches back by itself if the new game doesn't come
 //! up.
 
-use crate::{api::Client, backup, config::Config, engine, supervisor};
+use crate::{api::Client, backup, engine, supervisor};
+use horizon_server_launch::{
+    self as launch, Install,
+    config::{self, Config},
+};
 use serde_json::{Value, json};
 use std::{
     io::Read,
@@ -49,63 +53,16 @@ fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// The installer's folder: `releases/`, `current`, `previous` and `game-files/`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Install {
-    pub root: PathBuf,
+/// Changes to an installed release, owned by the supervisor's updater.
+pub trait UpdateInstall {
+    fn switch(&self, tag: &str) -> Result<(), String>;
+    fn switch_back(&self, from: &str, previous: Option<&str>) -> Result<(), String>;
+    fn prune(&self, keep: u32) -> (Vec<String>, Vec<String>);
 }
 
-impl Install {
-    /// The install this program runs from, if it runs from one.
-    pub fn find() -> Option<Self> {
-        Self::around(&std::env::current_exe().ok()?)
-    }
-
-    /// The install holding `program` (`<root>/releases/<tag>/horizon-server`, reached directly or through
-    /// `current`).
-    pub fn around(program: &Path) -> Option<Self> {
-        let program = std::fs::canonicalize(program).ok()?;
-        let releases = program.parent()?.parent()?;
-        if releases.file_name()? != "releases" {
-            return None;
-        }
-        let root = releases.parent()?.to_path_buf();
-        root.join("current").is_dir().then_some(Self { root })
-    }
-
-    /// The install, or why there is none to update.
-    pub fn required() -> Result<Self, String> {
-        Self::find().ok_or_else(|| {
-            "this horizon-server wasn't installed by install.sh or install.ps1 (no releases/ and current \
-             around it): update it the way you installed it"
-                .into()
-        })
-    }
-
-    pub fn release(&self, tag: &str) -> PathBuf {
-        self.root.join("releases").join(tag)
-    }
-
-    /// Where the game programs in use are: `current`, so a switch applies at the next start.
-    pub fn programs(&self) -> PathBuf {
-        self.root.join("current")
-    }
-
-    /// The release in use.
-    pub fn current(&self) -> Option<String> {
-        let target = std::fs::canonicalize(self.root.join("current")).ok()?;
-        Some(target.file_name()?.to_string_lossy().into_owned())
-    }
-
-    /// The release used before the current one, if it is still there.
-    pub fn previous(&self) -> Option<String> {
-        let tag = std::fs::read_to_string(self.root.join("previous")).ok()?;
-        let tag = tag.trim();
-        (!tag.is_empty() && self.release(tag).is_dir()).then(|| tag.to_owned())
-    }
-
+impl UpdateInstall for Install {
     /// Points `current` at the release `tag`, and remembers the one it pointed at as `previous`.
-    pub fn switch(&self, tag: &str) -> Result<(), String> {
+    fn switch(&self, tag: &str) -> Result<(), String> {
         let target = self.release(tag);
         if !target.join(exe("horizon-server")).is_file() {
             return Err(format!("{} holds no horizon-server", target.display()));
@@ -118,9 +75,9 @@ impl Install {
             .map_err(|e| format!("switching current to {tag}: {e}"))
     }
 
-    /// Undoes a [`Install::switch`]: `current` back on `from` and `previous` as it was before, so a later
+    /// Undoes a [`UpdateInstall::switch`]: `current` back on `from` and `previous` as it was before, so a later
     /// rollback doesn't go to the release that failed.
-    pub fn switch_back(&self, from: &str, previous: Option<&str>) -> Result<(), String> {
+    fn switch_back(&self, from: &str, previous: Option<&str>) -> Result<(), String> {
         point(&self.root.join("current"), &self.release(from))
             .map_err(|e| format!("switching current back to {from}: {e}"))?;
         let file = self.root.join("previous");
@@ -141,7 +98,7 @@ impl Install {
     /// `previous` names (where `rollback` goes), the one this program runs from, and the `keep` newest of
     /// the others. Returns the releases deleted, and what couldn't be (a program still running from it on
     /// Windows), which stays for the next update to try again.
-    pub fn prune(&self, keep: u32) -> (Vec<String>, Vec<String>) {
+    fn prune(&self, keep: u32) -> (Vec<String>, Vec<String>) {
         let releases = self.root.join("releases");
         let running = std::env::current_exe()
             .ok()
@@ -190,7 +147,7 @@ impl Install {
     }
 }
 
-/// What [`Install::prune`] did, for the log: empty when it deleted nothing.
+/// What [`UpdateInstall::prune`] did, for the log: empty when it deleted nothing.
 pub fn pruned(removed: &[String], failed: &[String]) -> String {
     let mut parts = Vec::new();
     if !removed.is_empty() {
@@ -388,11 +345,12 @@ fn pick_for_assets(
     // version, so an older Nightly can't be served as a newer one.
     let (tag, sha256) = if horizon_release_sign::is_nightly(tag) {
         let title = release["name"].as_str().unwrap_or_default();
-        let version = horizon_release_sign::nightly_title_version(title).ok_or_else(|| {
+        let version = horizon_release_sign::build_title_version(horizon_release_sign::Channel::Nightly, title).ok_or_else(|| {
             format!("the Nightly's title {title:?} doesn't name its date and commit, so it can't be checked")
         })?;
         let signature = attached(horizon_release_sign::SIGNATURE_V2)?.map(text);
-        let sha256 = horizon_release_sign::nightly_digest(
+        let sha256 = horizon_release_sign::build_digest(
+            horizon_release_sign::Channel::Nightly,
             &version,
             name,
             sums.as_deref(),
@@ -852,7 +810,7 @@ fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String
     let from = install
         .current()
         .ok_or("the installer's `current` points at no release")?;
-    let server = dir.join(crate::config::FILE).is_file();
+    let server = dir.join(config::FILE).is_file();
     let _lock = if server {
         Some(supervisor::lock(dir)?)
     } else {
@@ -873,7 +831,7 @@ fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String
     let previous = install.previous();
     install.switch(tag)?;
     if let Err(e) =
-        engine::program_in(&config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
+        launch::program_in(&config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
     {
         install.switch_back(&from, previous.as_deref())?;
         return Err(format!("stayed on {from}: {e}"));
@@ -1124,6 +1082,14 @@ mod tests {
         let mut release = nightly.clone();
         release["tag_name"] = json!("v0.2.95");
         assert!(pick(&release, serving(TONIGHT, TONIGHT), &[key.public()]).is_err());
+        // A genuine snapshot (its title, its own valid signatures) served as the Nightly, or under
+        // its own tag: refused, so no server updates to a snapshot.
+        const SNAPSHOT: &str = "snapshot-2026-10-28-0c02067";
+        let mut snapshot = nightly.clone();
+        snapshot["name"] = json!("Snapshot 2026-10-28 · 0c02067");
+        assert!(pick(&snapshot, serving("snapshot", SNAPSHOT), &[key.public()]).is_err());
+        snapshot["tag_name"] = json!(SNAPSHOT);
+        assert!(pick(&snapshot, serving("snapshot", SNAPSHOT), &[key.public()]).is_err());
     }
 
     #[test]
@@ -1320,6 +1286,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[ignore = "daily"]
     fn an_archive_unpacks_beside_the_others_with_the_game_files_linked() {
         let install = installed("unpack", &["v1"]);
         let source = scratch("unpack-source");

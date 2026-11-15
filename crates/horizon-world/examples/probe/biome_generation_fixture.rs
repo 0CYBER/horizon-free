@@ -67,7 +67,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             _ => panic!("unknown source"),
         };
-        let source = definition.resolve(&presets)?;
+        let source = definition.resolve(&presets, seed)?;
         let erosion = compiler.get_sampler(router.function(RouterField::Erosion))?;
         let mut resolver = source.resolver(&climate, erosion.as_ref());
         let (cx, cz, min, height) = (n(&f["cx"]), n(&f["cz"]), n(&f["min"]), n(&f["height"]));

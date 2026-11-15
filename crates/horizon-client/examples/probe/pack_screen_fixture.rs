@@ -71,7 +71,9 @@ pub fn main() -> horizon_client::Result<()> {
     let [root, inputs, output] = args.as_slice() else {
         return Err("usage: pack_screen_fixture RESOURCES CASES OUTPUT".into());
     };
-    let atlas = HudAtlas::build(root)?;
+    let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+        root.to_path_buf(),
+    ))?;
     let m = Measure(&atlas.font);
     let mut out = String::new();
     let mut language = String::new();
@@ -121,6 +123,7 @@ pub fn main() -> horizon_client::Result<()> {
                         Position::Bottom
                     },
                     fixed: p["fixed"].as_bool().unwrap_or(false),
+                    hidden: false,
                 }
             })
             .collect();

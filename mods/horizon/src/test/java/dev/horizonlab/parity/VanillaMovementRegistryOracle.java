@@ -26,7 +26,7 @@ public final class VanillaMovementRegistryOracle {
         var info=new JsonObject();info.addProperty("states",states.size());var ids=new JsonObject();for(var block:BuiltInRegistries.BLOCK)ids.addProperty(BuiltInRegistries.BLOCK.getKey(block).toString(),Block.getId(block.defaultBlockState()));info.add("defaults",ids);Files.writeString(dir.resolve("registry-info.json"),info.toString());
         var registry=new CompoundTag();registry.putInt("DataVersion",net.minecraft.SharedConstants.getCurrentVersion().dataVersion().version());registry.put("states",states);registry.put("defaults",defaults);
         var movement=new CompoundTag();movement.putInt("DataVersion",net.minecraft.SharedConstants.getCurrentVersion().dataVersion().version());movement.put("states",states);movement.put("blocks",definitions);
-        try(var out=new DataOutputStream(Files.newOutputStream(dir.resolve("block-registry.nbt")))){NbtIo.write(registry,out);}try(var out=new DataOutputStream(Files.newOutputStream(dir.resolve("movement-properties.nbt")))){NbtIo.write(movement,out);}
+        try(var out=new DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(dir.resolve("block-registry.nbt"))))){NbtIo.write(registry,out);}try(var out=new DataOutputStream(new java.io.BufferedOutputStream(Files.newOutputStream(dir.resolve("movement-properties.nbt"))))){NbtIo.write(movement,out);}
     }
     static final class Level extends net.minecraft.server.level.ServerLevel {
         JsonObject input;PrintWriter out;int calls;

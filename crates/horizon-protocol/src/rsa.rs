@@ -865,6 +865,7 @@ pub(crate) mod tests {
     /// A key made here: Java-style DER that parses back, and what its public
     /// half encrypts its private half decrypts.
     #[test]
+    #[ignore = "daily"]
     fn generated_keys_round_trip() {
         let key = RsaPrivateKey::generate(1024).unwrap();
         assert_eq!(key.public.size(), 128);
@@ -997,6 +998,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn generated_keys_sign() {
         let key = RsaPrivateKey::generate(1024).unwrap();
         for hash in [SignatureHash::Sha1, SignatureHash::Sha256] {

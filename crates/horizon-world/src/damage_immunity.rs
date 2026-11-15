@@ -31,11 +31,20 @@ pub trait ImmunityWorld {
     fn changing_dimension(&mut self) -> Result<bool, Self::Error>;
     fn ender_pearl(&mut self) -> Result<bool, Self::Error>;
     fn client_loaded(&mut self) -> Result<bool, Self::Error>;
+    /// Allow the server to override the vanilla per-source immunity decision.
+    fn invulnerability_check(&mut self, vanilla: bool) -> Result<bool, Self::Error> {
+        Ok(vanilla)
+    }
 }
 pub fn entity_invulnerable<W: ImmunityWorld + ?Sized>(w: &mut W) -> Result<bool, W::Error> {
     Ok(w.permanently_invulnerable()? || w.temporarily_invulnerable()?)
 }
 pub fn base_immunity<W: ImmunityWorld + ?Sized>(w: &mut W) -> Result<bool, W::Error> {
+    let vanilla = vanilla_base_immunity(w)?;
+    w.invulnerability_check(vanilla)
+}
+
+fn vanilla_base_immunity<W: ImmunityWorld + ?Sized>(w: &mut W) -> Result<bool, W::Error> {
     if w.removed() {
         return Ok(true);
     }

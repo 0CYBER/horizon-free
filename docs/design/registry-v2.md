@@ -1,5 +1,10 @@
 # Mod registry v2
 
+> **Fork scope:** This is retained upstream design and research, not the fork specification. See the
+> [fork registry reference](../modding/src/reference/registry-index.md). `.hmod` is the only mod package;
+> explicit native pins and update flow, and strict published-kind and owner checks, remain in force. This note
+> authorizes neither a `.hnmod` route nor implicit native repinning or rebuilding.
+
 Every kind can be submitted, every project has a real page (description, categories, tags, icon, screenshots), and
 installed projects update themselves. Asked by Ludovic on 2026-11-05. This note fixes the schema, the kinds, where
 the launcher installs each one, the category lists and the rollout. The format itself stays in
@@ -61,7 +66,7 @@ One fixed list per kind, Modrinth's, minus `cursed`:
   colored-lighting, foliage, path-tracing, pbr, reflections, shadows (features); potato, low, medium, high,
   screenshot (performance).
 
-They live in `horizon_mods::index::categories(kind)`; the site and the launcher read them from the index's projects
+They live in `horizon_mod_package::index::categories(kind)`; the site and the launcher read them from the index's projects
 and show the kind's list as filters.
 
 ## Submitting and editing

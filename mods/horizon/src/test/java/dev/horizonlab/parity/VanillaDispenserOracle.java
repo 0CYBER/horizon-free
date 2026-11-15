@@ -1058,6 +1058,11 @@ public final class VanillaDispenserOracle {
     static String describe(int index, Entity e) {
         StringBuilder line = new StringBuilder("T " + index + " " + BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()));
         if (e.isRemoved()) line.append(" removed");
+        if (e instanceof Container container) {
+            for (int i = 0; i < container.getContainerSize(); i++) {
+                if (!container.getItem(i).isEmpty()) line.append(" slot").append(i).append('=').append(ParityData.canon(container.getItem(i)));
+            }
+        }
         if (e instanceof LivingEntity living) {
             for (EquipmentSlot slot : EquipmentSlot.values()) {
                 ItemStack s = living.getItemBySlot(slot);

@@ -8,8 +8,11 @@ description = "The dedicated server's vanilla files: server.properties, eula.txt
 
 [dependencies]
 horizon-core = { path = "../horizon-core" }
+# server.properties and eula.txt are Java-properties files; the parser is shared with horizon-mod-wasm.
+horizon-java-properties = { path = "../horizon-java-properties" }
 horizon-protocol = { path = "../horizon-protocol" }
 horizon-world = { path = "../horizon-world" }
+serde = { version = "1", features = ["derive"] }
 log = "0.4"
 getrandom = "0.3"
 # Online mode: finding accounts by name (the services' profiles endpoint).
@@ -19,3 +22,7 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Durable file publication (durable.rs): MoveFileExW with MOVEFILE_WRITE_THROUGH.
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

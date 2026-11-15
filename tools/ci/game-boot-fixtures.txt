@@ -1,0 +1,27 @@
+# Game-boot fixtures: a test that calls one of these, directly or through a helper of its own file, boots the game
+# and is a daily test (#[ignore = "daily"] and its row; tools/ci/check_game_boot_tests.py, run by verify-static).
+# One name per line, a function (matched as a call of a function or method of that name) or `Type::function`.
+# Add a new fixture here; remove one only with a reason in the pull request.
+
+# The game itself: every test fixture below ends here, and a test that builds its own game calls it directly.
+Game::new
+
+# The prepared-data game fixtures (crates/horizon-client/src/game/**): they read HORIZON_TEST_RESOURCES and build a Game.
+with_game
+with_game_at
+with_game_of
+with_game_role
+with_game_states
+with_role_game
+with_survival_game
+with_save_game
+with_packet_game
+with_command_game
+with_client_game
+with_interaction_game
+
+# A test run again in a fresh child of its own test executable (crates/horizon-client/src/game.rs and
+# game/modding/native_entity_refs.rs): a game's process-wide state, so the child is a game process.
+in_own_process
+run_fresh_cases
+run_fresh_cases_at_once

@@ -1,0 +1,4 @@
+# Client failures exposed after enforcing target completion (arismoko/horizon#2137).
+horizon-client game::explosion::tests::explosion_items_parity_fixture arismoko/horizon#2177 harness
+horizon-client game::native_live_holder_tests::thousand_live_block_entity_ticks arismoko/horizon#2177 harness
+horizon-client game::remote_vehicles::tests::steering_mount_control_matches_vanilla arismoko/horizon#2177 harness

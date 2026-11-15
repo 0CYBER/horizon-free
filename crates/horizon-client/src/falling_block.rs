@@ -1,5 +1,6 @@
 //! FallingBlockEntity's impact damage, anvil wear, saved impact settings and
 //! the blocks it moves through (cobwebs, bubble columns).
+use crate::health::DamageLevel;
 use crate::motion::BubbleColumn;
 use crate::{
     mobs::{Damage as MobDamage, DamageKind, Mob},
@@ -9,7 +10,7 @@ use horizon_core::{
     geometry::{Aabb, Axis, Direction, Vec3, sweep_intersected_blocks},
     position::BlockPos,
 };
-use horizon_world::{chunk::BlockState, nbt::Tag};
+use {horizon_core::nbt::Tag, horizon_world::chunk::BlockState};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Damage {
@@ -291,11 +292,22 @@ fn inside_blocks(
         check(to, to, 1);
     }
 }
-pub fn hurt_mobs(mobs: &mut [Mob], position: Vec3, amount: f32) {
-    hurt_mobs_with_kind(mobs, position, amount, DamageKind::FallingBlock);
+pub fn hurt_mobs<'a>(
+    level: &mut DamageLevel<'_>,
+    mobs: impl IntoIterator<Item = &'a mut Mob>,
+    position: Vec3,
+    amount: f32,
+) {
+    hurt_mobs_with_kind(level, mobs, position, amount, DamageKind::FallingBlock);
 }
 
-pub fn hurt_mobs_with_kind(mobs: &mut [Mob], position: Vec3, amount: f32, kind: DamageKind) {
+pub fn hurt_mobs_with_kind<'a>(
+    level: &mut DamageLevel<'_>,
+    mobs: impl IntoIterator<Item = &'a mut Mob>,
+    position: Vec3,
+    amount: f32,
+    kind: DamageKind,
+) {
     if amount <= 0.0 {
         return;
     }
@@ -307,10 +319,10 @@ pub fn hurt_mobs_with_kind(mobs: &mut [Mob], position: Vec3, amount: f32, kind: 
         attacker_species: None,
     };
     for mob in mobs
-        .iter_mut()
+        .into_iter()
         .filter(|m| m.alive() && bounds.intersects(m.bounds()))
     {
-        mob.damage(amount, source);
+        mob.damage(level, amount, source);
     }
 }
 
@@ -508,8 +520,10 @@ mod tests {
         assert_eq!(step(1.5, 5.5, 5.46, -0.04), (-0.04, 2.0));
     }
     #[test]
-    #[ignore = "requires prepared entity models/data in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn impact_hurts_only_living_intersecting_noninvulnerable_mobs() {
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
         use crate::mobs::{Mob, MobTypes};
         use std::{path::Path, sync::Arc};
         let root = std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES");
@@ -522,9 +536,13 @@ mod tests {
             Mob::new(4, cow, Vec3::ZERO, 0.0),
         ];
         mobs[2].invulnerable_flag = true;
-        mobs[3].extra.head = Some("minecraft:carved_pumpkin".into());
+        mobs[3].extra.set_slot_id(
+            horizon_items::equipment::HEAD,
+            Some("minecraft:carved_pumpkin".into()),
+        );
         let initial = mobs.iter().map(|m| m.health).collect::<Vec<_>>();
         hurt_mobs(
+            level,
             &mut mobs,
             Vec3::ZERO,
             Damage::anvil().impact(5.0).unwrap().amount,

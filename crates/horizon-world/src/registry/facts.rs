@@ -151,14 +151,16 @@ impl<'de> Deserialize<'de> for State {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        DATA_VERSION,
-        chunk::BlockState,
-        nbt::Tag,
-        registry::{BlockRegistry, BlockStateId},
-    };
     use serde_json::Value;
     use std::path::Path;
+    use {
+        crate::{
+            DATA_VERSION,
+            chunk::BlockState,
+            registry::{BlockRegistry, BlockStateId},
+        },
+        horizon_core::nbt::Tag,
+    };
 
     #[test]
     fn reads_states_and_defaults() {

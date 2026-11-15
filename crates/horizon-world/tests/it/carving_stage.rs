@@ -4,21 +4,23 @@ use horizon_core::{
     position::ChunkPos,
     random::{RandomSource, XoroshiroRandom},
 };
-use horizon_world::{
-    DATA_VERSION,
-    heightmap::HeightmapState,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::{
-        anchor::WorldGenerationContext,
-        aquifer::AquiferError,
-        carving::{CarvingBlocks, apply_carving_mask},
-        material_condition::{MaterialRule, MaterialSurfaceQueries},
-        material_stage::TopMaterialInputs,
-        terrain::{TerrainAquifer, TerrainBlockStates, TerrainChunk},
+use std::{collections::BTreeSet, sync::Arc};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        heightmap::HeightmapState,
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::{
+            anchor::WorldGenerationContext,
+            aquifer::AquiferError,
+            carving::{CarvingBlocks, apply_carving_mask},
+            material_condition::{MaterialRule, MaterialSurfaceQueries},
+            material_stage::TopMaterialInputs,
+            terrain::{TerrainAquifer, TerrainBlockStates, TerrainChunk},
+        },
     },
 };
-use std::{collections::BTreeSet, sync::Arc};
 #[derive(Clone, Copy)]
 struct State(u32);
 impl HeightmapState for State {

@@ -1,0 +1,6 @@
+id = "counter_lib"
+name = "Counter library"
+version = "1.0.0"
+api = "0.2"
+side = "both"
+capabilities = ["registries"]

@@ -102,7 +102,7 @@ default). The game pauses where it can; each widget that is on gets a frame. Dra
 screen's edges and middle and to the other widgets' edges (the guides show where). The mouse wheel over a widget
 scales it by 10%, a right click puts it back in its corner at 100%, and the buttons set the text colour, shadow,
 background and its opacity, put every widget back in its corner at 100% (Reset), or close the editor (Esc too). The layout is saved when it closes.
-Code: `game/hud_editor.rs`.
+Code: `game/interface/hud_editor.rs`.
 
 ## Enchantment levels as numbers (`numericEnchants`, default off)
 
@@ -151,7 +151,7 @@ Overworld.
 | Chat search | `chatSearch` | Ctrl+F in the open chat: the box takes a query and only the messages holding it (any case) show. Enter, Esc or Ctrl+F again stops. |
 
 They change how `chat::Chat` lays its lines out (`ChatQol`, `set_search`): the 100 messages it keeps are the same,
-so turning an option off shows them as before. Code: `chat.rs`, `game/chat.rs`.
+so turning an option off shows them as before. Code: `chat.rs`, `game/interface/chat.rs`.
 
 ## Combat feel (`combatFeel`, default Modern)
 
@@ -184,7 +184,7 @@ own rules. Melee hits follow 1.8.9's `EntityPlayer.attackTargetEntityWithCurrent
   instead of halving the motion first.
 
 Code: `crates/horizon-client/src/legacy_combat.rs` (the formulas, with their 1.8.9 sources),
-`game/legacy_rules.rs`; `lan_e2e.py --check legacy-pvp` measures it between two games.
+`game/world/legacy_rules.rs`; `lan_e2e.py --check legacy-pvp` measures it between two games.
 
 It is only the look: the client sends a server exactly what Modern sends (same attacks, same timing, no
 block-hit packets), so vanilla servers and their anticheats see nothing new. Code: `first_person.rs`

@@ -31,15 +31,30 @@ impl ItemEntity {
     /// one is hurt every 20 ticks unless `isInLava`, which is the fluid it
     /// started the tick in (`in_lava`): it runs before `ItemEntity.tick`'s
     /// move, so its `entity_damage` is posted where the tick started.
-    pub fn burning_tick(&mut self, in_lava: bool, items: &crate::items::Items) -> ItemHits {
+    pub fn burning_tick(
+        &mut self,
+        in_lava: bool,
+        can_be_hurt_by: &dyn Fn(&ItemStack, &str) -> bool,
+    ) -> ItemHits {
+        self.burning_tick_with_hook(in_lava, can_be_hurt_by, |_| false)
+    }
+    /// As [`Self::burning_tick`], allowing the caller to decide the actual
+    /// `minecraft:on_fire` damage attempt (a mod's invulnerability).
+    pub fn burning_tick_with_hook(
+        &mut self,
+        in_lava: bool,
+        can_be_hurt_by: &dyn Fn(&ItemStack, &str) -> bool,
+        mut invulnerable: impl FnMut(&str) -> bool,
+    ) -> ItemHits {
         let mut hits = ItemHits::default();
-        if items.resists_fire(&self.stack, "minecraft:in_fire") {
+        if !can_be_hurt_by(&self.stack, "minecraft:in_fire") {
             self.fire_ticks = 0;
         }
         if self.fire_ticks > 0 {
             if self.fire_ticks % 20 == 0
                 && !in_lava
-                && !items.resists_fire(&self.stack, "minecraft:on_fire")
+                && can_be_hurt_by(&self.stack, "minecraft:on_fire")
+                && !invulnerable("minecraft:on_fire")
             {
                 hits.hit(self, 1);
             }

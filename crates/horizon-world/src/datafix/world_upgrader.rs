@@ -11,8 +11,8 @@ use super::progress::{UpgradeDataFixType, UpgradeProgress, UpgradeStatus, Upgrad
 use super::schema::Ty;
 use super::{CURRENT, update_chunk_to, update_region_tag_to};
 use crate::compression::Compression;
-use crate::nbt::{Limits, Tag};
 use crate::region::{ChunkRecord, RegionFile};
+use horizon_core::nbt::{Limits, Tag};
 use horizon_core::position::ChunkPos;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;

@@ -9,22 +9,6 @@ use horizon_core::{
     position::ChunkPos,
     random::{LegacyRandom, PositionalRandom, RandomSource, XoroshiroRandom},
 };
-use horizon_world::{
-    DATA_VERSION,
-    heightmap::{HeightmapState, HeightmapType},
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::{
-        aquifer::{
-            AquiferConfig, DisabledAquifer, GlobalFluidPicker, NoiseBasedAquifer,
-            RegistryAquiferBlockStates,
-        },
-        density::DensityRegistry,
-        router::{NoiseRouter, RouterField},
-        tags::TagDefinitions,
-        terrain::{TerrainAquifer, TerrainBlockStates, TerrainChunk, fill_noise},
-    },
-};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -32,6 +16,24 @@ use std::{
     io::{self, Write},
     path::Path,
     sync::Arc,
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        heightmap::{HeightmapState, HeightmapType},
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::{
+            aquifer::{
+                AquiferConfig, DisabledAquifer, GlobalFluidPicker, NoiseBasedAquifer,
+                RegistryAquiferBlockStates,
+            },
+            density::DensityRegistry,
+            router::{NoiseRouter, RouterField},
+            tags::TagDefinitions,
+            terrain::{TerrainAquifer, TerrainBlockStates, TerrainChunk, fill_noise},
+        },
+    },
 };
 #[derive(Clone, Copy)]
 struct State {

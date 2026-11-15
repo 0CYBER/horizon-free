@@ -4,33 +4,6 @@ use horizon_core::{
     geometry::{Aabb, Axis, Vec3, VoxelShape},
     position::{BlockPos, ChunkPos},
 };
-use horizon_world::{
-    block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
-    block_collision_scan::{BlockCollisionScan, BlockCollisionWorld, CollisionScanError},
-    collision::CachedCollisionRegistry,
-    collision_context::CollisionContext,
-    dynamic_support::DynamicSupportWorld,
-    edge_backoff::{EdgeBackoffInput, EdgeBackoffWorld, back_off_from_edge},
-    entity_obstruction::EntityIdentity,
-    fluid::FluidState,
-    fluid_occupancy::{FluidOccupancyWorld, FluidPresence},
-    free_space::offset_is_free,
-    heightmap::HeightmapState,
-    liquid_collision::LiquidCollisionWorld,
-    nbt::{self, Limits},
-    powder_snow_collision::{PowderSnowEntity, PowderSnowWorld},
-    registry::{BlockRegistry, BlockStateId},
-    registry_collision_scan::{CollisionChunks, RegistryCollisionWorld},
-    suffocation::{SuffocationDefinition, SuffocationRegistry},
-    world_movement::{
-        CollisionCheckRequest, EntityMovementWorld, MovementRequest, no_world_collision,
-        resolve_world_movement,
-    },
-    worldgen::{
-        tags::TagDefinitions,
-        terrain::{TerrainBlockStates, TerrainChunk},
-    },
-};
 use serde_json::Value;
 use std::{
     cell::RefCell,
@@ -40,6 +13,35 @@ use std::{
     path::Path,
     rc::Rc,
     sync::Arc,
+};
+use {
+    horizon_core::{nbt, nbt::Limits},
+    horizon_world::{
+        block_collision::{BlockCollisionRegistry, DynamicCollisionWorld, ShulkerCollisionState},
+        block_collision_scan::{BlockCollisionScan, BlockCollisionWorld, CollisionScanError},
+        collision::CachedCollisionRegistry,
+        collision_context::CollisionContext,
+        dynamic_support::DynamicSupportWorld,
+        edge_backoff::{EdgeBackoffInput, EdgeBackoffWorld, back_off_from_edge},
+        entity_obstruction::EntityIdentity,
+        fluid::FluidState,
+        fluid_occupancy::{FluidOccupancyWorld, FluidPresence},
+        free_space::offset_is_free,
+        heightmap::HeightmapState,
+        liquid_collision::LiquidCollisionWorld,
+        powder_snow_collision::{PowderSnowEntity, PowderSnowWorld},
+        registry::{BlockRegistry, BlockStateId},
+        registry_collision_scan::{CollisionChunks, RegistryCollisionWorld},
+        suffocation::{SuffocationDefinition, SuffocationRegistry},
+        world_movement::{
+            CollisionCheckRequest, EntityMovementWorld, MovementRequest, no_world_collision,
+            resolve_world_movement,
+        },
+        worldgen::{
+            tags::TagDefinitions,
+            terrain::{TerrainBlockStates, TerrainChunk},
+        },
+    },
 };
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())

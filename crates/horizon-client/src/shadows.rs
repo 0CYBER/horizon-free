@@ -8,6 +8,21 @@ use crate::{
 };
 use glam::DVec3;
 
+/// Resolve renderer metadata once while loading a registered content mob type.
+pub(crate) fn content_shadow(row: &serde_json::Value) -> Option<(f32, f32)> {
+    let (radius, strength) = shadow_params(row["template"].as_str()?);
+    Some((
+        row["shadow_radius"].as_f64().map_or(radius, |v| v as f32),
+        row["shadow_strength"]
+            .as_f64()
+            .map_or(strength, |v| v as f32),
+    ))
+}
+
+fn mob_shadow_params(m: &Mob) -> (f32, f32) {
+    m.kind.shadow.unwrap_or_else(|| shadow_params(&m.kind.id))
+}
+
 /// Vanilla renderer shadow radius and strength for an entity type id.
 pub fn shadow_params(entity: &str) -> (f32, f32) {
     let id = entity.strip_prefix("minecraft:").unwrap_or(entity);
@@ -68,8 +83,12 @@ pub fn mob_shadow_radius(m: &Mob) -> f32 {
         S::Pufferfish => return 0.1 + 0.1 * m.extra.size as f32,
         _ => {}
     }
-    let radius = shadow_params(&m.kind.id).0 * m.model_scale();
-    if matches!(&*m.kind.id, "minecraft:player" | "minecraft:mannequin") || !m.is_baby() {
+    let radius = mob_shadow_params(m).0 * m.model_scale();
+    if matches!(
+        m.kind.class_id(),
+        "minecraft:player" | "minecraft:mannequin"
+    ) || !m.is_baby()
+    {
         return radius;
     }
     let age = match species {
@@ -92,16 +111,21 @@ pub fn mob_shadow_radius(m: &Mob) -> f32 {
 /// `alpha`, with their type's shadow radius and strength.
 /// `EntityRenderer.extractShadow` skips an entity whose
 /// `EntityRenderState.isInvisible` is set (`Entity.isInvisible`).
-pub fn mob_casters(mobs: &[Mob], alpha: f64) -> impl Iterator<Item = (DVec3, f32, f32)> {
-    mobs.iter().filter(|m| !m.is_invisible()).map(move |m| {
-        let (p, q) = (m.previous, m.position);
-        let pos = DVec3::new(
-            p.x + (q.x - p.x) * alpha,
-            p.y + (q.y - p.y) * alpha,
-            p.z + (q.z - p.z) * alpha,
-        );
-        (pos, mob_shadow_radius(m), shadow_params(&m.kind.id).1)
-    })
+pub fn mob_casters<'a>(
+    mobs: impl IntoIterator<Item = &'a Mob>,
+    alpha: f64,
+) -> impl Iterator<Item = (DVec3, f32, f32)> {
+    mobs.into_iter()
+        .filter(|m| !m.is_invisible())
+        .map(move |m| {
+            let (p, q) = (m.previous, m.position);
+            let pos = DVec3::new(
+                p.x + (q.x - p.x) * alpha,
+                p.y + (q.y - p.y) * alpha,
+                p.z + (q.z - p.z) * alpha,
+            );
+            (pos, mob_shadow_radius(m), mob_shadow_params(m).1)
+        })
 }
 
 /// `DisplayRenderer.getShadowRadius` and `DisplayRenderer.getShadowStrength`:
@@ -134,7 +158,7 @@ fn shadow_gates(radius: f32, strength: f32, dist_sq: f64) -> Option<(f32, f32)> 
 /// model bounds. Keep the distance/strength gate before the frustum test: most
 /// entities are too far away to cast a shadow at all.
 pub fn in_view(
-    view: &crate::gfx::Frustum,
+    view: &crate::gfx::JoinedFrusta,
     camera: DVec3,
     pos: DVec3,
     radius: f32,
@@ -449,6 +473,8 @@ mod tests {
 
     #[test]
     fn invisible_mobs_cast_no_shadow() {
+        let mut test_level = crate::health::TestLevel::new(0);
+        let level = &mut test_level.level();
         use horizon_core::geometry::Vec3;
         let kind = crate::mobs::sensor_scan_tests::kind();
         let mut seen = Mob::new(1, kind.clone(), Vec3::new(1.0, 64.0, 1.0), 0.0);
@@ -459,6 +485,12 @@ mod tests {
         flagged.invisible = true;
         let mut potion = Mob::new(3, kind, Vec3::ZERO, 0.0);
         potion.add_effect("minecraft:invisibility", 600, 0);
+        crate::mobs::ai::tick_effects(
+            &mut potion,
+            crate::test_resources::server_loop_context(),
+            level,
+            None,
+        );
         let mobs = [seen, flagged, potion];
         let casters: Vec<_> = mob_casters(&mobs, 0.5).collect();
         assert_eq!(
@@ -565,5 +597,47 @@ mod tests {
         assert_eq!(shadow_gates(radius, strength, 64.0), Some((32.0, 0.375)));
         assert_eq!(shadow_gates(radius, strength, 256.0), None);
         assert_eq!(shadow_gates(radius, 0.0, 0.0), None);
+    }
+}
+
+#[cfg(test)]
+mod content_shadow_tests {
+    use super::*;
+
+    #[test]
+    fn content_renderer_shadows_inherit_override_and_scale() {
+        let mut kind = (*crate::mobs::sensor_scan_tests::kind()).clone();
+        kind.id = "test:mob".into();
+        kind.species = crate::mobs::Species::Zombie;
+        let make = |template: &str, radius: Option<f32>, strength: Option<f32>| {
+            let mut row = serde_json::json!({"template": template});
+            if let Some(v) = radius {
+                row["shadow_radius"] = v.into();
+            }
+            if let Some(v) = strength {
+                row["shadow_strength"] = v.into();
+            }
+            let mut k = kind.clone();
+            k.shadow = content_shadow(&row);
+            Mob::new(
+                1,
+                std::sync::Arc::new(k),
+                horizon_core::geometry::Vec3::ZERO,
+                0.0,
+            )
+        };
+        let declared = make("minecraft:zombie", Some(0.2), Some(0.6));
+        assert_eq!(mob_shadow_params(&declared), (0.2, 0.6));
+        assert_eq!(mob_casters([&declared], 0.0).next().unwrap().2, 0.6);
+        let ghast = make("minecraft:ghast", None, None);
+        assert_eq!(mob_shadow_radius(&ghast), 1.5);
+        let mut scaled = make("minecraft:zombie", Some(0.4), None);
+        scaled.extra.model_scale = 2.0;
+        assert_eq!(mob_shadow_radius(&scaled), 0.8);
+        let mut baby = make("minecraft:zombie", None, None);
+        baby.extra.age = -24000;
+        assert_eq!(mob_shadow_radius(&baby), 0.25);
+        let zero = make("minecraft:zombie", Some(0.0), None);
+        assert_eq!(shadow_gates(mob_shadow_radius(&zero), 1.0, 0.0), None);
     }
 }

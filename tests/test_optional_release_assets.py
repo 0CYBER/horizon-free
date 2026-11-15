@@ -1,6 +1,7 @@
 """Execute release shell steps with optional archives present and absent."""
 
 import hashlib
+from itertools import product
 import os
 from pathlib import Path
 import re
@@ -35,12 +36,15 @@ def run_step(containing):
                      "release shell checks require a bash that is not WSL's, OpenSSL and sha256sum")
 class OptionalReleaseAssetsTests(unittest.TestCase):
     def test_sign_and_publish_with_each_optional_archive_combination(self):
-        for mask in range(4):
-            with self.subTest(mask=mask), tempfile.TemporaryDirectory() as folder:
+        for with_sdk, mask in product((False, True), range(4)):
+            with self.subTest(with_sdk=with_sdk, mask=mask), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 dist = root / "dist"
                 dist.mkdir()
                 present = REQUIRED | {name for i, name in enumerate(OPTIONAL) if mask & (1 << i)}
+                # The Nightly carries its SDK's index in its signed sums (the sdk-index job's artifact).
+                if with_sdk:
+                    present |= {"sdk.json"}
                 for name in present:
                     (dist / name).write_text(name)
                 script_dir = root / "tools/ci"

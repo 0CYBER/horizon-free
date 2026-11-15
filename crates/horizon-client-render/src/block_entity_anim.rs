@@ -968,6 +968,19 @@ impl BlockEntityAnims {
             .retain(|p, _| is(p, |t| *t == Ticker::Gateway));
     }
     /// Drops the state of positions whose block entity is gone.
+    /// Invalidate a moved holder without scanning all visible block entities.
+    pub fn remove_position(&mut self, pos: [i32; 3]) {
+        self.chests.remove(&pos);
+        self.books.remove(&pos);
+        self.shulkers.remove(&pos);
+        self.bells.remove(&pos);
+        self.conduits.remove(&pos);
+        self.skulls.remove(&pos);
+        self.pots.remove(&pos);
+        self.gateways.remove(&pos);
+        self.gateway_servers.remove(&pos);
+        self.conduit_servers.remove(&pos);
+    }
     pub fn retain(&mut self, keep: impl Fn([i32; 3]) -> bool) {
         self.chests.retain(|p, _| keep(*p));
         self.books.retain(|p, _| keep(*p));

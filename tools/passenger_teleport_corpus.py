@@ -48,4 +48,3 @@ def passenger_teleports(cmd, setup):
     ops.append({'op': 'settle'})
     ops += setup('/execute in minecraft:the_nether run kill @e[tag=tp_tree_vehicle]')
     return ops
-

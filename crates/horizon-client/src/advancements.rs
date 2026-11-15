@@ -20,7 +20,8 @@ pub enum Frame {
 }
 #[derive(Clone, Debug)]
 pub struct Display {
-    pub icon: String,
+    /// `DisplayInfo.icon`, an `ItemStackTemplate`: the item with its count and components.
+    pub icon: crate::items::ItemStack,
     pub title: Value,
     pub description: Value,
     pub frame: Frame,
@@ -166,19 +167,21 @@ impl Tree {
         if overlay.kind("advancement").next().is_some() {
             return Arc::new(Tree::load_with(data, overlay));
         }
-        static TREES: Mutex<Vec<(PathBuf, Weak<Tree>)>> = Mutex::new(Vec::new());
+        type TreeKey = (PathBuf, horizon_world::conditions::LoadConditions);
+        static TREES: Mutex<Vec<(TreeKey, Weak<Tree>)>> = Mutex::new(Vec::new());
         // Held while loading: a second reader waits for the first one's tree.
+        let key = (data.to_path_buf(), overlay.conditions.clone());
         let mut trees = TREES.lock().unwrap_or_else(|e| e.into_inner());
         trees.retain(|(_, tree)| tree.strong_count() > 0);
         if let Some(tree) = trees
             .iter()
-            .find(|(path, _)| path == data)
+            .find(|(held, _)| held == &key)
             .and_then(|(_, tree)| tree.upgrade())
         {
             return tree;
         }
-        let tree = Arc::new(Tree::load(data));
-        trees.push((data.to_path_buf(), Arc::downgrade(&tree)));
+        let tree = Arc::new(Tree::load_with(data, overlay));
+        trees.push((key, Arc::downgrade(&tree)));
         tree
     }
     /// Loads `<data>/<namespace>/advancement/**/*.json`.
@@ -216,6 +219,9 @@ impl Tree {
             }
         }
         for (id, v) in json {
+            if !overlay.conditions.allows_id(&v, "advancement", &id) {
+                continue;
+            }
             if let Some(a) = parse(&id, &v) {
                 let index = tree.list.len();
                 for (ci, c) in a.criteria.iter().enumerate() {
@@ -456,10 +462,8 @@ fn parse(id: &str, v: &Value) -> Option<Advancement> {
     };
     let d = &v["display"];
     let display = d.is_object().then(|| Display {
-        icon: d["icon"]["id"]
-            .as_str()
-            .unwrap_or("minecraft:air")
-            .to_owned(),
+        icon: crate::crafting::recipe_result(&d["icon"])
+            .unwrap_or_else(|| crate::items::ItemStack::new("minecraft:air", 1)),
         title: d["title"].clone(),
         description: d["description"].clone(),
         frame: frame(&d["frame"]),
@@ -631,7 +635,7 @@ pub trait World {
     fn smokey(&self, pos: [i32; 3]) -> bool;
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool;
     /// The block entity's `saveWithFullMetadata` at `pos`, `None` without one.
-    fn block_entity_nbt(&self, _pos: [i32; 3]) -> Option<horizon_world::nbt::Tag> {
+    fn block_entity_nbt(&self, _pos: [i32; 3]) -> Option<horizon_core::nbt::Tag> {
         None
     }
     /// Read-only contents of a loaded named predicate, when this context
@@ -651,7 +655,7 @@ pub struct ItemView {
     pub custom_name: bool,
     /// Typed snapshot for supported mob equipment views. `None` leaves this
     /// family unprojected and unsupported; an empty compound is actual absence.
-    pub custom_data: Option<horizon_world::nbt::Tag>,
+    pub custom_data: Option<horizon_core::nbt::Tag>,
 }
 /// Query snapshot of supported known movement, in blocks/tick, and actual fall distance.
 #[derive(Clone, Copy, Debug)]
@@ -703,7 +707,7 @@ pub struct EntityView {
     pub custom_name: Option<Value>,
     /// The entity as saved (`NbtPredicate.getEntityTagToCompare`), for
     /// `minecraft:nbt`; built only when a criterion may ask (`Tree::tests_nbt`).
-    pub nbt: Option<horizon_world::nbt::Tag>,
+    pub nbt: Option<horizon_core::nbt::Tag>,
     /// `Entity.getTeam().getName()` (a tamed pet answers its owner's team);
     /// `None` without a team or where the identity is not bound.
     pub team: Option<String>,
@@ -880,7 +884,7 @@ pub fn item(v: &Value, it: &ItemView, w: &dyn World) -> bool {
     if let Some(pattern) = keyed(preds, "minecraft:custom_data").and_then(Value::as_str)
         && let Some(actual) = it.custom_data.as_ref()
     {
-        let Ok(pattern @ horizon_world::nbt::Tag::Compound(_)) =
+        let Ok(pattern @ horizon_core::nbt::Tag::Compound(_)) =
             crate::command::snbt::parse_fully(pattern)
         else {
             return false;
@@ -933,7 +937,7 @@ pub fn block(v: &Value, pos: [i32; 3], w: &dyn World) -> bool {
     // `matchesBlockEntity`: the block entity's data holds the pattern
     // (`NbtPredicate.matches`, `NbtUtils.compareNbt`); no block entity fails.
     if let Some(nbt) = v["nbt"].as_str() {
-        let Ok((pattern, _)) = horizon_world::nbt::parse_snbt(nbt) else {
+        let Ok((pattern, _)) = horizon_core::nbt::parse_snbt(nbt) else {
             return false;
         };
         if !crate::nbt_path::compare_nbt(&pattern, w.block_entity_nbt(pos).as_ref()) {
@@ -1137,7 +1141,7 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
             // `EntityNbtPredicate.matches`: the entity's compound holds the
             // pattern (`NbtUtils.compareNbt`); no compound known fails.
             "minecraft:nbt" => p.as_str().is_some_and(|s| {
-                horizon_world::nbt::parse_snbt(s).is_ok_and(|(pattern, _)| {
+                horizon_core::nbt::parse_snbt(s).is_ok_and(|(pattern, _)| {
                     crate::nbt_path::compare_nbt(&pattern, e.nbt.as_ref())
                 })
             }),
@@ -1964,6 +1968,54 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn conditional_advancements_select_before_filtering_and_cache_by_inventory() {
+        let data = std::env::temp_dir().join(format!(
+            "horizon-advancement-conditions-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&data);
+        std::fs::create_dir_all(data.join("demo/advancement")).unwrap();
+        let plain = json!({"criteria":{"never":{"trigger":"minecraft:impossible"}}});
+        let mut conditional = plain.clone();
+        conditional["neoforge:conditions"] =
+            json!([{"type":"neoforge:mod_loaded","modid":"provider"}]);
+        std::fs::write(
+            data.join("demo/advancement/entry.json"),
+            conditional.to_string(),
+        )
+        .unwrap();
+        let enabled = horizon_world::conditions::LoadConditions::new(["provider"]);
+        let off = Tree::shared(&data, &horizon_world::loot::PackOverlay::NONE);
+        let on_overlay = horizon_world::loot::PackOverlay {
+            conditions: &enabled,
+            ..horizon_world::loot::PackOverlay::NONE
+        };
+        let on = Tree::shared(&data, &on_overlay);
+        assert!(off.get("demo:entry").is_none());
+        assert!(on.get("demo:entry").is_some());
+        assert!(!Arc::ptr_eq(&off, &on));
+        assert!(Arc::ptr_eq(&on, &Tree::shared(&data, &on_overlay)));
+        let files = [(
+            "advancement/demo:entry".into(),
+            vec![
+                plain.to_string().into_bytes(),
+                json!({"neoforge:conditions":[{"type":"unsupported"}]})
+                    .to_string()
+                    .into_bytes(),
+            ],
+        )];
+        let overridden = Tree::shared(
+            &data,
+            &horizon_world::loot::PackOverlay {
+                files: &files,
+                ..on_overlay
+            },
+        );
+        assert!(overridden.get("demo:entry").is_none());
+        std::fs::remove_dir_all(data).unwrap();
+    }
+
+    #[test]
     fn advancement_reward_function_is_optional_and_namespaced() {
         for (raw, expected) in [
             ("parity:reward", "parity:reward"),
@@ -1991,7 +2043,7 @@ mod tests {
     /// `cargo test -p horizon-client --lib -- --ignored --nocapture index_on_vanilla_tree`
     /// with HORIZON_TEST_RESOURCES set to the prepared resources.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn index_on_vanilla_tree() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
@@ -2139,8 +2191,8 @@ mod tests {
             fn in_tag(&self, _: &str, _: &str, _: &str) -> bool {
                 false
             }
-            fn block_entity_nbt(&self, _: [i32; 3]) -> Option<horizon_world::nbt::Tag> {
-                horizon_world::nbt::parse_snbt(r#"{id:"minecraft:beacon",x:0,y:0,z:0,Levels:0}"#)
+            fn block_entity_nbt(&self, _: [i32; 3]) -> Option<horizon_core::nbt::Tag> {
+                horizon_core::nbt::parse_snbt(r#"{id:"minecraft:beacon",x:0,y:0,z:0,Levels:0}"#)
                     .ok()
                     .map(|(t, _)| t)
             }
@@ -2316,7 +2368,7 @@ mod tests {
     /// pattern (`NbtUtils.compareNbt(…, true)`); without one it fails.
     #[test]
     fn an_entity_predicates_nbt_tests_the_saved_compound() {
-        let snbt = |s: &str| horizon_world::nbt::parse_snbt(s).unwrap().0;
+        let snbt = |s: &str| horizon_core::nbt::parse_snbt(s).unwrap().0;
         let view = |kind: &str, nbt: &str| EntityView {
             kind: kind.into(),
             nbt: Some(snbt(nbt)),
@@ -2897,6 +2949,28 @@ mod tests {
         p.grant("minecraft:t", "b", "now");
         assert!(p.done(&a));
     }
+    /// `DisplayInfo.icon` is an `ItemStackTemplate`: the loaded icon keeps its components.
+    #[test]
+    fn a_display_icon_keeps_its_components() {
+        let a = parse(
+            "minecraft:t",
+            &serde_json::json!({
+                "display": {
+                    "icon": {
+                        "id": "minecraft:wooden_pickaxe",
+                        "components": {"minecraft:enchantment_glint_override": true}
+                    },
+                    "title": "t",
+                    "description": "d"
+                },
+                "criteria": {"a": {"trigger": "minecraft:tick"}}
+            }),
+        )
+        .unwrap();
+        let icon = a.display.unwrap().icon;
+        assert_eq!(&*icon.item, "minecraft:wooden_pickaxe");
+        assert!(icon.has_foil(None), "the glint override survives the load");
+    }
     /// `AdvancementRequirements.test` answers false with no requirement groups, so an advancement
     /// without criteria is never done by `isDone`; `PlayerAdvancements.checkForAutomaticTriggers`
     /// still grants its rewards as progress loads, and `Tree::automatic` is the list it walks.
@@ -2923,7 +2997,7 @@ mod tests {
     fn layout_spreads_children_like_tree_node_position() {
         let mut tree = Tree::default();
         let shown = Display {
-            icon: String::new(),
+            icon: crate::items::ItemStack::new("minecraft:air", 1),
             title: Value::Null,
             description: Value::Null,
             frame: Frame::Task,

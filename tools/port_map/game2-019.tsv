@@ -1,8 +1,8 @@
-state/predicate/BlockPredicate.test	inline	crates/horizon-client/src/game/end.rs::Game::podium_level	bedrock check only; the exit-portal 7x5 pattern is approximated by a bedrock count in podium_level
+state/predicate/BlockPredicate.test	inline	crates/horizon-client/src/game/world/end.rs::Game::podium_level	bedrock check only; the exit-portal 7x5 pattern is approximated by a bedrock count in podium_level
 Property.value	skip:java	-	wraps a value in a Property.Value record; Horizon keeps property names and value strings instead (state lookups are StateProperties::value)
 Property.toString	skip:debug	-	debug string for error text only
 Property.hashCode	skip:java	-	cached Java hash of class and name
-Property.parseValue	inline	crates/horizon-client/src/game/persist.rs::Game::state_from_nbt	gap: minor: whole-state lookup from Name and Properties; an invalid property falls back to the default state instead of keeping the valid ones
+Property.parseValue	inline	crates/horizon-client/src/game/world/persist.rs::Game::state_from_nbt	gap: minor: whole-state lookup from Name and Properties; an invalid property falls back to the default state instead of keeping the valid ones
 RotationSegment.convertToDirection	inline	crates/horizon-world/src/level/place.rs::Sim::placement_class	ceiling hanging sign placement maps the above sign's segment 0/4/8/12 to a direction inline
 SideChainPart.whenDisconnectedFromTheRight	port	crates/horizon-world/src/level/shelf.rs::Part::disconnected_from_the_right	same table
 SideChainPart.whenDisconnectedFromTheLeft	port	crates/horizon-world/src/level/shelf.rs::Part::disconnected_from_the_left	same table
@@ -11,10 +11,10 @@ BlockScanUtils.findBlocksInSection	inline	crates/horizon-client-render/src/light
 BlockScanUtils.findBlocksWithCache	inline	crates/horizon-client/src/mobs/world.rs::MobWorld::nearest_block	gap: minor: first match in Manhattan box order, used by mob goals; explicit position lists are not generalised
 WorldBorder.getDistanceToBorder	port	crates/horizon-core/src/geometry/border.rs::BorderGeometry::distance_to_border	-
 WorldBorder.lerpSizeBetween	port	crates/horizon-client-render/src/worldborder.rs::WorldBorder::lerp_between	-
-WorldBorder.setSafeZone	port	crates/horizon-client/src/game/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder damage buffer arm; no listener notification
-WorldBorder.setDamagePerBlock	port	crates/horizon-client/src/game/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder damage amount arm; no listener notification
-WorldBorder.setWarningTime	port	crates/horizon-client/src/game/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder warning time arm; no listener notification
-WorldBorder.setWarningBlocks	port	crates/horizon-client/src/game/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder warning distance arm; no listener notification
+WorldBorder.setSafeZone	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder damage buffer arm; no listener notification
+WorldBorder.setDamagePerBlock	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder damage amount arm; no listener notification
+WorldBorder.setWarningTime	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder warning time arm; no listener notification
+WorldBorder.setWarningBlocks	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_worldborder	plain field write in the /worldborder warning distance arm; no listener notification
 WorldBorder.applyInitialSettings	inline	crates/horizon-client-render/src/worldborder.rs::WorldBorder::unpack	saved settings restored on every load; no initialized flag
 WorldBorder.MovingBorderExtent.getMinX	port	crates/horizon-core/src/geometry/border.rs::BorderGeometry::bounds	bounds returns all four edges
 WorldBorder.MovingBorderExtent.getMinZ	port	crates/horizon-core/src/geometry/border.rs::BorderGeometry::bounds	bounds returns all four edges
@@ -68,12 +68,12 @@ LevelChunk.createBlockEntity	port	crates/horizon-client-render/src/containers.rs
 LevelChunk.getBlockEntity	skip:other	-	World.block_entities is read directly by the game (game.rs:764, 4000); no lookup function
 LevelChunk.addAndRegisterBlockEntity	skip:other	-	World.block_entities is written directly (game.rs:1134); no registration step
 LevelChunk.isInLevel	port	crates/horizon-world/src/level/update.rs::Sim::is_in_valid_bounds	-
-LevelChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save.rs::encode_block_entity	-
+LevelChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save/block_entity_encode.rs::encode	-
 LevelChunk.removeGameEventListener	skip:java	-	listener registry bookkeeping; game events dispatch by position
 LevelChunk.removeBlockEntityTicker	skip:java	-	tickers are rebuilt from block state (block_entities.rs tickers)
 LevelChunk.runPostLoad	missing	-	minor: unsure: no post-load step for block entities found
-LevelChunk.replaceBiomes	port	crates/horizon-client/src/game/commands/terrain_cmds.rs::Game::cmd_fillbiome	the /fillbiome command replaces the biomes of a region
-LevelChunk.postProcessGeneration	port	crates/horizon-client/src/game/postprocess.rs::Game::postprocess_chunks	the marked positions are updated once the chunk is live (aquifer fluids, shape-dependent blocks)
+LevelChunk.replaceBiomes	port	crates/horizon-client/src/game/administration/commands/terrain_cmds.rs::Game::cmd_fillbiome	the /fillbiome command replaces the biomes of a region
+LevelChunk.postProcessGeneration	port	crates/horizon-client/src/game/world/postprocess.rs::Game::postprocess_chunks	the marked positions are updated once the chunk is live (aquifer fluids, shape-dependent blocks)
 LevelChunk.promotePendingBlockEntity	skip:java	-	pending NBT slot; Horizon decodes block entities when they load (save.rs decode_block_entity)
 LevelChunk.unregisterTickContainerFromLevel	skip:java	-	tick container bookkeeping; scheduled ticks live in level/update.rs
 LevelChunk.registerDebugValues	skip:debug	-	debug values only
@@ -81,7 +81,7 @@ LevelChunk.clearAllBlockEntities	port	crates/horizon-client-render/src/block_ent
 LevelChunk.registerAllBlockEntitiesAfterLevelLoad	skip:java	-	ticker registration after load; Horizon ticks the block entities it holds
 LevelChunk.addGameEventListener	skip:java	-	listener registry; game events dispatch by position
 LevelChunk.updateBlockEntityTicker	skip:java	-	ticker bookkeeping; tickers are rebuilt from block state (block_entities.rs tickers)
-LevelChunk.BoundTickingBlockEntity.tick	port	crates/horizon-client/src/game/block_entity_ticks.rs::Game::tick_block_entities	ticks every loaded block entity in one pass
+LevelChunk.BoundTickingBlockEntity.tick	port	crates/horizon-client/src/game/blocks/block_entity_ticks.rs::Game::tick_block_entities	ticks every loaded block entity in one pass
 LevelChunkSection.recalcBlockCounts	missing	-	minor: unsure: no recount of block counts found; non-air counts are kept while writing
 LevelChunkSection.read	port	crates/horizon-protocol/src/chunk.rs::Section::read	reads block states and biomes together
 LevelChunkSection.readBiomes	inline	crates/horizon-protocol/src/chunk.rs::Section::read	-
@@ -108,7 +108,7 @@ ProtoChunk.setPersistedStatus	missing	-	minor: unsure: no setter for a proto chu
 ProtoChunk.packOffsetCoordinates	inline	crates/horizon-world/src/worldgen/terrain.rs::TerrainChunk::mark_postprocessing	the packed x|y|z offset is built inline
 ProtoChunk.unpackOffsetCoordinates	inline	crates/horizon-client/src/save.rs::decode_proto	the stored PostProcessing shorts are unpacked to block positions: chunk x/z, the section's Y, and the packed 4-bit offsets
 ProtoChunk.markPosForPostProcessing	port	crates/horizon-world/src/worldgen/terrain.rs::TerrainChunk::mark_postprocessing	-
-ProtoChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save.rs::encode_block_entity	the tag a chunk writes per block entity: id, x, y, z, keepPacked and the components
+ProtoChunk.getBlockEntityNbtForSaving	port	crates/horizon-client/src/save/block_entity_encode.rs::encode	the tag a chunk writes per block entity: id, x, y, z, keepPacked and the components
 ProtoChunk.removeBlockEntity	inline	crates/horizon-world/src/worldgen/generator_decoration.rs::World::set_block	entry is dropped when the block at the position changes
 Strategy.getIndex	port	crates/horizon-client-render/src/chunk.rs::index	block form (y<<8 | z<<4 | x); the biome form is biome_chunk.rs::index
 ChunkStatus.register	skip:data	-	status registry entry

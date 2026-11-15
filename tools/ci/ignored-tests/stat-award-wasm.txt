@@ -1,0 +1,2 @@
+# The wasm-mods workflow supplies both the compiled fixture and HORIZON_WASM_STD.
+horizon-client game::stats::stat_award_tests::wasm_real_break_and_jump_rewrite_awards HORIZON_WASM_FIXTURE needs

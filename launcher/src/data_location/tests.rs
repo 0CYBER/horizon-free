@@ -483,3 +483,22 @@ fn a_link_above_the_root_is_followed() {
     );
     let _ = fs::remove_dir_all(&base);
 }
+
+/// No unit test reaches the player's real folders: with no home of its own, a test's launcher
+/// data, build folders and native build log are all under the temporary folder.
+#[test]
+fn unit_tests_never_resolve_the_real_profile() {
+    let home = test_home();
+    for path in [
+        crate::backend::data_dir(),
+        crate::backend::build_dir(),
+        crate::native_mods::log_path(),
+    ] {
+        assert!(
+            path.starts_with(&home),
+            "{} is outside {}",
+            path.display(),
+            home.display()
+        );
+    }
+}

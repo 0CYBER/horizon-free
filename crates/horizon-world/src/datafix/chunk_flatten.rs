@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use super::block_state_data::{self as bsd, State};
 use super::dynamic::{as_bool, as_byte_buffer, as_int, as_str, ceillog2, key, set};
-use crate::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// `MappingConstants`.
 struct Consts {
@@ -600,7 +600,7 @@ fn upgrade_level(level: &Tag) -> Tag {
             ),
         );
     }
-    let mut indices = crate::nbt::Compound::new();
+    let mut indices = horizon_core::nbt::Compound::new();
     let mut sections = Vec::new();
     for section in chunk.sections.iter().flatten() {
         sections.push(section.write());

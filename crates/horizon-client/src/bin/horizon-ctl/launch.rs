@@ -265,6 +265,7 @@ mod tests {
     /// Refused up front: a usage error, with no game started and no log beside the socket.
     #[cfg(unix)]
     #[test]
+    #[ignore = "daily"]
     fn launch_refuses_a_socket_path_too_long() {
         let dir = temp("long-socket");
         let socket = dir.join(format!("{}.sock", "x".repeat(150)));

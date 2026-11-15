@@ -9,7 +9,7 @@ class FeaturePlacementCorpusTests(unittest.TestCase):
         self.assertIn([], chains)
         self.assertTrue(any(len(chain) >= 4 for chain in chains))
         fixtures = list(placement.corpus())
-        self.assertEqual(len(fixtures), sum(36 if any(v.get("type") == "count_on_every_layer" for v in chain) else 72 for chain in chains))
+        self.assertEqual(len(fixtures), sum(48 if any(v.get("type") == "count_on_every_layer" for v in chain) else 96 for chain in chains))
         self.assertEqual({f['legacy'] for f in fixtures}, {False, True})
         self.assertEqual({f['fail'] for f in fixtures}, {-1, 0, 2, 5})
         self.assertEqual({f['result'] for f in fixtures}, {0, 1, 2})

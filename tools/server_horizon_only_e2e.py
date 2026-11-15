@@ -11,7 +11,7 @@
 
 horizon-bots stand in for the clients (`--brand`). Each server runs in a fresh folder with fresh HORIZON_HOME
 and XDG folders (lab.game_env), on a free port. Build first:
-    cargo build --profile fast -p horizon-client --bin horizon-client
+    cargo build --profile fast -p horizon-game --bin horizon-client
     cargo build --profile fast -p horizon-bots
 """
 import argparse

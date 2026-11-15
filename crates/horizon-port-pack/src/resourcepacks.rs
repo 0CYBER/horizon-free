@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -51,7 +51,7 @@ impl Report {
 }
 
 // Cross-platform relative names: archive paths must mean the same thing on Windows and Unix.
-fn check_path(name: &str) -> Result<(), String> {
+pub(crate) fn check_path(name: &str) -> Result<(), String> {
     if name.len() > 4096 || name.split('/').count() > 64 {
         return Err("resource-pack path is too deep or long".into());
     }
@@ -319,32 +319,10 @@ fn publish(root: &Path, name: &str, files: &Files) -> Result<Outcome, String> {
     })
 }
 
-// zip 2.x silently collapses duplicate names. Count central records before extracting anything.
-fn reject_duplicate_entries(source: &Path, zip: &zip::ZipArchive<fs::File>) -> Result<(), String> {
-    let mut reader = fs::File::open(source).map_err(|e| e.to_string())?;
-    reader
-        .seek(SeekFrom::Start(zip.central_directory_start()))
-        .map_err(|e| e.to_string())?;
-    for _ in 0..zip.len() {
-        // ZIP central directory: 46 fixed bytes, then name, extra data and comment.
-        let mut header = [0; 46];
-        reader.read_exact(&mut header).map_err(|e| e.to_string())?;
-        if &header[..4] != b"PK\x01\x02" {
-            return Err("invalid ZIP central directory".into());
-        }
-        let length: u64 = [28, 30, 32]
-            .into_iter()
-            .map(|i| u64::from(u16::from_le_bytes([header[i], header[i + 1]])))
-            .sum();
-        reader
-            .seek(SeekFrom::Current(length as i64))
-            .map_err(|e| e.to_string())?;
-    }
-    let mut signature = [0; 4];
-    reader
-        .read_exact(&mut signature)
-        .map_err(|e| e.to_string())?;
-    if &signature == b"PK\x01\x02" {
+pub(crate) fn reject_duplicate_entries(
+    zip: &crate::zip_intake::Archive<fs::File>,
+) -> Result<(), String> {
+    if zip.has_duplicate_names() {
         return Err("duplicate ZIP archive entries refused".into());
     }
     Ok(())
@@ -373,13 +351,21 @@ pub fn stage(source: &Path, work: &Path, pack: &import::Pack) -> Result<Report, 
                 "shader-pack conversion is pending",
             );
         }
-    } else if pack.format == "mrpack" || pack.format == "curseforge" {
+    } else if matches!(pack.format.as_str(), "mrpack" | "curseforge" | "prism") {
         regular(source)?;
-        let mut zip = zip::ZipArchive::new(fs::File::open(source).map_err(|e| e.to_string())?)
+        let mut zip = crate::zip_intake::open(fs::File::open(source).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-        reject_duplicate_entries(source, &zip)?;
+        reject_duplicate_entries(&zip)?;
         let roots = if pack.format == "mrpack" {
-            vec!["overrides".to_owned(), "client-overrides".to_owned()]
+            vec!["overrides/".to_owned(), "client-overrides/".to_owned()]
+        } else if pack.format == "prism" {
+            let names = zip
+                .file_names()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            let (_, game) =
+                import::prism_archive_layout(&names)?.ok_or("missing Prism instance")?;
+            vec![game]
         } else {
             let manifest: serde_json::Value =
                 serde_json::from_reader(zip.by_name("manifest.json").map_err(|e| e.to_string())?)
@@ -389,15 +375,15 @@ pub fn stage(source: &Path, work: &Path, pack: &import::Pack) -> Result<Report, 
                 .unwrap_or("overrides")
                 .to_owned();
             check_path(&root)?;
-            vec![root]
+            vec![format!("{root}/")]
         };
         for root in roots {
-            let prefix = format!("{root}/resourcepacks/");
+            let prefix = format!("{root}resourcepacks/");
             let mut layer = Files::new();
             for i in 0..zip.len() {
                 let entry = zip.by_index(i).map_err(|e| e.to_string())?;
                 let raw = entry.name().map_err(|e| e.to_string())?.into_owned();
-                if !entry.is_dir() && raw.starts_with(&format!("{root}/shaderpacks/")) {
+                if !entry.is_dir() && raw.starts_with(&format!("{root}shaderpacks/")) {
                     report.set(
                         "shaderpacks/",
                         State::Unsupported,

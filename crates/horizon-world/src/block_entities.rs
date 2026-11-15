@@ -1,11 +1,11 @@
 //! Proto-chunk block-entity storage. Active payloads are caller-owned runtime
 //! types; this module does not create entities or execute their behavior.
-use crate::{compression::invalid, nbt::Tag};
 use horizon_core::position::{BlockPos, ChunkPos};
 use std::{
     collections::{HashMap, HashSet},
     io,
 };
+use {crate::compression::invalid, horizon_core::nbt::Tag};
 
 /// Resolve native block-entity coordinates, relocating mismatched X/Z into the
 /// owning chunk while retaining local offsets and the full Y coordinate. The

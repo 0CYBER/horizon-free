@@ -1,0 +1,25 @@
+[package]
+name = "horizon-mod-surface"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "The records of surface.json: what an API-only mod can name, with a contract hash per item"
+
+[lib]
+name = "mod_surface"
+
+[dependencies]
+# The uses scan parses a mod's source; spans give each place's line and byte.
+proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+syn = { version = "2", default-features = false, features = ["full", "parsing", "visit"] }
+
+# The scan's child caps its own address space.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true

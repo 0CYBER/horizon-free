@@ -1,13 +1,13 @@
 use crate::support::common::f32_bits;
-use horizon_world::{
-    food::FoodData,
-    nbt::{Compound, Tag},
-};
 use serde_json::Value;
 use std::{
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::nbt::{Compound, Tag},
+    horizon_world::food::FoodData,
 };
 const KEYS: [&str; 4] = [
     "foodLevel",

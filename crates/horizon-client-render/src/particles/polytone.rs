@@ -3,9 +3,11 @@
 //! death are expressions, and emitters that spawn particles from blocks and from particles. Each
 //! custom particle is an ordinary engine particle (sprite set, interpolation, rendering, the
 //! total limit) with a controller that runs the type's ticker.
+#[cfg(test)]
+use super::ModSet;
 use super::{
     Behaviour, Fluid, Particle, ParticleEngine, ParticleLevel, ParticleOptions, ParticleType,
-    ParticleUpdate, Sprite,
+    ParticleUpdate, PendingParticle, Sprite,
 };
 use crate::environment::Frame;
 use horizon_core::random::{LegacyRandom, RandomSource};
@@ -78,7 +80,10 @@ struct Tint {
 
 impl Tint {
     /// `colormap`: an id, or `{"colormap": id, "cache": ...}`. Inline colormaps aren't read.
-    fn read(pack_root: &Path, json: &Json) -> Option<Self> {
+    fn read(
+        pack_root: &horizon_assets::resource_source::ResourceSource,
+        json: &Json,
+    ) -> Option<Self> {
         let (id, cache) = match json {
             Json::String(id) => (id.as_str(), TintCache::EveryTick),
             Json::Object(o) => (
@@ -121,30 +126,18 @@ impl Tint {
 }
 
 /// Every `.json` under `dir`, with its path relative to `root`.
-fn json_files(root: &Path, dir: &Path) -> Vec<(String, Json)> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().is_none_or(|e| e != "json") {
-                continue;
-            }
-            let Ok(relative) = path.strip_prefix(root) else {
-                continue;
-            };
-            let relative = relative.to_string_lossy().into_owned();
-            match horizon_world::json_file::read::<Json>(&path) {
-                Ok(json) => out.push((relative, json)),
-                Err(e) => log::warn!("{relative}: {e}"),
-            }
-        }
-    }
-    out
+fn json_files(
+    root: &horizon_assets::resource_source::ResourceSource,
+    dir: &Path,
+) -> Vec<(String, Json)> {
+    root.list(&dir.to_string_lossy())
+        .into_iter()
+        .filter(|p| p.ends_with(".json"))
+        .filter_map(|p| {
+            let json = serde_json::from_str(&root.read_to_string(&p).ok()?).ok()?;
+            Some((p, json))
+        })
+        .collect()
 }
 
 impl super::ParticleOptions {
@@ -160,7 +153,7 @@ impl Registry {
     /// Every `assets/<namespace>/polytone/{custom_particles,block_modifiers,entity_modifiers}/**.json` under a
     /// pack overlay root.
     pub fn read(
-        pack_root: &Path,
+        pack_root: &horizon_assets::resource_source::ResourceSource,
         configs: horizon_polytone::pack::Configs,
         blocks: &'static BlockRegistry,
     ) -> Self {
@@ -169,7 +162,21 @@ impl Registry {
         let mut entity_modifiers = Vec::new();
         let mut particle_modifiers = Vec::new();
         // Custom colours' `particle.<id>`: a modifier that sets only the colour, below the files'.
-        for (id, color) in horizon_polytone::colors::PackColors::read(pack_root).particles() {
+        for (id, color) in horizon_polytone::colors::PackColors::from_files(
+            pack_root.namespaces("assets").into_iter().map(|namespace| {
+                let base = format!("assets/{namespace}/polytone");
+                (
+                    pack_root
+                        .read_to_string(&format!("{base}/color.properties"))
+                        .ok(),
+                    pack_root
+                        .read_to_string(&format!("{base}/colors.json"))
+                        .ok(),
+                )
+            }),
+        )
+        .particles()
+        {
             let json = serde_json::json!({"targets": [id], "color": color});
             match ParticleModifier::parse(&json, None) {
                 Ok(Some(m)) => particle_modifiers.push((m, None, None)),
@@ -177,12 +184,8 @@ impl Registry {
                 Err(e) => log::warn!("colors particle.{id}: {e}"),
             }
         }
-        let namespaces = std::fs::read_dir(pack_root.join("assets"))
-            .into_iter()
-            .flatten()
-            .flatten();
-        for namespace in namespaces {
-            let polytone = namespace.path().join("polytone");
+        for namespace in pack_root.namespaces("assets") {
+            let polytone = std::path::PathBuf::from(format!("assets/{namespace}/polytone"));
             for (relative, json) in json_files(pack_root, &polytone.join("custom_particles")) {
                 let Some(id) = horizon_polytone::implicit_id(&relative, "custom_particles") else {
                     continue;
@@ -595,7 +598,7 @@ impl Ctx<'_, '_> {
                 match fluid {
                     Fluid::Water => "minecraft:water",
                     Fluid::Lava => "minecraft:lava",
-                    Fluid::None => "minecraft:empty",
+                    Fluid::Modded | Fluid::None => "minecraft:empty",
                 }
                 .into(),
             )),
@@ -1247,7 +1250,13 @@ pub(super) fn make(
         let alive = engine
             .particles
             .iter()
-            .chain(engine.pending.iter().filter(|p| !p.spawn_check))
+            .chain(
+                engine
+                    .pending
+                    .iter()
+                    .filter_map(PendingParticle::ordinary)
+                    .filter(|p| !p.spawn_check),
+            )
             .filter(|p| !p.removed && p.polytone_type.as_deref() == Some(name))
             .count();
         if alive >= limit as usize {
@@ -1283,11 +1292,15 @@ pub(super) fn make(
     let hidden = def.render_type == RenderType::Invisible
         || (def.render.contains_key("model") && model.is_none())
         || def.gpu.is_some();
-    // A mod's sprite set, or for a type replacing a vanilla one, that type's.
-    let set = engine.mod_sets.get(name).map(|&(set, _)| set).or_else(|| {
-        let vanilla = name.strip_prefix("minecraft:")?;
-        engine.sets.get(&ParticleType::from_name(vanilla)?).copied()
-    });
+    // A custom sprite set, or the vanilla set when replacing a vanilla type.
+    let set = engine
+        .mod_sets
+        .get(name)
+        .map(|entry| entry.set)
+        .or_else(|| {
+            let vanilla = name.strip_prefix("minecraft:")?;
+            engine.sets.get(&ParticleType::from_name(vanilla)?).copied()
+        });
     match set {
         Some(set) => {
             let sprites = engine.set_sprites.get(set as usize)?;
@@ -1602,10 +1615,10 @@ mod tests {
     use crate::chunk::Chunk;
     use crate::world::World;
     use glam::DVec3;
+    use horizon_core::nbt::Tag;
     use horizon_world::DATA_VERSION;
     use horizon_world::block_collision::BlockCollisionRegistry;
     use horizon_world::collision::CachedCollisionRegistry;
-    use horizon_world::nbt::Tag;
     use horizon_world::registry::BlockStateId;
     use std::collections::HashSet;
 
@@ -1672,14 +1685,29 @@ mod tests {
                 states: vec![],
                 air: BlockStateId(0),
                 woods: HashMap::new(),
+                sign_texts: HashMap::new(),
             },
             collision: BlockCollisionRegistry::new(Arc::new(cached)).unwrap(),
         }
     }
 
     fn engine(registry: Registry) -> ParticleEngine {
-        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
-        engine.mod_sets.insert("test:spark".into(), (0, None));
+        let mut engine = ParticleEngine::new(
+            &horizon_assets::resource_source::ResourceSource::directory(
+                Path::new("").to_path_buf(),
+            ),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
+        engine.mod_sets.insert(
+            "test:spark".into(),
+            ModSet {
+                set: 0,
+                behaviour: None,
+                provider: None,
+                group: None,
+            },
+        );
         engine.set_sprites.push(vec![10, 11, 12]);
         engine.camera = [1.0, 65.0, 1.0];
         engine.set_polytone(Some(Arc::new(registry)));
@@ -1728,12 +1756,22 @@ mod tests {
             "assets/minecraft/polytone/block_modifiers/torch.json",
             serde_json::json!({"disable_particles": true}),
         )]);
-        let engine = engine(Registry::read(&root, Default::default(), blocks));
+        let engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         let state = |name| blocks.default_state(name).unwrap();
         assert!(engine.polytone_disables_particles(state("minecraft:torch")));
         assert!(!engine.polytone_disables_particles(state("minecraft:air")));
         // Without a Polytone pack nothing is stopped.
-        let plain = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
+        let plain = ParticleEngine::new(
+            &horizon_assets::resource_source::ResourceSource::directory(
+                Path::new("").to_path_buf(),
+            ),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
         assert!(!plain.polytone_disables_particles(state("minecraft:torch")));
     }
 
@@ -1749,13 +1787,17 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         // Air has no emitters; the torch fires its first emitter only.
         engine.polytone_animate(&level, [1, 64, 2]);
         assert!(engine.pending.is_empty());
         engine.polytone_animate(&level, [1, 64, 1]);
         assert_eq!(engine.pending.len(), 1);
-        let p = &engine.pending[0];
+        let p = engine.pending[0].ordinary().unwrap();
         assert!(p.controller.is_some());
         assert_eq!(p.position, [1.5, 65.0, 1.5]);
         // The initializer's values, the emitter's red over its own.
@@ -1789,9 +1831,15 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         engine.polytone_animate(&level, [1, 64, 1]);
-        let p = engine.pending.pop().unwrap();
+        let PendingParticle::Ordinary(p) = engine.pending.pop().unwrap() else {
+            panic!("ordinary particle");
+        };
         // Dark: the floor, 8 (light coordinates count 16 a level). The sky light is the world's.
         assert_eq!(p.light_coords(0.0, 240, 0), (240, 128));
         // A brighter block light is kept.
@@ -1811,9 +1859,15 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         engine.polytone_animate(&level, [1, 64, 1]);
-        let mut p = engine.pending.pop().unwrap();
+        let PendingParticle::Ordinary(mut p) = engine.pending.pop().unwrap() else {
+            panic!("expected ordinary particle")
+        };
         // `dx` is the emitter's named custom each tick: two blocks east per tick.
         for tick in 1..=3 {
             engine.tick_particle(&mut p, &level);
@@ -1857,7 +1911,11 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let registry = Registry::read(&root, Default::default(), blocks);
+        let registry = Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        );
         let frame = registry.frame.clone();
         let mut engine = engine(registry);
         let feet = [1.0, 64.0, 1.0];
@@ -1871,7 +1929,10 @@ mod tests {
         assert!(engine.pending.is_empty());
         engine.polytone_entity(&level, "minecraft:player", feet);
         assert_eq!(engine.pending.len(), 1);
-        assert_eq!(engine.pending[0].position, [2.0, 66.0, 1.0]);
+        assert_eq!(
+            engine.pending[0].ordinary().unwrap().position,
+            [2.0, 66.0, 1.0]
+        );
         // `limit` 1: no second one while the first lives.
         engine.polytone_entity(&level, "minecraft:player", feet);
         assert_eq!(engine.pending.len(), 1);
@@ -1913,16 +1974,28 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let registry = Registry::read(&root, Default::default(), blocks);
+        let registry = Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        );
         let mut engine = engine(registry);
         engine.polytone_entity(&level, "minecraft:player", [1.0, 64.0, 1.0]);
-        let mut xs: Vec<f64> = engine.pending.iter().map(|p| p.position[0]).collect();
+        let mut xs: Vec<f64> = engine
+            .pending
+            .iter()
+            .filter_map(PendingParticle::ordinary)
+            .map(|p| p.position[0])
+            .collect();
         xs.sort_by(f64::total_cmp);
         assert_eq!(xs, [1.0, 1.5, 1.5, 4.0]);
         // Once they are in the world, the next tick's splashes near them are excluded; ones
         // farther than the radius from all of them spawn, again without excluding each other.
         engine.tick(&level);
-        let splashes = |p: &&Particle| p.polytone_type.as_deref() == Some("test:splash");
+        let splashes = |p: &&PendingParticle| {
+            p.ordinary()
+                .is_some_and(|p| p.polytone_type.as_deref() == Some("test:splash"))
+        };
         engine.polytone_entity(&level, "minecraft:player", [1.0, 64.0, 1.0]);
         assert_eq!(engine.pending.iter().filter(splashes).count(), 0);
         engine.polytone_entity(&level, "minecraft:player", [9.0, 64.0, 1.0]);
@@ -1955,7 +2028,11 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         let rect = crate::hud::Rect {
             u0: 0.0,
             v0: 0.0,
@@ -2008,7 +2085,11 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         let rect = crate::hud::Rect {
             u0: 0.0,
             v0: 0.0,
@@ -2069,7 +2150,11 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         engine.polytone_entity(&level, "minecraft:player", [1.0, 70.0, 1.0]);
         for _ in 0..10 {
             engine.tick(&level);
@@ -2077,7 +2162,7 @@ mod tests {
         let rays = engine
             .particles
             .iter()
-            .chain(&engine.pending)
+            .chain(engine.pending.iter().filter_map(PendingParticle::ordinary))
             .filter(|p| p.polytone_type.as_deref() == Some("test:ray"))
             .count();
         assert_eq!(rays, 1);
@@ -2118,7 +2203,11 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         let rect = crate::hud::Rect {
             u0: 0.0,
             v0: 0.0,
@@ -2184,19 +2273,39 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let registry = Arc::new(Registry::read(&root, Default::default(), blocks));
+        let registry = Arc::new(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         // The chunk's biome is id 0: plains, whose foliage is #336699.
         registry.set_biomes(&Arc::new(crate::biome::Biomes::from_jsons(&[(
             "minecraft:plains",
             serde_json::json!({"effects": {"foliage_color": 0x336699}}),
         )])));
-        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
-        engine.mod_sets.insert("test:leaf".into(), (0, None));
+        let mut engine = ParticleEngine::new(
+            &horizon_assets::resource_source::ResourceSource::directory(
+                Path::new("").to_path_buf(),
+            ),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
+        engine.mod_sets.insert(
+            "test:leaf".into(),
+            ModSet {
+                set: 0,
+                behaviour: None,
+                provider: None,
+                group: None,
+            },
+        );
         engine.set_sprites.push(vec![10]);
         engine.camera = [1.0, 65.0, 1.0];
         engine.set_polytone(Some(registry.clone()));
         engine.polytone_entity(&level, "minecraft:player", [1.0, 64.0, 1.0]);
-        let mut p = engine.pending.pop().unwrap();
+        let PendingParticle::Ordinary(mut p) = engine.pending.pop().unwrap() else {
+            panic!("expected ordinary particle")
+        };
         let tinted = [
             0x33 as f32 / 255.0,
             0.5 * 0x66 as f32 / 255.0,
@@ -2222,7 +2331,11 @@ mod tests {
             "assets/obs/polytone/colors.json",
             serde_json::json!({"particle": {"minecraft:flame": "0x0000ff"}}),
         )]);
-        let registry = Registry::read(&root, Default::default(), blocks());
+        let registry = Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks(),
+        );
         let colour = |kind: &str| {
             let mut p = Particle::blank(ParticleType::Flame, [0.0; 3]);
             modify(&registry, kind, None, &mut p);
@@ -2245,7 +2358,11 @@ mod tests {
                 serde_json::json!({"targets": ["minecraft:smoke"], "color": "0x336699"}),
             ),
         ]);
-        let registry = Registry::read(&root, Default::default(), blocks());
+        let registry = Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks(),
+        );
         let flame = || {
             let mut p = Particle::blank(ParticleType::Flame, [0.0; 3]);
             p.size = 0.1;
@@ -2303,9 +2420,15 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         engine.polytone_entity(&level, "minecraft:player", [1.5, 70.0, 1.5]);
-        let mut p = engine.pending.pop().unwrap();
+        let PendingParticle::Ordinary(mut p) = engine.pending.pop().unwrap() else {
+            panic!("ordinary particle");
+        };
         for _ in 0..10 {
             engine.tick_particle(&mut p, &level);
             assert!(!p.removed);
@@ -2425,7 +2548,11 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         // The solid block is at (1, 64, 1): its bottom face is y 64.
         // Spawns one particle, lets the engine take it in and tick it: whether it joined, and
         // how many particles it emitted.
@@ -2500,7 +2627,11 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         let mut joined = |entity: &str| {
             engine.particles.clear();
             engine.pending.clear();
@@ -2525,7 +2656,11 @@ mod tests {
             "assets/minecraft/polytone/custom_particles/flame.json",
             serde_json::json!({"has_physics": false, "initializer": {"lifetime": "33", "size": "0.75"}}),
         )]);
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks()));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks(),
+        ));
         // The vanilla flame's sprite set (what the pack's particles/flame.json lists).
         engine.sets.insert(ParticleType::Flame, 1);
         engine.set_sprites.push(vec![20, 21]);
@@ -2535,7 +2670,7 @@ mod tests {
             [0.0; 3],
         );
         assert_eq!(engine.pending.len(), 1);
-        let p = &engine.pending[0];
+        let p = engine.pending[0].ordinary().unwrap();
         assert!(
             p.controller.is_some(),
             "the pack's particle, not vanilla's flame"
@@ -2584,7 +2719,11 @@ mod tests {
             player: None,
             cached_chunk: std::cell::Cell::new(None),
         };
-        let mut engine = engine(Registry::read(&root, Default::default(), blocks));
+        let mut engine = engine(Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks,
+        ));
         // The test chunk's biome is the table's first: a cold one first, then a warm one.
         let first = |name: &str| {
             Arc::new(crate::biome::Biomes::from_jsons(&[(
@@ -2600,7 +2739,10 @@ mod tests {
         registry.set_biomes(&first("minecraft:desert"));
         engine.polytone_animate(&level, [1, 64, 1]);
         assert_eq!(engine.pending.len(), 1);
-        assert_eq!(engine.pending[0].position, [1.0, 65.0, 1.0]);
+        assert_eq!(
+            engine.pending[0].ordinary().unwrap().position,
+            [1.0, 65.0, 1.0]
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2616,7 +2758,11 @@ mod tests {
                 serde_json::json!({"life": "50", "filter": {"item": "minecraft:apple"}}),
             ),
         ]);
-        let registry = Registry::read(&root, Default::default(), blocks());
+        let registry = Registry::read(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+            Default::default(),
+            blocks(),
+        );
         let run = |id: &str, source: Option<&str>| {
             let mut p = Particle::blank(ParticleType::Block, [0.0; 3]);
             p.size = 0.1;

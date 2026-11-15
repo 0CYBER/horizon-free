@@ -1,6 +1,7 @@
 package dev.horizonlab.parity;
 
 import com.google.gson.*;
+import com.mojang.serialization.JsonOps;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.RecordComponent;
@@ -249,6 +250,24 @@ public final class VanillaBlockBehaviourExporter {
             fluids.add(BuiltInRegistries.FLUID.getKey(fluid).toString());
         }
         result.add("fluids", fluids);
+        var fluidDefinitions = new JsonObject();
+        for (Fluid fluid : BuiltInRegistries.FLUID) {
+            var definition = new JsonObject();
+            var properties = new JsonObject();
+            for (var property : fluid.getStateDefinition().getProperties()) {
+                var values = new JsonArray();
+                for (var value : property.getPossibleValues()) {
+                    @SuppressWarnings({"rawtypes", "unchecked"})
+                    String name = ((net.minecraft.world.level.block.state.properties.Property) property).getName((Comparable) value);
+                    values.add(name);
+                }
+                properties.add(property.getName(), values);
+            }
+            definition.add("properties", properties);
+            definition.add("default", net.minecraft.world.level.material.FluidState.CODEC.encodeStart(JsonOps.INSTANCE, fluid.defaultFluidState()).getOrThrow());
+            fluidDefinitions.add(BuiltInRegistries.FLUID.getKey(fluid).toString(), definition);
+        }
+        result.add("fluid_state_definitions", fluidDefinitions);
         result.add("fire", fields(Blocks.FIRE, Block.class));
         Files.writeString(Path.of(args[0]), new Gson().toJson(result), StandardCharsets.UTF_8);
     }

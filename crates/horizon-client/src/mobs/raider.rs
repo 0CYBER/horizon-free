@@ -6,11 +6,11 @@ use super::{
     Mob, MobEvent, MobWorld, Species, Who,
     goals::{Cx, Goal, LOOK, MOVE, goal_clone},
 };
+use horizon_core::nbt::Tag;
 use horizon_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
 };
-use horizon_world::nbt::Tag;
 
 /// The ominous banner is a white banner with the raid patterns; raiders wear
 /// it as their head item.
@@ -123,16 +123,16 @@ pub fn has_active_raid(m: &Mob) -> bool {
 }
 /// `Raider.isCaptain`: the banner on the head of a patrol leader.
 ///
-/// The worn stack (`extra.armor[0]`) carries the ominous components so a
+/// The worn stack (`extra.equipment`'s head) carries the ominous components so a
 /// client that only got `SetEquipment` (no `PatrolLeader` NBT) still draws
 /// the patterned banner (#4567).
 pub fn is_captain(m: &Mob) -> bool {
-    if m.extra.head.as_deref() != Some(BANNER) {
+    if m.extra.head_id() != Some(BANNER) {
         return false;
     }
     state(m).is_some_and(|s| s.patrol_leader)
-        || m.extra.armor[0]
-            .as_ref()
+        || m.extra
+            .slot_stack(horizon_items::equipment::HEAD)
             .and_then(|s| s.data())
             .is_some_and(|d| d.ominous_banner)
 }
@@ -190,11 +190,11 @@ pub fn find_patrol_target_from(m: &mut Mob, [x, y, z]: [i32; 3]) {
 }
 /// The leader's ominous banner and saved head drop chance of 2.0.
 ///
-/// Also keeps the full ominous stack in `armor[0]` so `SetEquipment` sends
+/// The head holds the full ominous stack so `SetEquipment` sends
 /// the patterned banner to clients (`Raid.getOminousBannerInstance`).
 pub fn wear_banner(m: &mut Mob) {
-    m.extra.head = Some(BANNER.into());
-    m.extra.armor[0] = Some(ominous_banner());
+    m.extra
+        .set_slot_stack(horizon_items::equipment::HEAD, Some(ominous_banner()));
     // Raid.setLeader and PatrollingMonster.finalizeSpawn: EquipmentSlot.HEAD.
     super::finalize::set_drop_chance(m, 5, 2.0);
 }
@@ -707,7 +707,7 @@ impl Goal for HoldGroundAttack {
 }
 
 /// The saved fields (`PatrollingMonster` and `Raider.addAdditionalSaveData`).
-pub fn write_nbt(m: &Mob, map: &mut horizon_world::nbt::Compound) {
+pub fn write_nbt(m: &Mob, map: &mut horizon_core::nbt::Compound) {
     let Some(s) = state(m) else { return };
     match s.patrol_target {
         Some(p) => {
@@ -762,6 +762,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
     fn companions_and_shout_range_match_the_full_scan() {
         use crate::mobs::{
             Seen, seen_grid::SeenGrid, sensor_scan_tests::kind, world::with_test_world,
@@ -783,22 +784,28 @@ mod tests {
                 Mob::new(i + 1, mob_kind, at, 0.0)
             })
             .collect();
-        let seen: Vec<Seen> = mobs.iter().map(|m| m.seen(None)).collect();
+        let seen: Vec<Seen> = mobs
+            .iter()
+            .map(|m| m.seen(None, &crate::items::Items::empty()))
+            .collect();
         let grid = SeenGrid::new(seen.iter().map(|s| s.bounds));
-        with_test_world(&seen, |w, _| {
-            let indexed = MobWorld {
-                others_grid: Some(&grid),
-                ..w.clone()
-            };
-            let mut found = 0;
-            for m in mobs.iter().filter(|m| is_raider(m.species())) {
-                let scan = companions(m, w);
-                assert_eq!(companions(m, &indexed), scan);
-                assert_eq!(shout_range(m, &indexed), shout_range(m, w));
-                found += scan.len();
-            }
-            assert!(found > 0);
-        });
+        assert!(
+            with_test_world(&seen, |w, _| {
+                let indexed = MobWorld {
+                    others_grid: Some(&grid),
+                    ..w.clone()
+                };
+                let mut found = 0;
+                for m in mobs.iter().filter(|m| is_raider(m.species())) {
+                    let scan = companions(m, w);
+                    assert_eq!(companions(m, &indexed), scan);
+                    assert_eq!(shout_range(m, &indexed), shout_range(m, w));
+                    found += scan.len();
+                }
+                assert!(found > 0);
+            }),
+            "vanilla data is missing"
+        );
     }
     #[test]
     fn raiders_and_leaders() {
@@ -819,10 +826,10 @@ mod tests {
         state_mut(&mut m).patrol_leader = true;
         super::super::finalize::set_drop_chance(&mut m, 1, 0.65);
         wear_banner(&mut m);
-        assert_eq!(m.extra.head.as_deref(), Some(BANNER));
+        assert_eq!(m.extra.head_id(), Some(BANNER));
         assert!(
-            m.extra.armor[0]
-                .as_ref()
+            m.extra
+                .slot_stack(horizon_items::equipment::HEAD)
                 .and_then(|s| s.data())
                 .is_some_and(|d| d.ominous_banner)
         );
@@ -831,17 +838,17 @@ mod tests {
         let chances = saved.get("drop_chances").unwrap();
         assert_eq!(
             chances.get("head"),
-            Some(&horizon_world::nbt::Tag::Float(2.0_f32.to_bits()))
+            Some(&horizon_core::nbt::Tag::Float(2.0_f32.to_bits()))
         );
         assert_eq!(
             chances.get("offhand"),
-            Some(&horizon_world::nbt::Tag::Float(0.65_f32.to_bits())),
+            Some(&horizon_core::nbt::Tag::Float(0.65_f32.to_bits())),
             "equipping the banner preserves other slots' explicit chances"
         );
         // Client that only saw SetEquipment: no PatrolLeader, still a captain.
         state_mut(&mut m).patrol_leader = false;
         assert!(is_captain(&m));
-        m.extra.armor[0] = None;
+        m.extra.set_slot_stack(horizon_items::equipment::HEAD, None);
         assert!(!is_captain(&m));
     }
     #[test]
@@ -861,42 +868,47 @@ mod tests {
 
     /// `RaiderCelebration.tick` jumps only when the raider is not a passenger.
     #[test]
+    #[ignore = "daily"]
     fn a_celebrating_raider_does_not_jump_while_riding() {
         use crate::mobs::world::with_test_world;
         use std::sync::Arc;
-        let _ = with_test_world(&[], |w, _| {
-            let jumped = |seed: i64, riding: bool| {
-                let mut k = (*crate::mobs::sensor_scan_tests::kind()).clone();
-                k.id = "minecraft:pillager".into();
-                k.species = Species::Pillager;
-                let mut m = Mob::new(1, Arc::new(k), Vec3::ZERO, 0.0);
-                m.random.set_seed(seed);
-                m.extra.raider = Some(Box::default());
-                if riding {
-                    m.extra.mount = Some(9);
-                }
-                let mut goal = Celebration;
-                let mut lr = crate::mobs::world::level_random(1);
-                let mut events = Vec::new();
-                let mut cx = Cx {
-                    w,
-                    lr: &mut lr,
-                    events: &mut events,
+        assert!(
+            with_test_world(&[], |w, _| {
+                let jumped = |seed: i64, riding: bool| {
+                    let mut k = (*crate::mobs::sensor_scan_tests::kind()).clone();
+                    k.id = "minecraft:pillager".into();
+                    k.species = Species::Pillager;
+                    let mut m = Mob::new(1, Arc::new(k), Vec3::ZERO, 0.0);
+                    m.random.set_seed(seed);
+                    m.extra.raider = Some(Box::default());
+                    if riding {
+                        m.extra.mount = Some(9);
+                    }
+                    let mut goal = Celebration;
+                    let mut test_level = crate::health::TestLevel::new(1);
+                    let mut events = Vec::new();
+                    let mut cx = Cx {
+                        w,
+                        level: &mut test_level.level(),
+                        events: &mut events,
+                    };
+                    goal.tick(&mut m, &mut cx);
+                    m.ai.jumping
                 };
-                goal.tick(&mut m, &mut cx);
-                m.ai.jumping
-            };
-            let seed = (1..500)
-                .find(|seed| jumped(*seed, false))
-                .expect("some seed celebrates with a jump");
-            assert!(jumped(seed, false));
-            assert!(!jumped(seed, true));
-        });
+                let seed = (1..500)
+                    .find(|seed| jumped(*seed, false))
+                    .expect("some seed celebrates with a jump");
+                assert!(jumped(seed, false));
+                assert!(!jumped(seed, true));
+            }),
+            "vanilla data is missing"
+        );
     }
 
     /// `ObtainRaidLeaderBannerGoal.canContinueToUse` ends with
     /// `!cannotPickUpBanner()`: a raid that is over stops the banner chase.
     #[test]
+    #[ignore = "daily"]
     fn a_banner_chase_stops_when_the_raid_ends() {
         use crate::mobs::world::with_built_test_world;
         use std::sync::Arc;
@@ -945,11 +957,11 @@ mod tests {
                         path_to_banner: None,
                     },
                 );
-                let mut lr = crate::mobs::world::level_random(0);
+                let mut lr = crate::health::TestLevel::new(0);
                 let mut events = Vec::new();
                 let mut cx = Cx {
                     w,
-                    lr: &mut lr,
+                    level: &mut lr.level(),
                     events: &mut events,
                 };
                 let mut goals = std::mem::take(&mut m.ai.goals);

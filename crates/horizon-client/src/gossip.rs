@@ -1,8 +1,8 @@
 //! Villager gossip (`GossipContainer` and `GossipType`): what a villager
 //! remembers about each player, how it fades by the day, how it spreads from
 //! villager to villager and the reputation it adds up to.
+use horizon_core::nbt::Tag;
 use horizon_core::random::{LegacyRandom, RandomSource};
-use horizon_world::nbt::Tag;
 use std::collections::BTreeMap;
 
 /// `ReputationEventType` amounts.

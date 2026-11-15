@@ -122,7 +122,14 @@ fn spawn_member<L: PatrolLevel, R: RandomSource>(
     if !spawn_rules::is_valid_empty_spawn(Species::Pillager, level, x, y, z) {
         return false;
     }
-    if !spawn_rules::check_spawn_rules(Species::Pillager, level, Reason::Patrol, random, x, y, z) {
+    if !spawn_rules::check_spawn_rules(
+        "minecraft:pillager",
+        Species::Pillager,
+        level,
+        Reason::Patrol,
+        random,
+        pos,
+    ) {
         return false;
     }
     spawn(level, Member { pos, leader }, random)
@@ -212,25 +219,34 @@ impl GameplayAttributes {
         let mut out = Self::default();
         let timelines: std::collections::HashMap<String, Value> =
             list("timeline").into_iter().collect();
-        // Tag values with nested tags resolved.
+        // Tag values with nested tags and removals resolved.
         fn tag(data: &std::path::Path, name: &str, out: &mut Vec<String>) {
-            let file = data.join(format!(
-                "tags/timeline/{}.json",
-                name.trim_start_matches('#')
-                    .trim_start_matches("minecraft:")
-            ));
-            let Some(v) = std::fs::read(file)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            else {
-                return;
-            };
-            for item in v["values"].as_array().into_iter().flatten() {
-                let s = item.as_str().or_else(|| item["id"].as_str()).unwrap_or("");
-                if s.starts_with('#') {
-                    tag(data, s, out);
-                } else if !s.is_empty() {
-                    out.push(s.to_owned());
+            fn resolve(
+                data: &std::path::Path,
+                name: &str,
+                active: &mut std::collections::HashSet<String>,
+            ) -> Vec<String> {
+                let name = name
+                    .trim_start_matches('#')
+                    .trim_start_matches("minecraft:");
+                if !active.insert(name.to_owned()) {
+                    return Vec::new();
+                }
+                let file = data.join(format!("tags/timeline/{name}.json"));
+                let members = std::fs::read(file)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .map(|v| {
+                        horizon_world::tag_layers::TagLayers::from_file(&v)
+                            .build(|child| resolve(data, child, active))
+                    })
+                    .unwrap_or_default();
+                active.remove(name);
+                members
+            }
+            for id in resolve(data, name, &mut Default::default()) {
+                if !out.contains(&id) {
+                    out.push(id);
                 }
             }
         }
@@ -314,5 +330,41 @@ impl GameplayAttributes {
             v = t.apply(v, clock);
         }
         v
+    }
+}
+
+#[cfg(test)]
+mod tag_cycle_tests {
+    use super::*;
+    #[test]
+    fn mutual_timeline_tags_terminate_from_either_dimension() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |path: &str, value: serde_json::Value| {
+            let path = root.path().join(format!("data/minecraft/{path}.json"));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, value.to_string()).unwrap();
+        };
+        write(
+            "tags/timeline/a",
+            serde_json::json!({"values":["#minecraft:b"]}),
+        );
+        write(
+            "tags/timeline/b",
+            serde_json::json!({"values":["#minecraft:a", "minecraft:blocked"]}),
+        );
+        write(
+            "timeline/blocked",
+            serde_json::json!({"tracks":{(CAN_PILLAGER_PATROL_SPAWN):{"keyframes":[{"ticks":0,"value":false}]}}}),
+        );
+        for (dimension, tag) in [("one", "a"), ("two", "b")] {
+            write(
+                &format!("dimension_type/{dimension}"),
+                serde_json::json!({"timelines":format!("#minecraft:{tag}")}),
+            );
+        }
+        let attributes = GameplayAttributes::load(root.path());
+        for dimension in ["minecraft:one", "minecraft:two"] {
+            assert!(!attributes.value(CAN_PILLAGER_PATROL_SPAWN, dimension, "minecraft:plains", 0));
+        }
     }
 }

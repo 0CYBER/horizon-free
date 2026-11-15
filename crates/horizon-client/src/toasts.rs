@@ -1,6 +1,7 @@
 //! `ToastManager`'s slide, shared by the game's toasts and the title
 //! screens' system toasts.
 use crate::hud::{HudAtlas, HudBatch};
+use crate::text::Text;
 use std::time::Instant;
 
 /// `ToastManager.ToastInstance`: slides a toast in and out over 600 ms,
@@ -65,8 +66,8 @@ pub struct SystemToast {
     pub slide: Slide,
     /// `ToastInstance.firstSlotIndex`: its 32-pixel slot once shown.
     pub slot: Option<usize>,
-    title: String,
-    message: Option<String>,
+    pub title: Text,
+    pub message: Option<Text>,
     /// `changed`: the next update takes its time as `lastChanged`.
     changed: bool,
     last_changed: i64,
@@ -81,7 +82,7 @@ impl SystemToast {
     const DISPLAY_TIME: f64 = 5000.0;
     /// `SystemToastId.LOW_DISK_SPACE`'s and `UNSECURE_SERVER_WARNING`'s display time.
     pub const LONG_DISPLAY_TIME: f64 = 10000.0;
-    pub fn new(title: String, message: Option<String>) -> Self {
+    pub fn new(title: Text, message: Option<Text>) -> Self {
         Self {
             slide: Slide::default(),
             slot: None,
@@ -105,7 +106,7 @@ impl SystemToast {
         self
     }
     /// `reset`: new text, and the display time starts again.
-    pub fn reset(&mut self, title: String, message: Option<String>) {
+    pub fn reset(&mut self, title: Text, message: Option<Text>) {
         self.title = title;
         self.message = message;
         self.changed = true;
@@ -138,7 +139,7 @@ impl SystemToast {
     pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, y: f32) {
         let width = std::iter::once(&self.title)
             .chain(&self.message)
-            .map(|line| HudBatch::text_width(atlas, line))
+            .map(|line| atlas.font.width_text(line))
             .fold(0.0, f32::max)
             .ceil()
             .max(160.0)
@@ -148,11 +149,11 @@ impl SystemToast {
         let yellow = self.title_color;
         match &self.message {
             Some(message) => {
-                batch.text(atlas, &self.title, x + 18.0, y + 7.0, yellow, false);
-                batch.text(atlas, message, x + 18.0, y + 19.0, u32::MAX, false);
+                batch.text_styled(atlas, &self.title, x + 18.0, y + 7.0, yellow, false);
+                batch.text_styled(atlas, message, x + 18.0, y + 19.0, u32::MAX, false);
             }
             None => {
-                batch.text(atlas, &self.title, x + 18.0, y + 12.0, yellow, false);
+                batch.text_styled(atlas, &self.title, x + 18.0, y + 12.0, yellow, false);
             }
         }
     }
@@ -248,6 +249,8 @@ fn music_note_color(tick: i32) -> u32 {
 /// (scaled by the Notification Time option).
 #[derive(Default)]
 pub struct NowPlayingToast {
+    pub title: Text,
+    pub description: Option<Text>,
     slide: Slide,
     /// `updateToast`: `showToast` sets it, `onFinishedRendering` clears it.
     update_toast: bool,
@@ -290,28 +293,45 @@ impl NowPlayingToast {
     }
     /// `ToastInstance.extractRenderState` with `Toast.xPos`: nothing once it
     /// has slid out.
-    pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, song: &str, notes: &MusicNotes) {
+    pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, notes: &MusicNotes) {
         if self.finished {
             return;
         }
-        let width = Self::width(atlas, song);
-        draw_now_playing(
+        let width = Self::width(atlas, &self.title).max(
+            self.description
+                .as_ref()
+                .map_or(0.0, |text| Self::width(atlas, text)),
+        );
+        let x = width * self.slide.portion - width;
+        draw_now_playing_text(
             atlas,
             batch,
-            width * self.slide.portion - width,
-            song,
+            [x, width],
+            &self.title,
+            self.description.as_ref(),
             notes.color,
         );
     }
     /// `NowPlayingToast.getWidth`.
-    fn width(atlas: &HudAtlas, song: &str) -> f32 {
-        30.0 + HudBatch::text_width(atlas, song).ceil() + 7.0
+    fn width(atlas: &HudAtlas, song: &Text) -> f32 {
+        30.0 + atlas.font.width_text(song).ceil() + 7.0
     }
 }
 /// `NowPlayingToast.extractToast` at `x` on the top row: the background, the
 /// music notes in `notes` (ARGB) and the song's name in light grey.
-pub fn draw_now_playing(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, song: &str, notes: u32) {
+pub fn draw_now_playing(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, song: &Text, notes: u32) {
     let width = NowPlayingToast::width(atlas, song);
+    draw_now_playing_text(atlas, batch, [x, width], song, None, notes);
+}
+fn draw_now_playing_text(
+    atlas: &HudAtlas,
+    batch: &mut HudBatch,
+    placement: [f32; 2],
+    title: &Text,
+    description: Option<&Text>,
+    notes: u32,
+) {
+    let [x, width] = placement;
     // `toast/now_playing`: a nine slice of 160 by 32 with a border of 4, here 30 high.
     if let Some(rect) = atlas.sprites.get("gui/sprites/toast/now_playing").copied() {
         let (du, dv) = (
@@ -353,5 +373,15 @@ pub fn draw_now_playing(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, song: &s
         );
     }
     // DyeColor.LIGHT_GRAY.getTextColor, at 15 - 9 / 2.
-    batch.text(atlas, song, x + 30.0, 11.0, 0xFFD3_D3D3, true);
+    batch.text_styled(
+        atlas,
+        title,
+        x + 30.0,
+        if description.is_some() { 5.0 } else { 11.0 },
+        0xFFD3_D3D3,
+        true,
+    );
+    if let Some(description) = description {
+        batch.text_styled(atlas, description, x + 30.0, 17.0, 0xFFD3_D3D3, true);
+    }
 }

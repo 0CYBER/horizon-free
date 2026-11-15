@@ -716,17 +716,16 @@ impl Frontend {
         // itself (GLSL 4.60, 4.3.3, as #8462 quotes it), so it may be a texel offset: it
         // becomes a module constant, as a global `const` does.
         let constant = match (storage.0, decl.init) {
-            (StorageQualifier::Const, Some(init)) => ctx
-                .lift_up_const_value(init)
-                .ok()
-                .map(|init| {
+            (StorageQualifier::Const, Some(init)) => {
+                ctx.lift_up_const_value(init).ok().map(|init| {
                     let constant = Constant {
                         name: decl.name.clone(),
                         ty: decl.ty,
                         init,
                     };
                     ctx.module.constants.append(constant, decl.meta)
-                }),
+                })
+            }
             _ => None,
         };
 

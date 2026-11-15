@@ -13,9 +13,10 @@ use horizon_client::{
     mobs::{
         Mob, MobTypes, Species,
         data::MobData,
-        finalize::{self, Attr, Ctx, FinalizeLevel, Reason, SpawnData, SpawnRegistries},
+        finalize::{self, Attr, Ctx, FinalizeLevel, SpawnData, SpawnRegistries},
         gear,
-        render::{DYE_NAMES, PROFESSIONS, VILLAGER_TYPES},
+        render::{DYE_NAMES, VILLAGER_TYPES},
+        spawn_rules::Reason,
         spawning::LocalDifficulty,
     },
 };
@@ -29,6 +30,10 @@ use std::{collections::HashMap, fmt::Write as _, fs, path::Path, sync::Arc};
 struct Level<'a> {
     types: &'a MobTypes,
     data: &'a MobData,
+    registries: &'a SpawnRegistries,
+    enchantments: &'a Enchantments,
+    items: &'a Items,
+    camel_husk_size: (f32, f32),
     biome: String,
     structure: Option<(String, [i32; 6])>,
     phase: usize,
@@ -110,6 +115,14 @@ impl FinalizeLevel for Level<'_> {
         let mut m = Mob::new(index as u32 + 1, t, Vec3::ZERO, 0.0);
         m.random.set_seed(self.eseed.wrapping_add(index as i64));
         Some(m)
+    }
+    fn spawn_data(&self) -> SpawnData<'_> {
+        SpawnData {
+            registries: self.registries,
+            enchantments: self.enchantments,
+            items: self.items,
+            camel_husk_size: self.camel_husk_size,
+        }
     }
 }
 
@@ -224,13 +237,13 @@ fn variant(m: &Mob, regs: &SpawnRegistries, v: &mut Vec<String>) {
         S::Villager => v.push(format!(
             "minecraft:{}/minecraft:{}/{}",
             VILLAGER_TYPES[m.extra.variant as usize % 7],
-            PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()],
-            m.extra.variant3.max(1)
+            horizon_client::mobs::villager::profession(m.extra.profession.index().unwrap_or(0)).id,
+            m.extra.villager_level.max(1)
         )),
         S::ZombieVillager => v.push(format!(
             "minecraft:{}/{}",
             VILLAGER_TYPES[m.extra.variant as usize % 7],
-            m.extra.variant3.max(1)
+            m.extra.villager_level.max(1)
         )),
         S::Phantom => v.push(format!("size={}", m.extra.size)),
         S::Turtle => v.push(format!(
@@ -258,7 +271,7 @@ fn variant(m: &Mob, regs: &SpawnRegistries, v: &mut Vec<String>) {
         v.push(format!("raid={}", st.is_some_and(|s| s.can_join_raid)));
     }
     if s == S::Strider {
-        v.push(format!("saddled={}", m.extra.saddled));
+        v.push(format!("saddled={}", m.extra.saddled()));
     }
 }
 
@@ -306,8 +319,8 @@ fn describe(m: &Mob, all: &[Mob], regs: &SpawnRegistries) -> String {
         }
         // The ominous banner's components, read from the stack the mob wears.
         if slot == 5
-            && m.extra.armor[0]
-                .as_ref()
+            && m.extra
+                .slot_stack(horizon_items::equipment::HEAD)
                 .and_then(|s| s.data())
                 .is_some_and(|d| d.ominous_banner)
         {
@@ -357,7 +370,7 @@ fn describe(m: &Mob, all: &[Mob], regs: &SpawnRegistries) -> String {
         .extra
         .effects
         .iter()
-        .map(|(e, d, a)| format!("{e}:{a}:{d}"))
+        .map(|effect| format!("{}:{}:{}", effect.id, effect.amplifier, effect.duration))
         .collect();
     fx.sort();
     t.push(format!(
@@ -405,18 +418,17 @@ pub fn main() -> horizon_client::Result<()> {
     let halloween = args.get(4).is_some_and(|h| h == "true");
     let assets = Assets::load(root)?;
     let facts = BlockFacts::load(root, assets.registry)?;
-    let mob_data = MobData::load(root, &facts);
-    let items = Items::tags_only(root, &PackOverlay::NONE)?;
-    let enchantments = Enchantments::load(root);
+    let mob_data = MobData::load(
+        &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+        &facts,
+    );
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::tags_only(root, &PackOverlay::NONE, &defaults)?;
+    let enchantments = Enchantments::load(root, &defaults)?;
     let types = MobTypes::load(root)?;
     let registries = SpawnRegistries::load(root);
     let camel = &types.types["minecraft:camel_husk"];
-    let data = SpawnData {
-        registries: &registries,
-        enchantments: &enchantments,
-        items: &items,
-        camel_husk_size: (camel.width as f32, camel.height as f32),
-    };
+    let camel_husk_size = (camel.width as f32, camel.height as f32);
     let mut out = format!("halloween {halloween}\n");
     for line in input.lines().filter(|l| !l.trim().is_empty()) {
         let mut c: HashMap<&str, &str> = HashMap::new();
@@ -459,6 +471,10 @@ pub fn main() -> horizon_client::Result<()> {
         let mut level = Level {
             types: &types,
             data: &mob_data,
+            registries: &registries,
+            enchantments: &enchantments,
+            items: &items,
+            camel_husk_size,
             biome: get("biome", "minecraft:plains"),
             structure: c.get("structure").map(|s| {
                 (
@@ -497,7 +513,7 @@ pub fn main() -> horizon_client::Result<()> {
             }
         }
         let kind = get("type", "minecraft:pig");
-        let reason = Reason::parse(&get("reason", "NATURAL")).unwrap_or(Reason::Natural);
+        let reason = reason_named(&get("reason", "NATURAL"));
         let pack: usize = get("pack", "1").parse().unwrap_or(1);
         let mut random = LegacyRandom::new(get("seed", "0").parse().unwrap_or(0));
         let mut group = None;
@@ -511,7 +527,6 @@ pub fn main() -> horizon_client::Result<()> {
                 level: &mut level,
                 random: &mut random,
                 difficulty,
-                data: &data,
                 created: Vec::new(),
                 jockey_rider: None,
             };
@@ -536,4 +551,29 @@ pub fn main() -> horizon_client::Result<()> {
     }
     fs::write(args.get(3).ok_or("missing OUTPUT")?, out)?;
     Ok(())
+}
+
+/// `EntitySpawnReason` by its vanilla constant name; an unknown name is `NATURAL`.
+fn reason_named(name: &str) -> Reason {
+    match name {
+        "CHUNK_GENERATION" => Reason::ChunkGeneration,
+        "SPAWNER" => Reason::Spawner,
+        "STRUCTURE" => Reason::Structure,
+        "BREEDING" => Reason::Breeding,
+        "MOB_SUMMONED" => Reason::MobSummoned,
+        "JOCKEY" => Reason::Jockey,
+        "EVENT" => Reason::Event,
+        "CONVERSION" => Reason::Conversion,
+        "REINFORCEMENT" => Reason::Reinforcement,
+        "TRIGGERED" => Reason::Triggered,
+        "BUCKET" => Reason::Bucket,
+        "SPAWN_ITEM_USE" => Reason::SpawnItemUse,
+        "COMMAND" => Reason::Command,
+        "DISPENSER" => Reason::Dispenser,
+        "PATROL" => Reason::Patrol,
+        "TRIAL_SPAWNER" => Reason::TrialSpawner,
+        "LOAD" => Reason::Load,
+        "DIMENSION_TRAVEL" => Reason::DimensionTravel,
+        _ => Reason::Natural,
+    }
 }

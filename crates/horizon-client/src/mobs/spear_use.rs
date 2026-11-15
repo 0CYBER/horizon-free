@@ -17,26 +17,44 @@ use horizon_core::geometry::{Aabb, Vec3, trig::Mth};
 
 /// The kinetic weapon in the main hand (`getMainHandItem().get(KINETIC_WEAPON)`).
 pub fn main_hand_kinetic(m: &Mob) -> Option<Kinetic> {
-    m.extra.main_hand.as_deref().and_then(Kinetic::of)
+    m.extra.main_hand_id().and_then(Kinetic::of)
 }
 
-/// `LivingEntity.isUsingItem`. A piglin admiring what it holds in its off
-/// hand counts `using_item` down as well; vanilla keeps that in a memory.
+/// Whether `using_item` is a timer that vanilla keeps apart from a use: a
+/// piglin with something in its off hand admires it (a memory), and a witch
+/// drinks (`Witch.usingTime`, its own `DATA_USING_ITEM`).
+pub fn counts_own_timer(m: &Mob) -> bool {
+    match m.species() {
+        Species::Piglin => m.extra.off_hand_id().is_some(),
+        Species::Witch => m.extra.flag,
+        _ => false,
+    }
+}
+
+/// `LivingEntity.isUsingItem`, which an admiring piglin and a drinking witch
+/// are not.
 pub fn is_using_item(m: &Mob) -> bool {
-    m.extra.using_item > 0 && !(m.species() == Species::Piglin && m.extra.off_hand.is_some())
+    m.extra.using_item > 0 && !counts_own_timer(m)
 }
 
-/// `LivingEntity.startUsingItem(MAIN_HAND)`: the use of a kinetic weapon
-/// starts with a new `recentKineticEnemies`.
-pub fn start_using_item(m: &mut Mob) {
-    if m.extra.main_hand.is_none() || is_using_item(m) {
-        return;
+/// `LivingEntity.startUsingItem` of a hand, false when it is empty or a use
+/// runs: the use of a kinetic weapon starts with a new `recentKineticEnemies`
+/// (`update_using_item` stabs with the main hand's).
+pub fn start_using_item(m: &mut Mob, off_hand: bool) -> bool {
+    let held = if off_hand {
+        m.extra.off_hand_id()
+    } else {
+        m.extra.main_hand_id()
+    };
+    if held.is_none() || is_using_item(m) {
+        return false;
     }
     m.extra.using_item = 1;
-    m.extra.using_off_hand = false;
-    if main_hand_kinetic(m).is_some() {
+    m.extra.using_off_hand = off_hand;
+    if !off_hand && main_hand_kinetic(m).is_some() {
         m.extra.stabbed = Some(Vec::new());
     }
+    true
 }
 
 /// `LivingEntity.stopUsingItem`: `recentKineticEnemies` is gone.
@@ -62,8 +80,16 @@ pub fn update_using_item(m: &mut Mob, w: &MobWorld, known_speed: Vec3, events: &
     // `ItemStack.onUseTick` gets the ticks left; the use began at 1.
     let ticks_used = m.extra.using_item - 1;
     damage_entities(m, &kinetic, ticks_used, w, known_speed, events);
+    count_use_tick(m);
+}
+
+/// One more tick of a use. Vanilla counts `useItemRemaining` down as a Java
+/// int, which a mod may set to anything; here the ticks used count up, and a
+/// counter a mod pushed to `i32::MAX` stays there rather than wrapping below
+/// 1, which would end the use that vanilla keeps running.
+pub fn count_use_tick(m: &mut Mob) {
     if is_using_item(m) {
-        m.extra.using_item += 1;
+        m.extra.using_item = m.extra.using_item.saturating_add(1);
     }
 }
 
@@ -79,7 +105,7 @@ struct Candidate {
 /// on or the rider it carries.
 fn candidates(m: &Mob, w: &MobWorld) -> Vec<Candidate> {
     let mut out = Vec::new();
-    if let Some(p) = w.player.as_ref().filter(|p| p.alive && !p.spectator) {
+    if let Some(p) = w.selected_player().filter(|p| p.alive && !p.spectator) {
         out.push(Candidate {
             who: Who::Player,
             bounds: p.bounds,
@@ -247,11 +273,11 @@ fn stab_attack(
     let mut affected = deals_knockback;
     if deals_damage {
         match target {
-            Who::Player => events.push(MobEvent::DamagePlayer {
+            Who::Player => events.push(w.route_player_event(MobEvent::DamagePlayer {
                 amount: damage,
                 from,
                 kind: "minecraft:spear",
-            }),
+            })),
             Who::Mob(id) => events.push(MobEvent::AttackMob {
                 target: id,
                 amount: damage,
@@ -262,18 +288,18 @@ fn stab_attack(
         // `EnchantmentHelper.doPostAttackEffects`: Fire Aspect.
         let burn = gear::fire_aspect(m);
         if burn > 0 {
-            events.push(MobEvent::Ignite(target, burn));
+            events.push(w.route_player_event(MobEvent::Ignite(target, burn)));
         }
     }
     if deals_knockback {
-        cause_extra_knockback(m, target, 0.4_f32, source, events);
+        cause_extra_knockback(m, target, 0.4_f32, source, w, events);
         // `LivingEntity.getKnockback`: the Knockback enchantment, halved.
         let power = gear::knockback(m) as f32 / 2.0;
-        cause_extra_knockback(m, target, power, source, events);
+        cause_extra_knockback(m, target, power, source, w, events);
     }
     if dismounts && w.target_info(target).is_some_and(|t| t.passenger) {
         affected = true;
-        events.push(MobEvent::StabDismount { target });
+        events.push(w.route_player_event(MobEvent::StabDismount { target }));
     }
     affected
 }
@@ -285,20 +311,21 @@ fn cause_extra_knockback(
     target: Who,
     power: f32,
     source: Damage,
+    w: &MobWorld,
     events: &mut Vec<MobEvent>,
 ) {
     if power <= 0.0 {
         return;
     }
     let to_rad = std::f32::consts::PI / 180.0;
-    events.push(MobEvent::Knockback {
+    events.push(w.route_player_event(MobEvent::Knockback {
         target,
         power: f64::from(power),
         x: f64::from((m.yaw * to_rad).msin()),
         z: f64::from(-(m.yaw * to_rad).mcos()),
         source,
         apply_blocking: None,
-    });
+    }));
     m.velocity = Vec3::new(m.velocity.x * 0.6, m.velocity.y, m.velocity.z * 0.6);
 }
 
@@ -430,7 +457,7 @@ impl SpearUse {
                 return;
             }
             state.start_engagement(Self::kinetic_weapon_use_duration(m));
-            start_using_item(m);
+            start_using_item(m, false);
         }
         if state.tick_and_check_engagement() {
             stop_using_item(m);
@@ -604,7 +631,7 @@ fn attack_start(m: &mut Mob) {
     m.ai.aggressive = true;
     m.extra.piglin.spear.engage_time = Some(attack_kinetic_weapon_use_duration(m));
     m.extra.piglin.spear.charge_position = None;
-    start_using_item(m);
+    start_using_item(m, false);
 }
 
 /// `SpearAttack.canStillUse`: time left to charge and able to attack.
@@ -810,21 +837,21 @@ impl Goal for PiglinSpear {
             && m.extra.piglin.spear.status.is_none()
             && approach_check_extra_start_conditions(m, cx.w)
         {
-            self.approach.begin(cx.lr, now);
+            self.approach.begin(cx.level.random(), now);
             approach_start(m);
         }
         if !self.attack.running
             && m.extra.piglin.spear.status.is_some()
             && attack_check_extra_start_conditions(m, cx.w)
         {
-            self.attack.begin(cx.lr, now);
+            self.attack.begin(cx.level.random(), now);
             attack_start(m);
         }
         if !self.retreat.running
             && m.extra.piglin.spear.status.is_some()
             && retreat_check_extra_start_conditions(m, cx)
         {
-            self.retreat.begin(cx.lr, now);
+            self.retreat.begin(cx.level.random(), now);
             retreat_start(m);
         }
         if self.approach.running {
@@ -860,7 +887,7 @@ impl Goal for PiglinSpear {
 pub struct NoMeleeWithSpear<G>(pub G);
 /// A kinetic weapon or a crossbow in the main hand: the melee goal stays off.
 pub(super) fn holds_non_melee_weapon(m: &Mob) -> bool {
-    main_hand_kinetic(m).is_some() || m.extra.main_hand.as_deref() == Some("minecraft:crossbow")
+    main_hand_kinetic(m).is_some() || m.extra.main_hand_id() == Some("minecraft:crossbow")
 }
 impl<G: Goal + Clone + 'static> Goal for NoMeleeWithSpear<G> {
     goal_clone!();
@@ -890,5 +917,41 @@ impl<G: Goal + Clone + 'static> Goal for NoMeleeWithSpear<G> {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         self.0.tick(m, cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Mob, count_use_tick, is_using_item, start_using_item};
+    use horizon_core::geometry::Vec3;
+
+    fn spear_zombie() -> Mob {
+        let mut m = Mob::new(1, crate::mobs::sensor_scan_tests::kind(), Vec3::ZERO, 0.0);
+        m.extra.set_slot_id(
+            horizon_items::equipment::MAINHAND,
+            Some("minecraft:iron_spear".into()),
+        );
+        m
+    }
+
+    /// The counters a mod's `living_set_item_use_remaining` leaves a 72000
+    /// tick use at (remaining `i32::MIN`, `i32::MAX`, 0 and -5): the next
+    /// ticks count on without overflowing, and the use keeps running.
+    #[test]
+    fn a_use_counter_at_any_value_a_mod_sets_survives_the_next_ticks() {
+        for counter in [i32::MAX, 1, 72_001, 72_006, i32::MAX - 1] {
+            let mut m = spear_zombie();
+            assert!(start_using_item(&mut m, false));
+            m.extra.using_item = counter;
+            for tick in 1..=3 {
+                count_use_tick(&mut m);
+                assert!(is_using_item(&m), "{counter} tick {tick}");
+                assert_eq!(
+                    m.extra.using_item,
+                    counter.saturating_add(tick),
+                    "{counter} tick {tick}"
+                );
+            }
+        }
     }
 }

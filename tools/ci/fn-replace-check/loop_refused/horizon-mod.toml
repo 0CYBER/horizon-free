@@ -1,0 +1,34 @@
+id = "fnr_loop_refused"
+name = "Function replacement check: loop refusals"
+version = "0.1.0"
+description = "fn-replace: loop rows the build refuses by name before anything compiles"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+# A loop the game does not publish: E_LOOP_UNKNOWN, listing the published ones.
+[[native.loop]]
+id = "unknown"
+loop = "mobs.tick"
+helper = "src/loops/slot.rs"
+with = "Slot"
+
+# A filled loop...
+[[native.loop]]
+id = "filled"
+loop = "block_entities.tick"
+helper = "src/loops/slot.rs"
+with = "Slot"
+
+# ...whose entry an OVERWRITE would replace: E_LOOP_ENTRY_REPLACED.
+[[native.mixin]]
+id = "overwrite"
+target = "horizon_client::game::block_entity_ticks::Game<'_>::tick_block_entities"
+kind = "OVERWRITE"
+helper = "src/mixins/overwrite.rs"

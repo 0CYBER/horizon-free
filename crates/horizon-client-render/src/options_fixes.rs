@@ -252,7 +252,7 @@ pub fn update(raw: &mut Raw, version: i32) -> Result<(), FixFailed> {
         let background = java_parse_double(opacity).map_or(0.5, |v| (0.9 * v + 0.1) / 2.0);
         raw.insert(
             "textBackgroundOpacity".into(),
-            crate::java_text::double_to_string(background),
+            horizon_core::java_number::double_to_string(background),
         );
     }
     if version < 2556 {

@@ -7,7 +7,7 @@ use crate::{
     registries::Registries,
     text::{self, Style, Text},
 };
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -26,7 +26,7 @@ pub fn bracketed(inner: Text) -> Text {
 }
 fn hover_name(text: Text, name: &str) -> Text {
     text.with_style(&Style {
-        hover: Some(Box::new(Text::literal(name))),
+        hover: Some(std::sync::Arc::new(Text::untrusted(name))),
         ..Style::default()
     })
 }
@@ -374,9 +374,14 @@ pub fn criteria_by_name(name: &str, reg: &Registries) -> Result<Option<String>, 
             reg.items.is_empty() || reg.items.contains(&key)
         }
         "killed" | "killed_by" => reg.entity_types.is_empty() || reg.entity_types.contains(&key),
-        "custom" => key
-            .strip_prefix("minecraft:")
-            .is_some_and(|k| CUSTOM_STATS.contains(&k)),
+        "custom" => {
+            key.strip_prefix("minecraft:")
+                .is_some_and(|k| CUSTOM_STATS.contains(&k))
+                || reg
+                    .by_registry
+                    .get("minecraft:custom_stat")
+                    .is_some_and(|registry| registry.ids.contains(&key))
+        }
         _ => false,
     };
     Ok(known.then(|| stat_criteria(ty, &key)))
@@ -736,7 +741,7 @@ impl ScoreEntry {
     pub fn owner_name(&self) -> Text {
         match &self.display {
             Some(d) => comp_text(d),
-            None => Text::literal(self.owner.clone()),
+            None => Text::untrusted(self.owner.clone()),
         }
     }
     pub fn format_value(&self, default: &NumberFormat) -> Text {
@@ -1478,6 +1483,29 @@ mod tests {
     }
 
     #[test]
+    fn custom_stat_criteria_use_live_inventory() {
+        let mut reg = Registries::default();
+        let criterion = "minecraft.custom:rewrite.steps";
+        assert_eq!(criteria_by_name(criterion, &reg), Ok(None));
+        reg.by_registry
+            .entry("minecraft:custom_stat".into())
+            .or_default()
+            .ids
+            .push("rewrite:steps".into());
+        assert_eq!(
+            criteria_by_name(criterion, &reg),
+            Ok(Some(criterion.into()))
+        );
+        assert_eq!(
+            criteria_by_name("minecraft.custom:rewrite.missing", &reg),
+            Ok(None)
+        );
+        reg.by_registry.remove("minecraft:custom_stat");
+        assert_eq!(criteria_by_name(criterion, &reg), Ok(None));
+        assert!(criteria_exists("minecraft.custom:minecraft.jump", &reg));
+    }
+
+    #[test]
     fn scores_and_criteria_updates() {
         let mut sb = board();
         assert!(!sb.add_objective(
@@ -1550,15 +1578,15 @@ mod tests {
         let back = Scoreboard::unpack(&sb.pack());
         assert_eq!(back, sb);
         // And through the binary NBT format.
-        let bytes = horizon_world::nbt::write_named(
-            &horizon_world::nbt::NamedTag {
+        let bytes = horizon_core::nbt::write_named(
+            &horizon_core::nbt::NamedTag {
                 name: "".into(),
                 tag: sb.pack(),
             },
             Default::default(),
         )
         .unwrap();
-        let (named, _) = horizon_world::nbt::read_named(&bytes, Default::default()).unwrap();
+        let (named, _) = horizon_core::nbt::read_named(&bytes, Default::default()).unwrap();
         assert_eq!(Scoreboard::unpack(&named.tag), sb);
     }
 

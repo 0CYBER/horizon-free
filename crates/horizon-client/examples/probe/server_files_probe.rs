@@ -4,10 +4,10 @@
 //! same report. `server_files_probe CASES OUTPUT`.
 use horizon_client::server::{
     eula,
-    java_properties::now_millis,
     properties::{DIFFICULTIES, GAME_MODES, ServerProperties, SystemEntropy},
     user_lists::{BanEntry, BanList, IpBanList, NameAndId, OpEntry, OpList, WhiteEntry, WhiteList},
 };
+use horizon_java_properties::now_millis;
 use horizon_protocol::crypto::uuid_string;
 use std::{fmt::Write as _, path::Path};
 

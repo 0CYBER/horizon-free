@@ -6,7 +6,7 @@ stream, also after ViaVersion translated it for an older server, so Horizon's mu
 A vanilla 26.3 dedicated server (flat world, offline) runs behind tools/net_capture.py. Each client joins it in
 turn as Steve and plays every scenario below: the harness resets the place and the player from the server's
 console, then hands the client the scenario, which it plays tick by tick from its own tick loop (Horizon:
-HORIZON_TICK_SCRIPT, game/tick_script.rs; vanilla: VanillaTickScript.java, the unchanged client with its
+HORIZON_TICK_SCRIPT, game/world/tick_script.rs; vanilla: VanillaTickScript.java, the unchanged client with its
 keys pressed through KeyMapping). Both send /wire-mark on the scenario's first tick. tools/wire_stream.py
 cuts each scenario's stream into client ticks (ClientTickEnd ends one) and decodes the packets; every tick
 must hold the same packets, in the same order, with the same fields (doubles and floats exactly). Packets
@@ -275,7 +275,7 @@ class VanillaClient:
 
 class HeadlessGame(Game):
     """server_pack_e2e's game, `--headless`: no display, window or GPU; the frame and the ticks run as a
-    window's do (game/headless.rs), and only the ticks' packets matter here."""
+    window's do (game/runtime/headless.rs), and only the ticks' packets matter here."""
 
     def __init__(self, bins, resources, work, scripts, extras=None):
         self.home = work / 'home'

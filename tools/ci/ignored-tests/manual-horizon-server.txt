@@ -1,0 +1,2 @@
+# horizon-server's ignored tests that never run in the daily shards, and who runs them (README.md: `manual`).
+horizon-server service::tests::windows_task_installs_without_elevation by-hand manual # creates a scheduled task on this computer (Windows only)

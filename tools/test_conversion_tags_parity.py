@@ -20,7 +20,7 @@ def main():
     report = build / 'report.json'
     report.unlink(missing_ok=True)
     paths = ['crates/horizon-client/src/entity_nbt.rs',
-             'crates/horizon-client/src/game/creatures.rs',
+             'crates/horizon-client/src/game/mobs/creatures/mod.rs',
              'crates/horizon-client/examples/probe/conversion_tags_fixture.rs',
              'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaConversionTagsOracle.java',
              'tools/test_conversion_tags_parity.py']

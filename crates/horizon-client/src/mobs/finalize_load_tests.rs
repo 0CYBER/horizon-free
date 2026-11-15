@@ -7,7 +7,7 @@
 use super::*;
 use crate::entity_nbt::{mob_from_nbt, mob_to_nbt};
 use crate::mobs::MobType;
-use horizon_world::nbt::{Tag, parse_snbt};
+use horizon_core::nbt::{Tag, parse_snbt};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -126,6 +126,40 @@ fn a_wolf_tamed_in_game_saves_its_forty_health() {
     // And back: 8 again.
     crate::mobs::tame::set_tame(&mut m, false);
     assert_eq!(saved(&m, &input), [(HEALTH.to_owned(), 8.0)]);
+}
+
+#[test]
+fn a_wolf_with_no_stored_base_reads_forty_health_once_tamed() {
+    // A wolf tamed in game before anything stored its max_health base: `/attribute` reads the
+    // 40 `applyTamingSideEffects` sets, and a refresh keeps the cap there.
+    let (mut m, _) = loaded("minecraft:wolf", Species::Wolf, &[(HEALTH, 8.0)], "");
+    m.extra.attributes = None;
+    assert_eq!(base_value(&m, Attr::MaxHealth), 8.0);
+    crate::mobs::tame::set_tame(&mut m, true);
+    assert_eq!(base_value(&m, Attr::MaxHealth), 40.0);
+    assert_eq!(value(&m, Attr::MaxHealth), 40.0);
+    assert_eq!(m.attrs.max_health, 40.0);
+    refresh(&mut m, Attr::MaxHealth);
+    assert_eq!(m.attrs.max_health, 40.0);
+    // And back: 8 again.
+    crate::mobs::tame::set_tame(&mut m, false);
+    assert_eq!(base_value(&m, Attr::MaxHealth), 8.0);
+    assert_eq!(value(&m, Attr::MaxHealth), 8.0);
+    refresh(&mut m, Attr::MaxHealth);
+    assert_eq!(m.attrs.max_health, 8.0);
+}
+
+#[test]
+fn a_wolf_tamed_under_health_boost_loses_the_bonus_when_it_ends() {
+    // Health Boost II is +8 on top of the base 40; when it ends the maximum is 40 again.
+    let (mut m, _) = loaded("minecraft:wolf", Species::Wolf, &[(HEALTH, 8.0)], "");
+    m.extra.attributes = None;
+    m.add_effect("minecraft:health_boost", 600, 1);
+    crate::mobs::tame::set_tame(&mut m, true);
+    assert_eq!(m.attrs.max_health, 48.0);
+    assert!(m.retain_effects(|e| e.id != "minecraft:health_boost"));
+    assert_eq!(m.attrs.max_health, 40.0);
+    assert_eq!(m.health, 40.0);
 }
 
 #[test]

@@ -400,15 +400,15 @@ fn downloads_refused_before_any_byte() {
     assert!(download::refuse(&file).unwrap().contains("file servers"));
     // A mod's own repository's release asset, which the registry's index lists with its SHA-256.
     let mut file = file_for(body, true);
-    file.url = "https://github.com/acme/zoom/releases/download/v1.0.0/zoom-1.0.0.hnmod".into();
+    file.url = "https://github.com/acme/zoom/releases/download/v1.0.0/zoom-1.0.0.hmod".into();
     assert_eq!(download::refuse(&file), None);
     for bad in [
-        "http://github.com/acme/zoom/releases/download/v1/z.hnmod",
+        "http://github.com/acme/zoom/releases/download/v1/z.hmod",
         "https://github.com/acme/zoom/archive/main.zip",
-        "https://github.com/acme/zoom/releases/download/v1/../z.hnmod",
-        "https://github.com/acme/zoom/releases/download/v1/z.hnmod?x=1",
-        "https://github.com.evil.example/a/b/releases/download/v1/z.hnmod",
-        "https://github.com/acme/zoom/releases/download/v1/a/z.hnmod",
+        "https://github.com/acme/zoom/releases/download/v1/../z.hmod",
+        "https://github.com/acme/zoom/releases/download/v1/z.hmod?x=1",
+        "https://github.com.evil.example/a/b/releases/download/v1/z.hmod",
+        "https://github.com/acme/zoom/releases/download/v1/a/z.hmod",
     ] {
         let mut file = file_for(body, true);
         file.url = bad.into();

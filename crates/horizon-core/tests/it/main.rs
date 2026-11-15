@@ -3,3 +3,4 @@
 
 mod carving_bounds;
 mod density_world_fields;
+mod nbt_bounded_alloc;

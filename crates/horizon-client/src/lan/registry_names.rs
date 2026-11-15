@@ -1,5 +1,6 @@
 //! Registry names for the network ids a server sends (`native_registry_name` on a server).
 use super::hub::Hub;
+use horizon_core::identifier::Identifier;
 use horizon_protocol::item::Names;
 use horizon_protocol::registry::SyncedNames;
 
@@ -12,5 +13,15 @@ impl Hub {
             dynamic: &self.sync.dynamic,
         }
         .name(registry, id)
+    }
+
+    /// The network id of `name` in a built-in or synchronized registry, custom data component
+    /// types included, as connections are sent it (the reverse of `synced_name`).
+    pub fn synced_id(&self, registry: &Identifier, name: &Identifier) -> Option<i32> {
+        SyncedNames {
+            builtin: &self.sync.builtin,
+            dynamic: &self.sync.dynamic,
+        }
+        .id(registry, name)
     }
 }

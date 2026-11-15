@@ -4,7 +4,12 @@
 # output. Use the first name that actually runs Python 3.
 for py in python3 python py; do
     if "$py" -c "import sys; sys.exit(sys.version_info < (3,))" >/dev/null 2>&1; then
-        exec "$py" tools/check_public_tree.py --pre-push
+        # Both checks consume Git's ref list. Check committed tips, even when
+        # a clean working-tree edit would hide a broken outgoing workflow.
+        updates=$(cat)
+        printf '%s' "$updates" | "$py" tools/ci/check_repository_hygiene.py --pre-push || exit 1
+        printf '%s' "$updates" | "$py" tools/check_public_tree.py --pre-push
+        exit $?
     fi
 done
 echo "check_public_tree: no working Python 3 found" >&2

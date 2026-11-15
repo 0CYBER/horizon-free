@@ -23,7 +23,7 @@ fn zombie(id: u32, invulnerable: bool) -> Seen {
     kind.species = Species::Zombie;
     let mut m = Mob::new(id, Arc::new(kind), Vec3::new(2.5, 64.0, 0.5), 0.0);
     m.invulnerable_flag = invulnerable;
-    m.seen(None)
+    m.seen(None, &crate::items::Items::empty())
 }
 
 fn dig_cooldown(m: &mut Mob) -> i64 {
@@ -36,6 +36,7 @@ fn dig_cooldown(m: &mut Mob) -> i64 {
 /// "passenger or leashed"), so a `/summon`ed warden called Bob digs down and
 /// is gone.
 #[test]
+#[ignore = "daily"]
 fn only_a_persistent_or_leashed_warden_keeps_its_dig_cooldown() {
     let ran = with_test_world(&[], |w, types| {
         // What a warden holds a few ticks into its dig cooldown.
@@ -57,13 +58,14 @@ fn only_a_persistent_or_leashed_warden_keeps_its_dig_cooldown() {
             assert_eq!(dig_cooldown(&mut m), ttl, "{what} warden");
         }
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `Warden.canTargetEntity`: `!isAlliedTo(entity) && !entity.isInvulnerable()`.
 /// A warden on a player's team leaves that player and its other allies alone,
 /// and it never hunts an invulnerable mob.
 #[test]
+#[ignore = "daily"]
 fn the_warden_leaves_its_allies_and_invulnerable_mobs_alone() {
     let mut board = Scoreboard::default();
     board.add_team("t");
@@ -112,12 +114,13 @@ fn the_warden_leaves_its_allies_and_invulnerable_mobs_alone() {
                 "an invulnerable mob"
             );
         });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }
 
 /// `Warden.VibrationUser.canReceiveVibration` through `isAlliedTo`: a team
 /// mate's vibration is not one the warden hears, so it never angers at it.
 #[test]
+#[ignore = "daily"]
 fn an_allied_vibration_is_not_heard() {
     let mut board = Scoreboard::default();
     board.add_team("t");
@@ -131,7 +134,7 @@ fn an_allied_vibration_is_not_heard() {
     let ran = with_test_world(&[], |w, types| {
         let m = warden_mob(types, 1);
         let ctx = Context {
-            source: Some(Who::Mob(2)),
+            source: Some(Who::Mob(2).into()),
             living: true,
             targetable: true,
             ..Context::default()
@@ -149,5 +152,5 @@ fn an_allied_vibration_is_not_heard() {
         let none = heard_by(ctx, &Teams::default(), m.id);
         assert!(can_receive_vibration(&m, 0, &none));
     });
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

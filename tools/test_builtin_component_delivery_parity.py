@@ -375,22 +375,28 @@ def admit(f,build,label):
 
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--binary',type=Path,required=True);p.add_argument('--build',default='h283-component-delivery');p.add_argument('--side',choices=['java','native'],required=True);p.add_argument('--strict-all',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__)
+    # tools/parity.py runs every harness with no arguments: build the Horizon binary and run both sides.
+    p.add_argument('--binary',type=Path,help='A Horizon client binary; built when omitted')
+    p.add_argument('--build',default='h283-component-delivery')
+    p.add_argument('--side',choices=['java','native','both'],default='both')
+    p.add_argument('--strict-all',action='store_true');a=p.parse_args()
     try:
-        lock,build,java,native,client=net.sides(a.build,a.binary)
+        lock,build,java,native,client=net.sides(a.build,a.binary.resolve() if a.binary else None)
     except subprocess.CalledProcessError as e:
         print(e.stdout.decode() if isinstance(e.stdout,bytes) else e.stdout)
         print(e.stderr.decode() if isinstance(e.stderr,bytes) else e.stderr)
         raise
     (build/'program.json').write_text(json.dumps({'cases':CASES,'primary_gate':'six canonical forms+actual action/identity/load/clock/saved/slot admissions','diagnostics':'all historical advanced/armortrim/removals whole records; full original payloads+order+IDs+epochs; no all-form/receive closure','observation_ticks':0},indent=2)+'\n')
-    if a.side=='java':
-        world=generate(java,build);f=run('java',java,client,build,world);n=admit(f,build,'java');(build/'reference.json').write_text(json.dumps(f,indent=2)+'\n');print('JAVA ADMITTED',n);return 0
+    if a.side in ('java','both'):
+        world=generate(java,build);f=run('java',java,client,build,world);n=admit(f,build,'java');(build/'reference.json').write_text(json.dumps(f,indent=2)+'\n');print('JAVA ADMITTED',n)
+    if a.side=='java':return 0
     actual=run('native',native,client,build,build/'generate/world');ref=json.loads((build/'reference.json').read_text());diff={k:{'java':v,'native':actual.get(k)} for k,v in ref.items() if v!=actual.get(k)}
     (build/'native-facts.json').write_text(json.dumps(actual,indent=2)+'\n');(build/'diff.json').write_text(json.dumps(diff,indent=2)+'\n')
     print('EXACT',len(ref)-len(diff),'/',len(ref),'DIFF',json.dumps(diff,indent=2))
     if a.strict_all:
-        j=json.loads((build/'java-diagnostics.json').read_text());n=json.loads((build/'native-diagnostics.json').read_text());extra={k:{'java':v,'native':n.get(k)} for k,v in j.items() if v!=n.get(k)};(build/'all-diagnostic-differences.json').write_text(json.dumps(extra,indent=2)+'\n');return bool(diff or extra)
-    return bool(diff)
+        j=json.loads((build/'java-diagnostics.json').read_text());n=json.loads((build/'native-diagnostics.json').read_text());extra={k:{'java':v,'native':n.get(k)} for k,v in j.items() if v!=n.get(k)};(build/'all-diagnostic-differences.json').write_text(json.dumps(extra,indent=2)+'\n');return 1 if diff or extra else 0
+    return 1 if diff else 0
 
 
 if __name__=='__main__':raise SystemExit(main())

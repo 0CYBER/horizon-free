@@ -31,7 +31,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         let text = component::to_text(&input, &mut |_| Text::empty());
-        let mut batch = HudBatch::new([320, 240]);
+        let mut batch = HudBatch::scratch([320, 240]);
         let (x, y) = (
             row["x"].as_f64().unwrap() as f32,
             row["y"].as_f64().unwrap() as f32,

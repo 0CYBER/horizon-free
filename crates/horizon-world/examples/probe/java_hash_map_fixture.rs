@@ -1,4 +1,4 @@
-use horizon_world::java_hash_map::{CursorError, JavaHashMap, JavaKey};
+use horizon_core::java_hash_map::{CursorError, JavaHashMap, JavaKey};
 use serde_json::Value;
 use std::{
     cmp::Ordering,

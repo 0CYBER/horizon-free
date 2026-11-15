@@ -1,12 +1,14 @@
-use horizon_world::{
-    DATA_VERSION,
-    heightmap::HeightmapState,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::{tags::TagDefinitions, terrain::TerrainBlockStates},
-};
 use serde_json::Value;
 use std::{collections::BTreeSet, fs, path::Path};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        heightmap::HeightmapState,
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::{tags::TagDefinitions, terrain::TerrainBlockStates},
+    },
+};
 #[derive(Clone, Copy)]
 pub struct State {
     air: bool,

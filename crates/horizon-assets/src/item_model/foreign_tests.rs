@@ -11,56 +11,6 @@ fn model_id(n: &ItemModelNode) -> &str {
 }
 
 #[test]
-fn node_with_a_model_id_draws_that_model() {
-    let n = node(r#"{"type":"mod:thing","model":"mod:item/thing","tints":[{"type":"mod:tint"}]}"#)
-        .unwrap();
-    assert_eq!(model_id(&n), "mod:item/thing");
-    let ItemModelNode::Model(leaf) = n else {
-        unreachable!()
-    };
-    assert_eq!(leaf.tints, vec![TintSource::Constant(-1)]);
-    let n = node(r#"{"type":"mod:thing","base_model":"mod:item/base"}"#).unwrap();
-    assert_eq!(model_id(&n), "mod:item/base");
-    let n = node(r#"{"type":"mod:thing","on_model":"mod:item/a"}"#).unwrap();
-    assert_eq!(model_id(&n), "mod:item/a");
-}
-
-#[test]
-fn node_with_a_nested_node_decodes_it() {
-    let n = node(
-        r#"{"type":"neoforge:trimmed_armor","base_model":{"type":"minecraft:model","model":"mod:item/boots"}}"#,
-    )
-    .unwrap();
-    assert_eq!(model_id(&n), "mod:item/boots");
-    let n = node(
-        r#"{"type":"mod:x","model":{"type":"mod:y","model":"mod:item/inner"},"transformation":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}"#,
-    )
-    .unwrap();
-    let ItemModelNode::Composite {
-        models,
-        transformation,
-    } = n
-    else {
-        panic!("a transformation wraps the nested node")
-    };
-    assert!(transformation.is_some());
-    assert_eq!(model_id(&models[0]), "mod:item/inner");
-}
-
-#[test]
-fn node_with_nothing_usable_is_empty() {
-    assert!(matches!(
-        node(r#"{"type":"mod:facade"}"#).unwrap(),
-        ItemModelNode::Empty
-    ));
-    assert!(matches!(
-        node(r#"{"type":"mod:x","model":7}"#).unwrap(),
-        ItemModelNode::Empty
-    ));
-    assert!(ClientItem::from_json(r#"{"model":{"type":"ae2:facade"}}"#).is_ok());
-}
-
-#[test]
 fn unknown_vanilla_names_still_fail() {
     assert!(node(r#"{"type":"minecraft:nope"}"#).is_err());
     assert!(node(r#"{"type":"nope","model":"a:b"}"#).is_err());
@@ -86,25 +36,36 @@ fn unknown_vanilla_names_still_fail() {
 }
 
 #[test]
-fn condition_property_is_false() {
-    let n = node(
-        r#"{"type":"minecraft:condition","property":"mod:flag",
+fn condition_property_defaults_to_false_at_draw_time() {
+    let definition = ClientItem::from_json(
+        r#"{"model":{"type":"minecraft:condition","property":"mod:flag",
             "on_true":{"type":"minecraft:model","model":"a:yes"},
-            "on_false":{"type":"minecraft:model","model":"a:no"}}"#,
+            "on_false":{"type":"minecraft:model","model":"a:no"}}}"#,
     )
     .unwrap();
-    // A mod's property stays a condition its mod answers per stack
-    // (`item_model_property`); with no mod answering it, `on_false` is drawn.
-    let ItemModelNode::Condition {
-        property: ConditionProperty::Custom(property),
-        on_false,
-        ..
-    } = &n
-    else {
-        panic!("not a custom condition: {n:?}")
+    let mut models = ItemModels::default();
+    models.definitions.insert("mod:tool".into(), definition);
+    Arc::make_mut(&mut models.prototypes).insert(
+        "mod:tool".into(),
+        BTreeMap::from([(
+            "minecraft:item_model".into(),
+            Value::String("mod:tool".into()),
+        )]),
+    );
+    let context = Context {
+        display: DisplayContext::Gui,
+        owner: None,
+        level: None,
+        seed: 0,
     };
-    assert_eq!(property, "mod:flag");
-    assert_eq!(model_id(on_false), "a:no");
+    let resolved = models.resolve(&StackView::new("mod:tool", 1), &context, &NoEnv);
+    assert_eq!(resolved.layers.len(), 1);
+    assert_eq!(
+        resolved.layers[0].content,
+        LayerContent::Model {
+            model: "a:no".into()
+        }
+    );
 }
 
 #[test]
@@ -148,38 +109,83 @@ fn range_property_reads_zero() {
     assert!(matches!(n, ItemModelNode::Empty));
 }
 
+/// A special model type no mod registered is an error naming it, so the item definition holding
+/// it isn't loaded and the item draws the missing model; its `base` no longer stands in. A type a
+/// mod registered, vanilla's included, decodes with its model object for the mod's renderer, and
+/// vanilla's types no mod registered keep theirs.
 #[test]
-fn special_type_keeps_its_base_model() {
-    let n = node(
+fn a_special_type_draws_by_its_renderer_or_fails_by_name() {
+    let error = node(
         r#"{"type":"minecraft:special","base":"mod:item/cube","model":{"type":"mod:energy_cube"}}"#,
     )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("unknown special model type mod:energy_cube"),
+        "{error}"
+    );
+    // A mod may replace a vanilla type: its models then go to the mod's renderer.
+    register_special_model_types(vec!["foreigntest:skillet".into(), "minecraft:bell".into()]);
+    let n = node(
+        r#"{"type":"minecraft:special","base":"foreigntest:item/pan","model":{"type":"foreigntest:skillet","handle":2}}"#,
+    )
     .unwrap();
-    assert_eq!(model_id(&n), "mod:item/cube");
+    let ItemModelNode::RegisteredSpecial {
+        base, slot, config, ..
+    } = &n
+    else {
+        panic!("not a registered special model: {n:?}");
+    };
+    assert_eq!(
+        (base.as_str(), *slot),
+        ("foreigntest:item/pan", SpecialModelSlot(0))
+    );
+    assert_eq!(config.get("handle"), Some(&horizon_core::nbt::Tag::Byte(2)));
     let n =
         node(r#"{"type":"minecraft:special","base":"a:b","model":{"type":"minecraft:shield"}}"#)
             .unwrap();
     assert!(matches!(n, ItemModelNode::Special { .. }));
+    let n = node(r#"{"type":"minecraft:special","base":"a:b","model":{"type":"minecraft:bell"}}"#)
+        .unwrap();
+    assert!(matches!(
+        &n,
+        ItemModelNode::RegisteredSpecial {
+            slot: SpecialModelSlot(1),
+            ..
+        }
+    ));
 }
 
+/// A node type no mod registered is an error naming it, so the item definition holding it isn't
+/// loaded and the item draws the missing model, whatever keys the node has. NeoForge's own
+/// types are no exception, except `neoforge:fluid_container`, which the engine decodes (arismoko/horizon#2606).
 #[test]
-fn fluid_container_draws_its_base_without_the_fluid() {
-    let n = node(
-        r#"{"type":"neoforge:fluid_container","fluid":"mod:gas","cover_is_mask":false,"flip_gas":true,
-            "textures":{"base":"minecraft:item/bucket","fluid":"neoforge:item/mask/bucket_fluid"}}"#,
-    )
-    .unwrap();
-    assert_eq!(model_id(&n), "minecraft:item/bucket");
-    let n = node(
-        r#"{"type":"neoforge:fluid_container","cover_is_mask":false,
-            "textures":{"base":"a:item/flask","cover":"a:item/flask_cover"}}"#,
-    )
-    .unwrap();
-    let ItemModelNode::Composite { models, .. } = n else {
-        panic!("base and cover")
-    };
-    assert_eq!(models.len(), 2);
-    assert!(matches!(
-        node(r#"{"type":"neoforge:fluid_container"}"#).unwrap(),
-        ItemModelNode::Empty
-    ));
+fn an_unregistered_node_type_fails_by_name() {
+    for json in [
+        r#"{"type":"mod:thing","model":"mod:item/thing"}"#,
+        r#"{"type":"neoforge:trimmed_armor","base_model":{"type":"minecraft:model","model":"mod:item/boots"}}"#,
+        r#"{"type":"mod:facade"}"#,
+    ] {
+        let kind = serde_json::from_str::<Value>(json).unwrap()["type"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let error = node(json).unwrap_err().to_string();
+        assert!(
+            error.contains(&format!("unknown item model type {kind}")),
+            "{error}"
+        );
+    }
+    assert!(ClientItem::from_json(r#"{"model":{"type":"ae2:facade"}}"#).is_err());
+}
+
+/// Ownership comes from the decoder, not from the minecraft namespace or registrations.
+#[test]
+fn special_model_builtin_ownership_uses_the_decoder_identity() {
+    assert!(SpecialModel::is_builtin_type("minecraft:bell"));
+    assert!(SpecialModel::is_builtin_type("minecraft:chest"));
+    assert!(!SpecialModel::is_builtin_type("minecraft:foo"));
+    assert!(!SpecialModel::is_builtin_type("example:bell"));
+    assert!(SpecialModel::decode(&serde_json::json!({"type": "minecraft:bell"})).is_ok());
+    assert!(SpecialModel::decode(&serde_json::json!({"type": "minecraft:foo"})).is_err());
 }

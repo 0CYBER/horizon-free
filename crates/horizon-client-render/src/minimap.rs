@@ -51,7 +51,8 @@ impl Palette {
         for (i, f) in facts.states.iter().enumerate() {
             color.push(f.map_color);
             let mut b = match f.fluid {
-                Fluid::None => 0,
+                // A mod's fluid shows its block's map colour, as any block does.
+                Fluid::None | Fluid::Modded => 0,
                 Fluid::Water => 1,
                 Fluid::Lava => 2,
             };
@@ -523,6 +524,7 @@ mod tests {
             states: Vec::new(),
             air: horizon_world::registry::BlockStateId(0),
             woods: Default::default(),
+            sign_texts: Default::default(),
         };
         let mut world = world_with(
             (-2..=2)
@@ -611,6 +613,7 @@ mod tests {
             states: Vec::new(),
             air: horizon_world::registry::BlockStateId(0),
             woods: Default::default(),
+            sign_texts: Default::default(),
         };
         // Grass everywhere, one stone block 10 blocks north of the player.
         let mut world = world_with(

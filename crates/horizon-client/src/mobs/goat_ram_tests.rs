@@ -4,6 +4,7 @@
 //! so `HurtByTargetGoal`, which turns a mob on whoever last hurt it, never
 //! starts. A plain `mob_attack` still angers its victim.
 use super::ram_tick;
+use crate::health::TestLevel;
 use crate::mobs::goals::Cx;
 use crate::mobs::world::with_test_world;
 use crate::mobs::{Damage, DamageKind, Mob, MobEvent, MobTypes, MobWorld, Who};
@@ -36,12 +37,13 @@ fn hit(victim: &mut Mob, w: &MobWorld, amount: f32, source: Damage) -> Hurt {
     // timestamp (0), and a hit records `age` as its time.
     victim.age = 100;
     let before = victim.health;
-    assert!(victim.damage(amount, source), "the hit lands");
-    let mut lr = crate::mobs::world::level_random(0);
+    let mut test_level = TestLevel::new(0);
+    let mut level = test_level.level();
+    assert!(victim.damage(&mut level, amount, source), "the hit lands");
     let mut events = Vec::new();
     let mut cx = Cx {
         w,
-        lr: &mut lr,
+        level: &mut level,
         events: &mut events,
     };
     let mut targets = std::mem::take(&mut victim.ai.targets);
@@ -60,25 +62,31 @@ fn hit(victim: &mut Mob, w: &MobWorld, amount: f32, source: Damage) -> Hurt {
 /// lose health and blame nobody, so `HurtByTargetGoal` leaves them alone,
 /// while the same creeper hit by a zombie's `mob_attack` turns on the zombie.
 #[test]
+#[ignore = "daily"]
 fn a_ram_angers_no_mob_but_a_plain_mob_attack_does() {
     let mut outcomes = None;
     let ran = with_test_world(&[], |w, types| {
+        let items = crate::items::Items::empty();
         let mut out = Vec::new();
         for victim_id in ["minecraft:creeper", "minecraft:zombie"] {
             let mut goat = summon(types, "minecraft:goat", 1);
             goat.attrs.attack_damage = 2.0;
             let mut victim = summon(types, victim_id, 2);
             let zombie = summon(types, "minecraft:zombie", 3);
-            let seen = [goat.seen(None), victim.seen(None), zombie.seen(None)];
+            let seen = [
+                goat.seen(None, &items),
+                victim.seen(None, &items),
+                zombie.seen(None, &items),
+            ];
             let mut scene = w.clone();
             scene.others = &seen;
-            let mut lr = crate::mobs::world::level_random(0);
+            let mut test_level = TestLevel::new(0);
             let mut events = Vec::new();
             ram_tick(
                 &mut goat,
                 &mut Cx {
                     w: &scene,
-                    lr: &mut lr,
+                    level: &mut test_level.level(),
                     events: &mut events,
                 },
             );
@@ -103,7 +111,7 @@ fn a_ram_angers_no_mob_but_a_plain_mob_attack_does() {
         // A plain `mob_attack` (a zombie's blow) still angers its victim.
         let mut plain = summon(types, "minecraft:creeper", 4);
         let zombie = summon(types, "minecraft:zombie", 3);
-        let seen = [zombie.seen(None)];
+        let seen = [zombie.seen(None, &items)];
         let mut scene = w.clone();
         scene.others = &seen;
         out.push((

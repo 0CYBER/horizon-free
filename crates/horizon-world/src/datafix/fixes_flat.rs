@@ -12,7 +12,7 @@ use super::dynamic::{
 use super::schema::{Key, Ty, key};
 use super::tables as t;
 use super::{Cx, FixFn, items, mark_read, reread, reread_as};
-use crate::nbt::{Compound, JavaString, Tag};
+use horizon_core::nbt::{Compound, JavaString, Tag};
 
 pub(super) fn register(out: &mut Vec<(Key, FixFn)>) {
     out.push((key(1450, 0), |cx| {

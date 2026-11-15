@@ -1,0 +1,48 @@
+id = "fnr_alpha"
+name = "Function replacement check: alpha"
+version = "0.1.0"
+description = "fn-replace: HEAD with cancel and a private field, a value chain, RETURN, OVERWRITE"
+authors = []
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "HEAD"
+mixins = "MIXINS"
+
+# HEAD, cancellable, reaching a private field (`ticks_until_autosave`) and the clock.
+[[native.mixin]]
+id = "head"
+target = "horizon_client::game::autosave::Game<'_>::on_tick_rate_changed"
+kind = "HEAD"
+cancellable = true
+helper = "src/mixins/head.rs"
+bindings = [{ name = "game", ty = "&mut Game<'_>", value = "&mut *self" }]
+
+# The first of two mods' values at one call, by priority.
+[[native.mixin]]
+id = "doubled"
+target = "horizon_client::game::autosave::Game<'_>::next_autosave_interval"
+kind = "MODIFY_EXPRESSION_VALUE"
+selector = "autosave_interval(rate)"
+require = 1
+ordinal = 0
+priority = 200
+helper = "src/mixins/doubled.rs"
+bindings = [{ name = "value", ty = "i64", value = "$value" }]
+
+[[native.mixin]]
+id = "returned"
+target = "horizon_client::game::autosave_interval"
+kind = "RETURN"
+helper = "src/mixins/returned.rs"
+bindings = [{ name = "value", ty = "i64", value = "$value" }]
+
+[[native.mixin]]
+id = "overwrite"
+target = "horizon_client::game::commands::misc::millis"
+kind = "OVERWRITE"
+helper = "src/mixins/overwrite.rs"
+bindings = [{ name = "nanos", ty = "u64", value = "nanos" }]

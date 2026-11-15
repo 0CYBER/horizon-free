@@ -159,7 +159,7 @@ def main():
     args = ap.parse_args()
 
     home = Path(tempfile.mkdtemp(prefix="horizon-mod-browser-"))
-    env = lab.game_env(HORIZON_HOME=home, HORIZON_NO_HEARTBEAT="1", HORIZON_CONTROL=home / "ctl.sock")
+    env = lab.game_env(HORIZON_HOME=home, HORIZON_CONTROL=home / "ctl.sock")
     launcher = [args.launcher]
     game = Game(str(Path(args.bin) / "horizon-ctl"), str(Path(args.bin) / "horizon-client"),
                 args.resources, home, env)

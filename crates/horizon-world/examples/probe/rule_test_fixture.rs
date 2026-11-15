@@ -1,17 +1,21 @@
 //! Differential transport for replacement rules over pinned block identities.
 use crate::support::common::tag;
 use horizon_core::random::{LegacyRandom, RandomSource, XoroshiroRandom};
-use horizon_world::{
-    DATA_VERSION,
-    nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
-    worldgen::{block_feature::FeatureBlockBindings, rule_test::RuleTest, tags::TagDefinitions},
-};
 use serde_json::Value;
 use std::{
     fs,
     io::{self, Write},
     path::Path,
+};
+use {
+    horizon_core::nbt::Tag,
+    horizon_world::{
+        DATA_VERSION,
+        registry::{BlockRegistry, BlockStateId},
+        worldgen::{
+            block_feature::FeatureBlockBindings, rule_test::RuleTest, tags::TagDefinitions,
+        },
+    },
 };
 fn fixture(
     f: &Value,

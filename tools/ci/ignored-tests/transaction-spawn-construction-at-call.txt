@@ -1,0 +1,2 @@
+# Each transaction spawn is constructed at its call, joined at the commit.
+horizon-client game::transaction_entities_tests::each_spawn_in_a_transaction_is_constructed_at_its_own_call_and_joins_at_the_commit lib daily child-process

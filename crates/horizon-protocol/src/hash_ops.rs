@@ -5,7 +5,7 @@
 //! value is hashed as its codec form: a tag byte per type, map entries sorted by
 //! their hashes, lists in order. The functions here are `HashOps`' `create*`
 //! methods and its record builder; a component's codec form is built from them.
-use horizon_world::nbt::Tag;
+use horizon_core::nbt::Tag;
 
 /// Guava `Hashing.crc32c()`: the CRC-32C (Castagnoli) of the bytes.
 pub fn crc32c(bytes: &[u8]) -> u32 {

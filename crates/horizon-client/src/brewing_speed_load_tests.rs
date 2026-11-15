@@ -1,7 +1,7 @@
 //! A saved `speed_multiplier` is read by `ValueInput.getFloatOr`, which takes
 //! any numeric tag, not only a float.
-use horizon_client_lib::{containers::BlockEntity, save::decode_block_entity};
-use horizon_world::nbt::Tag;
+use crate::{containers::BlockEntity, save::decode_block_entity};
+use horizon_core::nbt::Tag;
 
 fn brewing(speed: Tag) -> f32 {
     let tag = Tag::compound([

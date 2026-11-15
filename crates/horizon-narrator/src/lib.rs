@@ -270,6 +270,11 @@ pub fn clear() {
 pub fn recent() -> Vec<String> {
     narrator().recent()
 }
+/// Runs `f` on the game's narrator under one lock: a mod's line is checked
+/// against the option and the speech and said without another caller between.
+pub fn with_narrator<R>(f: impl FnOnce(&mut GameNarrator) -> R) -> R {
+    f(&mut narrator())
+}
 
 #[cfg(test)]
 mod tests {

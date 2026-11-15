@@ -457,6 +457,7 @@ mod tests {
 
     #[test]
     fn the_grid_holds_each_face_once_and_faces_point_out() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mut cells: Vec<_> = Face::ALL
             .iter()
             .map(|f| f.cell().map(|x| (x * 6.0) as i32))
@@ -518,6 +519,7 @@ mod tests {
 
     #[test]
     fn every_mode_gives_its_documented_result() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let close = |a: f32, b: f32| assert!((a - b).abs() < 1e-6, "{a} != {b}");
         // Full brightness and alpha, a sky texel of 0.4 under a layer texel of 0.8.
         let (d, t) = (0.4, 0.8);
@@ -543,6 +545,7 @@ mod tests {
 
     #[test]
     fn the_shader_validates() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let module = naga::front::wgsl::parse_str(
             &(include_str!("../hdr_light.wgsl").to_owned() + include_str!("custom_sky.wgsl")),
         )
@@ -557,6 +560,7 @@ mod tests {
 
     #[test]
     fn the_box_covers_every_face_with_its_cell() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mesh = mesh();
         assert_eq!(mesh.len(), 36);
         for v in &mesh {
@@ -567,6 +571,7 @@ mod tests {
     }
     #[test]
     fn written_custom_sky_modes_keep_their_factors_and_light() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;

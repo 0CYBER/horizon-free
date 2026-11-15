@@ -1333,6 +1333,7 @@ mod tests {
     /// The graph is vanilla's, cell for cell, near the camera and beyond the
     /// distant step test's 60 blocks.
     #[test]
+    #[ignore = "daily"]
     fn same_sections_as_vanilla() {
         let (mut hidden, mut rayed) = (0, 0);
         for seed in [0x9e37_79b9, 7, 0xdead_beef] {
@@ -1370,6 +1371,7 @@ mod tests {
     /// A clamped search may conservatively show sections above its searched
     /// box, but it must never hide one that the full-height search reaches.
     #[test]
+    #[ignore = "daily"]
     fn vertical_clamping_only_adds_overdraw() {
         let mut compared = 0;
         let mut overdraw = 0;
@@ -1828,7 +1830,9 @@ mod tests {
     #[test]
     fn edit_queue_stays_bounded_without_searches() {
         let mut o = Occlusion::new(0, 4);
-        let total = (1usize << 16) + 5000;
+        // Fill the queue, trigger the resend, then edit once while it is pending.
+        // Further edits repeat that last branch without exercising a new boundary.
+        let total = EDIT_CAP + 2;
         for i in 0..total {
             o.set(((i % 700) as i32, 1, (i / 700) as i32), 1 + (i as u64 % 5));
         }
@@ -1842,7 +1846,10 @@ mod tests {
         let mut fresh = Occlusion::new(0, 4);
         for (&(x, z), column) in &o.columns.map {
             for (y, &vis) in column.iter().enumerate() {
-                fresh.set((x, y as i32, z), vis);
+                // Missing sections in the fresh world already connect every face.
+                if vis != ALL_VISIBLE {
+                    fresh.set((x, y as i32, z), vis);
+                }
             }
         }
         let camera = at((0, 1, 0));

@@ -2,7 +2,7 @@
 //! SNBT text components, with the data-fixer-upper error messages
 //! (ComponentArgument, StyleArgument and component-valued item data).
 use super::codec::{get, no_key, not_list, not_map};
-use horizon_world::nbt::{Compound, Tag};
+use horizon_core::nbt::{Compound, Tag};
 
 /// A DataResult error: its message and whether it carries a partial result.
 struct E {

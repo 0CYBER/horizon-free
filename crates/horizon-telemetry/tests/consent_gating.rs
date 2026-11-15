@@ -94,6 +94,7 @@ fn leftover(home: &Path, item: &Item, name: &str) {
 }
 
 #[test]
+#[ignore = "daily"]
 fn never_asked_sends_nothing() {
     let (url, seen) = mock_server(204);
     let home = home("never");
@@ -110,6 +111,7 @@ fn never_asked_sends_nothing() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn everything_off_sends_nothing_and_deletes_what_waited() {
     let (url, seen) = mock_server(204);
     let home = home("withdrawn");
@@ -123,6 +125,7 @@ fn everything_off_sends_nothing_and_deletes_what_waited() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn an_outdated_consent_sends_nothing() {
     let (url, seen) = mock_server(204);
     let home = home("outdated");
@@ -135,6 +138,7 @@ fn an_outdated_consent_sends_nothing() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn only_the_allowed_kinds_leave_in_one_compressed_batch() {
     let (url, seen) = mock_server(204);
     let home = home("partial");
@@ -169,6 +173,7 @@ fn only_the_allowed_kinds_leave_in_one_compressed_batch() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_failing_server_is_retried_later_and_keeps_the_items() {
     let (url, seen) = mock_server(503);
     let home = home("failing");
@@ -185,6 +190,7 @@ fn a_failing_server_is_retried_later_and_keeps_the_items() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_refused_batch_is_dropped() {
     let (url, seen) = mock_server(400);
     let home = home("refused");
@@ -196,6 +202,7 @@ fn a_refused_batch_is_dropped() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_preview_is_what_would_be_sent_and_deletion_names_the_install() {
     let (url, seen) = mock_server(204);
     let home = home("preview");

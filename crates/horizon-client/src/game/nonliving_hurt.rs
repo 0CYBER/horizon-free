@@ -77,7 +77,7 @@ impl Game<'_> {
                     continue;
                 }
                 seen.push(cell);
-                if self.burn_boat(i, 1.0) {
+                if self.burn_boat(i, 1.0, "minecraft:cactus") {
                     return true;
                 }
             }

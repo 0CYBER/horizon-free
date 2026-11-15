@@ -144,6 +144,7 @@ pub(crate) mod tests {
 
     /// A server that never answers the query but keeps the socket fed with other datagrams.
     #[test]
+    #[ignore = "daily"]
     fn a_query_kept_fed_with_noise_still_ends() {
         let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
         let server = silent.local_addr().unwrap();
@@ -197,6 +198,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn asks_and_reads_the_mapped_address() {
         let answer: SocketAddr = "203.0.113.9:40000".parse().unwrap();
         let server = mock(answer);

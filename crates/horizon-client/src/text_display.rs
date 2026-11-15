@@ -4,8 +4,8 @@ use crate::{
     save::{float, number},
     text::Text,
 };
+use horizon_core::nbt::Tag;
 use horizon_protocol::entity_data::{Value, serializer};
-use horizon_world::nbt::Tag;
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -446,7 +446,7 @@ impl CachedQuads {
 
     pub fn new(atlas: &crate::hud::HudAtlas, d: &TextDisplayData, background: u32) -> Self {
         let lines = Lines::split(&atlas.font, &d.text, d.line_width);
-        let mut batch = crate::hud::HudBatch::new([1, 1]);
+        let mut batch = crate::hud::HudBatch::scratch([1, 1]);
         draw(&mut batch, atlas, d, &lines, background);
         let mut lo = glam::Vec3::splat(f32::INFINITY);
         let mut hi = glam::Vec3::splat(f32::NEG_INFINITY);
@@ -569,7 +569,7 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_world::nbt::Compound;
+    use horizon_core::nbt::Compound;
 
     /// Whether a text quad seen from `camera` (yaw, pitch, at `eye` from the
     /// display) faces it (counter-clockwise on screen, the face back-face
@@ -579,7 +579,7 @@ mod tests {
             lines: vec![],
             width: 10.0,
         };
-        let mut batch = crate::hud::HudBatch::new([1, 1]);
+        let mut batch = crate::hud::HudBatch::scratch([1, 1]);
         batch.quad(
             [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
             [[0.0; 2]; 4],

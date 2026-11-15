@@ -812,6 +812,7 @@ fn the_protocol_answers_requests_ignores_notifications_and_names_its_faults() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn the_mcp_command_serves_the_protocol_on_stdio() {
     let dir = TempDir::new("mcp-stdio");
     let file = save(&dir, "run.hzperf", &capture(&Names::new(&NAMES)));

@@ -36,10 +36,18 @@ pub fn main() -> horizon_client::Result<()> {
     let usage = "usage: recipe_book_render_fixture RESOURCES CASES OUTPUT";
     let root = Path::new(args.get(1).ok_or(usage)?);
     let cases = fs::read_to_string(args.get(2).ok_or(usage)?)?;
-    let items = Items::catalog(root, &PackOverlay::NONE)?;
-    let recipes = Recipes::load(root, &items, &PackOverlay::NONE)?;
+    let defaults = horizon_world::item_defaults::read(root)?;
+    let items = Items::catalog(root, &PackOverlay::NONE, &defaults)?;
+    let recipes = Recipes::load(
+        root,
+        &items,
+        &PackOverlay::NONE,
+        &crate::test_resources::server_load(),
+    )?;
     let book = Book::build(&recipes, &items);
-    let atlas = HudAtlas::build(root)?;
+    let atlas = HudAtlas::build(&horizon_assets::resource_source::ResourceSource::directory(
+        root.to_path_buf(),
+    ))?;
     let root_buf = root.to_path_buf();
     lang::set(lang::Language::load(&[&root_buf], lang::DEFAULT));
     let translate = |key: &str| lang::get(key);
@@ -110,25 +118,15 @@ pub fn main() -> horizon_client::Result<()> {
                 anim: anims.get(i).and_then(Value::as_f64).unwrap_or(0.0) as f32,
             })
             .collect();
-        let (xo, yo) = Screen {
-            book: kind,
-            width: int(&case["width"]),
-            height: int(&case["height"]),
-            narrow: case["narrow"].as_bool().unwrap_or(false),
-            mouse: (0, 0),
-            index: 0,
-            filtering,
-            search: &search,
-            tabs: &[],
-            buttons: &[],
-            page,
-            pages,
-            overlay: None,
-            ghost: None,
-            translate: &translate,
-            text_width: &text_width,
-        }
-        .origin();
+        let (xo, yo) = (
+            (int(&case["width"]) - 147) / 2
+                - if case["narrow"].as_bool().unwrap_or(false) {
+                    0
+                } else {
+                    86
+                },
+            (int(&case["height"]) - 166) / 2,
+        );
         let overlay = case["overlay"].as_u64().map(|i| {
             let i = i as usize;
             let c = &shown[i];
@@ -174,9 +172,7 @@ pub fn main() -> horizon_client::Result<()> {
             .collect();
         let screen = Screen {
             book: kind,
-            width: int(&case["width"]),
-            height: int(&case["height"]),
-            narrow: case["narrow"].as_bool().unwrap_or(false),
+            origin: (xo, yo),
             mouse: (int(&case["mouse"][0]), int(&case["mouse"][1])),
             index: case["index"].as_u64().unwrap_or(0) as usize,
             filtering,

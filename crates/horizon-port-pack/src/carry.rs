@@ -783,7 +783,7 @@ const NOT_CLAIMED: [&str; 6] = ["minecraft", "c", "horizon", "forge", "neoforge"
 /// and the namespaces already claimed) name ids in it, and no mod of the
 /// pack (`pack_mod`) has it as its id.
 fn extra_namespaces(
-    zip: &mut zip::ZipArchive<fs::File>,
+    zip: &mut crate::zip_intake::Archive<fs::File>,
     id: &str,
     pack_mod: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
@@ -859,7 +859,7 @@ pub fn namespaces_claimed(
     pack_mod: &dyn Fn(&str) -> bool,
 ) -> Result<Vec<String>, String> {
     let file = fs::File::open(jar).map_err(|e| format!("{}: {e}", jar.display()))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", jar.display()))?;
+    let mut zip = crate::zip_intake::open(file).map_err(|e| format!("{}: {e}", jar.display()))?;
     Ok(extra_namespaces(&mut zip, id, pack_mod))
 }
 
@@ -872,7 +872,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// file that does not parse); Horizon's content loader refuses the whole
 /// set, so they stay out of the carry.
 fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
-    if let Err(e) = horizon_mods::content::check_path(name) {
+    if let Err(e) = horizon_mod_package::content::check_path(name) {
         return Some(e);
     }
     if !(name.ends_with(".json") || name.ends_with(".mcmeta")) {
@@ -895,7 +895,7 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
         },
     };
     // A vanilla or convention tag that replaces is kept: the game honours it
-    // as a data pack's, with a warning (docs/mods.md). A tag of the mod's own
+    // as a data pack's, with a warning (docs/modding/src/how-to/content-mods.md). A tag of the mod's own
     // that replaces: no pack before it defines the tag, so it is the same tag
     // added to (Towns and Towers' biome tags).
     let shared_tag = name.starts_with("data/minecraft/tags/") || name.starts_with("data/c/tags/");
@@ -995,7 +995,7 @@ pub fn carry(
         ));
     }
     let file = fs::File::open(jar).map_err(|e| format!("{}: {e}", jar.display()))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", jar.display()))?;
+    let mut zip = crate::zip_intake::open(file).map_err(|e| format!("{}: {e}", jar.display()))?;
     // The previous harness verdict describes the content we are about to replace.
     let verdict = out.join("harness/result.json");
     if let Err(e) = fs::remove_file(&verdict)
@@ -2590,8 +2590,8 @@ mod tests {
         );
 
         // Horizon's own reader accepts it: blocks and items declared, files fenced.
-        let package = horizon_mods::Package::read(&carried).unwrap();
-        let content = horizon_mods::Content::read(&carried, &package.manifest).unwrap();
+        let package = horizon_mod_package::Package::read(&carried).unwrap();
+        let content = horizon_mod_package::Content::read(&carried, &package.manifest).unwrap();
         let blocks: Vec<&str> = content.blocks.iter().map(|b| b.id.as_str()).collect();
         assert_eq!(blocks, ["gem:gem_block", "gem:gem_door"]);
         assert_eq!(content.items.len(), 1);
@@ -2724,9 +2724,9 @@ mod tests {
         // No block is declared from another namespace's blockstate.
         assert!(report.blocks.is_empty());
         let carried = out.join("carry");
-        let package = horizon_mods::Package::read(&carried).unwrap();
+        let package = horizon_mod_package::Package::read(&carried).unwrap();
         assert_eq!(package.manifest.namespaces, ["kaisyn", "towers_wg"]);
-        let content = horizon_mods::Content::read(&carried, &package.manifest).unwrap();
+        let content = horizon_mod_package::Content::read(&carried, &package.manifest).unwrap();
         assert!(
             content
                 .files
@@ -2824,8 +2824,8 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// NeoForge loads a recipe only when its `neoforge:conditions` pass. The oracle's recipes are the ones
-    /// that did: those are upgraded like any vanilla recipe, the others stay outside, as NeoForge left them out.
+    /// The oracle's recipes that passed `neoforge:conditions` are upgraded like any vanilla recipe;
+    /// recipes absent from the oracle stay outside.
     #[test]
     fn conditional_recipes_are_the_ones_neoforge_loaded() {
         let dir = std::env::temp_dir().join(format!(
@@ -2962,14 +2962,14 @@ mod tests {
             ["lost_seeds"]
         );
         let carried = out.join("carry");
-        let package = horizon_mods::Package::read(&carried).unwrap();
-        let content = horizon_mods::Content::read(&carried, &package.manifest).unwrap();
+        let package = horizon_mod_package::Package::read(&carried).unwrap();
+        let content = horizon_mod_package::Content::read(&carried, &package.manifest).unwrap();
         let item = content
             .items
             .iter()
             .find(|i| i.id == "gem:cabbage_seeds")
             .unwrap();
-        assert_eq!(item.place_block.as_deref(), Some("gem:cabbages"));
+        assert_eq!(item.block.as_deref(), Some("gem:cabbages"));
         fs::remove_dir_all(&dir).unwrap();
     }
 

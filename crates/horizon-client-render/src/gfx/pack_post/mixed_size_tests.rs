@@ -60,6 +60,7 @@ fn one_colour(pixels: &[[u8; 4]]) -> ([u8; 4], usize) {
 /// the whole pack in that case; Horizon skips only the program).
 #[test]
 fn a_program_writing_buffers_that_come_to_one_size_draws() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let mut post = gpu.build(pack("4 4"));
     let (colour, off) = one_colour(&gpu.render(&mut post, [16, 16]));
@@ -74,6 +75,7 @@ fn a_program_writing_buffers_that_come_to_one_size_draws() {
 /// Sizes of one kind that differ never meet: the program is skipped as the pack loads.
 #[test]
 fn a_program_writing_buffers_of_different_relative_sizes_is_skipped() {
+    let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Fixture::new() else { return };
     let post = pack("0.5 0.5");
     let post = gpu

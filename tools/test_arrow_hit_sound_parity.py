@@ -172,7 +172,7 @@ def main():
     if args.binary:
         binary = args.binary.resolve(strict=True)
     else:
-        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-client',
+        subprocess.run(['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'horizon-game',
                         '--bin', 'horizon-client'], cwd=lab.ROOT, check=True)
         binary = lab.cargo_target() / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     client_binary = args.client_binary.resolve(strict=True) if args.client_binary else binary

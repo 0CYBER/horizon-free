@@ -1,0 +1,20 @@
+# Prepared-resource/descriptive-ignore inventory migration for arismoko/horizon#4451.
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+horizon-world datafix::tests::a_riding_chain_the_fix_makes_too_deep_is_refused_after_it lib daily resources
+horizon-world level::infiniburn_tests::custom_and_missing_dimension_infiniburn lib daily resources
+horizon-world level::infiniburn_tests::refreshed_and_builtin_dimension_infiniburn lib daily resources
+horizon-world level::state_change_tests::a_nested_write_is_heard_after_the_updates_it_queued lib daily resources
+horizon-world level::state_change_tests::nested_writes_are_heard_in_the_order_they_were_made lib daily resources
+horizon-world level::tests::removal::removal_writes_chosen_state_or_vanilla_and_reports_original_arguments lib daily resources
+horizon-world level::tests::sticky::failed_part_retraction_corrects_successful_vanilla_replay lib daily resources
+horizon-world level::tests::sticky::refused_adhesion_next_tick_updates_replace_client_replay_before_landing lib daily resources
+horizon-world loot::query_context::tests::queried_ability_tags_use_prepared_world_sets lib daily resources
+horizon-world worldgen::generator::mod_terrain::tests::a_level_without_its_noise_settings_is_refused_by_name lib daily resources
+horizon-world worldgen::generator::mod_terrain::tests::complete_chunks_do_not_depend_on_order_or_workers lib daily resources
+horizon-world worldgen::generator::mod_terrain::tests::staged_mod_terrain_receives_its_level_id lib daily resources
+horizon-world worldgen::generator::mod_terrain::tests::structures_and_features_place_after_the_terrain lib daily resources
+horizon-world worldgen::generator::mod_terrain::tests::the_carvers_cut_the_mods_terrain lib daily resources
+horizon-world worldgen::generator::mod_terrain::tests::the_mods_terrain_fills_the_noise_range_not_the_levels lib daily resources
+horizon-world worldgen::generator::mod_terrain::tests::the_surface_covers_the_mods_terrain lib daily resources
+horizon-world worldgen::generator::mod_terrain::tests::without_placed_features_only_the_terrain_stages_open lib daily resources
+horizon-world worldgen::generator::tests::saved_starts_match_generated_layouts lib daily resources

@@ -10,8 +10,8 @@ and MultiPackResourceManager and asks what each reload listener reads: which
 pack a file comes from, translations (ClientLanguage), sound events
 (SoundManager.prepare), font providers (FontManager) and atlas sources
 (SpriteSourceList). examples/probe/pack_resources_fixture builds Horizon's resource
-root for the same selection (packs::build_overlay) and reads it with Horizon's
-loaders. Every answer must agree.
+view for the same selection (packs::resources) and reads it without extracting
+archive entries. Every answer must agree.
 """
 import json
 import shutil

@@ -1,0 +1,3 @@
+ids = ["fn:edit_part_state", "fn:read_state", "type:PartStateRefusal", "type:BlockEntityStateError"]
+why = "Part state is kept on entities too (arismoko/horizon#796 stage 3): edit_part_state and read_state take any PartStateHolder (BlockEntityRef or EntityRef) in a new first type parameter, and PartStateRefusal gains EntityKind for an entity type that keeps no Part state, so its wire layout and that of BlockEntityStateError, which carries it, change for wasm mods."
+migrate = "A call that passes a BlockEntityRef with inferred types compiles unchanged. A call naming the type parameters adds the holder first: edit_part_state::<BlockEntityRef, T, R> and read_state::<BlockEntityRef, T>. A wasm mod rebuilds against this SDK."

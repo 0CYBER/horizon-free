@@ -1,5 +1,5 @@
 use super::*;
-use crate::nbt::NamedTag;
+use horizon_core::nbt::NamedTag;
 
 struct TempWorld(PathBuf);
 impl TempWorld {
@@ -399,8 +399,9 @@ fn expected_counts(erase: bool, recreate: bool) -> (i32, i32) {
 /// and both give vanilla's counts and end at full progress.
 #[test]
 fn parallel_output_is_byte_identical_to_one_thread() {
+    // Each run mutates only its private copy, so all modes can copy the same source.
+    let source = multi_region_world("par-src");
     for (erase, recreate) in [(false, false), (true, false), (false, true)] {
-        let source = multi_region_world("par-src");
         let mut results = Vec::new();
         for threads in [1, 4] {
             let copy = TempWorld::new(&format!("par-{threads}"));
