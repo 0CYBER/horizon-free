@@ -3230,6 +3230,7 @@ mod world_border_tests {
     /// over soul sand or honey keeps 40% of the horizontal speed it keeps over
     /// stone, in the same tick. Skips quietly without the vanilla data (CI has none).
     #[test]
+    #[ignore = "daily"]
     fn a_dropped_item_on_soul_sand_or_honey_is_slowed_by_the_move() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3283,6 +3284,7 @@ mod world_border_tests {
     /// 10 around (20, 20) has its east wall at x = 25; each body starts at
     /// x = 24 on the flat ground of the test scene, moving 1.5 east.
     #[test]
+    #[ignore = "daily"]
     fn the_world_border_stops_items_and_experience_orbs() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3362,6 +3364,7 @@ mod honey_slide_tests {
     /// Gravity still stacks on idle ticks; waking every 4th tick zeroes Y on
     /// the ground (`ItemEntity.tick` with `onGround`).
     #[test]
+    #[ignore = "daily"]
     fn a_resting_item_skips_move_three_of_four_ticks() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3406,6 +3409,7 @@ mod honey_slide_tests {
     /// #4558: idle ticks still run `BubbleColumnBlock.entityInside`, so lift
     /// builds and the next wake-up rises off the soul sand.
     #[test]
+    #[ignore = "daily"]
     fn a_grounded_item_in_a_soul_sand_column_rises() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3468,6 +3472,7 @@ mod honey_slide_tests {
     /// `Entity.sendBubbleColumnParticles` is for the top of a column only: an item
     /// inside the column shows nothing, one in its surface block shows the block.
     #[test]
+    #[ignore = "daily"]
     fn an_item_at_the_top_of_a_bubble_column_is_at_its_surface() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3766,6 +3771,7 @@ mod slime_bounce_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_slime_bounce_marks_the_item_for_immediate_sync() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3886,6 +3892,7 @@ mod entity_collision_tests {
     /// above a boat's box (or a still happy ghast's) it lands on the box's top and rests,
     /// where with no box it falls to the floor of the scene.
     #[test]
+    #[ignore = "daily"]
     fn an_item_lands_on_an_entity_box_under_it() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -3926,6 +3933,7 @@ mod entity_collision_tests {
     /// `WebBlock.entityInside` / `PowderSnowBlock.entityInside` make an item stuck: a
     /// fast item sliding into a cobweb is stopped inside it, in powder snow it is slowed.
     #[test]
+    #[ignore = "daily"]
     fn a_cobweb_and_powder_snow_slow_an_item() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4074,6 +4082,7 @@ mod armor_stand_motion_tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
     fn honey_slide_runs_after_stand_travel_and_preserves_no_physics_controls() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4184,6 +4193,7 @@ mod armor_stand_motion_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn climbing_uses_actual_blocks_and_post_collision_position() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4273,6 +4283,7 @@ mod armor_stand_motion_tests {
     /// (20, 20) has its east wall at x = 25; the stand starts at x = 24 on the
     /// test scene's flat ground, moving 1.5 east.
     #[test]
+    #[ignore = "daily"]
     fn the_world_border_stops_an_armor_stand() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4324,6 +4335,7 @@ mod armor_stand_motion_tests {
     /// stops with its east side on the box's west face, x = 20. With no boxes
     /// it falls to the ground and slides on.
     #[test]
+    #[ignore = "daily"]
     fn a_stand_lands_on_and_stops_at_the_entity_boxes_it_is_given() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4422,6 +4434,7 @@ mod armor_stand_motion_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_tick_keeps_the_previous_position_for_interpolation() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4452,6 +4465,7 @@ mod armor_stand_motion_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_no_gravity_stand_stays_put() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4476,6 +4490,7 @@ mod armor_stand_motion_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn leather_boots_walk_on_powder_snow() {
         let Some(v) = crate::test_fixtures::vanilla() else {
             return;
@@ -4967,6 +4982,7 @@ mod orb_lava_tests {
     /// A client copy only clears the fire; a fire-free orb stays at 5 health,
     /// and a saved `Fire:-5s` is back to 0 after one server tick.
     #[test]
+    #[ignore = "daily"]
     fn a_burning_server_orb_is_hurt_every_twenty_ticks_and_burns_out() {
         with_fixture(|world, facts, collision, fluids, _| {
             let at = Vec3::new(20.5, 6.0, 20.5);
@@ -5018,6 +5034,7 @@ mod orb_lava_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_server_orb_takes_lava_damage_after_moving_and_discards_at_zero() {
         with_fixture(|world, facts, collision, fluids, assets| {
             let lava = assets.registry.default_state("minecraft:lava").unwrap();
@@ -5074,6 +5091,7 @@ mod orb_lava_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn an_invulnerable_orb_keeps_its_health_but_still_emits_lava_sound() {
         with_fixture(|world, facts, collision, fluids, assets| {
             let lava = assets.registry.default_state("minecraft:lava").unwrap();
@@ -5108,6 +5126,7 @@ mod orb_lava_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn legacy_orb_in_air_or_water_or_non_lava_does_not_play_sound_or_consume_random() {
         with_fixture(|world, facts, collision, fluids, assets| {
             // Air scenario
@@ -5173,6 +5192,7 @@ mod orb_lava_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn negative_case_non_contact_or_client_orb_does_not_play_burn_sound() {
         with_fixture(|world, facts, collision, fluids, assets| {
             let lava = assets.registry.default_state("minecraft:lava").unwrap();
@@ -5247,6 +5267,7 @@ mod orb_lava_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn positive_case_server_orb_in_lava_plays_generic_burn_sound() {
         with_fixture(|world, facts, collision, fluids, assets| {
             let lava = assets.registry.default_state("minecraft:lava").unwrap();
@@ -5281,6 +5302,7 @@ mod orb_lava_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn boundary_case_surviving_and_discarding_and_multi_contact_in_one_tick() {
         with_fixture(|world, facts, collision, fluids, assets| {
             let lava = assets.registry.default_state("minecraft:lava").unwrap();

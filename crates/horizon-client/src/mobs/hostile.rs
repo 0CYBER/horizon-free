@@ -477,6 +477,7 @@ mod spider_vehicle_tests {
     /// `SpiderAttackGoal.canUse` is `super.canUse() && !isVehicle()`: a spider
     /// with a player (or a mob) on its back does not start the attack goal.
     #[test]
+    #[ignore = "daily"]
     fn a_spider_carrying_a_player_does_not_start_its_attack() {
         let mut outcomes = None;
         if !with_test_world(&[], |w, types| {

@@ -161,6 +161,7 @@ impl<T: 'static> Group<T> {
         cache: Option<&crate::module_cache::ModuleCache>,
         mut host: impl FnMut(&mut Store<T>, &str, &str) -> Option<Extern>,
     ) -> Result<Self, LinkError> {
+        let _timer = crate::load_times::timer(crate::load_times::Phase::Group);
         let engine = store.engine();
         let mut parsed = Vec::with_capacity(members.len());
         for member in members {
@@ -372,12 +373,14 @@ impl<T: 'static> Group<T> {
                 };
                 imports.push(extern_);
             }
+            let instantiate = crate::load_times::timer(crate::load_times::Phase::Instantiate);
             let instance = Instance::new(&mut store, &layout.module, &imports).map_err(|e| {
                 LinkError::Instantiate {
                     member: member.name.to_owned(),
                     why: format!("{e:#}"),
                 }
             })?;
+            drop(instantiate);
             // Shared members have no core start function. Resolve their self-references to
             // actual exports before any relocation helper or constructor can execute.
             for (name, slot) in self_funcs {
@@ -446,6 +449,7 @@ impl<T: 'static> Group<T> {
             members: instances,
             memory,
         };
+        let _instantiate = crate::load_times::timer(crate::load_times::Phase::Instantiate);
         for hook in [
             "__wasm_start",
             "__wasm_apply_data_relocs",
@@ -509,6 +513,7 @@ impl Layout {
         member: &Member<'_>,
         cache: Option<&crate::module_cache::ModuleCache>,
     ) -> Result<Self, LinkError> {
+        let _timer = crate::load_times::timer(crate::load_times::Phase::Modules);
         let malformed = |why: String| LinkError::Malformed {
             member: member.name.to_owned(),
             why,

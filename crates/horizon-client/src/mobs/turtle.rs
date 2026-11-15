@@ -711,6 +711,7 @@ mod tests {
     /// random, the egg count from the turtle's, and the egg it sets is
     /// followed by `block_place` from the turtle at the new block.
     #[test]
+    #[ignore = "daily"]
     fn laying_an_egg_posts_block_place_with_the_level_s_pitch_and_its_own_eggs() {
         let ran = crate::mobs::world::with_test_world(&[], |w, _| {
             use horizon_core::random::LegacyRandom;
@@ -768,6 +769,6 @@ mod tests {
             assert_eq!(lr.random().state(), level.state());
             assert_eq!(m.random.state(), own.state());
         });
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }

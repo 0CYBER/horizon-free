@@ -2499,6 +2499,7 @@ mod tests {
     /// `LivingEntity.getJumpPower` multiplies the jump strength by the block jump factor of the
     /// block the mob stands on: honey halves a pig's jump, stone leaves it exactly its strength.
     #[test]
+    #[ignore = "daily"]
     fn a_mob_jumps_by_the_jump_factor_of_the_block_under_it() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -3117,6 +3118,7 @@ mod tests {
     /// two blocks of water takes the plain water velocity from `travel`, and
     /// the lift (0.06 for each column block its box touches) on top of it.
     #[test]
+    #[ignore = "daily"]
     fn a_bubble_column_lifts_a_mob_after_travel_not_inside_it() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -3182,6 +3184,7 @@ mod tests {
     /// sand (0.4) or honey (0.4) keeps 40% of its horizontal speed each move,
     /// on stone it keeps all of it, and its vertical speed is untouched.
     #[test]
+    #[ignore = "daily"]
     fn a_mob_on_soul_sand_or_honey_is_slowed_by_the_move() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -3224,6 +3227,7 @@ mod tests {
     /// as it stops the player's (#7080). A border of size 10 around (8, 8)
     /// has its east wall at x = 13.
     #[test]
+    #[ignore = "daily"]
     fn the_world_border_stops_a_mob() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -3382,6 +3386,7 @@ mod tests {
     /// the move control did not ask to move, and every other species keep the
     /// hop they had.
     #[test]
+    #[ignore = "daily"]
     fn a_sniffers_hop_from_a_standstill_carries_it_forward() {
         use crate::mobs::Species;
         let sniffer = |speed: f64, sideways: f64| {
@@ -3440,6 +3445,7 @@ mod tests {
     /// 0.98); in vines each move down from the third on is held to 0.15F,
     /// and the fall distance, reset before each move, is that one move.
     #[test]
+    #[ignore = "daily"]
     fn a_mob_in_vines_slides_down_slowly() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -3522,6 +3528,7 @@ mod tests {
     /// climbable test; a ladder is not in that tag, so a glider still holds
     /// on to it.
     #[test]
+    #[ignore = "daily"]
     fn a_gliding_mob_passes_through_vines_but_not_a_ladder() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -3545,6 +3552,7 @@ mod tests {
         });
     }
     #[test]
+    #[ignore = "daily"]
     fn damaging_mob_fall_plays_block_fall_sound() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -3582,7 +3590,7 @@ mod tests {
         );
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 
     /// `Entity.applyMovementEmissionAndPlaySound` asks `getMovementEmission`:
@@ -3593,6 +3601,7 @@ mod tests {
     /// `entity.silverfish.step` and is never heard either, and a shulker, whose
     /// emission is `NONE`, sends nothing at all.
     #[test]
+    #[ignore = "daily"]
     fn a_squid_and_a_bat_step_without_a_sound() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -3811,6 +3820,7 @@ pub mod teleports;
 mod farmland_event_tests {
     use super::*;
     #[test]
+    #[ignore = "daily"]
     fn a_mob_trampling_farmland_posts_block_change_from_it() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -3854,7 +3864,7 @@ mod farmland_event_tests {
         );
         // Without the vanilla data under .local/horizon-client the world
         // cannot be built: the test has nothing to check.
-        let _ = ran;
+        assert!(ran, "vanilla data is missing");
     }
 }
 

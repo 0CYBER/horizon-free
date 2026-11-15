@@ -1,0 +1,2 @@
+# Repeated development arguments keep their duplicate identity refusal in an isolated loader.
+horizon-mod-wasm tests::repeated_development_paths_are_refused lib daily child-process

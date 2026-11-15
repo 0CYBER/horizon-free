@@ -55,6 +55,7 @@ fn shot_power(m: &mut Mob, goal: &mut GhastShoot, world: &MobWorld<'_>) -> i32 {
 /// the goal gives it to the `LargeFireball` it spawns, and
 /// `Ghast.addAdditionalSaveData` saves it back.
 #[test]
+#[ignore = "daily"]
 fn ghast_explosion_power_sizes_the_fireball_it_shoots() {
     let ran = with_built_test_world(
         &[],
@@ -117,5 +118,5 @@ fn ghast_explosion_power_sizes_the_fireball_it_shoots() {
             );
         },
     );
-    let _ = ran;
+    assert!(ran, "vanilla data is missing");
 }

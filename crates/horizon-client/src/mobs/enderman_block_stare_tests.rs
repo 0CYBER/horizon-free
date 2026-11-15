@@ -49,6 +49,7 @@ fn tick_at(
 /// `level.getEntities(this.enderman, cube)`: the enderman's own box never
 /// blocks its feet cube, another mob's does.
 #[test]
+#[ignore = "daily"]
 fn the_enderman_itself_never_blocks_a_placement() {
     let Some(kind) = enderman_kind() else { return };
     let at = Vec3::new(0.5, 0.0, 0.5);
@@ -73,17 +74,20 @@ fn the_enderman_itself_never_blocks_a_placement() {
             true,
         ),
     ] {
-        with_test_world(&others, |w, _| {
-            let events = tick_at(&mut m, w, [0, 0, 0], pick, &mut LeaveBlock);
-            let occupants = events.iter().find_map(|e| match e {
-                MobEvent::EndermanPlaceBlock { pos, occupants, .. } => {
-                    assert_eq!(*pos, [0, 0, 0]);
-                    Some(occupants.clone())
-                }
-                _ => None,
-            });
-            assert_eq!(occupants.map(|o| !o.is_empty()), Some(blocked), "{blocked}");
-        });
+        assert!(
+            with_test_world(&others, |w, _| {
+                let events = tick_at(&mut m, w, [0, 0, 0], pick, &mut LeaveBlock);
+                let occupants = events.iter().find_map(|e| match e {
+                    MobEvent::EndermanPlaceBlock { pos, occupants, .. } => {
+                        assert_eq!(*pos, [0, 0, 0]);
+                        Some(occupants.clone())
+                    }
+                    _ => None,
+                });
+                assert_eq!(occupants.map(|o| !o.is_empty()), Some(blocked), "{blocked}");
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 
@@ -92,6 +96,7 @@ fn the_enderman_itself_never_blocks_a_placement() {
 /// hide a pumpkin behind them; a dandelion whose random offset moves it off
 /// the line does not.
 #[test]
+#[ignore = "daily"]
 fn take_block_reach_stops_at_outline_shapes() {
     let Some(kind) = enderman_kind() else { return };
     // EndermanTakeBlockGoal.tick: x - 2 + 4d, y + 3d, z - 2 + 4d.
@@ -139,12 +144,15 @@ fn take_block_reach_stops_at_outline_shapes() {
                 world.set(at[0], at[1], at[2], state(name)).unwrap();
             }
         };
-        with_built_test_world(&[], build, |w, _| {
-            let at = Vec3::new(f64::from(column[0]) + 0.5, 0.0, f64::from(column[1]) + 0.5);
-            let mut m = Mob::new(1, kind.clone(), at, 0.0);
-            tick_at(&mut m, w, pumpkin, pick, &mut TakeBlock);
-            assert_eq!(m.extra.carried.is_some(), taken, "{between:?}");
-        });
+        assert!(
+            with_built_test_world(&[], build, |w, _| {
+                let at = Vec3::new(f64::from(column[0]) + 0.5, 0.0, f64::from(column[1]) + 0.5);
+                let mut m = Mob::new(1, kind.clone(), at, 0.0);
+                tick_at(&mut m, w, pumpkin, pick, &mut TakeBlock);
+                assert_eq!(m.extra.carried.is_some(), taken, "{between:?}");
+            }),
+            "vanilla data is missing"
+        );
     }
 }
 
@@ -201,67 +209,76 @@ fn calm(m: &mut Mob, cx: &mut Cx) {
 /// hears `DATA_CREEPY` change before `DATA_STARED_AT` clears, so the end of
 /// a stare's anger plays it too; anger from a hit does not.
 #[test]
+#[ignore = "daily"]
 fn the_stare_sound_is_throttled_silenced_and_at_the_eyes() {
     let Some(kind) = enderman_kind() else { return };
-    with_test_world(&[], |w, _| {
-        let mut w = w.clone();
-        w.player = Some(crate::mobs::world::test_player(Vec3::new(0.5, 10.0, 30.5)));
-        let w = &w;
-        let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 10.0, 0.5), 0.0);
-        let sounds = step(&mut m, w, 100, stare_anger);
-        let [MobEvent::LocalSound("entity.enderman.stare", at, volume, pitch)] = sounds.as_slice()
-        else {
-            panic!("one stare sound: {sounds:?}");
-        };
-        // getEyeY: getY() + the float eye height 2.55 (EntityTypes.ENDERMAN).
-        assert_eq!(*at, [0.5, 10.0 + f64::from(2.55f32), 0.5]);
-        assert_eq!((*volume, *pitch), (2.5, 1.0));
-        assert!(step(&mut m, w, 150, calm).is_empty(), "within 400 ticks");
-        assert!(
-            step(&mut m, w, 200, stare_anger).is_empty(),
-            "within 400 ticks"
-        );
-        assert_eq!(step(&mut m, w, 520, calm).len(), 1, "the end of the anger");
-        assert!(
-            step(&mut m, w, 560, stare_anger).is_empty(),
-            "within 400 ticks"
-        );
+    assert!(
+        with_test_world(&[], |w, _| {
+            let mut w = w.clone();
+            w.player = Some(crate::mobs::world::test_player(Vec3::new(0.5, 10.0, 30.5)));
+            let w = &w;
+            let mut m = Mob::new(1, kind.clone(), Vec3::new(0.5, 10.0, 0.5), 0.0);
+            let sounds = step(&mut m, w, 100, stare_anger);
+            let [MobEvent::LocalSound("entity.enderman.stare", at, volume, pitch)] =
+                sounds.as_slice()
+            else {
+                panic!("one stare sound: {sounds:?}");
+            };
+            // getEyeY: getY() + the float eye height 2.55 (EntityTypes.ENDERMAN).
+            assert_eq!(*at, [0.5, 10.0 + f64::from(2.55f32), 0.5]);
+            assert_eq!((*volume, *pitch), (2.5, 1.0));
+            assert!(step(&mut m, w, 150, calm).is_empty(), "within 400 ticks");
+            assert!(
+                step(&mut m, w, 200, stare_anger).is_empty(),
+                "within 400 ticks"
+            );
+            assert_eq!(step(&mut m, w, 520, calm).len(), 1, "the end of the anger");
+            assert!(
+                step(&mut m, w, 560, stare_anger).is_empty(),
+                "within 400 ticks"
+            );
 
-        let mut hit = Mob::new(2, kind.clone(), Vec3::ZERO, 0.0);
-        let sounds = step(&mut hit, w, 100, |m, _| m.ai.target = Some(Who::Player));
-        assert!(sounds.is_empty(), "no stare");
-        assert!(step(&mut hit, w, 150, calm).is_empty(), "no stare");
+            let mut hit = Mob::new(2, kind.clone(), Vec3::ZERO, 0.0);
+            let sounds = step(&mut hit, w, 100, |m, _| m.ai.target = Some(Who::Player));
+            assert!(sounds.is_empty(), "no stare");
+            assert!(step(&mut hit, w, 150, calm).is_empty(), "no stare");
 
-        let mut silent = Mob::new(3, kind.clone(), Vec3::ZERO, 0.0);
-        silent.silent = true;
-        assert!(step(&mut silent, w, 100, stare_anger).is_empty(), "Silent");
-        step(&mut silent, w, 150, calm);
-        silent.silent = false;
-        assert!(
-            step(&mut silent, w, 200, stare_anger).is_empty(),
-            "the silent one stamped it"
-        );
-        step(&mut silent, w, 250, calm);
-        assert_eq!(step(&mut silent, w, 500, stare_anger).len(), 1);
-    });
+            let mut silent = Mob::new(3, kind.clone(), Vec3::ZERO, 0.0);
+            silent.silent = true;
+            assert!(step(&mut silent, w, 100, stare_anger).is_empty(), "Silent");
+            step(&mut silent, w, 150, calm);
+            silent.silent = false;
+            assert!(
+                step(&mut silent, w, 200, stare_anger).is_empty(),
+                "the silent one stamped it"
+            );
+            step(&mut silent, w, 250, calm);
+            assert_eq!(step(&mut silent, w, 500, stare_anger).len(), 1);
+        }),
+        "vanilla data is missing"
+    );
 }
 
 /// `setTarget` stamps `targetChangeTime` for any target, so an enderman a
 /// hit angers waits 600 ticks before its daylight teleport, as one a stare
 /// angers does; `setTarget(null)` zeroes it.
 #[test]
+#[ignore = "daily"]
 fn every_target_stamps_the_target_change_time() {
     let Some(kind) = enderman_kind() else { return };
-    with_test_world(&[], |w, _| {
-        let mut hit = Mob::new(1, kind.clone(), Vec3::ZERO, 0.0);
-        step(&mut hit, w, 300, |m, _| m.ai.target = Some(Who::Mob(7)));
-        assert_eq!(hit.extra.counter, 300);
-        let mut stared = Mob::new(2, kind.clone(), Vec3::ZERO, 0.0);
-        step(&mut stared, w, 290, |m, cx| look().start(m, cx));
-        assert_eq!(stared.extra.counter, 0, "a stare alone sets no target");
-        step(&mut stared, w, 300, |m, _| m.ai.target = Some(Who::Player));
-        assert_eq!(stared.extra.counter, 300);
-        step(&mut stared, w, 400, calm);
-        assert_eq!(stared.extra.counter, 0);
-    });
+    assert!(
+        with_test_world(&[], |w, _| {
+            let mut hit = Mob::new(1, kind.clone(), Vec3::ZERO, 0.0);
+            step(&mut hit, w, 300, |m, _| m.ai.target = Some(Who::Mob(7)));
+            assert_eq!(hit.extra.counter, 300);
+            let mut stared = Mob::new(2, kind.clone(), Vec3::ZERO, 0.0);
+            step(&mut stared, w, 290, |m, cx| look().start(m, cx));
+            assert_eq!(stared.extra.counter, 0, "a stare alone sets no target");
+            step(&mut stared, w, 300, |m, _| m.ai.target = Some(Who::Player));
+            assert_eq!(stared.extra.counter, 300);
+            step(&mut stared, w, 400, calm);
+            assert_eq!(stared.extra.counter, 0);
+        }),
+        "vanilla data is missing"
+    );
 }

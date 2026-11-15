@@ -316,6 +316,8 @@ impl Control {
 pub struct Negotiation {
     local: Manifest,
     offered: bool,
+    /// Whether this end sent a Query.
+    queried: bool,
     protocol_required: bool,
     frozen: Option<Vec<Entry>>,
 }
@@ -324,20 +326,26 @@ impl Negotiation {
         Self {
             local,
             offered: false,
+            queried: false,
             protocol_required: false,
             frozen: None,
         }
     }
-    /// Call once at setup. Empty installations emit no control traffic.
-    pub fn initial(&self) -> Option<Control> {
-        (!self.local.entries.is_empty()).then_some(Control::Query)
+    /// Call once at setup, or not at all: empty installations emit no control traffic, and
+    /// an endpoint may leave the first Query to its peer.
+    pub fn initial(&mut self) -> Option<Control> {
+        let query = !self.local.entries.is_empty();
+        self.queried |= query;
+        query.then_some(Control::Query)
     }
     /// Require a marked response for Horizon-branded peers, including empty installations.
-    /// Both endpoints announce this before their existing configuration barrier.
+    /// Both endpoints announce this before their existing configuration barrier: a Query
+    /// when this end has sent none and neither offered nor froze yet.
     pub fn require_protocol(&mut self) -> Option<Control> {
         self.protocol_required = true;
-        (self.local.entries.is_empty() && !self.offered && self.frozen.is_none())
-            .then_some(Control::Query)
+        let query = !self.queried && !self.offered && self.frozen.is_none();
+        self.queried |= query;
+        query.then_some(Control::Query)
     }
     pub fn accepted(&self) -> Option<&[Entry]> {
         self.frozen.as_deref()

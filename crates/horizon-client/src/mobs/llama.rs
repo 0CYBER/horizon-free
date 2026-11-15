@@ -268,6 +268,7 @@ mod tests {
         assert!(fives > 0 && fives < 200);
     }
     #[test]
+    #[ignore = "daily"]
     fn breeding_experience_uses_only_the_parent_random_when_drops_are_enabled() {
         super::super::world::with_test_world(&[], |_, types| {
             for kind in ["minecraft:llama", "minecraft:horse", "minecraft:cow"] {
@@ -289,6 +290,7 @@ mod tests {
         });
     }
     #[test]
+    #[ignore = "daily"]
     fn breeding_experience_is_drawn_in_the_goal_unless_a_mod_must_decide() {
         let mut kind = None;
         super::super::world::with_test_world(&[], |_, types| {

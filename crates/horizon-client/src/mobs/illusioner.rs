@@ -297,6 +297,7 @@ mod tests {
     /// Without it the count stayed at 20 after the first spell, so the
     /// illusioner kept casting: no second spell and no bow.
     #[test]
+    #[ignore = "daily"]
     fn the_cast_counts_down() {
         use crate::mobs::world::with_test_world;
         use std::sync::Arc;
@@ -329,6 +330,7 @@ mod tests {
     /// an iron golem (mob 2) gets it as the player does. Without the fix the
     /// cast on a mob sent no effect at all.
     #[test]
+    #[ignore = "daily"]
     fn the_blindness_spell_reaches_a_targeted_mob() {
         use crate::mobs::world::with_test_world;
         use std::sync::Arc;
