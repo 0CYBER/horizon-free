@@ -63,17 +63,17 @@ DependencySorter.addDependencyIfNotCyclic	inline	crates/horizon-world/src/worldg
 DependencySorter.orderByDependencies	inline	crates/horizon-world/src/worldgen/tags.rs::TagDefinitions::build	required edges first, then optional ones, then the visit order
 DirectoryLock.create	port	crates/horizon-client/src/save.rs::SessionLock::acquire	exclusive file lock on session.lock with the two-byte snowman content
 DirectoryLock.isLocked	port	crates/horizon-client/src/save.rs::SessionLock::is_locked	trying for the world's session.lock tells a locked world; title.rs uses it to flag the entry
-Ease.inBack	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.inElastic	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.inExpo	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.inOutBounce	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.inOutCirc	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.inOutQuad	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.inOutQuart	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.inOutQuint	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.outBounce	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.outElastic	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
-Ease.outExpo	missing		a named easing only a datapack's timeline can reach: the four shipped timelines ask for constant, cubic_bezier or no ease, and environment.rs::Environment::load_dimension reads those two
+Ease.inBack	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "in_back" entry: square(x) * (2.70158x - 1.70158) with both constants as written
+Ease.inElastic	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "in_elastic" entry: 0 and 1 returned first, else -2^(10x-10) * sin((10x-10.75) * 2pi/3)
+Ease.inExpo	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "in_expo" entry: 0 at 0, else 2^(10x-10) through jmath::pow
+Ease.inOutBounce	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "in_out_bounce" entry: out_bounce(1-2x) and out_bounce(2x-1), halved and offset by 1
+Ease.inOutCirc	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "in_out_circ" entry: the sqrt(1-(2x)^2) half below 0.5, the sqrt(1-(-2x+2)^2) half above
+Ease.inOutQuad	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "in_out_quad" entry: 2x^2 below 0.5, else 1-(2-2x)^2/2
+Ease.inOutQuart	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "in_out_quart" entry: 8x^4 below 0.5, else 1-(2-2x)^4/2
+Ease.inOutQuint	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "in_out_quint" entry: 16x^5 below 0.5, else 1-(2-2x)^5/2
+Ease.outBounce	port	crates/horizon-world/src/environment_timeline.rs::out_bounce	the 7.5625 branches at 0.36363637 and 0.72727275, the third test in double as the bytecode widens it
+Ease.outElastic	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "out_elastic" entry: 0 and 1 first, else 2^(-10x) * sin((10x-0.75) * 2pi/3) + 1
+Ease.outExpo	inline	crates/horizon-world/src/environment_timeline.rs::EASINGS	the "out_expo" entry: 1 at 1, else 1 - 2^(-10x)
 EasingType.cubicBezier	inline	crates/horizon-client-render/src/environment.rs::Environment::load_dimension	reads the four control points of a cubic_bezier ease; gap: minor: no range check, see CubicBezierControls.validate
 EasingType.CubicBezier.curveFromControls	inline	crates/horizon-client-render/src/environment.rs::Easing::apply	the curve coefficients closure
 EasingType.CubicBezier.solveT	inline	crates/horizon-client-render/src/environment.rs::Easing::apply	Newton steps with the 1e-5 tolerance
@@ -82,7 +82,7 @@ EasingType.CubicBezier.equals	skip:java		value equality
 EasingType.CubicBezier.toString	skip:debug		debug string
 EasingType.CubicBezier.CubicCurve.sample	inline	crates/horizon-client-render/src/environment.rs::Easing::apply	the sample closure
 EasingType.CubicBezier.CubicCurve.sampleGradient	inline	crates/horizon-client-render/src/environment.rs::Easing::apply	the gradient closure
-EasingType.CubicBezierControls.validate	missing		vanilla rejects control points outside [0;1] when a timeline loads; environment.rs::Environment::load_dimension takes the four numbers as given
+EasingType.CubicBezierControls.validate	inline	crates/horizon-world/src/environment_timeline.rs::Easing::parse	rejects x1 or x2 outside [0; 1] with the codec validator error before building the two curves
 EncoderCache.Key.equals	skip:java		cache key equality
 EncoderCache.Key.hashCode	skip:java		cache key hashing
 ExceptionCollector.add	skip:java		suppressed exception collector
