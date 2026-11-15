@@ -199,7 +199,7 @@ fn a_mod_sends_a_trident_to_another_level_with_its_stack_and_motion() {
 
 /// Armor stands use Entity.teleportCrossDimension, keeping their position on arrival.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mod_sends_an_armor_stand_to_another_level() {
     with_game(|game| {
         game.native_lifecycle.world_open_ready().unwrap();

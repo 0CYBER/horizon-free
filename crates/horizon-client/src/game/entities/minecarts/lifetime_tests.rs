@@ -491,7 +491,7 @@ fn a_bound_ticked_cart_publishes_its_moved_position_before_pushing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_bound_tnt_cart_passes_interaction_without_priming() {
     bound_cart_case(CartKind::Tnt, |game| {
         game.inventory[game.selected] = Some(ItemStack::new("minecraft:fire_charge", 1));
