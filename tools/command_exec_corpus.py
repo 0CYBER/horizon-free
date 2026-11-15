@@ -7223,6 +7223,38 @@ def primed_tnt_fall():
     return ops
 
 
+def end_crystal_saved_motion():
+    """`Entity.load` reads `Motion` (a part over 10 loads as 0) and `Rotation` (`setXRot`: the pitch `% 360`
+    within +-90), and `saveWithoutId` writes them back. `EndCrystal.tick` never moves or turns the crystal, so both
+    keep what was loaded, after ticks and through a save and a reload of the chunk."""
+    x0, y0, z0 = 4096 - 160, 260, 3648
+    ring = [[(x0 >> 4) + i, (z0 >> 4) + k] for i in range(-2, 3) for k in range(-2, 3)]
+    ops = [cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': ring}]
+    subjects = ['Motion:[0.0d,0.4d,0.0d]', 'Motion:[12.0d,0.1d,-0.2d]', 'Rotation:[45.0f,10.0f]',
+                'Rotation:[400.0f,100.0f],Motion:[0.3d,0.0d,0.0d]', 'Rotation:[-30.0f,-450.0f]']
+    for n, fields in enumerate(subjects, 1):
+        ops.append(cmd(f'/summon end_crystal {x0 + 3 * n}.5 {y0} {z0 + 8}.5 {{UUID:[I;{TAG_CRYSTAL},0,{n},1],'
+                       f'ShowBottom:0b,{fields}}}', expect_result=1))
+
+    def reads():
+        for n in range(1, len(subjects) + 1):
+            for key in ('Motion', 'Rotation'):
+                ops.append(cmd(f'/data get entity {TAG_CRYSTAL:08x}-0000-0000-0000-{n:04x}00000001 {key}'))
+
+    reads()
+    ops.append({'op': 'tick', 'n': 2})
+    reads()
+    # The chunk saves and drops its entities, then loads them back.
+    ops += [cmd(f'/forceload remove {x0} {z0}', False), {'op': 'tick', 'n': 60},
+            {**cmd(f'/execute unless loaded {x0} {y0} {z0}', expect_result=1), 'guard': True},
+            cmd(f'/forceload add {x0} {z0}', False), {'op': 'wait_chunks', 'chunks': ring}]
+    reads()
+    return ops + setup(f'/kill @e[type=end_crystal,x={x0},y={y0 - 8},z={z0},dx=16,dy=32,dz=16]',
+                       f'/forceload remove {x0} {z0}')
+
+
+TAG_CRYSTAL = 15995  # UUIDs of end_crystal_saved_motion's crystals
+
 def end_crystal_saved_fall():
     """#14671: `Entity.load` reads `OnGround` (`getBooleanOr`) and `fall_distance`, and `saveWithoutId` writes them
     back; `EndCrystal.tick` never moves the crystal nor runs `baseTick`, so both keep what was loaded, through a save
@@ -8688,6 +8720,7 @@ def groups():
         ('primed tnt box', primed_tnt_box()),
         ('primed tnt fall', primed_tnt_fall()),
         ('end crystal saved fall', end_crystal_saved_fall()),
+        ('end crystal saved motion', end_crystal_saved_motion()),
         ('dispensed item escape', dispensed_item_escape()),
         ('command block last output', command_block_last_output()),
         ('explosion player experience', explosion_player_experience()),

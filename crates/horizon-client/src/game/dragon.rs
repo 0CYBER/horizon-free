@@ -195,6 +195,9 @@ pub(super) struct Crystal {
     /// as loaded until `/tp` grounds it or a cobweb or powder snow resets the
     /// fall (`crystal.rs`).
     pub fall: (bool, f64),
+    /// `Motion` and `Rotation`, as loaded: `EndCrystal.tick` never moves or turns it.
+    pub motion: Vec3,
+    pub rotation: [f32; 2],
 }
 impl Crystal {
     /// `EntityType.END_CRYSTAL`: 2 x 2.
@@ -3642,45 +3645,6 @@ impl Dragon {
         }
         d.no_ai = horizon_client::entity_nbt::flag(tag, "NoAI");
         Some(d)
-    }
-}
-impl Crystal {
-    pub(super) fn to_nbt(&self, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
-        let mut tag = horizon_client::entity_nbt::vehicle_to_nbt(
-            "minecraft:end_crystal",
-            self.position,
-            Vec3::ZERO,
-            [0.0, 0.0],
-            self.fall,
-            uuid,
-            raw,
-        );
-        if let Tag::Compound(map) = &mut tag {
-            map.insert("ShowBottom".into(), Tag::Byte(i8::from(self.show_bottom)));
-            if let Some(b) = self.beam {
-                map.insert("beam_target".into(), Tag::IntArray(b.to_vec()));
-            }
-            map.insert(
-                "Invulnerable".into(),
-                Tag::Byte(i8::from(self.invulnerable)),
-            );
-        }
-        tag
-    }
-    pub(super) fn from_nbt(tag: &Tag, time: i32) -> Option<Self> {
-        let (position, _, _) = horizon_client::entity_nbt::boat_from_nbt(tag)?;
-        Some(Self {
-            id: 0,
-            position,
-            show_bottom: horizon_client::entity_nbt::flag_or(tag, "ShowBottom", true),
-            time,
-            beam: match tag.get("beam_target") {
-                Some(Tag::IntArray(v)) if v.len() == 3 => Some([v[0], v[1], v[2]]),
-                _ => None,
-            },
-            invulnerable: horizon_client::entity_nbt::flag(tag, "Invulnerable"),
-            fall: horizon_client::entity_nbt::ground_from_nbt(tag),
-        })
     }
 }
 impl Game<'_> {

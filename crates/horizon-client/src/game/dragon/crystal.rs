@@ -13,7 +13,56 @@ impl Crystal {
             beam: None,
             invulnerable: false,
             fall: (false, 0.0),
+            motion: Vec3::ZERO,
+            rotation: [0.0, 0.0],
         }
+    }
+    pub(in crate::game) fn to_nbt(&self, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
+        let mut tag = horizon_client::entity_nbt::vehicle_to_nbt(
+            "minecraft:end_crystal",
+            self.position,
+            self.motion,
+            self.rotation,
+            self.fall,
+            uuid,
+            raw,
+        );
+        if let Tag::Compound(map) = &mut tag {
+            map.insert("ShowBottom".into(), Tag::Byte(i8::from(self.show_bottom)));
+            if let Some(b) = self.beam {
+                map.insert("beam_target".into(), Tag::IntArray(b.to_vec()));
+            }
+            map.insert(
+                "Invulnerable".into(),
+                Tag::Byte(i8::from(self.invulnerable)),
+            );
+        }
+        tag
+    }
+    pub(in crate::game) fn from_nbt(tag: &Tag, time: i32) -> Option<Self> {
+        let (position, motion, _) = horizon_client::entity_nbt::boat_from_nbt(tag)?;
+        // Entity.load's setYRot and setXRot skip a non-finite angle and keep the pitch within
+        // +-90; /summon's `snapTo` takes both `% 360` (as `ominous_item_spawner.rs` does).
+        let [yaw, pitch] = horizon_client::entity_nbt::rotation(tag);
+        let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
+        let rotation = [
+            finite(yaw) % 360.0,
+            (finite(pitch) % 360.0).clamp(-90.0, 90.0),
+        ];
+        Some(Self {
+            id: 0,
+            position,
+            show_bottom: horizon_client::entity_nbt::flag_or(tag, "ShowBottom", true),
+            time,
+            beam: match tag.get("beam_target") {
+                Some(Tag::IntArray(v)) if v.len() == 3 => Some([v[0], v[1], v[2]]),
+                _ => None,
+            },
+            invulnerable: horizon_client::entity_nbt::flag(tag, "Invulnerable"),
+            fall: horizon_client::entity_nbt::ground_from_nbt(tag),
+            motion,
+            rotation,
+        })
     }
     /// The start of `time` (the spin and bob) for a crystal at `position`: the random draw
     /// vanilla makes, or under `HORIZON_STILL` one seeded from the position alone. Which crystal
