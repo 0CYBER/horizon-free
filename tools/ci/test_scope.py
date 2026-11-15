@@ -56,6 +56,8 @@ READERS = {
     "horizon-client-render": [
         "crates/horizon-client/assets/horizon/lang", "crates/horizon-client/assets/horizon/textures/gui",
     ],
+    # The daily Character comparator reads the original public-JDK API helper.
+    "horizon-core": ["tools/JavaCharacterTables.java"],
     # The build scripts hand the repository root to the generator.
     "horizon-engine-slots": MOD_API_GEN,
     "horizon-game": ["packaging/windows/exe.rs"],
