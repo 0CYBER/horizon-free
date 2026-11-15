@@ -809,6 +809,17 @@ pub(crate) fn short(path: &std::path::Path) -> String {
     }
 }
 
+/// A download's error as a player reads it: a lost connection is said plainly, without the
+/// address and the system's error code; any other error stays as it is.
+pub(crate) fn download_error(error: &str) -> String {
+    if error.starts_with("No connection") {
+        tr("Horizon couldn't reach the internet. Check your connection, then try again.")
+            .to_string()
+    } else {
+        error.to_string()
+    }
+}
+
 pub(crate) fn megabytes(bytes: u64) -> String {
     format!("{:.0} MB", bytes as f64 / 1_000_000.0)
 }

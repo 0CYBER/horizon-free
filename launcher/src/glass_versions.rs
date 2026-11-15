@@ -340,7 +340,7 @@ impl Launcher {
             .install_error
             .as_ref()
             .filter(|(e, _)| e == tag)
-            .map(|(_, e)| e.clone());
+            .map(|(_, e)| download_error(e));
         crate::glass::plate(radius::PANEL)
             .flex()
             .flex_col()
