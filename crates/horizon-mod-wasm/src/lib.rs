@@ -530,7 +530,14 @@ pub fn load_installed(
             .collect();
     let packages: Vec<WasmPackage> =
         horizon_mod_package::selection::content_packages_read(game_dir, &enabled, dev, |path| {
-            reads.remove(path).and_then(Result::ok)
+            reads
+                .get(path)
+                .and_then(|result| result.as_ref().ok())
+                .map(|package| horizon_mod_package::Package {
+                    manifest: package.manifest.clone(),
+                    icon: package.icon.clone(),
+                    layouts: package.layouts.clone(),
+                })
         })
         .filter(|selected| selected.package.manifest.wasm.is_some())
         .filter_map(|selected| {
@@ -901,6 +908,76 @@ mod tests {
                 .iter()
                 .any(|line| line == expected)
         );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn repeated_development_paths_are_refused() {
+        const CHILD_ROOT: &str = "HORIZON_DUPLICATE_DEV_TEST_ROOT";
+        let Some(root) = std::env::var_os(CHILD_ROOT) else {
+            // Relocate the harness so its standard-library lookup and native discovery
+            // cannot touch the real build output. The loader's global install is child-only.
+            let executable = std::env::current_exe().unwrap();
+            let root = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();
+            let harness = root.path().join("duplicate-dev-test");
+            std::fs::hard_link(executable, &harness).unwrap();
+            std::fs::write(
+                root.path().join("horizon-wasm-std.wasm"),
+                b"\0asm\x01\0\0\0",
+            )
+            .unwrap();
+            let status = std::process::Command::new(harness)
+                .args([
+                    "--exact",
+                    "tests::repeated_development_paths_are_refused",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env(CHILD_ROOT, root.path())
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let path = root.join("duplicate_dev");
+        std::fs::create_dir(&path).unwrap();
+        let module = wat::parse_str(
+            r#"(module (@custom "dylink.0" "\01\04\00\00\00\00")
+                (func (export "horizon_layout"))
+                (func (export "horizon_in"))
+                (func (export "horizon_hook")))"#,
+        )
+        .unwrap();
+        std::fs::write(path.join("mod.wasm"), &module).unwrap();
+        std::fs::write(
+            path.join("horizon-mod.toml"),
+            format!(
+                "id='duplicate_dev'\nname='Duplicate'\nversion='1.0.0'\napi='0.2'\ncapabilities=['registries']\n[wasm]\nsha512='{}'\ntoolchain='test'\nbuilt_with='test'\n",
+                horizon_mod_package::manifest::sha512_of(&module)
+            ),
+        )
+        .unwrap();
+        let argument = path.to_str().unwrap().to_owned();
+        let launch = horizon_mod_package::selection::LaunchArguments::parse(
+            [
+                "--dev-mod".to_owned(),
+                argument.clone(),
+                "--dev-mod".to_owned(),
+                argument,
+            ]
+            .into_iter(),
+            &root,
+            &root,
+            None,
+        )
+        .unwrap();
+        let loaded = load_installed(&launch, &root);
+        assert!(loaded.mods.is_empty());
+        assert_eq!(loaded.refused.len(), 2);
+        assert!(loaded.refused.iter().all(|(id, refusal)| {
+            id == "duplicate_dev" && matches!(refusal, Refusal::DependencyOrder { .. })
+        }));
     }
 
     #[test]
