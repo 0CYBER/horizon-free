@@ -406,11 +406,10 @@ pub(super) fn library(deps: &Path, krate: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Both compiler routes link the same SDK-owned executable template.
-pub(super) fn wrapper_externs(
-    deps: &Path,
-    template: &str,
-) -> Result<BTreeMap<String, PathBuf>, String> {
+/// Both compiler routes link the same SDK-owned executable template, and the patch library, so `horizon_mod_host`
+/// is always an extern: the game crates it carries (`horizon_client` and its closure, metadata only in `deps/`) are
+/// code only inside that dylib.
+pub(super) fn wrapper_externs(deps: &Path) -> Result<BTreeMap<String, PathBuf>, String> {
     let mut externs = BTreeMap::new();
     for name in [
         "horizon_client",
@@ -421,12 +420,10 @@ pub(super) fn wrapper_externs(
     ] {
         externs.insert(name.to_owned(), library(deps, name)?);
     }
-    if template.contains("horizon_mod_host::") {
-        externs.insert(
-            "horizon_mod_host".into(),
-            library(deps, "horizon_mod_host")?,
-        );
-    }
+    externs.insert(
+        "horizon_mod_host".into(),
+        library(deps, "horizon_mod_host")?,
+    );
     Ok(externs)
 }
 
@@ -436,6 +433,10 @@ fn facade_refused(krate: &str) -> String {
         &[("crate", krate)],
     )
 }
+
+/// What the patch library's source ends with: edition 2024 loads an `--extern` only when the source names it, and
+/// the dylib links the game's crates only through `horizon_mod_host`.
+pub(super) const PATCH_HOST_LINK: &str = "\nextern crate horizon_mod_host as _;\n";
 
 pub(super) fn facade_library(deps: &Path, krate: &str, sdk: &Identity) -> Result<PathBuf, String> {
     if !sdk.facade_crates.contains(krate) {
@@ -793,7 +794,7 @@ pub(super) fn compile(
     if let Some(patch) = patch {
         let source = out.join("horizon_patch.rs");
         let template = api::template(&game.join(super::api_route::TEMPLATE))?;
-        let entry = library_entry(
+        let mut entry = library_entry(
             &template,
             &[],
             &catalog,
@@ -802,6 +803,7 @@ pub(super) fn compile(
             "0",
             &patch.installs,
         );
+        entry.push_str(PATCH_HOST_LINK);
         fs::write(&source, &entry).map_err(|e| e.to_string())?;
         let library = out.join(dylib_name("horizon_patch"));
         let mut hash = Sha256::new();
@@ -815,7 +817,7 @@ pub(super) fn compile(
             library.is_file() && fs::read_to_string(&saved).ok().as_deref() == Some(&fingerprint);
         let mut cmd = rustc(rust, game, out, "2024", &sdk.link_args);
         cmd.args(["--crate-type", "dylib", "--crate-name", "horizon_patch"]);
-        for (name, path) in wrapper_externs(&deps, &template)? {
+        for (name, path) in wrapper_externs(&deps)? {
             cmd.arg("--extern")
                 .arg(format!("{name}={}", path.display()));
         }
