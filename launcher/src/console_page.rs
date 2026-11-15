@@ -566,6 +566,20 @@ impl Launcher {
                 cx.notify();
             }));
         let copied = lines.join("\n");
+        // With no line there is nothing to search, copy or send: those controls show dimmed and
+        // do not react.
+        let nothing_to_act_on = count == 0;
+        fn inert(control: impl IntoElement, off: bool) -> AnyElement {
+            match off {
+                true => div()
+                    .relative()
+                    .opacity(0.4)
+                    .child(control)
+                    .child(div().absolute().inset_0().occlude())
+                    .into_any_element(),
+                false => control.into_any_element(),
+            }
+        }
         let this = cx.entity().downgrade();
         let levels = ui::segments(
             "console-level",
@@ -584,7 +598,8 @@ impl Launcher {
                 });
             },
         );
-        let share = ui::quiet("console-share", tr("Share log…"), 36., &t);
+        let share = ui::quiet("console-share", tr("Share log…"), 36., &t)
+            .tooltip(ui::tip(tr("Uploads the log to mclo.gs, after you confirm")));
         let share = match self.console.sharing {
             true => share.opacity(0.4).cursor_default(),
             false => share.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -599,11 +614,17 @@ impl Launcher {
             .gap(px(8.))
             .px(px(12.))
             .pb(px(12.))
-            .child(self.field(Field::ConsoleSearch, tr("Search the log"), 220., cx))
-            .child(levels)
-            .child(div().ml(px(8.)).child(follow))
+            .child(inert(
+                self.field(Field::ConsoleSearch, tr("Search the log"), 220., cx),
+                nothing_to_act_on,
+            ))
+            .child(inert(levels, nothing_to_act_on))
+            .child(inert(
+                div().ml(px(8.)).child(follow).into_any_element(),
+                nothing_to_act_on,
+            ))
             .child(div().flex_1())
-            .child(
+            .child(inert(
                 ui::quiet("console-copy", tr("Copy"), 36., &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
                         copy_to_clipboard(cx, ClipboardItem::new_string(copied.clone()));
@@ -611,8 +632,9 @@ impl Launcher {
                         cx.notify();
                     },
                 )),
-            )
-            .child(share)
+                nothing_to_act_on,
+            ))
+            .child(inert(share, nothing_to_act_on))
             .child(
                 ui::icon_button(
                     "console-folder",
@@ -726,24 +748,14 @@ impl Launcher {
         // The terminal (the mockup's `logbox`): black under the glass, Geist Mono 12 on 1.7, the
         // warnings and errors in their colours, a caret after the last line while the game runs.
         let title = if from_file { "latest.log" } else { "horizon" };
-        let dot = |c: u32| {
-            div()
-                .size(px(10.))
-                .rounded_full()
-                .bg(ui::color(c).opacity(0.85))
-        };
         let bar = div()
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(7.))
             .h(px(32.))
             .px(px(12.))
             .border_b_1()
             .border_color(white(0.08))
-            .child(dot(0xff5f57))
-            .child(dot(0xfebc2e))
-            .child(dot(0x28c840))
             .child(
                 div()
                     .flex_1()
@@ -752,8 +764,7 @@ impl Launcher {
                     .text_size(px(11.5))
                     .text_color(white(ink::QUIET))
                     .child(title),
-            )
-            .child(div().w(px(44.)));
+            );
         let log = div()
             .id("console-lines")
             .track_scroll(&self.console.scroll.handle)
