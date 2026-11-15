@@ -92,7 +92,7 @@ fn a_mods_gradients_draw_top_to_bottom_in_the_clip_and_pose_and_empty_ones_draw_
     let mid = {
         let [t, b] = [abgr(TOP), abgr(BOTTOM)].map(u32::to_le_bytes);
         u32::from_le_bytes(std::array::from_fn(|i| {
-            ((u16::from(t[i]) + u16::from(b[i]) + 1) / 2) as u8
+            (u16::from(t[i]) + u16::from(b[i])).div_ceil(2) as u8
         }))
     };
     for (pos, color) in clipped {
