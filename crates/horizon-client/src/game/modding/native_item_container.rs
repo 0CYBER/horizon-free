@@ -239,7 +239,14 @@ impl Game<'_> {
     ) -> Option<(u32, ItemStack)> {
         let size = self.item_container_size(&stack.item);
         let fits = self.fits_inside_container_items(item);
-        insert_into(stack, size, slot, item, self.item_container_limit(item), fits)
+        insert_into(
+            stack,
+            size,
+            slot,
+            item,
+            self.item_container_limit(item),
+            fits,
+        )
     }
     /// `ResourceHandler.isValid` and `getCapacityAsLong`: how many of `item`
     /// slot `slot` of one item of `stack` holds when empty. None of a stack that
