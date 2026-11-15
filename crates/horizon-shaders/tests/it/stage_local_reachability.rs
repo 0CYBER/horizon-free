@@ -150,3 +150,36 @@ fn errors_after_removed_helpers_keep_the_include_file_and_line() {
         "{errors:?}"
     );
 }
+
+#[test]
+fn keeps_texture_overloads_reached_through_legacy_texture_calls() {
+    let program = fragment(
+        r#"#version 120
+const bvec3 noisetex = bvec3(true);
+vec4 hz_n2_img(vec2 p) { return vec4(p, 0.25, 1.0); }
+vec4 texture(bvec3 t, vec2 p) { return hz_n2_img(p); }
+vec4 textureLod(bvec3 t, vec2 p, float lod) { return hz_n2_img(p + lod); }
+vec4 textureGrad(bvec3 t, vec2 p, vec2 dx, vec2 dy) { return hz_n2_img(p + dx + dy); }
+vec4 textureProj(bvec3 t, vec4 p) { return hz_n2_img(p.xy / p.w); }
+vec4 texelFetch(bvec3 t, ivec2 c, int lod) { return hz_n2_img(vec2(c) / float(1 + lod)); }
+void main() {
+    vec2 uv = gl_FragCoord.xy;
+    vec4 a = texture2D(noisetex, uv);
+    vec4 b = texture2DLod(noisetex, uv, 0.0);
+    vec4 c = texture2DGrad(noisetex, uv, vec2(0.01), vec2(0.01));
+    vec4 d = texture2DProj(noisetex, vec4(uv, 0.0, 1.0));
+    vec4 e = texelFetch2D(noisetex, ivec2(1, 2), 0);
+    gl_FragColor = a + b + c + d + e;
+}
+"#,
+    )
+    .unwrap_or_else(|errors| panic!("legacy calls must retain bvec3 overloads: {errors:?}"));
+    assert!(
+        program
+            .fragment
+            .functions
+            .iter()
+            .any(|(_, f)| f.name.as_deref() == Some("hz_n2_img")),
+        "helper reached through legacy texture2D call should remain in fragment module"
+    );
+}

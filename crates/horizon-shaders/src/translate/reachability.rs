@@ -110,10 +110,27 @@ fn functions<'a>(tokens: &[Token<'a>]) -> Option<Vec<Function<'a>>> {
     Some(found)
 }
 
+/// Legacy GLSL texture functions are rewritten after reachability runs (`rewrite::Stage`), so a
+/// user-defined overload such as `texture(bvec3, vec2)` must also be reached by legacy calls.
+fn rewritten_call(name: &str) -> Option<&'static str> {
+    match name {
+        "texture1D" | "texture2D" | "texture3D" | "textureCube" | "shadow2D" => Some("texture"),
+        "texture2DLod" | "texture3DLod" | "texture2DLodARB" | "textureCubeLod" | "shadow2DLod" => {
+            Some("textureLod")
+        }
+        "texelFetch1D" | "texelFetch2D" | "texelFetch3D" => Some("texelFetch"),
+        "textureSize1D" | "textureSize2D" | "textureSize3D" => Some("textureSize"),
+        "texture2DProj" | "shadow2DProj" => Some("textureProj"),
+        "texture2DGrad" | "texture2DGradARB" => Some("textureGrad"),
+        _ => None,
+    }
+}
+
 fn calls<'a>(tokens: &[Token<'a>]) -> impl Iterator<Item = &'a str> {
-    tokens
-        .windows(2)
-        .filter_map(|pair| (is_ident(pair[0].text) && pair[1].text == "(").then_some(pair[0].text))
+    tokens.windows(2).flat_map(|pair| {
+        let matched = (is_ident(pair[0].text) && pair[1].text == "(").then_some(pair[0].text);
+        matched.into_iter().chain(matched.and_then(rewritten_call))
+    })
 }
 
 fn prune(code: &str) -> Option<String> {
