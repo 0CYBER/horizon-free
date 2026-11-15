@@ -44,6 +44,8 @@ fn saved_attributes(game: &mut Game<'_>) -> Tag {
 fn failed_modifier_value_get_leaves_the_attribute_store_and_its_save_alone() {
     with_game(|game| {
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 100.0, 4.5)).unwrap());
+        game.reset_entity_residency();
+        crate::game::native_entity_refs::tests::bind_local_player(game, 1, 1);
         let key = game
             .player
             .as_ref()
