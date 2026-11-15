@@ -5,7 +5,7 @@ use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
 
 use super::displace::Displacement;
-use super::native_material::{DisplacedShape, NativeMaterial, TerrainShape};
+use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
 use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
 use super::native_sky::NativeSky;
@@ -110,7 +110,7 @@ fn chosen_shadow(
 
 impl NativePack {
     /// Writes this frame's inputs (`NativeFrame::write`), and for a `[ray_tracing]` pack where
-    /// its post passes trace `scene` from, once it is built.
+    /// its post passes and material stage trace `scene` from, once it is built.
     pub(in crate::gfx) fn write(
         &mut self,
         queue: &wgpu::Queue,
@@ -120,9 +120,33 @@ impl NativePack {
         scene: Option<&RayScene>,
     ) {
         let scene = scene.and_then(|s| s.traced(frame.camera));
-        let post = self.post.as_ref();
-        self.frame.ray_distance = post.and_then(|post| post.trace(queue, scene.as_ref()));
+        let post = self
+            .post
+            .as_ref()
+            .and_then(|p| p.trace(queue, scene.as_ref()));
+        let material = self.material.as_ref();
+        let terrain = material.and_then(|m| m.trace(queue, scene.as_ref()));
+        self.frame.ray_distance = post.or(terrain);
         self.frame.write(queue, frame, size, display);
+    }
+
+    /// Joins the frame's group with this frame's `scene` from `camera` for a material stage
+    /// that traces: after the frame's group changed for this frame, before the terrain draws.
+    pub(in crate::gfx) fn bind_scene(
+        &mut self,
+        device: &wgpu::Device,
+        scene: Option<&RayScene>,
+        camera: glam::DVec3,
+    ) {
+        if let Some(trace) = self.material.as_mut().and_then(|m| m.scene.as_mut()) {
+            let scene = scene.and_then(|s| s.traced(camera));
+            trace.bind(device, &self.frame, scene.as_ref());
+        }
+    }
+
+    /// The pipelines the pack's terrain draws with this frame, and its group 3.
+    pub(in crate::gfx) fn terrain(&self) -> Option<(&MaterialPipelines, &wgpu::BindGroup)> {
+        Some(self.material.as_ref()?.drawn(&self.frame.group))
     }
 
     /// The pack of the checked stages `report` with the option values `constants`, drawing
@@ -277,7 +301,7 @@ impl NativePack {
             .find(|s| s.kind == StageKind::Sky)
             .map(|stage| NativeSky::new(device, globals, &frame, stage, constants, format))
             .transpose()?;
-        let material = others
+        let mut material = others
             .iter()
             .find(|s| s.kind == StageKind::Material)
             .map(|stage| {
@@ -313,14 +337,20 @@ impl NativePack {
                 NativePost::new(device, post, manifest, constants, format, &frame, tonemap)
             })
             .transpose()?;
-        if let Some(post) = post.as_mut().filter(|_| !scenes.is_empty()) {
-            let shape = super::native_post::trace::TraceShape {
-                sprites: terrain.sprite_views,
-                split: terrain.sprites[1] as u32,
-                tags: terrain.sprite_tags,
-                materials: terrain.sprite_materials,
-            };
-            post.trace_scene(device, scenes, constants, &shape);
+        // One scene for every stage, as `frame.has_ray_tracing` says: where the material stage
+        // traces and the device refuses its pipelines, the post passes keep missing too.
+        let traced = |m: &NativeMaterial| m.scene.is_some();
+        let wanted = |s: &horizon_shader_api::check::CheckedStage| s.scene_source.is_some();
+        let refused = others.iter().any(wanted)
+            && super::surface_setup::ray_query::on(device)
+            && !material.as_ref().is_some_and(traced);
+        if let Some(post) = post.as_mut().filter(|_| !scenes.is_empty() && !refused) {
+            let shape = super::native_post::trace::TraceShape::of(terrain);
+            if !post.trace_scene(device, scenes, constants, &shape)
+                && let Some(m) = material.as_mut()
+            {
+                m.scene = None;
+            }
         }
         let mut labels: Vec<String> = sky.iter().map(|s| s.label.clone()).collect();
         labels.extend(

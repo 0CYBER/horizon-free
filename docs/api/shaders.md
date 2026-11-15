@@ -222,14 +222,15 @@ file = "entity.wgsl"
 blend = "gamma"            # optional: gamma (default) or linear
 primaries = "bt709"        # optional: bt709 (default) or bt2020, which needs blend = "linear"
 
-[ray_tracing]              # optional, needs [[post]], no keys: the post stage gets `trace` and `trace_any`
+[ray_tracing]              # optional, needs [[post]] or [material], no keys: the post stage gets `trace` and `trace_any`, the material stage where it calls them
 [motion]                   # optional, needs [[post]]: the post stage's motion guide (not drawn yet)
 ```
 
 0.1 is unchanged: the same prelude, entries and reference, and a 0.1 pack that names `[tonemap]`, `[entity]`,
 `[frame]`, `[ray_tracing]` or `[motion]` is refused. The example's port is
-`crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK, and `packs/traced_shadows` beside it is the
-smallest pack that traces rays ([the guide](../shaders.md#ray-tracing)).
+`crates/horizon-shader-api/packs/golden_hour_0_2`, a test pack of the SDK, and `packs/traced_shadows` and
+`packs/traced_water` beside it are the smallest packs that trace rays, from a post pass and from the material stage
+([the guide](../shaders.md#ray-tracing)).
 
 ## Testing a pack frame by frame
 
@@ -278,6 +279,11 @@ draws them itself (the material stage covers terrain only). The first-person han
   reference says; it pointed the other way, so a normal map turned into world axes by the reference's rule had both
   in-plane components negated. `w` is unchanged. A 0.2 pack that negated the tangent to make up for it must stop.
   API 0.1 keeps the old direction: its WGSL is frozen.
+- 2026-11-13: API 0.2 (additions, experimental): under `[ray_tracing]` the material stage gets `RayHit`, `trace` and
+  `trace_any` too, the post stage's own, where its files name either function; a material stage that names neither is
+  built from the same WGSL as before, a test holds. `[ray_tracing]` needs a `[[post]]` pass or a `[material]` stage.
+  `horizon-shader check` builds such a material stage both ways and refuses a pack whose `displacement` or `vertex`
+  (both run in vertex shaders) reaches `trace` or `trace_any`.
 - 2026-11-12: API 0.2 (additions, experimental): `[ray_tracing]`: the post stage of a pack that sets it gets
   `fn trace(origin, direction, max_distance) -> RayHit` and `fn trace_any(...) -> bool`, which read the terrain around
   the camera where the game traces rays (`HORIZON_RAY_TRACING=1` on a GPU with ray queries) and miss where it doesn't,

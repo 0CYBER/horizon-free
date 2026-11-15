@@ -100,20 +100,45 @@ fn every_0_2_stage_compiles_under_ray_tracing() {
     let traces = "fn post(input: PostInput) -> vec4<f32> {\n    \
                   let hit = trace(view_position(input.uv, input.depth), frame.sun_direction, frame.ray_distance);\n    \
                   return select(input.color, hit.albedo * hit.tint, hit.distance >= 0.0 && frame.has_ray_tracing == 1u);\n}\n";
+    let shaded = "fn material(input: MaterialInput) -> Surface {\n    \
+                  let lit = f32(!trace_any(input.position, frame.sun_direction, frame.ray_distance));\n    \
+                  return Surface(input.albedo * input.tint * vec4<f32>(input.lightmap * lit, 1.0));\n}\n";
     for &kind in api.stages() {
-        let own = if kind == StageKind::Post {
-            traces
-        } else {
-            vanilla(kind)
+        let own = match kind {
+            StageKind::Post => traces,
+            StageKind::Material => shaded,
+            _ => vanilla(kind),
         };
         let stub = kind.prelude_traced(api, Tracing::Stub);
         validate(&format!("{stub}{own}{}", kind.entries(api)));
         let scene = kind.prelude_traced(api, Tracing::Scene);
         let text = format!("{scene}{own}{}", kind.entries(api));
         validate_for(&text, Capabilities::default() | Capabilities::RAY_QUERY);
-        // Only the post stage's module needs the device's ray queries.
-        assert_eq!(scene.contains("ray_query"), kind == StageKind::Post);
+        // Only the post and material stages' modules need the device's ray queries.
+        let rays = matches!(kind, StageKind::Post | StageKind::Material);
+        assert_eq!(scene.contains("ray_query"), rays, "{kind:?}");
         assert!(!stub.contains("ray_query") && !stub.contains("acceleration_structure"));
+    }
+}
+
+/// The SHA-256 of the material stage's 0.2 prelude for a `[ray_tracing]` pack whose material
+/// calls `trace` or `trace_any`, without the scene and with it.
+const PINNED_TRACED_MATERIAL: [(Tracing, &str); 2] = [
+    (
+        Tracing::Stub,
+        "75f7c8b4dee77eb30e07cde8c753c19aaa7c1149ab42a711520144a8c4f9121c",
+    ),
+    (
+        Tracing::Scene,
+        "18f84e67f797242de0b36834c31a48c8b115c839e2347f2e2adfdf740340fd67",
+    ),
+];
+
+#[test]
+fn the_traced_material_prelude_is_unchanged() {
+    for (tracing, prelude) in PINNED_TRACED_MATERIAL {
+        let have = StageKind::Material.prelude_traced(Api::V0_2, tracing);
+        assert_eq!(sha256_hex(have.as_bytes()), prelude, "{tracing:?}");
     }
 }
 

@@ -112,9 +112,10 @@ space the pack's colours are in, and `frame.luminance` holds that space's lumina
 fn ray_tracing() -> String {
     let mut out = String::from(
         "### Ray tracing\n\n\
-         With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass) the post stage's prelude also\n\
-         has `RayHit`, `trace` and `trace_any`, and the `Frame` of every stage of the pack has `has_ray_tracing` and\n\
-         `ray_distance`. A pack without the key has none of them.\n\n\
+         With `[ray_tracing]` in the manifest (it has no keys, and needs a `[[post]]` pass or a `[material]` stage) the post\n\
+         stage's prelude also has `RayHit`, `trace` and `trace_any`, so does the material stage's where the stage's files\n\
+         name either function, and the `Frame` of every stage of the pack has `has_ray_tracing` and `ray_distance`. A pack\n\
+         without the key has none of them, and a material stage that names neither function is built as without it.\n\n\
          The game traces for the pack picked when it starts: only then, and only for a pack with `[ray_tracing]`, does it\n\
          ask the GPU for hardware ray queries, where the GPU and graphics API have them. In a game started without them a\n\
          pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1`\n\
@@ -130,7 +131,11 @@ fn ray_tracing() -> String {
          the game doesn't trace (`frame.has_ray_tracing` is 0) the pack is built and runs all the same, and every ray\n\
          misses. Your files name no ray query of their own (`ray_query`, `acceleration_structure`, `RayDesc`,\n\
          `RayIntersection`, a `rayQuery` function, `enable wgpu_ray_query`): the check refuses them, and an `output`\n\
-         called `trace` or `trace_any`.\n\n",
+         called `trace` or `trace_any`.\n\n\
+         In the material stage only `material` traces: `displacement` and the vertex stage's `vertex`, whose files share\n\
+         its module, run in vertex shaders, and the check refuses a pack where either reaches `trace` or `trace_any`.\n\
+         `material` runs for every terrain fragment drawn, so a ray costs more there than in a post pass: keep its rays for\n\
+         translucent surfaces (`input.translucent`), which leave no surface for a post pass to light.\n\n",
     );
     out += &table(&RAY_HIT, None);
     out += &format!(

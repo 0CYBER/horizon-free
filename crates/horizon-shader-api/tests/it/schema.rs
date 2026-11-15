@@ -913,10 +913,14 @@ fn the_0_2_keys_are_refused_under_0_1_and_checked_under_0_2() {
 }
 
 #[test]
-fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass() {
+fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
     assert!(Manifest::parse(SMALLEST_0_2).unwrap().ray_tracing.is_none());
     let asked = Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n")).unwrap();
     assert!(asked.ray_tracing.is_some());
+    // The material stage traces too: it alone is enough.
+    let material = SMALLEST_0_2.replace("[[post]]", "[material]") + "[ray_tracing]\n";
+    let asked = Manifest::parse(&material).unwrap();
+    assert!(asked.ray_tracing.is_some() && asked.post.is_empty());
     // A traced ray's hit reads the tags and material ids: no material stage is needed.
     let tags = "[[tags]]\nid = \"glass\"\nsprites = [\"block/glass\"]\n";
     let materials = "[[materials]]\nid = 7\nsprites = [\"block/stone\"]\n";
@@ -952,7 +956,7 @@ fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass() {
         ),
         (
             SMALLEST_0_2.replace("[[post]]", "[sky]") + "[ray_tracing]\n",
-            "[ray_tracing] needs a [[post]] pass",
+            "[ray_tracing] needs a [[post]] pass or a [material] stage",
         ),
         (
             format!("{SMALLEST_0_2}[ray_tracing]\nbounces = 2\n"),

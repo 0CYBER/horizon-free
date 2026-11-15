@@ -404,7 +404,7 @@ pub const WEATHER_INPUT: Struct = Struct {
     },
 };
 
-/// What the post stage's `trace` returns (0.2, `[ray_tracing]`): the nearest surface along a ray.
+/// What `trace` returns (0.2, `[ray_tracing]`): the nearest surface along a ray.
 pub const RAY_HIT: Struct = Struct {
     name: "RayHit",
     doc: "The nearest surface along a ray, from `trace`. Its `albedo`, `tint`, `light`, `uv`, `material` and `tags` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0.",

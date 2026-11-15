@@ -818,3 +818,132 @@ fn a_discard_reachable_from_material_needs_pack_coverage() {
     // A helper with a discard that `material` never calls cuts no hole.
     coverage_pack("", MATERIAL, helpers).unwrap();
 }
+
+/// A 0.2 pack with `[ray_tracing]` and the material stage `material` (no post pass), its
+/// manifest's other `keys` and `files` added.
+fn traced_material(
+    material: &str,
+    keys: &str,
+    files: &[(&str, &str)],
+) -> Result<horizon_shader_api::Report, Vec<Problem>> {
+    let manifest = format!(
+        "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+         [material]\nfile = \"material.wgsl\"\n[ray_tracing]\n{keys}"
+    );
+    let files = [(MANIFEST, manifest.as_str()), ("material.wgsl", material)]
+        .into_iter()
+        .chain(files.iter().copied())
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .collect();
+    check(&Pack::from_files(files).unwrap())
+}
+
+/// Water that mirrors what a ray off it hits.
+const REFLECTING: &str = "fn material(input: MaterialInput) -> Surface {
+    let lit = input.albedo * input.tint * vec4<f32>(input.lightmap, 1.0);
+    if !input.translucent {
+        return Surface(lit);
+    }
+    let hit = trace(input.position, reflect(normalize(input.position), input.normal), 64.0);
+    let shadowed = trace_any(input.position, frame.sun_direction, 64.0);
+    let seen = select(frame.sky_color.rgb, hit.albedo.rgb * hit.tint.rgb, hit.distance >= 0.0);
+    return Surface(vec4<f32>(mix(lit.rgb, seen, 0.5) * select(1.0, 0.5, shadowed), lit.a));
+}
+";
+
+#[test]
+fn a_traced_material_stage_is_checked_without_the_scene_and_with_it() {
+    let report = traced_material(REFLECTING, "", &[]).unwrap();
+    let material = &report.stages[0];
+    assert!(!ray_queries(&material.module));
+    let plain = naga::valid::Capabilities::default();
+    assert!(valid(&material.module, plain));
+    let scene = material
+        .scene
+        .as_ref()
+        .expect("the stage against the scene");
+    assert!(ray_queries(scene));
+    assert!(valid(scene, plain | naga::valid::Capabilities::RAY_QUERY));
+    assert!(!valid(scene, plain));
+    // The renderer builds its terrain from the source, the directive first.
+    let source = material.scene_source.as_deref().unwrap();
+    assert!(source.starts_with("enable wgpu_ray_query;\n"));
+    assert!(!material.source.contains("enable wgpu_ray_query"));
+}
+
+#[test]
+fn a_material_stage_that_doesn_t_trace_is_built_as_before() {
+    let quiet = "// Not traced: trace and trace_any only in /* nested /* comments */ trace */.\n\
+                 fn material(input: MaterialInput) -> Surface { return Surface(input.albedo); }\n";
+    let report = traced_material(quiet, "", &[]).unwrap();
+    assert!(report.stages[0].scene.is_none() && report.stages[0].scene_source.is_none());
+    // Its composition before `trace` reached the material stage, from the same pack with a
+    // post pass (which `[ray_tracing]` needed then).
+    let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+                    [material]\nfile = \"material.wgsl\"\n[[post]]\nfile = \"post.wgsl\"\n\
+                    [tonemap]\nfile = \"tonemap.wgsl\"\n[ray_tracing]\n";
+    let files = [
+        (MANIFEST, manifest),
+        ("material.wgsl", quiet),
+        ("post.wgsl", POST),
+        ("tonemap.wgsl", TONEMAP),
+    ]
+    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+    .into();
+    let pack = Pack::from_files(files).unwrap();
+    let composed = horizon_shader_api::compose(&pack, StageKind::Material, "material.wgsl");
+    assert_eq!(
+        horizon_shader_api::package::sha256_hex(composed.text.as_bytes()),
+        "a8df6b5822f7cb911604859061d438ea45924677ff146376e249e7f2e38768d3"
+    );
+    // Without the key `trace` is the pack's own name, in the material stage too.
+    let own = "fn trace(c: vec4<f32>) -> vec4<f32> { return c; }\n\
+               fn material(input: MaterialInput) -> Surface { return Surface(trace(input.albedo)); }\n";
+    let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
+                    [material]\nfile = \"material.wgsl\"\n";
+    let files = [(MANIFEST, manifest), ("material.wgsl", own)]
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .into();
+    check(&Pack::from_files(files).unwrap()).unwrap();
+}
+
+#[test]
+fn a_ray_from_a_vertex_shader_is_refused() {
+    let reached = |problems: &[Problem], name: &str| {
+        let needle = format!("`{name}` reaches `trace` or `trace_any`: it runs in a vertex shader");
+        problems
+            .iter()
+            .filter(|p| p.message.contains(&needle))
+            .map(|p| (p.file.clone(), p.line))
+            .collect::<Vec<_>>()
+    };
+    // `displacement`, through a helper of its own.
+    let displaced = format!(
+        "{MATERIAL}fn deep(p: vec3<f32>) -> bool {{ return trace_any(p, vec3<f32>(0.0, 1.0, 0.0), 8.0); }}\n\
+         fn displacement(input: DisplacementInput) -> f32 {{ return select(0.0, 0.1, deep(input.position)); }}\n"
+    );
+    let problems = traced_material(&displaced, "[displacement]\n", &[]).unwrap_err();
+    assert_eq!(
+        reached(&problems, "displacement"),
+        [("material.wgsl".to_owned(), 3)],
+        "{problems:#?}"
+    );
+    // The vertex stage's `vertex`, which the material's module holds.
+    let vertex = "fn vertex(input: VertexInput) -> vec3<f32> {\n    \
+                  let hit = trace(input.position, vec3<f32>(0.0, 1.0, 0.0), 8.0);\n    \
+                  return input.position + hit.normal;\n}\n";
+    let keys = "[vertex]\nfile = \"vertex.wgsl\"\n";
+    let problems = traced_material(MATERIAL, keys, &[("vertex.wgsl", vertex)]).unwrap_err();
+    assert_eq!(
+        reached(&problems, "vertex"),
+        [("vertex.wgsl".to_owned(), 1)],
+        "{problems:#?}"
+    );
+    // The material's own rays beside both are its to trace.
+    let both = format!(
+        "{REFLECTING}fn displacement(input: DisplacementInput) -> f32 {{ return input.height; }}\n"
+    );
+    let plain = "fn vertex(input: VertexInput) -> vec3<f32> { return input.position; }\n";
+    let keys = format!("{keys}[displacement]\n");
+    traced_material(&both, &keys, &[("vertex.wgsl", plain)]).unwrap();
+}

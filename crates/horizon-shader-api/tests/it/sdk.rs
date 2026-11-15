@@ -40,13 +40,20 @@ fn the_example_pack_s_0_2_port_passes() {
 }
 
 #[test]
-fn the_traced_example_passes_without_the_scene_and_with_it() {
-    let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/packs/traced_shadows"));
-    let report = check(&Pack::read(dir).unwrap()).unwrap();
-    assert!(report.manifest.ray_tracing.is_some());
-    let labels: Vec<_> = report.stages.iter().map(|s| s.label.as_str()).collect();
-    assert_eq!(labels, ["Sun shadows"]);
-    assert!(report.stages[0].scene.is_some());
+fn the_traced_examples_pass_without_the_scene_and_with_it() {
+    for (pack, label) in [
+        ("traced_shadows", "Sun shadows"),
+        ("traced_water", "Reflecting water"),
+    ] {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("packs")
+            .join(pack);
+        let report = check(&Pack::read(&dir).unwrap()).unwrap();
+        assert!(report.manifest.ray_tracing.is_some());
+        let labels: Vec<_> = report.stages.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, [label]);
+        assert!(report.stages[0].scene.is_some(), "{pack}");
+    }
 }
 
 #[test]

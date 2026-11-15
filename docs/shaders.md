@@ -202,9 +202,10 @@ changes, from at most 2048 sources, the nearest first.
 
 ## Ray tracing
 
-A pack of API 0.2 can trace rays through the world from its post passes. It asks with an empty `[ray_tracing]` table,
-and its post stage gets two functions ([the reference](api/shaders-reference-0.2.md#ray-tracing) has `RayHit`'s
-fields):
+A pack of API 0.2 can trace rays through the world from its post passes and its material stage. It asks with an empty
+`[ray_tracing]` table (the pack needs a `[[post]]` pass or a `[material]` stage), and its post stage gets two functions,
+as does its material stage where its files call them ([the reference](api/shaders-reference-0.2.md#ray-tracing) has
+`RayHit`'s fields):
 
 ```toml
 api = "0.2"
@@ -236,11 +237,35 @@ and the check refuses a pack that names one itself.
 | In the scene today | Solid terrain (cut-outs included) within 8 chunks of the camera; `frame.ray_distance` is how far it surely reaches |
 | Not in it yet | Water, glass and other translucent terrain, entities, block entities, the hand, distant terrain tiles |
 | Turning it on | Pick the pack and start the game with it, on a GPU and graphics API with hardware ray queries: the device needs them from its creation, so in a game started without them a pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1` asks for ray queries and keeps the scene with any pack or none; any other value of it turns ray tracing off |
-| Without it | The pack loads and runs as it is: `frame.has_ray_tracing` is 0, `trace` misses and `trace_any` is false. Branch on `has_ray_tracing` and keep a look that works without rays |
+| Without it | The pack loads and runs as it is: `frame.has_ray_tracing` is 0, `trace` misses and `trace_any` is false. Branch on `has_ray_tracing` and keep a look that works without rays. It is also 0 in a pack none of whose stages calls `trace` or `trace_any` |
 
 The scene trails the world by a frame or two where chunks load or blocks change, and is empty for the first frames in
 a world. The smallest working pack is `crates/horizon-shader-api/packs/traced_shadows`: the sun's shadows, one ray a
 pixel.
+
+**In the material stage.** Translucent terrain (water, stained glass, ice) is blended where `material` shades it and
+leaves no surface for a post pass to light, so that is where its rays go. `input.position` and `input.normal` are
+camera-relative and in world axes, so a ray starts from them as they are:
+
+```wgsl
+if input.translucent && frame.has_ray_tracing == 1u {
+    let hit = trace(input.position, reflect(normalize(input.position), input.normal), 64.0);
+}
+```
+
+- **It costs more per ray.** `material` runs for every terrain fragment drawn, hidden ones included where the depth
+  test hasn't rejected them yet, so a ray there costs more than the same ray in a post pass, which runs once a pixel.
+  Light solid terrain in a post pass (`view_position`, `surface_at`) and keep the material stage's rays for translucent
+  surfaces (`input.translucent`).
+- **Only `material` itself traces.** `displacement` and the `[vertex]` file run in vertex shaders: the check refuses a
+  pack whose `displacement` or `vertex` reaches `trace` or `trace_any`.
+- **Water isn't in the scene yet.** A ray from a water surface passes through other water: right for the shore's
+  reflection, wrong for what lies behind a waterfall.
+- **Only a stage that calls them pays.** A material stage whose files name neither function is built as without
+  `[ray_tracing]`; one that does is built twice, the terrain drawing with the rays in frames that have the scene.
+
+`crates/horizon-shader-api/packs/traced_water` is the smallest pack that traces from `material`: water that mixes in
+what a reflected ray hits.
 
 ## Options
 

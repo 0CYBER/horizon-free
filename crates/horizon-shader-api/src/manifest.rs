@@ -160,16 +160,17 @@ pub struct Manifest {
     pub shadow: Option<Shadow>,
     /// Relief as geometry near the camera, if the pack asks for it; needs `[material]`.
     pub displacement: Option<Displacement>,
-    /// 0.2: the scene the post stage's `trace` reads, if the pack asks for it; needs `[[post]]`.
+    /// 0.2: the scene the post and material stages' `trace` reads, if the pack asks for it;
+    /// needs `[[post]]` or `[material]`.
     pub ray_tracing: Option<RayTracing>,
     /// 0.2: the motion guide the post stage's `motion_at` reads, if the pack asks for it;
     /// needs `[[post]]`.
     pub motion: Option<Motion>,
 }
 
-/// `[ray_tracing]` (0.2): the pack's post passes get `trace` and `trace_any`, which read the
-/// terrain around the camera where the device traces rays (`frame.has_ray_tracing`) and miss
-/// where it doesn't. No keys yet.
+/// `[ray_tracing]` (0.2): the pack's post passes, and its material stage where it calls them,
+/// get `trace` and `trace_any`, which read the terrain around the camera where the device
+/// traces rays (`frame.has_ray_tracing`) and miss where it doesn't. No keys yet.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RayTracing {}
@@ -795,9 +796,10 @@ impl Manifest {
         }
         check_post_targets(&raw.post, raw.ray_tracing.is_some(), raw.motion.is_some())
             .map_err(err)?;
-        if raw.ray_tracing.is_some() && raw.post.is_empty() {
+        if raw.ray_tracing.is_some() && raw.post.is_empty() && raw.material.is_none() {
             return Err(err(
-                "[ray_tracing] needs a [[post]] pass: `trace` is the post stage's".into(),
+                "[ray_tracing] needs a [[post]] pass or a [material] stage: `trace` is theirs"
+                    .into(),
             ));
         }
         if raw.motion.is_some() && raw.post.is_empty() {

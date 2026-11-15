@@ -339,8 +339,10 @@ pub struct NativeFrame {
     surface: wgpu::Texture,
     pub surface_view: wgpu::TextureView,
     pub(super) buffer: wgpu::Buffer,
-    /// Group 3 of the sky and material stages.
+    /// Group 3 of the sky and material stages, and its entries (a material stage that traces
+    /// joins them with the scene's).
     pub layout: wgpu::BindGroupLayout,
+    entries: Vec<wgpu::BindGroupLayoutEntry>,
     /// The pack's `[[textures]]` and their samplers, bound for every stage.
     pub textures: Vec<(wgpu::TextureView, wgpu::Sampler)>,
     /// The colour of block light around the camera (`[[lights]]`), bindings 9 and 10.
@@ -377,7 +379,7 @@ pub struct NativeFrame {
     eye: [f32; 4],
     /// A post stage must use black history after a long gap until it has rendered a frame.
     history_reset: bool,
-    /// `frame.ray_distance` while the post passes trace this frame's scene (`NativePost::trace`),
+    /// `frame.ray_distance` while the pack traces this frame's scene (`NativePack::write`),
     /// set before `write`: `frame.has_ray_tracing` is 1 then.
     pub(super) ray_distance: Option<f32>,
     start: std::time::Instant,
@@ -580,6 +582,7 @@ impl NativeFrame {
             &textures,
             &block_light,
             &pbr,
+            &[],
         );
         Self {
             textures,
@@ -587,6 +590,7 @@ impl NativeFrame {
             pbr,
             buffer,
             layout,
+            entries,
             group,
             surface,
             surface_view,
@@ -639,6 +643,7 @@ impl NativeFrame {
         textures: &[(wgpu::TextureView, wgpu::Sampler)],
         block_light: &super::block_light::BlockLight,
         pbr: &[wgpu::TextureView; 2],
+        scene: &[wgpu::BindGroupEntry<'_>],
     ) -> wgpu::BindGroup {
         let opaque_depth = opaque_depth.create_view(&Default::default());
         let opaque_color = opaque_color.create_view(&Default::default());
@@ -699,6 +704,7 @@ impl NativeFrame {
             },
         ]);
         entries.extend(pack_texture_group_entries(textures));
+        entries.extend_from_slice(scene);
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Native shader pack frame"),
             layout,
@@ -809,6 +815,7 @@ impl NativeFrame {
             &self.textures,
             &self.block_light,
             &self.pbr,
+            &[],
         );
     }
 
@@ -1684,7 +1691,7 @@ pub fn frame_inputs(
         black_level: 0.0,
         // No pack is served another space yet (`[frame] primaries`).
         primaries: Primaries::Bt709 as u32,
-        // `NativeFrame::write` sets them while the pack's post passes trace the scene.
+        // `NativeFrame::write` sets them while the pack traces the scene.
         has_ray_tracing: 0,
         ray_distance: 0.0,
         luminance: Primaries::Bt709.luminance(),

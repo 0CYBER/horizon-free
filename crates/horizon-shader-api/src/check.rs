@@ -6,12 +6,16 @@
 //! naga, checked against its signature and the API's rules (no bindings, no
 //! entry points, no `horizon_` names; in 0.2 none of the structs Horizon hands it
 //! constructed), then translated to SPIR-V, Metal and HLSL with its options at their
-//! defaults, minimums and maximums. A post stage of a pack with `[ray_tracing]` is checked
-//! twice: as every device runs it, where `trace` misses, and against the scene.
+//! defaults, minimums and maximums. A post stage of a pack with `[ray_tracing]`, and its
+//! material stage where that traces, is checked twice: as every device runs it, where `trace`
+//! misses, and against the scene.
 use crate::inputs::{DISPLACEMENT_INPUT, Frame, RAY_HIT};
 use crate::manifest::{OptionKind, PackOption};
 use crate::package::Pack;
-use crate::stages::{Composed, StageKind, compose, compose_scene};
+use crate::stages::{
+    Composed, GROUP, RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind, compose,
+    compose_scene, identifiers,
+};
 use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
 use std::collections::HashSet;
 use std::fmt;
@@ -63,14 +67,17 @@ pub struct CheckedStage {
     pub label: String,
     pub module: naga::Module,
     pub info: ModuleInfo,
-    /// A post stage of a pack with `[ray_tracing]`, built against the scene (`compose_scene`):
-    /// what the renderer runs while it binds the scene, on a device with ray queries. `module`
-    /// is the same stage with a `trace` that misses, which every device takes.
+    /// A post stage of a pack with `[ray_tracing]`, or its material stage where that calls
+    /// `trace` or `trace_any`, built against the scene (`compose_scene`): what the renderer runs
+    /// while it binds the scene, on a device with ray queries. `module` is the same stage with a
+    /// `trace` that misses, which every device takes.
     pub scene: Option<naga::Module>,
     /// The stage's WGSL without the entry points (the prelude, the shared
     /// files, the file), for a renderer that calls the stage function from
     /// its own shader (the sky).
     pub source: String,
+    /// `source` built against the scene, with `scene`.
+    pub scene_source: Option<String>,
     /// What the budgets hold: with `scene`, its counts, the larger ones.
     pub expressions: usize,
     pub texture_reads: usize,
@@ -288,14 +295,25 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
     let composed = compose(pack, kind, file);
     let module = parse(&composed)?;
     let info = validate(&module, &composed, Capabilities::default())?;
-    let scene = if kind == StageKind::Post && pack.manifest.ray_tracing.is_some() {
-        let composed = compose_scene(pack, kind, file);
-        let module = parse(&composed)?;
-        let capabilities = Capabilities::default() | Capabilities::RAY_QUERY;
-        let info = validate(&module, &composed, capabilities)?;
-        Some((module, info))
-    } else {
-        None
+    // A stage the scene changes nothing in (a material stage that doesn't trace) is built once.
+    let traced = Some(compose_scene(pack, kind, file)).filter(|s| s.text != composed.text);
+    let scene = match traced {
+        Some(mut composed) => {
+            let module = parse(&composed)?;
+            let capabilities = Capabilities::default() | Capabilities::RAY_QUERY;
+            let info = validate(&module, &composed, capabilities)?;
+            if kind == StageKind::Material {
+                let problems = vertex_rays(&module, &info, &composed, &pack.manifest);
+                if !problems.is_empty() {
+                    return Err(problems);
+                }
+            }
+            composed
+                .text
+                .truncate(composed.parts.last().expect("entries").1.start);
+            Some((module, info, composed.text))
+        }
+        None => None,
     };
     let (expressions, texture_reads) = cost(scene.as_ref().map_or(&module, |s| &s.0));
     let mut problems = Vec::new();
@@ -324,7 +342,7 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
     }
     let options = &pack.manifest.options;
     problems.extend(translate(&module, &info, options, file, (2, 2)));
-    if let (Some((module, info)), true) = (&scene, problems.is_empty()) {
+    if let (Some((module, info, _)), true) = (&scene, problems.is_empty()) {
         // Metal has ray queries from 2.4.
         problems.extend(translate(module, info, options, file, (2, 4)));
     }
@@ -337,8 +355,9 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
         label: file.to_owned(),
         module,
         info,
-        scene: scene.map(|s| s.0),
         source: own.text,
+        scene_source: scene.as_ref().map(|s| s.2.clone()),
+        scene: scene.map(|s| s.0),
         expressions,
         texture_reads,
     })
@@ -380,48 +399,62 @@ const RAY_QUERY_NAMES: [&str; 5] = [
 fn ray_queries(own: &Composed) -> Vec<Problem> {
     let mut problems = Vec::new();
     for (_, range) in &own.parts[1..] {
-        let text = &own.text[range.clone()];
-        let bytes = text.as_bytes();
-        let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
         let mut seen: Vec<&str> = Vec::new();
-        let mut at = 0;
-        while at < bytes.len() {
-            if text[at..].starts_with("//") {
-                at += text[at..].find('\n').unwrap_or(text.len() - at);
-            } else if text[at..].starts_with("/*") {
-                let mut depth = 0;
-                while at < bytes.len() {
-                    let (opens, closes) =
-                        (text[at..].starts_with("/*"), text[at..].starts_with("*/"));
-                    depth += i32::from(opens) - i32::from(closes);
-                    // A character of any width: `at` stays on a boundary.
-                    at += match opens || closes {
-                        true => 2,
-                        false => text[at..].chars().next().map_or(1, char::len_utf8),
-                    };
-                    if depth == 0 {
-                        break;
-                    }
-                }
-            } else if word(bytes[at]) {
-                let end = at + bytes[at..].iter().take_while(|b| word(**b)).count();
-                let name = &text[at..end];
-                let query = RAY_QUERY_NAMES.contains(&name) || name.starts_with("rayQuery");
-                if query && !seen.contains(&name) {
-                    seen.push(name);
-                    problems.push(located(
-                        own,
-                        Some(range.start + at),
-                        format!(
-                            "`{name}`: a pack traces rays with `trace` and `trace_any`; ray queries and the scene are Horizon's"
-                        ),
-                    ));
-                }
-                at = end;
-            } else {
-                // A character of any width: `at` stays on a boundary.
-                at += text[at..].chars().next().map_or(1, char::len_utf8);
+        for (at, name) in identifiers(&own.text[range.clone()]) {
+            let query = RAY_QUERY_NAMES.contains(&name) || name.starts_with("rayQuery");
+            if query && !seen.contains(&name) {
+                seen.push(name);
+                problems.push(located(
+                    own,
+                    Some(range.start + at),
+                    format!(
+                        "`{name}`: a pack traces rays with `trace` and `trace_any`; ray queries and the scene are Horizon's"
+                    ),
+                ));
             }
+        }
+    }
+    problems
+}
+
+/// Where a material stage built against the scene reaches it from a function that runs in a
+/// vertex shader: `displacement`, and the vertex stage's `vertex`, which shares its module. The
+/// renderer binds the scene for the fragment stage only.
+fn vertex_rays(
+    module: &naga::Module,
+    info: &ModuleInfo,
+    composed: &Composed,
+    manifest: &crate::manifest::Manifest,
+) -> Vec<Problem> {
+    let last = RAY_SPRITES_BINDING + RAY_SPRITE_ARRAYS - 1;
+    let scene: Vec<_> = (module.global_variables.iter())
+        .filter(|(_, g)| {
+            g.binding.as_ref().is_some_and(|b| {
+                b.group == GROUP && (RAY_SCENE_BINDING..=last).contains(&b.binding)
+            })
+        })
+        .map(|(handle, _)| handle)
+        .collect();
+    let vertex = [
+        ("vertex", manifest.vertex.is_some()),
+        ("displacement", manifest.displacement.is_some()),
+    ];
+    let mut problems = Vec::new();
+    for (handle, f) in module.functions.iter() {
+        let name = f.name.as_deref().unwrap_or_default();
+        if vertex.contains(&(name, true)) && scene.iter().any(|&g| !info[handle][g].is_empty()) {
+            let at = module
+                .functions
+                .get_span(handle)
+                .to_range()
+                .map(|r| r.start);
+            problems.push(located(
+                composed,
+                at,
+                format!(
+                    "`{name}` reaches `trace` or `trace_any`: it runs in a vertex shader, and only `material` traces rays"
+                ),
+            ));
         }
     }
     problems

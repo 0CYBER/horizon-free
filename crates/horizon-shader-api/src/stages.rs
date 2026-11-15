@@ -1017,10 +1017,18 @@ impl StageKind {
     }
 
     /// `prelude` with what `tracing` holds of the scene: in every stage the frame's two fields
-    /// for it, and in the post stage `RayHit`, `trace` and `trace_any`.
+    /// for it, and in the post and material stages `RayHit`, `trace` and `trace_any`.
     pub fn prelude_traced(self, api: Api, tracing: Tracing) -> String {
+        let rays = matches!(self, StageKind::Post | StageKind::Material);
+        self.prelude_rays(api, tracing, rays)
+    }
+
+    /// `prelude_traced`, with `RayHit`, `trace` and `trace_any` only where `rays`: a material
+    /// stage that calls neither is built as it was before them.
+    fn prelude_rays(self, api: Api, tracing: Tracing, rays: bool) -> String {
+        let rays = rays && tracing != Tracing::None;
         let mut out = match tracing {
-            Tracing::Scene if self == StageKind::Post => String::from(RAY_ENABLE),
+            Tracing::Scene if rays => String::from(RAY_ENABLE),
             _ => String::new(),
         };
         out += match api {
@@ -1048,13 +1056,6 @@ impl StageKind {
                 out += POST_HELPERS;
                 out += POST_SURFACE;
                 out += SHADOW_HELPERS;
-                if tracing != Tracing::None {
-                    out += &RAY_HIT.wgsl();
-                    out += match tracing {
-                        Tracing::Scene => RAY_SCENE,
-                        _ => RAY_STUB,
-                    };
-                }
             }
             StageKind::Material => {
                 out += match api {
@@ -1069,6 +1070,13 @@ impl StageKind {
                 out += SHADOW_HELPERS;
             }
             StageKind::Sky | StageKind::Weather | StageKind::Tonemap => {}
+        }
+        if rays {
+            out += &RAY_HIT.wgsl();
+            out += match tracing {
+                Tracing::Scene => RAY_SCENE,
+                _ => RAY_STUB,
+            };
         }
         out
     }
@@ -1223,9 +1231,53 @@ pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
 }
 
 /// `compose` for a pack with `[ray_tracing]` where the renderer binds the scene: its post
-/// stage traces it. The module needs a device with ray queries.
+/// stage traces it, and its material stage where that calls `trace` or `trace_any`. Such a
+/// module needs a device with ray queries.
 pub fn compose_scene(pack: &Pack, kind: StageKind, file: &str) -> Composed {
     compose_traced(pack, kind, file, true)
+}
+
+/// The names in WGSL `text` outside its comments (block comments nest), each with its byte
+/// offset, in order.
+pub(crate) fn identifiers(text: &str) -> Vec<(usize, &str)> {
+    let bytes = text.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut names = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if text[at..].starts_with("//") {
+            at += text[at..].find('\n').unwrap_or(text.len() - at);
+        } else if text[at..].starts_with("/*") {
+            let mut depth = 0;
+            while at < bytes.len() {
+                let (opens, closes) = (text[at..].starts_with("/*"), text[at..].starts_with("*/"));
+                depth += i32::from(opens) - i32::from(closes);
+                // A character of any width: `at` stays on a boundary.
+                at += match opens || closes {
+                    true => 2,
+                    false => text[at..].chars().next().map_or(1, char::len_utf8),
+                };
+                if depth == 0 {
+                    break;
+                }
+            }
+        } else if word(bytes[at]) {
+            let end = at + bytes[at..].iter().take_while(|b| word(**b)).count();
+            names.push((at, &text[at..end]));
+            at = end;
+        } else {
+            // A character of any width: `at` stays on a boundary.
+            at += text[at..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    names
+}
+
+/// Whether a material stage's files, `texts`, name `trace` or `trace_any`: only then does its
+/// prelude have them and the renderer build its terrain against the scene.
+fn traces<'a>(mut texts: impl Iterator<Item = &'a str>) -> bool {
+    let ray = |(_, name): &(usize, &str)| *name == "trace" || *name == "trace_any";
+    texts.any(|text| identifiers(text).iter().any(ray))
 }
 
 fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Composed {
@@ -1249,20 +1301,15 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
             .parts
             .push((name.to_owned(), start..composed.text.len()));
     };
-    let mut prelude =
-        kind.prelude_traced(api, tracing) + &texture_declarations(&pack.manifest.textures);
-    if kind == StageKind::Post {
-        prelude += &post_target_declarations(&pack.manifest);
-        if api == Api::V0_2 && pack.manifest.motion.is_some() {
-            prelude += MOTION;
-        }
-    }
-    push("<prelude>", &prelude);
-    for shared in pack.manifest.shared.iter().filter(|s| *s != file) {
-        push(shared, pack.source(shared).unwrap_or_default());
-    }
-    // The stage's own extra files, between the shared ones and its file.
+    // The shared files, then the stage's own extra files, its file, and after it in the
+    // material's module the vertex stage's.
     let m = &pack.manifest;
+    let mut files: Vec<&str> = m
+        .shared
+        .iter()
+        .map(String::as_str)
+        .filter(|s| *s != file)
+        .collect();
     let stage = match kind {
         StageKind::Sky => m.sky.as_ref(),
         StageKind::Material => m.material.as_ref(),
@@ -1272,12 +1319,13 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
         StageKind::Tonemap => m.tonemap.as_ref(),
         StageKind::Entity => m.entity.as_ref(),
     };
-    for extra in stage.into_iter().flat_map(|s| &s.files) {
-        if extra != file && !m.shared.contains(extra) {
-            push(extra, pack.source(extra).unwrap_or_default());
-        }
-    }
-    push(file, pack.source(file).unwrap_or_default());
+    let extras = stage.into_iter().flat_map(|s| &s.files);
+    files.extend(
+        extras
+            .filter(|e| *e != file && !m.shared.contains(e))
+            .map(String::as_str),
+    );
+    files.push(file);
     // They draw terrain together: the vertex stage's function is in the material's module.
     if kind == StageKind::Material
         && let Some(vertex) = &m.vertex
@@ -1285,9 +1333,27 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
         for extra in vertex.files.iter().chain(std::iter::once(&vertex.file)) {
             let own = stage.is_some_and(|s| s.files.contains(extra));
             if !own && !m.shared.contains(extra) {
-                push(extra, pack.source(extra).unwrap_or_default());
+                files.push(extra.as_str());
             }
         }
+    }
+    let source = |f: &&str| pack.source(f).unwrap_or_default();
+    let rays = match kind {
+        StageKind::Post => true,
+        StageKind::Material => tracing != Tracing::None && traces(files.iter().map(source)),
+        _ => false,
+    };
+    let mut prelude =
+        kind.prelude_rays(api, tracing, rays) + &texture_declarations(&pack.manifest.textures);
+    if kind == StageKind::Post {
+        prelude += &post_target_declarations(&pack.manifest);
+        if api == Api::V0_2 && pack.manifest.motion.is_some() {
+            prelude += MOTION;
+        }
+    }
+    push("<prelude>", &prelude);
+    for f in &files {
+        push(f, source(f));
     }
     if kind == StageKind::Material && m.displacement.is_some() {
         push(

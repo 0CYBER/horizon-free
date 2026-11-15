@@ -1,0 +1,14 @@
+schema = 1
+id = "traced_water"
+name = "Traced Water"
+version = "1.0.0"
+api = "0.2"
+description = "Water that mirrors what a ray off it hits: the smallest pack that traces from the material stage. A test pack of the SDK, not offered to players."
+authors = ["Horizon"]
+license = "MIT"
+
+[ray_tracing]
+
+[material]
+file = "material.wgsl"
+name = "Reflecting water"

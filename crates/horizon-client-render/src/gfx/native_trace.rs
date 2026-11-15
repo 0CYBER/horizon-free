@@ -1,17 +1,20 @@
-//! The scene in the post passes of a shader pack with `[ray_tracing]` (docs/shaders.md, spec
-//! #15624): where the device traces rays, each pass is built a second time from the module the
-//! check made against the scene (`CheckedStage::scene`), and its group 3 also holds the TLAS,
-//! the store of the sections' vertices (gfx/ray_scene.rs), the block sprites and the pack's
-//! material id and tags of each sprite layer, which the prelude's `trace` reads. Those passes
-//! draw in frames that have a scene; in the others, and on a device that can't hold the
-//! bindings, the passes whose `trace` misses draw, as on a device without ray queries.
+//! The scene in the post passes and the material stage of a shader pack with `[ray_tracing]`
+//! (docs/shaders.md, spec #15624): where the device traces rays, each pass, and the terrain's
+//! pipelines of a material stage that calls `trace` or `trace_any`, are built a second time
+//! from what the check made against the scene (`CheckedStage::scene`, `scene_source`), and their
+//! group 3 also holds the TLAS, the store of the sections' vertices (gfx/ray_scene.rs), the
+//! block sprites and the pack's material id and tags of each sprite layer, which the prelude's
+//! `trace` reads. Those draw in frames that have a scene; in the others, and on a device that
+//! can't hold the bindings, the ones whose `trace` misses draw, as on a device without ray
+//! queries.
 
 use horizon_shader_api::stages::{
     GROUP, RAY_LAYERS_BINDING, RAY_SCENE_BINDING, RAY_SPACE_BINDING, RAY_SPRITE_ARRAYS,
     RAY_SPRITES_BINDING, RAY_STORE_BINDING,
 };
 
-use super::{INTERMEDIATE, NativePost, post_pipeline};
+use super::super::native_material::{MaterialPipelines, TerrainShape, terrain_entries};
+use super::{INTERMEDIATE, NativeFrame, NativePost, post_pipeline};
 pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::{RayScene, Traced};
 
 /// What the scene's passes are built against besides the scene: the terrain's sprites and the
@@ -27,18 +30,47 @@ pub(in crate::gfx) struct TraceShape<'a> {
     pub materials: &'a [(u32, u32)],
 }
 
-/// The post passes built against the scene, and what they read besides it.
-pub(super) struct NativeTrace {
-    /// The post group's layout with the scene's bindings.
-    pub(super) layout: wgpu::BindGroupLayout,
-    /// One pipeline a pass, in the passes' order.
-    pub(super) pipelines: Vec<wgpu::RenderPipeline>,
+impl<'a> TraceShape<'a> {
+    pub(in crate::gfx) fn of(terrain: &TerrainShape<'a>) -> Self {
+        Self {
+            sprites: terrain.sprite_views,
+            split: terrain.sprites[1] as u32,
+            tags: terrain.sprite_tags,
+            materials: terrain.sprite_materials,
+        }
+    }
+}
+
+/// What a stage built against the scene reads besides the TLAS and the store.
+pub(in crate::gfx) struct Rays {
     /// The prelude's `horizon_ray_space`: the camera in the scene's space, then `split`.
     space: wgpu::Buffer,
     /// The prelude's `horizon_ray_layers`.
     layers: wgpu::Buffer,
     sprites: Vec<wgpu::TextureView>,
     split: u32,
+}
+
+/// The post passes built against the scene, and what they read besides it.
+pub(super) struct NativeTrace {
+    /// The post group's layout with the scene's bindings.
+    pub(super) layout: wgpu::BindGroupLayout,
+    /// One pipeline a pass, in the passes' order.
+    pub(super) pipelines: Vec<wgpu::RenderPipeline>,
+    rays: Rays,
+}
+
+/// A material stage's terrain pipelines built against the scene, and its frame's group with
+/// the scene in it.
+pub(in crate::gfx) struct TerrainTrace {
+    layout: wgpu::BindGroupLayout,
+    pipelines: MaterialPipelines,
+    rays: Rays,
+    /// The group, made for the frame's group `.0` and the scene of generation `.1` (the TLAS and
+    /// the store are replaced as they grow, and the frame's group as its targets change).
+    group: Option<(wgpu::BindGroup, u64, wgpu::BindGroup)>,
+    /// Whether this frame traces the scene.
+    on: bool,
 }
 
 /// `horizon_ray_layers`: two words a sprite layer, its material id then its tags, up to the
@@ -61,7 +93,7 @@ fn layer_words(tags: &[(u32, u32)], materials: &[(u32, u32)]) -> Vec<u32> {
     words
 }
 
-/// The scene's bindings in the post group, for the fragment stage.
+/// The scene's bindings in group 3, for the fragment stage.
 fn scene_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
         binding,
@@ -100,10 +132,18 @@ fn scene_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     entries
 }
 
-/// What `limits` lacks to hold a fragment stage's `entries`, if anything.
-fn over_limits(entries: &[wgpu::BindGroupLayoutEntry], limits: &wgpu::Limits) -> Option<String> {
+/// What `limits` lacks for a fragment stage that reads the group `group` and the other groups'
+/// entries `others`, if anything.
+fn over_limits(
+    group: &[wgpu::BindGroupLayoutEntry],
+    others: &[wgpu::BindGroupLayoutEntry],
+    limits: &wgpu::Limits,
+) -> Option<String> {
+    let fragment = || {
+        (group.iter().chain(others)).filter(|e| e.visibility.contains(wgpu::ShaderStages::FRAGMENT))
+    };
     let count = |wanted: fn(&wgpu::BindingType) -> bool| {
-        entries.iter().filter(|e| wanted(&e.ty)).count() as u32
+        fragment().filter(|e| wanted(&e.ty)).count() as u32
     };
     use wgpu::{BindingType::Buffer, BufferBindingType as Kind};
     let needs = [
@@ -145,7 +185,7 @@ fn over_limits(entries: &[wgpu::BindGroupLayoutEntry], limits: &wgpu::Limits) ->
         ),
         (
             "bindings in a group",
-            entries.iter().map(|e| e.binding + 1).max().unwrap_or(0),
+            group.iter().map(|e| e.binding + 1).max().unwrap_or(0),
             limits.max_bindings_per_bind_group,
         ),
     ];
@@ -155,99 +195,80 @@ fn over_limits(entries: &[wgpu::BindGroupLayoutEntry], limits: &wgpu::Limits) ->
         .map(|(what, need, limit)| format!("{need} {what}, the device takes {limit}"))
 }
 
-impl NativePost {
-    /// Builds the passes against the scene from `scenes` (each pass's label and its module
-    /// with the scene, in the passes' order), where the device traces rays and takes the
-    /// bindings; else the passes keep missing every ray, and the log says why once.
-    pub(in crate::gfx) fn trace_scene(
-        &mut self,
-        device: &wgpu::Device,
-        scenes: Vec<(String, naga::Module)>,
-        constants: &[(String, f64)],
-        shape: &TraceShape<'_>,
-    ) {
-        // Without ray queries there is no scene (`ray_query` said so if they were asked for).
-        if !crate::gfx::surface_setup::ray_query::on(device) || scenes.len() != self.passes.len() {
-            return;
-        }
-        let mut entries = self.entries.clone();
-        entries.extend(scene_entries());
-        let refused = if shape.sprites.len() < RAY_SPRITE_ARRAYS as usize {
-            Some("the terrain's sprite arrays aren't there".to_owned())
-        } else {
-            over_limits(&entries, &device.limits())
-        };
-        if let Some(why) = refused {
-            log::warn!("Horizon renderer: the shader pack's rays miss everything: {why}");
-            return;
-        }
-        // A scope of its own: a backend that refuses these passes leaves the pack its others.
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Native shader pack post with the scene"),
-            entries: &entries,
-        });
-        let mut groups: [Option<&wgpu::BindGroupLayout>; GROUP as usize + 1] = Default::default();
-        groups[GROUP as usize] = Some(&layout);
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Native shader pack post with the scene"),
-            bind_group_layouts: &groups,
-            ..Default::default()
-        });
-        // A `[ray_tracing]` pack is 0.2's: every pass draws a half-float target.
-        let pipelines = scenes
-            .into_iter()
-            .map(|(label, module)| {
-                let target = INTERMEDIATE;
-                post_pipeline(device, &label, &pipeline_layout, module, constants, target)
-            })
-            .collect();
-        if let Some(e) = pollster::block_on(scope.pop()) {
+/// Builds with `build` what draws against the scene, in a group 3 of `entries` and the
+/// scene's, where the device traces rays and its fragment stage holds them beside its other
+/// groups' entries `others`. Else None, and the log says why: what doesn't trace keeps missing
+/// every ray.
+fn with_scene<T>(
+    device: &wgpu::Device,
+    (entries, others): (&[wgpu::BindGroupLayoutEntry], &[wgpu::BindGroupLayoutEntry]),
+    shape: &TraceShape<'_>,
+    build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<T, String>,
+) -> Option<(wgpu::BindGroupLayout, T, Rays)> {
+    // Without ray queries there is no scene (`ray_query` said so if they were asked for).
+    if !crate::gfx::surface_setup::ray_query::on(device) {
+        return None;
+    }
+    let mut entries = entries.to_vec();
+    entries.extend(scene_entries());
+    let refused = if shape.sprites.len() < RAY_SPRITE_ARRAYS as usize {
+        Some("the terrain's sprite arrays aren't there".to_owned())
+    } else {
+        over_limits(&entries, others, &device.limits())
+    };
+    if let Some(why) = refused {
+        log::warn!("Horizon renderer: the shader pack's rays miss everything: {why}");
+        return None;
+    }
+    // A scope of its own: a backend that refuses these leaves the pack the ones that miss.
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Native shader pack group with the scene"),
+        entries: &entries,
+    });
+    let built = build(&layout);
+    let refused = pollster::block_on(scope.pop()).map(|e| e.to_string());
+    let built = match (built, refused) {
+        (Ok(built), None) => built,
+        (Err(e), _) | (_, Some(e)) => {
             log::warn!("Horizon renderer: the shader pack's rays miss everything: {e}");
-            return;
+            return None;
         }
-        let words = layer_words(shape.tags, shape.materials);
-        self.trace = Some(NativeTrace {
-            layout,
-            pipelines,
-            space: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Native shader pack ray space"),
-                size: 16,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            layers: wgpu::util::DeviceExt::create_buffer_init(
-                device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Native shader pack sprite layers"),
-                    contents: bytemuck::cast_slice(&words),
-                    usage: wgpu::BufferUsages::STORAGE,
-                },
-            ),
-            sprites: shape.sprites[..RAY_SPRITE_ARRAYS as usize].to_vec(),
-            split: shape.split.max(1),
-        });
-    }
-
-    /// This frame's `frame.ray_distance` when the passes trace `scene` (`run` with the same
-    /// `scene` then draws them): writes where the camera is in it. None when they don't.
-    pub(in crate::gfx) fn trace(
-        &self,
-        queue: &wgpu::Queue,
-        scene: Option<&Traced<'_>>,
-    ) -> Option<f32> {
-        let (trace, scene) = self.trace.as_ref().zip(scene)?;
-        let mut space = [0u8; 16];
-        space[..12].copy_from_slice(bytemuck::cast_slice(&scene.camera));
-        space[12..].copy_from_slice(&trace.split.to_ne_bytes());
-        queue.write_buffer(&trace.space, 0, &space);
-        Some(scene.distance)
-    }
+    };
+    let words = layer_words(shape.tags, shape.materials);
+    let rays = Rays {
+        space: device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Native shader pack ray space"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        layers: wgpu::util::DeviceExt::create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Native shader pack sprite layers"),
+                contents: bytemuck::cast_slice(&words),
+                usage: wgpu::BufferUsages::STORAGE,
+            },
+        ),
+        sprites: shape.sprites[..RAY_SPRITE_ARRAYS as usize].to_vec(),
+        split: shape.split.max(1),
+    };
+    Some((layout, built, rays))
 }
 
-impl NativeTrace {
-    /// The scene's entries of a pass's group.
-    pub(super) fn entries<'a>(&'a self, scene: &Traced<'a>) -> Vec<wgpu::BindGroupEntry<'a>> {
+impl Rays {
+    /// Writes where the camera is in `scene`, and returns this frame's `frame.ray_distance`.
+    fn write(&self, queue: &wgpu::Queue, scene: &Traced<'_>) -> f32 {
+        let mut space = [0u8; 16];
+        space[..12].copy_from_slice(bytemuck::cast_slice(&scene.camera));
+        space[12..].copy_from_slice(&self.split.to_ne_bytes());
+        queue.write_buffer(&self.space, 0, &space);
+        scene.distance
+    }
+
+    /// The scene's entries of a group 3.
+    fn entries<'a>(&'a self, scene: &Traced<'a>) -> Vec<wgpu::BindGroupEntry<'a>> {
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: RAY_SCENE_BINDING,
@@ -276,6 +297,150 @@ impl NativeTrace {
                 }),
         );
         entries
+    }
+}
+
+impl NativePost {
+    /// Builds the passes against the scene from `scenes` (each pass's label and its module
+    /// with the scene, in the passes' order), where the device traces rays and takes the
+    /// bindings; else the passes keep missing every ray, and the log says why once. Returns
+    /// whether they trace.
+    pub(in crate::gfx) fn trace_scene(
+        &mut self,
+        device: &wgpu::Device,
+        scenes: Vec<(String, naga::Module)>,
+        constants: &[(String, f64)],
+        shape: &TraceShape<'_>,
+    ) -> bool {
+        if scenes.len() != self.passes.len() {
+            return false;
+        }
+        let build = |layout: &wgpu::BindGroupLayout| {
+            let mut groups: [Option<&wgpu::BindGroupLayout>; GROUP as usize + 1] =
+                Default::default();
+            groups[GROUP as usize] = Some(layout);
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Native shader pack post with the scene"),
+                bind_group_layouts: &groups,
+                ..Default::default()
+            });
+            // A `[ray_tracing]` pack is 0.2's: every pass draws a half-float target.
+            let target = INTERMEDIATE;
+            Ok(scenes
+                .into_iter()
+                .map(|(label, module)| {
+                    post_pipeline(device, &label, &pipeline_layout, module, constants, target)
+                })
+                .collect())
+        };
+        let traced = with_scene(device, (&self.entries, &[]), shape, build);
+        self.trace = traced.map(|(layout, pipelines, rays)| NativeTrace {
+            layout,
+            pipelines,
+            rays,
+        });
+        self.trace.is_some()
+    }
+
+    /// This frame's `frame.ray_distance` when the passes trace `scene` (`run` with the same
+    /// `scene` then draws them): writes where the camera is in it. None when they don't.
+    pub(in crate::gfx) fn trace(
+        &self,
+        queue: &wgpu::Queue,
+        scene: Option<&Traced<'_>>,
+    ) -> Option<f32> {
+        let (trace, scene) = self.trace.as_ref().zip(scene)?;
+        Some(trace.rays.write(queue, scene))
+    }
+}
+
+impl NativeTrace {
+    /// The scene's entries of a pass's group.
+    pub(super) fn entries<'a>(&'a self, scene: &Traced<'a>) -> Vec<wgpu::BindGroupEntry<'a>> {
+        self.rays.entries(scene)
+    }
+}
+
+impl TerrainTrace {
+    /// The terrain's pipelines against the scene, made by `build` with the frame's group
+    /// joined with it, where the device traces rays and the terrain's fragment stage, which
+    /// also reads terrain.wgsl's group 0, holds the bindings.
+    pub(in crate::gfx) fn new(
+        device: &wgpu::Device,
+        frame: &NativeFrame,
+        terrain: &TerrainShape<'_>,
+        build: impl FnOnce(&wgpu::BindGroupLayout) -> Result<MaterialPipelines, String>,
+    ) -> Option<Self> {
+        let groups = (frame.entries.as_slice(), terrain_entries());
+        let shape = TraceShape::of(terrain);
+        let (layout, pipelines, rays) = with_scene(device, (groups.0, &groups.1), &shape, build)?;
+        Some(Self {
+            layout,
+            pipelines,
+            rays,
+            group: None,
+            on: false,
+        })
+    }
+
+    /// This frame's `frame.ray_distance` when the terrain traces `scene`: writes where the
+    /// camera is in it.
+    pub(in crate::gfx) fn trace(
+        &self,
+        queue: &wgpu::Queue,
+        scene: Option<&Traced<'_>>,
+    ) -> Option<f32> {
+        Some(self.rays.write(queue, scene?))
+    }
+
+    /// Joins the frame's group, as it is now, with `scene`, this frame's: the terrain draws
+    /// with these pipelines while there is one.
+    pub(in crate::gfx) fn bind(
+        &mut self,
+        device: &wgpu::Device,
+        frame: &NativeFrame,
+        scene: Option<&Traced<'_>>,
+    ) {
+        self.on = scene.is_some();
+        let Some(scene) = scene else {
+            return;
+        };
+        let made = |(group, generation, _): &(wgpu::BindGroup, u64, wgpu::BindGroup)| {
+            *group == frame.group && *generation == scene.generation
+        };
+        if !self.group.as_ref().is_some_and(made) {
+            let joined = frame.joined(device, &self.layout, &self.rays.entries(scene));
+            self.group = Some((frame.group.clone(), scene.generation, joined));
+        }
+    }
+
+    /// The pipelines and group 3 the terrain draws with this frame, if it traces.
+    pub(in crate::gfx) fn drawn(&self) -> Option<(&MaterialPipelines, &wgpu::BindGroup)> {
+        let (_, _, group) = self.group.as_ref().filter(|_| self.on)?;
+        Some((&self.pipelines, group))
+    }
+}
+
+impl NativeFrame {
+    /// The frame's group as `group` makes it, with `scene`'s entries, of the layout `layout`.
+    fn joined(
+        &self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        scene: &[wgpu::BindGroupEntry<'_>],
+    ) -> wgpu::BindGroup {
+        NativeFrame::group(
+            device,
+            layout,
+            &self.buffer,
+            (&self.reflection, &self.reflection_sampler),
+            &self.shadow_map,
+            (&self.opaque_depth, &self.opaque_color),
+            &self.textures,
+            &self.block_light,
+            &self.pbr,
+            scene,
+        )
     }
 }
 
@@ -312,22 +477,72 @@ mod tests {
             max_bindings_per_bind_group: 60,
             ..Default::default()
         };
-        assert_eq!(over_limits(&entries, &fits), None);
+        assert_eq!(over_limits(&entries, &[], &fits), None);
         // OpenGL's 16 sampled textures hold the post stage's own 12 or so, not eight more.
         let few = wgpu::Limits {
             max_sampled_textures_per_shader_stage: 8,
             ..fits.clone()
         };
-        let why = over_limits(&entries, &few).unwrap();
+        let why = over_limits(&entries, &[], &few).unwrap();
         assert_eq!(why, "9 sampled textures, the device takes 8");
         let none = wgpu::Limits {
             max_acceleration_structures_per_shader_stage: 0,
             ..fits
         };
         assert!(
-            over_limits(&entries, &none)
+            over_limits(&entries, &[], &none)
                 .unwrap()
                 .contains("acceleration structures")
+        );
+    }
+
+    /// The terrain's fragment stage reads terrain.wgsl's group 0 besides the frame's group:
+    /// its textures and uniform count toward the same per-stage limits, a binding number of its
+    /// own doesn't count toward the group's.
+    #[test]
+    fn the_terrain_s_own_group_counts_toward_its_fragment_stage_s_limits() {
+        let mut entries = scene_entries();
+        let terrain = terrain_entries();
+        // 8 sprite arrays, the lightmap and the emission thresholds; the globals' uniform.
+        let textures =
+            |e: &&wgpu::BindGroupLayoutEntry| matches!(e.ty, wgpu::BindingType::Texture { .. });
+        assert_eq!(terrain.iter().filter(textures).count(), 10);
+        // What only the vertex stage reads doesn't count.
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        });
+        let fits = wgpu::Limits {
+            max_sampled_textures_per_shader_stage: 18,
+            max_storage_buffers_per_shader_stage: 2,
+            max_uniform_buffers_per_shader_stage: 2,
+            max_acceleration_structures_per_shader_stage: 1,
+            max_bindings_per_bind_group: 60,
+            ..Default::default()
+        };
+        assert_eq!(over_limits(&entries, &terrain, &fits), None);
+        let few = wgpu::Limits {
+            max_sampled_textures_per_shader_stage: 17,
+            ..fits.clone()
+        };
+        let why = over_limits(&entries, &terrain, &few).unwrap();
+        assert_eq!(why, "18 sampled textures, the device takes 17");
+        // The scene's group without the terrain's would have fitted.
+        assert_eq!(over_limits(&entries, &[], &few), None);
+        let one = wgpu::Limits {
+            max_uniform_buffers_per_shader_stage: 1,
+            ..fits
+        };
+        assert!(
+            over_limits(&entries, &terrain, &one)
+                .unwrap()
+                .contains("2 uniform buffers")
         );
     }
 }
