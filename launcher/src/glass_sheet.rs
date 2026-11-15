@@ -121,6 +121,8 @@ struct Draft {
     java: (String, (String, String)),
     /// The hook fields (before, wrapper, after, variables), once the Hooks section was opened.
     hooks: Option<[String; 4]>,
+    /// The Linux switches, once one was flipped.
+    switches: Option<[bool; 3]>,
 }
 
 impl Draft {
@@ -150,7 +152,11 @@ impl Draft {
                         .unwrap_or_default(),
                 )
         });
-        let hooks = self.hooks.as_ref().is_some_and(|typed| *typed != hooks);
+        let l = &saved.launch;
+        let hooks = self.hooks.as_ref().is_some_and(|typed| *typed != hooks)
+            || self
+                .switches
+                .is_some_and(|s| s != [l.gamemode, l.mangohud, l.dedicated_gpu]);
         [
             (general, SheetTab::General),
             (installation, SheetTab::Installation),
@@ -200,6 +206,7 @@ impl Launcher {
                 ),
             ),
             hooks: self.hooks_typed(&saved.id),
+            switches: self.switches_typed(&saved.id),
         };
         draft.changed(saved)
     }
@@ -940,6 +947,7 @@ mod tests {
             plays: Plays::Horizon,
             java: (String::new(), (String::new(), String::new())),
             hooks: None,
+            switches: None,
         }
     }
 
@@ -973,7 +981,7 @@ mod tests {
         let general = SheetTab::General;
         let installation = SheetTab::Installation;
         type Edit = (fn(&mut Draft), SheetTab);
-        let edits: [Edit; 7] = [
+        let edits: [Edit; 8] = [
             (|d| d.name = "Renamed".into(), general),
             (|d| d.group = "Friends".into(), general),
             (|d| d.icon = Some(Icon::Colour("#6b4bff".into())), general),
@@ -995,6 +1003,8 @@ mod tests {
                 },
                 SheetTab::Hooks,
             ),
+            // A Linux switch flipped waits for Save like a typed command.
+            (|d| d.switches = Some([true, false, false]), SheetTab::Hooks),
         ];
         // Each edit marks its own section, and only that one.
         for (edit, section) in edits {
@@ -1005,6 +1015,9 @@ mod tests {
         // Hooks opened and left as they were is no edit.
         let mut draft = untouched(&saved);
         draft.hooks = Some(Default::default());
+        assert!(draft.changed(&saved).is_empty());
+        // A switch flipped and flipped back is no edit either.
+        draft.switches = Some([false, false, false]);
         assert!(draft.changed(&saved).is_empty());
     }
 }

@@ -15,6 +15,9 @@ pub(super) struct LaunchPanel {
     saved: Option<Result<Option<String>, String>>,
     /// What this computer has for the Linux switches, looked at when the panel opens.
     found: launch::Found,
+    /// The Linux switches (GameMode, MangoHud, dedicated card) as flipped, kept with Save like
+    /// the commands: None until one is flipped.
+    switches: Option<[bool; 3]>,
 }
 
 /// What saving the memory slider did, kept to show under the slider in the active language.
@@ -81,6 +84,7 @@ impl Launcher {
             instance: i.id,
             saved: None,
             found: launch::Found::here(),
+            switches: None,
         });
     }
 
@@ -97,11 +101,27 @@ impl Launcher {
         ])
     }
 
-    /// Parse the open command fields without writing any instance settings.
+    /// The Linux switches as flipped in the open panel for `id`, when one was.
+    pub(super) fn switches_typed(&self, id: &str) -> Option<[bool; 3]> {
+        self.launch.as_ref().filter(|p| p.instance == id)?.switches
+    }
+
+    /// Parse the open command fields (and the flipped switches) without writing any instance
+    /// settings.
     pub(super) fn parsed_launch(&self, id: &str) -> Option<Result<launch::Launch, String>> {
         let fields = self.hooks_typed(id)?;
         let saved = self.instances.list.iter().find(|i| i.id == id)?;
-        Some(parse_commands(saved.launch.clone(), fields))
+        let switches = self.switches_typed(id);
+        Some(
+            parse_commands(saved.launch.clone(), fields).map(|mut launch| {
+                if let Some([gamemode, mangohud, gpu]) = switches {
+                    launch.gamemode = gamemode;
+                    launch.mangohud = mangohud;
+                    launch.dedicated_gpu = gpu;
+                }
+                launch
+            }),
+        )
     }
 
     pub(super) fn save_launch(&mut self) {
@@ -121,21 +141,27 @@ impl Launcher {
         }
     }
 
-    /// Flips a Linux switch, saved at once.
+    /// Flips a Linux switch in the draft: Save keeps it with the rest, Cancel drops it.
     fn flip(&mut self, toggle: Toggle) {
-        let Some(panel) = &mut self.launch else {
+        let Some(panel) = &self.launch else {
             return;
         };
-        let saved = instances::edit(&panel.instance, |m| {
-            let on = match toggle {
-                Toggle::GameMode => &mut m.launch.gamemode,
-                Toggle::MangoHud => &mut m.launch.mangohud,
-                Toggle::Gpu => &mut m.launch.dedicated_gpu,
-            };
-            *on = !*on;
-        });
-        panel.saved = Some(saved.map(|i| i.launch.summary()));
-        self.reload_instances();
+        let Some(saved) = self.instances.list.iter().find(|i| i.id == panel.instance) else {
+            return;
+        };
+        let l = &saved.launch;
+        let mut switches = panel
+            .switches
+            .unwrap_or([l.gamemode, l.mangohud, l.dedicated_gpu]);
+        let i = match toggle {
+            Toggle::GameMode => 0,
+            Toggle::MangoHud => 1,
+            Toggle::Gpu => 2,
+        };
+        switches[i] = !switches[i];
+        if let Some(panel) = &mut self.launch {
+            panel.switches = Some(switches);
+        }
     }
 
     /// The Java instance being edited, or the selected Java instance on Home.
@@ -712,7 +738,10 @@ impl Launcher {
         body = body.child(div().flex().items_center().gap(px(12.)).children(result));
         // Linux only, and only what this computer has (`launch::Found`).
         if found.any() {
-            let now = selected.launch.clone();
+            let mut now = selected.launch.clone();
+            if let Some([gamemode, mangohud, gpu]) = self.switches_typed(&selected.id) {
+                (now.gamemode, now.mangohud, now.dedicated_gpu) = (gamemode, mangohud, gpu);
+            }
             let gpu_about = match found.nvidia {
                 true => "NVIDIA render offload: __NV_PRIME_RENDER_OFFLOAD and its Vulkan layer.",
                 false => "Mesa's DRI_PRIME=1, so Vulkan picks the other card.",
