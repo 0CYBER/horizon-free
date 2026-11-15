@@ -316,6 +316,7 @@ fn respawn_arrivals_hold_movement_then_resume_damage_and_pickups() {
     for personal in [false, true] {
         let mut resources = None;
         let (mut game, _rx) = server(&mut resources);
+        game.options.dedicated = Some(Vec::new());
         let pos = [FAR as i32, 150, FAR as i32];
         let chunk = pos[0] >> 4;
         game.level.world_spawn = Some(pos);
