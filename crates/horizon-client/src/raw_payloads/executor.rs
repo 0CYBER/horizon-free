@@ -21,9 +21,61 @@ enum FailedPublication {
 const _: () = assert!(std::mem::size_of::<After>() <= 256);
 
 /// Called by the physical receiving executor. Main events use its ordinary ordered stream.
-pub fn dispatch(mut incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
-    if !incoming.epoch.active() {
+pub fn dispatch(incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
+    let Some(connection) = endpoint.transport().connection.as_ref() else {
         return;
+    };
+    if let Some(incoming) = connection.queue_payload(incoming)
+        && let Some(incoming) = execute(incoming, &endpoint, &main, std::time::Instant::now())
+    {
+        connection.defer_payload(incoming);
+    }
+    dispatch_pending(&endpoint, &main);
+    if !matches!(main, MainQueue::Server { conn: Some(_), .. }) {
+        // Dedicated configuration/client receivers already own their physical
+        // ordered stream. Park that receiver, never a guest or the pooled server.
+        while !endpoint.transport().closed() && connection.wait_payloads() {
+            dispatch_pending(&endpoint, &main);
+        }
+    }
+}
+
+/// The pooled play receiver calls this from its existing maintenance turn.
+pub fn dispatch_pending(endpoint: &Endpoint, main: &MainQueue) {
+    dispatch_pending_at(endpoint, main, std::time::Instant::now());
+}
+
+pub(super) fn dispatch_pending_at(endpoint: &Endpoint, main: &MainQueue, now: std::time::Instant) {
+    let Some(connection) = endpoint.transport().connection.as_ref() else {
+        return;
+    };
+    if !connection.payloads_pending() {
+        return;
+    }
+    while let Some(incoming) = connection.next_payload() {
+        if let Some(incoming) = execute(incoming, endpoint, main, now) {
+            connection.defer_payload(incoming);
+            break;
+        }
+    }
+}
+
+fn execute(
+    mut incoming: Incoming,
+    endpoint: &Endpoint,
+    main: &MainQueue,
+    now: std::time::Instant,
+) -> Option<Incoming> {
+    if !incoming.epoch.active() {
+        return None;
+    }
+    if let Some(holder) = incoming.expired_busy(now) {
+        log::warn!("{}", incoming.busy_failure(holder));
+        endpoint.disconnect(failure(&format!(
+            "a mod's network handler failed ({})",
+            mod_of(&incoming.id)
+        )));
+        return None;
     }
     if matches!(incoming.body, Body::Work(_)) || incoming.receiver.thread == HandlerThread::Main {
         let epoch = incoming.epoch.clone();
@@ -31,7 +83,7 @@ pub fn dispatch(mut incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
             Ok(prepared) => prepared,
             Err(error) => {
                 endpoint.disconnect(failure(&format!("payload main refused: {error:?}")));
-                return;
+                return None;
             }
         };
         // The value stays outside the closure if invalidated before publication.
@@ -43,7 +95,7 @@ pub fn dispatch(mut incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
             drop(error);
             endpoint.disconnect(failure(&format!("payload main refused: {reason:?}")));
         }
-        return;
+        return None;
     }
     let Body::Payload(bytes) =
         std::mem::replace(&mut incoming.body, Body::Payload(PayloadBytes(Vec::new())))
@@ -52,18 +104,31 @@ pub fn dispatch(mut incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
     };
     let mut context = NetworkContext {
         incoming: &incoming,
-        endpoint: &endpoint,
-        main: &main,
+        endpoint,
+        main,
         after: Vec::new(),
         disconnect: None,
     };
     match incoming.receiver.handle(bytes, &mut context) {
-        Err(error) => {
+        Err(mod_api::PayloadHandleError::Busy { payload, holder }) => {
+            drop(context);
+            if incoming.defer(payload, &holder, now) {
+                return Some(incoming);
+            }
+            log::warn!("{}", incoming.busy_failure(&holder));
+            endpoint.disconnect(failure(&format!(
+                "a mod's network handler failed ({})",
+                mod_of(&incoming.id)
+            )));
+        }
+        Err(mod_api::PayloadHandleError::Failed(error)) => {
             // Drop reservations and guest work before closing, publishing no partial actions.
             drop(context);
             // The reason (a guest's deadline, trap or refusal) goes to the log; the player is told
             // only which mod's handler failed.
             log::warn!("payload {} failed: {error}", incoming.id.0);
+            #[cfg(test)]
+            super::staging_probe::failure(&incoming.id.0, &error);
             endpoint.disconnect(failure(&format!(
                 "a mod's network handler failed ({})",
                 mod_of(&incoming.id)
@@ -108,6 +173,7 @@ pub fn dispatch(mut incoming: Incoming, endpoint: Endpoint, main: MainQueue) {
             }
         }
     }
+    None
 }
 /// The mod a channel belongs to: its namespace.
 pub fn mod_of(id: &PayloadId) -> &str {

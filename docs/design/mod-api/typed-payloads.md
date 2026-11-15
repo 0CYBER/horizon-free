@@ -21,14 +21,18 @@ as Parts, not a separate manifest channel list.
 
 ```rust,ignore
 use mod_api::{
-    Hooks, IPayloadContext, IPayloadHandler, PayloadBytes, PayloadId, Registrar,
+    Hooks, IPayloadContext, IPayloadHandler, PayloadBytes, PayloadHandleError, PayloadId, Registrar,
     RegistrationContext, horizon_mod,
 };
 use std::sync::Arc;
 
 struct Update;
 impl IPayloadHandler for Update {
-    fn handle(&self, bytes: PayloadBytes, context: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        context: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         // Decode this application's bytes here. Network handlers must enqueue
         // main-thread work before requesting a world Host.
         let _ = (bytes, context);
@@ -58,6 +62,20 @@ refused. An id grants no authority merely because a caller constructs a `Payload
 Native and wasm use the same declarations, opaque `PayloadBytes`, handlers, and
 results. A callback receives the real connection's `IPayloadContext`, not a
 broadcast event. Dispatch selects the one registered owner.
+
+Handlers return `Result<(), PayloadHandleError>`. Application failures must use
+`PayloadHandleError::Failed(message)` explicitly; `PayloadWork::run` still returns
+`Result<(), String>`. Native panics and disabled owners are real failures, not busy
+results. A wasm group that is occupied returns `Busy { payload, holder }` before
+starting the callback, preserving the exact owned `PayloadBytes` and cheaply shared
+holder names (`owner`, `export`, `thread`) plus `held_millis`.
+
+The receiving transport, not the handler, retains busy bytes at the connection's
+head so later input cannot overtake them. Retries retain original ingress credit,
+queue budget and the original 60-second payload deadline; they do not renew the
+deadline or consume another lease. Phase changes and disconnect cancel old work.
+Nested cross-group calls refuse immediately rather than wait. Busy snapshots are
+formatted only when a diagnostic is needed, not on each retry.
 
 ## Admission, sending, and context
 
@@ -149,19 +167,24 @@ same registrar as typed payloads; no Part and no manifest entry are needed:
 
 ```rust,ignore
 use mod_api::{
-    Hooks, IPayloadContext, IPayloadHandler, PayloadBytes, PayloadId, Registrar,
+    Hooks, IPayloadContext, IPayloadHandler, PayloadBytes, PayloadHandleError, PayloadId, Registrar,
     RegistrationContext,
 };
 use std::sync::Arc;
 
 struct VoiceSecret;
 impl IPayloadHandler for VoiceSecret {
-    fn handle(&self, bytes: PayloadBytes, context: &mut dyn IPayloadContext) -> Result<(), String> {
-        let player = context.player().map_err(|e| format!("{e:?}"))?;
-        let host = context.server_host().map_err(|e| format!("{e:?}"))?;
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        context: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
+        let player = context.player().map_err(|e| PayloadHandleError::Failed(format!("{e:?}")))?;
+        let host = context.server_host().map_err(|e| PayloadHandleError::Failed(format!("{e:?}")))?;
         // Answer on the same channel; above 1,048,576 bytes this is PayloadTooLarge.
         let id = PayloadId("voicechat:secret".into());
-        player.send_payload(host, &id, bytes).map_err(|e| format!("{e:?}"))?;
+        player.send_payload(host, &id, bytes)
+            .map_err(|e| PayloadHandleError::Failed(format!("{e:?}")))?;
         Ok(())
     }
 }

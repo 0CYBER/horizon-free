@@ -36,7 +36,11 @@ struct Probe {
 }
 impl IPayloadHandler for Probe {
     /// The payload's one byte names the player to disconnect.
-    fn handle(&self, bytes: PayloadBytes, context: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        context: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         let sender = context.player().unwrap();
         let host = context.server_host().unwrap();
         let index = usize::from(bytes.0[0]);

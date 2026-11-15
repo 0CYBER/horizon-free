@@ -10,3 +10,4 @@ pub use payload::{
     PayloadProtocol, PayloadRegistrar, PayloadSendError, PayloadWork, PayloadWorkStatus,
     RegisterClientPayloadHandlersEvent, RegisterPayloadHandlersEvent,
 };
+pub use payload::{PayloadBusy, PayloadHandleError};

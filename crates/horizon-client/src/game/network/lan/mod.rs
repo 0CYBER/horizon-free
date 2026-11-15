@@ -2058,9 +2058,7 @@ impl Game<'_> {
             }
             match event {
                 HostEvent::InputCredits(credits) => drop(credits),
-                HostEvent::RawPayload(delivery) => {
-                    self.receive_server_payload(delivery.endpoint, delivery.incoming)
-                }
+                HostEvent::RawPayload(delivery) => self.receive_raw_delivery(delivery),
                 event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
                     self.lan_log_event(event);
                 }

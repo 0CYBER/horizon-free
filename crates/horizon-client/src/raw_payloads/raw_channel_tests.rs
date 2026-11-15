@@ -11,7 +11,11 @@ const SEND_ONLY: &str = "bungeecord:main";
 
 struct Listener;
 impl IPayloadHandler for Listener {
-    fn handle(&self, _: PayloadBytes, _: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        _: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         Ok(())
     }
 }
@@ -34,7 +38,11 @@ impl Hooks for Declares {
 }
 struct Typed;
 impl IPayloadHandler for Typed {
-    fn handle(&self, _: PayloadBytes, _: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        _: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         Ok(())
     }
 }

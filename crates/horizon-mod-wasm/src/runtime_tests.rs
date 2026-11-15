@@ -2,6 +2,9 @@ use super::*;
 
 use crate::test_log::{CAPTURE, capture_logs};
 
+#[path = "runtime_tests/payload_busy.rs"]
+mod payload_busy;
+
 #[test]
 fn released_queue_empty_fast_path_does_not_wait_for_its_mutex() {
     let releases = Arc::new(Releases::<Id>::default());
@@ -1574,7 +1577,8 @@ fn nested_busy_refusal_survives() {
         *module.running.holder.lock().unwrap() = Some(Holder {
             module: "holder_mod".into(),
             export: 7,
-            thread: std::thread::current(),
+            name: "test::holder".into(),
+            thread: THREAD_NAME.with(Arc::clone),
             since: Instant::now() - Duration::from_secs(3),
         });
         assert_eq!(call(&module), None);

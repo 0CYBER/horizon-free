@@ -52,3 +52,21 @@ impl Game<'_> {
         }
     }
 }
+
+impl Game<'_> {
+    pub(super) fn receive_raw_delivery(
+        &mut self,
+        mut delivery: Box<horizon_client::raw_payloads::Delivery>,
+    ) {
+        let finished =
+            self.receive_server_payload(delivery.endpoint.clone(), &mut delivery.incoming);
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        if !finished {
+            host.hub.defer_raw_payload(delivery);
+        } else {
+            host.hub.finish_raw_payload(delivery.conn);
+        }
+    }
+}

@@ -83,52 +83,85 @@ impl Game<'_> {
     }
     pub(super) fn receive_client_payload(
         &mut self,
-        incoming: Incoming,
-    ) -> horizon_client::Result<()> {
+        incoming: &mut Incoming,
+    ) -> horizon_client::Result<bool> {
         let Some(remote) = self.remote.as_ref() else {
-            return Ok(());
+            return Ok(true);
         };
         let endpoint = remote.session.payload_endpoint();
-        self.run_payload(endpoint, incoming);
-        Ok(())
+        Ok(self.run_payload(endpoint, incoming))
     }
     /// Endpoint identity was captured on ingress, not resolved from a later guest incarnation.
-    pub(super) fn receive_server_payload(&mut self, endpoint: Endpoint, incoming: Incoming) {
-        self.run_payload(endpoint, incoming);
+    pub(super) fn receive_server_payload(
+        &mut self,
+        endpoint: Endpoint,
+        incoming: &mut Incoming,
+    ) -> bool {
+        self.run_payload(endpoint, incoming)
     }
-    fn run_payload(&mut self, endpoint: Endpoint, incoming: Incoming) {
+    /// False only while the original receiving root remains deferred at the head.
+    fn run_payload(&mut self, endpoint: Endpoint, incoming: &mut Incoming) -> bool {
         if !incoming.epoch.active() {
-            return;
+            return true;
         }
-        let Incoming {
-            epoch,
-            id,
-            body,
-            receiver,
-            main,
-            lease,
-            work_lease,
-            raw,
-        } = incoming;
+        if let Some(holder) = incoming.expired_busy(std::time::Instant::now()) {
+            log::warn!("{}", incoming.busy_failure(holder));
+            if !incoming.raw {
+                endpoint.disconnect(Text::translate(
+                    "disconnect.genericReason",
+                    vec![Text::literal(format!(
+                        "a mod's payload handler failed ({})",
+                        horizon_client::raw_payloads::mod_of(&incoming.id)
+                    ))],
+                ));
+            }
+            return true;
+        }
+        let body = std::mem::replace(&mut incoming.body, Body::Payload(PayloadBytes(Vec::new())));
         #[cfg(test)]
-        let wasm_health_before = wasm_tests::health(self, &endpoint, &id);
+        let wasm_health_before = wasm_tests::health(self, &endpoint, &incoming.id);
         let seal = self.transaction_open();
         let mut context = MainContext {
             game: self,
-            epoch: &epoch,
+            epoch: &incoming.epoch,
             endpoint: endpoint.clone(),
-            receiver: &receiver,
+            receiver: &incoming.receiver,
             disconnect: None,
             failure: None,
         };
         let result = match body {
-            Body::Payload(bytes) if receiver.thread == HandlerThread::Main => {
-                receiver.handle(bytes, &mut context)
+            Body::Payload(bytes) if incoming.receiver.thread == HandlerThread::Main => {
+                incoming.receiver.handle(bytes, &mut context)
             }
-            Body::Payload(_) => {
-                Err("payload was not dispatched on its declared network executor".into())
+            Body::Payload(_) => Err(mod_api::PayloadHandleError::Failed(
+                "payload was not dispatched on its declared network executor".into(),
+            )),
+            Body::Work(work) => incoming
+                .receiver
+                .run_work(work.as_ref(), &mut context)
+                .map_err(mod_api::PayloadHandleError::Failed),
+        };
+        let result = match result {
+            Err(mod_api::PayloadHandleError::Busy { payload, holder }) => {
+                context.game.transaction_close(&seal, false);
+                drop(context);
+                if incoming.defer(payload, &holder, std::time::Instant::now()) {
+                    return false;
+                }
+                log::warn!("{}", incoming.busy_failure(&holder));
+                if !incoming.raw {
+                    endpoint.disconnect(Text::translate(
+                        "disconnect.genericReason",
+                        vec![Text::literal(format!(
+                            "a mod's payload handler failed ({})",
+                            horizon_client::raw_payloads::mod_of(&incoming.id)
+                        ))],
+                    ));
+                }
+                return true;
             }
-            Body::Work(work) => receiver.run_work(work.as_ref(), &mut context),
+            Err(mod_api::PayloadHandleError::Failed(error)) => Err(error),
+            Ok(()) => Ok(()),
         };
         let reason = context.disconnect.take();
         let failure = context.failure.take().or_else(|| result.err());
@@ -138,28 +171,28 @@ impl Game<'_> {
             wasm_health_before,
             context.game,
             &endpoint,
-            &id,
+            &incoming.id,
             failure.is_none(),
         );
-        if let Some(error) = failure.as_ref().filter(|_| raw) {
+        if let Some(error) = failure.as_ref().filter(|_| incoming.raw) {
             // A raw channel's bytes come from any client; one declaring mod's
             // refusal rolls back its own work only, and the next mod still runs.
             log::warn!(
                 "Mod {} failed on raw channel {}: {error}",
-                receiver.owner(),
-                id.0
+                incoming.receiver.owner(),
+                incoming.id.0
             );
             if let Some(reason) = reason {
                 endpoint.disconnect(reason);
             }
         } else if let Some(error) = failure {
             // The reason goes to the log; the player is told only which mod's handler failed.
-            log::warn!("payload {} failed: {error}", id.0);
+            log::warn!("payload {} failed: {error}", incoming.id.0);
             endpoint.disconnect(Text::translate(
                 "disconnect.genericReason",
                 vec![Text::literal(format!(
                     "a mod's payload handler failed ({})",
-                    horizon_client::raw_payloads::mod_of(&id)
+                    horizon_client::raw_payloads::mod_of(&incoming.id)
                 ))],
             ));
         } else if let Some(reason) = reason {
@@ -167,11 +200,7 @@ impl Game<'_> {
         }
         // Both the finish barrier and ingress credit cover root publication/rollback.
         drop(context);
-        drop(id);
-        drop(receiver);
-        drop(work_lease);
-        drop(lease);
-        drop(main);
+        true
     }
 }
 struct MainContext<'a, 'resources> {
