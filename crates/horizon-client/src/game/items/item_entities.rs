@@ -829,8 +829,13 @@ impl Game<'_> {
         randomly: bool,
         thrown_from_hand: bool,
     ) -> Option<u32> {
-        let mut r = random_source::entity();
-        let v = horizon_client::entities::drop_motion(&mut r, self.yaw, self.pitch, randomly);
+        let player = self.player.as_mut()?;
+        let v = horizon_client::entities::drop_motion(
+            &mut player.random,
+            self.yaw,
+            self.pitch,
+            randomly,
+        );
         let at = [eye[0], eye[1] - f64::from(0.3f32), eye[2]];
         let uuid = thrown_from_hand.then(|| self.acting_player_uuid());
         // Only `drop(.., false)` tosses ask `item_toss`: a death's scatter (`randomly`) does not.

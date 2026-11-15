@@ -2546,8 +2546,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
-    fn player_mod_drop_matches_drop_key_motion() {
+    #[ignore = "daily"]
+    fn player_mod_drop_and_drop_key_have_equivalent_motion() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.player = Some(
                 horizon_client::motion::PlayerMotion::new(
@@ -2565,11 +2565,13 @@ mod tests {
             *game.world.random = horizon_core::random::LegacyRandom::new(12345);
             let item = ItemStack::new("minecraft:apple", 1);
             game.inventory[game.selected] = Some(item.clone());
+            let player_random = game.player.as_ref().unwrap().random.clone();
             let (_, seeds) = horizon_client::random_source::record_seeds(|| game.drop_held(true));
             let key_velocity = game.dropped.last().unwrap().velocity;
             *game.world.random = horizon_core::random::LegacyRandom::new(12345);
             crate::game::native_entity_refs::tests::bind_local_player(game, 42, 123);
             let player = game.living(game.entity(42).unwrap()).unwrap();
+            game.player.as_mut().unwrap().random = player_random;
             let id = horizon_client::random_source::replay_seeds(seeds.clone(), || {
                 game.living_drop(player, item, false, true).unwrap().id()
             });
@@ -2585,6 +2587,85 @@ mod tests {
                 .velocity;
             assert_eq!(key_velocity, mod_velocity);
         });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn player_drop_spread_uses_the_players_random_even_when_cancelled() {
+        use horizon_core::{
+            geometry::trig::{cos, sin},
+            random::RandomSource,
+        };
+        use mod_api::{Flow, Hooks, ItemTossEvent, ModEntry, ServerHost};
+        struct Veto;
+        #[mod_api::__subscriptions]
+        impl Hooks for Veto {
+            fn item_toss(&self, _: &mut dyn ServerHost, _: &mut ItemTossEvent) -> Flow {
+                Flow::Cancel
+            }
+        }
+        for (randomly, cancelled) in [(false, false), (true, false), (false, true)] {
+            let mods: mod_api::Mods = if cancelled {
+                vec![ModEntry::new("veto", Box::new(Veto))].into()
+            } else {
+                Vec::<ModEntry>::new().into()
+            };
+            mod_platform::testing::with_mods(mods, || {
+                super::super::native_entity_refs::tests::with_game(|game| {
+                    game.player = Some(
+                        horizon_client::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap(),
+                    );
+                    super::super::native_entity_refs::tests::bind_local_player(game, 42, 123);
+                    game.yaw = 0.0;
+                    game.pitch = 0.0;
+                    game.player.as_mut().unwrap().random.set_seed(12345);
+                    let mut expected = game.player.as_ref().unwrap().random.clone();
+                    // Independent vanilla oracle at yaw=pitch=0. The item's
+                    // constructor owns a separate stream, not these floats.
+                    let velocity = if randomly {
+                        let strength = expected.next_float() * 0.5;
+                        let direction = f64::from(expected.next_float() * std::f32::consts::TAU);
+                        [
+                            f64::from(-sin(direction) * strength),
+                            f64::from(0.2f32),
+                            f64::from(cos(direction) * strength),
+                        ]
+                    } else {
+                        let direction = f64::from(expected.next_float() * std::f32::consts::TAU);
+                        let strength = f64::from(expected.next_float() * 0.02);
+                        let jitter = (expected.next_float() - expected.next_float()) * 0.1;
+                        [
+                            horizon_core::jmath::cos(direction) * strength,
+                            f64::from(0.1 + jitter),
+                            f64::from(0.3f32) + horizon_core::jmath::sin(direction) * strength,
+                        ]
+                    };
+                    let level = game.world.random.state();
+                    let before = game.dropped.len();
+                    let id = game.native_player_drop(
+                        ItemStack::new("minecraft:apple", 1),
+                        randomly,
+                        true,
+                    );
+                    assert_eq!(
+                        game.player.as_ref().unwrap().random.state(),
+                        expected.state(),
+                        "randomly={randomly} cancelled={cancelled}"
+                    );
+                    assert_eq!(game.world.random.state(), level, "no level random draws");
+                    if cancelled {
+                        assert!(id.is_none());
+                        assert_eq!(game.dropped.len(), before);
+                    } else {
+                        let drop = game.dropped.iter().find(|d| Some(d.id) == id).unwrap();
+                        assert_eq!(
+                            [drop.velocity.x, drop.velocity.y, drop.velocity.z],
+                            velocity
+                        );
+                    }
+                });
+            });
+        }
     }
 
     #[test]
