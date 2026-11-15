@@ -1968,14 +1968,14 @@ impl Game<'_> {
     }
 
     /// The rest of it: a block in `dimension` within `radius` of the world
-    /// spawn (square, in the Overworld only).
+    /// spawn (square, and only in the dimension the spawn belongs to).
     pub(super) fn spawn_protects(&self, radius: i32, dimension: &str, pos: [i32; 3]) -> bool {
         let Some(spawn) = self.level.world_spawn else {
             return false;
         };
         let dx = pos[0].abs_diff(spawn[0]);
         let dz = pos[2].abs_diff(spawn[2]);
-        dimension == "minecraft:overworld" && dx.max(dz) <= radius as u32
+        dimension == self.level.spawn_dimension() && dx.max(dz) <= radius as u32
     }
 
     /// ServerPlayer.sendSpawnProtectionMessage.

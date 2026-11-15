@@ -735,6 +735,16 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
+        // ArmorStand.skipAttackInteraction: `mayInteract` at its block refuses
+        // the hit before any damage is worked out (so before its RNG draws).
+        let at = self.armor_stands[i].position;
+        if !self.may_interact_at(BlockPos::new(
+            at.x.floor() as i32,
+            at.y.floor() as i32,
+            at.z.floor() as i32,
+        )) {
+            return true;
+        }
         let ((_, scale, crit, magic), admitted) =
             self.melee_damage_with_admission("minecraft:armor_stand", true);
         let hurt = self.hit_armor_stand(i, |g, area, id| {

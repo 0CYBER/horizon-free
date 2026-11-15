@@ -3751,6 +3751,8 @@ pub struct Level {
     pub world_spawn: Option<[i32; 3]>,
     /// The world spawn's yaw and pitch (`setworldspawn`'s rotation).
     pub world_spawn_angle: [f32; 2],
+    /// The world spawn's dimension (`level.dat` `spawn.dimension`); the Overworld when unset.
+    pub world_spawn_dimension: Option<String>,
     pub difficulty: String,
     pub hardcore: bool,
     /// `difficulty_settings.locked` (LevelData.isDifficultyLocked).
@@ -3863,21 +3865,7 @@ impl Level {
             ..Self::default()
         };
         // 26.3: spawn {pos: [I; x, y, z], dimension, yaw, pitch}; older: SpawnX/Y/Z.
-        level.world_spawn = match data.get("spawn").and_then(|s| s.get("pos")) {
-            Some(Tag::IntArray(p)) if p.len() == 3 => Some([p[0], p[1], p[2]]),
-            _ => data.get("SpawnX").map(|_| {
-                [
-                    n(data.get("SpawnX")) as i32,
-                    n(data.get("SpawnY")) as i32,
-                    n(data.get("SpawnZ")) as i32,
-                ]
-            }),
-        };
-        let angle = |k: &str| match data.get("spawn").and_then(|s| s.get(k)) {
-            Some(Tag::Float(b)) => f32::from_bits(*b),
-            _ => 0.0,
-        };
-        level.world_spawn_angle = [angle("yaw"), angle("pitch")];
+        level.read_world_spawn(data);
         if let Some(d) = data.get("difficulty_settings") {
             level.difficulty = text(d.get("difficulty")).unwrap_or_else(|| "normal".into());
             level.hardcore = n(d.get("hardcore")) != 0;
@@ -4502,7 +4490,7 @@ impl Level {
                 "spawn",
                 Tag::compound([
                     ("pos", Tag::IntArray(spawn.to_vec())),
-                    ("dimension", string("minecraft:overworld")),
+                    ("dimension", string(self.spawn_dimension())),
                     ("yaw", Tag::Float(self.world_spawn_angle[0].to_bits())),
                     ("pitch", Tag::Float(self.world_spawn_angle[1].to_bits())),
                 ]),

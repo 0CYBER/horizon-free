@@ -228,6 +228,16 @@ impl Game<'_> {
         self.command_source = previous;
         out
     }
+    /// `CommandSourceStack.getLevel`: the source's own level (`execute in`,
+    /// which `with_source` puts in place), the console's Overworld, or the
+    /// acting body's level.
+    pub(super) fn source_level(&self) -> Dim {
+        match self.command_source.and_then(|s| s.level) {
+            Some(level) => level,
+            None if self.source_entity().is_none() => Dim::Overworld,
+            None => self.dim,
+        }
+    }
 
     // ---- running commands -----------------------------------------------
 

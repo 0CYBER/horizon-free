@@ -2006,11 +2006,7 @@ impl Game<'_> {
         // A server's player in another level than the source's (`execute
         // in`, the console's Overworld) moves there (ServerPlayer.teleport
         // into another level), after the command.
-        let source_level = match self.command_source.and_then(|s| s.level) {
-            Some(level) => level,
-            None if self.source_entity().is_none() => super::Dim::Overworld,
-            None => self.dim,
-        };
+        let source_level = self.source_level();
         let target_name = (targets.len() == 1).then(|| {
             self.in_target_level(targets[0], |game| game.target_name(targets[0]))
                 .unwrap_or_else(Text::empty)
@@ -3632,11 +3628,15 @@ impl Game<'_> {
         };
         // SetWorldSpawnCommand uses RespawnData.of before storing or comparing.
         let rot = [wrap_degrees(rot[0]), rot[1].clamp(-90.0, 90.0)];
+        // `source.getLevel()`: the spawn, and the dimension it belongs to
+        // (`RespawnData.of(level.dimension(), pos, yaw, pitch)`).
+        let level = self.source_level();
         // LevelData.setRespawnData: the world's spawn (level.dat `spawn`).
         let previous_point = self.world_spawn_position().map(|v| v.floor() as i32);
         let old = self.level.world_spawn.replace(pos);
         let old_angle = self.level.world_spawn_angle;
         self.level.world_spawn_angle = rot;
+        self.level.world_spawn_dimension = Some(level.id().to_string());
         if previous_point != pos || old_angle.map(f32::to_bits) != rot.map(f32::to_bits) {
             self.lan_broadcast_world_spawn();
         }
@@ -3658,7 +3658,7 @@ impl Game<'_> {
             Text::literal(pos[2].to_string()),
             Text::literal(java_float(f64::from(rot[0]))),
             Text::literal(java_float(f64::from(rot[1]))),
-            Text::literal(self.dim.id()),
+            Text::literal(level.id()),
         ];
         self.feedback(Text::translate("commands.setworldspawn.success", &args));
         Ok(1)

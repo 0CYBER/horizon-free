@@ -6,6 +6,10 @@ use super::*;
 #[path = "melee_hit_tests.rs"]
 mod hit_tests;
 
+#[cfg(test)]
+#[path = "spawn_protection_tests.rs"]
+mod spawn_protection_tests;
+
 impl Game<'_> {
     /// `Player.attack`'s damage against `target_kind` (with the attack
     /// strength and whether it is a critical hit): the weapon and effects
@@ -218,6 +222,13 @@ impl Game<'_> {
             && self.mob_hit().is_none_or(|m| d < m.1)
             && self.before_block(d)
         {
+            // BlockAttachedEntity.skipAttackInteraction: a player may not
+            // touch a decoration where `mayInteract` refuses (spawn
+            // protection, the world border), and the attack goes no further.
+            let p = self.paintings[i].pos;
+            if !self.may_interact_at(BlockPos::new(p[0], p[1], p[2])) {
+                return true;
+            }
             self.break_painting(i, true);
             return true;
         }
