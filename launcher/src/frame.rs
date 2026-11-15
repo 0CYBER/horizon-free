@@ -33,8 +33,8 @@ pub fn keep_clear(w: f32, h: f32, home: bool) -> rain::Keep {
         [0., 0., left, h],
         [left, TOP, HERO_WIDTH.min(w - left), (HERO - TOP).max(0.)],
         [left, body, w - left, (h - body).max(0.)],
-        // The hero's buttons at the right edge.
-        [(w - 360.).max(left), TOP, 360., 80.],
+        // The hero's right column: its version and What's new buttons, the invite-code field.
+        [(w - 360.).max(left), TOP, 360., (HERO - TOP).max(0.)],
     ])
 }
 
@@ -139,6 +139,16 @@ impl Launcher {
                         .rounded(r)
                         .into_any_element();
                 }
+            }
+            // A Horizon instance with no icon of its own: its initial on a colour of the
+            // picker's, the same each time for the same instance, so several read apart on
+            // the rail. Java and modded ones keep their game's or loader's mark.
+            None if i.java.is_none() && i.kind != InstanceKind::Port => {
+                let hash =
+                    i.id.bytes()
+                        .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)));
+                let colours = crate::glass_instance::COLOURS;
+                colour = colours[hash as usize % colours.len()];
             }
             None => {
                 if let Some(mark) = self.instance_mark(i, size) {
@@ -529,6 +539,31 @@ impl Launcher {
             );
         }
         let list = list.child(server_rows);
+        // More rows than the rail shows: a fade at the list's foot says it scrolls.
+        let rows = self.instances.list.len() + servers.len();
+        let overflows = 52. * rows as f32 > f32::from(window.viewport_size().height) - 420.;
+        let list = div()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .child(list)
+            .when(overflows, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(px(32.))
+                        .bg(gpui::linear_gradient(
+                            180.,
+                            gpui::linear_color_stop(gpui::black().opacity(0.), 0.),
+                            gpui::linear_color_stop(gpui::black().opacity(0.45), 1.),
+                        )),
+                )
+            });
 
         // A hairline set in from the rail's sides: between the instances and the buttons, and
         // between Settings and the version.
@@ -556,8 +591,8 @@ impl Launcher {
         if open {
             foot = foot.children(self.rail_update_card(soft, cx));
             // Sculk's card (a sponsor), only where the rail is wide enough to show it.
-            if !self.settings.partner_hidden && p > 0.98 {
-                let rows = self.instances.list.len() + servers.len();
+            // When the instances already overflow the rail, the list keeps the room.
+            if !self.settings.partner_hidden && p > 0.98 && !overflows {
                 let free = f32::from(window.viewport_size().height) - 420. - 52. * rows as f32;
                 let mut side = div().relative().mb(px(6.)).child(partner::card(
                     "partner-side",

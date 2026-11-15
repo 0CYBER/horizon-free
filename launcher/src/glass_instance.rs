@@ -18,7 +18,7 @@ const LOADERS: [&str; 5] = ["fabric", "quilt", "neoforge", "forge", "liteloader"
 /// Logos offered as icons (the mockup's `LOGO_ICONS`, but Minecraft's, which is Mojang's).
 const LOGO_ICONS: [&str; 4] = ["neoforge", "fabric", "quilt", "forge"];
 /// The colours offered (`ICON_COLORS`).
-const COLOURS: [u32; 8] = [
+pub(super) const COLOURS: [u32; 8] = [
     0x6b4bff, 0x3b82f6, 0x14b8a6, 0x22c55e, 0xeab308, 0xf97316, 0xef4444, 0x8b8a99,
 ];
 
