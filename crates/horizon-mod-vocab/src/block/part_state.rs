@@ -87,7 +87,7 @@ pub enum PartStateError {
     /// The entity is out of its level's lists for its own tick, so its state can't be reached
     /// until that tick ends.
     HolderBusy,
-    /// An edit of this block entity's same state is already running further up the call:
+    /// An edit of this holder's same state is already running further up the call:
     /// the inner one is refused rather than overwritten by the outer one.
     Reentrant,
     /// Something else changed the value while the edit's closure ran; the edit stored
@@ -416,16 +416,16 @@ impl Drop for Editing {
     }
 }
 
-/// [`BlockEntityPartState::edit_state`] for any key.
+/// [`BlockEntityPartState::edit_state`] or [`crate::EntityPartState::edit_state`] for any key.
 ///
 /// Runs in a transaction of its own, nested in the open one if any: the value is read
 /// (decoded once from its saved form, or the default when absent), lent to `edit` as a
-/// copy while no store borrow is held, and stored back after `edit` returns, if the block
-/// entity is still the one `entity` names and nothing else replaced the value meanwhile.
+/// copy while no store borrow is held, and stored back after `edit` returns, if the holder
+/// is still the one `entity` names and nothing else replaced the value meanwhile.
 /// Otherwise, or when the value does not encode, the transaction aborts with everything
 /// `edit` wrote and the old value stays, with its saved bytes. A panic in `edit` aborts it
 /// too. An undecodable saved value refuses before `edit` runs and is kept as it was.
-/// An edit of the same block entity and key from inside `edit` is refused.
+/// An edit of the same holder and key from inside `edit` is refused.
 pub fn edit_part_state<H: PartStateHolder, T: Clone + Send + Sync + 'static, R>(
     host: &mut dyn ServerHost,
     entity: H,
