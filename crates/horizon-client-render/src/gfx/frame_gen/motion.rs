@@ -1,8 +1,8 @@
-//! Motion vectors for what moves on its own, for frame generation: the camera's motion
-//! vectors (from the depth) see mobs and dropped items as still. The game tags each
-//! entity's vertices with its id (`Frame::entity_motion`); an entity whose vertices have
-//! the same shape as last frame's (the same count, UVs and layers) gets each vertex's
-//! own motion, limbs and spin included, drawn into a texture at the render size
+//! Motion vectors for what moves on its own, for frame generation and other passes: the
+//! camera's motion vectors (from the depth) see mobs and dropped items as still. The game
+//! tags each entity's vertices with its id (`Frame::entity_motion`); an entity whose
+//! vertices have the same shape as last frame's (the same count, UVs and layers) gets each
+//! vertex's own motion, limbs and spin included, drawn into a texture at the render size
 //! (`motion.wgsl`) that the interpolation reads before the camera's.
 
 use crate::mesher::Vertex;
@@ -21,17 +21,29 @@ struct Params {
 /// A vertex this frame and where it was last frame, both relative to this frame's camera.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct MotionVertex {
     position: [f32; 3],
     previous: [f32; 3],
     uv: [f32; 2],
-    /// 1 for a translucent item, whose texture says where it shows.
-    translucent: u32,
+    /// `TRANSLUCENT` and `NEW`.
+    flags: u32,
 }
 
-pub struct ObjectMotion {
+/// A translucent item, whose texture says where it shows.
+const TRANSLUCENT: u32 = 1;
+/// Nothing to match last frame: `motion.wgsl` writes `w = 1` and nothing else.
+const NEW: u32 = 2;
+
+pub(in crate::gfx) struct ObjectMotion {
     pipeline: wgpu::RenderPipeline,
+    /// The entities' atlas, or a blank texel without one (`translucent_items` false).
     atlas: wgpu::TextureView,
+    /// Translucent items are drawn, where their atlas alpha shows them; without an atlas
+    /// they are left out.
+    translucent_items: bool,
+    /// Stage what has no last frame as `NEW` instead of leaving it out.
+    new_runs: bool,
     sampler: wgpu::Sampler,
     params: wgpu::Buffer,
     vertices: wgpu::Buffer,
@@ -46,8 +58,14 @@ pub struct ObjectMotion {
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 impl ObjectMotion {
-    /// `atlas`: the entities' texture atlas.
-    pub fn new(device: &wgpu::Device, atlas: wgpu::TextureView) -> Self {
+    /// `atlas`: the entities' texture atlas; `None` leaves translucent items out.
+    /// `new_runs`: also draw what has no last frame (new or reshaped tagged entities, and
+    /// untagged geometry that writes depth) as `w = 1`; frame generation reads only `z`.
+    pub(in crate::gfx) fn new(
+        device: &wgpu::Device,
+        atlas: Option<wgpu::TextureView>,
+        new_runs: bool,
+    ) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Frame generation motion"),
             source: wgpu::ShaderSource::Wgsl(include_str!("motion.wgsl").into()),
@@ -79,9 +97,26 @@ impl ObjectMotion {
             multiview_mask: None,
             cache: None,
         });
+        let translucent_items = atlas.is_some();
+        let atlas = atlas.unwrap_or_else(|| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Frame generation motion blank atlas"),
+                    size: wgpu::Extent3d::default(),
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        });
         Self {
             pipeline,
             atlas,
+            translucent_items,
+            new_runs,
             sampler: device.create_sampler(&Default::default()),
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Frame generation motion"),
@@ -98,14 +133,19 @@ impl ObjectMotion {
     }
 
     /// Forget last frame's entities: the next frame has no motion of its own.
-    pub fn reset(&mut self) {
+    pub(in crate::gfx) fn reset(&mut self) {
         self.tracked.clear();
     }
 
     /// Match this frame's `entities` (relative to `camera`) to last frame's by the ids
     /// `spans` gives their vertices (start, id; 0 for none, each up to the next start), and
     /// keep them for the next frame.
-    pub fn track(&mut self, entities: &[Vertex], spans: &[(u32, u64)], camera: DVec3) {
+    pub(in crate::gfx) fn track(
+        &mut self,
+        entities: &[Vertex],
+        spans: &[(u32, u64)],
+        camera: DVec3,
+    ) {
         self.staged.clear();
         let shift = (self.camera - camera).as_vec3();
         let mut tracked = HashMap::with_capacity(self.tracked.len());
@@ -113,52 +153,65 @@ impl ObjectMotion {
             let end = spans.get(i + 1).map_or(entities.len(), |s| s.0 as usize);
             let Some(now) = entities
                 .get(start as usize..end)
-                .filter(|v| id != 0 && !v.is_empty())
+                .filter(|v| (id != 0 || self.new_runs) && !v.is_empty())
             else {
                 continue;
             };
-            if let Some(then) = self.tracked.remove(&id)
-                && then.len() == now.len()
-                && then
-                    .iter()
-                    .zip(now)
-                    .all(|(a, b)| a.uv == b.uv && a.layer == b.layer)
-            {
+            // Id 0 is never tracked: it has no last frame.
+            let then = self.tracked.remove(&id).filter(|then| {
+                then.len() == now.len()
+                    && then
+                        .iter()
+                        .zip(now)
+                        .all(|(a, b)| a.uv == b.uv && a.layer == b.layer)
+            });
+            if then.is_some() || self.new_runs {
+                let new = if then.is_some() { 0 } else { NEW };
                 let pair = |i: usize| MotionVertex {
                     position: now[i].pos,
-                    previous: (Vec3::from(then[i].pos) + shift).into(),
+                    previous: then
+                        .as_ref()
+                        .map_or(now[i].pos, |then| (Vec3::from(then[i].pos) + shift).into()),
                     uv: now[i].uv,
-                    translucent: u32::from(matches!(
-                        now[i].layer,
-                        super::super::entity_batch::TRANSLUCENT_ITEM_OVERLAY
-                            | super::super::entity_batch::TRANSLUCENT_GLINT_ITEM_OVERLAY
-                    )),
+                    // The whole layer, unmasked, as frame generation has always tested it.
+                    flags: new
+                        | if translucent(now[i].layer) {
+                            TRANSLUCENT
+                        } else {
+                            0
+                        },
                 };
                 for q in (0..now.len() / 4).map(|q| q * 4) {
+                    if !self.translucent_items && translucent(now[q].layer & 0xffff)
+                        || new != 0 && !writes_depth(now[q].layer)
+                    {
+                        continue;
+                    }
                     self.staged
                         .extend([q, q + 1, q + 2, q, q + 2, q + 3].map(pair));
                 }
             }
-            tracked.insert(id, now.to_vec());
+            drop(then);
+            if id != 0 {
+                tracked.insert(id, now.to_vec());
+            }
         }
         self.tracked = tracked;
         self.camera = camera;
     }
 
-    /// Draw the matched entities' motion vectors at `size` (the world's render size),
-    /// where `depth` (the world's) shows them; the rest of the texture is 0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw(
+    /// Upload what `track` staged and the projections for `draw`, at `size` (the world's
+    /// render size): `jittered` the world's (TAA's jitter in it), `current` the same without
+    /// the jitter, `previous` last frame's from this frame's camera.
+    pub(in crate::gfx) fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        depth: &wgpu::TextureView,
         size: [u32; 2],
         jittered: Mat4,
         current: Mat4,
         previous: Mat4,
-    ) -> wgpu::TextureView {
+    ) {
         if self.target.as_ref().is_none_or(|t| t.0 != size) {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Frame generation motion"),
@@ -178,7 +231,6 @@ impl ObjectMotion {
             });
             self.target = Some((size, texture.create_view(&Default::default())));
         }
-        let target = self.target.as_ref().expect("made above").1.clone();
         let bytes: &[u8] = bytemuck::cast_slice(&self.staged);
         if bytes.len() as u64 > self.vertices.size() {
             self.vertices = vertex_buffer(device, (bytes.len() as u64).next_power_of_two());
@@ -192,6 +244,17 @@ impl ObjectMotion {
             previous: previous.to_cols_array_2d(),
         };
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
+    }
+
+    /// Draw the staged entities' motion vectors where `depth` (the world's, at `prepare`'s
+    /// size) shows them; the rest of the texture is 0.
+    pub(in crate::gfx) fn draw(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        depth: &wgpu::TextureView,
+    ) -> wgpu::TextureView {
+        let target = self.target.as_ref().expect("prepare() ran").1.clone();
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Frame generation motion"),
             layout: &self.pipeline.get_bind_group_layout(0),
@@ -231,12 +294,31 @@ impl ObjectMotion {
         if !self.staged.is_empty() {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &group, &[]);
-            pass.set_vertex_buffer(0, self.vertices.slice(..bytes.len() as u64));
+            let bytes = std::mem::size_of_val(self.staged.as_slice()) as u64;
+            pass.set_vertex_buffer(0, self.vertices.slice(..bytes));
             pass.draw(0..self.staged.len() as u32, 0..1);
         }
         drop(pass);
         target
     }
+}
+
+fn translucent(layer: u32) -> bool {
+    matches!(
+        layer,
+        super::super::entity_batch::TRANSLUCENT_ITEM_OVERLAY
+            | super::super::entity_batch::TRANSLUCENT_GLINT_ITEM_OVERLAY
+    )
+}
+
+/// Drawn without depth writes, so `depth` can't say where it shows: breaking cracks (11,
+/// 12), shadows and energy swirls.
+fn writes_depth(layer: u32) -> bool {
+    use super::super::entity_batch::{ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY};
+    !matches!(
+        layer & 0xffff,
+        11 | 12 | SHADOW_OVERLAY | ENERGY_SWIRL_OVERLAY
+    )
 }
 
 fn vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
@@ -281,7 +363,7 @@ mod tests {
             return;
         };
         let atlas = super::super::optical_flow::tests::upload(&device, &queue, [1, 1], &[0; 4]);
-        let mut motion = ObjectMotion::new(&device, atlas);
+        let mut motion = ObjectMotion::new(&device, Some(atlas), false);
         let mut entities = quad(0.0, 0.0);
         entities.extend(quad(10.0, 0.5));
         motion.track(&entities, &[(0, 7), (4, 8)], DVec3::ZERO);
@@ -302,5 +384,157 @@ mod tests {
         assert_eq!(v.position, [-1.0, 0.0, -5.0]);
         assert_eq!(v.previous, [-2.0, 0.0, -5.0]);
         assert_eq!(motion.tracked.len(), 3);
+    }
+
+    use super::super::super::entity_batch::{SHADOW_OVERLAY, TRANSLUCENT_ITEM_OVERLAY};
+
+    const CORNERS: [[f32; 2]; 4] = [[0.0, 0.0], [2.0, 0.0], [2.0, 4.0], [0.0, 4.0]];
+
+    /// A 2 by 4 block quad at `x`, 5 blocks in front of the camera.
+    fn square(x: f32, layer: u32) -> Vec<Vertex> {
+        CORNERS
+            .map(|[dx, y]| Vertex {
+                pos: [x + dx, y, -5.0],
+                layer,
+                ..bytemuck::Zeroable::zeroed()
+            })
+            .to_vec()
+    }
+
+    /// Without `new_runs`, what is staged is what frame generation always staged: each
+    /// matched quad as two triangles, translucent items flagged, nothing else.
+    #[test]
+    fn without_new_runs_only_matched_entities_are_staged() {
+        let Some((device, queue)) = super::super::optical_flow::tests::device() else {
+            return;
+        };
+        let atlas = super::super::optical_flow::tests::upload(&device, &queue, [1, 1], &[0; 4]);
+        let mut motion = ObjectMotion::new(&device, Some(atlas), false);
+        let mut entities = square(0.5, 0);
+        entities.extend(square(2.0, TRANSLUCENT_ITEM_OVERLAY));
+        motion.track(&entities, &[(0, 7), (4, 8)], DVec3::ZERO);
+        let mut entities = square(0.0, 0);
+        entities.extend(square(2.0, TRANSLUCENT_ITEM_OVERLAY));
+        entities.extend(square(4.0, 0));
+        entities.extend(square(6.0, 0));
+        motion.track(&entities, &[(0, 7), (4, 8), (8, 9), (12, 0)], DVec3::ZERO);
+        let corner = |x: f32, i: usize| [x + CORNERS[i][0], CORNERS[i][1], -5.0];
+        let quad = |now: f32, then: f32, flags: u32| {
+            [0, 1, 2, 0, 2, 3].map(|i| MotionVertex {
+                position: corner(now, i),
+                previous: corner(then, i),
+                uv: [0.0; 2],
+                flags,
+            })
+        };
+        let mut expected = quad(0.0, 0.5, 0).to_vec();
+        expected.extend(quad(2.0, 2.0, TRANSLUCENT));
+        assert_eq!(motion.staged, expected);
+    }
+
+    /// Without the atlas, nothing can say where a translucent item shows: it is left out.
+    #[test]
+    fn translucent_items_need_the_atlas() {
+        let Some((device, queue)) = super::super::optical_flow::tests::device() else {
+            return;
+        };
+        for with_atlas in [false, true] {
+            let atlas = with_atlas.then(|| {
+                super::super::optical_flow::tests::upload(&device, &queue, [1, 1], &[0; 4])
+            });
+            let mut motion = ObjectMotion::new(&device, atlas, false);
+            for layer in [TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY | 3 << 16] {
+                let item = square(0.0, layer);
+                motion.track(&item, &[(0, 7)], DVec3::ZERO);
+                motion.track(&item, &[(0, 7)], DVec3::ZERO);
+                assert_eq!(motion.staged.len(), if with_atlas { 6 } else { 0 });
+            }
+        }
+    }
+
+    /// A depth texture at `size` holding `value` everywhere.
+    fn depth(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        size: [u32; 2],
+        value: f32,
+    ) -> wgpu::TextureView {
+        let view = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Depth32Float,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(value),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        queue.submit([encoder.finish()]);
+        view
+    }
+
+    /// With `new_runs`, a new entity and untagged geometry that writes depth read
+    /// `(0, 0, 0, 1)`; a matched one keeps its vector and `z = 1`; an untagged shadow (no
+    /// depth writes) stays 0. Without it, only the matched one is drawn.
+    #[test]
+    fn new_runs_write_w_only_when_asked() {
+        let Some((device, queue)) = super::super::optical_flow::tests::device() else {
+            return;
+        };
+        let size = [8, 4];
+        let projection = Mat4::orthographic_rh(0.0, 8.0, 0.0, 4.0, 1.0, 10.0);
+        let world = projection.project_point3(Vec3::new(0.0, 0.0, -5.0)).z;
+        let depth = depth(&device, &queue, size, world);
+        for new_runs in [false, true] {
+            let mut motion = ObjectMotion::new(&device, None, new_runs);
+            motion.track(&square(0.5, 0), &[(0, 7)], DVec3::ZERO);
+            // 7 moved half a block (half a pixel) left; 9 is new; then untagged geometry
+            // and an untagged shadow.
+            let mut entities = square(0.0, 0);
+            entities.extend(square(2.0, 0));
+            entities.extend(square(4.0, 0));
+            entities.extend(square(6.0, SHADOW_OVERLAY));
+            motion.track(&entities, &[(0, 7), (4, 9), (8, 0), (12, 0)], DVec3::ZERO);
+            motion.prepare(&device, &queue, size, projection, projection, projection);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            let view = motion.draw(&device, &mut encoder, &depth);
+            queue.submit([encoder.finish()]);
+            let texels: Vec<[f32; 4]> =
+                super::super::optical_flow::tests::read(&device, &queue, view.texture(), 8)
+                    .chunks(8)
+                    .map(|t| {
+                        std::array::from_fn(|c| {
+                            half::f16::from_le_bytes([t[2 * c], t[2 * c + 1]]).to_f32()
+                        })
+                    })
+                    .collect();
+            let at = |x: usize| texels[2 * size[0] as usize + x];
+            let [x, y, z, w] = at(1);
+            assert!((x - 0.5 / 8.0).abs() < 1e-4 && y.abs() < 1e-4, "{x} {y}");
+            assert_eq!([z, w], [1.0, 0.0], "a matched entity");
+            let new = [0.0, 0.0, 0.0, if new_runs { 1.0 } else { 0.0 }];
+            assert_eq!(at(3), new, "a new entity");
+            assert_eq!(at(5), new, "untagged geometry");
+            assert_eq!(at(7), [0.0; 4], "an untagged shadow");
+        }
     }
 }
