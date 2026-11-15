@@ -8,8 +8,8 @@ design note for a new line ([api/stability.md](../api/stability.md)); this is th
 ## Why
 
 **The frame can't hold light brighter than white.** The world is drawn in vanilla's gamma space into the swapchain's
-8-bit format, or with HDR on into `Rgba16Unorm`, which clips at white after every pass as the 8-bit frame does
-(`gfx.rs` `WIDE_FRAME`). HDR output (`hdr.wgsl`) rebuilds the light above white at the end, from marks in the frame's
+8-bit format, or with HDR on into `Rgba16Unorm`, which clips at white after every pass as the 8-bit frame does.
+HDR output (`hdr.wgsl`) rebuilds the light above white at the end, from marks in the frame's
 alpha:
 
 | Alpha | Means |
@@ -137,7 +137,7 @@ The water mirror and `shadow_color` draw no blends, so they store linear in both
 - A 0.2 pack in SDR moves the frame from 4 to 8 bytes a pixel (about 15 MB more at 1440p), only while it runs. Its
   post chain already uses `Rgba16Float`.
 - WebGPU renders to, blends and filters `Rgba16Float` without optional features, unlike `Rgba16Unorm`
-  (`draws_wide_frame`); the 8-bit fallback stays only for the HUD's target. The GL backend is checked in the series.
+  (`draws_frame`); the 8-bit fallback stays only for the HUD's target. The GL backend is checked in the series.
 - Up to 1, half float steps at least 8 times finer than 8-bit, and far finer in the darks, so Smooth Gradients'
   gain stays without its setting.
 
