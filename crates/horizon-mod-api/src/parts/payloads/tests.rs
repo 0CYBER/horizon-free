@@ -14,7 +14,11 @@ fn frozen(registrar: &PartRegistrar) -> mod_vocab::__private::game::Payloads {
 
 struct Handler;
 impl IPayloadHandler for Handler {
-    fn handle(&self, _: PayloadBytes, _: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        _: &mut dyn IPayloadContext,
+    ) -> Result<(), crate::PayloadHandleError> {
         Ok(())
     }
 }

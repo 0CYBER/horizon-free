@@ -100,6 +100,7 @@ impl Edits {
                 max_players: 4,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();

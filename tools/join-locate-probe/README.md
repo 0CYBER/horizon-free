@@ -1,6 +1,7 @@
 # Production-source join lookup proof
 
-The probe imports the actual client `join_seq.rs`, with only its runtime dependency;
+The probe imports the actual client `join_seq.rs`, with only the dependencies those files reach
+(`horizon_core`, the mod API's `mod_api` vocabulary, the attachment runtime and `log`);
 it does not implement lookup or attachment lifetime behavior a second time.
 
 ```sh

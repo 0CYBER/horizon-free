@@ -11,6 +11,9 @@ mod lighting;
 mod mod_geometry;
 mod mod_tint;
 pub mod packed;
+pub mod part_tables;
+#[cfg(test)]
+mod part_tables_tests;
 mod sides;
 #[cfg(test)]
 #[path = "mesher/source_tests.rs"]
@@ -2101,6 +2104,9 @@ pub struct Mesher<'a> {
     /// a hidden block draws nothing, its neighbours' faces toward it show and it never occludes.
     /// Empty when no mod hides any.
     pub hidden_states: &'a [bool],
+    /// The answers of the client `BlockPart` methods the fluid mesher reads; empty tables when
+    /// no part subscribes.
+    pub part_tables: &'a part_tables::PartTables,
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
@@ -2203,7 +2209,15 @@ impl Mesher<'_> {
                             self.separate_ao,
                             self.shader_pack,
                         );
-                        fluid::tesselate(self.tables, shade, pad, water, &mut out, [x, y, z]);
+                        fluid::tesselate(
+                            self.tables,
+                            self.part_tables,
+                            shade,
+                            pad,
+                            water,
+                            &mut out,
+                            [x, y, z],
+                        );
                         if self.shader_pack {
                             out.record_source(
                                 start,

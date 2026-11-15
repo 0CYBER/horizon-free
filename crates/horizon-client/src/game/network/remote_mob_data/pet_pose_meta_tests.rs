@@ -53,6 +53,7 @@ fn meta_hub() -> horizon_client::lan::hub::Hub {
         max_players: 20,
         integrated: false,
         levels: Default::default(),
+        level_seeds: Default::default(),
     };
     hub::Hub::new(
         lan,

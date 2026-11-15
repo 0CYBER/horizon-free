@@ -4289,6 +4289,7 @@ mod tests {
             render,
             biomes: Arc::new(Biomes::load(&resource_root)?),
             hidden_states: Arc::from([]),
+            part_tables: Default::default(),
         };
         let kinds = state_kinds(&facts);
         let mut chunk = Chunk::empty(0, 0);
@@ -4367,6 +4368,7 @@ mod tests {
             render,
             biomes: biomes.clone(),
             hidden_states: Arc::from([]),
+            part_tables: Default::default(),
         });
         let source = Arc::new(TestTerrain::new(assets.registry, &biomes)?);
         let mut lod = Lod::new(source, context);
@@ -5576,6 +5578,7 @@ mod tests {
             render,
             biomes,
             hidden_states: Arc::from([]),
+            part_tables: Default::default(),
         });
         Ok((context, facts))
     }

@@ -794,7 +794,7 @@ impl Launcher {
                     tr("Play without updating").into(),
                     trf(
                         "Stay on {version}",
-                        &[("version", &crate::glass_instance::version_label(tag))],
+                        &[("version", &self.version_label(tag))],
                     ),
                     locked || !ready,
                     PlayItem::Play,

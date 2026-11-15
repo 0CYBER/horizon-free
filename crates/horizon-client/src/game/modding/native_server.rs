@@ -9,6 +9,8 @@
 //! server thread's), never on a client's.
 #[path = "native_server/argument_kinds.rs"]
 mod argument_kinds;
+#[path = "native_server/registered_commands.rs"]
+mod registered_commands;
 #[cfg(test)]
 #[path = "native_server/selector_tests.rs"]
 mod selector_tests;
@@ -17,7 +19,7 @@ mod selector_tests;
 mod wasm_selector_tests;
 
 use super::api_values::{TryIntoApi, TryIntoEngine};
-use super::{Dim, Game, commands::execute, lan::LanHost, respawn_anchor::RespawnConfig};
+use super::{Dim, Game, commands::execute, respawn_anchor::RespawnConfig};
 use crate::game::level_control_hooks::LevelControl;
 pub(super) use argument_kinds::{CommandArguments, command_arguments};
 use argument_kinds::{
@@ -25,6 +27,7 @@ use argument_kinds::{
     positional_value, resource_parser,
 };
 use mod_api::__private::game::*;
+pub(super) use registered_commands::NativeCommandState;
 // Their old home, for mixin code that names them here.
 use horizon_client::{
     command::{Arg, ArgType, Context, Dispatcher},
@@ -74,7 +77,7 @@ fn usage_nodes(
     let mut out = Vec::new();
     let mut optional_seen = false;
     let mut greedy_seen = false;
-    for word in usage.split_whitespace() {
+    for (index, word) in usage.split_whitespace().enumerate() {
         if greedy_seen {
             return Err(format!("`{usage}`: a text argument must be last"));
         }
@@ -86,11 +89,7 @@ fn usage_nodes(
             if optional_seen {
                 return Err(format!("`{usage}`: `{word}` follows an optional argument"));
             }
-            let literal = !word.is_empty()
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_-".contains(c));
-            if !literal {
+            if !argument_kinds::command_word(word, index == 0) {
                 return Err(format!("`{usage}`: `{word}` is not a command word"));
             }
             out.push((word.to_owned(), json!({"type": "literal"}), false));
@@ -1854,98 +1853,8 @@ pub(super) fn system_chat(line: &Text) -> C {
     })
 }
 
-/// Native command metadata and the server dispatcher containing their parsed usages.
-pub(super) struct NativeCommands {
-    levels: HashMap<String, u8>,
-    tree: Value,
-    arguments: CommandArguments,
-}
-
 /// Where the game calls the server hook points.
 impl Game<'_> {
-    /// Asks the mods for their commands once per hub, and puts them in every
-    /// player's command tree; again when a mod asked (`native_refresh_commands`).
-    pub(super) fn register_native_commands(&mut self) {
-        let refresh = std::mem::take(&mut self.native_commands_refresh);
-        if self
-            .lan
-            .as_ref()
-            .is_none_or(|host| host.native_commands.is_some() && !refresh)
-        {
-            return;
-        }
-        let mut commands = Vec::new();
-        self.native_register_commands(&mut commands);
-        let vanilla = Arc::new(horizon_client::command::vanilla::session_dispatcher(
-            &self.level.rule_registry,
-            &self.level.enabled_features,
-        ));
-        let Some(host) = self.lan.as_ref() else {
-            return;
-        };
-        // Horizon's own moderation commands go in the same tree, so operators' clients complete them
-        // instead of showing them as unknown; the game still runs them itself (`run_guest_command`).
-        let extras = super::tempban::moderation_commands(
-            host.hub.chat_filter_on(),
-            self.server_lists.is_some(),
-        );
-        commands.extend(extras.iter().cloned());
-        let arguments = command_arguments();
-        let (tree, mut levels, problems) = command_tree(
-            &commands,
-            |name| host.hub.vanilla_command(name) || vanilla.find(name).is_some(),
-            &arguments,
-        );
-        for p in problems {
-            log::warn!("Horizon: a native mod's command was left out: {p}");
-        }
-        levels.retain(|name, _| {
-            !extras
-                .iter()
-                .any(|c| c.usage.split(' ').next() == Some(name.as_str()))
-        });
-        let mut execution_tree = tree.clone();
-        if let Some(children) = execution_tree["children"].as_object_mut() {
-            children.retain(|name, _| levels.contains_key(name));
-        }
-        let Some(host) = self.lan.as_mut() else {
-            return;
-        };
-        host.native_commands = Some(NativeCommands {
-            levels,
-            tree: execution_tree,
-            arguments,
-        });
-        host.hub
-            .set_selector_tokens(super::native_entity_selectors::selector_tokens());
-        if refresh {
-            host.hub.store_mod_commands(0, tree);
-        } else {
-            host.hub.set_mod_commands(0, tree);
-        }
-        self.ui.dispatcher.0 = vanilla;
-        self.restore_native_commands();
-        if refresh {
-            self.resend_commands_filtered();
-        }
-    }
-
-    /// Restore mod nodes after vanilla rebuilds the session's command tree.
-    pub(super) fn restore_native_commands(&mut self) {
-        if let Some(commands) = self
-            .lan
-            .as_ref()
-            .and_then(|host| host.native_commands.as_ref())
-        {
-            register_dispatcher(
-                Arc::make_mut(&mut self.ui.dispatcher.0),
-                &commands.tree,
-                "native_mod_command",
-                &commands.arguments,
-            );
-        }
-    }
-
     /// A mod changed the commands it registers (`native_register_commands`):
     /// at the start of the next server tick every mod is asked again, the
     /// commands players may run are rebuilt, and every player on the server is
@@ -1953,7 +1862,7 @@ impl Game<'_> {
     /// happens where no world is open to players, and nothing for a server
     /// whose mods never call it. API @API:refresh_commands@.
     pub(super) fn native_refresh_commands(&mut self) {
-        self.native_commands_refresh = true;
+        self.native_commands.refresh = true;
     }
 
     /// Asks the mods what root commands each player's tree keeps
@@ -2006,13 +1915,6 @@ impl Game<'_> {
         if let Some(host) = self.lan.as_mut() {
             host.hub.resend_commands();
         }
-    }
-
-    /// The traversal level of a mod's root (`line`, without its slash), when registered.
-    /// The parsed executable node enforces its own usage level separately.
-    pub(super) fn native_command_level(host: &LanHost, line: &str) -> Option<u8> {
-        let name = line.split(' ').next().unwrap_or_default();
-        host.native_commands.as_ref()?.levels.get(name).copied()
     }
 
     /// Resolve the source once at the command boundary, retaining its output origin.
@@ -2204,7 +2106,11 @@ impl Game<'_> {
         let Some(host) = &self.lan else {
             return false;
         };
-        if Self::native_command_level(host, line).is_none_or(|level| level > permission) {
+        if self
+            .native_commands
+            .level(line)
+            .is_none_or(|level| level > permission)
+        {
             return false;
         }
         if host.hub.guest(conn).is_none() {
@@ -2223,10 +2129,7 @@ impl Game<'_> {
     /// usage is always allowed; a command no mod takes answers as vanilla's
     /// unknown command.
     pub(super) fn perform_native_console_command(&mut self, line: &str) -> bool {
-        let Some(host) = &self.lan else {
-            return false;
-        };
-        if Self::native_command_level(host, line).is_none() {
+        if self.lan.is_none() || self.native_commands.level(line).is_none() {
             return false;
         }
         self.as_console_in_overworld(|game| {
@@ -3481,6 +3384,13 @@ mod tests {
                     },
                 ));
             }
+            fn player_commands_sent(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::PlayerCommandsSentEvent<'_>,
+            ) {
+                event.names.retain(|name| name != "before");
+            }
         }
         let changed = Arc::new(AtomicBool::new(false));
         let registrations = Arc::new(AtomicUsize::new(0));
@@ -3501,14 +3411,8 @@ mod tests {
                     changed.store(true, Ordering::Relaxed);
                     game.register_native_commands();
                     assert_eq!(registrations.load(Ordering::Relaxed), 1);
-                    let host = game.lan.as_ref().unwrap();
-                    assert!(
-                        host.native_commands
-                            .as_ref()
-                            .unwrap()
-                            .levels
-                            .contains_key("before")
-                    );
+                    let registered = game.native_commands.registered.as_ref().unwrap();
+                    assert!(registered.levels.contains_key("before"));
                     mod_api::Commands::refresh_commands(game);
                     mod_api::Commands::refresh_commands(game);
                     assert_eq!(
@@ -3517,13 +3421,13 @@ mod tests {
                         "requests are deferred"
                     );
                     game.register_native_commands();
-                    assert!(!game.native_commands_refresh);
+                    assert!(!game.native_commands.refresh);
                     assert_eq!(
                         registrations.load(Ordering::Relaxed),
                         2,
                         "requests coalesce"
                     );
-                    let commands = game.lan.as_ref().unwrap().native_commands.as_ref().unwrap();
+                    let commands = game.native_commands.registered.as_ref().unwrap();
                     assert!(!commands.levels.contains_key("before"));
                     assert!(commands.levels.contains_key("after"));
                     let dispatcher = &game.ui.dispatcher.0;
@@ -3550,9 +3454,50 @@ mod tests {
                     mod_api::Commands::refresh_commands(game);
                     game.register_native_commands();
                     assert_eq!(registrations.load(Ordering::Relaxed), 3);
+                    assert!(game.native_commands.level("after").is_some());
+                    changed.store(false, Ordering::Relaxed);
+                    game.reload_datapacks(false, &game.level.enabled_features.clone())
+                        .unwrap();
+                    let (sent, received) = std::sync::mpsc::channel();
+                    game.lan
+                        .as_mut()
+                        .unwrap()
+                        .hub
+                        .update_guest(12, |guest| {
+                            guest.sender =
+                                horizon_client::lan::PlayerSender::new(sent, Default::default());
+                        })
+                        .unwrap();
+                    game.register_native_commands();
+                    let packet = received
+                        .try_iter()
+                        .flat_map(|out| match out {
+                            horizon_client::lan::Out::Packet(body) => vec![body],
+                            horizon_client::lan::Out::Packets(bodies) => bodies,
+                            horizon_client::lan::Out::Disconnect(_) => {
+                                panic!("reload disconnected guest")
+                            }
+                        })
+                        .find_map(|body| {
+                            let mut reader = horizon_protocol::buf::Reader::new(&body);
+                            let id = reader.varint().unwrap();
+                            match C::decode(id, &body[reader.position()..]).unwrap() {
+                                C::Commands(packet) => Some(packet),
+                                _ => None,
+                            }
+                        })
+                        .expect("reload must deliver a command tree");
+                    let names: Vec<_> = packet.nodes[packet.root as usize]
+                        .children
+                        .iter()
+                        .map(|&i| packet.nodes[i as usize].name.as_str())
+                        .collect();
+                    assert!(!names.is_empty());
                     assert!(
-                        Game::native_command_level(game.lan.as_ref().unwrap(), "after").is_some()
+                        !names.contains(&"before"),
+                        "new reload root must be filtered"
                     );
+                    assert!(!names.contains(&"after"), "old root must be retired");
                 })
             },
         );
@@ -3589,6 +3534,7 @@ mod tests {
                     mod_api::Command::new("typed give <who:player> <amount:integer> [message:text]"),
                     mod_api::Command::new("typed data <word:word> <number:number> <enabled:boolean> <item:item> <pos:block_pos>"),
                     mod_api::Command::new("typed opt [value:integer]"),
+                    mod_api::Command::new("/set <x:word>"),
                     mod_api::Command::new("typed repeat <value:player> <value:integer>"),
                     mod_api::Command::new("typed at <pos:vec3>"),
                     mod_api::Command::op("protected <who:player>", 4),
@@ -3689,6 +3635,7 @@ mod tests {
                         assert!(game.native_run_command("execute as guest13 run typed opt 13"))
                     })
                     .unwrap();
+                    let observations = heard.clone();
                     let heard = heard.lock().unwrap();
                     assert_eq!(heard.len(), 12);
                     let first = &heard[0].1;
@@ -3742,6 +3689,39 @@ mod tests {
                     assert_eq!(
                         heard[10].1.argument("pos"),
                         Some(&Value::Vec3([1.5, 64.25, -2.0]))
+                    );
+                    drop(heard);
+                    game.lan
+                        .as_mut()
+                        .unwrap()
+                        .hub
+                        .update_guest(12, |g| g.permission = 4)
+                        .unwrap();
+                    let inventory = game
+                        .lan
+                        .as_ref()
+                        .unwrap()
+                        .hub
+                        .guest(12)
+                        .unwrap()
+                        .inventory
+                        .clone();
+                    game.guest_command(12, "/set stone", None);
+                    game.guest_command(12, "typed opt 17", None);
+                    game.guest_command(12, "/give guest12 minecraft:stone 1", None);
+                    game.run_guest_commands();
+                    let heard = observations.lock().unwrap();
+                    assert_eq!(heard.len(), 14);
+                    assert_eq!(heard[12].1.literals, ["/set"]);
+                    assert_eq!(
+                        heard[12].1.argument("x"),
+                        Some(&Value::String("stone".into()))
+                    );
+                    assert_eq!(heard[13].1.literals, ["typed", "opt"]);
+                    assert_eq!(heard[13].1.argument("value"), Some(&Value::Integer(17)));
+                    assert_eq!(
+                        game.lan.as_ref().unwrap().hub.guest(12).unwrap().inventory,
+                        inventory
                     );
                 });
             },
@@ -4119,6 +4099,39 @@ mod tests {
         );
         let (none, levels, _) = tree(&[]);
         assert!(none.is_null() && levels.is_empty());
+    }
+
+    /// WorldEdit-style `//set`: the usage `/set <x:word>` (typed `//set` with the chat slash) is a
+    /// root literal `/set` with its argument, and the server dispatches it as typed.
+    #[test]
+    fn a_first_word_may_start_with_one_slash() {
+        let (t, levels, problems) = tree(&[mod_api::Command::new("/set <x:word>")]);
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(levels.keys().collect::<Vec<_>>(), ["/set"]);
+        assert_eq!(t["children"]["/set"]["type"], "literal");
+        assert_eq!(t["children"]["/set"]["children"]["x"]["type"], "argument");
+        for refused in ["//x", "/", "/ <x:word>", "a /b", "a /"] {
+            let (_, levels, problems) = tree(&[mod_api::Command::new(refused)]);
+            assert!(levels.is_empty(), "{refused}");
+            assert!(
+                problems.len() == 1 && problems[0].contains("is not a command word"),
+                "{refused}: {problems:?}"
+            );
+        }
+        let arguments = command_arguments();
+        let mut dispatcher = Dispatcher::new();
+        register_dispatcher(&mut dispatcher, &t, "native_mod_command", &arguments);
+        let registries = horizon_client::command::Registries::default();
+        let parsed = dispatcher.parse("/set stone", &registries);
+        let (context, _) = parsed.executable().expect("`//set stone` runs");
+        assert_eq!(context.literals, ["/set"]);
+        assert_eq!(context.get("x"), Some(&Arg::Str("stone".into())));
+        assert!(
+            dispatcher
+                .parse("set stone", &registries)
+                .executable()
+                .is_err()
+        );
     }
 }
 

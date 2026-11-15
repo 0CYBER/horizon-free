@@ -4161,9 +4161,9 @@ mod mob_health_boost_tests {
                 ("h205_cube", 20, "sulfur_cube 4.5 200 8.5 {Size:2", 1),
                 // size 5: attribute base and cache 20; Health Boost II adds 8
                 ("h205_cube_equal", 22, "sulfur_cube 6.5 200 8.5 {Size:4", 1),
-                // tame: cache 40, model 8; Health Boost II
+                // tame: max-health base 40; Health Boost II adds 8
                 ("h205_wolf", 21, "wolf 8.5 200 8.5 {", 1),
-                // tame: Health Boost VIII (+32) makes the model 40 = the cache
+                // tame: Health Boost VIII adds 32 to the tame base
                 ("h205_wolf_equal", 23, "wolf 10.5 200 8.5 {", 7),
             ];
             let mut ids = Vec::new();
@@ -4200,18 +4200,18 @@ mod mob_health_boost_tests {
             }
             assert_eq!(
                 horizon_client::mobs::finalize::max_health(&game.mobs[ids[3]]),
-                40.0,
-                "the coincidence: the boosted model equals the tame cache"
+                72.0,
+                "health boost adds to the tamed wolf's attribute base"
             );
             assert_eq!(
                 state(game),
                 [
                     (20.0, before[0].1),
                     (28.0, before[1].1),
-                    (40.0, before[2].1),
-                    (40.0, before[3].1),
+                    (48.0, before[2].1),
+                    (72.0, before[3].1),
                 ],
-                "size attributes gain the modifier without healing; tame caches keep their owner"
+                "size and tame attributes gain the modifier without healing"
             );
             for (tag, _, _, _) in cases {
                 assert!(game.run_command(&format!(

@@ -40,6 +40,10 @@ impl DrawContext for GameDrawContext<'_, '_> {
     fn fill(&mut self, rect: [f32; 4], argb: u32) {
         self.game.native_fill(&mut *self.surface, rect, argb)
     }
+    fn fill_gradient(&mut self, rect: [f32; 4], top: u32, bottom: u32) {
+        self.game
+            .native_fill_gradient(&mut *self.surface, rect, top, bottom)
+    }
     fn sprite(&mut self, name: &str, src: [f32; 4], dst: [f32; 4], tint: Option<u32>) -> bool {
         self.game
             .native_sprite(&mut *self.surface, name, src, dst, tint)

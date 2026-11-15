@@ -56,7 +56,7 @@ mod spawn_info;
 use advancements::AdvancementOwners;
 use chat::yellow_names;
 pub use pending_move::{Accepted, Hearing, PendingMove};
-use raw_inbox::{PacketDrain, yield_raw};
+use raw_inbox::{DeferredPayload, PacketDrain, yield_raw};
 pub mod game_event {
     pub const NO_RESPAWN_BLOCK_AVAILABLE: u8 = 0;
     pub const START_RAINING: u8 = 1;
@@ -83,6 +83,8 @@ fn initial_recipe_book_packets(sync: &SyncData, book: &crate::recipe_book::Setti
     ]
 }
 
+// exhaustive: engine-owned configuration, constructed by the game and its network fixtures;
+// not a mod API value.
 #[derive(Clone, Debug)]
 pub struct HubConfig {
     pub default_game_mode: i32,
@@ -103,6 +105,9 @@ pub struct HubConfig {
     pub integrated: bool,
     /// The shapes of the world's levels (their dimension types).
     pub levels: crate::chunk::LevelShapes,
+    /// The own seeds of the runtime levels a mod opened with one, by id; the world's seed for
+    /// the others. Kept here, not in `levels`, whose tables are leaked.
+    pub level_seeds: std::collections::BTreeMap<String, i64>,
 }
 
 /// What the other players see of a player's body besides sneaking and
@@ -328,6 +333,7 @@ fn take_tracking(
 
 pub struct Hub {
     packet_drain: Option<PacketDrain>,
+    deferred_payloads: std::collections::HashMap<Option<u32>, DeferredPayload>,
     /// Main-thread world identity used to bind typed network-context player handles.
     pub payload_player_epoch: Option<mod_api::WorldEpoch>,
     /// Clicks on and closings of native mods' menus, for the game.
@@ -834,6 +840,7 @@ impl Hub {
             native_menu_events: Vec::new(),
             chunk_watches: ChunkWatchLog::default(),
             packet_drain: None,
+            deferred_payloads: Default::default(),
             pending_kicks: Vec::new(),
             moves_listened: false,
             transfers: None,
@@ -2300,7 +2307,7 @@ impl Hub {
     pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
         self.anticheat_tick(ctx.tick_rate);
-        let mut events = std::mem::take(&mut self.pending_kicks);
+        let mut events = self.begin_payload_poll();
         self.finish_fake_kicks(&mut events);
         self.expire_arrivals(&mut events);
         let mut credits = Vec::new();
@@ -5737,6 +5744,7 @@ mod tests {
             max_players: 20,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         };
         let mut hub = Hub::new(
             lan,

@@ -96,6 +96,15 @@ impl Game<'_> {
             }
             let mut chains_sign = false;
             if block_answer.is_none() {
+                // TntBlock.useItemOn belongs to the block phase, before
+                // ItemStack.useOn's adventure can_place_on gate. It reads the
+                // hand as the block phase's listeners left it, as
+                // `state.useItemOn(player.getItemInHand(hand), ...)` does.
+                if let Some(stack) = self.held().cloned()
+                    && self.ignite_tnt(&stack)?
+                {
+                    return Ok(true);
+                }
                 if self.use_on_cauldron(hit.pos)? {
                     self.swing_arm();
                     return Ok(true);
@@ -435,12 +444,7 @@ impl Game<'_> {
             }
             return Ok(true);
         }
-        // TntBlock.useItemOn is the block's own: a sneak with something in hand skips it, and
-        // the flint and steel or fire charge lights a fire on the TNT instead.
-        if block_hit.is_some()
-            && ((may_use_on && self.use_bone_meal(&stack)?)
-                || (!(sneaking && hands_full) && self.ignite_tnt(&stack)?))
-        {
+        if may_use_on && self.use_bone_meal(&stack)? {
             return Ok(true);
         }
         // ShearsItem.useOn: shears crop a growing plant's head to its top age.

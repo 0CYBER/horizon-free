@@ -37,6 +37,7 @@ pub(super) fn mesh_section(
         translucent_layers: &settings.translucent_layers,
         leaf_culling: settings.leaf_culling,
         hidden_states: &context.hidden_states,
+        part_tables: &context.part_tables,
         assets: &context.assets,
         render: &context.render,
         tables: &context.tables,

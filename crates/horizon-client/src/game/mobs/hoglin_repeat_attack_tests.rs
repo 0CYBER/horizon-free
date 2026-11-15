@@ -574,6 +574,7 @@ fn host_with_guest(game: &mut Game<'_>, guest_at: [f64; 3]) {
         max_players: 2,
         integrated: false,
         levels: Default::default(),
+        level_seeds: Default::default(),
     };
     game.lan_host(settings, net, hub).unwrap();
     let (tx, _rx) = std::sync::mpsc::channel();

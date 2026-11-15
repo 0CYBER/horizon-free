@@ -52,9 +52,13 @@ All preparation happens at load; candidate comparisons borrow values without
 allocating or converting them to JSON. Removal keys require registration only.
 Native registrations retain their persistent NBT validation contract.
 
-The shared decoder currently covers 64 registered built-ins:
+The shared decoder currently covers 65 registered built-ins:
 `cat/sound_variant`, `cat/variant`, `wolf/sound_variant`, `wolf/variant`, `container_loot`, `tooltip_display`, `tropical_fish/pattern_color`, `tropical_fish/base_color`, `cushion/color`, `recipes`, `mob_visibility`, `custom_model_data`, `wolf/collar`, `cat/collar`, `shulker/color`, `sheep/color`, `dye`, `block_state`, `use_cooldown`, `cooking_fuel`, `brewing_fuel`, `compostable`, `fox/variant`, `weapon`, `food`, `damage`, `repair_cost`, `max_damage`, `max_stack_size`, `map_id`, `rarity`, `enchantments`, `stored_enchantments`, `enchantment_glint_override`, `custom_name`, `item_name`, `item_model`, `lodestone_tracker`, `damage_resistant`, `use_effects`, `block_entity_data`, `enchantable`, `ominous_bottle_amplifier`, `potion_duration_scale`, `minimum_attack_charge`, `dyed_color`, `attack_animation`, `attack_range`, `rabbit/variant`, `horse/variant`, `llama/variant`, `mooshroom/variant`, `axolotl/variant`, `salmon/size`, `parrot/variant`, `tropical_fish/pattern`, `villager_food`, `unbreakable`, `base_color`, `note_block_sound`, `tooltip_style`, `waxed`, `intangible_projectile`, `glider`,
 in the `minecraft` namespace.
+`chicken/variant` also decodes a fixed holder from the active chicken-variant
+registry. Bare or empty namespaces become `minecraft`; mod-registered keys are
+accepted, but unknown keys, missing registries, tags and inline objects are refused.
+Matching borrows the identifier, including inherited item defaults and removals.
 `enchantable` requires a positive integer `value`; extra record fields are ignored
 and equivalent numeric NBT widths match, including item defaults. Map ids accept
 signed numbers, including negative ids, using Java's integer conversion.
@@ -76,7 +80,7 @@ zero (including negative zero) is false; nonzero values, fractions and NaN are
 true. Displays retain canonical byte 0 or 1.
 `dyed_color` accepts packed integer colors or three numeric RGB channels,
 matching the decoded values without copying candidate payloads.
-The other 55 persistent registered built-ins use stored-value matching while their shared
+The other 54 persistent registered built-ins use stored-value matching while their shared
 decoders are added incrementally in **#3875**. Their absence is not a load refusal.
 The transient types `creative_slot_lock`, `additional_trade_cost` and
 `map_post_processing` are refused as stored component values, not matched as opaque NBT.

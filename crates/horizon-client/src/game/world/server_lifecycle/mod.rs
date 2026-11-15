@@ -185,7 +185,7 @@ impl Game<'_> {
         }
         self.session_lock = None;
         super::cauldron_interactions::clear();
-        mod_api::__private::clear_game_parts();
+        self.clear_world_parts();
         self.world_adopted = false;
         result
     }

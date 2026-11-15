@@ -141,7 +141,7 @@ impl Game<'_> {
         else {
             return false;
         };
-        let command = line.trim_start_matches('/');
+        let command = line.strip_prefix('/').unwrap_or(line);
         if !self.signable_arguments(permission, command).is_empty() {
             return false;
         }

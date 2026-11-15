@@ -93,6 +93,17 @@ impl Drop for TransportScope {
     }
 }
 impl WasmMod {
+    // The synchronous loopback has no competing guest-store owner.
+    fn call_payload<R>(
+        &self,
+        frame: boundary::Frame,
+        id: u32,
+        handler: Option<Id>,
+        encode: impl FnOnce(&mut Writer),
+        decode: impl FnOnce(&mut Reader<'_>) -> Result<R, WireError>,
+    ) -> Result<Option<R>, mod_api::PayloadBusy> {
+        Ok(self.call(CallClass::Callback, frame, id, handler, encode, decode))
+    }
     fn same_group(&self, other: &Self) -> bool {
         self.group == other.group
     }

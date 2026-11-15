@@ -8,7 +8,11 @@ use std::sync::Arc;
 pub(crate) const CHANNEL: &str = "raw_hub_probe:message";
 struct Probe;
 impl IPayloadHandler for Probe {
-    fn handle(&self, _: PayloadBytes, _: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        _: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         Ok(())
     }
 }

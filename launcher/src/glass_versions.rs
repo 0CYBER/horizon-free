@@ -62,28 +62,16 @@ fn nightly_card_text(release: &Release, same_day: bool) -> Option<(String, Strin
 
 impl Launcher {
     /// Version `tag` as the Versions page titles it ("Nov 11 update", with its time when another
-    /// update came out the same day), for any screen that names it; the tag itself otherwise.
+    /// update came out the same day, [`horizon_launcher::nightly::same_day_time`]), for any screen
+    /// that names it; the tag itself otherwise.
     pub(crate) fn version_name(&self, tag: &str) -> String {
-        if let Load::Ready(list) = &self.releases {
-            if let Some(release) = list.iter().find(|r| r.tag == tag) {
-                let same_day = list
-                    .iter()
-                    .filter(|r| r.nightly.is_some() && r.date == release.date)
-                    .count()
-                    > 1;
-                if let Some((title, _)) = nightly_card_text(release, same_day) {
-                    return title;
-                }
+        match horizon_launcher::nightly::date_of(tag) {
+            Some(date) => {
+                let time = horizon_launcher::nightly::same_day_time(tag).unwrap_or_default();
+                trf("{date} update", &[("date", &published(date, &time))])
             }
+            None => tag.to_owned(),
         }
-        horizon_launcher::nightly::date_of(tag)
-            .map(|date| {
-                trf(
-                    "{day} update",
-                    &[("day", &horizon_launcher::nightly::day(date))],
-                )
-            })
-            .unwrap_or_else(|| tag.to_owned())
     }
 
     /// The launcher's version when Use picked one older than the newest installed: what an
@@ -315,11 +303,7 @@ impl Launcher {
             keep,
             |i| {
                 let release = releases[i].clone();
-                let same_day = releases
-                    .iter()
-                    .filter(|r| r.nightly.is_some() && r.date == release.date)
-                    .count()
-                    > 1;
+                let same_day = horizon_launcher::nightly::same_day_time(&release.tag).is_some();
                 let (title, mut line) =
                     nightly_card_text(&release, same_day).unwrap_or_else(|| {
                         let title = release
@@ -671,7 +655,7 @@ impl Launcher {
                 if let Some(about) = native_mods::about(&tag) {
                     line.push(trf(
                         "Built on {base}",
-                        &[("base", &crate::glass_instance::version_label(&about.base))],
+                        &[("base", &self.version_label(&about.base))],
                     ));
                     // The build's own name stays in the details, for reports.
                     line.push(tag.clone());
@@ -689,7 +673,7 @@ impl Launcher {
                     self.glass_version_actions(&tag, cx).into_any_element()
                 };
                 let title = if native_mods::is_native(&tag) {
-                    crate::glass_instance::version_label(&tag)
+                    self.version_label(&tag)
                 } else {
                     horizon_launcher::nightly::label(&tag)
                         .or_else(|| build_import::label(&tag))

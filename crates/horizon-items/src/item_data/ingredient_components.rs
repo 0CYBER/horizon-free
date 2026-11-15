@@ -48,6 +48,7 @@ pub fn component_equal(id: &str, a: &ItemStack, b: &ItemStack) -> bool {
 
         "minecraft:cat/sound_variant"
         | "minecraft:cat/variant"
+        | "minecraft:chicken/variant"
         | "minecraft:wolf/sound_variant"
         | "minecraft:wolf/variant" => {
             let a = a.data().and_then(|d| d.other(id));

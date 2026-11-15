@@ -84,6 +84,18 @@ pub enum GuiDraw {
         y1: i32,
         color: u32,
     },
+    /// `fillGradient(x0, y0, x1, y1, top, bottom)`: ARGB `top` along the `y0` edge
+    /// blending to `bottom` along the `y1` edge, in the current pose and clip.
+    /// Zero area or inversion on exactly one axis draws nothing. With both axes inverted,
+    /// bounds are sorted and colours flipped: `top` stays on `y0`, now the lower edge.
+    FillGradient {
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        top: u32,
+        bottom: u32,
+    },
     /// `text(font, text, x, y, argb, dropShadow)`.
     Text {
         text: Text,

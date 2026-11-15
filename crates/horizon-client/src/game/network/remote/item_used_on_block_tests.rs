@@ -113,3 +113,39 @@ fn compass_criterion_sees_two_compasses_before_the_block_takes_one() {
         });
     });
 }
+
+/// `ServerPlayerGameMode.useItemOn` hands the block the stack in hand after
+/// the block phase's listeners: one that takes the last fire charge and lets
+/// the click go on leaves TNT nothing to light it with.
+#[test]
+#[ignore = "daily"]
+fn tnt_reads_the_hand_the_block_phase_listener_left() {
+    let observer = Observer::default();
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "item_used_on_block_observer",
+        Box::new(observer.clone()),
+    )]
+    .into();
+    crate::game::api_values::install_parts(&mods).unwrap();
+    mod_platform::testing::with_mods(mods, || {
+        with_interaction_game(false, |game| {
+            let tnt = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:tnt")
+                .unwrap();
+            game.world.set(0, 64, 0, tnt).unwrap();
+            game.forced_hit = Some(hit());
+            game.inventory[game.selected] = Some(ItemStack::new("minecraft:fire_charge", 1));
+            *observer.0.lock().unwrap() = Controls {
+                take_in_block: true,
+                ..Controls::default()
+            };
+            use_block(game, false);
+            assert!(game.held().is_none(), "the listener took the fire charge");
+            assert!(game.tnts.is_empty(), "nothing primed");
+            assert_eq!(game.world.block(0, 64, 0), tnt);
+        });
+    });
+}

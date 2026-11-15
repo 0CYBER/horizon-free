@@ -98,9 +98,19 @@ occluding entities, and returns `None` on a miss or without a client world.
 It can be read with a screen open. `entity` is an `EntityRef` carrying the current
 client level's epoch and network entity ID, including dragon parts. It becomes stale
 when the client level is replaced or the client disconnects; a same-level respawn
-keeps its epoch. This supplies identity, not client entity reads: the server-only
-entity data methods reject client handles. Unlike `view_hit` and `raycast`, this does not find blocks
+keeps its epoch. Unlike `view_hit` and `raycast`, this does not find blocks
 in distant terrain or return a block behind a targeted entity.
+
+A client `EntityRef` supports `bounding_box(host)`, `eye_height(host)` and
+`eye_position(host)`. For the local player these use the current predicted body and pose;
+for a tracked target they use the client's displayed body. Stale handles and entities the
+client cannot read return `None`.
+
+The local `PlayerRef` also supports `within_entity_reach(host, target, rule)`: it reads the
+predicted eyes, the target's displayed bounding box, the synchronized interaction-range
+attribute and the main hand's attack-range component. `EntityReach::Interact` and `Container`
+use strict limits; `Attack` includes the outer boundary. Only the local player can make this
+client query, and the result sends nothing and authorizes no action on the server.
 
 ## Local player reads
 
@@ -110,6 +120,14 @@ These read the local player as the client sees it. They take no mod-controlled n
   tab list draws it (`PlayerInfo.getLatency`): the server's smoothed keep-alive average, refreshed by
   the server's own broadcast. It reads 0 before the server's first measurement, as vanilla does, and
   `None` outside a world.
+- `ClientHost::client_session().client_tab_list()` is the player list as the Tab overlay draws it:
+  `ClientTabList { entries, header, footer }`. Each `ClientTabListEntry` has the profile `name`,
+  `uuid`, `game_mode`, `latency` and the `display` text as drawn (`getNameForDisplay`: the display
+  name the server set, else the name with its team's prefix, suffix and colour; italic for a
+  spectator). Entries come in the overlay's order (`getPlayerInfos`: list order, spectators last,
+  team name, name) and stop at the 80 it draws. Header and footer are `None` when empty. It is what
+  this client has been sent and changes as the server updates the list; `None` outside a world.
+  There is no NeoForge call for this: it is Horizon's own read.
 - `ClientHost::local_item_use()` is the item in use: `ItemUse { hand, ticks_used, ticks_remaining }`
   (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
   `ticks_used + ticks_remaining` is the use duration. It is `None` when no item is in use or no world

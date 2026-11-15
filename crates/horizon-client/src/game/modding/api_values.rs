@@ -2621,132 +2621,8 @@ mod declaration_snapshot_tests {
     }
 }
 
-macro_rules! gui_draw_value {
-    ($draw:expr, $from:ident, $to:ident, $convert:ident($($args:expr),*)) => {
-        match $draw {
-            $from::Sprite {
-                sprite,
-                x,
-                y,
-                w,
-                h,
-                region,
-                color,
-                blend,
-            } => $to::Sprite {
-                sprite: sprite.clone(),
-                x: *x,
-                y: *y,
-                w: *w,
-                h: *h,
-                region: *region,
-                color: *color,
-                blend: *blend,
-            },
-            $from::AtlasSprite {
-                sprite,
-                x,
-                y,
-                w,
-                h,
-                color,
-            } => $to::AtlasSprite {
-                sprite: sprite.clone(),
-                x: *x,
-                y: *y,
-                w: *w,
-                h: *h,
-                color: *color,
-            },
-            $from::Blit {
-                texture,
-                blend,
-                x,
-                y,
-                w,
-                h,
-                uv,
-                src,
-                tex,
-                color,
-            } => $to::Blit {
-                texture: texture.clone(),
-                blend: *blend,
-                x: *x,
-                y: *y,
-                w: *w,
-                h: *h,
-                uv: *uv,
-                src: *src,
-                tex: *tex,
-                color: *color,
-            },
-            $from::Fill {
-                x0,
-                y0,
-                x1,
-                y1,
-                color,
-            } => $to::Fill {
-                x0: *x0,
-                y0: *y0,
-                x1: *x1,
-                y1: *y1,
-                color: *color,
-            },
-            $from::Text {
-                text,
-                x,
-                y,
-                color,
-                shadow,
-            } => $to::Text {
-                text: text.$convert($($args),*)?,
-                x: *x,
-                y: *y,
-                color: *color,
-                shadow: *shadow,
-            },
-            $from::Item {
-                slot,
-                x,
-                y,
-                seed,
-                scale,
-                pivot,
-            } => $to::Item {
-                slot: *slot,
-                x: *x,
-                y: *y,
-                seed: *seed,
-                scale: *scale,
-                pivot: *pivot,
-            },
-            $from::Push(ops) => $to::Push(ops.clone()),
-            $from::Pop => $to::Pop,
-        }
-    };
-}
-
-impl TryIntoApi for horizon_client::hud_layout::GuiDraw {
-    type Api = mod_api::client::hud_layout::GuiDraw;
-    type Error = mod_api::text::TextFormError;
-    fn try_into_api(&self) -> Result<Self::Api, Self::Error> {
-        use horizon_client::hud_layout::GuiDraw as Engine;
-        use mod_api::client::hud_layout::GuiDraw as Api;
-        Ok(gui_draw_value!(self, Engine, Api, try_into_api()))
-    }
-}
-impl<C: ?Sized> TryIntoEngine<C> for mod_api::client::hud_layout::GuiDraw {
-    type Engine = horizon_client::hud_layout::GuiDraw;
-    type Error = mod_api::text::TextFormError;
-    fn try_into_engine(&self, _: &C) -> Result<Self::Engine, Self::Error> {
-        use horizon_client::hud_layout::GuiDraw as Engine;
-        use mod_api::client::hud_layout::GuiDraw as Api;
-        Ok(gui_draw_value!(self, Api, Engine, try_into_engine(&())))
-    }
-}
-
+#[path = "api_values/gui_draw.rs"]
+mod gui_draw;
 #[path = "api_values/text_boundary.rs"]
 mod text_boundary;
 #[cfg(test)]
@@ -2801,6 +2677,14 @@ mod gui_draw_boundary_tests {
                 y1: 34,
                 color: 35,
             },
+            D::FillGradient {
+                x0: 36,
+                y0: -37,
+                x1: 38,
+                y1: 39,
+                top: 0x8000_0040,
+                bottom: 0xFF00_0041,
+            },
             D::Text {
                 text: text.clone(),
                 x: 41,
@@ -2823,7 +2707,7 @@ mod gui_draw_boundary_tests {
         let actual: Result<Vec<D>, mod_api::text::TextFormError> = api.try_into_engine(&());
         let actual = actual.unwrap();
         assert_eq!(actual, commands);
-        let D::Text { text: actual, .. } = &actual[4] else {
+        let D::Text { text: actual, .. } = &actual[5] else {
             panic!("text command")
         };
         assert_eq!(actual.component(), text.component());

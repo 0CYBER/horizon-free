@@ -1031,6 +1031,7 @@ pub(in crate::game) mod tests {
             max_players: 20,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         };
         let mut hub = Hub::new(
             lan,

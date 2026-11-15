@@ -155,3 +155,24 @@ farmland the scan is vanilla's.
 Bookshelf slot-occupancy flags and the last-interacted slot are transactional storage bookkeeping,
 not notification effects. Aborting restores them with the items. Changed observers, comparator
 ticks and data-send requests already issued still survive that abort.
+
+## Fluid faces beside a block
+
+Client `BlockPart` methods change how a fluid draws its faces against your block. They are `collect`: set the field to
+decide. They depend on the block state and the fluid alone, so the client asks them on its own thread for every state
+and fluid when it joins a world and on `ClientHost::refresh_render_visibility`, as it asks `block_render_visibility`,
+and the meshing workers read the answers from a table. They never run per frame, and the level and position are not
+arguments. `event.fluid` is the fluid as it is asked: a source at amount 8, or a flowing fluid at amount 7, not falling.
+Water's and lava's flowing forms are fluids of their own, so a part can answer each.
+
+`BlockPart::should_hide_adjacent_fluid_face` answers whether your block hides the face a fluid beside it draws toward
+it. `event.direction` points from the fluid to your block, so `Direction::Up` is the top of a fluid under your block.
+`hidden` starts false. Vanilla's tests still apply first: a fluid beside the same fluid, or behind a face that occludes
+it, draws no face there whatever the answer.
+
+`BlockPart::should_display_fluid_overlay` answers whether a fluid's side beside your block uses the fluid's overlay
+sprite (water's `water_overlay`) instead of its flowing sprite. `overlay` starts with vanilla's test: true beside a block
+of vanilla's `HalfTransparentBlock` class (glass among them) or `LeavesBlock` class, and for a content block, its
+template's class. A fluid with no overlay sprite, such as lava, draws its flowing sprite whatever the answer.
+
+With no part answering either method, nothing is asked, the tables are empty and fluids draw exactly as vanilla's.

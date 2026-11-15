@@ -11,10 +11,10 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct PayloadRegistrar<'a> {
-    registrar: Rc<RefCell<&'a mut dyn Registrar>>,
-    version: String,
-    optional: bool,
-    thread: HandlerThread,
+    pub(super) registrar: Rc<RefCell<&'a mut dyn Registrar>>,
+    pub(super) version: String,
+    pub(super) optional: bool,
+    pub(super) thread: HandlerThread,
 }
 
 impl<'a> PayloadRegistrar<'a> {

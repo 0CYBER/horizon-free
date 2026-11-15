@@ -25,7 +25,8 @@ nodes retain the vanilla evaluator without constructing API weapon snapshots."#]
         side = "server",
         contract = "collect",
         out = "effects",
-        context = "registration"
+        context = "registration",
+        neoforge = "RegisterEvent"
     )]
     fn register_enchantment_damage_effects();
 }

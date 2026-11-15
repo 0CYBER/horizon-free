@@ -1,0 +1,2 @@
+horizon-client game::native_living_refs::tests::player_drop_spread_uses_the_players_random_even_when_cancelled lib daily resources
+horizon-client game::native_living_refs::tests::player_mod_drop_and_drop_key_have_equivalent_motion lib daily resources

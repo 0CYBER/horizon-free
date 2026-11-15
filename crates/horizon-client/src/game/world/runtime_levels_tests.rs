@@ -1305,3 +1305,43 @@ fn a_level_the_player_left_in_single_player_still_unloads_and_deletes() {
         assert!(!game.world_root.join("dimensions/solo/a").exists());
     });
 }
+
+/// Opening and unloading one id again and again, with a new seed each time, leaks its names,
+/// facts and level table once: every later open hands the game the same copies, and the level
+/// reads the seed of the open it is in (#4019).
+#[test]
+#[ignore = "daily"]
+fn reopening_one_id_with_any_seed_reuses_the_metadata_its_first_open_leaked() {
+    with_opener("cycle", "cycle:a", flat(), |game, seen| {
+        seen.mode.store(IDLE, Ordering::SeqCst);
+        let key = horizon_core::LevelKey::parse("cycle:a").unwrap();
+        let mut first = None;
+        for seed in [1, 2, 3, i64::MIN, i64::MAX] {
+            let level = RuntimeLevel::new("minecraft:overworld", RuntimeGenerator::Flat, seed);
+            game.levels
+                .runtime
+                .queue_open("cycle", "cycle:a", level)
+                .unwrap();
+            game.apply_runtime_levels();
+            assert!(game.runtime_level_is_open("cycle:a"));
+            assert_eq!(
+                game.levels.runtime.seeds().get("cycle:a").copied(),
+                Some(seed)
+            );
+            let table = game.level_shapes.extra;
+            let level = table.iter().find(|level| level.id == "cycle:a").unwrap();
+            let facts = horizon_world::dimension_type::DimensionFacts::of_level(key);
+            let leaked = (
+                table.as_ptr(),
+                level.id.as_ptr(),
+                level.dimension_type.as_ptr(),
+                std::ptr::from_ref(facts),
+            );
+            assert_eq!(*first.get_or_insert(leaked), leaked);
+            unload_as(game, "cycle", "cycle:a").unwrap();
+            game.apply_runtime_levels();
+            assert!(!game.runtime_level_is_open("cycle:a"));
+            assert_eq!(game.levels.runtime.seeds().get("cycle:a").copied(), None);
+        }
+    });
+}

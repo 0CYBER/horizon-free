@@ -127,6 +127,28 @@ To change Mending for every item at once,
 change the enchantment's `minecraft:repair_with_xp` effect in a data pack; the ratio a part gets arrives with it. To
 change it for particular items, vanilla's or another mod's included, attach a part to their item keys.
 
+## Enchanting and pick block
+
+Three server-side methods, each with a read-only `Host`, whose `event` field arrives holding vanilla's answer:
+
+- `ItemPart::is_primary_item_for` is `IItemExtension.isPrimaryItemFor`: whether enchantment selection may offer
+  `event.enchantment` to the part's item. `event.primary` arrives as `Enchantment.isPrimaryItem` (in the
+  enchantment's `supported_items`, and in its `primary_items` when that is set). Selection chooses the enchanting
+  table's offers and clues, loot `enchant_with_levels`, trades and spawn gear, all inside a roll. So the part is
+  asked once per registered enchantment when parts install (world open and `/reload`), with the item's default
+  stack, and selection reads the answers stored on that server's enchantment registry until the next install
+  or the world closing: answer from the item and the enchantment alone. A book is
+  offered every enchantment and never asks.
+- `ItemPart::apply_enchantments` is `IItemExtension.applyEnchantments`: the enchanting table's result for the
+  input stack and the list it chose (`event.enchantments`). `event.result` arrives as vanilla's (a book becomes
+  an enchanted book, then each level is added). The input slot holds what the part leaves, and
+  `player_enchant_item`, the `enchanted_item` trigger and `enchant_item` see it; the levels and lapis paid don't
+  change. An invalid stack, or a count other than the input's, is refused, and vanilla's result is kept.
+- `ItemPart::is_not_replaceable_by_pick_action` is `IItemExtension.isNotReplaceableByPickAction`: when a pick
+  moves an item into a full hotbar, whether the stack in `event.slot` must stay. `event.not_replaceable` arrives
+  as vanilla's (the stack is enchanted). The hotbar is asked from the selected slot on until a stack answers
+  `false`, and the pick uses that slot; with every stack kept, it uses the selected one.
+
 ## Hand, break and name on the client
 
 Three client-side methods change how the local player's client shows and handles a held stack. Each `event` field
@@ -149,3 +171,27 @@ lookup.
   text the part leaves is drawn at the same place and fade. It is asked once a client tick while the name shows. The
   name's timer still restarts only when the item or its hover name changes, so a tip that changes every tick doesn't
   keep it up.
+
+## Grindstone, repair combining and container items
+
+Three methods answer item questions that vanilla asks inside its menus and recipe matching. They run on both
+sides, the server's menus and the client's own result display, so they take the loop `context` and no `Host`:
+answer from `event.stack` and `context` alone, and fast. Each `event` field arrives holding vanilla's answer, which
+the part may set either way, and an item with no such part costs one table lookup.
+
+- `ItemPart::can_grindstone_repair` is `IItemExtension.canGrindstoneRepair`. `event.can_repair` starts with
+  whether the stack is damageable. It is asked for the top input when both grindstone inputs are single stacks of
+  the same item. `true` gives one item with the enchantments of both merged and only the curses kept (durability is
+  merged only when the item has some); `false` gives two of an item that stacks, when the inputs match, and nothing
+  otherwise. The input slots ask it too: a granted stack can be placed. A single enchanted input is never asked.
+- `ItemPart::is_combine_repairable` is `IItemExtension.isCombineRepairable`. `event.repairable` starts with
+  whether the stack has durability. Two single stacks of the same item in a crafting grid repair each other when
+  both answer `true`. A `true` for a stack with no maximum damage is refused, with one warning per item, because the
+  result needs one. The anvil keeps vanilla's test.
+- `ItemPart::can_fit_inside_container_items` is `IItemExtension.canFitInsideContainerItems`. `event.fits` starts
+  `true` for everything but a shulker box. It is asked by a shulker box's slots, a bundle (clicks and the `/item`
+  contents) and the item slots a mod gives an item. A hopper filling a shulker box doesn't ask. A `true` for a
+  shulker box lets shulker boxes nest: that is the mod's choice, bounded by the NBT readers' depth limit.
+
+Global events cover the rest of these menus: `grindstone_place` and `grindstone_take` change a grindstone's result
+after it is made, and `MenuPart::menu_slot_rules` answers per menu type and slot.

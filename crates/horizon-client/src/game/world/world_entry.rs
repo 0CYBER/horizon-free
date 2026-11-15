@@ -778,8 +778,9 @@ impl Game<'_> {
         self.resolve_enchant_particles();
         Ok(())
     }
-    /// Ask the parts of each block `isPathfindable` once per state and type: the answer depends
-    /// on nothing else, so path finding and spawning read it with no dispatch. A server also
+    /// Ask the parts of each block `isPathfindable` once per state and type, and of each item
+    /// `isPrimaryItemFor` once per enchantment: the answers depend on nothing else, so path
+    /// finding, spawning and enchantment selection read them with no dispatch. A server also
     /// publishes its parts for its world generation.
     pub(super) fn install_parts(&self, prepared: PreparedParts) {
         cauldron_interactions::install(prepared.cauldrons);
@@ -795,19 +796,27 @@ impl Game<'_> {
         mod_api::__private::install_resolved_parts(prepared.parts);
         self.resolve_block_paths();
         self.resolve_piston_reactions();
+        self.resolve_primary_items();
     }
     pub(super) fn resolve_block_paths(&self) {
         use horizon_client::mobs::data::PartAnswers;
-        use mod_api::{__private::has_scoped_hook, HookId, PathComputationType};
-        let pathfindable: &dyn Fn(BlockStateId, PathComputationType, bool) -> bool =
-            &|state, kind, mut pathfindable| {
-                self.native_is_pathfindable(state, kind, &mut pathfindable);
-                pathfindable
-            };
-        self.res.mob_data().resolve_parts(
+        use mod_api::{HookId, PathComputationType};
+        let data = self.res.mob_data();
+        let pathfindable =
+            Self::resolve_per_state(HookId::IsPathfindable, data.states.len(), |state| {
+                PathComputationType::ALL
+                    .into_iter()
+                    .filter(|&kind| {
+                        let mut pathfindable = data.block_pathfindable(state, kind);
+                        self.native_is_pathfindable(state, kind, &mut pathfindable);
+                        pathfindable
+                    })
+                    .fold(0, |bits, kind| bits | PartAnswers::pathfindable_bit(kind))
+            });
+        data.resolve_parts(
             self.res.facts(),
             &PartAnswers {
-                pathfindable: has_scoped_hook(HookId::IsPathfindable).then_some(pathfindable),
+                pathfindable: pathfindable.as_deref(),
             },
         );
     }

@@ -11,7 +11,11 @@ const SEND_ONLY: &str = "bungeecord:main";
 
 struct Listener;
 impl IPayloadHandler for Listener {
-    fn handle(&self, _: PayloadBytes, _: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        _: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         Ok(())
     }
 }
@@ -34,7 +38,11 @@ impl Hooks for Declares {
 }
 struct Typed;
 impl IPayloadHandler for Typed {
-    fn handle(&self, _: PayloadBytes, _: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        _: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         Ok(())
     }
 }
@@ -91,6 +99,7 @@ fn serverbound(channel: &str, len: usize) -> CustomPayload {
 
 #[test]
 fn a_raw_channel_reaches_every_declaring_mod_in_load_order() {
+    mod_platform::__private::initialize().unwrap();
     with_vanilla_peer(|transport| {
         let (sender, _out) = PlayerSender::payload_executor_test_sender(transport.clone());
         let (events, receiver) = crate::lan::event_channel_with_capacity(1 << 20);
@@ -99,33 +108,45 @@ fn a_raw_channel_reaches_every_declaring_mod_in_load_order() {
         else {
             panic!("a declared raw channel is the mods'");
         };
+        let endpoint = Endpoint::server(sender);
         for incoming in deliveries {
             assert!(incoming.raw);
-            let endpoint = Endpoint::server(sender.clone());
             dispatch(
                 incoming,
                 endpoint.clone(),
                 MainQueue::Server {
                     events: events.clone(),
-                    endpoint,
+                    endpoint: endpoint.clone(),
                     conn: Some(1),
                 },
             );
         }
-        let owners: Vec<_> = receiver
-            .take_turn()
-            .into_iter()
-            .map(|receipt| match receipt.into_parts().0 {
-                NetEvent::RawPayload(delivery) => {
-                    let Body::Payload(bytes) = &delivery.incoming.body else {
-                        panic!("a message, not work");
-                    };
-                    assert_eq!(bytes.0, vec![7; 5]);
-                    delivery.incoming.receiver.owner()
+        let main = MainQueue::Server {
+            events,
+            endpoint: endpoint.clone(),
+            conn: Some(1),
+        };
+        let mut owners = Vec::new();
+        for _ in 0..2 {
+            let turn = receiver.take_turn();
+            assert_eq!(turn.len(), 1, "one main delivery per connection turn");
+            for receipt in turn {
+                match receipt.into_parts().0 {
+                    NetEvent::RawPayload(delivery) => {
+                        let Body::Payload(bytes) = &delivery.incoming.body else {
+                            panic!("a message, not work");
+                        };
+                        assert_eq!(bytes.0, vec![7; 5]);
+                        owners.push(delivery.incoming.receiver.owner());
+                    }
+                    _ => panic!("only raw deliveries were queued"),
                 }
-                _ => panic!("only raw deliveries were queued"),
-            })
-            .collect();
+            }
+            // Dropping the main delivery releases its receiving turn. The pooled
+            // receiver's maintenance turn, not that drop, dispatches the next one.
+            dispatch_pending(&endpoint, &main);
+        }
+        assert!(receiver.take_turn().is_empty());
         assert_eq!(owners, ["voicechat", "voicebridge"]);
         // Undeclared and send-only channels keep their unrelated-plugin behaviour.
         for channel in [SEND_ONLY, "other:channel"] {

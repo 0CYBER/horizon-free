@@ -157,7 +157,7 @@ impl Game<'_> {
             return true;
         }
         let Some(item) = item else { return true };
-        if !horizon_client::bundle::can_be_in_bundle(item) {
+        if !horizon_client::menu::container_items::can_be_in_bundle(&self.loop_context, item) {
             return false;
         }
         let rest = slots

@@ -6,6 +6,11 @@ pub trait Hooks {
     /// so a mod ignores ids it does not own. `draw` shares its limits with that hook and clears every
     /// view, so nothing outlives a frame. A renderer that is not active is never asked, and neither is
     /// one without a world to draw in. Client-side.
-    #[hook(side = "client", contract = "listen", cancellable = false)]
+    #[hook(
+        side = "client",
+        contract = "listen",
+        neoforge = "RegisterDebugRenderersEvent (registration only; no per-frame event)",
+        cancellable = false
+    )]
     fn debug_renderer_draw();
 }

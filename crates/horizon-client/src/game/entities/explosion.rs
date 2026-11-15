@@ -1101,6 +1101,16 @@ impl Game<'_> {
             let Some((entity, handle)) = next else {
                 continue;
             };
+            // A callback may discard a later original without sweeping its
+            // storage yet. Removed entities no longer receive blast callbacks.
+            // A discarded mob stays in its storage flagged removed, and its
+            // selector target is gone, so the flag is read on its own.
+            if with_entity!(self, handle, e => e.is_removed())
+                || with_entity!(self, handle, e => e.selector_target())
+                    .is_some_and(|target| self.target_removed(&target))
+            {
+                continue;
+            }
             // An entity the blast's list does not name is neither hurt nor
             // pushed; without a listener the storages are the walk.
             let hit = if with_entity!(self, handle, e => self.combat.visits(e.id())) {

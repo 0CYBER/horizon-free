@@ -298,32 +298,103 @@ fn dragon_takes_player_thorns_through_its_body() {
 #[test]
 #[ignore = "daily"]
 fn a_still_guardian_spikes_the_player_who_hit_it() {
+    use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
+    use horizon_protocol::packets::configuration::ClientInformation;
+    use std::sync::{atomic::AtomicI32, mpsc};
+
     with_game(|g| {
+        g.lan_host(
+            crate::game::lan::LanSettings {
+                port: 0,
+                guest_commands: true,
+                force_game_mode: false,
+            },
+            NetConfig {
+                announce: false,
+                ..NetConfig::loopback(0, "guardian-test".into(), 2)
+            },
+            HubConfig {
+                default_game_mode: 0,
+                guest_commands: true,
+                force_game_mode: false,
+                hardcore: false,
+                view_distance: 2,
+                simulation_distance: 2,
+                dimension: "minecraft:overworld".into(),
+                allow_flight: false,
+                seed: 0,
+                max_players: 2,
+                integrated: false,
+                levels: Default::default(),
+                level_seeds: Default::default(),
+            },
+        )
+        .unwrap();
+        // Keep the channels alive just as for connected guests.
+        let mut receivers = Vec::new();
+        for (conn, entity) in [(11, 101), (22, 202)] {
+            let (tx, rx) = mpsc::channel();
+            receivers.push(rx);
+            let mut guest = Guest::new(
+                Joined {
+                    conn,
+                    uuid: u128::from(conn),
+                    name: format!("GuardianGuest{conn}"),
+                    properties: Vec::new(),
+                    info: ClientInformation::new(2),
+                    brand: "test".into(),
+                    sender: PlayerSender::new(tx, Arc::default()),
+                    latency: Arc::new(AtomicI32::new(0)),
+                    address: "127.0.0.1:25565".parse().unwrap(),
+                    expected: false,
+                },
+                entity,
+                [9.5, 64.0, 0.5],
+                2,
+            );
+            guest.dimension = "minecraft:overworld".into();
+            guest.placed = true;
+            guest.loaded = true;
+            guest.load_timeout = 0;
+            g.lan.as_mut().unwrap().hub.guests.push(guest);
+        }
         g.mobs.clear();
         let kind = g.res.mob_types().get("minecraft:guardian").unwrap().clone();
         let mut guardian = Mob::new(41, kind, Vec3::new(10.5, 64.0, 0.5), 0.0);
-        guardian.health = 30.0;
+        // Even a refused hit retaliates, before LivingEntity's guards.
+        guardian.invulnerable_flag = true;
         g.mobs.push(guardian);
-        g.player.as_mut().unwrap().health.advance_clock();
-        let before = g.player.as_ref().unwrap().health.health();
-        assert!(
-            g.hurt_by_player(0, 2.0, Damage::player([10.5, 64.0, 0.5])),
-            "the blow lands on the guardian"
-        );
-        g.player.as_mut().unwrap().health.advance_clock();
-        assert_eq!(
-            g.player.as_ref().unwrap().health.health(),
-            before - 2.0,
-            "the spikes hurt the player who hit it, in the hurt itself"
-        );
-        // Dealt once: the sweep at the end of the tick finds nothing left.
-        assert!(
-            !g.mobs[0]
-                .outbox
-                .iter()
-                .any(|e| matches!(e, MobEvent::DamagePlayer { .. })),
-            "{:?}",
-            g.mobs[0].outbox
-        );
+        let before: Vec<_> = [11, 22]
+            .into_iter()
+            .map(|conn| g.lan.as_ref().unwrap().hub.guest(conn).unwrap().health)
+            .collect();
+        g.as_guest(11, |g| {
+            g.player.as_mut().unwrap().health.advance_clock();
+            assert!(!g.hurt_by_player(0, 2.0, Damage::player([9.5, 64.0, 0.5])));
+            g.player.as_mut().unwrap().health.advance_clock();
+            assert_eq!(
+                g.player.as_ref().unwrap().health.health(),
+                before[0] - 2.0,
+                "synchronous thorns must hurt the original attacker (connection 11)"
+            );
+        })
+        .unwrap();
+        // The guardian changes targets, and the next player's turn drains the
+        // real outbox. A deferred or redirected thorns hit must not reach 22.
+        g.mobs[0].ai.target = Some(Who::Mob(202));
+        g.as_guest(22, |g| {
+            g.player.as_mut().unwrap().health.advance_clock();
+            let queued = std::mem::take(&mut g.mobs[0].outbox);
+            g.handle_mob_events(queued).unwrap();
+            g.player.as_mut().unwrap().health.advance_clock();
+        })
+        .unwrap();
+        for (conn, expected) in [(11, before[0] - 2.0), (22, before[1])] {
+            assert_eq!(
+                g.lan.as_ref().unwrap().hub.guest(conn).unwrap().health,
+                expected,
+                "only the original attacking guest takes thorns: connection {conn}"
+            );
+        }
     });
 }

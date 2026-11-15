@@ -1,0 +1,3 @@
+ids = ["method:ClientSession::client_tab_list", "type:ClientTabList", "type:ClientTabListEntry"]
+why = "Adds a client read of the player list as the Tab overlay draws it: each listed player's drawn name, profile name, UUID, game mode and latency in the overlay's order (at most 80), with the header and footer."
+migrate = "Additive. Read it on the client; it is None outside a logged-in client world and reflects what the server has sent."

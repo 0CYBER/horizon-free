@@ -80,7 +80,11 @@ fn finish(
     Ok(())
 }
 impl IPayloadHandler for Handler {
-    fn handle(&self, bytes: PayloadBytes, context: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        context: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         assert_eq!(
             &bytes.0,
             self.expected.as_ref(),
@@ -124,6 +128,7 @@ impl IPayloadHandler for Handler {
             Ok(())
         } else {
             finish(bytes, context, self.server, &self.hits)
+                .map_err(mod_api::PayloadHandleError::Failed)
         }
     }
 }

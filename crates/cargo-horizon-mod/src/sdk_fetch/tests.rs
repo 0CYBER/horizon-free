@@ -223,3 +223,50 @@ fn the_pin_is_the_native_tables_or_the_cargo_metadata() {
     assert_eq!(pin(project.path()).unwrap(), other);
     assert!(!project.path().join(DIR).exists());
 }
+
+#[test]
+fn a_project_inside_a_game_checkout_builds_against_it_and_a_pinned_one_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |path: &Path, text: &str| {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    let workspace = "[workspace]\nmembers = ['crates/horizon-mod-api']\n";
+    let dependency = |path: &str| {
+        format!(
+            "[package]\nname='m'\nversion='1.0.0'\n[dependencies]\nhorizon-mod-api = {{ path = '{path}' }}\n"
+        )
+    };
+    // The game's own fixture: a project inside the checkout, its dependency the checkout's crate.
+    let game = dir.path().join("game");
+    write(&game.join("Cargo.toml"), workspace);
+    write(&game.join("crates/horizon-mod-api/Cargo.toml"), "");
+    let fixture = game.join("mods/fixture");
+    write(
+        &fixture.join("Cargo.toml"),
+        &dependency("../../crates/horizon-mod-api"),
+    );
+    assert_eq!(
+        game_tree(&fixture).unwrap(),
+        Some(game.canonicalize().unwrap())
+    );
+    // A mod made from the template: its dependency is the fetched SDK's own workspace.
+    let project = dir.path().join("mod");
+    write(&project.join(".horizon/sdk/api/Cargo.toml"), workspace);
+    write(
+        &project.join(".horizon/sdk/api/crates/horizon-mod-api/Cargo.toml"),
+        "",
+    );
+    write(
+        &project.join("Cargo.toml"),
+        &dependency(".horizon/sdk/api/crates/horizon-mod-api"),
+    );
+    assert_eq!(game_tree(&project).unwrap(), None);
+    // A project outside the checkout that names its crate is still pinned, not built against it.
+    let outside = dir.path().join("outside");
+    write(
+        &outside.join("Cargo.toml"),
+        &dependency("../game/crates/horizon-mod-api"),
+    );
+    assert_eq!(game_tree(&outside).unwrap(), None);
+}

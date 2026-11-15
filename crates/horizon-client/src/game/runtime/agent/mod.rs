@@ -1786,8 +1786,8 @@ impl Game<'_> {
                     .trim_start()
                     .strip_prefix("command")
                     .unwrap_or("")
-                    .trim()
-                    .trim_start_matches('/');
+                    .trim();
+                let text = text.strip_prefix('/').unwrap_or(text);
                 if text.is_empty() {
                     return Err("command TEXT".into());
                 }

@@ -7,7 +7,7 @@
 mod backing;
 use super::guest::Guest;
 use crate::{
-    bundle::{Contents, can_be_in_bundle, toggle_selected},
+    bundle::{Contents, toggle_selected},
     containers::BlockEntity,
     enchant::Enchantments,
     items::{ItemStack, Items},
@@ -572,7 +572,7 @@ impl View<'_> {
         }
         !(self.shulker
             && self.container.as_ref().is_some_and(|c| i < c.len())
-            && !crate::menu::fits_inside_container_items(stack))
+            && !crate::menu::fits_inside_container_items(self.loop_context, stack))
     }
     fn slot_rules(&self, i: usize, stack: &ItemStack, rules: &dyn Rules) -> (bool, u32) {
         let own = self.vanilla_may_place(i, stack, rules);
@@ -1153,7 +1153,9 @@ fn pickup(view: &mut View, slot: i32, button: i32, rules: &dyn Rules) {
 /// `BundleItem.overrideStackedOnOther`, then the clicked one's
 /// `overrideOtherStackedOnMe`. True when a bundle took the click.
 fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bool {
+    use crate::menu::container_items::{can_be_in_bundle, fits_inside_container_items};
     let items = rules.items();
+    let context = view.loop_context;
     let other = view.get(i);
     if let Some(mut carried) = view.guest.carried.clone()
         && let Some(mut contents) = Contents::of(items, &carried)
@@ -1162,7 +1164,7 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
         match other {
             // tryTransfer: as much as fits, through `safeTake`.
             Some(other) => {
-                if can_be_in_bundle(&other) {
+                if can_be_in_bundle(context, &other) {
                     let amount = other.count.min(contents.room_for(items, &other));
                     let mut slot = HostedSlotView {
                         view,
@@ -1173,7 +1175,8 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
                     if let Some(mut taken) =
                         crate::menu::SlotView::safe_take(&mut slot, other.count, amount)
                     {
-                        contents.try_insert(items, &mut taken);
+                        // `tryInsert` asks `canItemBeInBundle` again: the answer above.
+                        contents.try_insert(items, &mut taken, true);
                     }
                 }
             }
@@ -1192,7 +1195,8 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
                         stack.count -= amount;
                     }
                     if stack.count > 0 {
-                        contents.try_insert(items, &mut stack);
+                        let fits = fits_inside_container_items(context, &stack);
+                        contents.try_insert(items, &mut stack, fits);
                     }
                 }
             }
@@ -1213,7 +1217,8 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
     match (view.guest.carried.take(), right) {
         (Some(mut carried), false) => {
             if allowed {
-                contents.try_insert(items, &mut carried);
+                let fits = fits_inside_container_items(context, &carried);
+                contents.try_insert(items, &mut carried, fits);
             }
             view.guest.carried = (carried.count > 0).then_some(carried);
         }

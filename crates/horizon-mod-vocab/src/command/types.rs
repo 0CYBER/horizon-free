@@ -1,5 +1,10 @@
 //! Commands and their authority.
 
+/// Literal words use lowercase letters, digits, `_` and `-`. Only the first word may
+/// additionally begin with one `/`: register `/set <x:word>` and type `//set stone` in chat.
+/// The command's literals retain `/set`. A slash alone, repeated leading slashes and
+/// slashes in later literal words are refused.
+///
 /// A command a native mod adds, as one usage: words, then arguments
 /// `<name:kind>`, optional ones last in brackets `[name:kind]`:
 /// `pay <player:player> <amount:integer>`, `balance [player:player]`,

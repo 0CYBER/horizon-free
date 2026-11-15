@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Run the asset-free GPU entity fixture through production source staging (requires a display)."""
+"""Run the asset-free GPU entity fixture (requires a display and a Vulkan adapter)."""
 import argparse
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 
@@ -13,16 +12,13 @@ import lab
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path)
-    parser.add_argument("--check-only", action="store_true", help="compile the staged fixture without a display")
+    parser.add_argument("--check-only", action="store_true", help="compile the fixture without a display")
     args = parser.parse_args()
     target = prebuilt_game.ROOT / "target" / "standard-pack-gpu-entities"
-    staged = prebuilt_game.stage(target)
-    crate = staged / "crates/horizon-client-render"
-    shutil.copy2(crate / "fixtures/standard_pack_gpu_entities.rs",
-                 crate / "examples/standard_pack_gpu_entities.rs")
+    target.mkdir(parents=True, exist_ok=True)
     if args.check_only:
         subprocess.run(["cargo", "check", "-p", "horizon-client-render", "--example", "standard_pack_gpu_entities"],
-                       cwd=staged, env=lab.game_env(CARGO_TARGET_DIR=target / "build"), check=True)
+                       cwd=prebuilt_game.ROOT, env=lab.game_env(CARGO_TARGET_DIR=target / "build"), check=True)
         return
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -36,7 +32,7 @@ def main():
         env = lab.game_env(CARGO_TARGET_DIR=target / "build", **homes)
         subprocess.run(["cargo", "run", "--profile", "dev", "-p", "horizon-client-render",
                         "--example", "standard_pack_gpu_entities", "--", str(output)],
-                       cwd=staged, env=env, check=True)
+                       cwd=prebuilt_game.ROOT, env=env, check=True)
 
 
 if __name__ == "__main__":

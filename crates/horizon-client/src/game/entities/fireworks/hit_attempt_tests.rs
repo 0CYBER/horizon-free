@@ -232,6 +232,7 @@ fn remaining_hit_callers_observe_refusals_and_zero_damage() {
                     max_players: 20,
                     integrated: false,
                     levels: Default::default(),
+                    level_seeds: Default::default(),
                 },
             )
             .unwrap();

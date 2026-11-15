@@ -283,7 +283,7 @@ mod desktop_tests {
     }
 
     #[test]
-    #[ignore = "daily"]
+    #[ignore = "requires an interactive desktop and graphics adapter"]
     fn desktop_list_renders_the_viewport_after_scrollbar_jumps() {
         gpui_platform::application().run(|cx| {
             let window = cx

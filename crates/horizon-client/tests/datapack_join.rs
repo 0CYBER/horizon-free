@@ -134,6 +134,7 @@ impl Host {
             seed: 1,
             max_players: 8,
             levels: Default::default(),
+            level_seeds: Default::default(),
         };
         let load = Arc::new(
             load_context(DataLoadOrigin::ServerDataLoad)

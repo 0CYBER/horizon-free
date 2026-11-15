@@ -57,6 +57,18 @@ pub enum GuiDraw {
         y1: i32,
         color: u32,
     },
+    /// `fillGradient(x0, y0, x1, y1, top, bottom)`: ARGB `top` along the `y0` edge
+    /// blending to `bottom` along the `y1` edge, in the current pose and clip.
+    /// Zero area or inversion on exactly one axis draws nothing. With both axes inverted,
+    /// bounds are sorted and colours flipped: `top` stays on `y0`, now the lower edge.
+    FillGradient {
+        x0: i32,
+        y0: i32,
+        x1: i32,
+        y1: i32,
+        top: u32,
+        bottom: u32,
+    },
     /// `text(font, text, x, y, argb, dropShadow)`.
     Text {
         text: Text,
@@ -114,7 +126,7 @@ pub fn draws_top(draws: &[GuiDraw]) -> Option<i32> {
             | GuiDraw::Blit { y, .. }
             | GuiDraw::Text { y, .. }
             | GuiDraw::Item { y, .. } => Some(y),
-            GuiDraw::Fill { y0, .. } => Some(y0),
+            GuiDraw::Fill { y0, .. } | GuiDraw::FillGradient { y0, .. } => Some(y0),
             GuiDraw::Push(_) | GuiDraw::Pop => None,
         })
         .min()
@@ -860,6 +872,25 @@ pub fn paint(batch: &mut crate::hud::HudBatch, atlas: &crate::hud::HudAtlas, dra
                     abgr(*color),
                 );
             }
+            GuiDraw::FillGradient {
+                x0,
+                y0,
+                x1,
+                y1,
+                top,
+                bottom,
+            } => {
+                if x1 != x0 && y1 != y0 && (x1 > x0) == (y1 > y0) {
+                    let (x, y) = ((*x0).min(*x1) as f32, (*y0).min(*y1) as f32);
+                    let rect = (x, y, (*x0).max(*x1) as f32 - x, (*y0).max(*y1) as f32 - y);
+                    let (top, bottom) = if y1 > y0 {
+                        (*top, *bottom)
+                    } else {
+                        (*bottom, *top)
+                    };
+                    batch.fill_gradient(atlas, rect, abgr(top), abgr(bottom));
+                }
+            }
             GuiDraw::Text {
                 text,
                 x,
@@ -908,3 +939,7 @@ fn opaque(color: u32) -> u32 {
         color
     }
 }
+
+#[cfg(test)]
+#[path = "hud_layout_gradient_tests.rs"]
+mod gradient_tests;

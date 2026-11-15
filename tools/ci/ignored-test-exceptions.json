@@ -50,6 +50,110 @@
   {
     "package": "horizon-client",
     "target": "lib",
+    "test": "game::creatures::mob_islands::tests::a_fast_mob_joins_only_the_herds_its_bound_reaches",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::a_fox_eating_chorus_fruit_joins_the_herd_below",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::a_pet_teleports_to_its_owner_while_a_far_herd_ticks_apart",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::a_raid_shares_one_group_beside_a_herd",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::actual_reaches_cover_links_villages_and_bounded_moves",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::foreign_lookup_observes_serial_visibility_and_unwind",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::islands_tick_their_mobs_as_one_thread_does",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::mobs_on_their_own_random_leave_the_level_stream_alone",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::moved_riders_use_loaded_and_ticking_state_at_their_turn",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::startup_and_turn_failures_release_lanes_and_preserve_payload",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::verification_detects_snapshot_and_gaussian_only_differences",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::mob_islands::tests::villagers_on_their_own_random_tick_in_groups_as_serial",
+    "path": "crates/horizon-client/src/game/creatures/mob_islands.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
+    "test": "game::creatures::prep::tests::preparation_refreshes_climbing_and_nearest_after_a_move",
+    "path": "crates/horizon-client/src/game/creatures/prep.rs",
+    "reason": "needs the upstream-parallel-mobs feature and prepared resources",
+    "rationale": "Compiled only with the upstream-parallel-mobs feature, which no daily shard builds; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-client-parallel-mobs.txt. Not selected by daily shards."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
     "test": "game::end::cooldown_tests::gateway_counters_match_actual_vanilla_methods",
     "path": "crates/horizon-client/src/game/world/end/gateway_cooldown_tests.rs",
     "reason": "needs explicit HORIZON_TEST_RESOURCES and HORIZON_PORTAL_REFERENCE",
@@ -678,6 +782,14 @@
     "path": "crates/horizon-items/src/item_data.rs",
     "reason": "microbenchmark; run with --ignored --nocapture",
     "rationale": "Opt-in measurement, not an ordinary daily correctness check: microbenchmark; run with --ignored --nocapture. Run by hand on an idle machine with the optimized profile and its explicitly requested inputs; all assertions remain in the test."
+  },
+  {
+    "package": "horizon-launcher",
+    "target": "bin:horizon-launcher",
+    "test": "cull::desktop_tests::desktop_list_renders_the_viewport_after_scrollbar_jumps",
+    "path": "launcher/src/cull.rs",
+    "reason": "requires an interactive desktop and graphics adapter",
+    "rationale": "Compiled only on Windows (cfg(all(test, target_os = \"windows\"))) and opens a real window; explicit manual runner by-hand in tools/ci/ignored-tests/manual-horizon-launcher.txt. Not selected by daily shards."
   },
   {
     "package": "horizon-launcher",

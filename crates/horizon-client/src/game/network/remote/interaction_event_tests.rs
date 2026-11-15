@@ -59,7 +59,7 @@ struct Controls {
     air_answer: Option<Answer>,
     air_main_only: bool,
     consume_item: bool,
-    /// The block phase takes one item from the hand before its answer.
+    /// The block phase takes one item from the hand, before its answer if it gives one.
     take_in_block: bool,
     expected_hand: Option<Hand>,
     part_answer: Option<Answer>,
@@ -185,21 +185,21 @@ impl Hooks for Observer {
             UsePhase::ItemBeforeBlock => state.first_answer,
             _ => unreachable!("UsePhase: unhandled variant"),
         };
+        if ((state.consume_item && answer.is_some() && event.phase == UsePhase::ItemAfterBlock)
+            || (state.take_in_block && event.phase == UsePhase::Block))
+            && let HostSide::Server(host) = host
+        {
+            let player = host.player(event.click.player).unwrap();
+            let items = player.entity().capability(host, &ENTITY_ITEMS, ()).unwrap();
+            let slot = player.selected_slot(host).unwrap();
+            let resource = ItemResource::of(event.click.stack.unwrap());
+            host.transaction(|host, tx| {
+                assert_eq!(items.extract(host, tx, slot, &resource, 1), 1);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        }
         if let Some(answer) = answer {
-            if ((state.consume_item && event.phase == UsePhase::ItemAfterBlock)
-                || (state.take_in_block && event.phase == UsePhase::Block))
-                && let HostSide::Server(host) = host
-            {
-                let player = host.player(event.click.player).unwrap();
-                let items = player.entity().capability(host, &ENTITY_ITEMS, ()).unwrap();
-                let slot = player.selected_slot(host).unwrap();
-                let resource = ItemResource::of(event.click.stack.unwrap());
-                host.transaction(|host, tx| {
-                    assert_eq!(items.extract(host, tx, slot, &resource, 1), 1);
-                    Ok::<_, ()>(())
-                })
-                .unwrap();
-            }
             *event.cancellation_result = answer;
             Flow::Cancel
         } else {
@@ -1330,6 +1330,7 @@ fn setup_interaction_guest(
             max_players: 2,
             integrated: true,
             levels: game.level_shapes,
+            level_seeds: game.levels.runtime.seeds(),
         },
     )
     .unwrap();

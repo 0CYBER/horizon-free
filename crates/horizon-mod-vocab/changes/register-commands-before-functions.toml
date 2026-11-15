@@ -1,0 +1,3 @@
+ids = ["hook:register_commands"]
+why = "register_commands now fires whenever the server builds its command tree: when a world opens, before its functions load (with no LAN host or dedicated hub needed), and on each /reload and data pack change, not only once per hub. A function's plain lines may now name a mod command; both they and macro lines are checked against the session's tree, and a command a mod stops registering is refused by the next functions loaded."
+migrate = "Rebuild listeners against hook version 2. Expect the listener at world open and after each reload, and push the same commands each time; do not count calls or assume a connected player exists when it runs."

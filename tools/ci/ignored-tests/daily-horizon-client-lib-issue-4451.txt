@@ -88,7 +88,6 @@ horizon-client-lib mobs::goals::breeding_variant_tests::chicken_breeding_coin_pr
 horizon-client-lib mobs::goals::breeding_variant_tests::variant_and_experience_are_drawn_in_order_before_later_goal_work lib daily resources
 horizon-client-lib mobs::goals::remove_all_tests::remove_all_stops_the_running_goal_and_moves_the_locks lib daily resources
 horizon-client-lib mobs::goals::target_change_hook_tests::nearest_target_goal_respects_cancellation lib daily resources
-horizon-client-lib mobs::guardian::tests::thorns_return_to_attacker_after_target_changes lib daily resources
 horizon-client-lib mobs::keyframes::parity_tests::every_vanilla_animation_samples_as_before_the_move lib daily resources
 horizon-client-lib mobs::living::tests::living_jump_power_respects_honey_block_and_jump_boost lib daily resources
 horizon-client-lib mobs::living::tests::mob_edge_bounce_uses_supporting_column lib daily resources

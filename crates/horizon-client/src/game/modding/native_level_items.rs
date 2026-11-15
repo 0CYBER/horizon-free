@@ -157,142 +157,109 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_level_pops_spawns_and_awards_as_vanilla() {
-        use super::super::{
-            Audio, Game, Options, Progress, Settings, execution_role::ExecutionRole,
-            load_resources, spill,
-        };
+        use super::super::{Game, spill};
         use horizon_client::gamerules::Value as RuleValue;
         use horizon_client::items::ItemStack;
         use horizon_core::random::RandomSource;
-        use mod_api::{Authority, LevelRef, WorldEpoch};
+        use mod_api::{LevelRef, WorldEpoch};
 
-        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
-        let settings = Settings::default();
-        let loaded = load_resources(
-            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
-            Vec::new(),
-            None,
-            &root,
-            &settings,
-            std::time::Instant::now(),
-            false,
-            ExecutionRole::IntegratedServer,
-            &Progress::new(),
-            &mut |_, _| unreachable!(),
-        )
-        .unwrap();
-        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
-        options.resources = root.clone();
-        options.execution_role = ExecutionRole::IntegratedServer;
-        let mut game = Game::new(
-            &loaded.resources,
-            loaded.pack,
-            loaded.gui.unwrap(),
-            options,
-            settings,
-            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
-                root.to_path_buf(),
-            )),
-            None,
-        )
-        .unwrap();
-        game.native_lifecycle
-            .begin_open(Authority::IntegratedServer);
-        let level = game.level(game.dim.id()).unwrap();
-        let stone = || ItemStack::new("minecraft:stone", 3);
+        super::super::native_entity_refs::tests::with_game(|game| {
+            let level = game.level(game.dim.id()).unwrap();
+            let stone = || ItemStack::new("minecraft:stone", 3);
 
-        // Block.popResource: three level-random offsets, then the entity.
-        let mut random = game.world.random.clone();
-        let at = spill::pop_position(&mut random, [4, 64, -2]);
-        let popped = game
-            .level_pop_resource(level, [4, 64, -2], stone())
-            .unwrap();
-        assert_eq!(
-            game.entity_kind(popped)
-                .map(|kind| kind.id(&game))
-                .as_deref(),
-            Some("minecraft:item")
-        );
-        assert_eq!(game.entity_position(popped), Some(at));
-        let item = game.dropped.last().unwrap();
-        assert_eq!((item.pickup_delay, item.stack.count), (10, 3));
-        assert_eq!(item.velocity.y, 0.2);
-        // The offsets are drawn even when nothing drops.
-        assert!(
-            game.level_pop_resource(level, [0; 3], ItemStack::new("minecraft:air", 1))
-                .is_none()
-        );
-        game.ui.rules.set("block_drops", RuleValue::Bool(false));
-        assert!(
-            game.level_pop_resource(level, [4, 64, -2], stone())
-                .is_none()
-        );
-        let _ = spill::pop_position(&mut random, [0; 3]);
-        let _ = spill::pop_position(&mut random, [0; 3]);
-        assert_eq!(random.next_long(), game.world.random.next_long());
-
-        // new ItemEntity(level, x, y, z, stack, delta...): the pickup delay
-        // is the caller's, as ItemEntity.setPickupDelay at construction.
-        let spawned = game
-            .level_spawn_item_with_motion(level, 1.5, 70.0, 2.5, stone(), [0.0, 0.3, 0.0], 40)
-            .unwrap();
-        assert_eq!(game.entity_position(spawned), Some([1.5, 70.0, 2.5]));
-        let item = game.dropped.last().unwrap();
-        assert_eq!((item.pickup_delay, item.velocity.y), (40, 0.3));
-        assert!(
-            game.level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 32767)
-                .is_some()
-        );
-        assert_eq!(game.dropped.last().unwrap().pickup_delay, 32767);
-        assert!(
-            game.level_spawn_item(level, f64::NAN, 70.0, 2.5, stone(), 0)
-                .is_none()
-        );
-        for empty in [
-            ItemStack::new("minecraft:stone", 0),
-            ItemStack::new("minecraft:nothing", 1),
-        ] {
+            // Block.popResource: three level-random offsets, then the entity.
+            let mut random = game.world.random.clone();
+            let at = spill::pop_position(&mut random, [4, 64, -2]);
+            let popped = game
+                .level_pop_resource(level, [4, 64, -2], stone())
+                .unwrap();
+            assert_eq!(
+                game.entity_kind(popped)
+                    .map(|kind| kind.id(game))
+                    .as_deref(),
+                Some("minecraft:item")
+            );
+            assert_eq!(game.entity_position(popped), Some(at));
+            let item = game.dropped.last().unwrap();
+            assert_eq!((item.pickup_delay, item.stack.count), (10, 3));
+            assert_eq!(item.velocity.y, 0.2);
+            // The offsets are drawn even when nothing drops.
             assert!(
-                game.level_spawn_item(level, 0.0, 0.0, 0.0, empty, 0)
+                game.level_pop_resource(level, [0; 3], ItemStack::new("minecraft:air", 1))
                     .is_none()
             );
-        }
+            game.ui.rules.set("block_drops", RuleValue::Bool(false));
+            assert!(
+                game.level_pop_resource(level, [4, 64, -2], stone())
+                    .is_none()
+            );
+            let _ = spill::pop_position(&mut random, [0; 3]);
+            let _ = spill::pop_position(&mut random, [0; 3]);
+            assert_eq!(random.next_long(), game.world.random.next_long());
 
-        // An item a hook spawns while the tick has the list out joins after
-        // the others, which keep their numbers.
-        use horizon_client::join_seq::Joined;
-        let joins = |game: &Game| -> Vec<(u32, u64)> {
-            game.dropped
-                .iter()
-                .map(|d| (d.id, d.join_seq().get()))
-                .collect()
-        };
-        let before = joins(&game);
-        let out = game.dropped.lift();
-        let hooked = game
-            .level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 0)
-            .unwrap();
-        assert_eq!(joins(&game).len(), 1);
-        game.put_back_dropped(out);
-        let after = joins(&game);
-        assert_eq!(after[..before.len()], before[..]);
-        assert_eq!(after[before.len()].0, hooked.id());
-        assert!(after[before.len()].1 > before.iter().map(|j| j.1).max().unwrap());
-        assert!(game.entity_kind(hooked).is_some());
+            // new ItemEntity(level, x, y, z, stack, delta...): the pickup delay
+            // is the caller's, as ItemEntity.setPickupDelay at construction.
+            let spawned = game
+                .level_spawn_item_with_motion(level, 1.5, 70.0, 2.5, stone(), [0.0, 0.3, 0.0], 40)
+                .unwrap();
+            assert_eq!(game.entity_position(spawned), Some([1.5, 70.0, 2.5]));
+            let item = game.dropped.last().unwrap();
+            assert_eq!((item.pickup_delay, item.velocity.y), (40, 0.3));
+            assert!(
+                game.level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 32767)
+                    .is_some()
+            );
+            assert_eq!(game.dropped.last().unwrap().pickup_delay, 32767);
+            assert!(
+                game.level_spawn_item(level, f64::NAN, 70.0, 2.5, stone(), 0)
+                    .is_none()
+            );
+            for empty in [
+                ItemStack::new("minecraft:stone", 0),
+                ItemStack::new("minecraft:nothing", 1),
+            ] {
+                assert!(
+                    game.level_spawn_item(level, 0.0, 0.0, 0.0, empty, 0)
+                        .is_none()
+                );
+            }
 
-        // ExperienceOrb.award: 100 is 73, 17, 7 and 3, far apart from other orbs.
-        assert!(game.level_award_experience(level, 100.5, 70.0, 0.5, 100));
-        let values: Vec<u32> = game.orbs.iter().map(|o| o.points()).collect();
-        assert_eq!(values, [73, 17, 7, 3]);
-        assert!(!game.level_award_experience(level, 100.5, 70.0, 0.5, 0));
+            // An item a hook spawns while the tick has the list out joins after
+            // the others, which keep their numbers.
+            use horizon_client::join_seq::Joined;
+            let joins = |game: &Game| -> Vec<(u32, u64)> {
+                game.dropped
+                    .iter()
+                    .map(|d| (d.id, d.join_seq().get()))
+                    .collect()
+            };
+            let before = joins(game);
+            let out = game.dropped.lift();
+            let hooked = game
+                .level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 0)
+                .unwrap();
+            assert_eq!(joins(game).len(), 1);
+            game.put_back_dropped(out);
+            let after = joins(game);
+            assert_eq!(after[..before.len()], before[..]);
+            assert_eq!(after[before.len()].0, hooked.id());
+            assert!(after[before.len()].1 > before.iter().map(|j| j.1).max().unwrap());
+            assert!(game.entity_kind(hooked).is_some());
 
-        let stale = LevelRef::new(WorldEpoch::new(0), game.dim.key());
-        assert!(
-            game.level_spawn_item(stale, 0.0, 0.0, 0.0, stone(), 0)
-                .is_none()
-        );
-        assert!(game.level_pop_resource(stale, [0; 3], stone()).is_none());
-        assert!(!game.level_award_experience(stale, 0.0, 0.0, 0.0, 5));
+            // ExperienceOrb.award: 100 is 73, 17, 7 and 3, far apart from other orbs.
+            assert!(game.level_award_experience(level, 100.5, 70.0, 0.5, 100));
+            let values: Vec<u32> = game.orbs.iter().map(|o| o.points()).collect();
+            assert_eq!(values, [73, 17, 7, 3]);
+            assert!(!game.level_award_experience(level, 100.5, 70.0, 0.5, 0));
+
+            let stale = LevelRef::new(WorldEpoch::new(0), game.dim.key());
+            assert!(
+                game.level_spawn_item(stale, 0.0, 0.0, 0.0, stone(), 0)
+                    .is_none()
+            );
+            assert!(game.level_pop_resource(stale, [0; 3], stone()).is_none());
+            assert!(!game.level_award_experience(stale, 0.0, 0.0, 0.0, 5));
+        });
     }
 
     #[test]

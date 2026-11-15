@@ -3,6 +3,11 @@ pub use content::payload_codec::{
     PayloadCodec, PayloadDecodeError, PayloadEncodeError, PayloadReader, PayloadWriter, VarInt,
     VarLong, decode_payload, encode_payload,
 };
+pub use content::payload_codec::{payload_schema_leaf, payload_schema_mix};
+// hidden: the derive's recursion guard.
+#[doc(hidden)]
+pub use content::payload_codec::payload_schema_named;
+pub use content::payload_schema::{PAYLOAD_SCHEMA_MARKER, payload_schema, typed_payload_version};
 
 /// Derive [`PayloadCodec`] from a type's fields.
 ///

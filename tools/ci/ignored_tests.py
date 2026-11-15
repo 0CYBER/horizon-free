@@ -84,7 +84,7 @@ SUMMARY = re.compile(r"^test result: \S+\. (\d+) passed; (\d+) failed; (\d+) ign
 # target whose source lives in another package's folder (`Running ../horizon-client/tests/lan_bot.rs (…)`).
 TARGET = re.compile(r"^\s+Running (?:unittests )?\S+ \(")
 COUNT = re.compile(r"^running (\d+) tests?$")
-PANIC = re.compile(r"^thread '([^']+)'.* panicked at (\S+):$")
+PANIC = re.compile(r"^thread '([^']+)'.* panicked at (.+):$")
 # The Rust runtime's own words when it aborts a process: fixed text, no payload, safe to show.
 ABORTS = (
     (re.compile(r"^thread '[^']*'.* has overflowed its stack$"), "stack overflow"),

@@ -1332,6 +1332,7 @@ impl Game<'_> {
             simulation_distance: props.simulation_distance.clamp(2, 32),
             dimension: self.dim.id().to_owned(),
             levels: self.level_shapes,
+            level_seeds: self.levels.runtime.seeds(),
             seed: self.level.seed,
             max_players: props.max_players.max(0) as usize,
             integrated: false,

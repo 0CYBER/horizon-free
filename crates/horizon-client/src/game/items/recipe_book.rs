@@ -1429,6 +1429,18 @@ impl Game<'_> {
             },
         ));
     }
+    /// The display ids of `recipe_id` that the server sent and this book
+    /// numbers the same way (`Book::confirmed_ids`): the entries
+    /// `transfer_viewer_recipe` and `transfer_recipe_check` find. A server
+    /// numbers the recipes it sent itself, so the display index's ids are not
+    /// evidence of its own.
+    pub(in crate::game) fn viewer_book_ids(&mut self, recipe_id: &str) -> std::sync::Arc<[i32]> {
+        self.ensure_book();
+        self.recipe_ui
+            .book
+            .as_ref()
+            .map_or_else(Default::default, |book| book.confirmed_ids(recipe_id))
+    }
     /// A viewer's transfer of one set of ingredients.
     pub(super) fn transfer_viewer_recipe(&mut self, display_id: i32) {
         self.panel.transfer_warning = None;
@@ -1792,6 +1804,9 @@ impl Game<'_> {
         for id in p.ids {
             self.recipe_ui.client.remove(id);
             self.recipe_ui.server_entries.remove(&id);
+            if let Some(book) = self.recipe_ui.book.as_mut() {
+                book.unconfirm(id);
+            }
         }
         self.recipe_ui.client_version += 1;
     }

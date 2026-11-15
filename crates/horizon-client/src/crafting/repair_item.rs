@@ -8,17 +8,45 @@ pub(super) fn pair<'a>(
     let [first, second] = stacks else {
         return None;
     };
-    let durable = |s: &ItemStack| {
-        let info = ctx.facts(s).map(|f| &f.info);
-        s.carries_component(info, "minecraft:max_damage")
-            && s.carries_component(info, "minecraft:damage")
-    };
     (first.item == second.item
         && first.count == 1
         && second.count == 1
-        && durable(first)
-        && durable(second))
+        && combine_repairable(ctx, first)
+        && combine_repairable(ctx, second))
     .then_some((*first, *second))
+}
+
+/// `ItemStack.isCombineRepairable`: vanilla's answer, whether the stack has durability
+/// (`max_damage` and `damage`), then the parts of its item (`ItemPart::is_combine_repairable`).
+/// A `true` for a stack with no maximum damage is refused (`refuse_no_durability`), since the
+/// result's must be positive. An item with no such part costs one table lookup.
+fn combine_repairable(ctx: &Context, stack: &ItemStack) -> bool {
+    let info = ctx.facts(stack).map(|f| &f.info);
+    let vanilla = stack.carries_component(info, "minecraft:max_damage")
+        && stack.carries_component(info, "minecraft:damage");
+    let mut repairable = vanilla;
+    crate::native_client_hooks::is_combine_repairable(ctx.context, stack, &mut repairable);
+    if repairable && !vanilla && stack.max_damage(info) <= 0 {
+        refuse_no_durability(&stack.item);
+        return vanilla;
+    }
+    repairable
+}
+
+/// Says once per item that its `is_combine_repairable` parts answered `true` for a stack with
+/// no durability, which the crafting grid can't repair.
+fn refuse_no_durability(item: &str) {
+    static REFUSED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    if REFUSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(item.to_owned())
+    {
+        log::warn!(
+            "Horizon: E_COMBINE_REPAIR_NO_DURABILITY: an is_combine_repairable part of {item} answered true for a stack with no maximum damage; the crafting grid keeps vanilla's false"
+        );
+    }
 }
 
 /// `RepairItemRecipe.assemble`: integer division truncates the five percent bonus.
@@ -61,3 +89,7 @@ pub(super) fn assemble(ctx: &Context, stacks: &[&ItemStack]) -> Option<ItemStack
 #[cfg(test)]
 #[path = "repair_item_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "combine_repair_part_tests.rs"]
+mod part_tests;

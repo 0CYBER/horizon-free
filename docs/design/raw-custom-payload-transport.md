@@ -37,8 +37,8 @@ incompatible matching declaration is ignored. A vanilla
 peer is admitted when all local requirements are optional; sending an absent
 optional payload returns UnsupportedPeer without a packet. There is no per-tick mod
 work for empty registries. Configuration still exchanges a constant-size protocol
-mark (and an empty Offer) for Horizon-branded peers, even with empty or all-optional
-registries. On `horizon:payloads`, Query is bytes `[0, 1]`; Offer begins `[1, 1]`
+mark (and an Offer, which carries the engine's optional declarations even with no mods) for
+Horizon-branded peers, even with empty or all-optional mod registries. On `horizon:payloads`, Query is bytes `[0, 1]`; Offer begins `[1, 1]`
 then the manifest record count. The second byte is raw transport revision 1,
 independent of application versions. A wrong revision or an absent marked response
 from a Horizon-branded peer refuses admission with a named raw-protocol cause.
@@ -87,6 +87,28 @@ enqueueWork. Root transaction commit publishes sends; abort publishes none. Repl
 cannot execute inline across the connection and are received on a subsequent turn.
 Single-player and split-screen use their real connect_local sessions, not direct
 callback shortcuts.
+
+`IPayloadHandler::handle` returns `Result<(), PayloadHandleError>`, with explicit
+`Failed(String)` for application and execution failures. Native panics and disabled
+owners remain failures. `PayloadWork::run` retains its `Result<(), String>` contract.
+Guest-group contention instead returns `Busy { payload, holder }` before the handler
+starts, returning the same owned body and a resolved `PayloadBusy` snapshot (shared
+owner/export/thread names and elapsed held milliseconds).
+
+The connection transport must requeue busy input at its head, preserving both
+payload and ordinary gameplay ordering, the original ingress lease and accounting,
+and the original payload deadline. Existing queue byte budgets bound retained
+memory. The deadline is 60 seconds, exceeding the largest guest execution budget;
+retries never renew it. Deadline expiry reports the held mod/export/thread/duration.
+Disconnect and protocol/epoch replacement cancel pending retries. Nested cross-group
+calls refuse immediately rather than waiting. This is the caller's contract, not
+queueing performed by the handler itself; it adds no detached retry worker.
+
+Busy retries retain the existing 16 MiB physical ingress reservations across work
+and main-thread moves. One connection-owned receiving turn spans MAIN root
+publication or rollback. Pooled server receivers retry on their existing tick;
+dedicated client and configuration receivers use timed condition-variable wakes,
+so progress requires neither another network frame nor a detached worker.
 
 ## Acceptance and the amendment to #813
 

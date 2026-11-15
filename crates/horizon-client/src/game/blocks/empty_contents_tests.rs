@@ -221,11 +221,8 @@ fn a_player_pour_with_a_changed_hand_is_refused() {
                 used,
                 Some(horizon_client::first_person::UseResult::Fail)
             ));
-            assert_eq!(
-                game.inventory[slot],
-                Some(ItemStack::new("minecraft:stone", 1))
-            );
-            // A direct block write is not journaled (see the transactions page); only journaled writes are undone.
+            assert_eq!(game.inventory[slot], Some(stick));
+            // The Part's equipment write is journaled and rolls back with the refused pour.
         });
     });
 }

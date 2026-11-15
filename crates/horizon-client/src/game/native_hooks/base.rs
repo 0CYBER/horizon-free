@@ -1466,12 +1466,11 @@ impl Game<'_> {
     ) {
         self.fire_menu_quick_move(pos, entity, container_slots, slot, stack, handled);
     }
-    /// The commands native mods add to the server's command tree: push
-    /// yours. Asked once when a world opens to players (a dedicated
-    /// server, a LAN host, single player's server thread); every player's
-    /// chat box then completes them as vanilla's, within their level. A
-    /// name vanilla has is left out. Asked again after a mod calls
-    /// `native_refresh_commands`. API 8.
+    /// The commands native mods add to the session's tree: push the complete current set.
+    /// Asked at world open before functions compile, on each reload and data pack change,
+    /// and after `native_refresh_commands`. No player or hub needs to exist yet; starting
+    /// the hub reuses the session registration. Every player's chat box completes them
+    /// within their level. A name vanilla has is left out.
     pub(in crate::game) fn native_register_commands(
         &mut self,
         commands: &mut Vec<mod_api::Command>,

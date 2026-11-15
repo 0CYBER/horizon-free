@@ -1208,6 +1208,7 @@ pub(super) mod tests {
                 max_players: 2,
                 integrated: true,
                 levels: game.level_shapes,
+                level_seeds: game.levels.runtime.seeds(),
             },
         )
         .unwrap();
@@ -1297,6 +1298,12 @@ pub(super) mod tests {
         // Rebuilding Parts replaces the entity-type lookup snapshot that content_root
         // completed. Publish the prepared registry order into this new fixture epoch.
         super::super::mods::register_iterated_registries(&root).unwrap();
+        // Parts registration also clears particle keys. Restore the load-owned
+        // providers as content_root does, rather than relying on a prior test.
+        super::super::mods::resolve_particle_providers(
+            &horizon_assets::resource_source::ResourceSource::directory(root.clone()),
+        )
+        .unwrap();
         let saves = tempfile::tempdir().unwrap();
         let settings = Settings::default();
         let loaded = load_resources(
@@ -2502,6 +2509,7 @@ pub(super) mod tests {
                 max_players: 2,
                 integrated: true,
                 levels: game.level_shapes,
+                level_seeds: game.levels.runtime.seeds(),
             };
             game.lan_host(settings, net, config).unwrap();
             let host = game.lan.as_mut().unwrap();
@@ -2912,6 +2920,7 @@ pub(super) mod tests {
                 max_players: 20,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             };
             let mut hub = Hub::new(
                 lan,

@@ -905,6 +905,7 @@ mod hub_tests {
             max_players: 4,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         };
         let mut hub = Hub::new(
             lan,

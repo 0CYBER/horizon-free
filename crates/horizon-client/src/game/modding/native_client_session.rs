@@ -47,6 +47,18 @@ impl Game<'_> {
         Some(u32::try_from(latency).unwrap_or(0))
     }
 
+    /// The player list as the Tab overlay draws it ([`tab_list`]); None outside a logged-in
+    /// client world.
+    pub(super) fn native_client_tab_list(&self) -> Option<mod_api::ClientTabList> {
+        let remote = self.native_session()?;
+        Some(tab_list(
+            &remote.listed_tab_players(),
+            &self.score.board,
+            self.tab_list.header.as_ref(),
+            self.tab_list.footer.as_ref(),
+        ))
+    }
+
     /// The local player's item use (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`,
     /// `getUseItemRemainingTicks`); None when no item is in use or outside a logged-in client
     /// world.
@@ -137,10 +149,121 @@ impl Game<'_> {
     }
 }
 
+/// `PlayerTabOverlay`'s list: the overlay's own order and cap (`tab_list::sorted_players`) and
+/// names (`tab_list::name_for_display`), so the read cannot drift from what is drawn.
+fn tab_list(
+    players: &[horizon_client::tab_list::TabPlayer],
+    board: &horizon_client::scoreboard::Scoreboard,
+    header: Option<&horizon_client::text::Text>,
+    footer: Option<&horizon_client::text::Text>,
+) -> mod_api::ClientTabList {
+    use super::api_values::TryIntoApi;
+    use horizon_client::tab_list::{name_for_display, sorted_players};
+    // A text too deep for the API reads as its plain words rather than dropping the entry.
+    let text = |text: &horizon_client::text::Text| {
+        text.try_into_api()
+            .unwrap_or_else(|_| mod_api::Text::literal(text.plain()))
+    };
+    let entries = sorted_players(players, board)
+        .into_iter()
+        .map(|p| {
+            mod_api::ClientTabListEntry::new(
+                p.name.clone(),
+                p.uuid,
+                // `GameType.byId`: an id it lacks is survival.
+                mod_api::GameMode::from_id(p.game_mode).unwrap_or(mod_api::GameMode::Survival),
+                p.latency,
+                text(&name_for_display(p, board)),
+            )
+        })
+        .collect();
+    mod_api::ClientTabList::new(entries, header.map(text), footer.map(text))
+}
+
 #[cfg(test)]
 pub(super) mod tests {
     use super::super::native_entity_refs::tests::with_client_game;
     use super::*;
+
+    /// The Tab overlay's names, order, cap, header and footer, as `client_tab_list` reads them.
+    #[test]
+    fn the_tab_list_reads_as_the_overlay_draws_it() {
+        use horizon_client::{
+            scoreboard::Scoreboard, tab_list::TabPlayer, text::Text as EngineText,
+        };
+        let mut board = Scoreboard::default();
+        let team = board.add_team("red");
+        team.prefix = serde_json::json!("[R] ");
+        team.suffix = serde_json::json!(" *");
+        board.add_to_team("Alex", "red");
+        let mut named = TabPlayer::new(1, "Steve");
+        named.display_name = Some(serde_json::json!({"text": "Captain"}));
+        named.latency = 42;
+        let teamed = TabPlayer::new(2, "Alex");
+        let mut watcher = TabPlayer::new(3, "Bob");
+        watcher.game_mode = 3;
+        let mut first = TabPlayer::new(4, "Zed");
+        first.list_order = 5;
+        let header = EngineText::literal("Welcome");
+        let list = tab_list(
+            &[watcher, named, teamed, first],
+            &board,
+            Some(&header),
+            None,
+        );
+        let names: Vec<_> = list.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Zed", "Steve", "Alex", "Bob"],
+            "list order, then spectators last"
+        );
+        fn plain(text: &mod_api::Text) -> String {
+            let own = match &text.content {
+                mod_api::text::TextContent::Literal(words) => words.as_str(),
+                _ => "",
+            };
+            text.children
+                .iter()
+                .map(plain)
+                .fold(own.to_owned(), |all, c| all + &c)
+        }
+        assert_eq!(plain(&list.entries[1].display), "Captain");
+        assert_eq!(list.entries[1].latency, 42);
+        assert_eq!(list.entries[1].uuid, 1);
+        assert_eq!(plain(&list.entries[2].display), "[R] Alex *");
+        assert_eq!(list.entries[3].game_mode, mod_api::GameMode::Spectator);
+        assert_eq!(list.entries[0].game_mode, mod_api::GameMode::Survival);
+        assert_eq!(list.header.as_ref().map(plain).as_deref(), Some("Welcome"));
+        assert_eq!(list.footer, None);
+        let crowd: Vec<_> = (0..100)
+            .map(|i| TabPlayer::new(i, format!("p{i:03}")))
+            .collect();
+        let list = tab_list(&crowd, &board, None, None);
+        assert_eq!(list.entries.len(), 80, "the overlay draws 80");
+        assert_eq!(list.entries[0].name, "p000");
+        assert_eq!(list.entries[79].name, "p079");
+        assert_eq!(list.header, None);
+        let mut overlay = horizon_client::tab_list::TabList::default();
+        overlay.header = Some(EngineText::literal("Header"));
+        overlay.footer = Some(EngineText::literal("Footer"));
+        let set = tab_list(
+            &[],
+            &board,
+            overlay.header.as_ref(),
+            overlay.footer.as_ref(),
+        );
+        assert_eq!(set.header.as_ref().map(plain).as_deref(), Some("Header"));
+        assert_eq!(set.footer.as_ref().map(plain).as_deref(), Some("Footer"));
+        overlay.reset();
+        let cleared = tab_list(
+            &[],
+            &board,
+            overlay.header.as_ref(),
+            overlay.footer.as_ref(),
+        );
+        assert_eq!(cleared.header, None);
+        assert_eq!(cleared.footer, None);
+    }
 
     pub(in crate::game) fn logged_client(
         game: &mut Game<'_>,

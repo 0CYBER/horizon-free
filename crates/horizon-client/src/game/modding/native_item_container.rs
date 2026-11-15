@@ -58,20 +58,21 @@ fn with_contents(stack: &ItemStack, slots: &[Option<ItemStack>]) -> ItemStack {
 /// slots that hold the same item and components, then goes into the first
 /// empty ones. Unlike `SimpleContainer`, which puts the whole rest in the
 /// first empty slot and cuts it to the limit, no slot takes more than its
-/// limit (`limit`), and what doesn't fit stays out. A shulker box never goes
-/// in (`Item.canFitInsideContainerItems`). The count that went in, and the
-/// item it becomes.
+/// limit (`limit`), and what doesn't fit stays out. Nothing goes in when
+/// `fits` is false (`ItemStack.canFitInsideContainerItems`, which the caller
+/// asks). The count that went in, and the item it becomes.
 fn insert_one(
     stack: &ItemStack,
     size: Option<u32>,
     item: &ItemStack,
     limit: u32,
+    fits: bool,
 ) -> Option<(u32, ItemStack)> {
     let size = size?;
     if stack.count == 0 {
         return None;
     }
-    if item.count == 0 || !horizon_client::menu::fits_inside_container_items(item) {
+    if item.count == 0 || !fits {
         return Some((0, one_of(stack)));
     }
     let mut slots = contents(stack, size);
@@ -106,14 +107,15 @@ fn insert_one(
 
 /// As much of `item` as slot `slot` of one item of `stack` takes, the slot topped up when it
 /// holds the same item and components, filled when empty, never past `limit`; none into a slot
-/// past the item's slots, or holding another item. The count that went in, and the item it
-/// becomes.
+/// past the item's slots, or holding another item, nor when `fits` is false. The count that
+/// went in, and the item it becomes.
 fn insert_into(
     stack: &ItemStack,
     size: Option<u32>,
     slot: usize,
     item: &ItemStack,
     limit: u32,
+    fits: bool,
 ) -> Option<(u32, ItemStack)> {
     let size = size?;
     if stack.count == 0 {
@@ -121,7 +123,7 @@ fn insert_into(
     }
     let mut slots = contents(stack, size);
     let room = match slots.get(slot) {
-        _ if !horizon_client::menu::fits_inside_container_items(item) => 0,
+        _ if !fits => 0,
         Some(None) => limit,
         Some(Some(held)) if held.same_item_same_components(item) => {
             limit.saturating_sub(held.count)
@@ -170,6 +172,11 @@ fn extract_one(
 
 // Native mods use these; nothing in Horizon does.
 impl Game<'_> {
+    /// `ItemStack.canFitInsideContainerItems`: vanilla's answer, then the parts of `item`'s
+    /// item, in the loop this game runs.
+    fn fits_inside_container_items(&self, item: &ItemStack) -> bool {
+        horizon_client::menu::fits_inside_container_items(&self.loop_context, item)
+    }
     /// The slots a mod gave item `item`, clamped; none for any other item.
     fn item_container_size(&self, item: &str) -> Option<u32> {
         let mut slots = None;
@@ -206,7 +213,8 @@ impl Game<'_> {
     /// `stack`, topping up the slots that hold the same item and components
     /// first, then the first empty ones (`SimpleContainer.addItem`'s order),
     /// no slot past its limit (99, or the item's own when less). A shulker
-    /// box never goes in. The count that went in, and the single item it
+    /// box goes in only when its parts say it fits (`can_fit_inside_container_items`).
+    /// The count that went in, and the single item it
     /// becomes (the item itself when none did). The stack given is not
     /// changed: shrink it by one and hand out the result, or leave the result
     /// unused to simulate. None where the item has no slots.
@@ -216,7 +224,8 @@ impl Game<'_> {
         item: &ItemStack,
     ) -> Option<(u32, ItemStack)> {
         let size = self.item_container_size(&stack.item);
-        insert_one(stack, size, item, self.item_container_limit(item))
+        let fits = self.fits_inside_container_items(item);
+        insert_one(stack, size, item, self.item_container_limit(item), fits)
     }
     /// `ResourceHandler.insert(index, …)`: as `item_container_insert`,
     /// into slot `slot` alone: topped up when it holds the same item and
@@ -229,11 +238,20 @@ impl Game<'_> {
         item: &ItemStack,
     ) -> Option<(u32, ItemStack)> {
         let size = self.item_container_size(&stack.item);
-        insert_into(stack, size, slot, item, self.item_container_limit(item))
+        let fits = self.fits_inside_container_items(item);
+        insert_into(
+            stack,
+            size,
+            slot,
+            item,
+            self.item_container_limit(item),
+            fits,
+        )
     }
     /// `ResourceHandler.isValid` and `getCapacityAsLong`: how many of `item`
-    /// slot `slot` of one item of `stack` holds when empty. None of a shulker
-    /// box, nor into a slot past the item's slots.
+    /// slot `slot` of one item of `stack` holds when empty. None of a stack that
+    /// doesn't fit inside container items (a shulker box, unless its parts say
+    /// so), nor into a slot past the item's slots.
     pub(in crate::game) fn item_container_capacity(
         &self,
         stack: &ItemStack,
@@ -243,7 +261,7 @@ impl Game<'_> {
         let fits = self
             .item_container_size(&stack.item)
             .is_some_and(|size| slot < size as usize)
-            && horizon_client::menu::fits_inside_container_items(item);
+            && self.fits_inside_container_items(item);
         if fits {
             self.item_container_limit(item)
         } else {
@@ -278,6 +296,29 @@ mod tests {
 
     fn of(item: &str, count: u32) -> ItemStack {
         ItemStack::new(item, count)
+    }
+
+    /// `super::insert_one` with vanilla's container rule, which no part changes here.
+    fn insert_one(
+        stack: &ItemStack,
+        size: Option<u32>,
+        item: &ItemStack,
+        limit: u32,
+    ) -> Option<(u32, ItemStack)> {
+        let fits = horizon_client::menu::container_items::vanilla_fits_inside_container_items(item);
+        super::insert_one(stack, size, item, limit, fits)
+    }
+
+    /// `super::insert_into` with vanilla's container rule.
+    fn insert_into(
+        stack: &ItemStack,
+        size: Option<u32>,
+        slot: usize,
+        item: &ItemStack,
+        limit: u32,
+    ) -> Option<(u32, ItemStack)> {
+        let fits = horizon_client::menu::container_items::vanilla_fits_inside_container_items(item);
+        super::insert_into(stack, size, slot, item, limit, fits)
     }
 
     /// (slot, item, count) of what one item holds.

@@ -388,6 +388,9 @@ impl Game<'_> {
                     if killed {
                         self.mob_removal_effects(id);
                     }
+                    // As `remove_mob_now` does outside a transaction: the leave is told at
+                    // the removal, here the root commit's.
+                    self.native_entity_left(id);
                 }
                 Removal::Other(entity) => {
                     // The commit lists the entity as removed until now, so the handle resolves

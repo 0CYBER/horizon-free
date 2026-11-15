@@ -33,6 +33,15 @@ pub fn register(registrar: &mut dyn Registrar) {
         .payload_handlers()
         .registrar("1")
         .executes_on(HandlerThread::Network)
+        .play_bidirectional(
+            PayloadId("wasm_fixture:busy".into()),
+            Arc::new(BusyEcho),
+            Some(Arc::new(BusyEcho)),
+        );
+    registrar
+        .payload_handlers()
+        .registrar("1")
+        .executes_on(HandlerThread::Network)
         .play_to_server(
             PayloadId("wasm_fixture:pressure".into()),
             Arc::new(Pressure),
@@ -53,7 +62,11 @@ static CONFIGURATION_CALLS: std::sync::atomic::AtomicU8 = std::sync::atomic::Ato
 
 struct Configuration;
 impl IPayloadHandler for Configuration {
-    fn handle(&self, mut bytes: PayloadBytes, cx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        mut bytes: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         assert_eq!(cx.protocol(), PayloadProtocol::Configuration);
         assert_eq!(cx.flow(), PayloadDirection::ToServer);
         assert!(matches!(cx.player(), Err(PayloadContextError::NoPlayer)));
@@ -73,14 +86,20 @@ impl IPayloadHandler for Configuration {
         let call = CONFIGURATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
         bytes.0.insert(0, call);
         cx.reply(&PayloadId("wasm_fixture:configuration".into()), bytes)
-            .map_err(|error| format!("configuration reply: {error:?}"))?;
+            .map_err(|error| {
+                PayloadHandleError::Failed(format!("configuration reply: {error:?}"))
+            })?;
         Ok(())
     }
 }
 
 struct ConfigurationReceipt;
 impl IPayloadHandler for ConfigurationReceipt {
-    fn handle(&self, bytes: PayloadBytes, cx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         assert_eq!(cx.protocol(), PayloadProtocol::Configuration);
         assert_eq!(cx.flow(), PayloadDirection::ToClient);
         assert!(matches!(cx.player(), Err(PayloadContextError::NoPlayer)));
@@ -91,7 +110,11 @@ impl IPayloadHandler for ConfigurationReceipt {
 }
 struct NetworkTrap;
 impl IPayloadHandler for NetworkTrap {
-    fn handle(&self, _: PayloadBytes, cx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         cx.enqueue_work(Arc::new(Noop)).unwrap();
         cx.reply(
             &PayloadId("raw_probe:receipt".into()),
@@ -103,16 +126,41 @@ impl IPayloadHandler for NetworkTrap {
 }
 struct Echo;
 impl IPayloadHandler for Echo {
-    fn handle(&self, bytes: PayloadBytes, cx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         assert_eq!(bytes.0.len(), 1 << 20);
-        cx.reply(&PayloadId("wasm_fixture:measure".into()), bytes)
-            .map_err(|e| format!("reply: {e:?}"))?;
-        Ok(())
+        echo("wasm_fixture:measure", bytes, cx)
     }
+}
+struct BusyEcho;
+impl IPayloadHandler for BusyEcho {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
+        echo("wasm_fixture:busy", bytes, cx)
+    }
+}
+fn echo(
+    channel: &str,
+    bytes: PayloadBytes,
+    cx: &mut dyn IPayloadContext,
+) -> Result<(), PayloadHandleError> {
+    cx.reply(&PayloadId(channel.into()), bytes)
+        .map_err(|e| PayloadHandleError::Failed(format!("reply: {e:?}")))?;
+    Ok(())
 }
 struct Pressure;
 impl IPayloadHandler for Pressure {
-    fn handle(&self, _: PayloadBytes, cx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         assert_eq!(
             cx.enqueue_work(Arc::new(Noop)),
             Err(PayloadContextError::Backpressure)
@@ -128,7 +176,11 @@ impl PayloadWork for Noop {
 }
 struct Handler(HandlerThread);
 impl IPayloadHandler for Handler {
-    fn handle(&self, bytes: PayloadBytes, cx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        bytes: PayloadBytes,
+        cx: &mut dyn IPayloadContext,
+    ) -> Result<(), PayloadHandleError> {
         assert_eq!(cx.protocol(), PayloadProtocol::Play);
         assert_eq!(cx.flow(), PayloadDirection::ToServer);
         let player = cx.player().unwrap();
@@ -143,10 +195,10 @@ impl IPayloadHandler for Handler {
                 Err(PayloadContextError::WrongSide)
             ));
             cx.enqueue_work(Arc::new(Work(std::sync::Mutex::new(Some(bytes)))))
-                .map_err(|e| format!("enqueue: {e:?}"))?;
+                .map_err(|e| PayloadHandleError::Failed(format!("enqueue: {e:?}")))?;
             return Ok(());
         }
-        finish(bytes, cx)
+        finish(bytes, cx).map_err(PayloadHandleError::Failed)
     }
 }
 struct Work(std::sync::Mutex<Option<PayloadBytes>>);

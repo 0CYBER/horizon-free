@@ -973,6 +973,7 @@ impl Game<'_> {
             simulation_distance: self.settings.simulation_distance.max(2),
             dimension: self.dim.id().to_owned(),
             levels: self.level_shapes,
+            level_seeds: self.levels.runtime.seeds(),
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
             // No player of its own: the hub runs without a host.
@@ -1131,7 +1132,7 @@ impl Game<'_> {
             let (back, theirs) = (self.dim, super::Dim::from_id(&g.dimension));
             let entered = theirs == back || self.enter_level(theirs).is_ok();
             if entered && let Some(swap) = self.enter_guest_in_dimension(conn, back) {
-                let command = command.trim_start_matches('/').to_owned();
+                let command = command.strip_prefix('/').unwrap_or(command).to_owned();
                 let lines = self.as_console(|g| {
                     g.chat_capture = Some(Vec::new());
                     // A command a native mod registered goes to the mods

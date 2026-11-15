@@ -488,19 +488,17 @@ fn a_link_above_the_root_is_followed() {
 /// data, build folders and native build log are all under the temporary folder.
 #[test]
 fn unit_tests_never_resolve_the_real_profile() {
-    let temp = std::env::temp_dir();
+    let home = test_home();
     for path in [
         crate::backend::data_dir(),
         crate::backend::build_dir(),
         crate::native_mods::log_path(),
     ] {
-        let real = path.canonicalize().unwrap_or(path.clone());
-        let base = temp.canonicalize().unwrap_or(temp.clone());
         assert!(
-            path.starts_with(&temp) || real.starts_with(&base),
+            path.starts_with(&home),
             "{} is outside {}",
             path.display(),
-            temp.display()
+            home.display()
         );
     }
 }

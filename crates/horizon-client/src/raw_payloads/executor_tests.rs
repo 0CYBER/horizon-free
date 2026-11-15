@@ -21,6 +21,7 @@ enum Mode {
     Success,
     Pressure,
     Error,
+    Panic,
     Cancel,
     PublicationClosed,
 }
@@ -50,7 +51,11 @@ impl Drop for ReentrantWork {
     }
 }
 impl IPayloadHandler for Probe {
-    fn handle(&self, _: PayloadBytes, ctx: &mut dyn IPayloadContext) -> Result<(), String> {
+    fn handle(
+        &self,
+        _: PayloadBytes,
+        ctx: &mut dyn IPayloadContext,
+    ) -> Result<(), mod_api::PayloadHandleError> {
         assert!(matches!(
             ctx.server_host(),
             Err(PayloadContextError::WrongThread)
@@ -85,7 +90,12 @@ impl IPayloadHandler for Probe {
         // Also prove that no assertion was caught as a handler panic.
         self.calls.fetch_add(1, Ordering::SeqCst);
         match self.mode {
-            Mode::Error => return Err("deliberate handler error".into()),
+            Mode::Error => {
+                return Err(mod_api::PayloadHandleError::Failed(
+                    "deliberate handler error".into(),
+                ));
+            }
+            Mode::Panic => panic!("deliberate handler panic after staging"),
             Mode::Cancel => transport.close(),
             Mode::PublicationClosed => drop(self.receiver.lock().unwrap().take()),
             _ => {}
@@ -228,7 +238,7 @@ fn provider_pressure_refuses_work_before_acceptance() {
 
 #[test]
 fn handler_error_or_epoch_cancellation_publishes_no_staged_work_or_replies() {
-    for mode in [Mode::Error, Mode::Cancel] {
+    for mode in [Mode::Error, Mode::Panic, Mode::Cancel] {
         with_case(mode, 1, |probe, incoming, endpoint, out| {
             let original = Arc::downgrade(&incoming.lease);
             dispatch(incoming, endpoint.clone(), queue(&probe, &endpoint));
@@ -238,7 +248,7 @@ fn handler_error_or_epoch_cancellation_publishes_no_staged_work_or_replies() {
             assert_eq!(probe.events.stats().reserved_bytes, 0);
             assert_eq!(probe.events.stats().queued_items, 0);
             assert_eq!(reply_count(&*out), 0);
-            if mode == Mode::Error {
+            if matches!(mode, Mode::Error | Mode::Panic) {
                 // The player is told which mod's handler failed, never its reason.
                 let sent = out();
                 let has = |text: &[u8]| {
@@ -284,4 +294,19 @@ fn failed_publication_and_remaining_work_drop_outside_epoch_gate() {
             assert_eq!(reply_count(&*out), 0);
         },
     );
+}
+
+#[test]
+fn disabled_owner_refuses_before_entering_its_native_handler() {
+    with_case(Mode::Success, 1, |probe, incoming, endpoint, out| {
+        let original = Arc::downgrade(&incoming.lease);
+        assert!(mod_api::__private::set_mod_enabled("executor_probe", false));
+        dispatch(incoming, endpoint.clone(), queue(&probe, &endpoint));
+        assert!(endpoint.transport().closed());
+        assert!(original.upgrade().is_none());
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(probe.drops.load(Ordering::SeqCst), 0);
+        assert_eq!(probe.events.stats().reserved_bytes, 0);
+        assert_eq!(reply_count(&*out), 0);
+    });
 }
