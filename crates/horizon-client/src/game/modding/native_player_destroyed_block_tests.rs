@@ -535,7 +535,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
-            let uuid = with_player(
+            let player = with_player(
                 game,
                 GameMode::Survival,
                 Some(ItemStack::new("minecraft:diamond_axe", 1)),
@@ -547,7 +547,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
                 mod_api::Tag::String("Loot Chest".into()),
             );
             game.dropped.clear();
-            assert!(game.native_player_break_block(uuid, chest, false));
+            assert!(game.player_destroy_block(player, chest, false));
             assert_eq!(block(game, chest), "minecraft:air");
             // The listener read the name the removal clears from the level and put it on the
             // chest item the break dropped.
@@ -566,7 +566,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
             let heard = std::mem::take(&mut *seen.lock().unwrap());
             assert_eq!(heard.len(), 1);
             let (breaker, breaker_entity, items, has_block_entity) = &heard[0];
-            assert_eq!(*breaker, Some(uuid));
+            assert_eq!(*breaker, Some(123));
             assert_eq!(
                 breaker_entity.map(|entity| entity.id()),
                 Some(20),
@@ -593,7 +593,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
             // A block with no block entity gives none.
             let dirt = [8, 64, 4];
             place(game, dirt, "minecraft:dirt");
-            assert!(game.native_player_break_block(uuid, dirt, false));
+            assert!(game.player_destroy_block(player, dirt, false));
             let heard = std::mem::take(&mut *seen.lock().unwrap());
             assert_eq!(heard.len(), 1);
             assert!(!heard[0].3);
@@ -665,7 +665,7 @@ fn block_drops_holds_nothing_after_a_listener_panics() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
-            let uuid = with_player(
+            let player = with_player(
                 game,
                 GameMode::Survival,
                 Some(ItemStack::new("minecraft:diamond_axe", 1)),
@@ -674,7 +674,7 @@ fn block_drops_holds_nothing_after_a_listener_panics() {
             put_chest(game, chest);
             // The platform may contain the panic or let it unwind through the break: either way.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                game.native_player_break_block(uuid, chest, false)
+                game.player_destroy_block(player, chest, false)
             }));
             assert_eq!(
                 seen.lock().unwrap().len(),
