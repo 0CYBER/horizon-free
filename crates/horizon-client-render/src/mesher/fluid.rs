@@ -4,7 +4,7 @@
 //! light.
 use super::{
     Info, MeshTables, Padded, SectionMesh, TerrainVertex, fluid_face, lighting, pack_coords,
-    pack_rgb, pi,
+    pack_rgb, part_tables::PartTables, pi,
 };
 use horizon_core::{
     geometry::{Axis, Direction, VoxelShape, trig},
@@ -207,13 +207,15 @@ pub(super) fn splits_north_east(nw: f32, ne: f32, sw: f32, se: f32) -> bool {
     let (along_nw, along_ne) = ((nw - se).abs(), (ne - sw).abs());
     along_nw < along_ne || along_nw == 0.0
 }
-/// Emits one fluid cell at section-relative `[x, y, z]`.
+/// Emits one fluid cell at section-relative `[x, y, z]`. `parts` holds the client `BlockPart`
+/// answers read here: a face a neighbour hides (`should_hide_adjacent_fluid_face`) is not drawn.
 /// `(nether, shader_pack_lighting, separate_ao, shader_pack)`: the Nether's face shading, only the
 /// up-face value when a shader pack lights the faces (`Mesher::shader_pack_lighting`), whether to
 /// keep pure alpha for separate AO, and whether a `shaders/` pack draws the terrain
 /// (`Mesher::shader_pack`: tops split as Iris splits them, [`splits_north_east`]).
 pub(super) fn tesselate(
     tables: &MeshTables,
+    parts: &PartTables,
     (nether, shader_pack_lighting, separate_ao, shader_pack): (bool, bool, bool, bool),
     pad: &Padded,
     water_color: u32,
@@ -236,10 +238,14 @@ pub(super) fn tesselate(
     let me = at(0);
     let kind = me.fluid.kind();
     let same = |s: &Info| s.fluid.kind().same_family(kind);
-    let neighbor = |d: Direction| at(super::OFFSETS[d as usize]);
+    let neighbor_id = |d: Direction| pad.blocks[(cell + super::OFFSETS[d as usize]) as usize];
+    let neighbor = |d: Direction| &info[neighbor_id(d) as usize];
     let (down, up) = (neighbor(Direction::Down), neighbor(Direction::Up));
-    let should_render = |d: Direction| !same(neighbor(d)) && !occluded_by_self(me, d);
-    let render_up = !same(up);
+    // Empty with no part answering: vanilla's tests alone.
+    let hides = !parts.hidden_fluid_faces.is_empty();
+    let hidden = |d: Direction| hides && parts.hides_fluid_face(neighbor_id(d), kind, d);
+    let should_render = |d: Direction| !same(neighbor(d)) && !occluded_by_self(me, d) && !hidden(d);
+    let render_up = !same(up) && !hidden(Direction::Up);
     let render_down =
         should_render(Direction::Down) && !occluded_by(Direction::Down, MAX_HEIGHT, down);
     let sides = [
@@ -595,6 +601,7 @@ mod tests {
             let mut mesh = SectionMesh::default();
             tesselate(
                 &tables,
+                &PartTables::NONE,
                 (false, false, true, false),
                 &pad,
                 0x00FF00,
@@ -629,6 +636,7 @@ mod tests {
         let mut mesh = SectionMesh::default();
         tesselate(
             &tables,
+            &PartTables::NONE,
             (false, false, true, false),
             &pad,
             0x00FF00,

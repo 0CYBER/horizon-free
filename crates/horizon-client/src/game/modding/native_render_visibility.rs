@@ -6,8 +6,9 @@ use super::{BlockStateId, Game};
 use std::sync::Arc;
 
 impl Game<'_> {
-    /// Asks `native_block_render_visibility` again for every state and, when the answers differ
-    /// from those in use, remeshes every loaded section with them. Call it when your answer changes (a toggle key, a scan
+    /// Asks `native_block_render_visibility` again for every state, and the fluid-face parts
+    /// for every state and fluid (`resolve_part_tables`), and, when the answers differ from
+    /// those in use, remeshes every loaded section with them. Call it when your answer changes (a toggle key, a scan
     /// finishing) and once when the player joins, not every frame: a rebuild takes the workers a
     /// few seconds. With no part answering, nothing is asked and the mesher keeps its no-mod path.
     pub(super) fn refresh_render_visibility(&mut self) {
@@ -27,7 +28,10 @@ impl Game<'_> {
         if !hidden.contains(&true) {
             hidden = Arc::from([]);
         }
-        if hidden == self.pack.context.hidden_states {
+        let part_tables = self.resolve_part_tables();
+        if hidden == self.pack.context.hidden_states
+            && part_tables == *self.pack.context.part_tables
+        {
             return;
         }
         let old = &self.pack.context;
@@ -38,6 +42,7 @@ impl Game<'_> {
             biomes: old.biomes.clone(),
             light: old.light.clone(),
             hidden_states: hidden,
+            part_tables: Arc::new(part_tables),
         });
         let context = self.worker_context();
         self.streaming.reload_resources(&mut self.world, context);

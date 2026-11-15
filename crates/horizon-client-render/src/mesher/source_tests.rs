@@ -199,6 +199,7 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
     ];
     let mut mesher = Mesher {
         hidden_states: &[],
+        part_tables: Default::default(),
         nether_shading: false,
         shader_pack_lighting: false,
         separate_ao: false,

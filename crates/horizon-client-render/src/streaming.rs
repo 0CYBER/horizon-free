@@ -1115,6 +1115,7 @@ impl<G: ChunkGenerator> Jobs<G> {
                     translucent_layers: &settings.translucent_layers,
                     leaf_culling: settings.leaf_culling,
                     hidden_states: &context.hidden_states,
+                    part_tables: &context.part_tables,
                     assets: &context.assets,
                     render: &context.render,
                     tables: &context.tables,
@@ -1140,6 +1141,8 @@ pub struct WorkerContext {
     /// The block states a mod hides from the mesher, by state id (`Mesher::hidden_states`); empty
     /// for none.
     pub hidden_states: Arc<[bool]>,
+    /// The client `BlockPart` answers the mesher reads (`Mesher::part_tables`); empty for none.
+    pub part_tables: Arc<crate::mesher::part_tables::PartTables>,
 }
 mod bounded;
 mod dynamic_emission;
@@ -3668,6 +3671,7 @@ mod tests {
             assets,
             render,
             hidden_states: Arc::from([]),
+            part_tables: Default::default(),
         });
         let generator = Arc::new(Generator::default());
         let mut streaming = Streaming::new(generator.clone(), context, 1);

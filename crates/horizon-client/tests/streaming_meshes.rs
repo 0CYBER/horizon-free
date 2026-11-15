@@ -80,6 +80,7 @@ fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
         assets,
         render: render.clone(),
         hidden_states: Arc::from([]),
+        part_tables: Default::default(),
     });
     let mut streaming = Streaming::new(Arc::new(Saved), context, 3);
     streaming.radius = 4;
@@ -190,6 +191,7 @@ fn relit_columns_keep_every_mesh_current() {
         assets: assets.clone(),
         render: render.clone(),
         hidden_states: Arc::from([]),
+        part_tables: Default::default(),
     });
     let state = |name: &str| assets.registry.default_state(name).unwrap().0;
     let (stone, glowstone, torch) = (
@@ -267,6 +269,7 @@ fn relit_columns_keep_every_mesh_current() {
             render: &context.render,
             tables: &context.tables,
             hidden_states: &context.hidden_states,
+            part_tables: &context.part_tables,
             biomes: &context.biomes,
             visibility: context.tables.visibility.clone(),
         };
@@ -315,6 +318,7 @@ fn every_extra_area_loads_however_the_areas_change() {
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
         hidden_states: Default::default(),
+        part_tables: Default::default(),
         tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility, None).unwrap()),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
         biomes: Arc::new(
@@ -391,6 +395,7 @@ fn meshes_waiting_for_upload_hold_back_new_mesh_jobs() {
         assets,
         render,
         hidden_states: Arc::from([]),
+        part_tables: Default::default(),
     });
     let workers = 3;
     let mut streaming = Streaming::new(Arc::new(Saved), context, workers);

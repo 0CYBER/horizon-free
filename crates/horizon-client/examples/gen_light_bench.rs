@@ -293,6 +293,7 @@ fn main() -> Result<(), Error> {
         assets: assets.clone(),
         render,
         hidden_states: Arc::from([]),
+        part_tables: Default::default(),
     });
     let item_data = test_resources::item_data(&root, DataLoadOrigin::ServerDataLoad)?;
     let terrain_resources = horizon_client::vanillagen::TerrainResources {

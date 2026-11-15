@@ -144,6 +144,7 @@ fn scene(
         translucent_layers: &[],
         leaf_culling: LeafCullingMode::Off,
         hidden_states: &[],
+        part_tables: Default::default(),
     };
     let section_y = int(&row["section_y"])?;
     let started = Instant::now();

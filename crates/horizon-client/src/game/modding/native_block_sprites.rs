@@ -439,6 +439,7 @@ mod block_tint_color_tests {
                 biomes: biomes.clone(),
                 light: old.light.clone(),
                 hidden_states: old.hidden_states.clone(),
+                part_tables: old.part_tables.clone(),
             });
             game.world_biomes = Some(biomes.clone());
             game.streaming.biome_blend = 0;

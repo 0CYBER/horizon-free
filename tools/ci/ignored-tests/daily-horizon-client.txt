@@ -117,6 +117,8 @@ horizon-client game::native_menu_places::tests::un_backing_or_shortening_empties
 horizon-client game::native_menus::tests::a_menus_items_are_replaced_in_one_packet_without_reopening lib daily resources
 horizon-client game::native_menus::tests::container_hooks_follow_actual_open_boundaries_without_a_tick lib daily game-boot
 horizon-client game::native_menus::tests::each_menu_items_refusal_has_its_own_name_and_sends_nothing lib daily resources
+horizon-client game::native_part_tables_tests::a_fluid_face_part_answers_per_state_fluid_and_direction lib daily resources
+horizon-client game::native_part_tables_tests::without_a_part_there_are_no_tables lib daily resources
 horizon-client game::native_passage_cross::tests::a_crossing_into_another_level_is_refused_far_level lib daily resources
 horizon-client game::native_passages::tests::a_destination_level_must_be_open_and_another_level lib daily resources
 horizon-client game::native_passages::tests::a_passage_into_another_level_is_not_sent_to_the_clients lib daily resources

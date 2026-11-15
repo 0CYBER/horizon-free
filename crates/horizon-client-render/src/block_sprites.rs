@@ -325,6 +325,7 @@ mod tests {
                 &horizon_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
             )?),
             hidden_states: Arc::from([]),
+            part_tables: Default::default(),
         };
         let names = texture_names(&context.render.sprite_layers);
         let lookup = Lookup::new(&context, 2048, &names);

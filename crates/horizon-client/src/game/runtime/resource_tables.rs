@@ -254,6 +254,7 @@ impl PackResources {
             biomes,
             light: old.light.clone(),
             hidden_states: old.hidden_states.clone(),
+            part_tables: old.part_tables.clone(),
         })
     }
     /// The pack tables over their parts, which `load_resources` builds on
@@ -311,6 +312,7 @@ impl PackResources {
                 biomes,
                 light,
                 hidden_states: Arc::from([]),
+                part_tables: Default::default(),
             }),
             block_registries: native_block_states::block_registries(assets.registry),
             assets,

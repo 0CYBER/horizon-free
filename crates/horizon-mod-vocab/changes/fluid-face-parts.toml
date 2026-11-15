@@ -1,0 +1,2 @@
+ids = ["hook:should_hide_adjacent_fluid_face"]
+why = "Adds the client BlockPart method should_hide_adjacent_fluid_face (IBlockExtension.shouldHideAdjacentFluidFace, #3191): a block state hides the face a fluid beside it draws toward it. Collect, hidden starts false; vanilla's same-fluid and occlusion tests apply first. Resolved per (state, fluid) on the client thread at join and on refresh_render_visibility and read by the fluid mesher from a table, so it never runs on the meshing workers."
