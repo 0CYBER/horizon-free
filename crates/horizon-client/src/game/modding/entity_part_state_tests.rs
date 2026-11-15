@@ -680,6 +680,51 @@ fn a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity() {
             indexed(game, Dim::Nether),
             [(moved.id(), 7), (arrived.id(), 7)]
         );
+
+        // Both at once: A to B adopted inside the action, then B taken again and the action
+        // rolled back before C arrives. The arrival carries what the action first found at A.
+        game.enter_level(Dim::Overworld).unwrap();
+        let first = mob(game, "minecraft:cow", 54);
+        assert_eq!(Charge::edit_state(game, first, |_, n| *n = 7), Ok(()));
+        let seal = game.transaction_open();
+        assert_eq!(Charge::edit_state(game, first, |_, n| *n = 9), Ok(()));
+        let state = game.take_transferred_entity_state(first.id());
+        game.mobs.retain(|m| m.id != first.id());
+        game.detach_entity(first.id());
+        game.enter_level(Dim::Nether).unwrap();
+        let second = game
+            .load_mob_transferred(mob_tag("minecraft:cow", 54), None, Some(state))
+            .unwrap();
+        let second = game.entity(second).unwrap();
+        assert_eq!(stored(game, second), Some(9));
+        let state = game.take_transferred_entity_state(second.id());
+        game.mobs.retain(|m| m.id != second.id());
+        game.detach_entity(second.id());
+        game.enter_level(Dim::Overworld).unwrap();
+        game.transaction_close(&seal, false);
+        assert!(game.transactions.is_empty());
+        let third = game
+            .load_mob_transferred(mob_tag("minecraft:cow", 54), None, Some(state))
+            .unwrap();
+        let third = game.entity(third).unwrap();
+        assert_eq!(stored(game, third), Some(7), "not the aborted 9");
+        for stale in [first, second] {
+            assert_eq!(Charge::state(game, stale), Err(PartStateError::Stale));
+            assert!(
+                !game.entity_attachments.contains_key(&stale.id()),
+                "nothing left behind"
+            );
+        }
+        assert_eq!(
+            indexed(game, Dim::Overworld),
+            [(c.id(), 7), (third.id(), 7)]
+        );
+        game.enter_level(Dim::Nether).unwrap();
+        assert_eq!(
+            indexed(game, Dim::Nether),
+            [(moved.id(), 7), (arrived.id(), 7)],
+            "no row for B"
+        );
     });
 }
 

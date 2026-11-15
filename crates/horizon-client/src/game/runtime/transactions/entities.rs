@@ -543,7 +543,11 @@ impl Game<'_> {
     pub(super) fn roll_back_in_flight(&mut self, level: &mut Level) {
         for (id, slot) in std::mem::take(&mut level.in_flight) {
             let holder = horizon_mod_runtime::attachments::Holder::Entity(id);
-            if let Some(kept) = level.attachments.remove(&holder) {
+            // 🤖 Agent: as in `journal_travel`, both are consumed and the travelled one, kept
+            // before the entity arrived under `id`, is the older and the one put back.
+            let travelled = level.travelled.remove(&id);
+            let kept = level.attachments.remove(&holder);
+            if let Some(kept) = travelled.or(kept) {
                 *slot.lock().unwrap_or_else(|error| error.into_inner()) = Some(kept.contents);
             }
             if let Some(outer) = self.transactions.last_mut() {
