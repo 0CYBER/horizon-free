@@ -429,12 +429,7 @@ impl Game<'_> {
             return;
         };
         let [x, y, z] = p.position;
-        if !x.is_finite()
-            || !y.is_finite()
-            || !z.is_finite()
-            || !p.yaw.is_finite()
-            || !p.pitch.is_finite()
-        {
+        if contains_invalid_values(p.position, p.yaw, p.pitch) {
             host.hub.kick(
                 conn,
                 translatable("multiplayer.disconnect.invalid_vehicle_movement", &[]),
@@ -721,6 +716,13 @@ impl Game<'_> {
     }
 }
 
+/// `ServerGamePacketListenerImpl.containsInvalidValues(DDDFF)`: a NaN coordinate or a rotation
+/// that is not finite. An infinite coordinate is valid there: `handleMoveVehicle` clamps it and
+/// goes on with the usual checks, so it does not disconnect.
+fn contains_invalid_values([x, y, z]: [f64; 3], yaw: f32, pitch: f32) -> bool {
+    x.is_nan() || y.is_nan() || z.is_nan() || !yaw.is_finite() || !pitch.is_finite()
+}
+
 #[cfg(test)]
 mod controller_tests {
     use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
@@ -764,6 +766,25 @@ mod controller_tests {
         // PlayerLoaded came in: its moves count.
         g.load_timeout = 0;
         (g, rx)
+    }
+
+    /// vanilla's `containsInvalidValues`: only a NaN coordinate or a non-finite rotation is invalid.
+    #[test]
+    fn only_a_nan_coordinate_or_a_non_finite_rotation_is_invalid() {
+        use super::contains_invalid_values as invalid;
+        assert!(!invalid([1.0, 64.0, -3.5], 90.0, 10.0));
+        for at in [f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(!invalid([at, 64.0, 0.0], 0.0, 0.0), "x {at}");
+            assert!(!invalid([0.0, at, 0.0], 0.0, 0.0), "y {at}");
+            assert!(!invalid([0.0, 64.0, at], 0.0, 0.0), "z {at}");
+        }
+        assert!(invalid([f64::NAN, 64.0, 0.0], 0.0, 0.0));
+        assert!(invalid([0.0, f64::NAN, 0.0], 0.0, 0.0));
+        assert!(invalid([0.0, 64.0, f64::NAN], 0.0, 0.0));
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(invalid([0.0, 64.0, 0.0], bad, 0.0), "yaw {bad}");
+            assert!(invalid([0.0, 64.0, 0.0], 0.0, bad), "pitch {bad}");
+        }
     }
 
     /// Two players in one boat: the one that got in first drives it
