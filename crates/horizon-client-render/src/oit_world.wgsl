@@ -36,7 +36,7 @@ fn oit_terrain_color(in: TerrainOut) -> vec4<f32> {
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
         // Convert the surface before weighting: the light behind it is never its own.
         let fogged = mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a);
-        return vec4(hdr_written(fogged, 1.0, globals.hdr_settings, globals.hdr_gains) * weighted.a, weighted.a);
+        return vec4(hdr_written(fogged, 1.0, globals.hdr_settings) * weighted.a, weighted.a);
     }
     return vec4(rgb, weighted.a);
 }

@@ -28,14 +28,11 @@ struct Globals {
     emissive_count: vec4<u32>,
     sunrise_fan: array<vec4<f32>, 32>,
     filtering: vec4<f32>,
-    // HDR output's tier windows (hdr.rs `Hdr::windows`): x..w low to very bright,
-    // [0] where the lift starts, [1] where it is full.
-    hdr_windows: array<vec4<f32>, 2>,
     // HDR output: z 1 with it on; w: apply the no-pack HDR gain; HDR_WRITE_LIGHT independently
     // keeps float alpha as coverage. x and y are unused.
     hdr_light: vec4<f32>,
+    // What `hdr_written` reads (hdr_light.wgsl): the display's headroom, the look and debug.
     hdr_settings: vec4<f32>,
-    hdr_gains: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -276,7 +273,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
 // unrelated predicate" when entity_color's discards sit a function call below the entry point.
 fn entity_written_color(in: Out, color: vec4<f32>) -> vec4<f32> {
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 && in.overlay != 11u && in.overlay != 12u {
-        return vec4(hdr_written(color.rgb, hdr_entity_mark(in), globals.hdr_settings, globals.hdr_gains), color.a);
+        return vec4(hdr_written(color.rgb, hdr_entity_mark(in), globals.hdr_settings), color.a);
     }
     if FRAME_LINEAR && (in.overlay == 11u || in.overlay == 12u) {
         // The cracks scale what is under them by twice their colour (CRUMBLING_BLEND). Vanilla's
@@ -359,7 +356,7 @@ fn shadow_color(in: Out) -> vec4<f32> {
     return vec4(in.color.rgb, 1.0);
 }
 
-// HDR's mark (hdr_light.wgsl `hdr_written`) of a light-giving particle's or entity's pixel, the
+// HDR's mark (hdr_look.wgsl `hdr_mark`) of a light-giving particle's or entity's pixel, the
 // way terrain.wgsl works out a light source's.
 fn hdr_entity_mark(in: Out) -> f32 {
     var uv = in.uv;
@@ -373,18 +370,6 @@ fn hdr_entity_mark(in: Out) -> f32 {
     // A layer that fades (the warden's) shines by what's left of it.
     let y = brightness(texel.rgb * in.color.rgb) * in.color.a * (1.0 - fogged);
     return hdr_mark(in.tier, y);
-}
-fn brightness(c: vec3<f32>) -> f32 {
-    let l = pow(max(c, vec3(0.0)), vec3(2.2));
-    return 0.5 * (dot(l, vec3(0.2126, 0.7152, 0.0722)) + max(l.r, max(l.g, l.b)));
-}
-// The mark: below 0.75, a band of 0.175 per tier (1 low .. 4 very bright, from 0.525 down to
-// 0) and in it how much the pixel lifts, from its own brightness `y` before lighting through
-// the tier's window.
-fn hdr_mark(tier: u32, y: f32) -> f32 {
-    let t = clamp(tier, 1u, 4u) - 1u;
-    let lift = smoothstep(globals.hdr_windows[0][t], globals.hdr_windows[1][t], y);
-    return 0.175 * f32(3u - t) + 0.165 * (1.0 - lift);
 }
 
 fn celestial_color(in: Out) -> vec4<f32> {
@@ -408,7 +393,7 @@ fn celestial_color(in: Out) -> vec4<f32> {
 @fragment fn fs_celestial(in: Out) -> @location(0) vec4<f32> {
     let color = celestial_color(in);
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
-        return vec4(hdr_written(color.rgb, hdr_entity_mark(in), globals.hdr_settings, globals.hdr_gains), color.a);
+        return vec4(hdr_written(color.rgb, hdr_entity_mark(in), globals.hdr_settings), color.a);
     }
     return frame_stored(color);
 }
@@ -430,9 +415,9 @@ fn sky_celestial(in: Out) -> vec4<f32> {
     let y = brightness(added);
     // Only what's past the tier's window takes the mark: a soft edge keeps the sky's light,
     // or it would come out darker than the sky around it.
-    let full = y >= globals.hdr_windows[1][clamp(tier, 1u, 4u) - 1u];
+    let full = hdr_lifts_fully(tier, y);
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
-        return vec4(hdr_written(added, select(1.0, hdr_mark(tier, y), full), globals.hdr_settings, globals.hdr_gains), color.a);
+        return vec4(hdr_written(added, select(1.0, hdr_mark(tier, y), full), globals.hdr_settings), color.a);
     }
     // Premultiplied after the decode: the light the texel adds, at its coverage.
     if HDR_WRITE_LIGHT { return vec4(frame_stored(color).rgb * color.a, color.a); }
@@ -441,29 +426,29 @@ fn sky_celestial(in: Out) -> vec4<f32> {
 
 // The sun in Horizon's lifted world (gfx/celestial.rs): its disc shows vanilla's colour, the sky
 // plus the sun clipped at white channel by channel, with white at S: the scene's peak, and on a
-// display above it the display's, up to a cap (`hdr_settings.x`, hdr.rs `sun_peak`). The sky
-// under it is vanilla's (sky_finished lifts nothing), so in the frame's encoding that is
-// min(S * sun + S * frame, S): this pass blends src + frame * alpha, then
+// display above it the display's, up to a cap (hdr_look.wgsl `hdr_sun_peak` of the display's
+// headroom, `hdr_settings.x`). The sky under it is vanilla's, at paper white, so in the frame's
+// encoding that is min(S * sun + S * frame, S): this pass blends src + frame * alpha, then
 // fs_sky_sun_clip takes the min. Added in the frame's gamma instead, sky and sun pass S and the
 // tone curve's hold flattens the disc in the sky's hue. w is the very bright tier's lift by the
 // texel's brightness (hdr_mark's): from 0 (sun.png's faint halo, the moon) to 1 both passes go
 // smoothly from fs_sky_celestial's add to the clipped disc.
 fn sun_weight(in: Out, added: vec3<f32>) -> f32 {
-    let w = smoothstep(globals.hdr_windows[0][3], globals.hdr_windows[1][3], brightness(added));
+    let w = hdr_lift(4u, brightness(added));
     return select(0.0, w, in.tier == 4u);
 }
 @fragment fn fs_sky_sun(in: Out) -> @location(0) vec4<f32> {
     let color = celestial_color(in);
     let added = color.rgb * color.a;
     let w = sun_weight(in, added);
-    let peak = globals.hdr_settings.x;
-    let sun = hdr_written(added, 0.0, globals.hdr_settings, vec4(peak));
+    let peak = hdr_sun_peak(globals.hdr_settings.x);
+    let sun = hdr_written_sun(added, globals.hdr_settings);
     return vec4(mix(sky_celestial(in).rgb, sun, w), mix(1.0, pow(peak, 1.0 / 2.2), w));
 }
 // The clip at S in the frame's encoding where w is 1, none (half float's largest) where it is 0.
 @fragment fn fs_sky_sun_clip(in: Out) -> @location(0) vec4<f32> {
     let color = celestial_color(in);
-    let peak = pow(globals.hdr_settings.x, 1.0 / 2.2);
+    let peak = pow(hdr_sun_peak(globals.hdr_settings.x), 1.0 / 2.2);
     return vec4(vec3(peak / max(sun_weight(in, color.rgb * color.a), peak / 65504.0)), 1.0);
 }
 

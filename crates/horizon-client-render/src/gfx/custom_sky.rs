@@ -33,7 +33,6 @@ struct Uniform {
     mode: u32,
     pad: [u32; 2],
     hdr_settings: [f32; 4],
-    hdr_gains: [f32; 4],
     hdr_light: [f32; 4],
 }
 
@@ -216,8 +215,7 @@ impl CustomSky {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Custom sky shader"),
             source: wgpu::ShaderSource::Wgsl(
-                (include_str!("../hdr_light.wgsl").to_owned() + include_str!("custom_sky.wgsl"))
-                    .into(),
+                (super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("custom_sky.wgsl")).into(),
             ),
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -409,7 +407,6 @@ impl CustomSky {
                 mode: mode as u32,
                 pad: [0; 2],
                 hdr_settings: globals.hdr_settings,
-                hdr_gains: globals.hdr_gains,
                 hdr_light: globals.hdr_light,
             };
             let offset = STRIDE * self.frame.len() as u64;
@@ -544,7 +541,7 @@ mod tests {
     #[test]
     fn the_shader_validates() {
         let module = naga::front::wgsl::parse_str(
-            &(include_str!("../hdr_light.wgsl").to_owned() + include_str!("custom_sky.wgsl")),
+            &(super::super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("custom_sky.wgsl")),
         )
         .unwrap();
         naga::valid::Validator::new(
@@ -573,7 +570,7 @@ mod tests {
         };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&Default::default())).unwrap();
-        let source = include_str!("../hdr_light.wgsl").to_owned()
+        let source = super::super::wgsl_prefix::HDR_LIGHT.to_owned()
             + include_str!("custom_sky.wgsl")
             + r#"
 @vertex fn test_vertex(@builtin(vertex_index) i: u32) -> Out {
@@ -665,7 +662,6 @@ mod tests {
                 mode: mode_index as u32,
                 pad: [0; 2],
                 hdr_settings: [5.0, 4.0, 1.0, f32::from(u8::from(debug))],
-                hdr_gains: [1.6, 2.4, 2.8, 4.0],
                 hdr_light: [0.0, 0.0, 1.0, f32::from(u8::from(written))],
             };
             let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

@@ -32,7 +32,7 @@ const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
 
 /// entity.wgsl after the OverlayTexture constants it reads.
 fn entity_shader() -> String {
-    crate::overlay::wgsl_constants() + include_str!("hdr_light.wgsl") + include_str!("entity.wgsl")
+    crate::overlay::wgsl_constants() + wgsl_prefix::HDR_LIGHT + include_str!("entity.wgsl")
 }
 
 fn no_pack_hdr_gain(layered: bool, pack: bool, world: bool) -> bool {
@@ -40,11 +40,11 @@ fn no_pack_hdr_gain(layered: bool, pack: bool, world: bool) -> bool {
 }
 
 fn terrain_shader() -> String {
-    include_str!("hdr_light.wgsl").to_owned() + include_str!("terrain.wgsl")
+    wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("terrain.wgsl")
 }
 
 fn border_shader() -> String {
-    include_str!("hdr_light.wgsl").to_owned() + include_str!("border.wgsl")
+    wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("border.wgsl")
 }
 
 /// The static block-entity vertex entry point shares entity shading but lives
@@ -466,15 +466,10 @@ struct Globals {
     /// x: `Options.textureFiltering` (0 none, 1 RGSS, 2 anisotropic); y: the sprite arrays' width;
     /// z: the mip level at which a sprite is one texel, when the views reach it, else 0.
     filtering: [f32; 4],
-    /// HDR output's tier windows, low to very bright: where the lift starts, where it is
-    /// full (`hdr::Hdr::windows`); zero without HDR.
-    hdr_windows: [[f32; 4]; 2],
     /// x and y unused; z 1 with HDR output on; w the world's writers write light (terrain.wgsl).
     hdr_light: [f32; 4],
-    /// The sun's disc's peak, an unused lane, world/look and debug; then the tiers' gains
-    /// (`Hdr::draw_params`).
+    /// The display's headroom, an unused lane, world/look and debug (`Hdr::draw_params`).
     hdr_settings: [f32; 4],
-    hdr_gains: [f32; 4],
 }
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -7817,16 +7812,11 @@ impl Renderer {
             self.shader_pack_kind().is_some(),
             !frame.title,
         );
-        let (hdr_settings, hdr_gains) = self
+        let hdr_settings = self
             .hdr
             .as_ref()
-            .map_or(([0.0; 4], [0.0; 4]), |h| h.draw_params(!frame.title));
-        self.world_post.baked_light(
-            hdr_gain,
-            hdr_settings,
-            hdr_gains,
-            self.hdr.as_ref().map_or([[0.0; 4]; 2], hdr::Hdr::windows),
-        );
+            .map_or([0.0; 4], |h| h.draw_params(!frame.title));
+        self.world_post.baked_light(hdr_gain, hdr_settings);
         let jitter = self.world_post.jitter(
             [self.config.width, self.config.height],
             taa,
@@ -7970,7 +7960,6 @@ impl Renderer {
                 },
                 0.0,
             ],
-            hdr_windows: self.hdr.as_ref().map_or([[0.0; 4]; 2], hdr::Hdr::windows),
             hdr_light: [
                 0.0,
                 0.0,
@@ -7979,7 +7968,6 @@ impl Renderer {
                 f32::from(u8::from(hdr_gain)),
             ],
             hdr_settings,
-            hdr_gains,
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
@@ -12745,10 +12733,12 @@ mod tests {
                 || name == "border.wgsl"
                 || name == "world_primitives.wgsl"
             {
-                let base = include_str!("hdr_light.wgsl").to_owned() + &text;
+                let base = super::wgsl_prefix::HDR_LIGHT.to_owned() + &text;
                 sources.push((path, crate::overlay::wgsl_constants() + &base));
             } else if name == "hdr.wgsl" {
                 sources.push((path, super::hdr::shader()));
+            } else if name == "hdr_stats.wgsl" {
+                sources.push((path, super::hdr_stats::shader()));
             } else if name == "oit_world.wgsl" {
                 let base = super::terrain_shader() + include_str!("oit.wgsl");
                 sources.push((path, base + &text));

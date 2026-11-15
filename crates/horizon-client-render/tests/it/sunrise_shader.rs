@@ -150,7 +150,7 @@ fn native_pack_sky_keeps_sunrise_helpers_private() {
     // Use the same shared helper, complete terrain sections and prefixer as native_sky.rs.
     let sky = prefixed(
         &[
-            include_str!("../../src/hdr_light.wgsl"),
+            wgsl_prefix::HDR_LIGHT,
             section(TERRAIN, "struct Globals {", "@group(0) @binding(1)"),
             section(TERRAIN, "fn linear_fog(", "fn apply_fog("),
             section(TERRAIN, "struct SkyOut {", "// rendertype_lines"),
@@ -180,10 +180,9 @@ fn native_pack_sky_keeps_sunrise_helpers_private() {
 
 #[test]
 fn complete_terrain_shader_still_validates_for_fallback_sky() {
-    let module = naga::front::wgsl::parse_str(
-        &(include_str!("../../src/hdr_light.wgsl").to_owned() + wgsl_prefix::TERRAIN),
-    )
-    .unwrap();
+    let module =
+        naga::front::wgsl::parse_str(&(wgsl_prefix::HDR_LIGHT.to_owned() + wgsl_prefix::TERRAIN))
+            .unwrap();
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),

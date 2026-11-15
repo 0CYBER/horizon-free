@@ -1,10 +1,15 @@
 //! HDR emission thresholds (`hdr_stats.wgsl`): for every block sprite, the brightness its
 //! pixels must reach to shine in HDR output, measured on the GPU from the sprite's own
 //! darkest and brightest opaque pixel when HDR output turns on. Until then (and with HDR
-//! off) the texture holds zeros: every pixel of a light source may shine, and hdr.wgsl's
+//! off) the texture holds zeros: every pixel of a light source may shine, and the look's
 //! tier windows alone decide, as before.
 
 use super::hdr::Masks;
+
+/// hdr_stats.wgsl after the look whose brightness it measures (hdr_look.wgsl).
+pub(super) fn shader() -> String {
+    include_str!("../hdr_look.wgsl").to_owned() + include_str!("../hdr_stats.wgsl")
+}
 
 pub struct EmissionStats {
     /// One texel per sprite: x the layer in its array, y the array.
@@ -33,7 +38,7 @@ impl EmissionStats {
         let view = texture.create_view(&Default::default());
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon HDR emission thresholds"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../hdr_stats.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader().into()),
         });
         let mut entries: Vec<_> = (0..super::SPRITE_ARRAYS)
             .map(|binding| wgpu::BindGroupLayoutEntry {

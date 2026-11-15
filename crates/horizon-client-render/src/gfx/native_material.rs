@@ -359,7 +359,7 @@ pub(super) fn terrain_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
 /// every name it declares prefixed.
 fn vanilla_terrain() -> String {
     prefixed(
-        &(include_str!("../hdr_light.wgsl").to_owned()
+        &(super::wgsl_prefix::HDR_LIGHT.to_owned()
             + section(TERRAIN, "struct Globals {", "// Sky (SkyRenderer)")),
         PREFIX,
     )
@@ -1318,7 +1318,7 @@ mod tests {
 "
             )
         };
-        let engine = include_str!("../hdr_light.wgsl").to_owned()
+        let engine = super::super::wgsl_prefix::HDR_LIGHT.to_owned()
             + section(TERRAIN, "struct Globals {", "// Sky (SkyRenderer)")
             + &entries("");
         let stage = stage(

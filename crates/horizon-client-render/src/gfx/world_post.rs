@@ -171,7 +171,7 @@ pub struct Post {
     /// The last TAA frame's unjittered `view_proj` and camera, `None` once a frame ran without it.
     taa_previous: Option<(DMat4, DVec3)>,
     taa_this_frame: TaaUniform,
-    light_key: Option<(bool, [f32; 4], [f32; 4], [[f32; 4]; 2])>,
+    light_key: Option<(bool, [f32; 4])>,
 }
 
 impl Post {
@@ -356,19 +356,13 @@ impl Post {
     }
 
     // History stores baked light, so a change must reject it before jitter records the next frame.
-    pub(super) fn baked_light(
-        &mut self,
-        gain: bool,
-        settings: [f32; 4],
-        gains: [f32; 4],
-        windows: [[f32; 4]; 2],
-    ) {
-        // These uniforms do not change baked colour without gain: the history stays through a
+    pub(super) fn baked_light(&mut self, gain: bool, settings: [f32; 4]) {
+        // The settings do not change baked colour without gain: the history stays through a
         // change of them alone.
         let key = Some(if gain {
-            (true, settings, gains, windows)
+            (true, settings)
         } else {
-            (false, [0.0; 4], [0.0; 4], [[0.0; 4]; 2])
+            (false, [0.0; 4])
         });
         if self.light_key != key {
             self.taa_previous = None;
@@ -849,34 +843,26 @@ mod tests {
             eprintln!("TAA baked-light GPU skipped: TAA unsupported");
             return;
         }
-        let key = (
-            [5.0, 4.0, 1.0, 0.0],
-            [0.2, 0.5, 0.6, 1.0],
-            [[0.1; 4], [0.4; 4]],
-        );
+        let key = [5.0, 4.0, 1.0, 0.0];
         for gain in [true, false, true] {
-            post.baked_light(gain, key.0, key.1, key.2);
+            post.baked_light(gain, key);
             post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
             assert_eq!(post.taa_this_frame.jitter[2], 1.0);
-            post.baked_light(gain, key.0, key.1, key.2);
+            post.baked_light(gain, key);
             post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
             assert_eq!(post.taa_this_frame.jitter[2], 0.0);
         }
-        for field in 0..16 {
+        for field in 0..4 {
             let mut changed = key;
-            match field {
-                0..=3 => changed.0[field] += 0.01,
-                4..=7 => changed.1[field - 4] += 0.01,
-                _ => changed.2[(field - 8) / 4][(field - 8) % 4] += 0.01,
-            }
-            post.baked_light(true, changed.0, changed.1, changed.2);
+            changed[field] += 0.01;
+            post.baked_light(true, changed);
             post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
             assert_eq!(post.taa_this_frame.jitter[2], 1.0);
         }
-        post.baked_light(false, key.0, key.1, key.2);
+        post.baked_light(false, key);
         post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
         assert_eq!(post.taa_this_frame.jitter[2], 1.0);
-        post.baked_light(false, [0.0; 4], [0.0; 4], [[0.0; 4]; 2]);
+        post.baked_light(false, [0.0; 4]);
         post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
         assert_eq!(post.taa_this_frame.jitter[2], 0.0);
         // A pack disables TAA even when the light settings stay the same. Its first
@@ -887,7 +873,7 @@ mod tests {
         post.jitter([32, 32], true, Mat4::IDENTITY, DVec3::ZERO);
         assert_eq!(post.taa_this_frame.jitter[2], 0.0);
         eprintln!(
-            "TAA baked-light GPU checked gain, all settings/gains/windows and the first frame after a pack"
+            "TAA baked-light GPU checked gain, all settings and the first frame after a pack"
         );
     }
 

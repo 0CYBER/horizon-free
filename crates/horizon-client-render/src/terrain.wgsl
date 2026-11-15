@@ -35,14 +35,11 @@ struct Globals {
     // in texels (vanilla's TextureSize), z: the mip level at which a sprite is one texel when
     // the views reach it, else 0 (`rotated_grid`).
     filtering: vec4<f32>,
-    // HDR output's tier windows (hdr.rs `Hdr::windows`): x..w low to very bright,
-    // [0] where the lift starts, [1] where it is full.
-    hdr_windows: array<vec4<f32>, 2>,
     // HDR output: z 1 with it on, which nothing here reads; w: apply the no-pack HDR gain;
     // HDR_WRITE_LIGHT independently keeps float alpha as coverage. x and y are unused.
     hdr_light: vec4<f32>,
+    // What `hdr_written` reads (hdr_light.wgsl): the display's headroom, the look and debug.
     hdr_settings: vec4<f32>,
-    hdr_gains: vec4<f32>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;
@@ -725,24 +722,6 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
                 linear_fog(cylindrical, globals.fog.z, globals.fog.w));
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
 }
-// hdr.wgsl's brightness: the mean of luminance and the brightest channel, in
-// linear light.
-fn brightness(c: vec3<f32>) -> f32 {
-    let l = pow(max(c, vec3(0.0)), vec3(2.2));
-    return 0.5 * (dot(l, vec3(0.2126, 0.7152, 0.0722)) + max(l.r, max(l.g, l.b)));
-}
-// How much a light source's pixel lifts, 0 to 1: its own brightness `y` before lighting through
-// its tier's window (1 low .. 4 very bright).
-fn hdr_lift(tier: u32, y: f32) -> f32 {
-    let t = clamp(tier, 1u, 4u) - 1u;
-    return smoothstep(globals.hdr_windows[0][t], globals.hdr_windows[1][t], y);
-}
-// HDR's mark (hdr_light.wgsl `hdr_written`): below 0.75, a band of 0.175 per tier (from 0.525
-// down to 0) and in it how much the pixel lifts (hdr_lift).
-fn hdr_mark(tier: u32, y: f32) -> f32 {
-    let t = clamp(tier, 1u, 4u) - 1u;
-    return 0.175 * f32(3u - t) + 0.165 * (1.0 - hdr_lift(tier, y));
-}
 @fragment fn fs_solid(wire: TerrainWire) -> @location(0) vec4<f32> {
     let in = from_wire(wire);
     return solid_color(in);
@@ -783,7 +762,7 @@ fn solid_finish(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>) -> vec4<f32>
 fn solid_light(finished: vec4<f32>) -> vec4<f32> {
     if HDR_WRITE_LIGHT {
         if globals.hdr_light.w != 0.0 {
-            return vec4(hdr_written(finished.rgb, finished.a, globals.hdr_settings, globals.hdr_gains), 1.0);
+            return vec4(hdr_written(finished.rgb, finished.a, globals.hdr_settings), 1.0);
         }
         return frame_stored(vec4(finished.rgb, 1.0));
     }
@@ -845,7 +824,7 @@ fn solid_finish_at(in: TerrainOut, texel: vec4<f32>, color: vec4<f32>, du: vec2<
     let finished = apply_fog(color, in.spherical, in.cylindrical);
     if HDR_WRITE_LIGHT && globals.hdr_light.w != 0.0 {
         // The surface's own light, whatever its texel's alpha: what is behind it is light already.
-        return vec4(hdr_written(finished.rgb, 1.0, globals.hdr_settings, globals.hdr_gains), finished.a);
+        return vec4(hdr_written(finished.rgb, 1.0, globals.hdr_settings), finished.a);
     }
     return frame_stored(finished);
 }
@@ -1051,7 +1030,7 @@ fn sky_along_ray_base(d: vec3<f32>) -> vec3<f32> {
 fn sky_finished(color: vec3<f32>) -> vec4<f32> {
     if HDR_WRITE_LIGHT {
         if globals.hdr_light.w != 0.0 {
-            return vec4(hdr_written(color, 1.0, globals.hdr_settings, globals.hdr_gains), 1.0);
+            return vec4(hdr_written(color, 1.0, globals.hdr_settings), 1.0);
         }
         return frame_stored(vec4(color, 1.0));
     }

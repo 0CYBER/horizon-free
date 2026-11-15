@@ -9,7 +9,7 @@ use glam::Mat4;
 
 /// world_primitives.wgsl after what it shares with the frame's other shaders (`frame_stored`).
 pub(super) fn shader() -> String {
-    include_str!("../hdr_light.wgsl").to_owned() + include_str!("world_primitives.wgsl")
+    super::wgsl_prefix::HDR_LIGHT.to_owned() + include_str!("world_primitives.wgsl")
 }
 
 /// A frame's primitives, camera-relative, as the game tessellated them: quads of 4 vertices
