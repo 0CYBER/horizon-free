@@ -90,8 +90,8 @@ FriendlyByteBuf.writeWithCodec	skip:java		DataFixer codec plumbing; Horizon has 
 FriendlyByteBuf.readLenientJsonWithCodec	skip:java		codec plumbing for lenient JSON
 FriendlyByteBuf.writeJsonWithCodec	skip:java		codec plumbing for JSON
 FriendlyByteBuf.readWithCount	skip:java		count loop; the List codec does it
-FriendlyByteBuf.writeEnumSet	port	crates/horizon-protocol/src/packets/play.rs::PlayerInfoUpdate::write	action flags as one byte (8 actions fit)
-FriendlyByteBuf.readEnumSet	port	crates/horizon-protocol/src/packets/play.rs::PlayerInfoUpdate::read	action flags as one byte (8 actions fit)
+FriendlyByteBuf.writeEnumSet	port	crates/horizon-protocol/src/packets/play/player_info.rs::PlayerInfoUpdate::write	action flags as one byte (8 actions fit)
+FriendlyByteBuf.readEnumSet	port	crates/horizon-protocol/src/packets/play/player_info.rs::PlayerInfoUpdate::read	action flags as one byte (8 actions fit)
 FriendlyByteBuf.writeOptional	port	crates/horizon-protocol/src/buf.rs::Opt::write	boolean flag, then the value
 FriendlyByteBuf.writeEither	port	crates/horizon-protocol/src/packets/play.rs::TrackedWaypoint::write	gap: minor: only the waypoint identifier; no generic Either codec
 FriendlyByteBuf.readEither	port	crates/horizon-protocol/src/packets/play.rs::TrackedWaypoint::read	gap: minor: only the waypoint identifier; no generic Either codec

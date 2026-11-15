@@ -70,9 +70,9 @@ ClientboundMoveEntityPacket.Rot.read	port	crates/horizon-protocol/src/packets/pl
 ClientboundMoveEntityPacket.Rot.write	port	crates/horizon-protocol/src/packets/play.rs::write_inner	MoveEntityRot write
 ClientboundPlayerAbilitiesPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! PlayerAbilities {flags Byte, flying speed, walking speed}; flag bits packed by the sender
 ClientboundPlayerInfoUpdatePacket.createPlayerInitializing	port	crates/horizon-client/src/lan/hub.rs::Hub::place_new_player	sends every action (INFO_ACTIONS) to a newcomer
-ClientboundPlayerInfoUpdatePacket.entryCodec	port	crates/horizon-protocol/src/packets/play.rs::PlayerInfoUpdate::write	per-entry write in action order
+ClientboundPlayerInfoUpdatePacket.entryCodec	port	crates/horizon-protocol/src/packets/play/player_info.rs::PlayerInfoUpdate::write	per-entry write in action order
 ClientboundPlayerInfoUpdatePacket.toString	skip:debug		debug string
-ClientboundPlayerInfoUpdatePacket.EntryBuilder.build	inline	crates/horizon-protocol/src/packets/play.rs::PlayerInfoUpdate::read	entry fields read in action order
+ClientboundPlayerInfoUpdatePacket.EntryBuilder.build	inline	crates/horizon-protocol/src/packets/play/player_info.rs::PlayerInfoUpdate::read	entry fields read in action order
 ClientboundPlayerLookAtPacket.<init>	port	crates/horizon-client/src/game/commands.rs::Game::send_player_look_at	every target of /tp ... facing and /rotate ... facing gets the packet, a guest over its connection
 ClientboundPlayerLookAtPacket.write	port	crates/horizon-protocol/src/buf.rs::write	packet! PlayerLookAt {from, target, entity LookAtEntity {id, anchor}}
 ClientboundPlayerLookAtPacket.getPosition	inline	crates/horizon-client/src/game/remote.rs::Game::remote_look_at	the point is read off the packet, unless the named entity is tracked, then its feet or eyes
