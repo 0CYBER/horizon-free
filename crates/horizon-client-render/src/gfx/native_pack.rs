@@ -9,8 +9,11 @@ use super::native_material::{DisplacedShape, NativeMaterial, TerrainShape};
 use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
 use super::native_sky::NativeSky;
+use super::output::EffectiveOutput;
 use super::pack_timing::PassTiming;
 use super::surface_setup::ray_query::ray_scene::RayScene;
+use super::{Frame, SectionKey};
+use crate::fast_hash::FxHashMap;
 
 pub struct NativePack {
     pub frame: NativeFrame,
@@ -353,6 +356,91 @@ impl NativePack {
             || self.weather.is_some()
             || self.post.is_some()
     }
+
+    /// Writes this frame's inputs, once a frame, and starts timing its passes. Returns
+    /// whether its sky draws in a pass of its own: in a timed frame, so that it has a time of
+    /// its own.
+    pub fn start_frame(&mut self, start: FrameStart<'_>) -> bool {
+        let FrameStart {
+            device,
+            queue,
+            frame,
+            size,
+            output,
+            lights,
+            light_revision,
+            sky_visible,
+            scene,
+        } = start;
+        self.write(queue, frame, size, output.display(), scene);
+        self.frame
+            .block_light
+            .update(queue, frame.camera, lights, light_revision);
+        let Some(t) = &mut self.timing else {
+            return false;
+        };
+        t.begin(device, queue);
+        self.sky.is_some() && t.recording() && sky_visible && frame.skybox
+    }
+
+    /// Binds the water mirror the renderer drew this frame, and outside the title screen
+    /// fits the material stage's copies of the world and the surface target to its targets.
+    pub fn prepare_world_targets(&mut self, world: WorldTargets<'_>) {
+        let WorldTargets {
+            device,
+            encoder,
+            reflection,
+            title,
+            depth,
+            color,
+        } = world;
+        let reflection = reflection.map(|view| self.frame.linear_mirror(device, encoder, view));
+        self.frame.set_reflection(device, reflection.as_ref());
+        if title {
+            return;
+        }
+        if self.material.is_some() {
+            self.frame.fit_opaque(device, depth, color);
+        }
+        let writes = self.material.as_ref().is_some_and(|m| m.writes_surface);
+        let size = if writes {
+            [depth.width(), depth.height()]
+        } else {
+            [1, 1]
+        };
+        self.frame.fit_surface(device, size);
+    }
+}
+
+/// What the renderer hands the pack before its world passes (`NativePack::start_frame`).
+pub struct FrameStart<'a> {
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub frame: &'a Frame<'a>,
+    /// The world's size this frame: the scaled target's, else the window's.
+    pub size: [u32; 2],
+    /// This frame's output, whose display values a 0.2 pack reads.
+    pub output: &'a EffectiveOutput,
+    /// The light sources the section meshes list, and their revision (`BlockLight::update`).
+    pub lights: &'a FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    pub light_revision: u64,
+    /// The sky is open this frame.
+    pub sky_visible: bool,
+    /// The ray scene, when the game traces rays (`NativePack::write`).
+    pub scene: Option<&'a RayScene>,
+}
+
+/// What the renderer hands the pack after the water mirror (`NativePack::prepare_world_targets`).
+pub struct WorldTargets<'a> {
+    pub device: &'a wgpu::Device,
+    pub encoder: &'a mut wgpu::CommandEncoder,
+    /// The water mirror's colour, when one was drawn this frame.
+    pub reflection: Option<wgpu::TextureView>,
+    pub title: bool,
+    /// The world's depth, and its colour where it can be copied (the scaled target, not the
+    /// window's own).
+    pub depth: &'a wgpu::Texture,
+    pub color: Option<&'a wgpu::Texture>,
 }
 
 #[cfg(test)]

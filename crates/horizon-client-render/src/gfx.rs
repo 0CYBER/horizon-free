@@ -9927,24 +9927,21 @@ impl Renderer {
         if !frame.title
             && let Some(native) = &mut self.native
         {
-            let size = self
-                .world_post
-                .size()
-                .filter(|_| scaled.is_some())
-                .unwrap_or([self.config.width, self.config.height]);
-            let scene = self.ray_scene.as_ref();
-            native.write(&self.queue, frame, size, output.display(), scene);
-            native.frame.block_light.update(
-                &self.queue,
-                frame.camera,
-                &self.light_blocks,
-                self.light_revision,
-            );
-            if let Some(t) = &mut native.timing {
-                t.begin(&self.device, &self.queue);
-                native_sky_pass =
-                    native.sky.is_some() && t.recording() && sky_visible && frame.skybox;
-            }
+            native_sky_pass = native.start_frame(native_pack::FrameStart {
+                device: &self.device,
+                queue: &self.queue,
+                frame,
+                size: self
+                    .world_post
+                    .size()
+                    .filter(|_| scaled.is_some())
+                    .unwrap_or([self.config.width, self.config.height]),
+                output: &output,
+                lights: &self.light_blocks,
+                light_revision: self.light_revision,
+                sky_visible,
+                scene: self.ray_scene.as_ref(),
+            });
         }
         // One of Horizon's own packs: its shadow passes, from the shadow camera's lists.
         if !frame.title
@@ -10124,33 +10121,17 @@ impl Renderer {
                 reflection = Some(mirror.color.clone());
             }
         }
+        // One of Horizon's own packs: the mirror its material reads, and its copies of the world
+        // before translucent terrain and its surface target, the size of this frame's targets.
         if let Some(native) = &mut self.native {
-            let reflection =
-                reflection.map(|view| native.frame.linear_mirror(&self.device, &mut encoder, view));
-            native
-                .frame
-                .set_reflection(&self.device, reflection.as_ref());
-        }
-        // The material stage's copies of the world before translucent terrain, the size of
-        // this frame's targets.
-        if let Some(native) = &mut self.native
-            && native.material.is_some()
-            && !frame.title
-        {
-            let color = scaled.as_ref().map(|(c, _)| c.texture());
-            native
-                .frame
-                .fit_opaque(&self.device, world_depth.texture(), color);
-        }
-        if let Some(native) = self.native.as_mut().filter(|_| !frame.title) {
-            let writes = native.material.as_ref().is_some_and(|m| m.writes_surface);
-            let depth = world_depth.texture();
-            let size = if writes {
-                [depth.width(), depth.height()]
-            } else {
-                [1, 1]
-            };
-            native.frame.fit_surface(&self.device, size);
+            native.prepare_world_targets(native_pack::WorldTargets {
+                device: &self.device,
+                encoder: &mut encoder,
+                reflection,
+                title: frame.title,
+                depth: world_depth.texture(),
+                color: scaled.as_ref().map(|(c, _)| c.texture()),
+            });
         }
         laps.lap("r_mirror");
         // One of Horizon's own packs with a material stage: terrain draws with its pipelines,
