@@ -30,6 +30,11 @@ once, not an isolated measurement, so FAIL keeps a margin over the 2 s target. A
 documentation examples and the Python steps of `verify` are not under the guard. The run ends with the slowest five
 tests and the summed test seconds. (libtest's own `--ensure-time` was the alternative: it fails a slow test inside
 the binary with libtest's words, not the instruction, and needs a threshold variable per kind of test target.)
+
+`--no-data-skips` (verify) fails the run when a test that ran prints the `skipped: no vanilla data; test=NAME` line of
+the shared helper (`crates/horizon-client/src/test_fixtures.rs`, `report_missing`): such a test returns early and is
+counted as passed, though verify has no prepared resources. Every one is listed with its package and the fix. The
+daily run has the data, so those tests print nothing there and do not pass the flag.
 """
 import argparse
 import json
@@ -185,21 +190,35 @@ def untimed(result: dict) -> list[str]:
 # A libtest result line, with the time --report-time adds.
 # A failed result line, with the time --report-time adds.
 FAILED = re.compile(r"^test (\S+)(?: - should panic)? \.\.\. FAILED(?: <\d+(?:\.\d+)?s>)?$")
+# The line `report_missing` writes when a test returns early for want of prepared data. It is searched for, not
+# anchored: libtest's own `test a::b ... ` may be on the same line, since both write to one file.
+DATA_SKIP = re.compile(r"skipped: no vanilla data; test=([^;\n]+); skipped tests=\d+")
 
 
 def report(result: dict) -> list[str]:
-    """Print one finished binary's output, streamed from its file, and return its failed test names."""
+    """Print one finished binary's output, streamed from its file, and return its failed test names.
+
+    The tests that skipped for missing data are left in `result["data_skips"]`."""
     print(f"     Running {result['binary']['label']} [{result['seconds']:.1f}s, "
           f"max RSS {result['max_rss_kib'] // 1024} MiB]")
     output, failed_tests = result["output"], []
+    result["data_skips"] = []
     output.seek(0)
     for line in output:
         print(line, end="")
+        result["data_skips"].extend(name for name in DATA_SKIP.findall(line) if name not in result["data_skips"])
         if found := FAILED.match(line.rstrip("\n")):
             failed_tests.append(found[1])
     output.close()
     print(flush=True)
     return failed_tests
+
+
+def data_skip_errors(skips: list[tuple[str, str]]) -> list[str]:
+    """One error per (binary label, test) that skipped for want of prepared data, with the fix."""
+    return [f"{label}: {test} returns early without vanilla data and counts as passed: mark it "
+            '#[ignore = "daily"] with a `resources` row (tools/ci/move_to_daily.py, tools/ci/ignored-tests/README.md), '
+            "or give it a fixture" for label, test in skips]
 
 
 def timing_verdict(times: list[tuple[float, str, str]], warn: float, fail: float) -> tuple[list[str], list[str]]:
@@ -249,6 +268,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--jobs", type=int, required=True, help="test binaries running at once")
     parser.add_argument("--time-limits", metavar="WARN,FAIL", help="seconds: warn about a test over WARN, fail one "
                         "over FAIL (adds libtest's --report-time)")
+    parser.add_argument("--no-data-skips", action="store_true", help="fail the run when a test prints the missing-"
+                        "vanilla-data skip line: it returns early and counts as passed")
     parser.add_argument("cargo", nargs=argparse.REMAINDER,
                         help="the cargo test command, after --; arguments after its own -- go to every test binary")
     args = parser.parse_args(argv)
@@ -292,7 +313,7 @@ def main(argv: list[str]) -> int:
     if limits:
         extra_env["RUSTC_BOOTSTRAP"] = "1"
     print(f"running {len(binaries)} test binaries, {args.jobs} at a time", flush=True)
-    failures, peaks, times, missing, started = [], [], [], [], time.monotonic()
+    failures, peaks, times, missing, data_skips, started = [], [], [], [], [], time.monotonic()
     def results():
         with ThreadPoolExecutor(args.jobs) as pool:
             if not args.network_guard:
@@ -302,6 +323,7 @@ def main(argv: list[str]) -> int:
                 b, extra_env, test_args, bool(limits), args.network_guard.resolve(), run_one, listed_tests), binaries)
     for result in results():
         failed_tests = report(result)
+        data_skips.extend((result["binary"]["label"], test) for test in result["data_skips"])
         failed_tests.extend(name for name in result.get("network_tests", []) if name not in failed_tests)
         times.extend((seconds, test, result["binary"]["label"])
                      for test, (_, seconds) in result.get("log", {}).items() if seconds is not None)
@@ -334,7 +356,12 @@ def main(argv: list[str]) -> int:
             print(f"::error::{label}: {status}")
             for name in failed_tests:
                 print(f"    {name}")
-    return 1 if failures or slow else 0
+    skipped = args.no_data_skips and data_skips
+    if skipped:
+        print(f"::error::{len(data_skips)} tests skipped for missing vanilla data and were counted as passed:")
+        for error in data_skip_errors(data_skips):
+            print(f"::error::{error}")
+    return 1 if failures or slow or skipped else 0
 
 
 if __name__ == "__main__":
