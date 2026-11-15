@@ -493,8 +493,7 @@ impl Keyboard {
                 };
                 // Smaller when the label is wider than its key (a long translation).
                 let room = w - 2.0 * LABEL_PAD;
-                let wide = ui.measure(Face::Medium, ui_theme::body(), &label);
-                let size = ui_theme::body() * (room / wide).min(1.0);
+                let size = ui.fit(Face::Medium, ui_theme::body(), &label, room);
                 let lw = ui.measure(Face::Medium, size, &label);
                 ui.text_line(
                     Face::Medium,
@@ -510,8 +509,7 @@ impl Keyboard {
         let top = y0 + keys_h + HINT_GAP;
         for (i, line) in hints.iter().enumerate() {
             // Only a line of one word wider than the panel is still too wide: smaller, to fit.
-            let wide = ui.measure(Face::Regular, ui_theme::small(), line);
-            let size = ui_theme::small() * (width / wide).min(1.0);
+            let size = ui.fit(Face::Regular, ui_theme::small(), line, width);
             ui.text_centered(
                 Face::Regular,
                 size,

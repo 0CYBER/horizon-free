@@ -71,6 +71,8 @@ Cases:
 - osk_sign_done: on a sign Done (Menu) closes the sign with what was typed, as its Done button.
 - osk_chat_suggestions: over chat with the keyboard open, RT fills in the selected command suggestion (Tab) and the
   right stick picks another first (Up and Down), without closing the keyboard.
+- osk_labels: the on-screen keyboard over chat draws its keys' labels, in Horizon's look and with no menu style given
+  (`HORIZON_MENU_STYLE=vanilla`, where the overlays have no fonts of their own and use the pack's).
 Needs built fast binaries (`cargo build --profile fast -p horizon-client -p horizon-client-lib --bins`)
 and prepared resources in .local/horizon-client/26.3. Exit status 0 when every case passes.
 - radial_commit: holding the opener shows the overlay and pauses nothing; the stick selects; releasing runs the action once.
@@ -2358,6 +2360,54 @@ def prompt_dialog_field(args, name):
         game.quit()
     return check.failures
 
+
+# The on-screen keyboard's layout in dp (`osk.rs`, `Keyboard::draw`) and the dp scale (`ui_theme::Ui::new`).
+OSK_UNIT, OSK_GAP, OSK_KEY_H, OSK_EDGE = 50, 6, 38, 16
+OSK_WIDTH = 10 * OSK_UNIT + 9 * OSK_GAP
+DP_WINDOW = (1040, 700)
+# A label's ink against the dark key plates: every channel this bright, and at least this many pixels of it.
+LABEL_INK, LABEL_PIXELS = 200, 12
+# Keys away from the focus (on Q): Y in the letters row, Space in the bottom row; (row, left unit, units wide).
+LABELLED_KEYS = {'Y': (1, 5, 1), 'Space': (4, 3, 4)}
+
+
+def label_pixels(rows, width, channels, row, left, units):
+    """How many bright pixels the keyboard (at the top, as over chat) draws inside one key's plate."""
+    height = len(rows)
+    density = min(max(min(width / DP_WINDOW[0], height / DP_WINDOW[1]), 1.0), 4.0)
+    x0 = round((width / density - OSK_WIDTH) / 2)
+    x = x0 + left * (OSK_UNIT + OSK_GAP)
+    y = OSK_EDGE + row * (OSK_KEY_H + OSK_GAP)
+    w = units * OSK_UNIT + (units - 1) * OSK_GAP
+    bright = 0
+    for py in range(int((y + 2) * density), int((y + OSK_KEY_H - 2) * density)):
+        line = rows[py]
+        for px in range(int((x + 2) * density), int((x + w - 2) * density)):
+            if min(line[px * channels:px * channels + 3]) >= LABEL_INK:
+                bright += 1
+    return bright
+
+
+def osk_labels(args, name):
+    failures = []
+    for look, env in (('horizon', None), ('vanilla', {'HORIZON_MENU_STYLE': 'vanilla'})):
+        game = Game(args, f'{name}-{look}', world=True, env=env)
+        check = Check()
+        try:
+            game.pad('up')
+            time.sleep(SETTLE)
+            check(game.menu()['keyboard'], f'{look}: the keyboard did not open over chat')
+            path = game.home / 'keyboard.png'
+            game.ctl('screenshot', path, timeout=120)
+            shot(game, f'osk-labels-{look}')
+            rows, width, channels = png_rows(path)
+            for key, (row, left, units) in LABELLED_KEYS.items():
+                ink = label_pixels(rows, width, channels, row, left, units)
+                check(ink >= LABEL_PIXELS, f'{look}: the {key} key draws no label ({ink} bright pixels)')
+        finally:
+            game.quit()
+        failures += check.failures
+    return failures
 
 def walk_to_field(game, check):
     """The D-pad, towards the screen's text field."""
@@ -4697,6 +4747,7 @@ CASES = {'idle_a': idle_a, 'idle_b': idle_b, 'idle_x': idle_x, 'release': releas
          'prompt_dialog': prompt_dialog,
          'prompt_dialog_field': prompt_dialog_field,
          'prompt_keeps_typing': prompt_keeps_typing,
+         'osk_labels': osk_labels,
          'prompt_keeps_crosshair': prompt_keeps_crosshair,
          'osk_social': osk_social,
          'osk_book': osk_book,

@@ -5,8 +5,9 @@
 //!
 //! The layer above gives it once at startup ([`install`]), before the first frame; the
 //! official game gives Horizon's design system (`docs/design-system.md`). With none given, the
-//! screens draw in [`NEUTRAL`]: vanilla's greys and chat colours, and no text where they would
-//! use their own fonts. A read is one atomic load, and only those screens make it.
+//! screens draw in [`NEUTRAL`]: vanilla's own surfaces (its widget sprites and list backgrounds),
+//! its greys and chat colours, and the resource pack's font where they would use their own. A
+//! read is one atomic load, and only those screens make it.
 use std::sync::OnceLock;
 
 /// Colours as `0xRRGGBB`, sizes in dp (the launcher's logical pixels).
@@ -15,8 +16,21 @@ pub struct MenuStyle {
     pub settings: SettingsColours,
     pub overlay: OverlayColours,
     pub sizes: Sizes,
-    /// The overlays' TrueType faces; none: they draw no text.
+    /// The overlays' TrueType faces; none: they draw their text in the resource pack's font.
     pub fonts: Option<Fonts>,
+    /// What the settings pages are drawn with: their panels, lists and controls.
+    pub surfaces: Surfaces,
+}
+
+/// The settings pages' surfaces: panels, page list, rules, buttons, tick boxes, sliders, fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surfaces {
+    /// Flat fills in the settings colours: panels of see-through glass, flat controls.
+    Flat,
+    /// What vanilla's Options screens draw, from the player's resource packs: the list background
+    /// and its separators for panels, a selection list's outline for the open page, and the
+    /// `widget/*` sprites for controls. A pack that restyles vanilla's menus restyles these too.
+    Vanilla,
 }
 
 /// The settings pages: square panels of dark glass over the world, flat controls, one face.
@@ -89,7 +103,7 @@ pub struct Fonts {
     pub mono: &'static [u8],
 }
 
-/// The look with nothing given: vanilla's greys and chat colours.
+/// The look with nothing given: vanilla's own surfaces, greys and chat colours.
 pub const NEUTRAL: MenuStyle = MenuStyle {
     settings: SettingsColours {
         page: 0x101010,
@@ -128,6 +142,7 @@ pub const NEUTRAL: MenuStyle = MenuStyle {
         control_large: 40.0,
     },
     fonts: None,
+    surfaces: Surfaces::Vanilla,
 };
 
 static STYLE: OnceLock<MenuStyle> = OnceLock::new();
@@ -136,6 +151,30 @@ static STYLE: OnceLock<MenuStyle> = OnceLock::new();
 /// returns false.
 pub fn install(style: MenuStyle) -> bool {
     STYLE.set(style).is_ok()
+}
+
+/// The surfaces the settings pages draw on: the style's, or in this crate's tests the ones
+/// [`with_surfaces`] pinned, so a test doesn't depend on what [`NEUTRAL`] uses.
+pub fn surfaces() -> Surfaces {
+    #[cfg(test)]
+    if let Some(pinned) = PINNED.get() {
+        return pinned;
+    }
+    get().surfaces
+}
+
+#[cfg(test)]
+thread_local! {
+    static PINNED: std::cell::Cell<Option<Surfaces>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with the settings pages on `surfaces`, on this thread (tests only).
+#[cfg(test)]
+pub fn with_surfaces<R>(surfaces: Surfaces, f: impl FnOnce() -> R) -> R {
+    let before = PINNED.replace(Some(surfaces));
+    let out = f();
+    PINNED.set(before);
+    out
 }
 
 /// The look given to [`install`], or [`NEUTRAL`].

@@ -149,7 +149,8 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
 - **Game**: vanilla's screens. The on-screen keyboard is a rounded plate of keys in the page
   colour, the focused key in the accent. Horizon's graphics, controller, Extras and Shaders
   settings screens take the Blocks palette below in a lighter form (`graphics_style.rs`, through
-  the shared `settings_shell.rs`).
+  the shared `settings_shell.rs`); with no style given, they draw on vanilla's own surfaces
+  ([docs/ui-kit.md](ui-kit.md#its-look)).
 
 ## Blocks
 

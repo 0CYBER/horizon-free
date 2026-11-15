@@ -17,6 +17,16 @@ use crate::{
 fn b() -> &'static SettingsColours {
     &menu_style::get().settings
 }
+/// The pages drawn on vanilla's own surfaces (`menu_style::Surfaces::Vanilla`).
+mod vanilla;
+pub fn vanilla_surfaces() -> bool {
+    menu_style::surfaces() == menu_style::Surfaces::Vanilla
+}
+thread_local! {
+    /// Whether a world is behind the screen, as its backdrop was last drawn ([`veil_over`]): vanilla's
+    /// list background is see-through over a world and solid over the menu's.
+    static IN_WORLD: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
 
 /// What a setting costs in frame time, shown with its description.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,16 +175,86 @@ pub fn panel(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4]) {
     fill(batch, atlas, rect, glass());
     ring(batch, atlas, rect, edge());
 }
-/// A group's panel on the plate, its rows on it.
+/// A group's panel on the plate, its rows on it. Vanilla's lists have none.
 pub fn group(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4]) {
-    fill(batch, atlas, rect, group_fill());
+    if !vanilla_surfaces() {
+        fill(batch, atlas, rect, group_fill());
+    }
+}
+/// The veil over the backdrop, under the panels; none on vanilla's surfaces, whose list
+/// backgrounds darken what they cover. `in_world`: a world is behind the screen.
+pub fn veil_over(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4], in_world: bool) {
+    IN_WORLD.set(in_world);
+    if !vanilla_surfaces() {
+        fill(batch, atlas, rect, veil());
+    }
+}
+/// The settings pages' plate and strip: a [`panel`], or vanilla's list background between its
+/// separators.
+pub fn sheet(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4]) {
+    if vanilla_surfaces() {
+        return vanilla::sheet(batch, atlas, rect, IN_WORLD.get());
+    }
+    panel(batch, atlas, rect);
+}
+/// The rule under the plate's heading: vanilla's header separator on its surfaces.
+pub fn heading_rule(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4]) {
+    if vanilla_surfaces() {
+        return vanilla::separator(batch, atlas, rect, IN_WORLD.get());
+    }
+    fill(batch, atlas, rect, head_rule());
+}
+/// The rule between two rows of a group; vanilla's lists have none.
+pub fn rule(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4]) {
+    if !vanilla_surfaces() {
+        fill(batch, atlas, rect, row_rule());
+    }
+}
+/// A row's light while it is pointed at or focused: on vanilla's surfaces, a selection list's
+/// grey edge round it, its control lit too.
+pub fn lit(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4]) {
+    if vanilla_surfaces() {
+        return vanilla::outline(batch, atlas, rect);
+    }
+    fill(batch, atlas, rect, hover());
+}
+/// The open page in the page list: a plate with the accent's bar beside it, or vanilla's
+/// selection-list entry (a grey outline round black; the focus ring makes it white).
+pub fn open_page(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4]) {
+    if vanilla_surfaces() {
+        return vanilla::selected(batch, atlas, rect);
+    }
+    fill(batch, atlas, rect, open());
+    fill(batch, atlas, [rect[0], rect[1], 2.0, rect[3]], accent());
+}
+/// The width of a value's control (a cycler, a key) from the row's right edge: the value
+/// between its arrows, or a vanilla button at least a control wide.
+pub fn value_w(atlas: &HudAtlas, value: &str) -> f32 {
+    let w = atlas.font.width(value);
+    if vanilla_surfaces() {
+        (w + vanilla::LABEL_PAD).max(CONTROL_W)
+    } else {
+        w + 18.0
+    }
+}
+/// Where a value's control sits in the row at `y`, from `x` to `right`: a well 14 high, or a
+/// vanilla button as tall as the row's other controls.
+pub fn value_rect(x: f32, right: f32, y: f32) -> [f32; 4] {
+    let h = if vanilla_surfaces() { CONTROL_H } else { 14.0 };
+    [x, y + ((ROW - h) / 2.0).floor(), right - x, h]
 }
 /// A sunk well: the search field, the value stepper.
 pub fn well(batch: &mut HudBatch, atlas: &HudAtlas, rect: [f32; 4]) {
+    if vanilla_surfaces() {
+        return vanilla::well(batch, atlas, rect);
+    }
     fill(batch, atlas, rect, well_fill());
 }
-/// The scroller: a faint track and its thumb.
+/// The scroller: a faint track and its thumb, or vanilla's.
 pub fn scroller(batch: &mut HudBatch, atlas: &HudAtlas, track: [f32; 4], thumb: [f32; 4]) {
+    if vanilla_surfaces() {
+        return vanilla::scroller(batch, atlas, track, thumb);
+    }
     fill(batch, atlas, track, row_rule());
     fill(batch, atlas, thumb, track_fill());
 }
@@ -182,7 +262,18 @@ pub fn scroller(batch: &mut HudBatch, atlas: &HudAtlas, track: [f32; 4], thumb: 
 /// kit's `fit::ellipsize`.
 pub use crate::hud_kit::fit::ellipsize as fit;
 /// A 12 px tick box ending at `right`, centred in the row at `y`: its edge in the accent when on.
-pub fn checkbox(batch: &mut HudBatch, atlas: &HudAtlas, right: f32, y: f32, on: bool, live: bool) {
+/// `lit`: pointed at or held; vanilla's box lights then.
+pub fn checkbox(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    right: f32,
+    y: f32,
+    on: bool,
+    (lit, live): (bool, bool),
+) {
+    if vanilla_surfaces() {
+        return vanilla::checkbox(batch, atlas, [right, y], on, (lit, live));
+    }
     let rect = [right - 12.0, y + 4.0, 12.0, 12.0];
     fill(batch, atlas, rect, well_fill());
     let edge = match (on, live) {
@@ -238,6 +329,9 @@ pub fn button_with_room(
     (hover, live, primary): (bool, bool, bool),
     room: f32,
 ) {
+    if vanilla_surfaces() {
+        return vanilla::button(batch, atlas, rect, label, (hover, live), room);
+    }
     let [x, y, w, h] = rect;
     let face = match (live, primary, hover) {
         (false, _, _) => well_fill(),
@@ -293,6 +387,9 @@ pub fn slider(
     position: f32,
     (hover, live): (bool, bool),
 ) {
+    if vanilla_surfaces() {
+        return vanilla::slider(batch, atlas, rect, value, position, (hover, live));
+    }
     let [x, y, w, h] = rect;
     let color = if live { WHITE } else { muted() };
     scrolling_label(
@@ -331,6 +428,9 @@ pub fn cycler(
     value: &Text,
     (hover, live): (bool, bool),
 ) {
+    if vanilla_surfaces() {
+        return vanilla::cycler(batch, atlas, rect, value, (hover, live));
+    }
     let [x, y, w, h] = rect;
     well(batch, atlas, rect);
     if hover && live {
@@ -346,6 +446,22 @@ pub fn cycler(
         (true, false) => soft(),
     };
     scrolling_label(batch, atlas, value, [x + 9.0, ty, w - 18.0], (y, h), color);
+}
+/// A tab as vanilla's Create World screen draws it (`MenuTabBar.MenuTabButton`), in any look:
+/// the tab sprite, and on the open tab the menu background inside it and an underline under the
+/// label. `(selected, lit, live)`: open; pointed at or focused; usable.
+pub fn vanilla_tab(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    rect: [f32; 4],
+    label: &Text,
+    flags: (bool, bool, bool),
+) {
+    vanilla::tab(batch, atlas, rect, label, flags);
+}
+/// The top of a [`vanilla_tab`]'s label, for marks drawn on its line (a controller's glyphs).
+pub fn vanilla_tab_label_y(y: f32, h: f32, open: bool) -> f32 {
+    vanilla::tab_label_y(y, h, open)
 }
 /// A screen's title, centred at the top (split-screen profiles).
 pub fn title(batch: &mut HudBatch, atlas: &HudAtlas, text: &Text) {
@@ -387,7 +503,7 @@ mod tests {
         assert!(atlas.font.width_text(&long.resolved()) > rect[2]);
         let short = Text::literal("Done");
         let short_w = atlas.font.width_text(&short.resolved());
-        let draws: [(&str, fn(&mut HudBatch, &HudAtlas, [f32; 4], &Text)); 3] = [
+        let draws: [(&str, fn(&mut HudBatch, &HudAtlas, [f32; 4], &Text)); 5] = [
             ("button", |b, a, r, t| {
                 button(b, a, r, t, (false, true, false))
             }),
@@ -395,13 +511,24 @@ mod tests {
                 slider(b, a, r, t, 0.5, (false, true))
             }),
             ("cycler", |b, a, r, t| cycler(b, a, r, t, (false, true))),
+            ("open tab", |b, a, r, t| {
+                vanilla_tab(b, a, r, t, (true, false, true))
+            }),
+            ("tab", |b, a, r, t| {
+                vanilla_tab(b, a, r, t, (false, true, true))
+            }),
         ];
-        for (name, draw) in draws {
+        let looks = [menu_style::Surfaces::Flat, menu_style::Surfaces::Vanilla];
+        for (surfaces, (name, draw)) in looks.into_iter().flat_map(|l| draws.map(|d| (l, d))) {
+            let name = format!("{name} on {surfaces:?}");
+            let draw = |batch: &mut HudBatch, text: &Text| {
+                menu_style::with_surfaces(surfaces, || draw(batch, &atlas, rect, text))
+            };
             let mut plain = HudBatch::new([640, 480]);
-            draw(&mut plain, &atlas, rect, &Text::empty());
+            draw(&mut plain, &Text::empty());
             let base = plain.vertices.len();
             let mut batch = HudBatch::new([640, 480]);
-            draw(&mut batch, &atlas, rect, &long);
+            draw(&mut batch, &long);
             assert!(batch.vertices.len() > base, "{name}: long label drawn");
             // The widget's own fill, track and handle also draw: only the label's vertices count.
             let label = batch
@@ -418,7 +545,7 @@ mod tests {
             }
             // The label's own glyphs (past the widget's fill) start centred.
             let mut batch = HudBatch::new([640, 480]);
-            draw(&mut batch, &atlas, rect, &short);
+            draw(&mut batch, &short);
             let (lo, hi) = x_span(&batch, &plain);
             let middle = (lo + hi) / 2.0;
             let want = rect[0] + rect[2] / 2.0;
@@ -427,5 +554,14 @@ mod tests {
                 "{name}: centre {middle}, want {want}"
             );
         }
+    }
+
+    /// A tab's label sits where vanilla's `MenuTabButton` puts it: for a 24 px tab, 8 px down
+    /// while open and 10 px while not (`(top + bottom - 9) / 2 + 1`, its top 3 px lower).
+    #[test]
+    fn a_tab_label_sits_on_vanillas_line() {
+        assert_eq!(vanilla_tab_label_y(0.0, 24.0, true), 8.0);
+        assert_eq!(vanilla_tab_label_y(0.0, 24.0, false), 10.0);
+        assert_eq!(vanilla_tab_label_y(40.0, 24.0, false), 50.0);
     }
 }
