@@ -85,6 +85,10 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
         &pack.join("data/registry_entry_test/worldgen/noise_settings/broken.json"),
         "{}",
     );
+    write(
+        &pack.join("data/registry_entry_test/tags/worldgen/structure/towns.json"),
+        r#"{"values":["minecraft:village_plains"]}"#,
+    );
     mod_platform::testing::with_mods(
         vec![ModEntry::new("registry_entry_test", Box::new(RegistryMod))].into(),
         || {
@@ -125,6 +129,18 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                 );
                 assert!(!host(game).registry_entries("minecraft:worldgen/noise_settings")
                     .unwrap().contains(&id("registry_entry_test:broken")));
+                let village = host(game)
+                    .registry_entry("minecraft:worldgen/structure", "minecraft:village_plains")
+                    .unwrap();
+                assert_eq!(
+                    host(game).registry_entry_in_tag(&village, "registry_entry_test:towns"),
+                    Some(true),
+                    "an accepted structure in a loaded structure tag"
+                );
+                assert_eq!(
+                    host(game).registry_entry_in_tag(&village, "registry_entry_test:absent"),
+                    Some(false)
+                );
                 let stone = host(game)
                     .registry_entry("minecraft:block", "minecraft:stone")
                     .unwrap();

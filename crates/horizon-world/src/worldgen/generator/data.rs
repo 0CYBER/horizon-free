@@ -797,12 +797,14 @@ impl GeneratorData {
         if !self.registry_contains(registry, id)? {
             return None;
         }
-        let tags = match registry {
-            "minecraft:worldgen/biome" => Some(&self.biome_tags),
-            _ => None,
-        };
+        // Only biome tags are the generator's own; the owner of another
+        // registry's tags answers for them.
+        if registry != "minecraft:worldgen/biome" {
+            return None;
+        }
         Some(
-            tags.and_then(|tags| tags.get(tag))
+            self.biome_tags
+                .get(tag)
                 .is_some_and(|members| members.iter().any(|member| member == id)),
         )
     }
