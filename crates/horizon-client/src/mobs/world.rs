@@ -612,16 +612,11 @@ impl MobWorld<'_> {
     pub fn brightness(&self, x: i32, y: i32, z: i32) -> f32 {
         let light = self.world.light(x, y, z);
         let sky = i32::from(light >> 4) - self.sky_darken();
-        let level = sky.max(i32::from(light & 15)).clamp(0, 15) as f32;
-        // DimensionType.getBrightness with ambient light 0 (overworld) / 0.1 (nether).
-        let f = level / 15.0;
-        let base = f / (4.0 - 3.0 * f);
-        // The End's ambient light (0.25) is not applied here, as before.
-        if self.level == horizon_core::LevelKey::NETHER {
-            0.1 + base * 0.9
-        } else {
-            base
-        }
+        let level = sky.max(i32::from(light & 15)).clamp(0, 15) as u8;
+        // `LevelReader.getLightLevelDependentMagicValue`: the curved level
+        // lerped with the dimension's ambient light (0 overworld, 0.1 nether,
+        // 0.25 end).
+        crate::screen_effects::lightmap_brightness(self.dimension_type.ambient_light, level)
     }
     pub fn sky_darken(&self) -> i32 {
         if self.daylight { 0 } else { 11 }
@@ -828,6 +823,10 @@ pub fn visual_clip<W: DynamicCollisionWorld>(
     });
     result.ok()
 }
+
+#[cfg(test)]
+#[path = "end_ambient_light_tests.rs"]
+mod end_ambient_light_tests;
 
 /// Runs `f` with an empty overworld (`others` its mobs) and the mob types,
 /// both from the extracted vanilla data; false, without running it, when

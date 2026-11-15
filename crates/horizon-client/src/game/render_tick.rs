@@ -1,6 +1,6 @@
 //! Per-tick client visuals: the particle engine, `ClientLevel.animateTick`,
 //! campfire smoke and rain splashes (`ClientLevel.tickWeatherEffects`).
-use super::{Dim, Game};
+use super::Game;
 use horizon_client::assets::Properties;
 use horizon_client::camera::NearPlane;
 use horizon_client::fog::{
@@ -436,7 +436,9 @@ impl Game<'_> {
         let packed = self.world.light(b[0], b[1], b[2]);
         let sky = i32::from(packed >> 4) - self.sky_darken();
         let raw = sky.max(i32::from(packed & 15)).clamp(0, 15) as u8;
-        lightmap_brightness(if self.dim == Dim::Nether { 0.1 } else { 0.0 }, raw)
+        // `Lightmap.getBrightness`: the dimension type's `ambientLight` (0 in the
+        // overworld, 0.1 in the nether, 0.25 in the end).
+        lightmap_brightness(self.dimension_type().ambient_light, raw)
     }
     /// What `Minecraft` ticks outside the level's own tick: `GameRenderer.tick` runs the light
     /// flicker whenever the game is not paused, frozen or not, while `TextureManager.tick`
@@ -807,6 +809,9 @@ impl Game<'_> {
         }
     }
 }
+
+#[cfg(test)]
+mod end_light_tests;
 
 #[cfg(test)]
 mod tests {
