@@ -83,9 +83,9 @@ impl Launcher {
             .children(tabs.into_iter().map(|(tab, count)| {
                 let name = match tab {
                     HomeTab::Overview => tr("Overview"),
-                    HomeTab::Mods => tr("Mods"),
+                    HomeTab::Mods => tr("Installed mods"),
                     HomeTab::Worlds => tr("Worlds"),
-                    HomeTab::Multiplayer => tr("Multiplayer"),
+                    HomeTab::Multiplayer => tr("Saved servers"),
                     HomeTab::Packs => tr("Resource packs"),
                     HomeTab::Shaders => tr("Shaders"),
                     HomeTab::Screenshots => tr("Screenshots"),

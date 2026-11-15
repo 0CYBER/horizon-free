@@ -33,11 +33,11 @@ impl Launcher {
             .map(|(tab, count)| {
                 let (name, icon) = match tab {
                     HomeTab::Overview => (tr("Overview"), "dashboard-square-01"),
-                    HomeTab::Mods => (tr("Mods"), "puzzle"),
+                    HomeTab::Mods => (tr("Installed mods"), "puzzle"),
                     HomeTab::Packs => (tr("Resource packs"), "image-01"),
                     HomeTab::Shaders => (tr("Shaders"), "flash"),
                     HomeTab::Worlds => (tr("Worlds"), "earth"),
-                    HomeTab::Multiplayer => (tr("Multiplayer"), "user-multiple-02"),
+                    HomeTab::Multiplayer => (tr("Saved servers"), "user-multiple-02"),
                     HomeTab::Screenshots => (tr("Screenshots"), "image-01"),
                     HomeTab::Console => (tr("Log"), "computer-terminal-01"),
                 };
