@@ -31,7 +31,7 @@ impl Launcher {
     pub(super) fn glass_servers_page(&mut self, cx: &mut Context<Self>) -> Div {
         let head = glass_ui::page_head(
             tr("Servers"),
-            tr("Host a world for your friends with buttons and no commands. The same program runs on a VPS."),
+            tr("Host a world for your friends with buttons and no commands. The same program runs on a rented server too."),
         );
         // The mockup always shows a server: the open one, else the first.
         if self.servers.open.is_none() {
@@ -531,7 +531,7 @@ impl Launcher {
                     .max_w(px(460.))
                     .text_center()
                     .line_height(px(21.))
-                    .child(tr("No server yet. Create one: it takes a few seconds, and with the defaults (tick the EULA, press Create) you get a friends-only survival world.")),
+                    .child(tr("No server yet. Create one: it takes a few seconds, and with the defaults (accept Minecraft's terms, press Create) you get a friends-only survival world.")),
             );
         if let Some(p) = self.servers.problem.clone() {
             card = card.child(glass_home_lists::danger_line(p.message).relative());

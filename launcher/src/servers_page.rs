@@ -1465,7 +1465,7 @@ impl Launcher {
         if self.servers.list.is_empty() {
             return page
                 .child(centered(
-                    tr("No server yet. Create one: it takes a few seconds, and with the defaults (tick the EULA, press Create) you get a friends-only survival world."),
+                    tr("No server yet. Create one: it takes a few seconds, and with the defaults (accept Minecraft's terms, press Create) you get a friends-only survival world."),
                     &t,
                 ))
                 .children(partner);
@@ -3255,7 +3255,7 @@ impl Launcher {
                     .child("Create a server"),
             )
             .child(text(theme::CAPTION).text_color(t.muted).child(
-                "Everything has a default: tick the EULA and Create makes a friends-only survival \
+                "Everything has a default: accept Minecraft's terms and Create makes a friends-only survival \
                  world. You can change all of it later.",
             ))
             .child(row(
