@@ -305,8 +305,6 @@ struct Launcher {
     native_step: Option<String>,
     /// Where the build under way is, for the card's stages and bar.
     native_progress: Option<native_mods::Progress>,
-    /// The mod the build compiles now and how far through the mods ("fast-ore · 2 of 3").
-    native_mod_step: Option<String>,
     /// The first build's one-time download (the compiler), in bytes; `None` once it is there.
     first_build: Option<u64>,
     /// Play was pressed while the instance's native mods needed a build (Build and play): the

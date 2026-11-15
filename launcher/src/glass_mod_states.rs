@@ -234,16 +234,6 @@ impl Launcher {
                 if let Some(step) = step(key) {
                     self.native_step = Some(step.label());
                     self.native_progress = Some(step.progress());
-                    if let Step::Mod { id, done, total } = &step {
-                        self.native_mod_step = Some(trf(
-                            "{mod} · {done} of {total}",
-                            &[
-                                ("mod", id),
-                                ("done", &done.to_string()),
-                                ("total", &total.to_string()),
-                            ],
-                        ));
-                    }
                     if matches!(step, Step::Rust(_) | Step::Tools { .. }) {
                         self.first_build = Some(180_000_000);
                     }

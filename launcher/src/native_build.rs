@@ -43,7 +43,6 @@ impl Launcher {
         };
         self.native_step = Some(tr("Starting the build").into());
         self.native_progress = None;
-        self.native_mod_step = None;
         // The first build downloads the compiler: the card says so, with its size.
         self.first_build = horizon_launcher::rust_toolchain::installed()
             .is_none()
@@ -59,18 +58,7 @@ impl Launcher {
                 None,
                 back_up,
                 |step| {
-                    let module = match &step {
-                        native_mods::Step::Mod { id, done, total } => Some(trf(
-                            "{mod} · {done} of {total}",
-                            &[
-                                ("mod", id),
-                                ("done", &done.to_string()),
-                                ("total", &total.to_string()),
-                            ],
-                        )),
-                        _ => None,
-                    };
-                    let _ = tx.send(Msg::NativeProgress(step.label(), step.progress(), module));
+                    let _ = tx.send(Msg::NativeProgress(step.label(), step.progress()));
                 },
                 |inventory| {
                     let (reply, answer) = std::sync::mpsc::channel();

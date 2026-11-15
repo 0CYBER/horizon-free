@@ -102,8 +102,9 @@ impl RouteFacts {
     }
 }
 
-/// The share of a whole build each stage covers, for the one percentage.
-fn percent(progress: Option<native_mods::Progress>) -> u32 {
+/// The share of a whole build each stage covers, for the one percentage the card and the Play
+/// button both show.
+pub(super) fn percent(progress: Option<native_mods::Progress>) -> u32 {
     let Some(p) = progress else { return 0 };
     let (from, span) = match p.stage {
         Stage::Prepare => (0., 0.15),
@@ -612,11 +613,6 @@ impl Launcher {
                     .child(icons),
             )
             .child(bar)
-            .children(self.native_mod_step.clone().map(|module| {
-                text_in(14., pal.ink)
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(module)
-            }))
             .child(text_in(13., pal.muted).truncate().child(step.to_owned()))
             .children(self.first_build.map(|bytes| {
                 text_in(13., pal.muted).child(trf(

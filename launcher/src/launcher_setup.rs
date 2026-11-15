@@ -133,7 +133,6 @@ impl Launcher {
             import_error: None,
             native_step: None,
             native_progress: None,
-            native_mod_step: None,
             first_build: None,
             play_after_build: false,
             native_done: None,

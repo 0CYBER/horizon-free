@@ -228,17 +228,14 @@ impl Launcher {
                 Msg::NativeRegistryConsent(inventory, reply) => {
                     native_registry_consent::show(window, inventory, reply, cx)
                 }
-                Msg::NativeProgress(step, progress, module) => {
+                Msg::NativeProgress(step, progress) => {
                     self.native_step = Some(step);
-                    // Only while a mod compiles: later steps say the build's own step.
-                    self.native_mod_step = module;
                     self.native_progress = Some(progress);
                 }
                 Msg::Native(result) => {
                     // The last step of a build that worked says how it went.
                     let last = self.native_step.take();
                     self.native_progress = None;
-                    self.native_mod_step = None;
                     self.first_build = None;
                     // Build and play: the game starts once the build worked.
                     let play_now = std::mem::take(&mut self.play_after_build) && result.is_ok();

@@ -428,14 +428,12 @@ impl Launcher {
                     horizon_launcher::mojang::progress().map(|(d, n)| d as f32 / n.max(1) as f32),
                 )),
                 (_, _, Some(_)) => Some((tr("Starting").into(), None)),
-                // This instance's mods building (Build and play): the mod it compiles, and the
-                // build's own progress.
+                // This instance's mods building (Build and play): the build's overall progress,
+                // the same figure as its card.
                 _ if building => Some((
-                    self.native_mod_step
-                        .clone()
-                        .unwrap_or_else(|| tr("Building mods").into())
-                        .into(),
-                    self.native_progress.as_ref().and_then(|p| p.fraction),
+                    tr("Building mods").into(),
+                    self.native_progress
+                        .map(|p| build_mode::percent(Some(p)) as f32 / 100.),
                 )),
                 // One build at a time: another instance's build first, and this one says whose.
                 _ if needs_build && self.native_step.is_some() => Some((
