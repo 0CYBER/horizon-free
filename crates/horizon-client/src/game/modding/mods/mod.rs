@@ -205,35 +205,8 @@ impl ModsState {
     }
 }
 
-/// Capture load inputs at the resource-generation boundary, before workers share them.
-pub(super) fn load_item_data(root: &Path, role: ExecutionRole) -> horizon_client::Result<ItemData> {
-    let phase = mod_api::__private::PhaseOwner::scope(if role.is_client() {
-        mod_api::__private::ModPhase::Setup
-    } else {
-        mod_api::__private::ModPhase::World
-    });
-    let _reload = phase.reloading()?;
-    let inputs = LoadInputs::new(builtin_registry_names(root)?, Game::mod_data_root());
-    let inventory = horizon_mod_package::enabled::EnabledMods::read(root)?;
-    let ids: Vec<_> = if role.is_logical_server() {
-        inventory.server_ids().collect()
-    } else {
-        inventory.client_ids().collect()
-    };
-    // Registration, the initial item-data load and its later table readers
-    // belong to one startup publication, not separate settings events.
-    let context = match mod_api::__private::RegistrationData::initial_settings_snapshot() {
-        Some(settings) => LoadContext::from_settings_snapshot(
-            role.data_load_origin(),
-            Arc::new(inputs),
-            ids,
-            settings,
-        ),
-        None => LoadContext::new(role.data_load_origin(), Arc::new(inputs), ids),
-    };
-
-    Ok(ItemData::load(root, context)?)
-}
+mod item_data_load;
+pub(super) use item_data_load::{LoadRole, load_item_data};
 
 /// The built-in registries' names in ID order, with Horizon's own data components.
 fn builtin_registry_names(root: &Path) -> horizon_client::Result<BTreeMap<String, Vec<String>>> {
