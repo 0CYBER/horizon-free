@@ -1,0 +1,3 @@
+ids = ["hook:player_kicked", "hook:player_logged_out"]
+why = "Both hooks are version 2: a kicked fake player now produces kick and logout notifications through the shared leave path. A fake has no preceding player_logged_in, so logout is no longer paired with login for every observed player. Silent remove_fake remains silent."
+migrate = "Rebuild listeners for hook version 2 and allow logout without a preceding login. Hook signatures are unchanged; no new hook or reason field is introduced."

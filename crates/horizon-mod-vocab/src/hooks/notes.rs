@@ -395,7 +395,7 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
 - **`player_input(player, name, flags)`**: a loaded guest sent a `PlayerInput` packet, after its flags were applied to the hub. `flags` is the packet's bit field, and the guest's state is swapped in.
 - **`player_arm_swing(player, name, hand)`**: a guest's arm swing was handled and their attack strength reset. The packet currently swings `mainhand`; the guest's state is swapped in.
 - **`player_jump(player, name)`**: accepted guest movement made the server player jump from the ground, after movement simulation finishes. The guest's state is swapped in.
-- **`player_kicked(player, name, reason)`**: a guest was kicked after the hub recorded the rendered disconnect reason and sent the disconnect. The guest's state is swapped in, unless the guest was already removed in the same poll (a kick and the disconnect arriving together): the hook still fires, without it.
+- **`player_kicked(player, name, reason)` (version 2)**: a network or fake guest was kicked after the hub recorded the rendered disconnect reason; a network guest also receives the disconnect packet. The guest's state is swapped in, unless the guest was already removed in the same poll: the hook still fires, without it.
 - **`player_level_change(player, name, from, to)`**: a server player's experience change altered their level, after the new level was applied. The guest's state is swapped in when the player is a guest.
 - **`player_swap_hands(player, name, to_main_hand, to_off_hand, cancel)` (version 2)**: a player pressed the swap-hands key (not a spectator), heard
   before the main and off hand items swap. `to_main_hand` starts as the off hand's stack and `to_off_hand` as the main hand's; the hands get what the listeners leave, and the client gets both slots when they changed. Set `cancel` and they stay where they are; the player's client
@@ -1624,7 +1624,7 @@ one, where vanilla gives the `by` one.
   mod's removal helper — and cancelling keeps it. All three name their entity as a `LivingRef`, the player's own included.
 
 - Chunks and players coming and going, on the server: `chunk_load` (with whether the chunk is new), `chunk_unload`, and
-  `player_logged_in` and `player_logged_out`, which come in pairs however a player leaves, the server stopping included. Changes made to the departing chunk in `chunk_unload` aren't saved: as in vanilla, the chunk is saved before it unloads.
+  `player_logged_in` and `player_logged_out` (version 2), which come in pairs for network players however they leave, the server stopping included. A kicked fake also produces logout without a preceding login; silent `remove_fake` produces neither. Changes made to the departing chunk in `chunk_unload` aren't saved: as in vanilla, the chunk is saved before it unloads.
 
   One tick's streaming step (`update_world`) runs in this order:
 
@@ -2708,7 +2708,7 @@ registration path.
 
 - A guest jumped: `player_jump(player, name)` is called after accepted movement made the server player jump from the ground, once the guest's movement simulation finished. The guest's state is swapped in.
 
-- A guest was kicked from the server: `player_kicked(player, name, reason)` is called after the hub records the rendered reason and sends the disconnect. The guest's state is swapped in.
+- A network or fake guest was kicked: `player_kicked(player, name, reason)` (version 2) is called after the hub records the rendered reason; a network guest also receives the disconnect. The guest's state is swapped in unless already removed in the same poll.
 
 - A LAN guest launched a snowball, egg, ender pearl, potion or trident: `player_launch_projectile(player, name, item)` runs after the projectile is created.
 

@@ -6,6 +6,7 @@ pub trait Hooks {
     /// swapped in unless they were already removed in the same poll.
     #[hook(
         side = "server",
+        version = 2,
         contract = "listen",
         neoforge = "none (NeoForge has no such event; Bukkit's PlayerKickEvent)"
     )]

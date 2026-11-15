@@ -3,7 +3,13 @@
 `host.fake_player(level, uuid, name)` creates or retrieves a player with no connection in the level in place, as
 NeoForge's `FakePlayerFactory` does: a machine that acts as a player (a deployer, a block breaker). It does not participate as an
 online player: the tab list, player counts, sleeping, natural spawning, chunk tickets, statistics and saves leave
-it out. `player.is_fake(host)` tells one apart; `player.remove_fake(host)` removes it.
+it out. `player.is_fake(host)` tells one apart; `player.remove_fake(host)` removes it silently.
+
+`player.disconnect(host, reason)` instead kicks the fake with a `Text` reason, as `/kick` by name or selector does.
+The first reason stands; removal completes at the next hub poll, after any current action returns.
+The shared leave path broadcasts the leave line and fires `player_kicked` and `player_logged_out` (version 2),
+even though a fake has no preceding `player_logged_in`. It still writes no player-data save.
+Silent `remove_fake` sends no kick, leave line or logout notification.
 
 ## Actions
 
