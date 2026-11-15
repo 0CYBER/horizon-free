@@ -685,18 +685,28 @@ mod tests {
             // Guardian.hurtServer retaliates synchronously, not from the
             // following AI step's last-damage record.
             hurt_server(&mut mob, &Damage::player([1.0, 64.0, 0.0]));
-            assert!(matches!(mob.outbox.as_slice(), [MobEvent::DamagePlayer {
-                kind: "minecraft:thorns", amount: 2.0, ..
-            }]));
+            assert!(matches!(
+                mob.outbox.as_slice(),
+                [MobEvent::DamagePlayer {
+                    kind: "minecraft:thorns",
+                    amount: 2.0,
+                    ..
+                }]
+            ));
             mob.outbox.clear();
             assert!(selection.select(2));
             let mut events = Vec::new();
             ai_step(&mut mob, &world, &mut events);
-            assert!(!events.iter().any(|event| matches!(
-                event,
-                MobEvent::DamagePlayer { kind: "minecraft:thorns", .. }
-                    | MobEvent::ForPlayer { .. }
-            )), "the next AI step does not repeat or redirect the retaliation");
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    MobEvent::DamagePlayer {
+                        kind: "minecraft:thorns",
+                        ..
+                    } | MobEvent::ForPlayer { .. }
+                )),
+                "the next AI step does not repeat or redirect the retaliation"
+            );
         }));
     }
 }

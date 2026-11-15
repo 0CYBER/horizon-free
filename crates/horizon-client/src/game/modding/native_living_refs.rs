@@ -2607,7 +2607,10 @@ mod tests {
             let id = horizon_client::random_source::replay_seeds(seeds.clone(), || {
                 game.living_drop(player, item, false, true).unwrap().id()
             });
-            assert!(seeds.complete(), "both drop routes allocate the same random streams");
+            assert!(
+                seeds.complete(),
+                "both drop routes allocate the same random streams"
+            );
             let mod_velocity = game
                 .dropped
                 .iter()
