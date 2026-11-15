@@ -68,16 +68,25 @@ pub trait BlockEntityPartState: BlockEntityPart + Sized {
     }
 }
 
-/// Why a block entity's Part state could not be read or changed. Nothing was stored.
+/// Why a block entity's or an entity's Part state could not be read or changed. Nothing was
+/// stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 // no wire: returned inside the mod that called; the calls it reports on cross as attachment calls.
 pub enum PartStateError {
-    /// The handle names a block entity of another level than the one this host is in.
+    /// The handle names a block entity or an entity of another level than the one this host
+    /// is in.
     OtherLevel,
-    /// The block entity was removed, replaced or unloaded, or its world closed: get a
-    /// fresh handle. A reloaded block entity keeps its saved value under a new handle.
+    /// The holder was removed, replaced or unloaded, or its world closed: get a fresh
+    /// handle. A reloaded holder keeps its saved value under a new handle. An entity that
+    /// changed level without a player riding it is rebuilt under a new id, and its state goes
+    /// with it: find it again by its UUID. Inside an action that is rolled back after the
+    /// entity changed level, the state stays with the entity under its new id, and the old
+    /// handle stays `Stale`.
     Stale,
+    /// The entity is out of its level's lists for its own tick, so its state can't be reached
+    /// until that tick ends.
+    HolderBusy,
     /// An edit of this block entity's same state is already running further up the call:
     /// the inner one is refused rather than overwritten by the outer one.
     Reentrant,
@@ -99,9 +108,10 @@ pub enum PartStateError {
 impl fmt::Display for PartStateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::OtherLevel => f.write_str("the block entity is in another level than this host"),
-            Self::Stale => f.write_str("the block entity was removed, replaced or unloaded"),
-            Self::Reentrant => f.write_str("this block entity's state is already being edited"),
+            Self::OtherLevel => f.write_str("the holder is in another level than this host"),
+            Self::Stale => f.write_str("the holder was removed, replaced, unloaded or moved"),
+            Self::HolderBusy => f.write_str("the entity is out of its level for its own tick"),
+            Self::Reentrant => f.write_str("this holder's state is already being edited"),
             Self::Changed => f.write_str("the state changed while it was being edited"),
             Self::Attachment {
                 namespace,
@@ -138,6 +148,37 @@ pub enum PartStateRefusal {
         /// The type the key was first declared with.
         declared: &'static str,
     },
+    /// The entity type keeps no entity Part state: a player, a vanilla family no entity part
+    /// runs on, or no type at all. Decided once every type is known, when the game loads.
+    EntityKind {
+        /// The entity type id the Part was attached to.
+        kind: &'static str,
+        /// Why that type is refused.
+        reason: &'static str,
+    },
+}
+
+impl PartStateRefusal {
+    /// What the refusal says, for a holder named `holder` (`block entities`, `entities`).
+    pub(crate) fn describe(&self, f: &mut fmt::Formatter<'_>, holder: &str) -> fmt::Result {
+        match self {
+            Self::Sync => f.write_str("sync is not supported for part state yet"),
+            Self::CopyOnDeath => write!(f, "copy_on_death does not apply to {holder}"),
+            Self::NoCodecOnWasm => f.write_str(
+                "a wasm mod's part state needs a codec (its values cross only in saved form)",
+            ),
+            Self::ResourceHandle => f.write_str(
+                "its Wire form holds a resource handle, which crosses only within one link \
+                 group: not to every target, nor into a save",
+            ),
+            Self::UnownedNamespace => f.write_str("the namespace is not one this mod owns"),
+            Self::Incompatible { declared } => write!(
+                f,
+                "the key is already declared with type {declared}, whose Wire layout differs"
+            ),
+            Self::EntityKind { kind, reason } => write!(f, "entity type {kind}: {reason}"),
+        }
+    }
 }
 
 /// A Part with state could not be attached.
@@ -182,28 +223,7 @@ impl fmt::Display for BlockEntityStateError {
             f,
             "part {part}: state {namespace}:{name} of type {data} refused: "
         )?;
-        match reason {
-            PartStateRefusal::Sync => f.write_str("sync is not supported for part state yet"),
-            PartStateRefusal::CopyOnDeath => {
-                f.write_str("copy_on_death does not apply to block entities")
-            }
-            PartStateRefusal::NoCodecOnWasm => f.write_str(
-                "a wasm mod's part state needs a codec (its values cross only in saved form)",
-            ),
-            PartStateRefusal::ResourceHandle => f.write_str(
-                "its Wire form holds a resource handle, which crosses only within one link \
-                 group: not to every target, nor into a save",
-            ),
-            PartStateRefusal::UnownedNamespace => {
-                f.write_str("the namespace is not one this mod owns")
-            }
-            PartStateRefusal::Incompatible { declared } => {
-                write!(
-                    f,
-                    "the key is already declared with type {declared}, whose Wire layout differs"
-                )
-            }
-        }
+        reason.describe(f, "block entities")
     }
 }
 
@@ -273,6 +293,23 @@ impl PartStateDeclaration {
         Ok(())
     }
 
+    /// The error refusing it for `reason`, for entity Part `part` attached to `kind`.
+    pub fn refused_on_entity(
+        &self,
+        part: &'static str,
+        kind: &'static str,
+        reason: PartStateRefusal,
+    ) -> crate::EntityPartStateError {
+        crate::EntityPartStateError::State {
+            part,
+            kind,
+            namespace: self.namespace,
+            name: self.name,
+            data: self.data_name,
+            reason,
+        }
+    }
+
     /// The error refusing it for `reason`, for Part `part`.
     pub fn refused(&self, part: &'static str, reason: PartStateRefusal) -> BlockEntityStateError {
         BlockEntityStateError::State {
@@ -302,6 +339,7 @@ pub trait PartStateHolder: Copy + PartialEq + private::Sealed + 'static {
 mod private {
     pub trait Sealed {}
     impl Sealed for crate::BlockEntityRef {}
+    impl Sealed for crate::EntityRef {}
 }
 
 impl PartStateHolder for BlockEntityRef {

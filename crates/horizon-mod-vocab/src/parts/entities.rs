@@ -140,6 +140,28 @@ impl dyn Registrar + '_ {
     pub fn entity_part<P: EntityPart>(&mut self, entity: &str, part: P) {
         self.attach_entity_part(entity, type_name::<P>(), Arc::new(part));
     }
+    /// [`Self::entity_part`] for a Part with typed state (`EntityPartState`): each entity
+    /// of type `entity` keeps one `P::Data`, under `P::DATA`. Refused, and reported as the
+    /// mod's registration refusal, when `P::DATA` syncs, copies on death, holds a resource
+    /// handle, is outside the mod's namespaces, or names a key this mod already declared with
+    /// another type. The entity type is checked once every type is known, when the game
+    /// loads: only mob types (vanilla and mod) and mod general entity types keep Part state,
+    /// and `minecraft:player`, any other vanilla family and an unknown id refuse the load,
+    /// naming the type. `entity_part` itself checks no type.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn entity_part_with_state<P: crate::EntityPartState>(
+        &mut self,
+        entity: &str,
+        part: P,
+    ) -> Result<(), crate::EntityPartStateError> {
+        self.declare_entity_part_state(
+            entity,
+            type_name::<P>(),
+            crate::PartStateDeclaration::of(P::DATA),
+        )?;
+        self.entity_part(entity, part);
+        Ok(())
+    }
     /// Answer entity capability `key` for entity type `kind` (`mymod:robot`,
     /// `minecraft:player`) with `provider`, which gives a handler for one entity, or none:
     /// `r.entity_capability(&ENTITY_ITEMS, "mymod:robot", |_, robot, ()| Some(Box::new(Cargo(robot))))`.
@@ -186,6 +208,18 @@ pub trait EntitiesRegistrar {
     /// the generator still keeps the method off the wasm world by this doc.
     #[cfg(not(target_arch = "wasm32"))]
     fn attach_entity_part(&mut self, entity: &str, kind: &'static str, part: Arc<dyn EntityPart>);
+
+    /// Record the state declaration of entity Part `part` on entity type `entity`, or refuse
+    /// it (as the mod's registration refusal too): see `PartStateDeclaration::check`, a key
+    /// outside this mod's namespaces, or one it declared with another Wire layout. Mods reach
+    /// it through `entity_part_with_state`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn declare_entity_part_state(
+        &mut self,
+        entity: &str,
+        part: &'static str,
+        declaration: crate::PartStateDeclaration,
+    ) -> Result<(), crate::EntityPartStateError>;
 
     /// Answer entity capability `name` for entity type `kind` with `provider`; mods reach it
     /// through `entity_capability`.

@@ -153,6 +153,36 @@ impl EntitiesRegistrar for PartRegistrar {
         self.attach(|p| &mut p.entities, kind, entity, part);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn declare_entity_part_state(
+        &mut self,
+        entity: &str,
+        part: &'static str,
+        declaration: crate::PartStateDeclaration,
+    ) -> Result<(), crate::EntityPartStateError> {
+        // 🤖 Agent: one leaked id per declaration, once at startup, so a refusal can name the
+        // type in the `Copy` refusal it shares with block entities.
+        let kind: &'static str = Box::leak(entity.into());
+        match self.check_part_state(declaration) {
+            Ok(()) => {
+                self.entity_part_states.push(
+                    mod_vocab::__private::EntityPartStateDeclaration::new(
+                        self.mod_id.to_owned(),
+                        part,
+                        kind,
+                        declaration,
+                    ),
+                );
+                Ok(())
+            }
+            Err(reason) => {
+                let error = declaration.refused_on_entity(part, kind, reason);
+                self.refused.push(format!("{}: {error}", self.mod_id));
+                Err(error)
+            }
+        }
+    }
+
     fn provide_entity_capability(
         &mut self,
         name: &'static str,
