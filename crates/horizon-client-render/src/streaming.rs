@@ -10,12 +10,11 @@ use crate::{
     chunk_map::ChunkMembershipDelta,
     graphics::LeafCullingMode,
     light::{LightChanges, LightTables, light_chunk},
-    mesher::{MeshScratch, MeshTables, Mesher, Region, SectionMesh, borrow},
+    mesher::{MeshScratch, MeshTables, Region, SectionMesh, borrow},
     world::World,
 };
 use horizon_core::biome::BiomeZoom;
 use horizon_threads::jobs::{Class, PerWorker, Rank, Registration, Source};
-use horizon_world::block_render::FaceVisibility;
 use horizon_world::worldgen::decoration_order::DecorationOrder;
 use std::{
     collections::{BinaryHeap, HashSet, VecDeque},
@@ -899,7 +898,7 @@ impl GenerationScan {
 /// state and face shape) and the mesher's scratch.
 struct WorkerLocal<W> {
     worker: W,
-    faces: Option<(Arc<MeshTables>, FaceVisibility)>,
+    faces: Faces,
     mesh_scratch: MeshScratch,
 }
 /// A streamer's jobs, run by the process's shared pool (`horizon_threads::jobs`).
@@ -1096,35 +1095,16 @@ impl<G: ChunkGenerator> Jobs<G> {
             }
             Job::Mesh(x, sy, z, region, seq, settings) => {
                 let context = shared.context.read().unwrap().clone();
-                let visibility = match faces.take() {
-                    Some((tables, visibility)) if Arc::ptr_eq(&tables, &context.tables) => {
-                        visibility
-                    }
-                    _ => context.tables.visibility.clone(),
-                };
-                let mut mesher = Mesher {
-                    nether_shading: settings.nether,
-                    shader_pack_lighting: settings.shader_pack_lighting,
-                    separate_ao: settings.separate_ao,
-                    shader_pack: settings.shader_pack,
-                    zoom: settings.zoom,
-                    blend_radius: settings.blend_radius,
-                    smooth_lighting: settings.smooth_lighting,
-                    cutout_leaves: settings.cutout_leaves,
-                    opaque_ice: settings.opaque_ice,
-                    translucent_layers: &settings.translucent_layers,
-                    leaf_culling: settings.leaf_culling,
-                    hidden_states: &context.hidden_states,
-                    assets: &context.assets,
-                    render: &context.render,
-                    tables: &context.tables,
-                    biomes: &context.biomes,
-                    visibility,
-                };
                 let recycled = shared.meshes.lock().unwrap().take();
-                let mut mesh = mesher.mesh_reusing(&borrow(&region), sy, recycled, mesh_scratch);
-                mesh.sort_solid();
-                *faces = Some((context.tables.clone(), mesher.visibility));
+                let mesh = mesh_section(
+                    &context,
+                    &settings,
+                    faces,
+                    mesh_scratch,
+                    &region,
+                    sy,
+                    recycled,
+                );
                 Done::Meshed(x, sy, z, mesh, seq)
             }
         };
@@ -1147,10 +1127,17 @@ mod queue_census;
 pub use queue_census::QueueCensus;
 mod forced_cover;
 mod forced_ring;
+mod mesh_job;
 mod relight_now;
+mod viewed_meshing;
 use bounded::nearest_first;
 use dynamic_emission::light_region_ready;
 use forced_cover::ForcedCover;
+use mesh_job::{Faces, mesh_section};
+pub use viewed_meshing::{
+    MAX_VIEWED_SECTIONS, MeshSource, VIEWED_LINGER, VIEWED_MESH_WORKERS, VIEWED_UPLOADS_PER_FRAME,
+    ViewedLevel, ViewedMeshing,
+};
 impl Streaming {
     pub fn new<G: ChunkGenerator>(
         generator: Arc<G>,
@@ -2311,19 +2298,7 @@ impl Streaming {
                         z,
                         region.clone(),
                         self.sequence,
-                        MeshSettings {
-                            nether: self.nether_shading,
-                            shader_pack_lighting: self.shader_pack_lighting,
-                            separate_ao: self.separate_ao,
-                            shader_pack: self.shader_pack,
-                            zoom: self.biome_zoom,
-                            blend_radius: self.biome_blend,
-                            smooth_lighting: self.smooth_lighting,
-                            cutout_leaves: self.cutout_leaves,
-                            opaque_ice: self.opaque_ice,
-                            translucent_layers: self.translucent_layers.clone(),
-                            leaf_culling: self.leaf_culling,
-                        },
+                        self.mesh_settings(),
                     ),
                 );
             }
