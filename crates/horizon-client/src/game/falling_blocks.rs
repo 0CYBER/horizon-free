@@ -62,6 +62,7 @@ impl Game<'_> {
                 .to_array();
             vertex.light = light;
         }
+        self.lit_entity(start..out.len());
     }
     /// FallingBlockEntity.tick: fall with 0.04 gravity and 0.98F drag, then land.
     /// One falling block's `tick`: places or drops its block in its own tick,

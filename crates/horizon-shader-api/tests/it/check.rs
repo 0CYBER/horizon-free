@@ -498,6 +498,20 @@ fn a_pack_reads_horizon_s_structs_passes_them_along_and_builds_its_surface() {
     post_pack_with_material(MATERIAL, POST, tonemap).unwrap();
 }
 
+/// The entity stage's fixture, which the frame identity test draws with
+/// (tools/test_frame_identity_parity.py).
+#[test]
+fn the_entity_fixture_passes() {
+    let pack = Pack::read(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/samples/entity-stage"
+    )))
+    .unwrap();
+    let report = check(&pack).unwrap();
+    let kinds: Vec<_> = report.stages.iter().map(|s| s.kind).collect();
+    assert_eq!(kinds, [StageKind::Sky, StageKind::Entity]);
+}
+
 /// A pack of the entity stage alone.
 fn entity_pack(entity: &str) -> Result<horizon_shader_api::Report, Vec<Problem>> {
     let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\

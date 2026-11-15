@@ -1231,6 +1231,7 @@ impl Game<'_> {
             for v in &mut out[start..] {
                 v.layer |= u32::from(horizon_client::mesher::BRIGHT) << 16;
             }
+            self.lit_entity(start..out.len());
             if let Some(target) = crystal.beam {
                 // The beam from the target's centre up to the bobbing crystal.
                 let from = glam::DVec3::new(

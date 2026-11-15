@@ -125,6 +125,7 @@ by Horizon: a pack changes how things look, not how they are drawn.
 | --- | --- | --- |
 | `[sky]` | `fn sky(input: SkyInput) -> vec4<f32>` | the sky's colour along each view ray, opaque (alpha is ignored), drawn where vanilla draws its sky dome (the Overworld's sky; not the Nether's or the End's); the sun, moon, stars and clouds are drawn over it |
 | `[material]` | `fn material(input: MaterialInput) -> Surface` | the lit colour of each point of a block's surface, before the alpha test and fog: every terrain section and distant tile, solid, cutout and translucent (not entities, block entities or particles) |
+| `[entity]` | `fn entity(input: EntityInput) -> Surface` | the lit colour of each point of an entity or a block entity (mobs, players, armour, chests, banners), before the alpha test, the enchantment glint and fog; `input.kind` says which. Items and particles keep Horizon's lighting for now |
 | `[weather]` | `fn weather(input: WeatherInput) -> vec4<f32>` | the colour of each point of a rain or snow streak, blended over the world with its alpha; Horizon's light and fog aren't applied, so the pack applies its own |
 | `[[post]]` | `fn post(input: PostInput) -> vec4<f32>` | a full-screen pass over the world's picture (up to 8, in order), under the hand and HUD; its alpha is ignored |
 | `[tonemap]` | `fn tonemap(input: TonemapInput) -> vec3<f32>` | the post chain's picture for the display, from 0 to `frame.headroom`; without it Horizon's curve runs |
@@ -425,5 +426,5 @@ without the pack.
 
 ## Next
 
-An overlay showing what each pass draws (F3 already shows what each costs), and stages for entities, block entities
-and particles (the material stage covers terrain only).
+An overlay showing what each pass draws (F3 already shows what each costs), and items, particles and the
+first-person hand through a pack (the entity stage lights entities and block entities so far).

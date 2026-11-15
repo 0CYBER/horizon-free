@@ -1369,6 +1369,7 @@ impl Game<'_> {
             }
             let packed = (u32::from(l >> 4) * 16) | ((u32::from(l & 15) * 16) << 8);
             let poses = Poses::new(model);
+            let start = out.len();
             horizon_client::mobs::render::draw(
                 model,
                 base,
@@ -1392,6 +1393,7 @@ impl Game<'_> {
                     out,
                 );
             }
+            self.lit_entity(start..out.len());
         }
         self.mark_motion(out.len(), 0);
     }

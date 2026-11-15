@@ -1,8 +1,7 @@
 # The entity stage is new with these names (2026-11-10): no pack had the stage before them, so
 # none can collide with a name an existing pack uses, and they reach only packs with [entity].
-# The game doesn't draw the stage yet and refuses a pack that has it, so the list may still grow
-# (set_surface for entities is planned). Once a release draws the stage, the list is held like the
-# others: a new name needs a manifest key.
+# The game draws the stage since 2026-11-13, so the list is held like the others: a new name needs
+# a manifest key (set_surface for entities, which is planned, comes under one).
 EntityInput
 Frame
 Surface

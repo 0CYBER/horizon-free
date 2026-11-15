@@ -592,6 +592,7 @@ impl Game<'_> {
                 * glam::Mat4::from_scale(glam::Vec3::splat(scale));
             let light = self.world.light(key.0, key.1, key.2);
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            let start = out.len();
             if mob.species() == horizon_client::mobs::Species::SulfurCube {
                 self.sulfur_cube_body_geometry(
                     mob,
@@ -610,6 +611,7 @@ impl Game<'_> {
                 self.res.mob_data(),
                 out,
             );
+            self.lit_entity(start..out.len());
         }
     }
 }

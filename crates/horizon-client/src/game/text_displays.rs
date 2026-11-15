@@ -295,6 +295,7 @@ impl Game<'_> {
                 }
                 let light = Self::display_light(&self.world, &d, position);
                 if let Some(state) = display.block {
+                    let start = out.len();
                     // BlockModelResolver.update: model seed 42.
                     self.block_model_vertices(state, 42, matrix, light, true, out);
                     // CompositeBlockModel.update: the special model of a chest,
@@ -311,6 +312,7 @@ impl Game<'_> {
                             ((((light & 0xFF) / 16) << 4) | (((light >> 8) & 0xFF) / 16)) as u8;
                         self.special_block_model(state, matrix, packed, out);
                     }
+                    self.lit_entity(start..out.len());
                 } else if let Some(stack) = &display.item {
                     let context = match display.item_display {
                         1 => DisplayContext::ThirdPersonLeftHand,

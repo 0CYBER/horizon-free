@@ -1,0 +1,16 @@
+# The entity stage's fixture: `tests/check.rs` checks it, and tools/test_frame_identity_parity.py
+# draws with it, and with what comes before the stage's table as the same pack without the stage.
+schema = 1
+id = "entity_stage"
+name = "Entity stage"
+version = "1.0.0"
+api = "0.2"
+description = "Vanilla's own entity lighting, written as the pack's stage."
+authors = ["Horizon"]
+license = "MIT"
+
+[sky]
+file = "sky.wgsl"
+
+[entity]
+file = "vanilla.wgsl"

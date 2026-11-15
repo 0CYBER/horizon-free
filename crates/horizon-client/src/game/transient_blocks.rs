@@ -110,6 +110,7 @@ impl Game<'_> {
                 )
             })
         });
+        let start = out.len();
         for (pos, block) in &shown {
             let at = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]));
             self.moving_block_vertices(
@@ -119,6 +120,8 @@ impl Game<'_> {
                 out,
             );
         }
+        // Lit as the blocks a piston moves, which are drawn the same way.
+        self.lit_block_entity(start..out.len());
         self.transient_blocks.shown = shown;
     }
 }

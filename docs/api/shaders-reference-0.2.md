@@ -543,7 +543,7 @@ One point of the surface of an entity, a block entity, an item or a particle, fo
 | `position` | `vec3<f32>` | The point, camera-relative, in blocks. |
 | `emission` | `f32` | 1 on a layer vanilla draws at full brightness (spider and enderman eyes, the warden's glow), else 0. There `lightmap` is full light; `shade` stays vanilla's, which shades the warden's glow and not the eyes. |
 | `normal` | `vec3<f32>` | The surface's geometric normal, a unit vector in world axes, facing the camera, from the position's screen derivatives (as `MaterialInput.normal`, without its snap to the axes). |
-| `kind` | `u32` | What is drawn: 0 an entity (mobs, players, armour, vehicles), 1 a block entity (chests, signs, banners, beds), 2 a dropped or framed item, 3 reserved for the first-person hand, 4 a particle. |
+| `kind` | `u32` | What is drawn: 0 an entity (mobs, players, armour, vehicles), 1 a block entity (chests, banners, bells, shulker boxes), 2 a dropped or framed item, 3 reserved for the first-person hand, 4 a particle. |
 | `colored_light` | `vec3<f32>` | As `MaterialInput.colored_light`: the frame's coloured lights at this point, 0..1; 0 where none reaches. |
 | `translucent` | `bool` | Drawn with blending. |
 | `light` | `vec2<f32>` | Block and sky light, 0..1. |
@@ -553,9 +553,22 @@ One point of the surface of an entity, a block entity, an item or a particle, fo
 `entity` lights what is no block terrain: `input.kind` says which. It returns the same `Surface` as `material` (rgb
 linear light, 0 or more and unbounded; alpha its coverage), so a pack writes its lighting once and calls it from both
 stages. Around it Horizon keeps vanilla's order: the alpha test on the returned alpha, then the enchantment glint
-added on top, then fog. `horizon-shader check` takes the stage; **the game doesn't draw it yet** and refuses a pack
-that has it. A pack without `[entity]` is drawn as before, and sees none of this stage's names. Until the game draws
-the stage its prelude may still gain names; from then on the rule for new names holds for it too.
+added on top, then fog. A pack without `[entity]` is drawn as before, and sees none of this stage's names; the rule
+for new names holds for the stage as for the others.
+
+**What the game draws through the stage so far: entities and block entities** (`kind` 0 and 1). Until a later
+release brings them in, Horizon lights the rest itself, exactly as without the stage: dropped and framed items and
+what a block or a display entity shows of one (`kind` 2), what flies as its item (a snowball, a potion, a fireball,
+an eye of ender), firework rockets, particles (`kind` 4), the fire on a burning entity, a guardian's beam, a lead's
+rope, name tags and text, and the first-person hand. Some draws stay Horizon's for good: beacon beams, the beams of
+End crystals, End portals and gateways, breaking cracks, energy swirls, lightning and other additive glows.
+
+An item an entity holds or wears as its model (a sword in a hand, a block on a head) reaches the stage with the
+entity, unless its texture has see-through pixels (stained glass, ice, a slime block): that one is drawn with the
+translucent items, and stays Horizon's until items draw through the stage. A block drawn as an entity (a falling
+block, primed TNT, a block display) or as a block entity (a block a piston moves) reaches the stage too. These have
+vanilla's shade already in `tint`, and `shade` 1: their vertices carry the two as one colour so far. A sign's board
+and a bed are block terrain, the material stage's.
 
 Vanilla's own, the picture a pack without the stage gets:
 

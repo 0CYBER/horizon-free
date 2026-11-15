@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use horizon_client::gfx::native_entity::{EntityKind, EntityRuns};
 use horizon_client::text::Text;
 use horizon_shader_api::{Manifest, Pack, Primaries, check};
 
@@ -68,6 +69,9 @@ pub(super) struct NativeShaders {
     selection: String,
     resolved: PathBuf,
     resolved_at: Option<Instant>,
+    /// The runs of this frame's entity geometry that the pack's `[entity]` stage lights
+    /// (`Game::lit_entity`), up to the renderer taking them (`Renderer::take_entity_runs`).
+    pub entity_runs: std::cell::RefCell<EntityRuns>,
 }
 
 impl NativeShaders {
@@ -110,6 +114,43 @@ impl NativeShaders {
 }
 
 impl Game<'_> {
+    /// The pack's `[entity]` stage lights vertices `run` of the entity geometry as `kind`. A
+    /// run is named once it is drawn, and with its end: what no caller names stays Horizon's
+    /// own draw (items, particles, fire, beams, ropes, text, and whatever is added without a
+    /// word here), so a run ends before any of those. Within a run, quads of another batch
+    /// material (a translucent item in a hand, an energy swirl) and unlit overlays (the beam
+    /// that heals the dragon, an End portal) stay Horizon's all the same: `EntityBatch` names
+    /// only its ordinary quads, and the stage's shader passes the unlit ones on.
+    /// Kept only while the pack in use has the stage.
+    fn lit_run(&self, run: std::ops::Range<usize>, kind: EntityKind) {
+        let stage = self.renderer.as_ref();
+        if stage.is_some_and(|r| r.draws_entity_stage()) {
+            self.native_shaders.entity_runs.borrow_mut().push(run, kind);
+        }
+    }
+
+    /// Vertices `run` are an entity's model: a mob's or a player's with what it holds and
+    /// wears, a vehicle's, a projectile's.
+    pub(super) fn lit_entity(&self, run: std::ops::Range<usize>) {
+        self.lit_run(run, EntityKind::Entity);
+    }
+
+    /// Vertices `run` are block entities' models.
+    pub(super) fn lit_block_entity(&self, run: std::ops::Range<usize>) {
+        self.lit_run(run, EntityKind::BlockEntity);
+    }
+
+    /// What `draw` adds to `out` is entities' models (`lit_entity`).
+    pub(super) fn lit(
+        &mut self,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+        draw: impl FnOnce(&mut Self, &mut Vec<horizon_client::mesher::Vertex>),
+    ) {
+        let start = out.len();
+        draw(self, out);
+        self.lit_entity(start..out.len());
+    }
+
     /// Builds the pack at `path` when its files changed since it was last read.
     pub(super) fn tick_native_shader_pack(&mut self, path: &Path) {
         // A reload would replace the pack a `screenshot-sequence` draws: it waits for the reply.
@@ -246,15 +287,12 @@ fn manifest_refused(path: &Path) -> Option<String> {
 }
 
 /// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
-/// isn't served yet (#14584), and neither are the `[entity]` stage, `[motion]` or compute entries.
+/// isn't served yet (#14584), and neither are `[motion]` or compute entries.
 fn not_drawn(m: &Manifest) -> Option<&'static str> {
     if m.primaries == Primaries::Bt2020 {
         return Some(
             "[frame] primaries = \"bt2020\" isn't served yet: leave it out, or set \"bt709\"",
         );
-    }
-    if m.entity.is_some() {
-        return Some("the [entity] stage isn't drawn yet: leave it out");
     }
     if m.motion.is_some() {
         return Some(
@@ -420,11 +458,6 @@ mod tests {
                 "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n",
                 "primaries = \"bt2020\" isn't served yet",
             ),
-            (
-                "0.2",
-                "[entity]\nfile = \"e.wgsl\"\n",
-                "[entity] stage isn't drawn yet",
-            ),
             ("0.2", "[frame\n", "horizon-shaders.toml"),
         ] {
             write(api, extra);
@@ -436,11 +469,12 @@ mod tests {
 
     #[test]
     fn a_pack_is_drawn_but_for_what_isnt_served_yet() {
-        // Either blend: `"linear"` is drawn as `"gamma"` is.
+        // Either blend: `"linear"` is drawn as `"gamma"` is. The entity stage is drawn too.
         for frame in [
             "",
             "[frame]\nblend = \"linear\"\n",
             "[frame]\nprimaries = \"bt709\"\n",
+            "[entity]\nfile = \"e.wgsl\"\n",
         ] {
             assert_eq!(not_drawn(&manifest(frame)), None, "{frame}");
         }
@@ -450,8 +484,6 @@ mod tests {
             why.contains("primaries = \"bt2020\" isn't served yet"),
             "{why}"
         );
-        let why = not_drawn(&manifest("[entity]\nfile = \"e.wgsl\"\n"));
-        assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
         let why = not_drawn(&manifest("[motion]\n")).unwrap();
         assert!(why.contains("[motion] needs a later Horizon"), "{why}");
         let kept =

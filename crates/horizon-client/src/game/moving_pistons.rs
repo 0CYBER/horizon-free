@@ -13,6 +13,7 @@ impl Game<'_> {
         alpha: f64,
         out: &mut Vec<Vertex>,
     ) {
+        let start = out.len();
         let partial = alpha as f32;
         let live = self
             .world
@@ -57,6 +58,8 @@ impl Game<'_> {
                 self.moving_block_vertices(base, at, corner - camera, out);
             }
         }
+        // `minecraft:moving_piston` is a block entity.
+        self.lit_block_entity(start..out.len());
         self.mark_motion(out.len(), 0);
     }
     /// The section holding the block at `p` (`SectionPos.blockToSection`).

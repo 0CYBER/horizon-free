@@ -28,7 +28,8 @@ pub enum StageKind {
     /// before the camera overlays and the HUD.
     Tonemap,
     /// The colour of surfaces that are no block terrain (entities, block entities, items,
-    /// particles), before the alpha test, the glint and fog. Checked, not yet drawn.
+    /// particles), before the alpha test, the glint and fog. The game draws entities and
+    /// block entities through it so far.
     Entity,
     /// 0.2: a dispatch in the post chain (`[[post]] compute = true`), which reads what a post
     /// pass does. Checked, not yet run; not in `ALL`, since each pass's entry is its own.
@@ -1000,9 +1001,9 @@ struct HorizonTonemapOut {
 }
 ";
 
-/// An entry point with the entity stage's inputs, for the check: the renderer will call
-/// `entity` from its own entity shader in the same way, decoding the colours on the way in and
-/// encoding the result for a frame that stores gamma.
+/// An entry point with the entity stage's inputs, for the check: the renderer calls `entity`
+/// from its own entity shader in the same way (`gfx/native_entity.rs`), decoding the colours on
+/// the way in and encoding the result for a frame that stores gamma.
 const ENTITY_ENTRIES: &str = "\
 struct HorizonEntityIn {
     @builtin(position) position: vec4<f32>,

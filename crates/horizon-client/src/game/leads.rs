@@ -876,6 +876,8 @@ impl Game<'_> {
         let Some(r) = atlas.sprites.get("entity/lead_knot/lead_knot").copied() else {
             return;
         };
+        // The knots are entities' models; the ropes above are flat-coloured strips, Horizon's.
+        let start = out.len();
         for p in knots {
             let state = leash::knot_state(p);
             let at =
@@ -895,6 +897,7 @@ impl Game<'_> {
                 out,
             );
         }
+        self.lit_entity(start..out.len());
     }
     /// `Player.getRopeHoldPosition` (and `LocalPlayer`'s in first person).
     fn player_rope_hold(

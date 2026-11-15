@@ -95,7 +95,7 @@ pub struct Manifest {
     /// The picture for the display, after the post chain (Horizon's tone curve when absent).
     pub tonemap: Option<Stage>,
     /// The lit colour of entities, block entities, items and particles (Horizon's own when
-    /// absent). Checked, not yet drawn.
+    /// absent). The game draws entities and block entities through it so far.
     pub entity: Option<Stage>,
     /// `[frame] blend`.
     pub blend: Blend,

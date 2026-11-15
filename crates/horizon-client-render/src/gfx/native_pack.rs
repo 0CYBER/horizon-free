@@ -1,10 +1,11 @@
 //! One of Horizon's own shader packs while it runs (docs/shaders.md): the frame its stages
-//! read, its sky, material and post stages, and the timer of their passes.
+//! read, its sky, material, entity and post stages, and the timer of their passes.
 
 use horizon_shader_api::check::CheckedStage;
 use horizon_shader_api::{Report, StageKind};
 
 use super::displace::Displacement;
+use super::native_entity::NativeEntity;
 use super::native_material::{DisplacedShape, MaterialPipelines, NativeMaterial, TerrainShape};
 use super::native_post::{NativeFrame, NativePost};
 use super::native_shadow::{NativeShadow, ShadowGrid};
@@ -19,6 +20,7 @@ pub struct NativePack {
     pub frame: NativeFrame,
     pub sky: Option<NativeSky>,
     pub material: Option<NativeMaterial>,
+    pub entity: Option<NativeEntity>,
     /// The post chain (none without `[[post]]`), the decode before it and the tonemap after.
     pub post: NativePost,
     /// With a sky stage, what of Minecraft's sky still draws over it (`[sky]`).
@@ -345,6 +347,14 @@ impl NativePack {
                 )
             })
             .transpose()?;
+        let entity = others
+            .iter()
+            .find(|s| s.kind == StageKind::Entity)
+            .map(|stage| {
+                let groups = [terrain.entities, terrain.retained_entities];
+                NativeEntity::new(device, format, groups, &frame, stage, constants)
+            })
+            .transpose()?;
         // The decode and the tonemap run without a chain too.
         let tonemap = others.iter().find(|s| s.kind == StageKind::Tonemap);
         // A `[ray_tracing]` pack's passes as the check built them against the scene.
@@ -373,7 +383,10 @@ impl NativePack {
         labels.extend(
             others
                 .iter()
-                .filter(|s| material.is_some() && s.kind == StageKind::Material)
+                .filter(|s| match s.kind {
+                    StageKind::Material => material.is_some(),
+                    kind => kind == StageKind::Entity,
+                })
                 .map(|s| s.label.clone()),
         );
         labels.extend(weather_label);
@@ -386,6 +399,7 @@ impl NativePack {
             frame,
             sky,
             material,
+            entity,
             post,
             vanilla_clouds,
             vanilla_sun,
@@ -680,6 +694,7 @@ file = \"material.wgsl\"
             sprite_tags: &[],
             sprite_materials: &[],
             entities: empty,
+            retained_entities: empty,
             weather_groups: [empty, empty],
             pbr: None,
         }

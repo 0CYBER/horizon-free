@@ -175,6 +175,12 @@ fn composed() -> Vec<(&'static str, Vec<&'static str>, String)> {
             vec!["world_primitives.wgsl"],
             super::world_primitives::shader(),
         ),
+        // A native pack's entity stage (gfx/native_entity.rs), around vanilla's own.
+        (
+            "native pack entities",
+            vec!["entity.wgsl", "static_entity.wgsl"],
+            super::native_entity::tests::shader(super::native_entity::tests::VANILLA),
+        ),
         (
             "improved transparency world border",
             vec!["border.wgsl", "oit.wgsl", "oit_border.wgsl"],

@@ -732,6 +732,14 @@ impl Game<'_> {
         }
     }
 
+    /// Forgets the last frame's marks.
+    pub(super) fn clear_entity_marks(&self) {
+        self.entity_spans.borrow_mut().clear();
+        self.entity_motion.borrow_mut().clear();
+        self.entity_motion_posed.borrow_mut().clear();
+        self.native_shaders.entity_runs.borrow_mut().clear();
+    }
+
     fn push_span(&self, start: usize, stage: &str, id: i32) {
         let mut spans = self.entity_spans.borrow_mut();
         let span = EntitySpan {
