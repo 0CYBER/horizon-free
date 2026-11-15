@@ -3636,11 +3636,9 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             .into_iter()
             .find(|b| b.enabled && x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + 20.0)
             .map(|b| b.id);
-        if hit.is_some() {
+        // Buttons retain focus; clicking a multiplayer text field drops it.
+        if hit.is_some() || matches!(&self.mode, Mode::Multiplayer(screen) if screen.has_fields()) {
             self.focused_button = hit;
-        } else if matches!(&self.mode, Mode::Multiplayer(screen) if screen.has_fields()) {
-            // A press on a text field takes the focus from the button.
-            self.focused_button = None;
         }
         if matches!(self.mode, Mode::CreateBuffet { .. }) {
             self.buffet_click(x, y, (w, h), hit);
@@ -3652,10 +3650,12 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             self.drop_button_focus_for_field(hit);
             return (Action::None, hit.is_some());
         }
+        let sound = hit.is_some()
+            || matches!(&self.mode, Mode::Realms(screen) if screen.reset_tile_at(x, y, (w, h)).is_some());
         let action = self.click_action(x, y, (w, h), hit);
         self.drop_button_focus_for_field(hit);
         // World list selection is silent; launching its selected entry sounds.
-        let sound = hit.is_some() || matches!(action, Action::Play { .. });
+        let sound = sound || matches!(action, Action::Play { .. });
         (action, sound)
     }
     /// A click that misses every button and leaves an edit box focused moves the focus

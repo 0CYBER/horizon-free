@@ -1,6 +1,8 @@
 //! Shared GUI widgets drawn as HUD quads: nine-slice sprites (gui.scaling
 //! metadata), buttons, sliders, tiled menu backgrounds, separators and the
 //! EditBox text field with vanilla cursor, selection and scrolling.
+pub mod frame_button;
+
 use crate::{
     hud::{HudAtlas, HudBatch, Rect, rgba},
     text::Text,

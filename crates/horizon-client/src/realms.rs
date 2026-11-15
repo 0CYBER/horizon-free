@@ -6171,6 +6171,17 @@ impl Screen {
         }
     }
 
+    /// The active `FrameButton` hitbox, shared by dispatch and click feedback.
+    pub(crate) fn reset_tile_at(&self, x: f32, y: f32, (w, h): (f32, f32)) -> Option<usize> {
+        if !matches!(self.subscreen, SubScreen::ResetWorld { reset: None, .. }) {
+            return None;
+        }
+        (0..6).find(|&i| {
+            let (tx, ty) = reset_tile((w / 2.0).floor(), reset_content_y(h), i);
+            crate::ui::hovered((x, y), tx, ty, 60.0, 69.0)
+        })
+    }
+
     /// `RealmsMainScreen.leaveClicked`: someone else's Realm only, and only the question:
     /// nothing is sent until Continue.
     fn leave_clicked(&mut self, me: Option<u128>) {
@@ -6562,21 +6573,10 @@ impl Screen {
                 return Outcome::None;
             }
         }
-        // `RealmsResetWorldScreen`'s tiles are drawn, not widgets: the click is a rectangle.
-        if let SubScreen::ResetWorld { reset, .. } = &self.subscreen {
-            if reset.is_some() {
-                return Outcome::None;
-            }
-            let cx = (w / 2.0).floor();
-            let top = reset_content_y(h);
-            // `FrameButton` is 60 wide and 69 tall (its label is part of the control).
-            let tile = (0..6).find(|i| {
-                let (tx, ty) = reset_tile(cx, top, *i);
-                x >= tx && x < tx + 60.0 && y >= ty && y < ty + 69.0
-            });
-            if let Some(tile) = tile {
-                return self.click(Some(70 + tile as u8), x, y, (w, h));
-            }
+        if let Some(tile) = self.reset_tile_at(x, y, (w, h)) {
+            return self.click(Some(70 + tile as u8), x, y, (w, h));
+        }
+        if matches!(self.subscreen, SubScreen::ResetWorld { .. }) {
             return Outcome::None;
         }
         // `Entry.mouseClicked` checks its two link buttons before the list; the question
@@ -10440,42 +10440,16 @@ impl Screen {
                     let content_y = reset_content_y(h);
                     for (i, (label, image)) in tiles.iter().enumerate() {
                         let (x, y) = reset_tile(cx, content_y, i);
-                        // The control is 60x69: the frame plus its label.
-                        let hover = crate::ui::hovered(cursor, x, y, 60.0, 69.0);
-                        let frame = if hover { 0xFF90_9090 } else { u32::MAX };
-                        batch.fill(atlas, x + 2.0, y + 2.0, 56.0, 56.0, 0xFF20_2020);
-                        // `FrameButton`: the picture inside `widget/slot_frame`.
-                        crate::ui::blit_sprite(
+                        let rect = [x, y, 60.0, 69.0];
+                        crate::ui::frame_button::draw(
                             batch,
                             atlas,
+                            [x, y],
+                            &Text::tr(label, &[]),
                             image,
-                            x + 2.0,
-                            y + 2.0,
-                            56.0,
-                            56.0,
-                            frame,
-                        );
-                        crate::ui::blit_sprite(
-                            batch,
-                            atlas,
-                            "gui/sprites/widget/slot_frame",
-                            x,
-                            y,
-                            60.0,
-                            60.0,
-                            frame,
-                        );
-                        let color = if hover { GREY } else { u32::MAX };
-                        let text = t(label);
-                        let width = HudBatch::text_width(atlas, &text);
-                        // `FrameButton.extractContents`: `centeredText(..., x + 28, y - 14)`.
-                        batch.text(
-                            atlas,
-                            &text,
-                            x + 28.0 - (width / 2.0).floor(),
-                            y - 14.0,
-                            color,
                             true,
+                            crate::ui::hovered(cursor, x, y, rect[2], rect[3]),
+                            crate::widgets::narration_focused(rect),
                         );
                     }
                 }
@@ -12731,6 +12705,171 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn reset_frames_register_focus_and_dispatch_through_the_title() {
+        // Isolate the widget registry, narration and frame counter from other tests.
+        std::thread::spawn(|| {
+            use crate::gamepad::{Button, focus_step_rect};
+            use crate::title::{Action, Mode, Title};
+            use crate::widgets::{self, Kind};
+
+            let resources = std::path::Path::new("/nonexistent/realms-reset-frame-assets");
+            let mut atlas = HudAtlas::build(resources).unwrap();
+            atlas.sprites.insert(
+                "gui/sprites/widget/slot_frame".into(),
+                crate::hud::Rect {
+                    u0: 0.125,
+                    v0: 0.25,
+                    u1: 0.375,
+                    v1: 0.5,
+                    w: 60,
+                    h: 60,
+                },
+            );
+            widgets::set_narrating(true);
+            let mut frame = 0;
+            let mut draw = |title: &Title, size: [u32; 2]| {
+                // Seed at scale 1, then set logical GUI bounds without changing global GUI_SCALE.
+                let mut batch = HudBatch::new([1, 1]);
+                let logical = (size[0] as f32, size[1] as f32);
+                (batch.width, batch.height) = logical;
+                assert_eq!(batch.scale, 1.0);
+                assert_eq!((batch.width, batch.height), logical);
+                // Title.draw begins the narration screen and records the real controls.
+                title.draw(&atlas, &mut batch, (-1.0, -1.0), true);
+                frame += 1;
+                widgets::end_frame(frame);
+                batch
+            };
+            for (size, left, top) in [([854, 480], 305.0, 63.0), ([400, 243], 78.0, 56.0)] {
+                let mut screen = listed(vec![server(7, None)]);
+                screen.subscreen = SubScreen::ResetWorld {
+                    server: server(7, None),
+                    slot: 2,
+                    kind: ResetKind::Reset,
+                    creation: None,
+                    templates: None,
+                    job: None,
+                    reset: None,
+                    error: None,
+                };
+                let mut title = Title::new(PathBuf::new(), resources);
+                title.mode = Mode::Realms(screen.clone());
+                widgets::set_narration_focus(None);
+                let plain = draw(&title, size);
+                let (w, h) = (size[0] as f32, size[1] as f32);
+                let expected = [
+                    [left, top, 60.0, 69.0],
+                    [left + 92.0, top, 60.0, 69.0],
+                    [left + 184.0, top, 60.0, 69.0],
+                    [left, top + 85.0, 60.0, 69.0],
+                    [left + 92.0, top + 85.0, 60.0, 69.0],
+                    [left + 184.0, top + 85.0, 60.0, 69.0],
+                    [w / 2.0 - 75.0, h - 27.0, 150.0, 20.0],
+                ];
+                let registered = widgets::last_labelled();
+                let rects: Vec<_> = registered.iter().map(|b| [b.x, b.y, b.w, b.h]).collect();
+                assert_eq!(
+                    rects.as_slice(),
+                    expected.as_slice(),
+                    "no 20px tile proxies"
+                );
+                for (b, key) in registered.iter().zip([
+                    "mco.reset.world.generate",
+                    "mco.upload.select.world.title",
+                    "mco.reset.world.template",
+                    "mco.reset.world.adventure",
+                    "mco.reset.world.experience",
+                    "mco.reset.world.inspiration",
+                    "gui.back",
+                ]) {
+                    assert_eq!(b.label, crate::lang::get(key));
+                    assert!(b.enabled && b.kind == Kind::Button);
+                }
+                let targets = widgets::last_targets();
+                assert_eq!(
+                    targets.iter().map(|t| t.rect).collect::<Vec<_>>(),
+                    expected[..6]
+                );
+                assert!(targets.iter().all(|t| t.kind == Kind::Button));
+                assert_eq!(
+                    focus_step_rect([0.0, -1.0, w, 1.0], Button::DPadDown, &rects),
+                    Some(0)
+                );
+                assert_eq!(
+                    focus_step_rect([0.0, h, w, 1.0], Button::DPadUp, &rects),
+                    Some(6)
+                );
+                for (from, direction, to) in [
+                    (0, Button::DPadRight, 1),
+                    (1, Button::DPadRight, 2),
+                    (0, Button::DPadDown, 3),
+                    (1, Button::DPadDown, 4),
+                    (2, Button::DPadDown, 5),
+                    (3, Button::DPadRight, 4),
+                    (5, Button::DPadUp, 2),
+                    (4, Button::DPadDown, 6),
+                ] {
+                    assert_eq!(focus_step_rect(rects[from], direction, &rects), Some(to));
+                }
+                let frame_color = |batch: &HudBatch| {
+                    batch
+                        .vertices
+                        .iter()
+                        .find(|v| v.pos == [left, top] && v.uv == [0.125, 0.25])
+                        .expect("the Generate frame was actually drawn")
+                        .color
+                };
+                assert_eq!(frame_color(&plain), u32::MAX);
+                widgets::set_narration_focus(Some(rects[0]));
+                assert_eq!(frame_color(&draw(&title, size)), 0xFF8E_8E8E);
+                assert!(widgets::take_last_narration().items[0].focused);
+                let [x, y, bw, bh] = targets[0].rect;
+                let center = (x + bw / 2.0, y + bh / 2.0);
+                title.focused_button = Some(76);
+                assert_eq!(
+                    title.click(center.0, center.1, (w, h)),
+                    (Action::None, true)
+                );
+                assert!(matches!(title.mode, Mode::Create { .. }));
+                assert_eq!(title.focused_button, None);
+                assert!(title.has_caret_field());
+                let before = title.focused_field().unwrap().1.clone();
+                title.type_text(" "); // The title's EditBox.charTyped/insertText path.
+                assert_eq!(*title.focused_field().unwrap().1, format!("{before} "));
+
+                let abort = Arc::new(AtomicBool::new(false));
+                if let SubScreen::ResetWorld { reset, .. } = &mut screen.subscreen {
+                    *reset = Some(RunningTask {
+                        job: Arc::new(Mutex::new(None)),
+                        title: Arc::new(Mutex::new(String::new())),
+                        abort: Arc::clone(&abort),
+                    });
+                }
+                title.mode = Mode::Realms(screen);
+                draw(&title, size);
+                assert!(widgets::last_targets().is_empty());
+                let busy = widgets::last_labelled();
+                assert_eq!(busy.len(), 1);
+                assert_eq!(busy[0].label, crate::lang::get("gui.cancel"));
+                assert_eq!(
+                    title.click(center.0, center.1, (w, h)),
+                    (Action::None, false)
+                );
+                assert!(matches!(
+                    title.mode,
+                    Mode::Realms(Screen {
+                        subscreen: SubScreen::ResetWorld { reset: Some(_), .. },
+                        ..
+                    })
+                ));
+                assert!(!abort.load(Ordering::Relaxed));
+            }
+        })
+        .join()
+        .unwrap();
     }
 
     /// `RealmsCreateWorldFlow.createTemporaryWorldFolder`: level.dat without
