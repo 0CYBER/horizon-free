@@ -171,6 +171,99 @@ fn flat_draws_map_uvs_onto_a_stitched_sprite() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// #16758: a small model element samples its own sprite region, not a wider one. The redstone
+/// torch's flame is a 2x2-pixel element with UVs [7, 6]-[9, 8] of a 16-pixel sprite. Whatever
+/// padding the Mipmap Levels and anisotropy options give the sprite's holder, the element's
+/// corners must land on its own [7, 9] x [6, 8] pixels of it, and `mc_midTexCoord` on its middle.
+#[test]
+fn a_small_elements_flat_uvs_cover_its_own_sprite_region() {
+    let instance = crate::gfx::test_gpu::instance();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+    // The flame's UVs, as the model asks for them.
+    let uv = [
+        [7. / 16., 6. / 16.],
+        [9. / 16., 6. / 16.],
+        [9. / 16., 8. / 16.],
+        [7. / 16., 8. / 16.],
+    ];
+    let positions = [[0., 0., 0.], [1., 0., 0.], [1., 1., 0.], [0., 1., 0.]];
+    let vertices: Vec<_> = (0..4)
+        .map(|k| TerrainVertex::new(positions[k], uv[k], 0x8000, u32::MAX, 0))
+        .collect();
+    let origin = f32::from_bits((1. / UV_STEPS).to_bits());
+    // The same quad in the compact layout, as a solid quad on the block grid reaches a pack:
+    // one record, padded to a whole quad of slots (`mesher::packed::place`).
+    let record = crate::mesher::packed::pack_quad(
+        vertices.as_chunks::<4>().0.first().unwrap(),
+        crate::mesher::packed::WHITE,
+    )
+    .expect("the flame's grid position and 1/32-step UVs pack");
+    let records = [record, [0; 6], [0; 6], [0; 6]];
+    // The game's Mipmap Levels option, and 16x anisotropy with anisotropic filtering on: the
+    // padding is vanilla's `1 << level`, times 8 at that bit. One 16 px sprite in a holder of
+    // 16 + 2 * padding, rounded up to the mip step, in an atlas of that power of two.
+    for (mip, anisotropy) in [(0u32, 0u32), (4, 0), (4, 4)] {
+        let padding: u32 = (1 << mip) << anisotropy.saturating_sub(1).min(4);
+        let holder = (16 + 2 * padding).div_ceil(1 << mip) << mip;
+        let atlas_side = holder.next_power_of_two();
+        let array = super::tests::upscaled_array(&device, &queue, &[16]);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let atlas = PackAtlas::stitched(
+            &device,
+            &mut encoder,
+            &[array],
+            1,
+            16,
+            &[16],
+            mip,
+            anisotropy,
+        )
+        .unwrap();
+        queue.submit([encoder.finish()]);
+        let corner = padding | padding << 16;
+        assert_eq!(
+            (atlas.size(), atlas.rects_table()),
+            ([atlas_side, atlas_side], vec![corner, 16])
+        );
+        for shadow in [false, true] {
+            let pixels = sample(&device, &queue, &atlas, &vertices, origin, [true, shadow]);
+            let packed = sample_page(
+                &device,
+                &queue,
+                &atlas,
+                bytemuck::cast_slice(&records),
+                crate::mesher::packed::PACKED_BASE..crate::mesher::packed::PACKED_BASE + 4,
+                origin,
+                [true, shadow],
+                "vec4(mc_midTexCoord, gl_MultiTexCoord0.xy)",
+            );
+            let corner = padding as f32;
+            let side = atlas_side as f32;
+            for (k, [u, v]) in uv.iter().enumerate() {
+                let expected = [
+                    (corner + 8.) / side,
+                    (corner + 7.) / side,
+                    (corner + u * 16.) / side,
+                    (corner + v * 16.) / side,
+                ];
+                for actual in [pixels[k], packed[k]] {
+                    assert!(
+                        actual
+                            .iter()
+                            .zip(expected)
+                            .all(|(a, b)| (a - b).abs() < 1e-6),
+                        "corner {k}, mip={mip} anisotropy={anisotropy}, shadow={shadow}: \
+                         {actual:?} != {expected:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Read back with a probe pack of ours, Iris 1.11.7's terrain `gl_Vertex` (camera on the block
 /// grid) puts a water top, 8/9 - 0.001 of a block up, at 29094/32768, and plants offset by 13/15
 /// and 0.1 of a block at 28398/32768 and 3276/32768 (#8464): each 32768th below the position.
