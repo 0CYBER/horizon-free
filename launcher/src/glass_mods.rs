@@ -698,6 +698,7 @@ impl Launcher {
             .get(&p.id)
             .filter(|_| p.source == SourceId::Horizon)
             .map(|lines| lines.join(" · "));
+        let registry = about.is_some();
 
         // The action: Remove (then Remove for good), Install or Import, or why not.
         let button: AnyElement = if let Some(e) = &entry {
@@ -838,7 +839,7 @@ impl Launcher {
                     div().flex().justify_center().mt(px(12.)).child(
                         ui::link(
                             SharedString::from(format!("mods-detail-page-{}", p.id)),
-                            tr("Its page"),
+                            tr("Open mod page"),
                         )
                         .on_click(cx.listener(
                             move |this, _: &ClickEvent, _, cx| {
@@ -847,7 +848,16 @@ impl Launcher {
                             },
                         )),
                     ),
-                ),
+                )
+                // A registry mod: the rules it was listed under.
+                .when(registry, |d| {
+                    d.child(
+                        div().flex().justify_center().mt(px(4.)).child(
+                            ui::link("mods-detail-policy", tr("Horizon's mod policy"))
+                                .on_click(|_, _, cx| cx.open_url(browser::horizon::POLICY)),
+                        ),
+                    )
+                }),
         )
     }
 }

@@ -344,21 +344,26 @@ pub fn trust_and_capabilities(
     let Some(p) = index.project(id) else {
         return Vec::new();
     };
+    // Shown to players: in their words, through `tr`; the policy is a link beside them
+    // ([`POLICY`]), not a bare address in the text.
     let mut lines = vec![if official(p) {
-        "Made by Horizon".to_owned()
+        tr("Made by Horizon").to_string()
     } else {
-        format!(
-            "Made by {}. Not made or endorsed by the Horizon project ({POLICY})",
-            p.authors.join(", ")
+        trf(
+            "Made by {authors}, not by the Horizon project",
+            &[("authors", &p.authors.join(", "))],
         )
     }];
     lines.push(match &p.key {
-        Some(_) => "Signed by its author: the launcher checks the signature".to_owned(),
-        None => "Unsigned: the launcher checks its checksum only".to_owned(),
+        Some(_) => tr("Signed by its author: Horizon checks it really is theirs").to_string(),
+        None => tr(
+            "Not signed by its author: Horizon checks the download arrives complete and unchanged",
+        )
+        .to_string(),
     });
     if p.kind == index::Kind::NativeMod {
         lines.push(
-            "Native code: it is compiled into the game and runs with full access to your computer. Its source was reviewed before it was listed".into(),
+            tr("Native code: it is built into the game and runs with full access to your computer. Its source was reviewed before it was listed").to_string(),
         );
         if let Some(v) = p.versions.iter().find(|v| v.game == GAME) {
             let pin = v.api.split('/').nth(1).unwrap_or_default();
@@ -366,9 +371,9 @@ pub fn trust_and_capabilities(
                 instance
                     .and_then(|i| crate::native_fit::line(i, pin))
                     .unwrap_or_else(|| {
-                        format!(
-                            "Built by the launcher on Horizon {}",
-                            &pin[..pin.len().min(7)]
+                        trf(
+                            "Built for {build}",
+                            &[("build", &crate::native_mods::sdk_cache::known_name(pin))],
                         )
                     }),
             );
@@ -379,11 +384,11 @@ pub fn trust_and_capabilities(
             v.capabilities
                 .known()
                 .iter()
-                .map(|c| format!("May {}", c.describe())),
+                .map(|c| trf("May {what}", &[("what", tr(c.describe()))])),
         );
         // Capabilities this Horizon lacks are the project's verdict (`Project::blocked`), said once.
         if v.capabilities.is_empty() {
-            lines.push("Asks for nothing beyond its own log".into());
+            lines.push(tr("Asks for nothing beyond its own log").to_string());
         }
     }
     lines
