@@ -4,6 +4,12 @@ use mod_api::{IPayloadContext, IPayloadHandler, PayloadBytes, PayloadHandleError
 /// Any context access would mean the refused callback had begun staging effects.
 struct UnusedContext;
 impl IPayloadContext for UnusedContext {
+    fn check_payload_token(
+        &self,
+        _: &mod_api::PayloadToken,
+    ) -> Result<(), mod_api::PayloadSendError> {
+        panic!("busy payload checked its token")
+    }
     fn player(&self) -> Result<mod_api::PlayerRef, mod_api::PayloadContextError> {
         panic!("busy payload accessed its player")
     }
