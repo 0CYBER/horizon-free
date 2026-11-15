@@ -93,14 +93,14 @@ def main(argv=None):
         if error:
             print(f"wire_loopback check failed: {error}")
             return 1
-        merge_base = merge_base.git("merge-base", base, "HEAD").strip()
+        fork_point = merge_base.git("merge-base", base, "HEAD").strip()
         # The root's path at the merge base: its own, or the one it was renamed from since.
-        renames = merge_base.git("diff", "--name-status", "-M", "--diff-filter=R", merge_base, "HEAD")
+        renames = merge_base.git("diff", "--name-status", "-M", "--diff-filter=R", fork_point, "HEAD")
         old = next((line.split("\t")[1] for line in renames.splitlines() if line.split("\t")[-1] == ROOT_FILE),
                    ROOT_FILE)
-        shown = subprocess.run(["git", "show", f"{merge_base}:{old}"], capture_output=True, encoding="utf-8", cwd=ROOT)
+        shown = subprocess.run(["git", "show", f"{fork_point}:{old}"], capture_output=True, encoding="utf-8", cwd=ROOT)
         if shown.returncode != 0:
-            print(f"wire_loopback check failed: cannot read {old} at the merge base {merge_base} "
+            print(f"wire_loopback check failed: cannot read {old} at the merge base {fork_point} "
                   f"(a shallow clone? fetch --unshallow): {shown.stderr.strip()}")
             return 1
         before = shown.stdout
