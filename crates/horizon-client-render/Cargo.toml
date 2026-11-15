@@ -102,7 +102,7 @@ path = "fixtures/standard_pack_gpu_entities.rs"
 
 [[example]]
 name = "standard_pack_gpu_entities"
-path = "fixtures/standard_pack_gpu_entities.rs"
+path = "examples/standard_pack_gpu_entities.rs"
 
 [dev-dependencies]
 tempfile = "3"

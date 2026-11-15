@@ -357,7 +357,7 @@ fn run(out: &Path) {
 }
 
 #[cfg(not(test))]
-fn main() {
+pub(crate) fn main() {
     let output = std::env::args_os()
         .nth(1)
         .expect("output directory required");
