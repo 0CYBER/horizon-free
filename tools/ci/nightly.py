@@ -58,8 +58,6 @@ else:  # run as tools/ci/nightly.py: its folder is on the path
 DATED = re.compile(r"^nightly-(\d{4}-\d{2}-\d{2})$")
 TITLE_DATE = re.compile(r"Nightly (\d{4}-\d{2}-\d{2})")
 SOURCE_TAG = "nightly-source/"
-# Load from the trusted workflow checkout before pick() switches to a possibly older green tree.
-FORK_PLAYERS = Path(__file__).with_name("nightly-arismoko.md").read_text().strip()
 
 
 @dataclass
@@ -114,12 +112,8 @@ def notes(today: str, chosen: Ref, main: Ref, picked: list[dict], left_out: list
     fixed = [pr for pr in shown if "feature" not in pr["labels"]]
     built = f"main ({main.sha[:7]})" + (f" with {len(picked)} pull requests merged in" if picked else "")
     # The banner first: people who land on the Nightly ran its game zip for the launcher (a player, 2026-10-30).
-    fork = train.REPO == "arismoko/horizon"
-    parts = [FORK_PLAYERS if fork else train.PLAYERS,
-             f"Nightly {today} · {chosen.sha[:7]}: {built}, built from `{chosen.name}` ({chosen.sha}).",
-             source_line(today, chosen.sha)]
-    if not fork:
-        parts.append(PLAYERS)
+    parts = [train.PLAYERS, f"Nightly {today} · {chosen.sha[:7]}: {built}, built from `{chosen.name}` ({chosen.sha}).",
+             source_line(today, chosen.sha), PLAYERS]
     if not shown and not picked:
         parts.append("Nothing new for players on main since the previous Nightly.")
     if new:

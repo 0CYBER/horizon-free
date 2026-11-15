@@ -75,8 +75,7 @@ and some are waiting for Ludovic:
   does not compile the lookup, so no environment adds trust to a shipped launcher, and game and launcher releases
   are never checked with it. A test in both profiles proves the release profile ignores the variable. No release
   key enters the daily job.
-- **Nightly signatures.** This describes upstream's Nightly channel, not the fork's daily-only prebuilt schedule and publishing policy; this sync enables no new release trigger or keys.
-  A Nightly carries two signatures over the same `SHA256SUMS`. `SHA256SUMS.sig` is signed
+- **Nightly signatures.** A Nightly carries two signatures over the same `SHA256SUMS`. `SHA256SUMS.sig` is signed
   for the channel (`horizon release nightly`), for launchers and servers from before this change, which read only
   that one. `SHA256SUMS.v2.sig` is signed for the Nightly's own version (`horizon release nightly-<date>-<commit>`),
   which its release title names (`Nightly <date> · <commit>`). Current launchers, `horizon-server update` and
@@ -87,21 +86,12 @@ and some are waiting for Ludovic:
   or picked with `--version` any more; they leave GitHub with the 7-day rotation. Until a v2 Nightly exists, a
   launcher has nothing to update to, so the first Nightly is built right after this merges. A server can still go back
   to a build it already has with `horizon-server rollback`, which checks nothing it hasn't already checked.
-  **When the old signature can go:** once support for launchers and servers predating v2 is retired. The fork
-  collects no telemetry, so it cannot determine this from usage data. Then drop `SHA256SUMS.sig` from nightly-build.yml's
+  **When the old signature can go:** once every launcher and server still updating reads v2. That is, when the
+  telemetry live count shows no launcher (and the server update log no `horizon-server`) older than the first build
+  with this change, or at the latest 60 days after it shipped. Then drop `SHA256SUMS.sig` from nightly-build.yml's
   publish step and the `--tag nightly` check before it, and remove `NIGHTLY` from horizon-release-sign. Releases (not
   Nightlies) keep their single `SHA256SUMS.sig`, which is already signed for their tag.
-  **Fork releases (`arismoko/horizon`):** the launcher chooses keys by repository. Only
-  `crates/horizon-release-sign/fork-release-keys.txt` authorizes fork downloads; upstream's keys
-  authorize only `horizon-rust/horizon`, and unknown repositories have no trusted keys. An empty
-  fork key file refuses every fork release. Upstream's legacy checksum pins never authorize a
-  fork archive: every fork game or launcher download needs a fork signature. The real private key
-  exists only as the repository secret `RELEASE_SIGNING_KEY`; dry runs receive no release secrets
-  and sign with an ephemeral test key instead. To rotate, first ship the next public key in the
-  same fork key file, then enable `RELEASE_SIGNING_KEY_NEXT` for overlapping signatures before
-  replacing the primary secret and eventually retiring the old public key. Nightly title,
-  channel and exact-version signature binding remain unchanged.
-- **Upstream release machinery needs the council.** The workflows, the release and signing tools, the update-checking code
+- **The release machinery needs the council.** The workflows, the release and signing tools, the update-checking code
   and the installers are listed in `.github/CODEOWNERS`. Once main's protection requires code owners' reviews, a
   change to any of them waits for a review from the `horizon-rust/council` team (council poll P35). Everything else still merges as soon as its checks pass.
 - **Agents get their own, smaller identity** (prepared, switched on by Ludovic). The `horizon-agent` GitHub App

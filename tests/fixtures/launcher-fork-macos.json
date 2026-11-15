@@ -1,7 +1,0 @@
-{
-  "name": "macos",
-  "mac": true,
-  "asset": "horizon-fork-launcher-macos-arm64.zip",
-  "binary": "horizon-fork-launcher",
-  "mac_arch": "arm64"
-}

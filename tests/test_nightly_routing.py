@@ -80,10 +80,9 @@ console.log(JSON.stringify(eval(expression)));
                         self.assertEqual(evaluate(expressions[1], row, trusted), expected)
 
         timeout = re.search(r"^\s*timeout-minutes:\s*\$\{\{(.*?)\}\}", workflow_jobs["build"], re.M).group(1)
-        for repository, trusted, row in itertools.product(["arismoko/horizon", "horizon-rust/horizon"], [False, True], rows):
-            with self.subTest(repository=repository, trusted=trusted, entry=row["name"]):
-                expected = 60 if repository == "arismoko/horizon" or row.get("mac") else 40
-                self.assertEqual(evaluate(timeout, row, trusted, repository), expected)
+        for trusted, row in itertools.product([False, True], rows):
+            with self.subTest(trusted=trusted, entry=row["name"]):
+                self.assertEqual(evaluate(timeout, row, trusted), 60 if row.get("mac") else 40)
 
     def test_every_shipped_glibc_program_is_checked_by_workflow_owned_tools(self):
         text = GAME.read_text()

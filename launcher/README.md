@@ -1,42 +1,5 @@
 # Horizon launcher
 
-## arismoko fork builds
-
-**Horizon Fork Launcher (arismoko)** is not the official Horizon launcher. Fork
-builds start with empty settings and accounts; they do not import official tokens.
-Their launcher and game data live under `horizon-fork-arismoko/launcher` and
-`horizon-fork-arismoko/game`. Relocation metadata and the OS keychain service are
-separate. Explicit home overrides still work for developers.
-
-A source-built launcher can install fork builds today. Configured Microsoft
-sign-in and signed Nightly Play arrive with the fork launcher; no release date is
-announced. Upstream has authorized use of its Microsoft application ID, supplied
-through the fork repository's `HORIZON_MSA_CLIENT_ID` variable rather than
-hard-coded in the fork. Accounts and tokens remain in this fork's separate
-storage; nothing is imported from the official launcher. A build without a
-configured ID cannot sign in. Unsigned local developer builds retain the explicit
-offline single-player switch. Signed builds retain account and ownership checks.
-
-Windows builds are **not Authenticode-signed**. Windows may show “Windows protected
-your PC” or an unknown-publisher warning. Signed checksums do not remove SmartScreen
-warnings. macOS packages are **ad-hoc signed**, without an Apple Developer ID and
-**not notarized**. Gatekeeper may block them or say Apple cannot check them for
-malicious software. No OS trust bypass is implied by a checksum signature.
-
-Build identity defaults to `arismoko/horizon`, consistently with the fork's release
-repository. Set `HORIZON_LAUNCHER_REPOSITORY=horizon-rust/horizon` at build time to
-retain upstream identity. Other values fail the build. Stage packaging with
-`python3 tools/stage_launcher_packaging.py OUTPUT --repository REPOSITORY` using
-the same repository selection. The original packaging templates and icons are
-left unchanged. The workflow passes `github.repository` to the real build selector
-and generates the corresponding build matrix. Existing signing, signature
-verification and publication gates are retained: dry runs use an ephemeral key,
-while publication uses the fork's existing signing key and still requires separate
-approval. The workflow must remain disabled until root authorizes a dispatch.
-Linux x86_64 and Windows x64 are the initial package targets; Windows ARM64 and
-macOS packages are not produced by this dry-run workflow. Any future macOS job
-must use GitHub-hosted runners, never the upstream private runner.
-
 A small desktop app that installs Horizon builds, prepares them from your own copy of
 Minecraft, and starts the client or a dedicated server. Built with [GPUI Fast](https://github.com/longbridge/gpui-fast),
 a fork of Zed's UI framework [GPUI](https://www.gpui.rs) that draws unchanged views from the last frame;

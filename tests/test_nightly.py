@@ -68,19 +68,6 @@ class NightlyTests(unittest.TestCase):
             self.assertTrue(notes().startswith(nightly.train.PLAYERS + "\n\nNightly 2026-10-28 · bbbbbbb: "))
             self.assertIn(nightly.PLAYERS, notes())
 
-    def test_fork_notes_use_loaded_intro_and_keep_build_details(self):
-        with mock.patch.object(nightly.train, "REPO", "arismoko/horizon"):
-            # An older selected checkout may not contain the template. It must already be loaded.
-            with mock.patch.object(Path, "read_text", side_effect=AssertionError("late template read")):
-                text = notes(merged=[merged_pr(9, "Fix fork install", [])], issues=["- Known issue"])
-        self.assertTrue(text.startswith(nightly.FORK_PLAYERS + "\n\n"))
-        self.assertNotIn(nightly.PLAYERS, text)
-        self.assertIn("Nightly 2026-10-28 · bbbbbbb: main (mmmmmmm)", text)
-        self.assertIn("nightly-source/2026-10-28-bbbbbbb", text)
-        self.assertIn("### Fixed\n- Fix fork install (#9)", text)
-        self.assertIn("### Known issues\n- Known issue", text)
-        self.assertTrue(text.endswith(nightly.train.DISCLAIMER + "\n"))
-
     def test_other_repositories_keep_the_upstream_intro(self):
         with mock.patch.object(nightly.train, "REPO", "another/horizon"):
             self.assertTrue(notes().startswith(nightly.train.PLAYERS + "\n\n"))

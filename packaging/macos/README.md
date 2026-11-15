@@ -14,22 +14,6 @@
   swapped in by renaming, then restarted); a bare `horizon-launcher` binary, as launchers before
   the app shipped, finds the binary inside the zip and replaces only itself.
 
-## Fork packages
-
-The arismoko fork ships Apple Silicon (arm64) only, not Intel. Its staged packaging
-uses `Horizon Fork Launcher (arismoko).app`, bundle id
-`io.github.arismoko.horizonfork.launcher`, the fork icon and executable
-`horizon-fork-launcher`. The volume is named `Horizon Fork Launcher (arismoko)`.
-The installer is `horizon-fork-launcher-macos-arm64.dmg`; self-update uses
-`horizon-fork-launcher-macos-arm64.zip` from arismoko/horizon. Settings, accounts
-and game data use the separate fork namespace.
-
-The app is **ad hoc signed, not notarized**. Drag it to Applications. On macOS 14
-and earlier, right-click the app and choose **Open**, then confirm **Open**. On
-macOS 15 and later, open it once, then use **System Settings › Privacy & Security ›
-Open Anyway** and confirm. No Apple signing identity or notarization profile is needed. The upstream signing description below does not
-apply to these fork packages.
-
 ## Signing and notarization
 
 Releases are signed with Ludovic's **Developer ID** ("Developer ID Application: Ludovic Marie

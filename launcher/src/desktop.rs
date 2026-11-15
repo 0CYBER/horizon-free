@@ -79,7 +79,7 @@ pub(crate) fn quote(path: &Path) -> String {
 
 /// The launcher's entry, starting the binary at `exe`.
 pub fn launcher_entry(exe: &Path) -> String {
-    let entry = format!(
+    format!(
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=Horizon\n\
@@ -94,8 +94,7 @@ pub fn launcher_entry(exe: &Path) -> String {
         quote(exe),
         exe.display(),
         minecraft = horizon_platform::version::VANILLA_VERSION,
-    );
-    entry
+    )
 }
 
 /// Every file this module writes, with its contents, under `data`.

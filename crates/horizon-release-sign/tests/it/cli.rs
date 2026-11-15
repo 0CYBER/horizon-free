@@ -264,7 +264,7 @@ fn a_nightly_is_signed_for_its_channel_and_for_its_version() {
 #[ignore = "daily"]
 fn publishing_never_bypasses_signatures_for_fork_or_unknown_repositories() {
     let dir = folder("repository-fail-closed");
-    for repo in ["arismoko/horizon", "unknown/horizon"] {
+    for repo in ["someone/horizon", "unknown/horizon"] {
         let output = verify(&dir, &["--repository", repo, "--publishing"]);
         assert!(
             !output.status.success(),

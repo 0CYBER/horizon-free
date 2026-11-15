@@ -1,6 +1,0 @@
-# arismoko/horizon release verification keys, base64 Ed25519 public keys only.
-# The first key was added on 2026-11-10 after the nonpublishing dry run was verified.
-# With no key here, fork release installation fails closed.
-# Rotation: add the next public key here before enabling RELEASE_SIGNING_KEY_NEXT.
-# Never put a private key or a test signing key in this file.
-Iql+MN7pjxis0Xm+fRhjoW0aIwO1tV/gQLonX1tK35o=

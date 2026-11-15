@@ -833,7 +833,7 @@ pub struct Links {
     pub discord: String,
     pub sponsor: String,
     pub website: String,
-    /// The fork project board.
+    /// A roadmap page (empty: no button).
     pub roadmap: String,
     /// The modding book.
     pub docs: String,
@@ -908,7 +908,9 @@ pub fn data_dir() -> PathBuf {
     if let Ok(Some(roots)) = crate::data_location::configured_roots() {
         return roots.launcher;
     }
-    crate::identity::launcher_folder_in(&dirs::data_dir().unwrap_or_else(std::env::temp_dir))
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("horizon-launcher")
 }
 
 /// A canonical path without Windows' verbatim prefix: `canonicalize` gives `\\?\C:\...` there,
@@ -2537,7 +2539,9 @@ pub fn game_home() -> PathBuf {
     if let Ok(Some(roots)) = crate::data_location::configured_roots() {
         return roots.game;
     }
-    crate::identity::game_folder_in(&dirs::data_dir().unwrap_or_else(std::env::temp_dir))
+    dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("horizon")
 }
 
 /// Whether No AI is on: every AI feature hidden and off (`horizon_platform::no_ai`, kept in the
@@ -5571,7 +5575,7 @@ pub fn {f}("
         assert!(launcher_update(&[r(own_tag())]).is_none());
         assert_eq!(launcher_version(&own_tag()), Some(VERSION));
         assert_eq!(
-            parse_version_output(&format!("{}{VERSION}\n", "horizon-launcher ")),
+            parse_version_output(&format!("horizon-launcher {VERSION}\n")),
             Some(VERSION)
         );
     }
@@ -6814,7 +6818,7 @@ pub fn {f}("
             let app = dir.join("Horizon.app");
             fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
             fs::create_dir_all(app.join("Contents/Resources")).unwrap();
-            let bin = app.join("Contents/MacOS").join("horizon-launcher");
+            let bin = app.join("Contents/MacOS/horizon-launcher");
             fs::copy("/usr/bin/true", &bin).unwrap();
             fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
             fs::write(app.join("Contents/Resources/version"), version).unwrap();
@@ -6823,8 +6827,7 @@ pub fn {f}("
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
                  <key>CFBundleExecutable</key><string>horizon-launcher</string>\
                  <key>CFBundleIdentifier</key><string>dev.horizon.test</string>\
-                 <key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n"
-                    .replace("horizon-launcher", "horizon-launcher"),
+                 <key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n",
             )
             .unwrap();
             let signed = Command::new("codesign")
@@ -6850,7 +6853,7 @@ pub fn {f}("
         replace_bundle(&new, &installed).unwrap();
         let version = fs::read_to_string(installed.join("Contents/Resources/version")).unwrap();
         assert_eq!(version, "2.0.0");
-        let bin = installed.join("Contents/MacOS").join("horizon-launcher");
+        let bin = installed.join("Contents/MacOS/horizon-launcher");
         assert!(
             Command::new(&bin).status().unwrap().success(),
             "still executable"

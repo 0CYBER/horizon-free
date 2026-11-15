@@ -514,27 +514,6 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertNotIn(train.PLAYERS_FOOTER, body)
         self.assertIn("Your launcher updates itself.", body)
 
-    def test_fork_launcher_notes_use_supported_downloads_and_exact_verifier_tag(self):
-        import shlex
-        tag = "launcher@0.3.0"
-        title, body = train.notes("launcher", tag, [pr(3, "Fix launcher updates")], [],
-                                 previous="launcher-v0.17.0", repository="arismoko/horizon")
-        self.assertEqual(title, f"Horizon Fork Launcher (arismoko) {tag}")
-        self.assertTrue(body.startswith("# Horizon Fork Launcher (arismoko)\n"))
-        self.assertIn("### Fixed\n- Fix launcher updates (#3)", body)
-        self.assertNotIn(train.LAUNCHER_FOOTER, body)
-        self.assertNotIn("macOS", body)
-        self.assertNotIn("numbered with the game", body)
-        command = next(line for line in body.splitlines() if line.startswith("cargo run "))
-        self.assertEqual(shlex.split(command), [
-            "cargo", "run", "--locked", "-p", "horizon-release-sign", "--", "verify",
-            "--repository", "arismoko/horizon", "--tag", tag, "--publishing",
-            "/absolute/path/to/downloads",
-        ])
-        clone = next(line for line in body.splitlines() if line.startswith("git clone "))
-        self.assertEqual(shlex.split(clone)[3], tag)
-        self.assertNotIn("{tag}", body)
-
     def test_a_game_release_opens_with_the_way_to_the_launcher(self):
         # GitHub's latest is a game release: whoever lands on it is sent to the launcher first (#1647).
         _, body = train.notes("game", "v0.2.50", [pr(1)], ["- Sound cuts out after an hour."])

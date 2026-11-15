@@ -65,9 +65,6 @@ pub const LAUNCHER_LOOK_CREDIT: &str = "https://github.com/Xmilon";
 /// The official launcher installer's product home.
 pub const LAUNCHER_ABOUT: &str = "https://playhorizon.dev";
 
-/// The separately branded arismoko fork launcher installer's product home.
-pub const FORK_LAUNCHER_ABOUT: &str = "https://github.com/arismoko/horizon";
-
 /// Cargo's canonical source identity for the crates.io registry.
 pub const CARGO_CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
 

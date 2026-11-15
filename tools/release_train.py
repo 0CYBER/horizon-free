@@ -436,7 +436,7 @@ def line_intro(kind, version, previous):
             f"`horizon-server update --version {version}`.")
 
 
-def notes(kind, version, prs, issues, previous=None, repository="horizon-rust/horizon"):
+def notes(kind, version, prs, issues, previous=None):
     """(title, body) of a release. previous: the release before it, for a line's first release."""
     shown = [pr for pr in prs if pr["paths"] and "skip-release" not in pr["labels"]]
     new = [pr for pr in shown if "feature" in pr["labels"]]
@@ -445,12 +445,8 @@ def notes(kind, version, prs, issues, previous=None, repository="horizon-rust/ho
         title = f"Horizon {version.removeprefix(GAME_PREFIX)}" + (f": {summary(new, fixed)}" if shown else "")
     else:
         title = f"Horizon launcher {version.removeprefix(OLD_LAUNCHER_PREFIX).removeprefix(LAUNCHER_PREFIX)}"
-    fork_launcher = kind == "launcher" and repository == "arismoko/horizon"
-    intro = None if fork_launcher else line_intro(kind, version, previous)
+    intro = line_intro(kind, version, previous)
     parts = [PLAYERS] if kind == "game" else []
-    if fork_launcher:
-        title = f"Horizon Fork Launcher (arismoko) {version}"
-        parts.append((ROOT / "packaging/fork-launcher-release-notes.md").read_text().replace("{tag}", version).strip())
     if intro:
         parts.append(intro)
     if not shown:
@@ -464,7 +460,7 @@ def notes(kind, version, prs, issues, previous=None, repository="horizon-rust/ho
     contributors = sorted({pr["author"] for pr in shown if pr["author"] and pr["author"] != MAINTAINER})
     if contributors:
         parts.append("### Contributors\nThanks to " + ", ".join(f"@{name}" for name in contributors) + ".")
-    if kind == "launcher" and not fork_launcher:
+    if kind == "launcher":
         parts.append(LAUNCHER_FOOTER)
     if kind == "game":
         parts.append(PLAYERS_FOOTER)
@@ -718,7 +714,7 @@ def main():
     if args.command == "notes":
         version = args.tag or "unreleased"
         previous = last["tag_name"] if last and last["tag_name"] != version else None
-        title, body = notes(args.kind, version, prs, known_issues(), previous=previous, repository=REPO)
+        title, body = notes(args.kind, version, prs, known_issues(), previous=previous)
         if args.out:
             args.out.mkdir(parents=True, exist_ok=True)
             (args.out / "title.txt").write_text(title + "\n")

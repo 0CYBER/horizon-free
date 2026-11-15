@@ -178,7 +178,7 @@ jobs:
             asset: horizon-macos-x64.zip
     runs-on: ${{ matrix.mac && fromJSON(inputs.trusted && toJSON(vars.MAC_RUNNER) || (vars.SELF_HOSTED_CI != 'off' && '["self-hosted", "macOS", "horizon-nightly"]') || '"macos-15"') || matrix.os }}
     # The fork's cold client + headless builds need both feature variants; keep upstream's limits unchanged.
-    timeout-minutes: ${{ github.repository == 'arismoko/horizon' && 60 || (matrix.mac && 60 || 40) }}
+    timeout-minutes: ${{ matrix.mac && 60 || 40 }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
       # The release's version, built in (horizon_core::release): --version, user agents and crash reports

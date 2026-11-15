@@ -34,14 +34,7 @@ fn desktop_entry(home: &Path, wrapper: Option<&str>, args: &[&str]) {
 fn menu_registration_preserves_the_package_wrapper() {
     let home = std::env::temp_dir().join(format!("horizon-desktop-wrapper-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
-    let entry = home
-        .join("data/applications")
-        .join("horizon-launcher.desktop");
-    let other = home
-        .join("data/applications")
-        .join("io.github.arismoko.horizonfork.launcher.desktop");
-    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
-    std::fs::write(&other, "other launcher registration").unwrap();
+    let entry = home.join("data/applications/horizon-launcher.desktop");
 
     // Migrate a registration that pointed at the private executable.
     desktop_entry(&home, None, &[]);
@@ -64,9 +57,5 @@ fn menu_registration_preserves_the_package_wrapper() {
     // An unset or empty override keeps standalone installations working.
     desktop_entry(&home, Some(""), &[]);
     assert_eq!(std::fs::read_to_string(&entry).unwrap(), original);
-    assert_eq!(
-        std::fs::read_to_string(&other).unwrap(),
-        "other launcher registration"
-    );
     std::fs::remove_dir_all(&home).unwrap();
 }

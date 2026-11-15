@@ -30,7 +30,6 @@ pub const SIGNATURE_V2: &str = "SHA256SUMS.v2.sig";
 
 const KEYS: &str = include_str!("../release-keys.txt");
 const LEGACY: &str = include_str!("../legacy-releases.txt");
-const FORK_KEYS: &str = include_str!("../fork-release-keys.txt");
 
 /// An Ed25519 public key.
 pub type PublicKey = [u8; 32];
@@ -41,10 +40,10 @@ pub fn trusted_keys() -> Vec<PublicKey> {
     trusted_keys_for("horizon-rust/horizon")
 }
 
-/// Repository-scoped release trust. Unknown repositories and an unconfigured fork fail closed.
-/// The fork's public release keys have one canonical home: `fork-release-keys.txt`.
+/// Repository-scoped release trust: `release-keys.txt` for horizon-rust/horizon. Any other repository has no
+/// trusted keys, so its downloads fail closed.
 pub fn trusted_keys_for(repository: &str) -> Vec<PublicKey> {
-    parse_keys(repository_keys(repository, KEYS, FORK_KEYS)).unwrap_or_default()
+    parse_keys(repository_keys(repository, KEYS)).unwrap_or_default()
 }
 
 /// The environment variable that adds one more trusted SDK key: exactly one base64 Ed25519 public key, what
@@ -90,10 +89,9 @@ fn extra_sdk_keys() -> Vec<PublicKey> {
     Vec::new()
 }
 
-fn repository_keys<'a>(repository: &str, upstream: &'a str, fork: &'a str) -> &'a str {
+fn repository_keys<'a>(repository: &str, keys: &'a str) -> &'a str {
     match repository {
-        "horizon-rust/horizon" => upstream,
-        "arismoko/horizon" => fork,
+        "horizon-rust/horizon" => keys,
         _ => "",
     }
 }
@@ -430,7 +428,7 @@ pub fn legacy_digest(tag: &str, asset: &str) -> Option<&'static str> {
     legacy_digest_for("horizon-rust/horizon", tag, asset)
 }
 
-/// Historical pins belong to upstream only. The fork has no unsigned game-release history.
+/// Historical pins belong to horizon-rust/horizon only: no other repository has unsigned game-release history.
 pub fn legacy_digest_for(repository: &str, tag: &str, asset: &str) -> Option<&'static str> {
     if repository != "horizon-rust/horizon" {
         return None;
@@ -564,53 +562,45 @@ mod tests {
     #[test]
     fn repository_trust_is_isolated_and_unknown_repositories_fail_closed() {
         let (upstream, _) = SigningKey::generate().unwrap();
-        let (fork, _) = SigningKey::generate().unwrap();
+        let (other, _) = SigningKey::generate().unwrap();
         let upstream_text = upstream.public_base64();
-        let fork_text = fork.public_base64();
-        let keys = |repo| parse_keys(repository_keys(repo, &upstream_text, &fork_text)).unwrap();
+        let keys = |repo| parse_keys(repository_keys(repo, &upstream_text)).unwrap();
         let sums = sums_file(&[("game.tar.gz".into(), "ab".repeat(32))]);
         let tag = "nightly-2026-11-10-abcdef0";
-        for (repository, signer, other) in [
-            ("horizon-rust/horizon", &upstream, &fork),
-            ("arismoko/horizon", &fork, &upstream),
-        ] {
-            assert!(
-                verify(
-                    tag,
-                    sums.as_bytes(),
-                    &signer.sign(tag, sums.as_bytes()),
-                    &keys(repository)
-                )
-                .is_ok()
-            );
-            assert!(
-                verify(
-                    tag,
-                    sums.as_bytes(),
-                    &other.sign(tag, sums.as_bytes()),
-                    &keys(repository)
-                )
-                .is_err()
-            );
-            assert!(
-                verify(
-                    "nightly",
-                    sums.as_bytes(),
-                    &signer.sign(tag, sums.as_bytes()),
-                    &keys(repository)
-                )
-                .is_err()
-            );
-        }
+        let repository = "horizon-rust/horizon";
+        assert!(
+            verify(
+                tag,
+                sums.as_bytes(),
+                &upstream.sign(tag, sums.as_bytes()),
+                &keys(repository)
+            )
+            .is_ok()
+        );
+        assert!(
+            verify(
+                tag,
+                sums.as_bytes(),
+                &other.sign(tag, sums.as_bytes()),
+                &keys(repository)
+            )
+            .is_err()
+        );
+        assert!(
+            verify(
+                "nightly",
+                sums.as_bytes(),
+                &upstream.sign(tag, sums.as_bytes()),
+                &keys(repository)
+            )
+            .is_err()
+        );
+        assert!(keys("someone/horizon").is_empty());
         assert!(keys("unknown/horizon").is_empty());
         assert!(trusted_keys_for("unknown/horizon").is_empty());
         assert_eq!(
             trusted_keys_for("horizon-rust/horizon"),
             parse_keys(KEYS).unwrap()
-        );
-        assert_eq!(
-            trusted_keys_for("arismoko/horizon"),
-            parse_keys(FORK_KEYS).unwrap()
         );
     }
 

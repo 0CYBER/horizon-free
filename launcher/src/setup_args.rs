@@ -133,22 +133,12 @@ mod tests {
         \"horizon-launcher.exe\",\"4120\",\"Console\",\"1\",\"212,044 K\"\r\n\
         \"horizon-launcher-setup.exe\",\"77\",\"Console\",\"1\",\"9,000 K\"\r\n";
 
-    fn tasklist() -> String {
-        TASKLIST.into()
-    }
-
     #[test]
     fn a_running_launcher_is_found_but_not_this_process() {
         // The uninstaller is itself `horizon-launcher.exe`: it must not ask itself to quit.
-        assert_eq!(other_launcher_pids(&tasklist(), 9988), vec![4120]);
-        assert_eq!(other_launcher_pids(&tasklist(), 1), vec![4120, 9988]);
-        assert_eq!(other_launcher_pids(&tasklist(), 4120), vec![9988]);
-    }
-
-    #[test]
-    fn another_identity_is_never_terminated() {
-        let other = "\"horizon-fork-launcher.exe\",\"42\"";
-        assert!(other_launcher_pids(other, 1).is_empty());
+        assert_eq!(other_launcher_pids(TASKLIST, 9988), vec![4120]);
+        assert_eq!(other_launcher_pids(TASKLIST, 1), vec![4120, 9988]);
+        assert_eq!(other_launcher_pids(TASKLIST, 4120), vec![9988]);
     }
 
     #[test]
