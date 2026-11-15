@@ -684,7 +684,9 @@ mod tests {
             );
             // Guardian.hurtServer retaliates synchronously, not from the
             // following AI step's last-damage record.
-            hurt_server(&mut mob, &Damage::player([1.0, 64.0, 0.0]));
+            mob.invulnerable_flag = true;
+            let mut level = crate::health::TestLevel::new(0);
+            assert!(!mob.damage(&mut level.level(), 2.0, Damage::player([1.0, 64.0, 0.0])));
             assert!(matches!(
                 mob.outbox.as_slice(),
                 [MobEvent::DamagePlayer {
