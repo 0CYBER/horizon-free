@@ -98,7 +98,7 @@ impl Game<'_> {
     }
 
     pub(super) fn native_authoritative(&self) -> bool {
-        self.serving.is_some() || self.options.dedicated.is_some()
+        self.is_logical_server()
     }
 
     /// Access a holder's attachment map, to lend to a mod: a server's, whose
