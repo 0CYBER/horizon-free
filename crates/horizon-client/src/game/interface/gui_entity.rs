@@ -261,7 +261,12 @@ fn seen_quads(verts: &[Vertex], gui: Mat4, quads: &mut Vec<SeenQuad>) {
         let ch = |s: u32| ((((c >> s) & 255) as f32 * shade) as u32) << s;
         let color = (c & 0xFF00_0000) | ch(0) | ch(8) | ch(16);
         let depth = p.iter().map(|v| v.z).sum::<f32>() / 4.0;
-        quads.push((depth, p.map(|v| v.to_array()), std::array::from_fn(|i| q[i].uv), color));
+        quads.push((
+            depth,
+            p.map(|v| v.to_array()),
+            std::array::from_fn(|i| q[i].uv),
+            color,
+        ));
     }
     // Translucent faces over what is behind them; unstable, so no buffer is allocated.
     quads.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
@@ -274,16 +279,28 @@ mod tests {
     #[test]
     fn the_cursor_turns_the_entity_as_follows_mouse_does() {
         // The cursor on the centre: facing the viewer, untilted.
-        assert_eq!(turn(GuiEntityLook::At([50.0, 60.0]), [50.0, 60.0]), (180.0, 180.0, 0.0, 0.0));
+        assert_eq!(
+            turn(GuiEntityLook::At([50.0, 60.0]), [50.0, 60.0]),
+            (180.0, 180.0, 0.0, 0.0)
+        );
         // Left of the centre: atan(40 / 40) = pi/4, body 20 of it, head 40.
         let (body, head, pitch, tilt) = turn(GuiEntityLook::At([10.0, 60.0]), [50.0, 60.0]);
         let quarter = std::f32::consts::FRAC_PI_4;
-        assert_eq!((body, head), (180.0 + quarter * 20.0, 180.0 + quarter * 40.0));
+        assert_eq!(
+            (body, head),
+            (180.0 + quarter * 20.0, 180.0 + quarter * 40.0)
+        );
         assert_eq!((pitch, tilt), (0.0, 0.0));
         // Above: the head pitches up (negative) and the whole entity tilts.
         let (_, _, pitch, tilt) = turn(GuiEntityLook::At([50.0, 20.0]), [50.0, 60.0]);
         assert_eq!((pitch, tilt), (-quarter * 20.0, quarter * 20.0));
-        let fixed = turn(GuiEntityLook::Turned { yaw: 30.0, pitch: 10.0 }, [0.0; 2]);
+        let fixed = turn(
+            GuiEntityLook::Turned {
+                yaw: 30.0,
+                pitch: 10.0,
+            },
+            [0.0; 2],
+        );
         assert_eq!(fixed, (210.0, 210.0, 10.0, 0.0));
     }
 
@@ -327,7 +344,10 @@ mod tests {
         assert!(!GuiEntityView::new([0.0, 0.0, 0.0, 70.0], 30.0, 0.0, look).is_drawable());
         assert!(!GuiEntityView::new([0.0, 0.0, 50.0, 70.0], 0.0, 0.0, look).is_drawable());
         assert!(!GuiEntityView::new([0.0, 0.0, 50.0, 70.0], 30.0, f32::NAN, look).is_drawable());
-        let nan = GuiEntityLook::Turned { yaw: f32::INFINITY, pitch: 0.0 };
+        let nan = GuiEntityLook::Turned {
+            yaw: f32::INFINITY,
+            pitch: 0.0,
+        };
         assert!(!GuiEntityView::new([0.0, 0.0, 50.0, 70.0], 30.0, 0.0, nan).is_drawable());
     }
 
@@ -374,7 +394,10 @@ mod tests {
             let other = GuiEntity::with_data("minecraft:zombie", data);
             assert_eq!(refused(&other, view), Err(GuiEntityError::BadData));
             let stale = mod_api::EntityRef::new(mod_api::WorldEpoch::new(999), 5);
-            assert_eq!(refused(&GuiEntity::existing(stale), view), Err(GuiEntityError::NoEntity));
+            assert_eq!(
+                refused(&GuiEntity::existing(stale), view),
+                Err(GuiEntityError::NoEntity)
+            );
             let empty = GuiEntityView::new([26.0, 8.0, 26.0, 78.0], 30.0, 0.0, look);
             assert_eq!(refused(&zombie, empty), Err(GuiEntityError::BadView));
             // Finite values whose sums or products overflow are refused too, drawing nothing.
@@ -386,7 +409,12 @@ mod tests {
             ];
             for view in huge {
                 assert!(view.is_drawable(), "{:?}", view.rect);
-                assert_eq!(refused(&zombie, view), Err(GuiEntityError::BadView), "{:?}", view.rect);
+                assert_eq!(
+                    refused(&zombie, view),
+                    Err(GuiEntityError::BadView),
+                    "{:?}",
+                    view.rect
+                );
             }
             assert_eq!(batch.vertices.len(), before);
         });
