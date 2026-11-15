@@ -151,6 +151,9 @@ pub(super) struct TransferredEntityState {
     initialized: bool,
     accepted_hit: Option<std::sync::Arc<horizon_client::health::AcceptedHit>>,
     died: bool,
+    /// The source id whose attachment map a transaction open at the take kept: the
+    /// arrival moves that keeping to the new id.
+    journaled: Option<u32>,
 }
 
 impl TransferredEntityState {
@@ -169,9 +172,18 @@ impl TransferredEntityState {
 impl Game<'_> {
     /// Consume the source object's state before forgetting its persistence metadata.
     /// Retiring the publisher immediately makes retained query write tokens stale.
+    /// Inside a transaction the take is journaled: the map's writes in the action roll back
+    /// wherever the map is, and the source level's index keeps its rows until the root closes
+    /// (`defer_departure`). Travel itself is not undone, so the map stays with the entity.
     pub(super) fn take_transferred_entity_state(&mut self, id: u32) -> TransferredEntityState {
+        let journaled = (!self.transactions.is_empty()).then(|| {
+            self.journal_attachments(Holder::Entity(id));
+            id
+        });
         let mut attachments = self.entity_attachments.remove(&id);
-        if let Some(map) = &mut attachments {
+        if journaled.is_some() {
+            self.defer_departure(id, attachments.as_mut());
+        } else if let Some(map) = &mut attachments {
             map.unbind_index();
         }
         let accepted_hit = self
@@ -182,6 +194,7 @@ impl Game<'_> {
             attachments,
             accepted_hit,
             died,
+            journaled,
             initialized: self
                 .entity_initialization
                 .initialized
@@ -197,6 +210,9 @@ impl Game<'_> {
         state: TransferredEntityState,
     ) {
         self.journal_arrival(id);
+        if let Some(source) = state.journaled {
+            self.journal_travel(source, id);
+        }
         if state.died {
             self.died.insert(id);
         }
