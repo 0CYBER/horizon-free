@@ -397,8 +397,8 @@ renderer.
 
 ## Kept resources and compute passes
 
-**Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a
-`[[resource]]`, a `[[before_world]]` entry or a compute `[[post]]` entry: it needs a later Horizon.
+Not yet with `[ray_tracing]`: the game refuses a pack that has it beside a `[[resource]]`, a `[[before_world]]` entry
+or a compute `[[post]]` entry, as one that needs a later Horizon.
 
 - `[[resource]]`: `name`; `buffer` (bytes) with `element` (`u32`, `atomic<u32>`, `f32`, `vec4<u32>`, `vec4<f32>`), or `format`
   (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`

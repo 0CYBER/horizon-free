@@ -188,8 +188,8 @@ fn kept() -> String {
     let formats = list(Format::ALL.iter().map(|f| f.wgsl()).collect());
     let mut out = format!(
         "## Kept resources and compute passes\n\n\
-         **Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a\n\
-         `[[resource]]`, a `[[before_world]]` entry or a compute `[[post]]` entry: it needs a later Horizon.\n\n\
+         Not yet with `[ray_tracing]`: the game refuses a pack that has it beside a `[[resource]]`, a `[[before_world]]` entry\n\
+         or a compute `[[post]]` entry, as one that needs a later Horizon.\n\n\
          - `[[resource]]`: `name`; `buffer` (bytes) with `element` ({elements}), or `format`\n  \
          ({formats}) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `\"view\"`\n  \
          (screen history) or `\"world\"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in\n  \

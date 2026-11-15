@@ -146,7 +146,7 @@ pub struct Manifest {
     /// 0.2: the motion guide the post stage's `motion_at` reads, if the pack asks for it;
     /// needs `[[post]]`.
     pub motion: Option<Motion>,
-    /// 0.2: kept resources and compute passes. Checked, not yet run.
+    /// 0.2: kept resources and compute passes.
     pub kept: crate::kept::Kept,
 }
 
@@ -1340,8 +1340,7 @@ impl Manifest {
         out
     }
 
-    /// Whether the pack declares kept resources or compute passes, which the game doesn't run
-    /// yet.
+    /// Whether the pack declares kept resources or compute passes.
     pub fn computes(&self) -> bool {
         !self.kept.resources.is_empty()
             || !self.kept.before_world.is_empty()

@@ -280,6 +280,9 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   the registry refuse a 0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`; the game draws without it.
   [Moving a pack to 0.2](#shader-api-02-experimental) is described above; Golden Hour 2.0.0 is the moved example. The
   0.1 reference is gone, and the templates of `horizon-shader new` are 0.2 packs. API 0.2 is unchanged.
+- 2026-11-15: API 0.2 (experimental): the game runs kept resources, compute `[[post]]` entries and
+  `[[before_world]]` passes (#16011 item 4), which it refused until now. It still refuses a pack that has them beside
+  `[ray_tracing]`, as one that needs a later Horizon. The API is unchanged.
 - 2026-11-15: API 0.2 (additions, experimental): fixed-size kept textures (`[[resource]]` with a `size`) may take
   32 MiB together, both versions counted, as much as kept buffers; it was 1 MiB, one 256×256 `rgba16float` texture.
   A camera-centred trail or height map, a light cache or a lookup table can now be a texture rather than a buffer

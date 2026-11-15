@@ -1,6 +1,6 @@
 //! Shader API 0.2's kept resources and compute passes (#16011 item 4): `[kept]`, `[[resource]]`,
-//! `[[before_world]]`, `[[post]] compute = true` and options' `resets`. The check takes them;
-//! the game doesn't run them yet and refuses a pack that declares any (`Manifest::computes`).
+//! `[[before_world]]`, `[[post]] compute = true` and options' `resets`. The game runs them, but
+//! not yet beside `[ray_tracing]` (`Manifest::computes`).
 use crate::manifest::{POST_SCALES, Stage};
 use serde::Deserialize;
 

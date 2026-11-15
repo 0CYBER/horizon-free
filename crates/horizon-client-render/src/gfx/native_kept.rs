@@ -3,8 +3,8 @@
 //! device lacks for them, and the epochs that say when they start over; the post chain's passes
 //! bind them, and each frame starts by swapping, fitting and clearing them (`KeptStore::begin`).
 //! Compute `[[post]]` entries dispatch where they stand in the chain, and `[[before_world]]`
-//! entries once a frame after the shadow map (`NativePack::before_world`); the game still
-//! refuses a pack with them (`not_drawn`).
+//! entries once a frame after the shadow map (`NativePack::before_world`). The game refuses a
+//! pack with them only together with `[ray_tracing]` (`not_drawn`).
 use horizon_shader_api::check::{CheckedStage, Report};
 use horizon_shader_api::kept::{self, Dispatch, Format, Keep, Kept, Shape};
 use horizon_shader_api::stages::{GROUP, KeptAccess, KeptBinding, kept_bindings};

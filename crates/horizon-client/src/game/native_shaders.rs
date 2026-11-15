@@ -303,7 +303,8 @@ fn manifest_refused(path: &Path) -> Option<String> {
 }
 
 /// Why the game doesn't draw a pack the check may still pass: `[frame] primaries = "bt2020"`
-/// isn't served yet (#14584), and neither are `[motion]` or compute entries.
+/// isn't served yet (#14584), and neither are `[motion]` or `[ray_tracing]` beside kept
+/// resources and compute entries.
 fn not_drawn(m: &Manifest) -> Option<&'static str> {
     if m.primaries == Primaries::Bt2020 {
         return Some(
@@ -315,9 +316,10 @@ fn not_drawn(m: &Manifest) -> Option<&'static str> {
             "[motion] needs a later Horizon: this one checks the motion guide but doesn't draw it",
         );
     }
-    m.computes().then_some(
-        "[[resource]], [[before_world]] and compute [[post]] entries need a later Horizon: \
-         this one checks them but doesn't run them",
+    // Their passes' layouts have no scene yet: the post passes would miss every ray unsaid.
+    (m.computes() && m.ray_tracing.is_some()).then_some(
+        "[ray_tracing] beside [[resource]], [[before_world]] or compute [[post]] entries needs a \
+         later Horizon: this one doesn't trace in a pack that keeps resources",
     )
 }
 
@@ -504,7 +506,9 @@ mod tests {
         assert!(why.contains("[motion] needs a later Horizon"), "{why}");
         let kept =
             "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n";
-        let why = not_drawn(&manifest(kept)).unwrap();
-        assert!(why.contains("need a later Horizon"), "{why}");
+        assert_eq!(not_drawn(&manifest(kept)), None);
+        let traced = format!("{kept}[ray_tracing]\n");
+        let why = not_drawn(&manifest(&traced)).unwrap();
+        assert!(why.contains("[ray_tracing] beside [[resource]]"), "{why}");
     }
 }
