@@ -12,7 +12,7 @@ impl Game<'_> {
         LookOptions {
             sensitivity: f64::from(self.settings.sensitivity),
             smooth_camera: self.smooth_camera,
-            scoping: self.scoping(),
+            scoping: self.camera_type.first_person() && self.scoping(),
             invert_x: self.settings.invert_x,
             invert_y: self.settings.invert_y,
         }
@@ -445,3 +445,7 @@ mod tests {
         assert!(!top_screen_pauses(Some(false), Some(true), false, false));
     }
 }
+
+#[cfg(test)]
+#[path = "scoping_look_tests.rs"]
+mod scoping_look_tests;

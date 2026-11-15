@@ -358,6 +358,8 @@ pub fn main() -> Result<()> {
         let texts = RefCell::new(Vec::<TextCall>::new());
         let scene = Scene {
             camera,
+            // No player in the oracle: `isOutlineVisible` falls back to the distance.
+            spyglass_outline: false,
             orientation: Quat::from_euler(
                 glam::EulerRot::YXZ,
                 std::f32::consts::PI - yaw * (std::f32::consts::PI / 180.0),

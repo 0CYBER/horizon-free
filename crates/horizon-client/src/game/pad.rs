@@ -820,7 +820,12 @@ impl Game<'_> {
         }
         // A long frame (a hitch) must not spin the view.
         let seconds = seconds.min(0.1);
-        let turn = gamepad::look_delta(self.pad.state.right, settings, seconds, self.scoping());
+        let turn = gamepad::look_delta(
+            self.pad.state.right,
+            settings,
+            seconds,
+            self.camera_type.first_person() && self.scoping(),
+        );
         // The cinematic camera eases the stick's turn in and out, as it does the mouse's.
         let (yaw, pitch) = self.pad.look.turn(turn, seconds, self.smooth_camera);
         if yaw == 0.0 && pitch == 0.0 {

@@ -643,16 +643,11 @@ fn first_line(line: &Text, max_width: f32, advance: &dyn Fn(char, &Style) -> f32
     line.clone()
 }
 
-/// `AbstractSignRenderer.isOutlineVisible`: the camera within 16 blocks of
-/// the sign's centre.
-fn sign_text_near(pos: [i32; 3], camera: DVec3) -> bool {
-    DVec3::new(
-        f64::from(pos[0]) + 0.5,
-        f64::from(pos[1]) + 0.5,
-        f64::from(pos[2]) + 0.5,
-    )
-    .distance_squared(camera)
-        < 256.0
+/// `AbstractSignRenderer.isOutlineVisible`: a first-person camera looking through a
+/// spyglass outlines the text, else the camera is within 16 blocks of its centre.
+fn sign_text_near(scene: &Scene, pos: [i32; 3]) -> bool {
+    let centre = DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])) + 0.5;
+    scene.spyglass_outline || centre.distance_squared(scene.camera) < 256.0
 }
 
 /// `AbstractSignRenderer.submitSignText`: four centred lines, glowing text
@@ -947,6 +942,8 @@ pub struct TextCall {
 /// Inputs from the game for one frame of block-entity rendering.
 pub struct Scene<'a> {
     pub camera: DVec3,
+    /// `isScoping` in first person: glowing sign text is outlined at any distance.
+    pub spyglass_outline: bool,
     /// `Camera.rotation` (conduit eyes face the camera).
     pub orientation: Quat,
     /// Ticked block-entity state at a position.
@@ -2469,7 +2466,7 @@ impl BlockEntityRenderer {
         let Some(data) = (scene.sign)(pos) else {
             return;
         };
-        let near = (data.front.glowing || data.back.glowing) && sign_text_near(pos, scene.camera);
+        let near = (data.front.glowing || data.back.glowing) && sign_text_near(scene, pos);
         let Ok(mut cache) = self.sign_texts.lock() else {
             return;
         };
@@ -2796,7 +2793,7 @@ impl BlockEntityRenderer {
                         m *= Mat4::from_translation(Vec3::new(0.0, 1.0 / 3.0, 0.046_666_667))
                             * Mat4::from_scale(s * 0.010_416_667);
                     }
-                    let near = sign_text_near(pos, scene.camera);
+                    let near = sign_text_near(scene, pos);
                     let calls = sign_text_calls(scene, data, text, m, packed, near);
                     match scene.texts {
                         Some(sink) => sink.borrow_mut().extend(calls),
@@ -3656,6 +3653,38 @@ mod tests {
     use super::*;
     use crate::assets::Assets;
     use horizon_world::nbt::Tag;
+
+    /// The scene a sign-text test renders with: no camera rotation, no ticked
+    /// state, one frame, a flat world and the test's glyph atlas.
+    macro_rules! sign_scene {
+        ($world:expr, $sprites:expr, $glyph:expr) => {
+            Scene {
+                camera: DVec3::ZERO,
+                spyglass_outline: false,
+                orientation: Quat::IDENTITY,
+                anim: &|_| BlockAnim::default(),
+                texts: None,
+                partial: 0.0,
+                game_time: 0,
+                max_y: 320,
+                world: $world,
+                sprites: $sprites,
+                emissive: &Default::default(),
+                translucent_sprites: &HashSet::new(),
+                atlas_revision: 1,
+                nether: false,
+                lid: &|_| 0.0,
+                sign: &|_| None,
+                banner: &|_| Vec::new(),
+                skull: &|_| None,
+                glyph: $glyph,
+                glyphs: 0,
+                font: None,
+                dynamic_visible: None,
+            }
+        };
+    }
+
     #[test]
     #[ignore = "requires prepared models/textures in HORIZON_TEST_RESOURCES"]
     fn entity_block_particles_and_breaking_use_exported_models() -> Result<()> {
@@ -3750,6 +3779,7 @@ mod tests {
         let cache_lid = |_| cache_open.get();
         let mut scene = Scene {
             camera: DVec3::ZERO,
+            spyglass_outline: false,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4143,29 +4173,7 @@ mod tests {
                 ..Glyph::default()
             }
         };
-        let scene = Scene {
-            camera: DVec3::ZERO,
-            orientation: Quat::IDENTITY,
-            anim: &|_| BlockAnim::default(),
-            texts: None,
-            partial: 0.0,
-            game_time: 0,
-            max_y: 320,
-            world: &world,
-            sprites: &sprites,
-            emissive: &Default::default(),
-            translucent_sprites: &HashSet::new(),
-            atlas_revision: 1,
-            nether: false,
-            lid: &|_| 0.0,
-            sign: &|_| None,
-            banner: &|_| Vec::new(),
-            skull: &|_| None,
-            glyph: &glyph,
-            glyphs: 0,
-            font: None,
-            dynamic_visible: None,
-        };
+        let scene = sign_scene!(&world, &sprites, &glyph);
         let mut call = TextCall {
             matrix: Mat4::IDENTITY,
             x: 0.0,
@@ -4219,29 +4227,7 @@ mod tests {
             advance: 5.0,
             offset: 0.5,
         };
-        let scene = Scene {
-            camera: DVec3::ZERO,
-            orientation: Quat::IDENTITY,
-            anim: &|_| BlockAnim::default(),
-            texts: None,
-            partial: 0.0,
-            game_time: 0,
-            max_y: 320,
-            world: &world,
-            sprites: &sprites,
-            emissive: &Default::default(),
-            translucent_sprites: &HashSet::new(),
-            atlas_revision: 1,
-            nether: false,
-            lid: &|_| 0.0,
-            sign: &|_| None,
-            banner: &|_| Vec::new(),
-            skull: &|_| None,
-            glyph: &glyph,
-            glyphs: 0,
-            font: None,
-            dynamic_visible: None,
-        };
+        let scene = sign_scene!(&world, &sprites, &glyph);
         let call = TextCall {
             matrix: Mat4::IDENTITY,
             x: 10.0,
@@ -4356,29 +4342,7 @@ mod tests {
             advance: 6.0,
             ..Glyph::default()
         };
-        let scene = Scene {
-            camera: DVec3::ZERO,
-            orientation: Quat::IDENTITY,
-            anim: &|_| BlockAnim::default(),
-            texts: None,
-            partial: 0.0,
-            game_time: 0,
-            max_y: 320,
-            world: &world,
-            sprites: &sprites,
-            emissive: &Default::default(),
-            translucent_sprites: &HashSet::new(),
-            atlas_revision: 1,
-            nether: false,
-            lid: &|_| 0.0,
-            sign: &|_| None,
-            banner: &|_| Vec::new(),
-            skull: &|_| None,
-            glyph: &glyph,
-            glyphs: 0,
-            font: None,
-            dynamic_visible: None,
-        };
+        let scene = sign_scene!(&world, &sprites, &glyph);
         sign_text_calls(&scene, data, &data.front, Mat4::IDENTITY, 0, near)
             .into_iter()
             .map(|c| (c.text, c.x, c.y, c.color, c.outline))
@@ -4543,6 +4507,7 @@ mod tests {
         );
         let mut scene = Scene {
             camera: DVec3::new(3.25, 70.5, -4.75),
+            spyglass_outline: false,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4731,6 +4696,7 @@ mod tests {
         let world = World::new(BlockStateId(0), 1);
         let scene = Scene {
             camera: DVec3::ZERO,
+            spyglass_outline: false,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,
@@ -4821,6 +4787,7 @@ mod tests {
         let world = World::new(BlockStateId(0), 1);
         let scene = Scene {
             camera: DVec3::ZERO,
+            spyglass_outline: false,
             orientation: Quat::IDENTITY,
             anim: &|_| BlockAnim::default(),
             texts: None,

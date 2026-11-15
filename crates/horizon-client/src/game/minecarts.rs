@@ -2862,9 +2862,9 @@ impl Game<'_> {
         light: u8,
         out: &mut Vec<Vertex>,
     ) {
-        let lid = |_: [i32; 3]| 0.0;
         let scene = horizon_client::block_entity_render::Scene {
             camera: glam::DVec3::ZERO,
+            spyglass_outline: self.camera_type.first_person() && self.scoping(),
             orientation: glam::Quat::IDENTITY,
             anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
             texts: None,
@@ -2877,7 +2877,7 @@ impl Game<'_> {
             translucent_sprites: &self.gui.atlas.translucent,
             atlas_revision: self.gui.atlas.revision,
             nether: self.nether_lighting(),
-            lid: &lid,
+            lid: &|_: [i32; 3]| 0.0,
             sign: &|_| None,
             banner: &|_| Vec::new(),
             skull: &|_| None,

@@ -6878,10 +6878,10 @@ impl Game<'_> {
                 );
                 !self.block_entity_occluded(bounds)
             };
-            let lid = |p: [i32; 3]| self.chest_lid(p, alpha as f32);
             let anim = |p: [i32; 3]| self.block_anim(p, alpha as f32);
             let scene = BlockEntityScene {
                 camera,
+                spyglass_outline: self.camera_type.first_person() && self.scoping(),
                 orientation: self.camera_orientation(),
                 anim: &anim,
                 texts: None,
@@ -6894,7 +6894,7 @@ impl Game<'_> {
                 translucent_sprites: &self.gui.atlas.translucent,
                 atlas_revision: self.gui.atlas.revision,
                 nether: self.nether_lighting(),
-                lid: &lid,
+                lid: &|p: [i32; 3]| self.chest_lid(p, alpha as f32),
                 sign: &|p| match self.world.block_entities.get(&(p[0], p[1], p[2])) {
                     Some(BlockEntity::Sign(sign)) => Some(sign),
                     _ => None,
