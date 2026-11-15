@@ -119,8 +119,16 @@ impl ResolvedState {
 /// question is `None` when no part answers it, and every state keeps the block's answer.
 #[derive(Default)]
 pub struct PartAnswers<'a> {
-    /// `isPathfindable`, given the block's own answer.
-    pub pathfindable: Option<&'a dyn Fn(BlockStateId, PathComputationType, bool) -> bool>,
+    /// `isPathfindable`, by state id: the [`Self::pathfindable_bit`] of each
+    /// [`PathComputationType`] the state's parts answered true, given the block's own answer
+    /// ([`MobData::block_pathfindable`]). One entry per state of [`MobData::states`].
+    pub pathfindable: Option<&'a [u8]>,
+}
+impl PartAnswers<'_> {
+    /// The bit `kind` sets in a [`Self::pathfindable`] entry.
+    pub fn pathfindable_bit(kind: PathComputationType) -> u8 {
+        path_bit(kind) as u8
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Placement {
@@ -225,6 +233,10 @@ impl MobData {
             self.state(state).flags & path_bit(kind) != 0
         }
     }
+    /// The block's own `isPathfindable(kind)`, the export's, whatever a mod part answered.
+    pub fn block_pathfindable(&self, state: BlockStateId, kind: PathComputationType) -> bool {
+        self.state(state).flags & path_bit(kind) != 0
+    }
     /// Vanilla static classification after state-only `isPathfindable` resolution.
     /// Positional path-type overrides are applied by `MobWorld`, never stored here.
     pub fn path_type(&self, state: BlockStateId) -> PathType {
@@ -233,23 +245,20 @@ impl MobData {
             |slot| PathType::ALL[usize::from(slot.path.load(Ordering::Relaxed))],
         )
     }
-    /// Ask each state's mod parts once, in vanilla's order, and keep the answers: they depend on
-    /// the state alone, so path finding and spawning read them with nothing dispatched. Called
-    /// when parts install, at world load and on every `/reload`; a question with no answer in
-    /// `answers` gives every state its block's answer again. `facts` says which states are air
-    /// and which hold water.
+    /// Keep each state's mod-part answers, asked once by the game's per-state resolver: they
+    /// depend on the state alone, so path finding and spawning read them with nothing
+    /// dispatched. Called when parts install, at world load and on every `/reload`; a question
+    /// with no answer in `answers` gives every state its block's answer again. `facts` says
+    /// which states are air and which hold water.
     pub fn resolve_parts(&self, facts: &BlockFacts, answers: &PartAnswers<'_>) {
         let table = self
             .resolved
             .get_or_init(|| self.states.iter().map(ResolvedState::exported).collect());
         for ((i, data), slot) in self.states.iter().enumerate().zip(table) {
             let state = BlockStateId(i as u32);
-            let given = answers.pathfindable.map_or(0, |answer| {
-                PathComputationType::ALL
-                    .into_iter()
-                    .filter(|&kind| answer(state, kind, data.flags & path_bit(kind) != 0))
-                    .fold(OVERRIDDEN, |bits, kind| bits | path_bit(kind) as u8)
-            });
+            let given = answers
+                .pathfindable
+                .map_or(0, |answers| OVERRIDDEN | answers[i]);
             let land = if given & OVERRIDDEN != 0 {
                 u16::from(given) & LAND != 0
             } else {
