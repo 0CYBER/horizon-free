@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-const LAUNCHER_HINT: &str = "Horizon does not download the game: play {version} once in the launcher you play \
+const LAUNCHER_HINT: &str =
+    "Horizon does not download the game: play {version} once in the launcher you play \
 Minecraft Java Edition with so it downloads the game's files, then rerun. Horizon reads the \
 official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher or MultiMC, \
 pass --prism-dir with its folder; for the Modrinth App or GDLauncher, prepare from the Horizon \

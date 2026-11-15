@@ -3867,7 +3867,8 @@ mod slots_predicate_tests {
         );
         fs::write(dir.join("test.json"), json).unwrap();
         fs::write(root.join("items.json"), "{}").unwrap();
-        let data = LootData::load(&root, &PackOverlay::NONE).unwrap();
+        let defaults = crate::item_defaults::read(&root).unwrap();
+        let data = LootData::load(&root, &PackOverlay::NONE, &defaults).unwrap();
         let _ = fs::remove_dir_all(&root);
         data
     }

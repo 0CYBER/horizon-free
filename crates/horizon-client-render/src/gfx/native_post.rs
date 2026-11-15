@@ -1809,7 +1809,7 @@ mod tests {
     /// pack with `[shadow]` gets the shadow camera's light as before, to the bit.
     #[test]
     fn the_light_is_the_sun_by_day_and_the_moon_by_night_with_or_without_a_shadow_map() {
-        let hud = crate::hud::HudBatch::new([4, 4]);
+        let hud = crate::hud::HudBatch::scratch([4, 4]);
         let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
         let shadow = crate::gfx::native_shadow::camera(&Default::default());
         let light = |frame: &Frame, shadow| {

@@ -1383,7 +1383,7 @@ impl Game<'_> {
     /// `Entity.clearFire` for a cart. The only fire a cart has here is the
     /// `Fire` it was loaded with, which its save writes back.
     fn clear_cart_fire(&mut self, id: u32) {
-        if let Some(horizon_world::nbt::Tag::Compound(map)) = self.persist.raw.get_mut(&id) {
+        if let Some(horizon_core::nbt::Tag::Compound(map)) = self.persist.raw.get_mut(&id) {
             map.remove(&"Fire".into());
         }
     }
