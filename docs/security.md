@@ -93,6 +93,15 @@ and some are waiting for Ludovic:
   same fork key file, then enable `RELEASE_SIGNING_KEY_NEXT` for overlapping signatures before
   replacing the primary secret and eventually retiring the old public key. Nightly title,
   channel and exact-version signature binding remain unchanged.
+
+**A test SDK key, developer builds only:** the daily run's `fn-replace-check` checks its own, unpublished SDK. It
+  signs that SDK with a throwaway key made for the run and gives the launcher the public key in
+  `HORIZON_SDK_TRUSTED_KEY` (one base64 Ed25519 key, what `tools/ci/sign_release.sh` writes to `ephemeral.pub` under
+  `EPHEMERAL=yes`). `horizon_release_sign::sdk_keys_for` adds that key to the release keys for SDK checks only (the
+  launcher's SDK index and `cargo horizon-mod`'s fetch), and only in a build with `debug_assertions`: a release build
+  does not compile the lookup, so no environment adds trust to a shipped launcher, and game and launcher releases are
+  never checked with it. A test runs in both profiles and proves the release profile ignores the variable. No release
+  key enters the daily job.
 - **Upstream release machinery needs the council.** The workflows, the release and signing tools, the update-checking code
   and the installers are listed in `.github/CODEOWNERS`. Once main's protection requires code owners' reviews, a
   change to any of them waits for a review from the `horizon-rust/council` team (council poll P35). Everything else still merges as soon as its checks pass.
