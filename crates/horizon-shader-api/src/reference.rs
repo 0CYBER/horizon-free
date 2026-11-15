@@ -251,12 +251,12 @@ fn kept() -> String {
     }
     out + &format!(
         "\nLimits: {MAX_RESOURCES} resources, {MAX_BEFORE_WORLD} `[[before_world]]` entries, {MAX_COMPUTE_POST} compute\n\
-         `[[post]]` entries; {} MiB of buffers and {} KiB of fixed-size textures, both versions counted; each R-relative\n\
+         `[[post]]` entries; {} MiB of buffers and {} MiB of fixed-size textures, both versions counted; each R-relative\n\
          kept texture takes 2 of the post targets' budget (Limits); a workgroup of up to {MAX_WORKGROUP:?} and\n\
          {MAX_WORKGROUP_INVOCATIONS} invocations; {MAX_DISPATCH_INVOCATIONS} invocations a dispatch and {MAX_FRAME_INVOCATIONS} a frame over every\n\
          compute pass, `[[before_world]]` and `[[post]]` together, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
         MAX_BUFFER_BYTES >> 20,
-        MAX_FIXED_TEXTURE_BYTES >> 10,
+        MAX_FIXED_TEXTURE_BYTES >> 20,
         PIXELS_COUNTED_AS[0],
         PIXELS_COUNTED_AS[1]
     )

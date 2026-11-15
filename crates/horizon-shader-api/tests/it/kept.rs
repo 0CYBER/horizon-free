@@ -253,18 +253,26 @@ fn counts_and_memory_are_bounded() {
         &format!("{}{}", many(2, half), resource("more", small)),
         "buffers take 33554436 bytes",
     );
-    // 1 MiB of fixed textures, both versions counted: two 128² of 16-byte texels, not one 256².
+    // 32 MiB of fixed textures, both versions counted, as buffers. What 1 MiB took still passes
+    // (two 128² of 16-byte texels), and so do a 512² trail or height map, a 1024² `rgba16float`
+    // (16 MiB) and two of those, but not a texel more.
     for format in ["rgba32float", "rgba32uint"] {
         parse(&many(
             2,
             &format!("format = \"{format}\"\nsize = [128, 128]"),
         ))
         .unwrap();
-        refused(
-            &many(1, &format!("format = \"{format}\"\nsize = [256, 256]")),
-            "fixed-size [[resource]] textures take 2097152 bytes",
-        );
     }
+    parse(&many(1, "format = \"r32float\"\nsize = [512, 512]")).unwrap();
+    let large = "format = \"rgba16float\"\nsize = [1024, 1024]";
+    parse(&many(1, large)).unwrap();
+    parse(&many(2, large)).unwrap();
+    let texel = resource("more", "format = \"r32float\"\nsize = [1, 1]");
+    refused(
+        &format!("{}{texel}", many(2, large)),
+        "fixed-size [[resource]] textures take 33554440 bytes with both versions; a pack may \
+         keep 33554432",
+    );
     // An R-relative texture takes 2 of the 6 render-size textures post targets may use, at
     // any scale.
     let scaled = "format = \"rgba16float\"\nscale = 0.5";

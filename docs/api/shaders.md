@@ -280,6 +280,12 @@ no shadow into a pack's shadow map yet, and the first-person hand has no stage.
   the registry refuse a 0.1 pack with `needs shader API 0.1; this Horizon serves 0.2`; the game draws without it.
   [Moving a pack to 0.2](#shader-api-02-experimental) is described above; Golden Hour 2.0.0 is the moved example. The
   0.1 reference is gone, and the templates of `horizon-shader new` are 0.2 packs. API 0.2 is unchanged.
+- 2026-11-15: API 0.2 (additions, experimental): fixed-size kept textures (`[[resource]]` with a `size`) may take
+  32 MiB together, both versions counted, as much as kept buffers; it was 1 MiB, one 256×256 `rgba16float` texture.
+  A camera-centred trail or height map, a light cache or a lookup table can now be a texture rather than a buffer
+  indexed by hand: a 1024×1024 `rgba16float` one takes 16 MiB. The device still refuses a side longer than its
+  largest texture when the pack loads. Every pack the old budget took passes; no WGSL name changes, so every pack
+  builds from the same WGSL as before.
 - 2026-11-15: API 0.2 (additions, experimental): post targets are counted by memory. `[[post]] output`s and
   R-relative kept textures together may take 6 render-size `rgba16float` textures, an `output` its `scale`² (1, 0.25
   or 0.0625), an R-relative kept texture 2 as before, with at most 16 `output`s; it was 4 targets, an `output` 1. Two

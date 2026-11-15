@@ -12,8 +12,9 @@ pub const MAX_BEFORE_WORLD: usize = 4;
 pub const MAX_COMPUTE_POST: usize = 8;
 /// The bytes of every buffer of a pack together, per view.
 pub const MAX_BUFFER_BYTES: u64 = 32 << 20;
-/// The bytes of every fixed-size kept texture of a pack together, both versions counted.
-pub const MAX_FIXED_TEXTURE_BYTES: u64 = 1 << 20;
+/// The bytes of every fixed-size kept texture of a pack together, both versions counted: as
+/// much as its buffers, so a trail, a cache or a lookup table can be a texture, not a buffer.
+pub const MAX_FIXED_TEXTURE_BYTES: u64 = 32 << 20;
 /// A workgroup's largest size along each axis, and its invocations: wgpu's default limits,
 /// which every device with compute has.
 pub const MAX_WORKGROUP: [u32; 3] = [256, 256, 64];
