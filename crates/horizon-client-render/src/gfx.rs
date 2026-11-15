@@ -10405,6 +10405,11 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if entity_stage.is_some() {
+                // The entity stage binds the frame's own group; a material stage that traces
+                // draws translucent terrain with the scene's.
+                pack_frame(&mut pass);
+            }
             if text_quads > 0 && !oit_on {
                 pass.stage(self.own_timing.as_mut(), "entity text");
                 pass.set_pipeline(warped.map_or(&self.text_polygon_offset_pipeline, |w| &w.text));

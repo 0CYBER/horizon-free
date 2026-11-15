@@ -1,0 +1,18 @@
+schema = 1
+id = "entity_traced"
+name = "Frame identity: entity stage beside a traced material"
+version = "1.0.0"
+api = "0.2"
+description = "A test fixture of the frame identity harness: a material stage that traces and an entity stage. Not a look."
+authors = ["Horizon"]
+license = "MIT"
+
+[ray_tracing]
+
+[material]
+file = "material.wgsl"
+name = "Traced water"
+
+[entity]
+file = "entity.wgsl"
+name = "Tinted entities"

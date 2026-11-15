@@ -38,6 +38,10 @@ Sessions, each a fresh game and world (seed 7) per build:
   (crates/horizon-shader-api/tests/samples/entity-stage) without and with its [entity] stage, which is vanilla's
   own: the entities, in SDR, and with HDR output on and the block entities kept on the GPU; and items, which the
   stage doesn't draw, under a dynamic light (Horizon Extras' dynamic lights are on in these sessions).
+- entity_traced: a test pack whose material stage traces rays on translucent terrain and whose entity stage tints the
+  entities (tools/fixtures/shaderpacks/entity_traced), frames drawn flat: the entities over water. Where the device
+  has ray queries, the material's pipelines read the frame's group joined with the ray scene and the entity stage's
+  the frame's own: the water drawn after the entities must find the material's group again (#13780).
 
 Shader packs are read from the change's tree for both builds (tools/fixtures/shaderpacks, else the SDK's
 crates/horizon-shader-api/packs), so a base from before a fixture was added draws it too.
@@ -559,7 +563,12 @@ SESSIONS = {
                        {'HORIZON_SHADER_PACK': 'entity_off', 'HORIZON_HDR_OUTPUT': 'pq'}, ['entities', 'items'], False),
     'entity_stage_hdr': ('hdr:true\nblockEntityCache:true\n', {'HORIZON_SHADER_PACK': 'entity_stage',
                                                                'HORIZON_HDR_OUTPUT': 'pq'}, ['entities', 'items'], False),
+    # 🤖 Agent: Flat frames on any GPU: drawn per section, translucent terrain gets a pass of its own, which binds the
+    # material's group anyway.
+    'entity_traced': ('', {'HORIZON_SHADER_PACK': 'entity_traced', 'HORIZON_FLAT_DRAWS': '1'}, ['entities'], False),
 }
+# 🤖 Agent: The sessions whose entities stand over water, translucent terrain drawn after them.
+OVER_WATER = ('entity_traced',)
 # 🤖 Agent: The sessions drawn with GPU pass timing on, which draws the sky in a timed pass of its own.
 TIMED = ('world_pack_timed',)
 # 🤖 Agent: The session a pack's pictures are held against in scenes the usual one (session_checks) doesn't shoot.
@@ -648,6 +657,8 @@ def run_session(name, label, bin_dir, out, env_base, args):
                 raise RuntimeError(f'Improved Transparency was not requested: {option}')
             lab.write_json(out / f'{name}.option.json', option)
         prepare(game)
+        if name in OVER_WATER:
+            game.command(f'fill {EX - 5} {Y - 1} {EZ - 1} {EX + 5} {Y - 1} {EZ + 1} minecraft:water')
         if 'end_sky' in scenes:
             prepare_end(game)
         if name in TIMED:
