@@ -105,6 +105,22 @@ space the pack's colours are in, and `frame.luminance` holds that space's lumina
 
 ";
 
+/// 0.2's `[material] coverage`, after the paragraph on what a stage is.
+const COVERAGE_0_2: &str = "\
+## `[material] coverage`
+
+Which points of terrain are drawn is the engine's unless the pack says otherwise. Under `coverage = \"engine\"` (the
+default) solid and cutout terrain keep Horizon's alpha test on the texture's own alpha (cut below 0.5, except the
+leaves Horizon draws opaque), and the alpha `material` returns is ignored there; translucent terrain is cut where the
+texture's alpha is below 0.01, and the returned alpha is its opacity, so water and glass still set how see-through
+they are. `material`, and every function it calls, may not `discard`: the check refuses it. A pack that cuts its own
+holes sets `coverage = \"pack\"`: the returned alpha then drives the alpha test (below 0.5 on solid and cutout
+terrain, below 0.01 on translucent) and the stage may `discard`. Normal and parallax shading that keeps the
+silhouette needs no `\"pack\"`, and neither do `[vertex]` and `[displacement]`, which move geometry, not coverage.
+The stage writes no depth of its own either way.
+
+";
+
 /// The entity stage's notes, after its input: what it returns, and vanilla's own.
 const ENTITY_NOTES: &str = "\
 `entity` lights what is no block terrain: `input.kind` says which. It returns the same `Surface` as `material` (rgb
@@ -145,8 +161,11 @@ pub fn markdown(api: Api) -> String {
     }
     out += "A stage is a function your WGSL defines, with the signature below; Horizon puts the prelude (these structs, the\n\
             resources and helpers) before your files and calls the function from its own pass. Your files declare no\n\
-            bindings and no entry points, and no names starting with `horizon_`.\n\n\
-            ## Stages\n\n\
+            bindings and no entry points, and no names starting with `horizon_`.\n\n";
+    if api == Api::V0_2 {
+        out += COVERAGE_0_2;
+    }
+    out += "## Stages\n\n\
             | Stage | In `horizon-shaders.toml` | Your function |\n| --- | --- | --- |\n";
     for &kind in api.stages() {
         let key = match kind {
@@ -172,11 +191,18 @@ pub fn markdown(api: Api) -> String {
             // 0.2's lit colour is linear light and may pass white; 0.1's reference keeps its text.
             out += &match api {
                 Api::V0_1 => surface,
-                Api::V0_2 => surface.replace(
-                    "The lit colour, 0..1, with its alpha.",
-                    "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than \
-                     white); alpha its coverage.",
-                ),
+                Api::V0_2 => surface
+                    .replace(
+                        "The lit colour, 0..1, with its alpha.",
+                        "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter \
+                         than white); alpha translucent terrain's opacity, and what the alpha test reads under \
+                         `[material] coverage = \"pack\"`.",
+                    )
+                    .replace(
+                        "Horizon then applies the alpha test (cutout and translucent) and fog.",
+                        "Horizon then applies the alpha test (cutout and translucent; on the texture's alpha \
+                         unless `[material] coverage = \"pack\"`) and fog.",
+                    ),
             };
             out += "Under `[displacement]` the stage also defines \
                     `fn displacement(input: DisplacementInput) -> f32`, called for each corner of the grid the \

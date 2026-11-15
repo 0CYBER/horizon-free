@@ -766,7 +766,7 @@ const SMALLEST_0_2: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\
 
 #[test]
 fn both_lines_are_read() {
-    use horizon_shader_api::{Api, Blend, Primaries};
+    use horizon_shader_api::{Api, Blend, Coverage, Primaries};
     let m = Manifest::parse(SMALLEST_0_2).unwrap();
     assert_eq!(
         (m.api, m.blend, m.tonemap.is_none()),
@@ -786,6 +786,20 @@ fn both_lines_are_read() {
         assert!((p.luminance().iter().sum::<f32>() - 1.0).abs() < 1e-6);
     }
     assert_eq!(Manifest::parse(&sample_text()).unwrap().api, Api::V0_1);
+    // The material keeps the engine's coverage unless it says otherwise; 0.1's alpha always decides.
+    let material = format!("{SMALLEST_0_2}[material]\nfile = \"m.wgsl\"\n");
+    assert_eq!(
+        Manifest::parse(&material).unwrap().coverage,
+        Coverage::Engine
+    );
+    let own = format!("{material}coverage = \"pack\"\n");
+    assert_eq!(Manifest::parse(&own).unwrap().coverage, Coverage::Pack);
+    let engine = format!("{material}coverage = \"engine\"\n");
+    assert_eq!(Manifest::parse(&engine).unwrap().coverage, Coverage::Engine);
+    assert_eq!(
+        Manifest::parse(&sample_text()).unwrap().coverage,
+        Coverage::Pack
+    );
     let tonemap = format!("{SMALLEST_0_2}[tonemap]\nfile = \"t.wgsl\"\nname = \"Curve\"\n");
     let m = Manifest::parse(&tonemap).unwrap();
     assert_eq!(m.tonemap.as_ref().unwrap().name.as_deref(), Some("Curve"));
@@ -842,6 +856,18 @@ fn the_0_2_keys_are_refused_under_0_1_and_checked_under_0_2() {
         (
             format!("{smallest_0_1}[entity]\nfile = \"e.wgsl\"\n"),
             "[entity] is shader API 0.2",
+        ),
+        (
+            format!("{smallest_0_1}[material]\nfile = \"m.wgsl\"\ncoverage = \"pack\"\n"),
+            "[material] coverage is shader API 0.2",
+        ),
+        (
+            format!("{SMALLEST_0_2}[material]\nfile = \"m.wgsl\"\ncoverage = \"texture\"\n"),
+            "material.coverage \"texture\": engine or pack",
+        ),
+        (
+            format!("{SMALLEST_0_2}[entity]\nfile = \"e.wgsl\"\ncoverage = \"pack\"\n"),
+            "`coverage` is a key of [material] only",
         ),
         (
             format!("{SMALLEST_0_2}[entity]\nfile = \"e.wgsl\"\nfog = false\n"),

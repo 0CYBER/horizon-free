@@ -71,6 +71,18 @@ A stage is a function your WGSL defines, with the signature below; Horizon puts 
 resources and helpers) before your files and calls the function from its own pass. Your files declare no
 bindings and no entry points, and no names starting with `horizon_`.
 
+## `[material] coverage`
+
+Which points of terrain are drawn is the engine's unless the pack says otherwise. Under `coverage = "engine"` (the
+default) solid and cutout terrain keep Horizon's alpha test on the texture's own alpha (cut below 0.5, except the
+leaves Horizon draws opaque), and the alpha `material` returns is ignored there; translucent terrain is cut where the
+texture's alpha is below 0.01, and the returned alpha is its opacity, so water and glass still set how see-through
+they are. `material`, and every function it calls, may not `discard`: the check refuses it. A pack that cuts its own
+holes sets `coverage = "pack"`: the returned alpha then drives the alpha test (below 0.5 on solid and cutout
+terrain, below 0.01 on translucent) and the stage may `discard`. Normal and parallax shading that keeps the
+silhouette needs no `"pack"`, and neither do `[vertex]` and `[displacement]`, which move geometry, not coverage.
+The stage writes no depth of its own either way.
+
 ## Stages
 
 | Stage | In `horizon-shaders.toml` | Your function |
@@ -162,11 +174,11 @@ One point of a block's surface, for `fn material(input: MaterialInput) -> Surfac
 
 ### `Surface`
 
-What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; Horizon then applies the alpha test (cutout and translucent) and fog.
+What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; Horizon then applies the alpha test (cutout and translucent; on the texture's alpha unless `[material] coverage = "pack"`) and fog.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `color` | `vec4<f32>` | The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha its coverage. |
+| `color` | `vec4<f32>` | The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha translucent terrain's opacity, and what the alpha test reads under `[material] coverage = "pack"`. |
 
 Under `[displacement]` the stage also defines `fn displacement(input: DisplacementInput) -> f32`, called for each corner of the grid the faces near the camera are cut into; the corner moves along the face's normal by the depth it gives at the point's height less the depth at the texture's mean height, pinned at the face's edges and easing out over the last quarter of the distance.
 

@@ -28,6 +28,16 @@ fn horizon_material_fogged(color: vec4<f32>, spherical: f32, cylindrical: f32) -
     }
     return color;
 }
+// The manifest's `[material] coverage`: true for `pack` (and on 0.1), where the stage's returned
+// alpha cuts the holes; else the texture's own alpha does, as on Horizon's terrain, and the
+// returned alpha is only translucent terrain's opacity.
+override horizon_material_coverage_pack: bool = false;
+fn horizon_material_covers(in: HorizonMaterialOut, color: vec4<f32>, cutoff: f32) -> bool {
+    if horizon_material_coverage_pack {
+        return color.a >= cutoff;
+    }
+    return horizon_terrain_sprite(in.uv, in.layer & 0x7fffu).a >= cutoff;
+}
 struct HorizonMaterialOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -241,7 +251,7 @@ fn horizon_material_solid(in: HorizonMaterialOut) -> HorizonMaterialSolid {
     let color = horizon_material_faded(in, horizon_material_color(in, false));
     let texel = horizon_terrain_sprite(in.uv, in.layer & 0x7fffu);
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
-    if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
+    if !horizon_material_covers(in, color, 0.5) && (in.layer & 0x8000u) == 0u { discard; }
     if horizon_surface.w == 0.0 {
         set_surface(horizon_material_face_normal, 0.0, 0.0);
     }
@@ -253,7 +263,7 @@ fn horizon_material_solid(in: HorizonMaterialOut) -> HorizonMaterialSolid {
 }
 @fragment fn horizon_material_fs_translucent(in: HorizonMaterialOut) -> @location(0) vec4<f32> {
     let color = horizon_material_faded(in, horizon_material_color(in, true));
-    if color.a < 0.01 { discard; }
+    if !horizon_material_covers(in, color, 0.01) { discard; }
     return horizon_material_fogged(color, in.spherical, in.cylindrical);
 }
 ";
@@ -449,6 +459,7 @@ impl NativeMaterial {
         stage: &CheckedStage,
         constants: &[(String, f64)],
         fog: bool,
+        coverage: horizon_shader_api::Coverage,
         vertex: bool,
         displaced: Option<&DisplacedShape<'_>>,
     ) -> Result<Self, String> {
@@ -468,6 +479,8 @@ impl NativeMaterial {
         ];
         constants.extend(sprite_names.into_iter().zip(shape.sprites));
         constants.push(("horizon_material_fog", f64::from(u8::from(fog))));
+        let pack = coverage == horizon_shader_api::Coverage::Pack;
+        constants.push(("horizon_material_coverage_pack", f64::from(u8::from(pack))));
         let [(_, write_light), (_, linear)] =
             super::linear_blend::frame_constants(shape.format, frame.linear);
         constants.push(("horizon_terrain_HDR_WRITE_LIGHT", write_light));
@@ -636,13 +649,14 @@ impl NativeMaterial {
 
 #[cfg(test)]
 /// A material pack's terrain shader on shader API line `api`, its frame holding linear light
-/// where `linear`, with a full-screen `test_vertex`.
+/// where `linear`, with a full-screen `test_vertex`. Its material returns alpha `test_alpha`
+/// (0.7 unless set).
 pub(super) fn coverage_test_shader((api, linear): (horizon_shader_api::Api, bool)) -> String {
     use horizon_shader_api::{MANIFEST, Pack, StageKind, check};
     let manifest = format!(
         "schema = 1\nid = \"coverage\"\nname = \"Coverage\"\nversion = \"1\"\napi = \"{api}\"\n[material]\nfile = \"material.wgsl\"\n[displacement]\n"
     );
-    let material = "fn material(input: MaterialInput) -> Surface { return Surface(vec4<f32>(1.4, 0.3, 0.1, 0.7)); }\nfn displacement(input: DisplacementInput) -> f32 { return 0.0; }\n";
+    let material = "override test_alpha: f32 = 0.7;\nfn material(input: MaterialInput) -> Surface { return Surface(vec4<f32>(1.4, 0.3, 0.1, test_alpha)); }\nfn displacement(input: DisplacementInput) -> f32 { return 0.0; }\n";
     let files = [(MANIFEST, manifest.as_str()), ("material.wgsl", material)]
         .map(|(n, text)| (n.to_owned(), text.as_bytes().to_vec()))
         .into();
