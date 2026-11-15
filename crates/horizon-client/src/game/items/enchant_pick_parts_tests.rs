@@ -96,12 +96,16 @@ impl Hooks for Mod {
 /// the stone, sharing one set of answers, after the parts resolved.
 fn with_parts(test: impl FnOnce(&mut Game<'_>, &Answers)) {
     let answers = Answers::default();
-    let parts = ["minecraft:stick", "minecraft:diamond_sword", "minecraft:stone"]
-        .map(|item| Part {
-            item,
-            answers: answers.clone(),
-        })
-        .to_vec();
+    let parts = [
+        "minecraft:stick",
+        "minecraft:diamond_sword",
+        "minecraft:stone",
+    ]
+    .map(|item| Part {
+        item,
+        answers: answers.clone(),
+    })
+    .to_vec();
     let mods: mod_api::Mods = vec![ModEntry::new("enchant_pick", Box::new(Mod(parts)))].into();
     mod_platform::testing::with_mods(mods.clone(), || {
         crate::game::api_values::install_parts(&mods).unwrap();
@@ -157,7 +161,10 @@ fn primary_answers_are_asked_at_install_and_read_by_selection() {
         assert_eq!(sharpness_at_30(game, "minecraft:book"), level_3);
         // The answers are this server's snapshot's: its stations and its loot items read them.
         let items = &game.items().enchantments;
-        assert_eq!(items.primary_answers().answer("minecraft:stick", SHARPNESS), Some(true));
+        assert_eq!(
+            items.primary_answers().answer("minecraft:stick", SHARPNESS),
+            Some(true)
+        );
     });
 }
 
@@ -209,7 +216,10 @@ fn apply_enchantments_starts_from_vanilla_and_refuses_another_count() {
             &sword,
         );
         // No answer: vanilla's result, and the part got the list and that result.
-        assert_eq!(game.table_enchant(7, 2, 30, &sword).as_ref(), Some(&vanilla));
+        assert_eq!(
+            game.table_enchant(7, 2, 30, &sword).as_ref(),
+            Some(&vanilla)
+        );
         let asked = std::mem::take(&mut *answers.applied_asked.lock().unwrap());
         assert_eq!(asked.len(), 1);
         let want: Vec<_> = list.iter().map(|(id, l)| (id.to_string(), *l)).collect();

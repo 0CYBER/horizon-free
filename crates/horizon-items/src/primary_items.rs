@@ -89,11 +89,13 @@ mod tests {
         // the highest whose window (23 to 43) holds 30.
         assert!(at_30(&e, PROBE).is_empty());
         assert_eq!(at_30(&e, SWORD), level_3);
-        e.primary_answers().install(answers(&sharpness, PROBE, true));
+        e.primary_answers()
+            .install(answers(&sharpness, PROBE, true));
         assert_eq!(at_30(&e, PROBE), level_3);
         assert_eq!(at_30(&e, SWORD), level_3);
         // A reload installs the new answers in place of the old.
-        e.primary_answers().install(answers(&sharpness, SWORD, false));
+        e.primary_answers()
+            .install(answers(&sharpness, SWORD, false));
         assert!(at_30(&e, SWORD).is_empty());
         assert!(at_30(&e, PROBE).is_empty());
         // Retired: vanilla again.
