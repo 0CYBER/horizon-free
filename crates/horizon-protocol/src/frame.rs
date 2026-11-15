@@ -24,6 +24,14 @@ pub fn encode(body: &[u8], threshold: Option<usize>) -> Result<Vec<u8>> {
 pub fn contents(body: &[u8], threshold: Option<usize>) -> Result<Vec<u8>> {
     let inner = match threshold {
         None => body.to_vec(),
+        // CompressionEncoder: a body over the other side's CompressionDecoder maximum is not sent,
+        // however small it deflates.
+        Some(_) if body.len() > MAX_UNCOMPRESSED => {
+            return Err(Error::new(format!(
+                "Packet too big (is {}, should be less than {MAX_UNCOMPRESSED})",
+                body.len()
+            )));
+        }
         Some(t) if body.len() < t => {
             let mut v = Vec::with_capacity(body.len() + 1);
             v.push(0);
@@ -268,6 +276,25 @@ mod tests {
             super::body(&frame, Some(256), &mut inflater).unwrap(),
             Body::Inflated(_)
         ));
+    }
+
+    /// CompressionEncoder refuses a body over CompressionDecoder's MAXIMUM_UNCOMPRESSED_LENGTH (8 MiB),
+    /// which the other side would refuse: 8 MiB of zeros deflate to a few KiB, well inside a frame,
+    /// and are read back whole; one byte more is not sent.
+    #[test]
+    fn a_body_over_the_uncompressed_maximum_is_not_sent() {
+        // CompressionDecoder.MAXIMUM_UNCOMPRESSED_LENGTH, written out so the constant is checked too.
+        let mut body = vec![0u8; 8_388_608];
+        let frame = contents(&body, Some(256)).unwrap();
+        let Body::Inflated(out) = super::body(&frame, Some(256), &mut Inflater::default()).unwrap()
+        else {
+            panic!("compressed");
+        };
+        assert_eq!(out.len(), 8_388_608);
+        body.push(0);
+        assert!(contents(&body, Some(256)).is_err());
+        // Without compression there is no CompressionEncoder: the frame's own limit applies.
+        assert!(contents(&body, None).is_err());
     }
 
     /// Split one complete frame off the front of `buffer`, if available.
