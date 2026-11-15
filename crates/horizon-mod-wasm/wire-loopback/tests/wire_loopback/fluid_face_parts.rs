@@ -2,7 +2,10 @@
 //! intact: a wasm part sees the state, the direction and the fluid the game asked with, and its
 //! answer comes back to the game.
 use super::*;
-use mod_api::{BlockMetadata, BlockPart, BlockState, ClientHost, ShouldHideAdjacentFluidFaceEvent};
+use mod_api::{
+    BlockMetadata, BlockPart, BlockState, ClientHost, ShouldDisplayFluidOverlayEvent,
+    ShouldHideAdjacentFluidFaceEvent,
+};
 
 /// A client host the generated proxies can carry; the parts read nothing from it.
 struct Client;
@@ -11,7 +14,7 @@ mod_api::impl_host_areas!(Client);
 impl ClientHost for Client {}
 mod_api::impl_client_host_areas!(Client);
 
-/// Hides a still fluid's top under the block, and nothing else.
+/// Hides a still fluid's top under the block, and turns the overlay on beside a flowing fluid.
 struct Part;
 #[mod_api::horizon_part]
 impl BlockPart for Part {
@@ -21,6 +24,13 @@ impl BlockPart for Part {
         event: &mut ShouldHideAdjacentFluidFaceEvent,
     ) {
         event.hidden = event.direction == mod_api::Direction::Up && event.fluid.is_source();
+    }
+    fn should_display_fluid_overlay(
+        &self,
+        _: &dyn ClientHost,
+        event: &mut ShouldDisplayFluidOverlayEvent,
+    ) {
+        event.overlay ^= !event.fluid.is_source();
     }
 }
 struct Register;
@@ -95,5 +105,25 @@ fn wire_loopback_should_hide_adjacent_fluid_face_carries_direction_and_fluid() {
         assert!(ask(mod_api::Direction::Up, water(true)));
         assert!(!ask(mod_api::Direction::North, water(true)));
         assert!(!ask(mod_api::Direction::Up, water(false)));
+    });
+}
+
+#[test]
+fn wire_loopback_should_display_fluid_overlay_starts_from_the_games_answer() {
+    with_proxy(|state, proxy| {
+        let ask = |fluid, overlay| {
+            let mut event = ShouldDisplayFluidOverlayEvent {
+                state,
+                fluid,
+                overlay,
+            };
+            proxy.should_display_fluid_overlay(&Client, &mut event);
+            assert_eq!((event.state, event.fluid), (state, fluid));
+            event.overlay
+        };
+        assert!(ask(water(true), true));
+        assert!(!ask(water(true), false));
+        assert!(ask(water(false), false));
+        assert!(!ask(water(false), true));
     });
 }

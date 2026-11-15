@@ -175,3 +175,30 @@ fn a_table_built_without_a_fluid_or_state_answers_nothing() {
     assert_eq!(short.get(BESIDE, FluidKind::Water), None);
     assert_eq!(FluidTable::<u8>::EMPTY.get(BESIDE, FluidKind::Water), None);
 }
+
+#[test]
+fn a_part_choosing_the_overlay_changes_the_sprite_of_that_side_only() {
+    // Beside a block of neither class, a part turns the overlay on: one quad, no back face.
+    let plain = tables(false);
+    let vanilla = faces(&plain, &PartTables::NONE);
+    let parts = PartTables {
+        fluid_overlay: beside_water(true),
+        ..PartTables::NONE
+    };
+    let overlaid = faces(&plain, &parts);
+    assert_eq!(overlaid[Direction::East as usize], [WATER_OVERLAY]);
+    for side in Direction::ALL.into_iter().filter(|&side| side != Direction::East) {
+        assert_eq!(overlaid[side as usize], vanilla[side as usize], "{side:?}");
+    }
+    // Beside glass, vanilla's overlay; a part answering false gives the flow sprite back.
+    let glass = tables(true);
+    assert_eq!(
+        faces(&glass, &PartTables::NONE)[Direction::East as usize],
+        [WATER_OVERLAY]
+    );
+    let parts = PartTables {
+        fluid_overlay: beside_water(false),
+        ..PartTables::NONE
+    };
+    assert_eq!(faces(&glass, &parts)[Direction::East as usize], [WATER_FLOW; 2]);
+}

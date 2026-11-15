@@ -2,7 +2,7 @@
 //! per-state resolver where `refresh_render_visibility` resolves the hidden states, so meshing
 //! reads tables and never a mod.
 
-use super::{Game, native_world_read::api_fluid_state};
+use super::{BlockStateId, Game, native_world_read::api_fluid_state};
 use horizon_client::mesher::part_tables::{FluidTable, PartTables};
 use horizon_core::geometry::Direction;
 use horizon_world::fluid::{FluidKind, FluidState, mod_fluids};
@@ -10,7 +10,7 @@ use mod_api::HookId;
 
 impl Game<'_> {
     /// Every table, built for the states and fluids of this game; a table that changes nothing
-    /// is left empty.
+    /// is left empty. The overlay answer starts with vanilla's test, the mesher's `Info::overlay`.
     pub(super) fn resolve_part_tables(&self) -> PartTables {
         let states = self.pack.assets.registry.len();
         let fluids = asked_fluids();
@@ -39,7 +39,29 @@ impl Game<'_> {
         )
         .filter(|faces| faces.iter().any(|&faces| faces != 0))
         .map_or(FluidTable::EMPTY, |faces| FluidTable::new(fluids.len(), faces));
-        PartTables { hidden_fluid_faces }
+        let tables = &self.pack.context.tables;
+        let vanilla = |state: BlockStateId| tables.vanilla_fluid_overlay(state.0);
+        let fluid_overlay = Self::resolve_per_state_fluid(
+            HookId::ShouldDisplayFluidOverlay,
+            states,
+            fluids.len(),
+            |state, fluid| {
+                let mut overlay = vanilla(state);
+                if let Some(fluid) = fluids[fluid] {
+                    self.native_should_display_fluid_overlay(state, fluid, &mut overlay);
+                }
+                overlay
+            },
+        )
+        .filter(|overlay| {
+            (overlay.chunks(fluids.len()).enumerate())
+                .any(|(state, row)| row.iter().any(|&o| o != vanilla(BlockStateId(state as u32))))
+        })
+        .map_or(FluidTable::EMPTY, |overlay| FluidTable::new(fluids.len(), overlay));
+        PartTables {
+            hidden_fluid_faces,
+            fluid_overlay,
+        }
     }
 }
 

@@ -208,7 +208,8 @@ pub(super) fn splits_north_east(nw: f32, ne: f32, sw: f32, se: f32) -> bool {
     along_nw < along_ne || along_nw == 0.0
 }
 /// Emits one fluid cell at section-relative `[x, y, z]`. `parts` holds the client `BlockPart`
-/// answers read here: a face a neighbour hides (`should_hide_adjacent_fluid_face`) is not drawn.
+/// answers read here: a face a neighbour hides (`should_hide_adjacent_fluid_face`) is not drawn,
+/// and a side uses the overlay sprite where its neighbour says so (`should_display_fluid_overlay`).
 /// `(nether, shader_pack_lighting, separate_ao, shader_pack)`: the Nether's face shading, only the
 /// up-face value when a shader pack lights the faces (`Mesher::shader_pack_lighting`), whether to
 /// keep pure alpha for separate AO, and whether a `shaders/` pack draws the terrain
@@ -485,7 +486,9 @@ pub(super) fn tesselate(
             continue;
         }
         let (layer, is_overlay) = match overlay {
-            Some(layer) if face_state.overlay => (layer, true),
+            Some(layer) if parts.fluid_overlay(neighbor_id(d), kind, face_state.overlay) => {
+                (layer, true)
+            }
             _ => (flow, false),
         };
         // Vanilla's side is the up value times the side's; a shader pack's has no side factor.

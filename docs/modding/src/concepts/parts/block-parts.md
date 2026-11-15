@@ -167,4 +167,9 @@ it. `event.direction` points from the fluid to your block, so `Direction::Up` is
 `hidden` starts false. Vanilla's tests still apply first: a fluid beside the same fluid, or behind a face that occludes
 it, draws no face there whatever the answer.
 
-With no part answering, nothing is asked, the tables are empty and fluids draw exactly as vanilla's.
+`BlockPart::should_display_fluid_overlay` answers whether a fluid's side beside your block uses the fluid's overlay
+sprite (water's `water_overlay`) instead of its flowing sprite. `overlay` starts with vanilla's test: true beside a block
+of vanilla's `HalfTransparentBlock` class (glass among them) or `LeavesBlock` class, and for a content block, its
+template's class. A fluid with no overlay sprite, such as lava, draws its flowing sprite whatever the answer.
+
+With no part answering either method, nothing is asked, the tables are empty and fluids draw exactly as vanilla's.

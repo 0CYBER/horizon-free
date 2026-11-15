@@ -53,21 +53,37 @@ pub struct PartTables {
     /// `1 << direction` set when the state hides the face the fluid draws toward it,
     /// `direction` pointing from the fluid to the block.
     pub hidden_fluid_faces: FluidTable<u8>,
+    /// `should_display_fluid_overlay`: by the state beside a fluid and that fluid, whether the
+    /// fluid's side toward the state uses the fluid's overlay sprite.
+    pub fluid_overlay: FluidTable<bool>,
 }
 impl PartTables {
     /// No tables.
     pub const NONE: Self = Self {
         hidden_fluid_faces: FluidTable::EMPTY,
+        fluid_overlay: FluidTable::EMPTY,
     };
     /// Whether every table is empty, as with no subscriber.
     pub fn is_empty(&self) -> bool {
-        self.hidden_fluid_faces.is_empty()
+        self.hidden_fluid_faces.is_empty() && self.fluid_overlay.is_empty()
     }
     /// Whether `state`, beside `fluid` in `direction` from it, hides that face of the fluid.
     pub fn hides_fluid_face(&self, state: u32, fluid: FluidKind, direction: Direction) -> bool {
         self.hidden_fluid_faces
             .get(state, fluid)
             .is_some_and(|faces| faces & 1 << direction as u8 != 0)
+    }
+    /// Whether `fluid`'s side toward `state` uses the overlay sprite, `vanilla` (the state's
+    /// `HalfTransparentBlock`/`LeavesBlock` test) when no part answered.
+    pub fn fluid_overlay(&self, state: u32, fluid: FluidKind, vanilla: bool) -> bool {
+        self.fluid_overlay.get(state, fluid).unwrap_or(vanilla)
+    }
+}
+impl super::MeshTables {
+    /// Vanilla's overlay test for a fluid's side beside `state` (`HalfTransparentBlock` or
+    /// `LeavesBlock`), where `should_display_fluid_overlay` starts.
+    pub fn vanilla_fluid_overlay(&self, state: u32) -> bool {
+        self.info.get(state as usize).is_some_and(|info| info.overlay)
     }
 }
 /// No tables, for a mesher built without a worker context.

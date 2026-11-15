@@ -4,9 +4,12 @@ use super::native_entity_refs::tests::with_client_game;
 use horizon_client::mesher::part_tables::PartTables;
 use horizon_core::geometry::Direction;
 use horizon_world::fluid::FluidKind;
-use mod_api::{BlockPart, ClientHost, Hooks, Registrar, ShouldHideAdjacentFluidFaceEvent};
+use mod_api::{
+    BlockPart, ClientHost, Hooks, Registrar, ShouldDisplayFluidOverlayEvent,
+    ShouldHideAdjacentFluidFaceEvent,
+};
 
-/// Glass hides the top of still water under it.
+/// Glass hides the top of still water under it, and shows no overlay beside lava's flowing form.
 struct Sealed;
 #[mod_api::horizon_part]
 impl BlockPart for Sealed {
@@ -17,6 +20,15 @@ impl BlockPart for Sealed {
     ) {
         event.hidden = event.direction == mod_api::Direction::Up
             && mod_api::__private::fluid_id(event.fluid.fluid) == Some("minecraft:water");
+    }
+    fn should_display_fluid_overlay(
+        &self,
+        _: &dyn ClientHost,
+        event: &mut ShouldDisplayFluidOverlayEvent,
+    ) {
+        if mod_api::__private::fluid_id(event.fluid.fluid) == Some("minecraft:flowing_lava") {
+            event.overlay = false;
+        }
     }
 }
 struct SealedMod;
@@ -57,6 +69,10 @@ fn a_fluid_face_part_answers_per_state_fluid_and_direction() {
             // Flowing water is a fluid of its own, and lava is not water.
             assert!(!tables.hides_fluid_face(glass, FluidKind::FlowingWater, Direction::Up));
             assert!(!tables.hides_fluid_face(glass, FluidKind::Lava, Direction::Up));
+            // The overlay starts with vanilla's test: glass is half transparent, stone is not.
+            assert!(tables.fluid_overlay(glass, FluidKind::Water, false));
+            assert!(!tables.fluid_overlay(glass, FluidKind::FlowingLava, true));
+            assert!(!tables.fluid_overlay(stone, FluidKind::FlowingLava, true));
         });
     });
 }
