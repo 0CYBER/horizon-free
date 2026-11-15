@@ -7,7 +7,7 @@ pub trait Hooks {
     /// `event.fluid` is the fluid as it is asked: a source at amount 8, or a flowing fluid at amount 7, not falling.
     /// `hidden` starts false. Vanilla's tests still apply first: a fluid beside the same fluid, or behind a face
     /// that occludes it, draws no face there whatever the answer. The answer depends on the state and the fluid
-    /// alone and is resolved at mesh time, never per frame: the client asks once for every state and fluid where
+    /// alone and is resolved at join or explicit visibility refresh, never on a meshing worker: the client asks once for every state and fluid where
     /// it resolves `block_render_visibility` (joining a world, `ClientHost::refresh_render_visibility`), and the
     /// meshing workers read the table. The level and position are not arguments. With no part answering, nothing
     /// is asked and meshes are unchanged. Diverges from upstream: new hook.
