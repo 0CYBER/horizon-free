@@ -200,9 +200,8 @@ pub(super) fn load_core(
         Err(e) => return Ok(Err(e.to_string())),
     };
     progress.set(1);
-    let item_data = Arc::new(
-        mods::load_item_data(root, role, load_role.owning).map_err(|e| e.to_string())?,
-    );
+    let item_data =
+        Arc::new(mods::load_item_data(root, role, load_role.owning).map_err(|e| e.to_string())?);
     let registry = assets.registry;
     let entity_models_for_render = entity_models.clone();
     let (render, gameplay, visibility, biomes, environment, collision) = std::thread::scope(
@@ -611,7 +610,14 @@ pub(super) fn load_resources(
                 // it waits for the core that loaded.
                 let early = launch_world.filter(|_| root == vanilla_root);
                 startup::time("core", || {
-                    load_core(&resolved, &additional_data, load_role, parallel, progress, early)
+                    load_core(
+                        &resolved,
+                        &additional_data,
+                        load_role,
+                        parallel,
+                        progress,
+                        early,
+                    )
                 })
             });
             let ui = load_ui(resolved.source()).map(|ui| offer(ui, &root));
