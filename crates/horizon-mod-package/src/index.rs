@@ -413,9 +413,12 @@ impl Index {
     /// left with no version. An id listed twice leaves out every project with that id.
     fn keep_valid(&mut self, local_files: bool) {
         let mut left_out = Vec::new();
-        let ids: Vec<String> = self.projects.iter().map(|p| p.id.clone()).collect();
+        let mut listed: std::collections::HashMap<String, usize> = Default::default();
+        for p in &self.projects {
+            *listed.entry(p.id.clone()).or_default() += 1;
+        }
         self.projects.retain(|p| {
-            let reason = match ids.iter().filter(|id| **id == p.id).count() {
+            let reason = match listed[&p.id] {
                 1 => check_project(p).err(),
                 _ => Some(format!("{}: listed twice", p.id)),
             };
