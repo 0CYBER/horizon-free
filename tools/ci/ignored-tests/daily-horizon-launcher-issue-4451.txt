@@ -1,3 +1,0 @@
-# Prepared-resource/descriptive-ignore inventory migration for #4451.
-# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
-horizon-launcher cull::desktop_tests::desktop_list_renders_the_viewport_after_scrollbar_jumps bin:horizon-launcher daily resources
