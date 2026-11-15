@@ -219,7 +219,7 @@ impl EntityBatch {
                 }
             }
         }
-        // Fluid and RenderType.text sort their own alpha-blended quads far to
+        // Fluid and RenderTypes.text sort their own alpha-blended quads far to
         // near. Fluid precedes both world-canvas layers, after existing materials
         // (including eyes moved out of additive).
         for runs in &self.runs[10..13] {

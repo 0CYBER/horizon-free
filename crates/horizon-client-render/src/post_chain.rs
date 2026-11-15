@@ -32,7 +32,7 @@ const BLOCK_BYTES: usize = 128;
 /// more than vanilla writes still binds.
 const UNIFORM_BYTES: u64 = 256;
 
-/// `ResourceLocation.withDefaultNamespace` on an id read from a chain.
+/// `Identifier.withDefaultNamespace` on an id read from a chain.
 fn normalise(id: &str) -> String {
     if id.contains(':') {
         id.to_owned()
@@ -681,7 +681,7 @@ impl PostEffects {
         }
     }
 
-    /// `GameRenderer.reloadPostEffects`-alike: forget chains loaded from another
+    /// `GameRenderer.onResourceManagerReload`-alike: forget chains loaded from another
     /// root, and the failures with them (`shouldResetFailedPostEffects`).
     fn use_root(&mut self, root: &Path) {
         if self.root != root {

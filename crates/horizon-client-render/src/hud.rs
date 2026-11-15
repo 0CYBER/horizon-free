@@ -2164,7 +2164,7 @@ impl HudBatch {
     ) -> f32 {
         self.styled_text(atlas, text, x, y, color, shadow, true, None)
     }
-    /// `Font.drawInBatch8xOutline`: eight glyph offsets in the outline color,
+    /// `Font.prepare8xTextOutline`: eight glyph offsets in the outline color,
     /// then the original text. Returns (advance, first front-text vertex), so
     /// world rendering can use POLYGON_OFFSET for the front and NORMAL for
     /// its outline. Offsets use each glyph's own shadow offset (unihex: 0.5).

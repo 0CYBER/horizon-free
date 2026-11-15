@@ -792,7 +792,7 @@ impl Chat {
         let bottom_to_text =
             (8.0 * (o.line_spacing + 1.0) - 4.0 * o.line_spacing + 0.5).floor() as i32;
         // Vanilla's 200-tick fade reads the whole GUI ticks
-        // (`Gui.getGuiTicks`); only the smooth chat extra eases it per frame.
+        // (`Hud.getGuiTicks`); only the smooth chat extra eases it per frame.
         let fade_ticks = if self.smooth { ticks } else { ticks.floor() };
         let alpha_of = |line: &Line| {
             if focused {
@@ -1082,7 +1082,7 @@ impl Chat {
         }
         Some((self.lines.get(self.scroll + row)?, x))
     }
-    /// ChatComponent.getClickedComponentStyleAt.
+    /// ChatComponent.captureClickableText (through `ActiveTextCollector.ClickableStyleFinder`).
     pub fn style_at(
         &self,
         font: &crate::font::Font,

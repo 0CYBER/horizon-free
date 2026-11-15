@@ -282,7 +282,7 @@ fn used_width(pixels: &[u8], stride: u32, (cx, cy, cw, ch): (u32, u32, u32, u32)
 fn fishy_advance(advance: f32) -> bool {
     !(0.0..=32.0).contains(&advance)
 }
-/// A Unihex glyph's advance (`UnihexProvider.Glyph.advance`): half its width
+/// A Unihex glyph's advance (`UnihexProvider.Glyph.info().getAdvance`): half its width
 /// plus one, the width being the bits from its left to its right column.
 fn hex_advance(h: &HexGlyph) -> f32 {
     let width = h.right.saturating_sub(h.left) + 1;

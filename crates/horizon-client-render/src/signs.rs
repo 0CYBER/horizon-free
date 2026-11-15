@@ -115,7 +115,7 @@ impl SignText {
     }
     /// The component a line is saved as (`SignText.CODEC`): the one it was
     /// read as while its text is unchanged. A line edited since is a literal in
-    /// the old line's root style, as `SignBlockEntity.setMessages` makes it
+    /// the old line's root style, as `SignBlockEntity.updateMessages` makes it
     /// (the style keeps its colour and click event, the siblings go).
     pub fn message(&self, i: usize) -> Tag {
         let line = &self.lines[i];
@@ -494,7 +494,7 @@ mod tests {
     fn an_edited_line_keeps_only_the_old_lines_style() {
         let mut data = SignData::default();
         data.decode(&styled_sign());
-        // `SignBlockEntity.setMessages`: a new literal with the old line's style.
+        // `SignBlockEntity.updateMessages`: a new literal with the old line's style.
         data.front.lines[1] = "Full".into();
         let encoded = Tag::compound(data.encode());
         assert_eq!(

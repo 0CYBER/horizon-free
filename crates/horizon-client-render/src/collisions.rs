@@ -234,7 +234,7 @@ impl SceneCollisions<'_, '_> {
         self.resolve_with_context(bounds, movement, max_step, on_ground, self.context(bounds))
     }
     /// [`Self::resolve`], also stopped by the world border's walls when one is
-    /// given with the moving entity's x and z: `Entity.collectColliders` adds
+    /// given with the moving entity's x and z: `Entity.collectAllColliders` adds
     /// `WorldBorder.getCollisionShape` for any entity inside and close to it.
     pub fn resolve_in_border(
         self,
