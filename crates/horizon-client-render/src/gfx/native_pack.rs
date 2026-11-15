@@ -37,6 +37,8 @@ pub struct NativePack {
     pub timing: Option<PassTiming>,
     /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_native`).
     pub traces: bool,
+    /// With kept resources, what lets a rebuild keep them (`carry`).
+    kept: Option<super::native_post::kept::Signature>,
 }
 
 /// Whether the option `id` (a bool, or a number above 0) is on, or there is none to ask.
@@ -128,6 +130,27 @@ impl NativePack {
         let terrain = material.and_then(|m| m.trace(queue, scene.as_ref()));
         self.frame.ray_distance = post.or(terrain);
         self.frame.write(queue, frame, size, display);
+        if let (Some(epochs), Some(post)) = (&self.frame.epochs, &mut self.post) {
+            post.kept_frame(epochs.current(), size);
+        }
+    }
+
+    /// Takes the kept resources and epochs of `old`, the pack before, when this one declares
+    /// the same and composes the same stages (an option change rebuilds a pack): then the
+    /// changed options' `resets` clear theirs. Else this pack's stay fresh, loaded.
+    pub(in crate::gfx) fn carry(&mut self, old: &mut NativePack) {
+        let (Some(new), Some(was)) = (&self.kept, &old.kept) else {
+            return;
+        };
+        let (Some(post), Some(old_post), Some(epochs)) =
+            (&mut self.post, &mut old.post, &mut old.frame.epochs)
+        else {
+            return;
+        };
+        if new.carry(was, epochs) {
+            post.carry(old_post);
+            self.frame.carry(&mut old.frame);
+        }
     }
 
     /// Joins the frame's group with this frame's `scene` from `camera` for a material stage
@@ -183,6 +206,7 @@ impl NativePack {
         lights: super::block_light::LightTable,
     ) -> Result<(Self, Vec<String>), String> {
         let (globals, format) = (terrain.globals, terrain.format);
+        let kept = super::native_post::kept::Signature::of(&report, constants);
         let textures = super::native_post::pack_textures(device, queue, &report);
         // `[shadow]`, unless its option is off, at the size its options pick.
         let chosen = report
@@ -201,6 +225,8 @@ impl NativePack {
             terrain.pbr,
             (api, terrain.linear && api == horizon_shader_api::Api::V0_2),
         );
+        let reach = report.manifest.kept.reach;
+        frame.epochs = (kept.as_ref()).map(|_| super::native_post::kept::Epochs::new(reach));
         // `[displacement]`, unless its option is off; nothing to displace without heights.
         let displacement = report
             .manifest
@@ -367,6 +393,7 @@ impl NativePack {
             particle_lights: report.manifest.particle_lights.clone(),
             light_colors: report.manifest.lights.clone(),
             traces: report.manifest.ray_tracing.is_some(),
+            kept,
             frame,
             sky,
             material,

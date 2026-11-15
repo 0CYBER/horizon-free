@@ -55,11 +55,18 @@ impl Renderer {
     /// declares `[ray_tracing]` keeps the scene there is, or gets one built from the sections
     /// resident now; another pack, or none, drops it (`ray_query::wanted`: with
     /// `HORIZON_RAY_TRACING=1` every pack keeps one). Called before the pack's first frame, so
-    /// the scene is there when it gathers what it traces.
+    /// the scene is there when it gathers what it traces. A rebuild of the pack that runs keeps
+    /// its kept resources (`NativePack::carry`); else they go before the new pack's are made.
     pub(in crate::gfx) fn replace_native(
         &mut self,
-        pack: Option<crate::gfx::native_pack::NativePack>,
+        mut pack: Option<crate::gfx::native_pack::NativePack>,
     ) {
+        if let (Some(new), Some(old)) = (&mut pack, &mut self.native) {
+            new.carry(old);
+        }
+        let old = self.native.as_mut().and_then(|p| p.post.as_mut());
+        let new = pack.as_mut().and_then(|p| p.post.as_mut());
+        crate::gfx::native_post::kept::install(&self.device, new, old);
         let traces = pack.as_ref().is_some_and(|p| p.traces);
         follow(
             &mut self.ray_scene,
@@ -69,8 +76,11 @@ impl Renderer {
         self.native = pack;
     }
 
-    /// Every section is gone (a new world, a new dimension).
+    /// Every section is gone (a new world, a new dimension): so are the pack's kept resources.
     pub(in crate::gfx) fn ray_clear(&mut self) {
+        if let Some(epochs) = self.native.as_mut().and_then(|n| n.frame.epochs.as_mut()) {
+            epochs.note(horizon_shader_api::kept::REASON_WORLD);
+        }
         if let Some(rt) = &mut self.ray_scene {
             rt.clear();
         }

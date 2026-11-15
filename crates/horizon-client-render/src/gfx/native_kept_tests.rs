@@ -316,3 +316,240 @@ fn layout_entries_follow_the_access_and_the_format() {
     assert_eq!(ty(at(1, KeptAccess::Read)), buffer(true));
     assert_eq!(ty(at(1, KeptAccess::Write)), buffer(false));
 }
+
+/// This frame's `[view_epoch, world_epoch, reset_reasons]` as the uploaded bytes hold them.
+fn epochs_of(
+    native: &mut super::super::NativeFrame,
+    frame: &crate::gfx::Frame,
+    size: [u32; 2],
+    hdr: bool,
+) -> [u32; 3] {
+    let display = crate::gfx::output::DisplayValues {
+        hdr,
+        ..crate::gfx::output::DisplayValues::SDR
+    };
+    let inputs = native.next_inputs(frame, size, display);
+    let bytes = bytemuck::bytes_of(&inputs);
+    let offsets = &horizon_shader_api::Frame::OFFSETS[horizon_shader_api::Frame::KEPT_FIELDS];
+    assert_eq!(offsets, [796, 800, 804]);
+    let at = |o: usize| u32::from_ne_bytes(bytes[o..o + 4].try_into().unwrap());
+    let got = [0, 1, 2].map(|i| at(offsets[i]));
+    assert_eq!(
+        got,
+        [inputs.view_epoch, inputs.world_epoch, inputs.reset_reasons]
+    );
+    got
+}
+
+/// #16011 item 4: a frame's own events move the epochs they reset. A pause (a gap over 0.5 s),
+/// an R change and an HDR toggle move the view's, a teleport past `reach` both, a shorter move
+/// neither, a history reset both; the reasons are that frame's only.
+#[test]
+fn frame_events_move_the_epochs_they_reset() {
+    use horizon_shader_api::kept::*;
+    let Some((device, _)) = device() else {
+        return;
+    };
+    let hud = crate::hud::HudBatch::new([4, 4]);
+    let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
+    let mut native = super::super::NativeFrame::new(
+        &device,
+        None,
+        Vec::new(),
+        Default::default(),
+        None,
+        (horizon_shader_api::Api::V0_2, false),
+    );
+    native.epochs = Some(Epochs::new(Some(64)));
+    let mut next = |frame: &crate::gfx::Frame, size, hdr| epochs_of(&mut native, frame, size, hdr);
+    assert_eq!(next(&frame, [4, 4], false), [1, 1, REASON_LOAD]);
+    assert_eq!(next(&frame, [4, 4], false), [1, 1, 0]);
+    drop(next);
+    native.last.as_mut().unwrap().2 -= std::time::Duration::from_millis(600);
+    let mut next = |frame: &crate::gfx::Frame, size, hdr| epochs_of(&mut native, frame, size, hdr);
+    assert_eq!(next(&frame, [4, 4], false), [2, 1, REASON_PAUSE]);
+    assert_eq!(next(&frame, [8, 4], false), [3, 1, REASON_SIZE]);
+    assert_eq!(next(&frame, [8, 4], true), [4, 1, REASON_DISPLAY]);
+    frame.camera.x += 100.0;
+    assert_eq!(next(&frame, [8, 4], true), [5, 2, REASON_TELEPORT]);
+    frame.camera.x += 30.0;
+    assert_eq!(next(&frame, [8, 4], true), [5, 2, 0]);
+    drop(next);
+    native.reset_history();
+    assert_eq!(
+        epochs_of(&mut native, &frame, [8, 4], true),
+        [6, 3, REASON_RESET]
+    );
+    // A rebuild that carries (`NativePack::carry`) carries the last frame too: a pause or a
+    // teleport across it still resets.
+    let new = || {
+        super::super::NativeFrame::new(
+            &device,
+            None,
+            Vec::new(),
+            Default::default(),
+            None,
+            (horizon_shader_api::Api::V0_2, false),
+        )
+    };
+    let mut rebuilt = new();
+    rebuilt.carry(&mut native);
+    rebuilt.last.as_mut().unwrap().2 -= std::time::Duration::from_millis(600);
+    assert_eq!(
+        epochs_of(&mut rebuilt, &frame, [8, 4], true),
+        [7, 3, REASON_PAUSE]
+    );
+    let mut again = new();
+    again.carry(&mut rebuilt);
+    frame.camera.x += 100.0;
+    assert_eq!(
+        epochs_of(&mut again, &frame, [8, 4], true),
+        [8, 4, REASON_TELEPORT]
+    );
+}
+
+/// A pack with kept resources, the options `a` (`resets = "view"`), `b` and `w` (`resets =
+/// "world"`), and `file` as its last post pass.
+fn with_options(file: &str) -> Report {
+    let options = ["a\"\nresets = \"view", "b", "w\"\nresets = \"world"].map(|id| {
+        format!("[[options]]\nid = \"{id}\"\nname = \"O\"\ntype = \"bool\"\ndefault = true\n")
+    });
+    let manifest = format!(
+        "{}{BUFFERS}[[post]]\nfile = \"sum.wgsl\"\ncompute = true\ndispatch = [64, 1, 1]\n\
+         workgroup = [64, 1, 1]\nwrites = [\"cells\"]\n[[post]]\nfile = \"last.wgsl\"\nreads = [\"cells\"]\n",
+        options.concat()
+    );
+    let file = format!("override a: bool;\noverride b: bool;\noverride w: bool;\n{file}");
+    report(&manifest, &[("sum.wgsl", SUM), ("last.wgsl", &file)])
+}
+
+/// A rebuild of the same declaration and stages carries the store and its epochs: an unmarked
+/// option's change resets nothing, a `resets = "view"` one the view's, `"world"` both. A changed
+/// stage doesn't carry, and the new pack's epochs start at 1. A world change (`ray_clear`)
+/// moves both; an epoch skips 0 when it wraps.
+#[test]
+fn a_rebuild_carries_the_epochs_and_options_reset_what_they_name() {
+    use horizon_shader_api::kept::*;
+    let values =
+        |[a, b, w]: [f64; 3]| [("a", a), ("b", b), ("w", w)].map(|(k, v)| (k.to_owned(), v));
+    let pack = with_options(LAST);
+    let signature = |v| Signature::of(&pack, &values(v)).unwrap();
+    let mut epochs = Epochs::new(None);
+    let next = |e: &mut Epochs| e.advance([4, 4], false, false, 0.0);
+    assert_eq!(next(&mut epochs), [1, 1, REASON_LOAD]);
+    let was = signature([1.0; 3]);
+    assert!(signature([1.0, 0.0, 1.0]).carry(&was, &mut epochs));
+    assert_eq!(next(&mut epochs), [1, 1, 0]);
+    assert!(signature([0.0, 1.0, 1.0]).carry(&was, &mut epochs));
+    assert_eq!(next(&mut epochs), [2, 1, REASON_OPTION]);
+    assert!(signature([1.0, 1.0, 0.0]).carry(&was, &mut epochs));
+    assert_eq!(next(&mut epochs), [3, 2, REASON_OPTION]);
+    let changed = with_options(&LAST.replace("cells[0]", "cells[1]"));
+    let changed = Signature::of(&changed, &values([1.0; 3])).unwrap();
+    assert!(!changed.carry(&was, &mut epochs));
+    assert_eq!(next(&mut epochs), [3, 2, 0]);
+    assert_eq!(next(&mut Epochs::new(None)), [1, 1, REASON_LOAD]);
+    epochs.note(REASON_WORLD);
+    assert_eq!(next(&mut epochs), [4, 3, REASON_WORLD]);
+    epochs.view = u32::MAX;
+    epochs.note(REASON_PAUSE);
+    assert_eq!(next(&mut epochs), [1, 3, REASON_PAUSE]);
+    assert!(
+        Signature::of(
+            &report(
+                "[[post]]\nfile = \"last.wgsl\"\n",
+                &[(
+                    "last.wgsl",
+                    "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n"
+                )]
+            ),
+            &[]
+        )
+        .is_none()
+    );
+}
+
+/// #16011 item 4: a pack's kept resources are made at install (`replace_native`), not while it
+/// builds, so one that fails to build makes none; a reload destroys the old store before it
+/// makes the new one, and a carried store stays; a pack whose kept formats the device can't make
+/// is refused while it builds, and the running store stays. Counted with
+/// `Instance::generate_report`.
+#[test]
+fn a_reload_never_holds_two_stores() {
+    let instance = crate::gfx::test_gpu::instance();
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+        return;
+    };
+    let Ok((device, _)) = pollster::block_on(adapter.request_device(&Default::default())) else {
+        return;
+    };
+    // Live buffers and textures.
+    let count = || {
+        let hub = instance.generate_report()?.hub;
+        Some([hub.buffers.num_allocated, hub.textures.num_allocated])
+    };
+    if count().is_none() {
+        return;
+    }
+    let frame = super::super::NativeFrame::new(
+        &device,
+        None,
+        Vec::new(),
+        Default::default(),
+        None,
+        (horizon_shader_api::Api::V0_2, false),
+    );
+    let build = |resources: &str, colour: &str| {
+        let pass = format!("fn post(input: PostInput) -> vec4<f32> {{ return {colour}; }}\n");
+        let report = report(
+            &format!("{resources}[[post]]\nfile = \"a.wgsl\"\n"),
+            &[("a.wgsl", &pass)],
+        );
+        let stages = (report.stages.into_iter())
+            .filter(|s| s.kind == StageKind::Post)
+            .collect();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        super::super::NativePost::new(&device, stages, &report.manifest, &[], format, &frame, None)
+    };
+    let post = |resources: &str, colour: &str| build(resources, colour).unwrap();
+    let delta = |from: [usize; 2]| count().map(|c| [c[0] - from[0], c[1] - from[1]]);
+    // Building one makes what building one without resources makes: nothing kept.
+    let before = count().unwrap();
+    let bare = post("", "input.color");
+    let made = delta(before).unwrap();
+    drop(bare);
+    let before = count().unwrap();
+    let mut first = post(BUFFERS, "input.color");
+    assert_eq!(delta(before), Some(made));
+    // Installed: the buffer and the texture's two versions.
+    let built = count().unwrap();
+    install(&device, Some(&mut first), None);
+    assert_eq!(delta(built), Some([1, 2]));
+    // A reload with another file: the first store goes, then the second is made.
+    let mut second = post(BUFFERS, "input.color * 0.5");
+    let built = count().unwrap();
+    install(&device, Some(&mut second), Some(&mut first));
+    assert_eq!(delta(built), Some([0, 0]));
+    assert!(first.kept.as_ref().is_some_and(|k| k.held.is_empty()));
+    // A carried store stays: nothing destroyed, nothing made.
+    let mut third = post(BUFFERS, "input.color * 0.5");
+    third.carry(&mut second);
+    let built = count().unwrap();
+    install(&device, Some(&mut third), Some(&mut second));
+    assert_eq!(delta(built), Some([0, 0]));
+    assert_eq!(third.kept.as_ref().map(|k| k.held.len()), Some(2));
+    // A device that can't make `wide`'s r32float so (`PROBE_EXTRA` stands in for one): refused
+    // in the build, its error caught there, nothing left made, the running store whole.
+    PROBE_EXTRA.set(wgpu::TextureUsages::STORAGE_ATOMIC);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let built = count().unwrap();
+    let refused = build(BUFFERS, "input.color").err().unwrap();
+    PROBE_EXTRA.set(wgpu::TextureUsages::empty());
+    assert!(
+        refused.starts_with("wide: the device can't make an r32float texture to keep"),
+        "{refused}"
+    );
+    assert_eq!(delta(built), Some([0, 0]));
+    assert!(pollster::block_on(scope.pop()).is_none());
+    assert_eq!(third.kept.as_ref().map(|k| k.held.len()), Some(2));
+}
