@@ -176,7 +176,10 @@ mod tests {
                 m.position.z,
                 before.position.z
             );
-            assert_eq!(m.ai.no_action_time, 0, "no AI step ran");
+            assert_eq!(
+                m.ai.no_action_time, before.ai.no_action_time,
+                "no AI step ran after the path's warm-up"
+            );
             assert_eq!(m.ai.target, Some(Who::Mob(41)), "the target is kept");
             assert_eq!(
                 m.ai.nav.target_pos, before.ai.nav.target_pos,
@@ -230,9 +233,10 @@ mod tests {
     /// A paused allay (a brain mob) and a paused zombie (a goal mob) run no
     /// AI step while their unpaused neighbours do; a flying mob's vertical
     /// input is zeroed every paused tick, its move target kept. The witness
-    /// is `noActionTime`, cleared after warm-up so only a later `serverAiStep`
-    /// can advance it during the observed interval. The zombie also retains a
-    /// running goal without ticking, stopping or restarting it during pause.
+    /// for the allay is `noActionTime`, cleared after warm-up. For the zombie,
+    /// Monster.aiStep also adds two per bright tick outside serverAiStep, so
+    /// the running goal's counters witness the pause independently of that
+    /// ambient increment: it neither ticks, stops nor restarts.
     #[test]
     #[ignore = "daily"]
     fn a_paused_brain_or_goal_mob_runs_no_ai_step_and_holds_no_input() {
@@ -311,10 +315,12 @@ mod tests {
             assert!(m.position.y < 67.5, "did not climb: {}", m.position.y);
             assert!(m.ai.mov.has_wanted(), "the move target is kept");
             assert_eq!(m.ai.mov.wanted, wanted);
-            for handle in paused {
-                let m = mob(game, handle);
-                assert_eq!(m.ai.no_action_time, 0, "{}: no AI step", m.kind.id);
-            }
+            assert_eq!(mob(game, allay).ai.no_action_time, 0, "no brain AI step");
+            assert_eq!(
+                mob(game, paused[1]).ai.no_action_time,
+                20,
+                "ten bright Monster.aiStep ticks, but no serverAiStep increment"
+            );
             for handle in thinking {
                 let m = mob(game, handle);
                 assert!(m.ai.no_action_time >= 1, "{}: thinks", m.kind.id);
