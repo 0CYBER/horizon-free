@@ -7,11 +7,12 @@
 # .local/horizon-client and the exporter outputs beside it, what horizon-prepare makes, are prepared by this
 # checkout's own preparer once per preparer version (its sources, the exporters and research-lock.json), so a
 # change to the preparer is checked with what it prepares; the four newest preparations are kept on legacy runners.
-# Dyna uses a per-slot HORIZON_PREPARED_CACHE and read-only HORIZON_SHARED_SOURCE; old keys stay until slot GC.
+# A runner pool that keeps HORIZON_PREPARED_CACHE between jobs (HORIZON_PERSISTENT_CACHE=true) reads a read-only
+# HORIZON_SHARED_SOURCE; old keys stay until the pool collects them.
 set -euo pipefail
 shared="${HORIZON_PREPARED_CACHE:-${RUNNER_WORKSPACE:?}/shared-local}"
 source="${HORIZON_SHARED_SOURCE:-$HOME/code/horizon-parity/shared-local}"
-dyna="${HORIZON_DYNA_CACHE:-false}"
+persistent="${HORIZON_PERSISTENT_CACHE:-false}"
 version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' research-lock.json | head -1)
 if [ ! -f "$shared/minecraft/$version/prepared.json" ]; then
   [ -f "$source/minecraft/$version/prepared.json" ] || { echo "::error::no imported Minecraft $version"; exit 1; }
@@ -44,7 +45,7 @@ else
   done
   trap 'rmdir "$lock" 2>/dev/null || true' EXIT
 fi
-# Dyna keeps $prepared on the slot between jobs, so a job must never change it: it is only ever read here,
+# A persistent cache keeps $prepared between jobs, so a job must never change it: it is only ever read here,
 # against the digest of its files written when its preparation finished, and the job gets a private copy.
 # Each file's digest, then one digest of the list; .manifest* themselves are left out.
 file_digests() {
@@ -60,7 +61,7 @@ use_private_copy() {
   while read -r name; do ln -sfn "$work/$name" ".local/$name"; done < "$work/.entries"
   echo "prepared key $key: private copy for this job ($(find "$work" -type f | wc -l) files)"
 }
-if [ "$dyna" = true ] && [ -f "$prepared/.entries" ] && grep -qx horizon-client "$prepared/.entries"; then
+if [ "$persistent" = true ] && [ -f "$prepared/.entries" ] && grep -qx horizon-client "$prepared/.entries"; then
   expected=$(cat "$prepared/.manifest" 2>/dev/null || echo none)
   found=$(digest "$prepared")
   if [ "$found" = "$expected" ]; then
@@ -82,7 +83,7 @@ if [ "$dyna" = true ] && [ -f "$prepared/.entries" ] && grep -qx horizon-client 
   fi
   rm -rf "$prepared"
 fi
-if [ "$dyna" = true ]; then
+if [ "$persistent" = true ]; then
   echo "prepared key $key stale"
   # The preparer owns its scratch data; never let it write through the source mount.
   for name in minecraft tools; do ln -sfn "$source/$name" ".local/$name"; done
@@ -127,7 +128,7 @@ if [ ! -f "$prepared/.entries" ]; then
   done
   before=$(ls -1A .local | LC_ALL=C sort)
   started=$SECONDS
-  if [ "$dyna" = true ]; then
+  if [ "$persistent" = true ]; then
     python3 tools/ci/preparation_step.py preparer-build "$RUNNER_TEMP/prepare-build.log" cargo build --release --locked -p horizon-prepare
   else
     cargo build --release --locked -p horizon-prepare
@@ -144,7 +145,7 @@ if [ ! -f "$prepared/.entries" ]; then
   fi
   LC_ALL=C comm -13 <(echo "$before") <(ls -1A .local | LC_ALL=C sort) > "$RUNNER_TEMP/prepared-entries"
   while read -r name; do mv ".local/$name" "$prepared/$name"; done < "$RUNNER_TEMP/prepared-entries"
-  if [ "$dyna" = true ]; then
+  if [ "$persistent" = true ]; then
     # Optional dispatch-only measurement before shared extras can affect the output.
     if [ -n "${HORIZON_PREPARE_EXPORT_DIGEST:-}" ]; then
       python3 tools/prepare_output.py digest "$prepared/horizon-client/$version" > "$HORIZON_PREPARE_EXPORT_DIGEST" 2> "$RUNNER_TEMP/export-digest.log" || { echo "::error::export digest unavailable"; exit 1; }
@@ -153,11 +154,11 @@ if [ ! -f "$prepared/.entries" ]; then
     python3 tools/ci/preparation_step.py seed-extras "$RUNNER_TEMP/seed-extras.log" python3 -m tools.ci.seed_prepared_extras "$source/horizon-client/$version" "$prepared/horizon-client/$version/"
   fi
   mv "$RUNNER_TEMP/prepared-entries" "$prepared/.entries"
-  if [ "$dyna" != true ]; then echo "Prepared in $((SECONDS - started)) s: $(tr '\n' ' ' < "$prepared/.entries")"; fi
+  if [ "$persistent" != true ]; then echo "Prepared in $((SECONDS - started)) s: $(tr '\n' ' ' < "$prepared/.entries")"; fi
 fi
 # The game finds some data relative to its resources (<resources>/../../datagen): beside the prepared folders,
 # the same neighbours as in the shared folder.
-if [ "$dyna" = true ]; then
+if [ "$persistent" = true ]; then
   for name in minecraft tools; do [ -e "$prepared/$name" ] || ln -sfn "$source/$name" "$prepared/$name"; done
 else
   for entry in "$shared"/*; do
@@ -204,7 +205,7 @@ if [ -d "$languages/minecraft/lang" ] && [ -d "$assets" ]; then
   fi
 fi
 touch "$prepared"
-if [ "$dyna" = true ]; then
+if [ "$persistent" = true ]; then
   echo "prepared in $((SECONDS - started)) s"
   # Written last, once the preparation is whole: the next job reuses this tree only if it still matches.
   file_digests "$prepared" > "$RUNNER_TEMP/prepared-files"
@@ -215,7 +216,7 @@ if [ "$dyna" = true ]; then
   report_prepared
 fi
 # The four newest preparations stay.
-# Dyna keeps old keys because another active job may still read them; slot GC handles them.
-if [ "$dyna" != true ]; then
+# A persistent cache keeps old keys because another active job may still read them; the pool collects them.
+if [ "$persistent" != true ]; then
   ls -1dt "$shared/prepared"/*/ 2>/dev/null | tail -n +5 | while read -r old; do rm -rf "$old"; done
 fi

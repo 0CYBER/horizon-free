@@ -1,4 +1,4 @@
-"""The slot preparation cache (HORIZON_DYNA_CACHE) reuses keys and recovers its lock after a killed job."""
+"""The persistent preparation cache (HORIZON_PERSISTENT_CACHE) reuses keys and recovers its lock after a killed job."""
 import os
 from pathlib import Path
 import signal
@@ -43,7 +43,7 @@ class PreparedCacheTest(unittest.TestCase):
             cargo = binary / "cargo"
             cargo.write_text('#!/bin/sh\nexit 0\n')
             cargo.chmod(0o755)
-            env = dict(os.environ, PATH=f"{binary}:{os.environ['PATH']}", HORIZON_DYNA_CACHE="true",
+            env = dict(os.environ, PATH=f"{binary}:{os.environ['PATH']}", HORIZON_PERSISTENT_CACHE="true",
                        HORIZON_PREPARED_CACHE=str(cache), HORIZON_SHARED_SOURCE=str(source),
                        HORIZON_PREPARE_KEY="fixture", HORIZON_PREPARE_EXPORT_DIGEST=str(tmp / "export.digest"),
                        RUNNER_TEMP=str(tmp), CARGO_TARGET_DIR=str(work / "target"))

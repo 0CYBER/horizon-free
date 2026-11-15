@@ -101,7 +101,7 @@ class PreparationStepTests(unittest.TestCase):
             prepare = root / "target/release/horizon-prepare"
             prepare.write_text('#!/bin/sh\nmkdir .local/scratch\necho "SECRET No space left on device"\nexit 23\n')
             prepare.chmod(0o755)
-            env = dict(os.environ, HORIZON_DYNA_CACHE="true", HORIZON_PREPARED_CACHE=str(root / "cache"),
+            env = dict(os.environ, HORIZON_PERSISTENT_CACHE="true", HORIZON_PREPARED_CACHE=str(root / "cache"),
                        HORIZON_SHARED_SOURCE=str(root / "source"), HORIZON_PREPARE_KEY="0123456789abcdef",
                        RUNNER_TEMP=str(root), CARGO_TARGET_DIR=str(root / "target"),
                        PATH=str(root / "bin") + os.pathsep + os.environ["PATH"])
@@ -143,7 +143,7 @@ class PreparationStepTests(unittest.TestCase):
             prepare.write_text('#!/bin/sh\nmkdir -p .local/horizon-client/26.3\necho one > .local/horizon-client/26.3/a\n'
                                'echo "prepared" >> "$PREPARED_RUNS"\n')
             prepare.chmod(0o755)
-            env = dict(os.environ, HORIZON_DYNA_CACHE="true", HORIZON_PREPARED_CACHE=str(root / "cache"),
+            env = dict(os.environ, HORIZON_PERSISTENT_CACHE="true", HORIZON_PREPARED_CACHE=str(root / "cache"),
                        HORIZON_SHARED_SOURCE=str(root / "source"), HORIZON_PREPARE_KEY="0123456789abcdef",
                        RUNNER_TEMP=str(root), CARGO_TARGET_DIR=str(root / "target"),
                        PREPARED_RUNS=str(root / "runs"), PATH=str(root / "bin") + os.pathsep + os.environ["PATH"])

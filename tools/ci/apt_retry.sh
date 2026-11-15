@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared bounded backoff for CI apt commands. Source before calling retry.
-tries="${DYNA_CI_APT_TRIES:-4}"
-pause="${DYNA_CI_APT_PAUSE:-5}"
+tries="${APT_RETRY_TRIES:-4}"
+pause="${APT_RETRY_PAUSE:-5}"
 retry() {
   local attempt=1 status=0
   while :; do

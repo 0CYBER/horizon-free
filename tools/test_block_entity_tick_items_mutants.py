@@ -20,7 +20,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--resources", type=Path, required=True)
 args = parser.parse_args()
 resources = args.resources.resolve()
-if resources.is_relative_to(Path("/box/shared/vanilla")):
+shared = os.environ.get("HORIZON_SHARED_SOURCE") or Path.home() / "code/horizon-parity/shared-local"
+if resources.is_relative_to(Path(shared)):
     parser.error("use a private resource copy, not the read-only shared tree")
 logs = ROOT / ".local/row4-mutants"
 logs.mkdir(parents=True, exist_ok=True)

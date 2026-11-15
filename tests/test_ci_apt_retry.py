@@ -50,7 +50,7 @@ fi
             env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}",
                        LOG=str(root / "log"), STATE=str(root / "state"),
                        FAILED_COMMAND=failed_command, FAILURES=str(failures),
-                       DYNA_CI_APT_TRIES="4", DYNA_CI_APT_PAUSE="5")
+                       APT_RETRY_TRIES="4", APT_RETRY_PAUSE="5")
             result = subprocess.run(
                 ["bash", ROOT / "tools/ci/install_launcher_deps.sh", "libx11-xcb-dev", "libudev-dev"],
                 env=env, text=True, capture_output=True)

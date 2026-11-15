@@ -4,7 +4,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 VARIABLE = 'HORIZON_DATAFIX_ROOT'
-READ_ONLY = Path('/box/shared/vanilla')
+# The read-only shared copy of the vanilla data (tools/ci/vanilla-data.sh's HORIZON_SHARED_SOURCE).
+READ_ONLY = Path(os.environ.get('HORIZON_SHARED_SOURCE') or Path.home() / 'code/horizon-parity/shared-local')
 
 
 def writable_root():

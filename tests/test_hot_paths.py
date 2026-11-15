@@ -30,7 +30,7 @@ class Record(unittest.TestCase):
         self.assertEqual(kept['notes'], ['instructions and allocations not measured: no valgrind on this machine'])
 
     def test_a_path_or_an_unknown_metric_is_refused(self):
-        for change in ({'host': '/box/work/runner'}, {'cpu': 'C:\\Users\\someone'}, {'commit': 'main'},
+        for change in ({'host': '/srv/work/runner'}, {'cpu': 'C:\\Users\\someone'}, {'commit': 'main'},
                        {'metrics': {'server.tick.mobs_128.assets': [1.0]}},
                        {'metrics': {'other.workload.instructions': [1.0]}},
                        {'workloads': {'../escape': {'operations': 1, 'checksum': '0' * 16}}}):
