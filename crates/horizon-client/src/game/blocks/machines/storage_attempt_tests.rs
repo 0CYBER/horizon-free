@@ -418,7 +418,7 @@ fn count(game: &Game<'_>, pos: Pos, slot: usize) -> u32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn blocked_pull_ticks_extract_abort_restore_without_hopper_mark_or_cooldown() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::blocked_pull_ticks_extract_abort_restore_without_hopper_mark_or_cooldown",
@@ -462,7 +462,7 @@ fn blocked_pull_ticks_extract_abort_restore_without_hopper_mark_or_cooldown() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn blocked_push_ticks_share_one_abort_and_restore_refused_source_slots() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::blocked_push_ticks_share_one_abort_and_restore_refused_source_slots",
@@ -529,7 +529,7 @@ fn blocked_push_ticks_share_one_abort_and_restore_refused_source_slots() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn push_then_pull_commit_in_one_tick_with_only_the_ordered_hopper_marks() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::push_then_pull_commit_in_one_tick_with_only_the_ordered_hopper_marks",
@@ -591,7 +591,7 @@ fn push_then_pull_commit_in_one_tick_with_only_the_ordered_hopper_marks() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn pull_chooses_the_first_slot_after_extract_and_not_an_existing_stack() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::pull_chooses_the_first_slot_after_extract_and_not_an_existing_stack",
@@ -651,7 +651,7 @@ fn pull_chooses_the_first_slot_after_extract_and_not_an_existing_stack() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn full_storage_and_fully_stacked_hopper_are_the_only_capacity_shortcuts() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::full_storage_and_fully_stacked_hopper_are_the_only_capacity_shortcuts",
@@ -675,7 +675,7 @@ fn full_storage_and_fully_stacked_hopper_are_the_only_capacity_shortcuts() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn dropper_commits_refused_insertion_and_its_storage_notifications() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::dropper_commits_refused_insertion_and_its_storage_notifications",
@@ -738,7 +738,7 @@ fn dropper_commits_refused_insertion_and_its_storage_notifications() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn vanilla_container_provider_and_entity_never_ask_their_storage() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::vanilla_container_provider_and_entity_never_ask_their_storage",
@@ -785,7 +785,7 @@ fn vanilla_container_provider_and_entity_never_ask_their_storage() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn failed_block_pull_stops_but_minecart_falls_back_to_item_entities() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::failed_block_pull_stops_but_minecart_falls_back_to_item_entities",
@@ -817,7 +817,7 @@ fn failed_block_pull_stops_but_minecart_falls_back_to_item_entities() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn nontransactional_storage_loses_a_blocked_extraction_on_abort() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::nontransactional_storage_loses_a_blocked_extraction_on_abort",
@@ -849,7 +849,7 @@ fn nontransactional_storage_loses_a_blocked_extraction_on_abort() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn extract_notifications_cross_signal_each_tick_and_comparator_ticks_every_second_tick() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::extract_notifications_cross_signal_each_tick_and_comparator_ticks_every_second_tick",
@@ -958,7 +958,7 @@ fn extract_notifications_cross_signal_each_tick_and_comparator_ticks_every_secon
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn a_blocked_pull_slot_aborts_before_the_next_slot_commits() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::a_blocked_pull_slot_aborts_before_the_next_slot_commits",
@@ -1003,7 +1003,7 @@ fn a_blocked_pull_slot_aborts_before_the_next_slot_commits() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn pushes_use_only_the_opposite_face_for_each_hopper_facing() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::pushes_use_only_the_opposite_face_for_each_hopper_facing",
@@ -1050,7 +1050,7 @@ fn pushes_use_only_the_opposite_face_for_each_hopper_facing() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn refused_push_callback_journals_source_without_losing_the_restored_item() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::refused_push_callback_journals_source_without_losing_the_restored_item",
@@ -1096,7 +1096,7 @@ fn refused_push_callback_journals_source_without_losing_the_restored_item() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn dropper_removes_accepted_source_before_a_real_root_commit_callback() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::dropper_removes_accepted_source_before_a_real_root_commit_callback",
@@ -1193,7 +1193,7 @@ fn dropper_reserves_source_across_writable_insertion_notices() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; isolated scratch process"]
+#[ignore = "daily"]
 fn dropper_routes_saved_pot_directly_even_with_a_storage_provider() {
     fixture(
         "game::machines::native_items::storage_attempt_tests::dropper_routes_saved_pot_directly_even_with_a_storage_provider",
