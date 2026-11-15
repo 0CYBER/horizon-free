@@ -68,10 +68,15 @@ fn commit_of(tag: &str) -> String {
 /// "Nov 7 update" and the day it came out; the commit is in a tooltip on that line.
 fn nightly_card_text(release: &Release, same_day: bool) -> Option<(String, String)> {
     release.nightly.as_ref()?;
-    // Two updates on one day are told apart by their time in the title.
+    // Two updates on one day are told apart by their time in the title, which then says all
+    // the line would: the line keeps only what the card adds.
     let date = published(&release.date, if same_day { &release.time } else { "" });
     let title = trf("{date} update", &[("date", &date)]);
-    Some((title, published(&release.date, &release.time)))
+    let line = match same_day {
+        true => String::new(),
+        false => published(&release.date, &release.time),
+    };
+    Some((title, line))
 }
 
 impl Launcher {
@@ -273,9 +278,6 @@ impl Launcher {
                         };
                         (title, published(&release.date, &release.time))
                     });
-                if line.is_empty() {
-                    line = published(&release.date, &release.time);
-                }
                 let right = self.glass_release_action(&release, cx);
                 let notes = self.glass_whats_new(&release, i == 0, cx);
                 let card = self
@@ -862,5 +864,8 @@ mod tests {
         assert_eq!(title, "Nov 7 update");
         assert_eq!(line, "Nov 7, 14:32 UTC");
         assert_eq!(commit_of(&release.tag), "4aa6854");
+        let (title, line) = nightly_card_text(&release, true).expect("nightlies have card text");
+        assert_eq!(title, "Nov 7, 14:32 UTC update");
+        assert_eq!(line, "");
     }
 }
