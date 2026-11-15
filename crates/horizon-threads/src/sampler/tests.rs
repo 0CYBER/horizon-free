@@ -440,8 +440,11 @@ fn a_spinning_thread_has_wall_samples_that_are_running() {
         (60..=600).contains(&wall),
         "{wall} wall samples in 200 ms at 1 kHz"
     );
+    // Half, not most: on a runner with more runnable threads than cores the
+    // spinning thread is descheduled part of the time (207 of 331 running,
+    // #16931). A sleeping thread stays under a tenth.
     assert!(
-        running * 10 >= wall * 8,
+        running * 2 >= wall,
         "{running} of {wall} marked running while spinning"
     );
     assert!(
