@@ -1132,7 +1132,7 @@ impl Game<'_> {
             let (back, theirs) = (self.dim, super::Dim::from_id(&g.dimension));
             let entered = theirs == back || self.enter_level(theirs).is_ok();
             if entered && let Some(swap) = self.enter_guest_in_dimension(conn, back) {
-                let command = command.trim_start_matches('/').to_owned();
+                let command = command.strip_prefix('/').unwrap_or(command).to_owned();
                 let lines = self.as_console(|g| {
                     g.chat_capture = Some(Vec::new());
                     // A command a native mod registered goes to the mods
