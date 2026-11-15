@@ -97,10 +97,12 @@ impl Launcher {
         } else {
             Vec::new()
         };
-        body = body.children(left_out.iter().map(|left| {
-            ui::text(13., FontWeight::NORMAL, 1.)
-                .text_color(ui::warn())
-                .child(left.label())
+        body = body.children((!left_out.is_empty()).then(|| {
+            self.panel().children(left_out.iter().map(|left| {
+                ui::text(13., FontWeight::NORMAL, 1.)
+                    .text_color(ui::warn())
+                    .child(left.label())
+            }))
         }));
         let rows: Vec<ModRow> = self
             .instance_mods

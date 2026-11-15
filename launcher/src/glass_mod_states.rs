@@ -222,6 +222,8 @@ impl Launcher {
         self.instance_mods.list = vec![
             row("fast-ore", ModKind::Native, None),
             row("greeter", ModKind::Native, None),
+            // Left out of a build, a mod stays installed and listed (`native_left_out`).
+            row("hitbox-plus", ModKind::Native, None),
         ];
         self.mod_preview.state = Some(native_status::State::Outdated);
         let (kind, key) = name.split_once('-').unwrap_or((name, ""));

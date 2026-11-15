@@ -349,7 +349,7 @@ impl Launcher {
     }
 
     /// A bordered panel, as the build card and its warning sit on the page.
-    fn panel(&self) -> Div {
+    pub(super) fn panel(&self) -> Div {
         let t = self.theme;
         div()
             .flex()
@@ -430,8 +430,9 @@ impl Launcher {
         let t = self.theme;
         let other = self.native_step.is_some() && !mine;
         let mut card = div().flex().flex_col().gap(px(10.));
+        // Each message sits in the same card as the update question, its actions inside it.
         if let Some(e) = error {
-            card = card.child(
+            let mut message = self.panel().child(
                 div()
                     .flex()
                     .items_start()
@@ -459,12 +460,16 @@ impl Launcher {
                             ),
                     ),
             );
-        }
-        if let Some(stake) = self.worlds_stop(mine).filter(|_| error.is_some()) {
-            card = card.child(self.worlds_choice(stake, pal, cx));
+            if let Some(stake) = self.worlds_stop(mine) {
+                message = message.child(self.worlds_choice(stake, pal, cx));
+            }
+            card = card.child(message);
         }
         if let Some(done) = self.native_done.as_ref().filter(|_| mine) {
-            card = card.child(text_in(13., pal.muted).child(done.clone()));
+            card = card.child(
+                self.panel()
+                    .child(text_in(13., pal.muted).child(done.clone())),
+            );
         }
         if other {
             let name = self
@@ -472,10 +477,10 @@ impl Launcher {
                 .as_deref()
                 .and_then(|id| self.instances.list.iter().find(|i| i.id == id))
                 .map_or("", |i| i.name.as_str());
-            card = card.child(text_in(13., pal.muted).child(trf(
+            card = card.child(self.panel().child(text_in(13., pal.muted).child(trf(
                 "{instance} is building: one build at a time.",
                 &[("instance", name)],
-            )));
+            ))));
         }
         card
     }
