@@ -127,6 +127,7 @@ impl Launcher {
             storage_pending: false,
             storage_confirm: None,
             storage_error: None,
+            storage_revoke: None,
             disk_for: Vec::new(),
             install_error: None,
             importing_build: false,

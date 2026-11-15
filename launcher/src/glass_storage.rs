@@ -196,40 +196,95 @@ impl Launcher {
         let breakdown = card;
         let mut card = crate::glass::plate(horizon_theme::glass::radius::PANEL).p(px(8.));
         if self.settings.native_mods_allowed_at.is_some() {
+            // Turn off asks first: it switches mods off in every instance, and each comes back
+            // only from its own instance.
+            let (detail, actions) = match self.storage_revoke {
+                None => (
+                    tr(
+                        "Allowed: they run with access to your computer. Turn off takes the \
+                        permission back; Horizon asks again before the next build.",
+                    )
+                    .to_string(),
+                    div().child(
+                        button("storage-revoke", "Turn off", Kind::Secondary, &t).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                let counts: Vec<usize> = instances::list()
+                                    .iter()
+                                    .map(|i| native_status::enabled(&i.home).len())
+                                    .filter(|n| *n > 0)
+                                    .collect();
+                                this.storage_revoke = Some((counts.iter().sum(), counts.len()));
+                                cx.notify();
+                            }),
+                        ),
+                    ),
+                ),
+                Some((mods, instances_)) => (
+                    match (mods, instances_) {
+                        (0, _) => tr("No native mod is switched on: only the permission goes.")
+                            .to_string(),
+                        (1, _) => tr("This switches off your one native mod. Turn it back on \
+                                      from its instance's Installed mods.")
+                        .to_string(),
+                        (_, 1) => trf(
+                            "This switches off {mods} native mods. Turn them back on from the \
+                             instance's Installed mods.",
+                            &[("mods", &mods.to_string())],
+                        ),
+                        _ => trf(
+                            "This switches off {mods} native mods in {instances} instances. \
+                             Turn them back on from each instance's Installed mods.",
+                            &[
+                                ("mods", &mods.to_string()),
+                                ("instances", &instances_.to_string()),
+                            ],
+                        ),
+                    },
+                    div()
+                        .flex()
+                        .gap(px(8.))
+                        .child(
+                            button("storage-revoke-cancel", "Cancel", Kind::Secondary, &t)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.storage_revoke = None;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            button("storage-revoke-yes", "Turn off", Kind::Primary, &t).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.storage_revoke = None;
+                                    let result =
+                                        this.settings.revoke_native_mods().and_then(|()| {
+                                            let mut failure = None;
+                                            for instance in instances::list() {
+                                                for (id, _, _) in
+                                                    native_status::enabled(&instance.home)
+                                                {
+                                                    if let Err(error) = browser::java::set_enabled(
+                                                        &instance.home,
+                                                        &id,
+                                                        false,
+                                                    ) {
+                                                        failure.get_or_insert(error);
+                                                    }
+                                                }
+                                            }
+                                            failure.map_or(Ok(()), Err)
+                                        });
+                                    if let Err(error) = result {
+                                        this.storage_error = Some(error);
+                                    }
+                                    cx.notify();
+                                }),
+                            ),
+                        ),
+                ),
+            };
             card = card.child(ui::setting_row(
                 tr("Native mods"),
-                Some(
-                    div()
-                        .child(tr(
-                            "Allowed: they run with access to your computer. Turn off takes the \
-                             permission back and switches every native mod off; Horizon asks \
-                             again before the next build.",
-                        ))
-                        .into_any_element(),
-                ),
-                Some(
-                    button("storage-revoke", "Turn off", Kind::Secondary, &t)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let result = this.settings.revoke_native_mods().and_then(|()| {
-                                let mut failure = None;
-                                for instance in instances::list() {
-                                    for (id, _, _) in native_status::enabled(&instance.home) {
-                                        if let Err(error) =
-                                            browser::java::set_enabled(&instance.home, &id, false)
-                                        {
-                                            failure.get_or_insert(error);
-                                        }
-                                    }
-                                }
-                                failure.map_or(Ok(()), Err)
-                            });
-                            if let Err(error) = result {
-                                this.storage_error = Some(error);
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element(),
-                ),
+                Some(div().child(detail).into_any_element()),
+                Some(actions.into_any_element()),
             ));
         } else {
             card = card.child(ui::setting_row(

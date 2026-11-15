@@ -294,6 +294,9 @@ struct Launcher {
     /// A Clear the player still has to confirm: `Some(None)` is Clear all.
     storage_confirm: Option<Option<storage::Category>>,
     storage_error: Option<String>,
+    /// Turn off for native mods was pressed once: how many switched-on native mods it would
+    /// switch off, and in how many instances, counted then (`glass_storage.rs`).
+    storage_revoke: Option<(usize, usize)>,
     disk_for: Vec<String>,
     install_error: Option<(String, String)>,
     /// Import a game build (`build_import`, on the Versions page): whether one is being copied in,
