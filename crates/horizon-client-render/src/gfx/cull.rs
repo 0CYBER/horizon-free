@@ -241,6 +241,18 @@ pub(super) fn packed_lookup(source: &str, name: &str, n: usize) -> Vec<u32> {
 /// Qualcomm's PCI vendor id, which wgpu reports for Adreno GPUs.
 const ADRENO: u32 = 0x5143;
 
+/// Mesa's open-source Nouveau driver on OpenGL (NVC0/Fermi through Pascal):
+/// its Gallium driver (`nvc0`) suffers from kernel pushbuf rejections and
+/// channel kills when fragment shaders write to storage buffers alongside early
+/// depth tests and indirect execution (#15633).
+pub(crate) fn is_nouveau(info: &wgpu::AdapterInfo) -> bool {
+    info.backend == wgpu::Backend::Gl
+        && (info.driver_info.contains("Mesa") || info.driver.contains("Mesa"))
+        && (info.name.starts_with("NV")
+            || info.name.to_lowercase().contains("nouveau")
+            || info.driver.to_lowercase().contains("nouveau"))
+}
+
 impl Cull {
     /// The device feature culling needs, where the adapter has it.
     pub fn features(adapter: &wgpu::Adapter) -> wgpu::Features {
@@ -258,6 +270,10 @@ impl Cull {
             // then leaves sections out with the early test, the world flashing black or
             // see-through as a block breaks; the test in the shader, as on Metal, holds.
             wgpu::Backend::Vulkan if info.vendor == ADRENO => DepthTest::InShader,
+            // Mesa's Nouveau OpenGL driver crashes with kernel pushbuf rejections and SIGSEGV
+            // when fragment shaders write to storage buffers with early depth tests and indirect
+            // execution (#15633).
+            wgpu::Backend::Gl if is_nouveau(&info) => return None,
             wgpu::Backend::Vulkan | wgpu::Backend::Gl
                 if device
                     .features()
@@ -814,5 +830,49 @@ mod tests {
         ] {
             assert_eq!(packed_lookup(source, "box_triangle_corner", 36), triangles);
         }
+    }
+
+    #[test]
+    fn nouveau_is_detected_on_opengl_and_other_adapters_kept() {
+        let mut info = wgpu::AdapterInfo {
+            name: "NVC3".into(),
+            vendor: 0,
+            device: 0,
+            device_type: wgpu::DeviceType::Other,
+            device_pci_bus_id: String::new(),
+            driver: "4.3 (Core Profile)".into(),
+            driver_info: "Mesa 26.2.3-arch1.1".into(),
+            backend: wgpu::Backend::Gl,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        };
+        assert!(is_nouveau(&info));
+
+        // Other Nouveau chipsets (Fermi, Kepler, Maxwell, Pascal)
+        for name in ["NVC0", "NVD9", "NVE4", "NV117", "NV130"] {
+            info.name = name.into();
+            assert!(is_nouveau(&info));
+        }
+
+        // Intel on Mesa OpenGL is kept (crocus / iris)
+        info.name = "Mesa Intel(R) HD Graphics 4400 (HSW GT2)".into();
+        assert!(!is_nouveau(&info));
+
+        // AMD on Mesa OpenGL is kept (radeonsi)
+        info.name = "AMD Radeon RX 580 (radeonsi, ...)".into();
+        assert!(!is_nouveau(&info));
+
+        // Proprietary NVIDIA on OpenGL does not have Mesa in driver_info
+        info.name = "NVIDIA GeForce RTX 3060".into();
+        info.driver_info = "NVIDIA 550.54.14".into();
+        assert!(!is_nouveau(&info));
+
+        // Vulkan is not OpenGL
+        info.name = "NVC3".into();
+        info.driver_info = "Mesa 26.2.3-arch1.1".into();
+        info.backend = wgpu::Backend::Vulkan;
+        assert!(!is_nouveau(&info));
     }
 }
