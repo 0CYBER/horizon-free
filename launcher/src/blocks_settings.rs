@@ -324,14 +324,13 @@ impl Launcher {
 
     pub(crate) fn native_consent(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        // A build refused for consent with no native mod enabled, or with several ("a, b is a
-        // native mod" reads wrong), names none: the generic text.
+        // The mods asked about, when known (a build with none enabled names none).
         let name = self
             .pending_consent
             .as_ref()
-            .filter(|p| !matches!(p, PendingConsent::Build(ids) if ids.len() > 1))
             .map(PendingConsent::name)
             .filter(|name| !name.is_empty());
+        let build = matches!(self.pending_consent, Some(PendingConsent::Build(_)));
         let bytes = horizon_launcher::rust_toolchain::host().map(|host| host.download_bytes());
         let size = bytes
             .map(megabytes)
@@ -340,15 +339,9 @@ impl Launcher {
             .child(plate(&t).w(px(520.)).p(px(28.)).bg(t.surface).rounded(px(16.)).border_1().border_color(t.rule).shadow_lg().flex().flex_col().gap(px(18.))
                 .child(div().size(px(48.)).rounded(px(12.)).bg(t.warn.opacity(0.12)).flex().items_center().justify_center().child(crate::glass_ui::icon("information-circle", 26., t.warn)))
                 .child(div().text_size(px(24.)).font_weight(FontWeight::BOLD).child(tr("Allow native mods?")))
-                .child(match name {
-                    Some(name) => {
-                        let body = trf("{mod} is a native mod. Native mods are native code that runs inside your game, with your rights: like any program you install, they can read and change your files. Allow them only if you trust their authors.", &[("mod", &name)]);
-                        let highlight = body.find(&name).map(|start| (start..start + name.len(), gpui::HighlightStyle { font_weight: Some(FontWeight::BOLD), ..Default::default() }));
-                        div().child(gpui::StyledText::new(body).with_highlights(highlight))
-                    }
-                    None => div().child(tr("Native mods are native code that runs inside your game, with your rights: like any program you install, they can read and change your files. Allow them only if you trust their authors.")),
-                })
-                .child(trf("Horizon will download the Rust compiler ({size}) to build them. You can turn this off in Settings, Storage.", &[("size", &size)]))
+                .children(name.map(|name| div().font_weight(FontWeight::BOLD).child(name)))
+                .child(tr("These mods are programs that run inside your game. Like any program you install, they can read and change your files. Allow them only if you trust who made them."))
+                .child(trf("Horizon will download the Rust compiler ({size}) to build them. You can take this permission back in Settings > Storage.", &[("size", &size)]))
                 .children(self.consent_error.clone().map(|error| div().text_color(t.danger).child(error)))
                 .children(bytes.is_none().then(|| div().text_color(t.danger).child(tr("Native mods can't be built on this computer, so they can't be allowed here."))))
                 .child(div().flex().justify_end().gap(px(12.))
@@ -357,7 +350,7 @@ impl Launcher {
                         cx.notify();
                     })))
                     .child({
-                        let allow = button("native-allow", "Allow", Kind::Primary, &t).w(px(120.));
+                        let allow = button("native-allow", if build { tr("Allow and build") } else { tr("Allow") }, Kind::Primary, &t).w(px(160.));
                         if bytes.is_none() {
                             disabled(allow)
                         } else {

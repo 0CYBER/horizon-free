@@ -41,6 +41,15 @@ impl ModKind {
         }
     }
 
+    /// What the badge means, for its tooltip.
+    pub(super) fn hint(self) -> &'static str {
+        match self {
+            Self::Native => tr("Has its own program code. It runs inside your game and is built on this computer, so it needs your permission first."),
+            Self::Wasm => tr("Has its own program code, run in a protected sandbox. It never needs a build."),
+            Self::Content => tr("Only data and pictures, no program code. It never needs a build."),
+        }
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Native => tr("Native"),
@@ -164,21 +173,22 @@ impl Launcher {
         let mine = self.native_for.as_deref() == Some(instance.id.as_str());
         let building = self.native_step.as_ref().filter(|_| mine);
         let error = self.native_error.as_ref().filter(|_| mine);
-        let mut card = div()
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(self.mode_head(state, error, mine, pal, cx));
+        let update = (building.is_none() && error.is_none() && state != State::NoMods)
+            .then(|| self.update_card(instance, pal, cx))
+            .flatten();
+        let mut card = div().flex().flex_col().gap(px(12.)).child(self.mode_head(
+            state,
+            error,
+            mine,
+            update.is_some(),
+            pal,
+            cx,
+        ));
         card = match building {
             Some(step) => card.child(self.panel().child(self.building_card(step, pal, cx))),
             None => card.child(self.mode_status(error, mine, pal, cx)),
         };
-        if building.is_none() && error.is_none() && state != State::NoMods {
-            if let Some(update) = self.update_card(instance, pal, cx) {
-                card = card.child(update);
-            }
-        }
-        Some(card)
+        Some(card.children(update))
     }
 
     /// Before an update of an instance with native mods (design-fit §10.1): when a newer release
@@ -371,6 +381,7 @@ impl Launcher {
         state: State,
         error: Option<&String>,
         mine: bool,
+        asking: bool,
         pal: Pal,
         cx: &mut Context<Self>,
     ) -> Div {
@@ -389,12 +400,18 @@ impl Launcher {
         if self.native_step.is_none() {
             if let Some(label) = needs {
                 right = right.child(blocks::badge(label, pal.warn, &t));
-            } else if state == State::UpToDate {
+            } else if state == State::UpToDate && !asking {
+                // Not beside an open question about updating, where it would read as "no update".
                 right = right.child(blocks::badge(tr("Up to date"), pal.success, &t));
             }
         }
         if can_build && self.native_step.is_none() {
-            right = right.child(button("native-build", "Build", Kind::Primary, &t).on_click(
+            // Build is where permission is asked for, so it says so until it was given.
+            let label = match self.settings.native_mods_allowed_at {
+                Some(_) => tr("Build"),
+                None => tr("Allow and build"),
+            };
+            right = right.child(button("native-build", label, Kind::Primary, &t).on_click(
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     if this.settings.native_mods_allowed_at.is_some() {
                         this.build_native();
@@ -1030,9 +1047,10 @@ impl Launcher {
     }
 
     /// The kind badge beside a mod's name.
-    pub(super) fn kind_badge(&self, kind: ModKind) -> Div {
+    pub(super) fn kind_badge(&self, kind: ModKind) -> Stateful<Div> {
         let pal = Pal::of(&self.theme);
-        div()
+        let badge = div()
+            .id(SharedString::from(format!("kind-{}", kind.label())))
             .flex()
             .flex_none()
             .items_center()
@@ -1040,7 +1058,8 @@ impl Launcher {
             .px(px(7.))
             .rounded_full()
             .bg(pal.faint)
-            .child(text_in(11., pal.muted).child(kind.label()))
+            .child(text_in(11., pal.muted).child(kind.label()));
+        self.with_reason(badge, kind.hint())
     }
 }
 

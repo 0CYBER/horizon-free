@@ -224,7 +224,12 @@ impl Launcher {
         ui::list_row(key, hovered, hover, &t)
             .child(icon)
             .child(ui::list_text(row.name.clone(), note))
-            .children(row.kind.as_ref().map(|(kind, _)| kind_pill(*kind)))
+            .children(row.kind.as_ref().map(|(kind, _)| {
+                self.with_reason(
+                    kind_pill(*kind).id(SharedString::from(format!("kind-{}", row.file))),
+                    kind.hint(),
+                )
+            }))
             .child(status.relative())
             .children(update.map(|u| u.relative()))
             .children(github.map(|g| g.relative()))
@@ -287,7 +292,17 @@ impl Launcher {
                 ui::text(12., FontWeight::MEDIUM, 1.)
                     .text_color(color)
                     .child(word),
-            );
+            )
+            .id(SharedString::from(format!("mod-status-{}", row.file)));
+        // Nothing here grants the permission: say where it is asked for.
+        let shown = if word == tr("Needs permission") {
+            self.with_reason(
+                shown,
+                tr("Native mods need your permission before they build. Build asks you first."),
+            )
+        } else {
+            shown
+        };
         // A native mod's word opens what its chip says on the old look: how it reaches the game
         // (fits, exact build only, does not fit, did not build) and what can be done.
         let facts = id
