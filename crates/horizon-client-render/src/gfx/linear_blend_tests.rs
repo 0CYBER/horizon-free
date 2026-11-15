@@ -3,7 +3,6 @@ use super::super::{
     native_post::{Decoder, INTERMEDIATE, line_helpers},
 };
 use super::{frame_constants, stored_clear};
-use horizon_shader_api::Api;
 use wgpu::util::DeviceExt;
 
 /// One full-screen draw into the frame: `vec4(rgb, alpha)` from Horizon's own shaders, which
@@ -65,8 +64,7 @@ fn stage_input(
     let frame = texture(LINEAR_FRAME, wgpu::TextureUsages::TEXTURE_BINDING);
     let input = texture(INTERMEDIATE, wgpu::TextureUsages::COPY_SRC);
     let frame_view = frame.create_view(&Default::default());
-    let source =
-        include_str!("../hdr_light.wgsl").to_owned() + line_helpers(Api::V0_2, linear) + SOURCE;
+    let source = include_str!("../hdr_light.wgsl").to_owned() + line_helpers(linear) + SOURCE;
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -288,7 +286,7 @@ fn a_fading_section_mixes_toward_the_fog_in_gamma() {
         usage: wgpu::BufferUsages::UNIFORM,
     });
     for (linear, want) in [(false, 0.5), (true, 0.3757)] {
-        let source = super::super::native_material::coverage_test_shader((Api::V0_2, linear))
+        let source = super::super::native_material::coverage_test_shader(linear)
             + "
 @fragment fn test_faded() -> @location(0) vec4<f32> {
     var o: HorizonMaterialOut;

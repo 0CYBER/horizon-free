@@ -4,7 +4,7 @@ use super::*;
 
 const HMOD: &str = "e1135345692f6dd8fd4c51920151944b82333e17049c9bb7d756f27b8deefc53";
 const HPACK: &str = "241ac840f9c5ea3f6252d849da10c90d36cb1da4d6cd8d1d268c2760a353cd65";
-const HSHADER: &str = "331cfe29a666a0de804e9a9ff3d19d246eebcfbfa70b4f49bba8482d30ad9f02";
+const HSHADER: &str = "9e7e2f54db26151ff30d4f39a0192b6f82144afa6507d4fffb3157977e15d178";
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/index")
@@ -83,7 +83,7 @@ version = "1.0.0"
 published = "2026-10-26"
 game = "26.3"
 file = "glow-1.0.0.hshader"
-sha256 = "331cfe29a666a0de804e9a9ff3d19d246eebcfbfa70b4f49bba8482d30ad9f02"
+sha256 = "9e7e2f54db26151ff30d4f39a0192b6f82144afa6507d4fffb3157977e15d178"
 "#;
 
 const REVOKED_TOML: &str = r#"[[revoked]]

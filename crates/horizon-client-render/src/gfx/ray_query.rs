@@ -148,8 +148,7 @@ impl crate::gfx::Renderer {
     /// Its output under the running shader pack (`EffectiveOutput::with_pack`), with what its
     /// ray tracing is to a pack that asks for it.
     pub(in crate::gfx) fn output_with_rays(&self) -> crate::gfx::output::EffectiveOutput {
-        let native = self.native.as_ref().map(|n| n.frame.api);
-        let output = (self.output).with_pack(self.shader_pack_kind() == Some("iris"), native);
+        let output = (self.output).with_pack(self.shader_pack_kind().is_some());
         let offered = self.adapter.features().contains(RAY_QUERY);
         crate::gfx::output::EffectiveOutput {
             rays: Some(status(switch(), offered, on(&self.device))),

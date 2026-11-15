@@ -535,8 +535,8 @@ impl<'a> Draw<'a> {
             .write_buffer(&self.uniform, 0, bytemuck::bytes_of(globals));
     }
 
-    fn material(&mut self, api: horizon_shader_api::Api) {
-        let source = super::super::native_material::coverage_test_shader((api, false));
+    fn material(&mut self) {
+        let source = super::super::native_material::coverage_test_shader(false);
         self.shader = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -549,7 +549,7 @@ impl<'a> Draw<'a> {
             Vec::new(),
             Default::default(),
             None,
-            (api, false),
+            false,
         );
         self.queue.write_buffer(
             &frame.buffer,
@@ -978,36 +978,34 @@ fn float_material_wrappers_keep_rgb_and_coverage_including_displacement() {
         hdr_windows: hdr.windows(),
         ..bytemuck::Zeroable::zeroed()
     };
-    for api in [horizon_shader_api::Api::V0_1, horizon_shader_api::Api::V0_2] {
-        let mut draw = Draw::new(&device, &queue, true, &globals, 255);
-        draw.material(api);
-        for entry in [
-            "horizon_material_fs_solid",
-            "horizon_material_fs_displaced",
-            "horizon_material_fs_translucent",
-        ] {
-            let old = draw.render(&mut hdr, false, entry, 3, 0, [0.0; 4]);
-            let float = draw.render(&mut hdr, true, entry, 3, 0, [0.0; 4]);
-            assert_eq!(&float[..3], &old[..3], "{api} {entry}");
-            let alpha = if entry.ends_with("translucent") {
-                0.7
-            } else {
-                1.0
-            };
-            assert!((float[3] - alpha).abs() < 0.001, "{api} {entry}: {float:?}");
-            assert!(
-                float[0] > 1.0,
-                "{api} {entry}: clipping or an empty fixture: {float:?}"
+    let mut draw = Draw::new(&device, &queue, true, &globals, 255);
+    draw.material();
+    for entry in [
+        "horizon_material_fs_solid",
+        "horizon_material_fs_displaced",
+        "horizon_material_fs_translucent",
+    ] {
+        let old = draw.render(&mut hdr, false, entry, 3, 0, [0.0; 4]);
+        let float = draw.render(&mut hdr, true, entry, 3, 0, [0.0; 4]);
+        assert_eq!(&float[..3], &old[..3], "{entry}");
+        let alpha = if entry.ends_with("translucent") {
+            0.7
+        } else {
+            1.0
+        };
+        assert!((float[3] - alpha).abs() < 0.001, "{entry}: {float:?}");
+        assert!(
+            float[0] > 1.0,
+            "{entry}: clipping or an empty fixture: {float:?}"
+        );
+        if alpha == 1.0 {
+            assert_ne!(
+                old[3], float[3],
+                "the legacy source mark must distinguish the paths"
             );
-            if alpha == 1.0 {
-                assert_ne!(
-                    old[3], float[3],
-                    "the legacy source mark must distinguish the paths"
-                );
-            }
         }
     }
-    eprintln!("material GPU ran both API lines through solid, displaced and translucent wrappers");
+    eprintln!("material GPU ran the solid, displaced and translucent wrappers");
 }
 
 #[test]
@@ -1035,7 +1033,7 @@ fn material_coverage_is_the_texture_s_unless_the_pack_declares_its_own() {
         (true, 255, 0.7, true, true),
     ] {
         let mut draw = Draw::new(&device, &queue, true, &globals, texel);
-        draw.material(horizon_shader_api::Api::V0_2);
+        draw.material();
         draw.constants = vec![
             ("horizon_material_coverage_pack", f64::from(u8::from(pack))),
             ("test_alpha", returned),

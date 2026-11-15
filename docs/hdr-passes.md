@@ -13,7 +13,7 @@ white, and a pass written for SDR alone breaks it, mostly without any test faili
 | --- | --- | --- |
 | Under a 0.2 pack, or with HDR on and no pack | `Rgba16Float` | light: 1.0 is paper white, more is brighter |
 | HDR off, otherwise | the swapchain's 8-bit format | vanilla's picture, clipped at 1 |
-| HDR on under a 0.1 or `shaders/` pack (the compatibility frame) | `Rgba16Unorm`, or 8-bit | the picture clipped at 1; under a 0.1 pack, with HDR's marks in alpha |
+| HDR on under a `shaders/` pack (the compatibility frame) | `Rgba16Unorm`, or 8-bit | the picture clipped at 1 |
 
 HDR is on only where the device draws the float frame and keeps the HUD on a layer of its own; elsewhere the HDR
 page says so and the picture is SDR's.
@@ -71,7 +71,7 @@ curve, the HUD's layer and the last pass as the real one does.
 5. **Write no NaN, infinity or negative values.** Half float's largest value is 65504, and a history keeps a NaN
    and spreads it.
 6. **Leave alpha alone.** Return each pixel's own alpha; a filter returns its centre pixel's. The compatibility
-   frame marks light sources in alpha under a 0.1 pack, and a filtered alpha moves a pixel into another mark's band.
+   frame's draws mark light sources in alpha, and a filtered alpha moves a pixel into another mark's band.
 7. **Drop history when the frame changes.** Its format and encoding change with HDR, Smooth Gradients and the
    shader pack, and blending across the change mixes two meanings.
 8. **Captures map the picture.** A screenshot, recording or stream takes the world through HDR's mapping to SDR, as

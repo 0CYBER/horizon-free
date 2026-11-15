@@ -691,17 +691,6 @@ fn access_names_declared_resources_with_one_writer() {
     );
 }
 
-#[test]
-fn shader_api_0_1_has_none_of_it() {
-    let old = |extra: &str| {
-        Manifest::parse(&format!("{}{extra}{LAST}", HEAD.replace("0.2", "0.1"))).unwrap_err()
-    };
-    assert!(old(&compute("")).contains("[[post]] compute is shader API 0.2"));
-    let before =
-        "[[before_world]]\nfile = \"b.wgsl\"\ndispatch = [1, 1, 1]\nworkgroup = [1, 1, 1]\n";
-    assert!(old(before).contains("[[before_world]] is shader API 0.2"));
-}
-
 /// #16011 item 4's caps on compute work: 2^25 invocations a dispatch and 2^26 a frame over
 /// every compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 rounded
 /// up to them.

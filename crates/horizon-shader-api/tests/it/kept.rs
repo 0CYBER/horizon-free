@@ -341,14 +341,3 @@ fn options_say_what_they_reset() {
     );
     refused(&option("view"), "resets, with no [[resource]] to clear");
 }
-
-#[test]
-fn shader_api_0_1_has_none_of_it() {
-    let old = |extra: &str| {
-        Manifest::parse(&format!("{}{extra}{LAST}", HEAD.replace("0.2", "0.1"))).unwrap_err()
-    };
-    assert!(old(RES).contains("[[resource]] is shader API 0.2"));
-    assert!(old("[kept]\nreach = 1\n").contains("[kept] is shader API 0.2"));
-    let option = "[[options]]\nid = \"o\"\nname = \"O\"\ntype = \"bool\"\ndefault = true\nresets = \"view\"\n";
-    assert!(old(option).contains("an option's `resets` is shader API 0.2"));
-}

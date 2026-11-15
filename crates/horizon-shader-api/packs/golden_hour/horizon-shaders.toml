@@ -1,8 +1,8 @@
 schema = 1
 id = "golden_hour"
 name = "Golden Hour"
-version = "1.0.0"
-api = "0.1"
+version = "2.0.0"
+api = "0.2"
 description = "Warm light at sunrise and sunset, a soft glow around bright things and a gentle colour grade."
 authors = ["Horizon"]
 license = "MIT"

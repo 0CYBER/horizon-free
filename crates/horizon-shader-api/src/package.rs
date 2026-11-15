@@ -56,6 +56,21 @@ pub fn is_pack(path: &Path) -> bool {
 impl Pack {
     /// Reads only the manifest, without loading or validating shader source.
     pub fn read_manifest(path: &Path) -> Result<Manifest, String> {
+        Manifest::parse(&Self::manifest_text(path)?)
+    }
+
+    /// The `id` the manifest at `path` declares, whether or not this build takes the manifest:
+    /// a pack for another API line still says which pack it is.
+    pub fn declared_id(path: &Path) -> Option<String> {
+        #[derive(serde::Deserialize)]
+        struct Declared {
+            id: String,
+        }
+        let declared: Declared = toml::from_str(&Self::manifest_text(path).ok()?).ok()?;
+        Some(declared.id)
+    }
+
+    fn manifest_text(path: &Path) -> Result<String, String> {
         let file = std::fs::File::open(if path.is_dir() {
             path.join(MANIFEST)
         } else {
@@ -76,7 +91,7 @@ impl Pack {
         if text.len() as u64 > MAX_OTHER {
             return Err("shader manifest is too large".into());
         }
-        Manifest::parse(&text)
+        Ok(text)
     }
 
     /// Reads `path`: a `.hshader` file, or a folder (its hidden files and

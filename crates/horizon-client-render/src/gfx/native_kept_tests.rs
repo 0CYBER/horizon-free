@@ -352,14 +352,8 @@ fn frame_events_move_the_epochs_they_reset() {
     };
     let hud = crate::hud::HudBatch::new([4, 4]);
     let mut frame = crate::gfx::pack_uniforms::initial_history_tests::frame(&hud);
-    let mut native = super::super::NativeFrame::new(
-        &device,
-        None,
-        Vec::new(),
-        Default::default(),
-        None,
-        (horizon_shader_api::Api::V0_2, false),
-    );
+    let mut native =
+        super::super::NativeFrame::new(&device, None, Vec::new(), Default::default(), None, false);
     native.epochs = Some(Epochs::new(Some(64)));
     let mut next = |frame: &crate::gfx::Frame, size, hdr| epochs_of(&mut native, frame, size, hdr);
     assert_eq!(next(&frame, [4, 4], false), [1, 1, REASON_LOAD]);
@@ -383,14 +377,7 @@ fn frame_events_move_the_epochs_they_reset() {
     // A rebuild that carries (`NativePack::carry`) carries the last frame too: a pause or a
     // teleport across it still resets.
     let new = || {
-        super::super::NativeFrame::new(
-            &device,
-            None,
-            Vec::new(),
-            Default::default(),
-            None,
-            (horizon_shader_api::Api::V0_2, false),
-        )
+        super::super::NativeFrame::new(&device, None, Vec::new(), Default::default(), None, false)
     };
     let mut rebuilt = new();
     rebuilt.carry(&mut native);
@@ -491,14 +478,8 @@ fn a_reload_never_holds_two_stores() {
     if count().is_none() {
         return;
     }
-    let frame = super::super::NativeFrame::new(
-        &device,
-        None,
-        Vec::new(),
-        Default::default(),
-        None,
-        (horizon_shader_api::Api::V0_2, false),
-    );
+    let frame =
+        super::super::NativeFrame::new(&device, None, Vec::new(), Default::default(), None, false);
     let build = |resources: &str, colour: &str| {
         let pass = format!("fn post(input: PostInput) -> vec4<f32> {{ return {colour}; }}\n");
         let report = report(

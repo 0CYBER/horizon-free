@@ -274,7 +274,7 @@ fn the_newest_version_this_horizon_runs_is_installed() {
 
 #[test]
 fn shader_packs_pass_the_game_s_own_check() {
-    let manifest = "schema = 1\nid = \"glow\"\nname = \"Glow\"\nversion = \"1.0.0\"\napi = \"0.1\"\n\
+    let manifest = "schema = 1\nid = \"glow\"\nname = \"Glow\"\nversion = \"1.0.0\"\napi = \"0.2\"\n\
                     [[post]]\nfile = \"post.wgsl\"\n";
     let pack = |post: &str| {
         let files = [
@@ -302,25 +302,6 @@ fn shader_packs_pass_the_game_s_own_check() {
         pack("fn post(input: PostInput) -> vec4<f32> { return input.color }\n"),
     )
     .unwrap();
-    let experimental = dir.join("glow-0.2.hshader");
-    let files = [
-        (
-            horizon_shader_api::MANIFEST,
-            manifest.replace("api = \"0.1\"", "api = \"0.2\""),
-        ),
-        (
-            "post.wgsl",
-            "fn post(input: PostInput) -> vec4<f32> { return input.color; }\n".into(),
-        ),
-    ]
-    .map(|(n, t)| (n.to_owned(), t.into_bytes()))
-    .into();
-    let bytes = horizon_shader_api::Pack::from_files(files)
-        .unwrap()
-        .package()
-        .unwrap();
-    std::fs::write(&experimental, bytes).unwrap();
-    let experimental = inspect(&Kind::Shader, &experimental).unwrap_err();
     let facts = inspect(&Kind::Shader, &good);
     let refused = inspect(&Kind::Shader, &bad).unwrap_err();
     let not_a_pack = inspect(&Kind::Shader, &fixtures().join("cozy-1.0.0.hpack")).unwrap_err();
@@ -332,13 +313,9 @@ fn shader_packs_pass_the_game_s_own_check() {
             facts.version.as_deref(),
             facts.api.as_str()
         ),
-        (Some("glow"), Some("1.0.0"), "0.1")
+        (Some("glow"), Some("1.0.0"), "0.2")
     );
     assert!(refused.contains("post.wgsl:1:"), "{refused}");
-    assert!(
-        experimental.contains("shader API 0.2, which is experimental"),
-        "{experimental}"
-    );
     assert!(
         not_a_pack.contains(horizon_shader_api::MANIFEST),
         "{not_a_pack}"

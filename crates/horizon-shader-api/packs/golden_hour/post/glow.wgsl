@@ -1,12 +1,12 @@
 // A soft halo around the brightest pixels (the sun, lava, torches at night): twelve taps on two
 // rings, scaled with the picture's height so it looks the same at any resolution. The daytime
-// sky is bright too, so it glows only a quarter as much.
+// sky is bright too, so it glows only a quarter as much. Light above white glows the more.
 override glow: f32 = 0.35;
 
 fn bright(uv: vec2<f32>) -> vec3<f32> {
     let c = textureSampleLevel(previous, linear_sampler, uv, 0.0).rgb;
     let sky = select(1.0, 0.25, depth_at(uv) == 0.0);
-    return c * smoothstep(0.8, 1.0, luminance(c)) * sky;
+    return c * smoothstep(0.6, 1.0, luminance(c)) * sky;
 }
 
 fn post(input: PostInput) -> vec4<f32> {
@@ -21,5 +21,5 @@ fn post(input: PostInput) -> vec4<f32> {
         let offset = vec2<f32>(cos(angle), sin(angle)) * radius * step;
         sum += bright(input.uv + offset);
     }
-    return vec4<f32>(input.color.rgb + sum * (glow / 8.0), input.color.a);
+    return vec4<f32>(input.color.rgb + sum * (glow / 8.0), 1.0);
 }

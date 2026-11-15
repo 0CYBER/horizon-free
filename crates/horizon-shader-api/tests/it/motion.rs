@@ -97,7 +97,6 @@ fn motion_is_0_2_with_a_post_pass() {
             .is_some()
     );
     for (text, needle) in [
-        (manifest("0.1", "[[post]]"), "[motion] is shader API 0.2"),
         (manifest("0.2", "[sky]"), "[motion] needs a [[post]] pass"),
         (manifest("0.2", "[[post]]") + "on = true\n", "unknown field"),
     ] {

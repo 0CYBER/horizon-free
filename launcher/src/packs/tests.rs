@@ -25,7 +25,7 @@ fn zip_file(path: &Path, files: &[(&str, &[u8])]) {
 const META: &[u8] = "{\"pack\":{\"pack_format\":69,\"description\":[\"\",{\"text\":\"Smooth \u{a7}aglass\"},\"\\nand more\"]}}"
     .as_bytes();
 
-const SHADER_META: &str = "schema = 1\nid = \"warm\"\nname = \"Warm Light\"\nversion = \"1.0\"\napi = \"0.1\"\n[[post]]\nfile = \"post.wgsl\"\n";
+const SHADER_META: &str = "schema = 1\nid = \"warm\"\nname = \"Warm Light\"\nversion = \"1.0\"\napi = \"0.2\"\n[[post]]\nfile = \"post.wgsl\"\n";
 
 /// A game folder with three resource packs (one on), and shader packs of both kinds.
 fn home(name: &str) -> PathBuf {

@@ -2,8 +2,11 @@
 //! folder with `horizon-shaders.toml`, or a `.hshader`; `game/shader_packs.rs`) runs once it
 //! passes `horizon_shader_api::check`. The pack is looked at twice a second: a saved file (or
 //! saved option values) is checked and the pack rebuilt, and a
-//! pack that fails is refused with its problems in the chat while the last good one keeps
-//! drawing.
+//! pack that fails is refused with its problems in the chat. Where a stage fails, the last
+//! good version keeps drawing, on the frame it has: the pick keeps asking for it
+//! (`remember_look`). A pack whose manifest is refused (`manifest_refused`) stops drawing
+//! instead: the manifest decides the frame, the one that ran was built for another, and the
+//! pick asks for its frame as no pack does (`picked_pack_shape`).
 
 use std::{
     hash::{Hash, Hasher},
@@ -12,7 +15,7 @@ use std::{
 };
 
 use horizon_client::text::Text;
-use horizon_shader_api::{Api, Manifest, Pack, Primaries, check};
+use horizon_shader_api::{Manifest, Pack, Primaries, check};
 
 use super::Game;
 
@@ -21,20 +24,38 @@ const RED: u32 = 0xFF5555;
 
 thread_local! {
     // Loader outcomes survive renderer replacement; rejected files must not cause a rebuild loop.
-    static OUTCOMES: std::cell::RefCell<std::collections::HashMap<PathBuf, (Option<u64>, Option<Api>)>> =
+    // Each is the pack's files (`fingerprint`) and whether a version of the pack draws since:
+    // those files, or the last good ones before them (`remember_look`).
+    static OUTCOMES: std::cell::RefCell<std::collections::HashMap<PathBuf, (Option<u64>, bool)>> =
         std::cell::RefCell::default();
 }
 
-pub(super) fn outcome(path: &Path) -> Option<Option<Api>> {
-    OUTCOMES.with_borrow(|packs| packs.get(path).map(|(_, api)| *api))
+/// Whether a version of the pack at `path` draws since it was last looked at: `None` before
+/// that.
+pub(super) fn outcome(path: &Path) -> Option<bool> {
+    OUTCOMES.with_borrow(|packs| packs.get(path).map(|(_, draws)| *draws))
 }
 
-pub(super) fn remember(path: &Path, stamp: Option<u64>, api: Option<Api>) {
-    OUTCOMES.with_borrow_mut(|packs| packs.insert(path.to_owned(), (stamp, api)));
+pub(super) fn remember(path: &Path, stamp: Option<u64>, draws: bool) {
+    OUTCOMES.with_borrow_mut(|packs| packs.insert(path.to_owned(), (stamp, draws)));
+}
+
+/// Remembers a look at one of Horizon's own packs: its files were `taken`, or they failed
+/// while a version of the pack was `running`. A stage that fails leaves that version drawing,
+/// so the pick keeps asking for its frame and the renderer isn't made again; a refused
+/// manifest stops it (`manifest_refused`), and a pack that never ran has nothing to keep.
+pub(super) fn remember_look(
+    path: &Path,
+    stamp: Option<u64>,
+    taken: bool,
+    manifest_refused: bool,
+    running: bool,
+) {
+    remember(path, stamp, taken || (running && !manifest_refused));
 }
 
 pub(super) fn refused(path: &Path, stamp: Option<u64>) -> bool {
-    OUTCOMES.with_borrow(|packs| packs.get(path) == Some(&(stamp, None)))
+    OUTCOMES.with_borrow(|packs| packs.get(path) == Some(&(stamp, false)))
 }
 
 #[derive(Default)]
@@ -58,7 +79,7 @@ impl NativeShaders {
                 horizon_client::shader_pack_list::resolve(dir, picked).1
             };
             // A manifest being edited may be temporarily invalid. Keep its path so the
-            // reload reports the error and retains the last good shader.
+            // reload reports the error.
             let unresolved =
                 !filesystem && picked.starts_with("horizon:") && resolved == dir.join(picked);
             let keep_path = unresolved
@@ -110,10 +131,13 @@ impl Game<'_> {
         let Some(renderer) = &mut self.renderer else {
             return;
         };
-        let result = Pack::read(path).map_err(|e| vec![e]).and_then(|pack| {
-            if let Some(why) = not_drawn(&pack.manifest) {
-                return Err(vec![why.into()]);
-            }
+        let manifest_refused = manifest_refused(path);
+        let running = renderer.shader_pack_kind() == Some("native");
+        let read = match &manifest_refused {
+            Some(why) => Err(vec![why.clone()]),
+            None => Pack::read(path).map_err(|e| vec![e]),
+        };
+        let result = read.and_then(|pack| {
             let report = check(&pack)
                 .map_err(|p| p.iter().map(ToString::to_string).collect::<Vec<String>>())?;
             // The player's values (the pack's Shader Options page), else the defaults.
@@ -162,7 +186,13 @@ impl Game<'_> {
                 .map_err(|e| vec![e])?;
             Ok((pack.manifest, labels, translucent))
         });
-        remember(path, stamp, result.as_ref().ok().map(|(m, _, _)| m.api));
+        remember_look(
+            path,
+            stamp,
+            result.is_ok(),
+            manifest_refused.is_some(),
+            running,
+        );
         // The resources were loaded without a native pack, so without the resource packs'
         // LabPBR maps its material stage reads: load them once, now that one runs.
         if result.as_ref().is_ok_and(|(m, _, _)| m.material.is_some())
@@ -188,6 +218,12 @@ impl Game<'_> {
                 }
             }
             Err(problems) => {
+                if manifest_refused.is_some() {
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.drop_shader_packs();
+                    }
+                    self.set_translucent_layers(Vec::new());
+                }
                 log::warn!("shader pack {name} refused: {}", problems.join("; "));
                 self.system_message(Text::colored(format!("Shader pack {name} refused:"), RED));
                 for p in problems {
@@ -195,6 +231,17 @@ impl Game<'_> {
                 }
             }
         }
+    }
+}
+
+/// Why the manifest of the pack at `path` is refused, if it is: it doesn't read (a shader API
+/// line this build doesn't serve, a mistake in it), or it asks for what isn't drawn yet
+/// (`not_drawn`). A pack that ran before stops then; one whose stages fail keeps its last good
+/// version drawing.
+fn manifest_refused(path: &Path) -> Option<String> {
+    match Pack::read_manifest(path) {
+        Ok(manifest) => not_drawn(&manifest).map(Into::into),
+        Err(e) => Some(e),
     }
 }
 
@@ -260,35 +307,33 @@ mod tests {
 
     #[test]
     fn outcomes_and_refusals_survive_renderer_resets() {
-        use super::{Api, NativeShaders, fingerprint, outcome, refused, remember};
+        use super::{NativeShaders, fingerprint, outcome, refused, remember};
         let root = std::env::temp_dir().join(format!("horizon-acceptance-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let file = root.join("post.wgsl");
         std::fs::write(&file, "first files").unwrap();
         let stamp = fingerprint(&root);
         assert_eq!(outcome(&root), None);
-        remember(&root, stamp, Some(Api::V0_1));
-        assert_eq!(outcome(&root), Some(Some(Api::V0_1)));
-        remember(&root, stamp, Some(Api::V0_2));
-        assert_eq!(outcome(&root), Some(Some(Api::V0_2)));
+        remember(&root, stamp, true);
+        assert_eq!(outcome(&root), Some(true));
         // Policy, SDK and GPU refusals all reach this same outcome before any resource reload.
-        remember(&root, stamp, None);
+        remember(&root, stamp, false);
         for _ in 0..3 {
             let mut reset = NativeShaders::picking(&root.to_string_lossy());
             reset.select(&root.to_string_lossy());
-            assert_eq!(outcome(&root), Some(None));
+            assert_eq!(outcome(&root), Some(false));
             assert!(refused(&root, fingerprint(&root)));
         }
         std::fs::write(&file, "repaired files with a different size").unwrap();
         assert!(!refused(&root, fingerprint(&root)));
-        remember(&root, fingerprint(&root), Some(Api::V0_2));
-        assert_eq!(outcome(&root), Some(Some(Api::V0_2)));
+        remember(&root, fingerprint(&root), true);
+        assert_eq!(outcome(&root), Some(true));
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    fn manifest(api: &str, extra: &str) -> Manifest {
+    fn manifest(extra: &str) -> Manifest {
         Manifest::parse(&format!(
-            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"{api}\"\n\
+            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n\
              [[post]]\nfile = \"post.wgsl\"\n{extra}"
         ))
         .unwrap()
@@ -302,7 +347,7 @@ mod tests {
         let pack = dir.join("native-test_mod");
         std::fs::create_dir_all(&pack).unwrap();
         std::fs::write(pack.join(horizon_shader_api::MANIFEST),
-            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.1\"\n[[post]]\nfile = \"post.wgsl\"\n").unwrap();
+            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n[[post]]\nfile = \"post.wgsl\"\n").unwrap();
         std::fs::write(pack.join("post.wgsl"), "fixture").unwrap();
         let mut state = NativeShaders::default();
         assert_eq!(state.resolve_path(&dir, "horizon:p", false), pack);
@@ -346,30 +391,72 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// Every way a manifest is refused stops the pack that ran: another API line, what isn't
+    /// drawn yet, a mistake in it. A stage that fails is not one of them: its last good
+    /// version keeps drawing.
     #[test]
-    fn both_api_lines_are_drawn_but_for_what_isnt_served_yet() {
-        assert_eq!(not_drawn(&manifest("0.1", "")), None);
+    fn a_refused_manifest_stops_the_pack_and_a_failing_stage_does_not() {
+        use super::manifest_refused;
+        let pack = std::env::temp_dir().join(format!("horizon-refused-{}", std::process::id()));
+        std::fs::create_dir_all(&pack).unwrap();
+        let write = |api: &str, extra: &str| {
+            let text = format!(
+                "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"{api}\"\n\
+                 [[post]]\nfile = \"post.wgsl\"\n{extra}"
+            );
+            std::fs::write(pack.join(horizon_shader_api::MANIFEST), text).unwrap();
+        };
+        // A stage the check refuses: the manifest itself is taken.
+        std::fs::write(pack.join("post.wgsl"), "not wgsl").unwrap();
+        write("0.2", "");
+        assert_eq!(manifest_refused(&pack), None);
+        assert!(
+            horizon_shader_api::check(&horizon_shader_api::Pack::read(&pack).unwrap()).is_err()
+        );
+        for (api, extra, why) in [
+            ("0.1", "", "needs shader API 0.1; this Horizon serves 0.2"),
+            (
+                "0.2",
+                "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n",
+                "primaries = \"bt2020\" isn't served yet",
+            ),
+            (
+                "0.2",
+                "[entity]\nfile = \"e.wgsl\"\n",
+                "[entity] stage isn't drawn yet",
+            ),
+            ("0.2", "[frame\n", "horizon-shaders.toml"),
+        ] {
+            write(api, extra);
+            let refused = manifest_refused(&pack).unwrap_or_default();
+            assert!(refused.contains(why), "{api} {extra}: {refused}");
+        }
+        std::fs::remove_dir_all(pack).unwrap();
+    }
+
+    #[test]
+    fn a_pack_is_drawn_but_for_what_isnt_served_yet() {
         // Either blend: `"linear"` is drawn as `"gamma"` is.
         for frame in [
             "",
             "[frame]\nblend = \"linear\"\n",
             "[frame]\nprimaries = \"bt709\"\n",
         ] {
-            assert_eq!(not_drawn(&manifest("0.2", frame)), None, "{frame}");
+            assert_eq!(not_drawn(&manifest(frame)), None, "{frame}");
         }
         let wide = "[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n";
-        let why = not_drawn(&manifest("0.2", wide)).unwrap();
+        let why = not_drawn(&manifest(wide)).unwrap();
         assert!(
             why.contains("primaries = \"bt2020\" isn't served yet"),
             "{why}"
         );
-        let why = not_drawn(&manifest("0.2", "[entity]\nfile = \"e.wgsl\"\n"));
+        let why = not_drawn(&manifest("[entity]\nfile = \"e.wgsl\"\n"));
         assert!(why.unwrap().contains("[entity] stage isn't drawn yet"));
-        let why = not_drawn(&manifest("0.2", "[motion]\n")).unwrap();
+        let why = not_drawn(&manifest("[motion]\n")).unwrap();
         assert!(why.contains("[motion] needs a later Horizon"), "{why}");
         let kept =
             "[[resource]]\nname = \"cache\"\nbuffer = 64\nelement = \"u32\"\nkeep = \"view\"\n";
-        let why = not_drawn(&manifest("0.2", kept)).unwrap();
+        let why = not_drawn(&manifest(kept)).unwrap();
         assert!(why.contains("need a later Horizon"), "{why}");
     }
 }

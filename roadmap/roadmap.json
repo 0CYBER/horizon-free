@@ -386,7 +386,7 @@
    "status": "shipped",
    "area": "rendering",
    "plain": "Horizon's own way to make shader packs, with tools to write and test them. Every pack is checked before it runs, and the registry will list them.",
-   "dev": "`horizon-shader-api` (API 0.1, experimental): WGSL stages with typed inputs inside the renderer's passes, options as WGSL override constants, and the `horizon-shader new|check|pack` tool with templates and the example pack Golden Hour. Merged: the check every pack passes (#1820) and the tool, templates and guide (#1822). In review: the post stage running in the game with hot reload (#1861), the sky stage (#1863) and registry checks that use the game's own check (#1855). Left: the material, lighting and shadow stages, a last-good fallback on reload, a GPU-time overlay per stage and budgets (docs/shaders.md, docs/api/shaders.md). The Iris/OptiFine loader is a separate item, 'Shader packs, written again from scratch'.",
+   "dev": "`horizon-shader-api` (API 0.2, experimental): WGSL stages with typed inputs inside the renderer's passes, options as WGSL override constants, and the `horizon-shader new|check|pack` tool with templates and the example pack Golden Hour. Merged: the check every pack passes (#1820) and the tool, templates and guide (#1822). In review: the post stage running in the game with hot reload (#1861), the sky stage (#1863) and registry checks that use the game's own check (#1855). Left: the material, lighting and shadow stages, a last-good fallback on reload, a GPU-time overlay per stage and budgets (docs/shaders.md, docs/api/shaders.md). The Iris/OptiFine loader is a separate item, 'Shader packs, written again from scratch'.",
    "links": [
     "#1820",
     "#1822",

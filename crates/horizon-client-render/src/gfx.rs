@@ -6979,9 +6979,7 @@ impl Renderer {
         }
         if let Some(native) = &mut self.native {
             native.frame.reset_history();
-            if let Some(post) = &mut native.post {
-                post.reset_history();
-            }
+            native.post.reset_history();
         }
     }
     /// The running shader pack's kind: `iris` (a `shaders/` pack) or `native` (one of
@@ -7184,9 +7182,7 @@ impl Renderer {
             block_light::LightTable,
         )>,
     ) -> std::result::Result<Vec<String>, String> {
-        let linear = pack
-            .as_ref()
-            .is_some_and(|p| p.0.manifest.api == horizon_shader_api::Api::V0_2);
+        let linear = pack.is_some();
         if (linear || self.output.frame.format == LINEAR_FRAME)
             && linear != (self.output.frame.format == LINEAR_FRAME)
             && !std::mem::replace(&mut self.frame_kept_logged, true)
@@ -7221,12 +7217,10 @@ impl Renderer {
             &constants,
             lights,
         )?;
-        self.replace_native(pack.draws().then_some(pack));
-        if self.native.is_some() {
-            self.pack_post = None;
-            self.pack_atlas = None;
-            self.pack_material_atlases = None;
-        }
+        self.replace_native(Some(pack));
+        self.pack_post = None;
+        self.pack_atlas = None;
+        self.pack_material_atlases = None;
         Ok(labels)
     }
     /// What a shader pack's gbuffers programs read from Horizon's geometry: the sky's, and
@@ -7838,7 +7832,7 @@ impl Renderer {
             && !frame.title
             && frame.menu_blur.is_none()
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.native.as_ref().is_none_or(|n| n.post.is_none())
+            && self.native.is_none()
             && (self.surface.is_none()
                 || self.config.usage.contains(wgpu::TextureUsages::COPY_DST));
         if !fg {
@@ -7976,7 +7970,7 @@ impl Renderer {
         // TAA runs where the world post pass does, not under a shader pack's own.
         let taa = !frame.title
             && self.pack_post.as_ref().is_none_or(|p| p.1.is_none())
-            && self.native.as_ref().is_none_or(|n| n.post.is_none());
+            && self.native.is_none();
         let hdr_lighting = self.shader_pack_kind().is_none();
         if let Some(hdr) = &mut self.hdr {
             hdr.lighting = hdr_lighting && hdr.look;
@@ -9702,7 +9696,7 @@ impl Renderer {
         // The world's targets: the screen, or the scaled target of `post`.
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // One of Horizon's own packs reads the same world target.
-        let native_post = !frame.title && self.native.as_ref().is_some_and(|n| n.post.is_some());
+        let native_post = !frame.title && self.native.is_some();
         if let Some(timer) = Self::pass_timer(&mut self.pack_post, &mut self.native)
             && timer.is_some() != self.pass_timing
         {
@@ -11228,8 +11222,7 @@ impl Renderer {
         let lifts_world = output::lifts_world(
             frame.title,
             self.output.frame.format == LINEAR_FRAME,
-            self.shader_pack_kind() == Some("iris"),
-            self.native.as_ref().map(|n| n.frame.api),
+            self.shader_pack_kind().is_some(),
         );
         if let Some((color, depth)) = &scaled
             && pack_post
@@ -11358,10 +11351,9 @@ impl Renderer {
         } else if let Some((color, depth)) = &scaled
             && native_post
             && let Some(native) = &mut self.native
-            && let Some(post) = &mut native.post
         {
             let history_reset = native.frame.take_history_reset();
-            post.run(
+            native.post.run(
                 &self.device,
                 &mut encoder,
                 (color, depth, &native.frame.surface_view),
@@ -11876,11 +11868,7 @@ impl Renderer {
         }
         // The layered frame's light eases into the peak, before the camera overlays draw on it,
         // unless a 0.2 pack's own `[tonemap]` did.
-        let pack_tonemap = self
-            .native
-            .as_ref()
-            .and_then(|n| n.post.as_ref())
-            .is_some_and(native_post::NativePost::tonemaps);
+        let pack_tonemap = self.native.as_ref().is_some_and(|n| n.post.tonemaps());
         if horizon_tone_curve(layered, !frame.title, pack_tonemap)
             && let Some(hdr) = &self.hdr
         {

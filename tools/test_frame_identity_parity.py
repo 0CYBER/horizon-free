@@ -15,11 +15,10 @@ Sessions, each a fresh game and world (seed 7) per build:
   a banner, a framed item),
   and the HUD over light: chat over the sun, chat and the crosshair over lava, the pause
   menu over it.
-- golden_hour: the Golden Hour example pack (shader API 0.1) in SDR, the same scenes.
-- golden_hour_hdr: Golden Hour with offscreen HDR output on (HORIZON_HDR_OUTPUT=pq), on the compatibility frame a
-  0.1 pack keeps: each screenshot and its -hdr.png.
+- golden_hour: the Golden Hour example pack in SDR, the same scenes.
+- golden_hour_hdr: Golden Hour with offscreen HDR output on (HORIZON_HDR_OUTPUT=pq), on the float frame: each
+  screenshot and its -hdr.png.
 - hdr_toggle: vanilla started with HDR on (the float frame), shot, HDR turned off from its settings page, shot.
-- golden_hour_0_2, golden_hour_0_2_hdr: the Golden Hour 0.2 pack (shader API 0.2), in SDR and with HDR on.
 - oit, visbuffer: Improved Transparency, and the visibility buffer (HORIZON_VISBUFFER=1), with HDR off.
 - float_hdr, float_oit, float_visbuffer: HDR on, which draws the float frame: forward, with Improved Transparency
   and with the visibility buffer, the last on a 300-nit display with the HUD at half brightness.
@@ -497,10 +496,6 @@ SESSIONS = {
     'golden_hour_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'golden_hour', 'HORIZON_HDR_OUTPUT': 'pq'},
                         ['day_water', 'night_lights'], False),
     'hdr_toggle': ('hdr:true\n', {'HORIZON_HDR_OUTPUT': 'pq'}, ['day_water', 'night_lights'], True),
-    'golden_hour_0_2': ('', {'HORIZON_SHADER_PACK': 'golden_hour_0_2'},
-                        ['day_water', 'night_lights', 'entities'], False),
-    'golden_hour_0_2_hdr': ('hdr:true\n', {'HORIZON_SHADER_PACK': 'golden_hour_0_2', 'HORIZON_HDR_OUTPUT': 'pq'},
-                            ['day_water', 'night_lights'], False),
     'oit': ('', {}, ['day_water', 'night_lights'], False),
     # 🤖 Agent: The visibility buffer draws only frames drawn flat, which frames without a pack are by default only on
     # Metal and some Intel drivers.
@@ -830,8 +825,7 @@ def hdr_gates(shots, sessions):
 
     for name in sessions:
         graphics, extra = GRAPHICS + SESSIONS[name][0], SESSIONS[name][1]
-        # 🤖 Agent: Without a pack: a 0.2 pack's [tonemap] maps its own picture for each output, and a 0.1 pack keeps
-        # the compatibility frame.
+        # 🤖 Agent: Without a pack: a pack's [tonemap] maps its own picture for each output.
         if 'HORIZON_SHADER_PACK' in extra or 'hdr:true' not in graphics:
             continue
         paper, peak, ui = setting(name, 'hdrPaperWhite'), setting(name, 'hdrPeak'), setting(name, 'hdrUiBrightness', 100)

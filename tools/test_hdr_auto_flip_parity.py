@@ -5,7 +5,7 @@ One game runs offscreen on the float frame (HORIZON_HDR_OUTPUT=pq) with HDR on A
 HORIZON_STILL=1. No HDR display is needed: HORIZON_HDR_DISPLAY names a file that says what the system reports for the
 display, `on` or `off`, which the game reads every two seconds as it reads the system. The file starts at `on`, turns
 `off`, then `on` again, and the scenes are shot in each state. A second game starts with the file at `off`. A third
-flips as the first under the shader API 0.2 example pack (golden_hour_0_2) with flat draws on (HORIZON_FLAT_DRAWS=1),
+flips as the first under the example pack (golden_hour) with flat draws on (HORIZON_FLAT_DRAWS=1),
 where a Horizon pack lays solid terrain out wide instead of compact (`packed_layout`).
 
 It fails unless:
@@ -40,7 +40,7 @@ RUN = lab.LOCAL / 'hdr-auto-flip'
 SCENES = ['day_water', 'night_lights']
 ENV = {'HORIZON_HDR_OUTPUT': 'pq'}
 MADE_AGAIN = 'the renderer was made again for the frame'
-PACK = 'golden_hour_0_2'
+PACK = 'golden_hour'
 
 
 def status(game):

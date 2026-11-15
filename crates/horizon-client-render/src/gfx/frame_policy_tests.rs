@@ -25,7 +25,7 @@ fn frame_policy_keeps_compatibility_frames_and_requires_layering_for_float_hdr()
         let float_ok = bits & 8 != 0;
         let coverage_ok = bits & 16 != 0;
         let smooth = bits & 32 != 0;
-        for pack in ["none", "0.1", "0.2", "shaders"] {
+        for pack in ["none", "0.2", "shaders"] {
             let float_hdr = matches!(pack, "none" | "0.2");
             let expected = if float_ok && float_hdr && hdr && offered && coverage_ok {
                 (LINEAR_FRAME, true)

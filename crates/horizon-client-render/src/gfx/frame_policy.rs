@@ -5,7 +5,7 @@ use super::{LINEAR_FRAME, WIDE_FRAME};
 
 /// What a renderer's frame is drawn in: `LINEAR_FRAME` where the device draws it, for a 0.2
 /// pack, or for the layered HDR frame where the surface offers HDR output (`linear`:
-/// `(a 0.2 pack picked, the layered HDR frame, the device draws it)`); else, under a 0.1 or
+/// `(a 0.2 pack picked, the layered HDR frame, the device draws it)`); else, under a
 /// `shaders/` pack, the compatibility frame: `WIDE_FRAME` when it is made with HDR on and
 /// Smooth Gradients (`wide_frame`, `output::resolve_frame`), the surface offering HDR output
 /// (`hdr_offered`) and the device drawing it (`draws_wide_frame`): an 8-bit frame's steps

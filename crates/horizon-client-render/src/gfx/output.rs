@@ -82,15 +82,15 @@ impl DisplayReading {
 /// What the picked pack asks of the frame (`picked_pack_shape`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FrameRequest {
-    /// A shader API 0.2 pack is picked: its frame is float.
+    /// One of Horizon's own packs is picked: its frame is float.
     pub linear_pack: bool,
     /// That pack's `[frame] blend` is `"linear"`: its frame holds linear light where it is
     /// float (`linear_blend`).
     pub linear_blend: bool,
     /// The pack declares `[ray_tracing]`: the device asks for ray queries (`ray_query`).
     pub ray_tracing: bool,
-    /// A 0.1 or `shaders/` pack is picked: HDR output keeps the compatibility frame under
-    /// it. With no pack available or a 0.2 one, the frame is the layered float one wherever
+    /// A `shaders/` pack is picked: HDR output keeps the compatibility frame under it. With
+    /// no pack available or one of Horizon's own, the frame is the layered float one wherever
     /// HDR output goes.
     pub compatibility: bool,
 }
@@ -208,17 +208,11 @@ impl EffectiveOutput {
         pack_lights: false,
         rays: None,
     };
-    /// This output under the running shader pack: a `shaders/` one (`shaders`), or one of
-    /// Horizon's own of API `native`. Under a 0.1 pack on the 8- or 16-bit frame the last pass
-    /// still lifts the light sources and the sun its marks hold (`lifts_world` in
-    /// `Renderer::render`); under the rest Horizon lifts nothing.
-    pub(crate) fn with_pack(self, shaders: bool, native: Option<horizon_shader_api::Api>) -> Self {
-        let pack_lights = shaders
-            || native.is_some_and(|api| {
-                api != horizon_shader_api::Api::V0_1 || self.frame.format == super::LINEAR_FRAME
-            });
+    /// This output while a shader pack runs (`pack`), a `shaders/` one or one of Horizon's
+    /// own: it lights its world itself, and Horizon lifts nothing.
+    pub(crate) fn with_pack(self, pack: bool) -> Self {
         Self {
-            pack_lights,
+            pack_lights: pack,
             ..self
         }
     }
@@ -338,19 +332,11 @@ pub(crate) fn resolve_output(
 }
 
 /// Whether HDR output lifts the world's light-source marks above paper white. Not on the title
-/// screen or the float frame, and not under a pack that lights its world itself: a 0.2 pack is
-/// shown at paper white, and a `shaders/` pack's `final` pass leaves its own alpha in the
-/// frame, which isn't marks (HDR lighting is off under it too).
-pub(crate) fn lifts_world(
-    title: bool,
-    float_frame: bool,
-    shaders_pack: bool,
-    native_api: Option<horizon_shader_api::Api>,
-) -> bool {
-    !title
-        && !float_frame
-        && !shaders_pack
-        && native_api.is_none_or(|api| api == horizon_shader_api::Api::V0_1)
+/// screen or the float frame, and not under a pack, which lights its world itself: one of
+/// Horizon's own is shown at paper white, and a `shaders/` pack's `final` pass leaves its own
+/// alpha in the frame, which isn't marks (HDR lighting is off under it too).
+pub(crate) fn lifts_world(title: bool, float_frame: bool, pack: bool) -> bool {
+    !title && !float_frame && !pack
 }
 
 #[cfg(test)]
@@ -395,25 +381,23 @@ pub(crate) mod tests {
         resolve_output(settings, caps, reading, frame, true)
     }
 
-    /// HDR output lifts light-source marks only on the 8/16-bit frame's world with no pack or
-    /// a 0.1 pack: a `shaders/` pack's alpha isn't marks, and a 0.2 pack is shown at paper white.
+    /// HDR output lifts light-source marks only on the 8/16-bit frame's world without a
+    /// pack: a `shaders/` pack's alpha isn't marks, and Horizon's own packs are shown at paper
+    /// white.
     #[test]
     fn only_horizons_own_gamma_world_is_lifted() {
-        use horizon_shader_api::Api::{V0_1, V0_2};
-        // (title, float frame, `shaders/` pack, Horizon pack) -> lifts
+        // (title, float frame, a pack) -> lifts
         let cases = [
-            ((false, false, false, None), true),
-            ((false, false, false, Some(V0_1)), true),
-            ((false, false, true, None), false),
-            ((false, false, false, Some(V0_2)), false),
-            ((false, true, false, None), false),
-            ((true, false, false, None), false),
+            ((false, false, false), true),
+            ((false, false, true), false),
+            ((false, true, false), false),
+            ((true, false, false), false),
         ];
-        for ((title, float, shaders, api), lifts) in cases {
+        for ((title, float, pack), lifts) in cases {
             assert_eq!(
-                lifts_world(title, float, shaders, api),
+                lifts_world(title, float, pack),
                 lifts,
-                "title {title}, float {float}, shaders/ pack {shaders}, pack {api:?}"
+                "title {title}, float {float}, pack {pack}"
             );
         }
     }
@@ -425,21 +409,22 @@ pub(crate) mod tests {
     fn the_resolver_picks_one_output_and_frame_for_each_combination() {
         // A refused, missing or disabled pick asks as no pack does (`picked_pack_shape`).
         let no_pack = FrameRequest::default();
-        let pack_0_2 = FrameRequest {
+        let own_pack = FrameRequest {
             linear_pack: true,
             ..no_pack
         };
-        // A 0.1 pack, or a `shaders/` one.
-        let legacy = FrameRequest {
+        let shaders_pack = FrameRequest {
             compatibility: true,
             ..no_pack
         };
         for mode in HdrMode::ALL {
             for hdr in [None, Some(Output::Pq), Some(Output::ScRgb)] {
                 for system in [None, Some(false), Some(true)] {
-                    for (request, name) in
-                        [(no_pack, "no pack"), (pack_0_2, "0.2"), (legacy, "0.1")]
-                    {
+                    for (request, name) in [
+                        (no_pack, "no pack"),
+                        (own_pack, "Horizon's own"),
+                        (shaders_pack, "shaders/"),
+                    ] {
                         for (float_frame, hud_layer) in
                             [(true, true), (true, false), (false, true), (false, false)]
                         {
@@ -768,8 +753,9 @@ pub(crate) mod tests {
         assert_eq!(stopped.reported, window_reading.luminance);
     }
 
-    /// A scaled screenshot of the layered frame keeps HDR, and a 0.2 pack reads the window's
-    /// display in it, not SDR's; a 0.1 pack's 16-bit frame shoots SDR, as do SDR windows.
+    /// A scaled screenshot of the layered frame keeps HDR, and a pack of Horizon's own reads
+    /// the window's display in it, not SDR's; a `shaders/` pack's frame shoots SDR, as do SDR
+    /// windows.
     #[test]
     fn a_scaled_screenshot_keeps_the_display_only_on_the_layered_frame() {
         let on = Graphics {
@@ -777,7 +763,7 @@ pub(crate) mod tests {
             ..Graphics::default()
         };
         let no_pack = FrameRequest::default();
-        let pack_0_1 = FrameRequest {
+        let shaders_pack = FrameRequest {
             compatibility: true,
             ..no_pack
         };
@@ -788,7 +774,7 @@ pub(crate) mod tests {
         assert_eq!(shot.encoding, Some(Output::Pq));
         assert_eq!(shot.display(), layered.display());
         for out in [
-            snapshot(&on, pack_0_1, caps, reading),
+            snapshot(&on, shaders_pack, caps, reading),
             snapshot(&Graphics::default(), no_pack, caps, reading),
         ] {
             let shot = out.scaled_screenshot();

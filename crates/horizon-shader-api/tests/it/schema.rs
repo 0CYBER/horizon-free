@@ -21,13 +21,8 @@ fn refused(text: &str) -> String {
 fn reads_every_key_of_schema_1() {
     let m = Manifest::parse(&sample_text()).unwrap();
     assert_eq!(
-        (
-            m.id.as_str(),
-            m.name.as_str(),
-            m.version.as_str(),
-            m.api.as_str()
-        ),
-        ("sample_pack", "Sample Pack", "1.0.0", "0.1")
+        (m.id.as_str(), m.name.as_str(), m.version.as_str()),
+        ("sample_pack", "Sample Pack", "1.0.0")
     );
     assert_eq!(m.authors, ["Horizon"]);
     assert_eq!(m.license.as_deref(), Some("MIT"));
@@ -109,7 +104,7 @@ fn a_shadow_map_stays_in_range_and_needs_a_stage_to_read_it() {
     refused("resolution = 64", "shadow.resolution");
     refused("distance = 8.0", "shadow.distance");
     let m = Manifest::parse(
-        "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n\
+        "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n\
          [sky]\nfile = \"s.wgsl\"\n[shadow]\n",
     );
     assert!(m.unwrap_err().to_string().contains("[shadow] needs"));
@@ -177,7 +172,7 @@ fn the_shadow_map_may_follow_options() {
 fn material_ids_go_by_the_first_entry_and_may_cut_shadows_whole() {
     let manifest = |rest: &str| {
         Manifest::parse(&format!(
-            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n\
+            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n\
              [material]\nfile = \"m.wgsl\"\n{rest}"
         ))
     };
@@ -227,7 +222,7 @@ fn material_ids_go_by_the_first_entry_and_may_cut_shadows_whole() {
     // Without a material stage, only the shadow pass can read the ids.
     let post_only = |rest: &str| {
         Manifest::parse(&format!(
-            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n\
+            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n\
              [[post]]\nfile = \"p.wgsl\"\n[[materials]]\nid = 7\nsprites = [\"a\"]\n{rest}"
         ))
     };
@@ -270,7 +265,7 @@ fn sprite_tags_name_sprites_with_one_wildcard() {
 #[test]
 fn the_smallest_manifest() {
     let m = Manifest::parse(
-        "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.1\"\n[[post]]\nfile = \"a.wgsl\"\n",
+        "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n[[post]]\nfile = \"a.wgsl\"\n",
     )
     .unwrap();
     assert!(m.sky.is_none() && m.options.is_empty() && m.budget.gpu_ms.is_none());
@@ -282,8 +277,13 @@ fn refuses_what_this_build_does_not_read() {
     let cases = [
         (text.replace("schema = 1", "schema = 2"), "schema 2"),
         (
-            text.replace("api = \"0.1\"", "api = \"0.3\""),
-            "shader API 0.3",
+            text.replace("api = \"0.2\"", "api = \"0.3\""),
+            "needs shader API 0.3; this Horizon serves 0.2",
+        ),
+        // The line before, retired when 0.2 came on by default.
+        (
+            text.replace("api = \"0.2\"", "api = \"0.1\""),
+            "needs shader API 0.1; this Horizon serves 0.2",
         ),
         (
             text.replace("\"sample_pack\"", "\"Sample\""),
@@ -354,7 +354,7 @@ fn refuses_what_this_build_does_not_read() {
         assert!(e.contains(needle), "{needle:?} not in {e:?}");
         assert!(e.starts_with(MANIFEST), "{e}");
     }
-    let no_stage = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.1\"\n";
+    let no_stage = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n";
     assert!(refused(no_stage).contains("no stage"));
     let mirror = format!("{no_stage}[sky]\nfile = \"sky.wgsl\"\n[reflection]\n");
     assert!(refused(&mirror).contains("[reflection] needs [material]"));
@@ -435,7 +435,7 @@ fn refuses_files_a_pack_does_not_use() {
 fn fog_is_a_key_of_the_material_stage() {
     let with_fog = |stage: &str| {
         format!(
-            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1.0.0\"\napi = \"0.1\"\n\n{stage}\nfile = \"a.wgsl\"\nfog = false\n"
+            "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1.0.0\"\napi = \"0.2\"\n\n{stage}\nfile = \"a.wgsl\"\nfog = false\n"
         )
     };
     let material = horizon_shader_api::Manifest::parse(&with_fog("[material]")).unwrap();
@@ -450,7 +450,7 @@ fn fog_is_a_key_of_the_material_stage() {
 fn a_sky_can_keep_or_replace_minecrafts_clouds_sun_and_stars() {
     let manifest = |stages: &str| {
         Manifest::parse(&format!(
-            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n{stages}"
+            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n{stages}"
         ))
     };
     let m =
@@ -534,7 +534,7 @@ fn reads_settings_pages_and_refuses_broken_links() {
 #[test]
 fn a_weather_stage_is_a_stage_of_its_own() {
     let m = Manifest::parse(
-        "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n\
+        "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n\
          [weather]\nfile = \"w.wgsl\"\n",
     )
     .unwrap();
@@ -555,7 +555,7 @@ fn png_bytes() -> Vec<u8> {
 
 #[test]
 fn a_pack_texture_is_declared_for_every_stage_and_decoded() {
-    let head = "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n\
+    let head = "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n\
                 [sky]\nfile = \"s.wgsl\"\n";
     let texture = "[[textures]]\nid = \"noise\"\nfile = \"noise.png\"\nwrap = \"clamp\"\n";
     let dir = std::env::temp_dir().join(format!("horizon-pack-texture-{}", std::process::id()));
@@ -603,7 +603,7 @@ fn a_pack_texture_is_declared_for_every_stage_and_decoded() {
 fn a_block_takes_the_colour_of_the_first_light_that_names_it() {
     let manifest = |rest: &str| {
         Manifest::parse(&format!(
-            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n\
+            "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n\
              [material]\nfile = \"m.wgsl\"\n{rest}"
         ))
     };
@@ -630,7 +630,7 @@ fn a_block_takes_the_colour_of_the_first_light_that_names_it() {
         "needs blocks",
     );
     let e = Manifest::parse(
-        "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n\
+        "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n\
          [[post]]\nfile = \"p.wgsl\"\n[[lights]]\ncolor = [1.0, 0.0, 0.0]\nblocks = [\"a\"]\n",
     );
     assert!(e.unwrap_err().to_string().contains("give it a [material]"));
@@ -638,7 +638,7 @@ fn a_block_takes_the_colour_of_the_first_light_that_names_it() {
 
 #[test]
 fn post_outputs_are_named_scaled_and_never_the_last_pass() {
-    let head = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1.0.0\"\napi = \"0.1\"\n";
+    let head = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1.0.0\"\napi = \"0.2\"\n";
     let pack = |passes: &str| horizon_shader_api::Manifest::parse(&format!("{head}{passes}"));
     let good = pack(
         "[[post]]\nfile = \"a.wgsl\"\noutput = \"bloom\"\nscale = 0.5\n\
@@ -672,7 +672,7 @@ fn post_outputs_are_named_scaled_and_never_the_last_pass() {
 
 #[test]
 fn a_vertex_stage_needs_a_material() {
-    let head = "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n";
+    let head = "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n";
     let e = Manifest::parse(&format!(
         "{head}[vertex]\nfile = \"v.wgsl\"\n[[post]]\nfile = \"p.wgsl\"\n"
     ))
@@ -688,7 +688,7 @@ fn a_vertex_stage_needs_a_material() {
 #[test]
 fn materials_name_blocks_and_move_sprites_to_the_translucent_pass() {
     let m = Manifest::parse(concat!(
-        "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.1\"\n",
+        "schema = 1\nid = \"a\"\nname = \"A\"\nversion = \"1\"\napi = \"0.2\"\n",
         "[material]\nfile = \"m.wgsl\"\n",
         "[[materials]]\nid = 7\nblocks = [\"oak_log\", \"grass_block:snowy=true\"]\n\
          [[materials]]\nid = 8\nsprites = [\"block/glass\"]\ntranslucent = true\n\
@@ -757,25 +757,22 @@ fn displacement_needs_the_material_stage_and_stays_in_range() {
         let e = refused(&with(section));
         assert!(e.contains(needle), "{needle:?} not in {e:?}");
     }
-    let no_stage = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.1\"\n";
+    let no_stage = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n";
     let sky_only = format!("{no_stage}[sky]\nfile = \"sky.wgsl\"\n[displacement]\n");
     assert!(refused(&sky_only).contains("[displacement] needs [material]"));
 }
 
-const SMALLEST_0_2: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n[[post]]\nfile = \"a.wgsl\"\n";
+const SMALLEST: &str = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.2\"\n[[post]]\nfile = \"a.wgsl\"\n";
 
 #[test]
-fn both_lines_are_read() {
-    use horizon_shader_api::{Api, Blend, Coverage, Primaries};
-    let m = Manifest::parse(SMALLEST_0_2).unwrap();
-    assert_eq!(
-        (m.api, m.blend, m.tonemap.is_none()),
-        (Api::V0_2, Blend::Gamma, true)
-    );
+fn the_frame_tonemap_and_entity_keys_are_read() {
+    use horizon_shader_api::{Blend, Coverage, Primaries};
+    let m = Manifest::parse(SMALLEST).unwrap();
+    assert_eq!((m.blend, m.tonemap.is_none()), (Blend::Gamma, true));
     assert_eq!(m.primaries, Primaries::Bt709);
-    let named = format!("{SMALLEST_0_2}[frame]\nprimaries = \"bt709\"\n");
+    let named = format!("{SMALLEST}[frame]\nprimaries = \"bt709\"\n");
     assert_eq!(Manifest::parse(&named).unwrap(), m);
-    let wide = format!("{SMALLEST_0_2}[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n");
+    let wide = format!("{SMALLEST}[frame]\nblend = \"linear\"\nprimaries = \"bt2020\"\n");
     let wide = Manifest::parse(&wide).unwrap();
     assert_eq!(
         (wide.blend, wide.primaries),
@@ -785,9 +782,8 @@ fn both_lines_are_read() {
     for p in [Primaries::Bt709, Primaries::Bt2020] {
         assert!((p.luminance().iter().sum::<f32>() - 1.0).abs() < 1e-6);
     }
-    assert_eq!(Manifest::parse(&sample_text()).unwrap().api, Api::V0_1);
-    // The material keeps the engine's coverage unless it says otherwise; 0.1's alpha always decides.
-    let material = format!("{SMALLEST_0_2}[material]\nfile = \"m.wgsl\"\n");
+    // The material keeps the engine's coverage unless it says otherwise.
+    let material = format!("{SMALLEST}[material]\nfile = \"m.wgsl\"\n");
     assert_eq!(
         Manifest::parse(&material).unwrap().coverage,
         Coverage::Engine
@@ -796,17 +792,13 @@ fn both_lines_are_read() {
     assert_eq!(Manifest::parse(&own).unwrap().coverage, Coverage::Pack);
     let engine = format!("{material}coverage = \"engine\"\n");
     assert_eq!(Manifest::parse(&engine).unwrap().coverage, Coverage::Engine);
-    assert_eq!(
-        Manifest::parse(&sample_text()).unwrap().coverage,
-        Coverage::Pack
-    );
-    let tonemap = format!("{SMALLEST_0_2}[tonemap]\nfile = \"t.wgsl\"\nname = \"Curve\"\n");
+    let tonemap = format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\nname = \"Curve\"\n");
     let m = Manifest::parse(&tonemap).unwrap();
     assert_eq!(m.tonemap.as_ref().unwrap().name.as_deref(), Some("Curve"));
     assert!(m.files().contains(&"t.wgsl"));
-    let linear = Manifest::parse(&format!("{SMALLEST_0_2}[frame]\nblend = \"linear\"\n")).unwrap();
+    let linear = Manifest::parse(&format!("{SMALLEST}[frame]\nblend = \"linear\"\n")).unwrap();
     assert_eq!(linear.blend, Blend::Linear);
-    let only = SMALLEST_0_2.replace(
+    let only = SMALLEST.replace(
         "[[post]]\nfile = \"a.wgsl\"\n",
         "[tonemap]\nfile = \"t.wgsl\"\n",
     );
@@ -822,83 +814,59 @@ fn both_lines_are_read() {
 }
 
 #[test]
-fn the_0_2_keys_are_refused_under_0_1_and_checked_under_0_2() {
-    let smallest_0_1 = SMALLEST_0_2.replace("0.2", "0.1");
+fn the_frame_tonemap_and_entity_keys_are_checked() {
     let cases = [
         (
-            format!("{smallest_0_1}[tonemap]\nfile = \"t.wgsl\"\n"),
-            "[tonemap] is shader API 0.2",
-        ),
-        (
-            format!("{smallest_0_1}[frame]\nblend = \"gamma\"\n"),
-            "[frame] is shader API 0.2",
-        ),
-        (
-            format!("{SMALLEST_0_2}[frame]\nblend = \"srgb\"\n"),
+            format!("{SMALLEST}[frame]\nblend = \"srgb\"\n"),
             "frame.blend \"srgb\": gamma or linear",
         ),
         (
-            format!("{SMALLEST_0_2}[frame]\nblend = \"linear\"\nprimaries = \"p3\"\n"),
+            format!("{SMALLEST}[frame]\nblend = \"linear\"\nprimaries = \"p3\"\n"),
             "frame.primaries \"p3\": bt709 or bt2020",
         ),
         (
-            format!("{SMALLEST_0_2}[frame]\nprimaries = \"bt2020\"\n"),
+            format!("{SMALLEST}[frame]\nprimaries = \"bt2020\"\n"),
             "needs blend = \"linear\": a change of primaries is only right in linear light",
         ),
         (
-            format!("{SMALLEST_0_2}[frame]\nblend = \"gamma\"\nprimaries = \"bt2020\"\n"),
+            format!("{SMALLEST}[frame]\nblend = \"gamma\"\nprimaries = \"bt2020\"\n"),
             "frame.primaries \"bt2020\" needs blend = \"linear\"",
         ),
         (
-            format!("{smallest_0_1}[frame]\nprimaries = \"bt709\"\n"),
-            "[frame] is shader API 0.2",
-        ),
-        (
-            format!("{smallest_0_1}[entity]\nfile = \"e.wgsl\"\n"),
-            "[entity] is shader API 0.2",
-        ),
-        (
-            format!("{smallest_0_1}[material]\nfile = \"m.wgsl\"\ncoverage = \"pack\"\n"),
-            "[material] coverage is shader API 0.2",
-        ),
-        (
-            format!("{SMALLEST_0_2}[material]\nfile = \"m.wgsl\"\ncoverage = \"texture\"\n"),
+            format!("{SMALLEST}[material]\nfile = \"m.wgsl\"\ncoverage = \"texture\"\n"),
             "material.coverage \"texture\": engine or pack",
         ),
         (
-            format!("{SMALLEST_0_2}[entity]\nfile = \"e.wgsl\"\ncoverage = \"pack\"\n"),
+            format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\ncoverage = \"pack\"\n"),
             "`coverage` is a key of [material] only",
         ),
         (
-            format!("{SMALLEST_0_2}[entity]\nfile = \"e.wgsl\"\nfog = false\n"),
+            format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nfog = false\n"),
             "`fog` is a key of [material] only",
         ),
         (
-            format!("{SMALLEST_0_2}[entity]\nfile = \"e.wgsl\"\nscale = 0.5\n"),
+            format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nscale = 0.5\n"),
             "`scale` and `output` are keys of [[post]] only",
         ),
         (
-            format!("{SMALLEST_0_2}[entity]\nfile = \"e.wgsl\"\nclouds = false\n"),
+            format!("{SMALLEST}[entity]\nfile = \"e.wgsl\"\nclouds = false\n"),
             "`clouds`, `sun` and `stars` are keys of [sky] only",
         ),
         (
-            format!("{SMALLEST_0_2}[entity]\nfile = \"e.glsl\"\n"),
+            format!("{SMALLEST}[entity]\nfile = \"e.glsl\"\n"),
             "is not a plain path to a .wgsl file",
         ),
+        (format!("{SMALLEST}[frame]\nwhite = 1\n"), "unknown field"),
         (
-            format!("{SMALLEST_0_2}[frame]\nwhite = 1\n"),
-            "unknown field",
-        ),
-        (
-            format!("{SMALLEST_0_2}[tonemap]\nfile = \"t.wgsl\"\nscale = 0.5\n"),
+            format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\nscale = 0.5\n"),
             "`scale` and `output` are keys of [[post]] only",
         ),
         (
-            format!("{SMALLEST_0_2}[tonemap]\nfile = \"t.wgsl\"\nfog = false\n"),
+            format!("{SMALLEST}[tonemap]\nfile = \"t.wgsl\"\nfog = false\n"),
             "`fog` is a key of [material] only",
         ),
         (
-            format!("{SMALLEST_0_2}[tonemap]\nfile = \"../t.wgsl\"\n"),
+            format!("{SMALLEST}[tonemap]\nfile = \"../t.wgsl\"\n"),
             "is not a plain path",
         ),
         (
@@ -913,19 +881,18 @@ fn the_0_2_keys_are_refused_under_0_1_and_checked_under_0_2() {
 }
 
 #[test]
-fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
-    assert!(Manifest::parse(SMALLEST_0_2).unwrap().ray_tracing.is_none());
-    let asked = Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n")).unwrap();
+fn ray_tracing_is_a_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
+    assert!(Manifest::parse(SMALLEST).unwrap().ray_tracing.is_none());
+    let asked = Manifest::parse(&format!("{SMALLEST}[ray_tracing]\n")).unwrap();
     assert!(asked.ray_tracing.is_some());
     // The material stage traces too: it alone is enough.
-    let material = SMALLEST_0_2.replace("[[post]]", "[material]") + "[ray_tracing]\n";
+    let material = SMALLEST.replace("[[post]]", "[material]") + "[ray_tracing]\n";
     let asked = Manifest::parse(&material).unwrap();
     assert!(asked.ray_tracing.is_some() && asked.post.is_empty());
     // A traced ray's hit reads the tags and material ids: no material stage is needed.
     let tags = "[[tags]]\nid = \"glass\"\nsprites = [\"block/glass\"]\n";
     let materials = "[[materials]]\nid = 7\nsprites = [\"block/stone\"]\n";
-    let traced =
-        Manifest::parse(&format!("{SMALLEST_0_2}[ray_tracing]\n{tags}{materials}")).unwrap();
+    let traced = Manifest::parse(&format!("{SMALLEST}[ray_tracing]\n{tags}{materials}")).unwrap();
     assert!(traced.material.is_none());
     let sprites = [("minecraft:block/glass", 3), ("minecraft:block/stone", 5)];
     assert_eq!(traced.sprite_tags(sprites), [(3, 1)]);
@@ -937,11 +904,11 @@ fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
             "materials are read by the material stage, `trace`",
         ),
     ] {
-        let e = Manifest::parse(&format!("{SMALLEST_0_2}{list}")).unwrap_err();
+        let e = Manifest::parse(&format!("{SMALLEST}{list}")).unwrap_err();
         assert!(e.to_string().contains(message), "{e}");
     }
     // `trace` is a name like any other for a pack that doesn't ask.
-    let named = SMALLEST_0_2.replace(
+    let named = SMALLEST.replace(
         "[[post]]\n",
         "[[post]]\nfile = \"t.wgsl\"\noutput = \"trace\"\n[[post]]\n",
     );
@@ -951,15 +918,11 @@ fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
     );
     let cases = [
         (
-            SMALLEST_0_2.replace("0.2", "0.1") + "[ray_tracing]\n",
-            "[ray_tracing] is shader API 0.2",
-        ),
-        (
-            SMALLEST_0_2.replace("[[post]]", "[sky]") + "[ray_tracing]\n",
+            SMALLEST.replace("[[post]]", "[sky]") + "[ray_tracing]\n",
             "[ray_tracing] needs a [[post]] pass or a [material] stage",
         ),
         (
-            format!("{SMALLEST_0_2}[ray_tracing]\nbounces = 2\n"),
+            format!("{SMALLEST}[ray_tracing]\nbounces = 2\n"),
             "unknown field",
         ),
         (
@@ -987,7 +950,7 @@ fn ray_tracing_is_a_0_2_key_for_a_pack_with_a_post_pass_or_a_material_stage() {
 
 fn float_option_manifest(fields: &str) -> String {
     format!(
-        "schema = 1\nid = \"finite_options\"\nname = \"Finite options\"\nversion = \"1.0\"\napi = \"0.1\"\n[sky]\nfile = \"sky.wgsl\"\n[[options]]\nid = \"gain\"\nname = \"Gain\"\ntype = \"float\"\n{fields}"
+        "schema = 1\nid = \"finite_options\"\nname = \"Finite options\"\nversion = \"1.0\"\napi = \"0.2\"\n[sky]\nfile = \"sky.wgsl\"\n[[options]]\nid = \"gain\"\nname = \"Gain\"\ntype = \"float\"\n{fields}"
     )
 }
 

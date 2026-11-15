@@ -14,7 +14,7 @@ use horizon_shader_api::stages::{
 };
 
 use super::super::native_material::{MaterialPipelines, TerrainShape, terrain_entries};
-use super::{INTERMEDIATE, NativeFrame, NativePost, post_pipeline};
+use super::{NativeFrame, NativePost, post_pipeline};
 pub(in crate::gfx) use crate::gfx::surface_setup::ray_query::ray_scene::{RayScene, Traced};
 
 /// What the scene's passes are built against besides the scene: the terrain's sprites and the
@@ -354,12 +354,10 @@ impl NativePost {
                 bind_group_layouts: &groups,
                 ..Default::default()
             });
-            // A `[ray_tracing]` pack is 0.2's: every pass draws a half-float target.
-            let target = INTERMEDIATE;
             Ok(scenes
                 .into_iter()
                 .map(|(label, module)| {
-                    post_pipeline(device, &label, &pipeline_layout, module, constants, target)
+                    post_pipeline(device, &label, &pipeline_layout, module, constants)
                 })
                 .collect())
         };

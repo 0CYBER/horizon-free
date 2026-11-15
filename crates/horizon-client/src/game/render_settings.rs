@@ -10,7 +10,7 @@ pub(super) struct FrameAttempt<K = FrameKey>(Option<K>);
 type FrameKey = (
     Option<horizon_client::gfx::FrameConfiguration>,
     PathBuf,
-    Option<Option<horizon_shader_api::Api>>,
+    Option<bool>,
 );
 
 impl<K: PartialEq> FrameAttempt<K> {
@@ -71,7 +71,7 @@ impl Game<'_> {
         let outcome = if available {
             native_shaders::outcome(&path)
         } else {
-            Some(None)
+            Some(false)
         };
         // The renderer's offer can change while the game runs (Vulkan's formats follow desktop
         // HDR and the window's output), and the frame with it.
@@ -283,7 +283,6 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::FrameAttempt;
-    use horizon_shader_api::Api;
 
     #[test]
     fn failed_frame_attempt_waits_for_a_policy_or_setting_change() {
@@ -295,10 +294,10 @@ mod tests {
             ("8-bit", "p", None),
             // HDR output offered later, with HDR On: the frame is looked at again.
             ("float", "p", None),
-            ("float", "p", Some(Some(Api::V0_2))),
-            ("float", "p", Some(Some(Api::V0_2))),
-            ("float", "p", Some(None)),
-            ("float", "p", Some(None)),
+            ("float", "p", Some(true)),
+            ("float", "p", Some(true)),
+            ("float", "p", Some(false)),
+            ("float", "p", Some(false)),
             ("float", "q", None),
             ("8-bit", "q", None),
         ] {

@@ -1,7 +1,7 @@
 //! What a pack's WGSL reads: the frame uniform every stage sees, which the
 //! renderer fills and uploads as the Rust struct below, and the stage input
 //! and output structs. The WGSL of each is generated from these definitions
-//! (`Struct::wgsl`), and so is the reference (docs/api/shaders-reference.md).
+//! (`Struct::wgsl`), and so is the reference (docs/api/shaders-reference-0.2.md).
 
 /// One field of a WGSL struct, for the prelude and the reference.
 #[derive(Clone, Copy, Debug)]
@@ -243,10 +243,6 @@ uniform! {
 }
 
 impl Frame {
-    /// The fields 0.1's prelude declares: the struct up to `shadow_center_texel`, a prefix of
-    /// the buffer the renderer uploads.
-    pub const FIELDS_0_1: usize = 49;
-
     /// Where `has_ray_tracing` and `ray_distance` are among the fields: in what was a gap of
     /// the layout before `luminance`, so no other field moves with or without them.
     pub const RAY_FIELDS: std::ops::Range<usize> = 55..57;
@@ -255,7 +251,7 @@ impl Frame {
     /// so a pack without `[[resource]]` declares a prefix and no other field moves.
     pub const KEPT_FIELDS: std::ops::Range<usize> = 58..61;
 
-    /// The fields without `RAY_FIELDS`: what a 0.2 pack without `[ray_tracing]` declares, less
+    /// The fields without `RAY_FIELDS`: what a pack without `[ray_tracing]` declares, less
     /// `KEPT_FIELDS` without `[[resource]]`.
     const UNTRACED: [Field; 59] = {
         let all = Self::WGSL.fields;
@@ -271,23 +267,16 @@ impl Frame {
         out
     };
 
-    /// `Frame` as the line's prelude declares it for a pack without `[ray_tracing]` or
-    /// `[[resource]]`.
-    pub fn line(api: crate::Api) -> Struct {
-        Self::declared(api, false, false)
-    }
-
-    /// `Frame` as the line's prelude declares it, for a pack that asks for the scene
-    /// (`[ray_tracing]`, 0.2) or not, and that keeps resources (`[[resource]]`, 0.2) or not.
-    pub fn declared(api: crate::Api, ray_tracing: bool, kept: bool) -> Struct {
-        let fields: &'static [Field] = match (api, ray_tracing) {
-            (crate::Api::V0_1, _) => &Self::WGSL.fields[..Self::FIELDS_0_1],
-            (crate::Api::V0_2, false) => &Self::UNTRACED,
-            (crate::Api::V0_2, true) => Self::WGSL.fields,
+    /// `Frame` as the prelude declares it, for a pack that asks for the scene
+    /// (`[ray_tracing]`) or not, and that keeps resources (`[[resource]]`) or not.
+    pub fn declared(ray_tracing: bool, kept: bool) -> Struct {
+        let fields: &'static [Field] = match ray_tracing {
+            false => &Self::UNTRACED,
+            true => Self::WGSL.fields,
         };
-        let fields = match api == crate::Api::V0_2 && !kept {
-            true => &fields[..fields.len() - Self::KEPT_FIELDS.len()],
-            false => fields,
+        let fields = match kept {
+            false => &fields[..fields.len() - Self::KEPT_FIELDS.len()],
+            true => fields,
         };
         Struct {
             fields,
@@ -314,7 +303,7 @@ pub const POST_INPUT: Struct = Struct {
     },
 };
 
-/// A compute pass's input (0.2): one invocation of its dispatch.
+/// A compute pass's input: one invocation of its dispatch.
 pub const COMPUTE_INPUT: Struct = Struct {
     name: "ComputeInput",
     doc: "One invocation of a dispatch, for `fn compute(input: ComputeInput)`.",
@@ -355,13 +344,14 @@ pub const MATERIAL_INPUT: Struct = Struct {
 pub const SURFACE: Struct = Struct {
     name: "Surface",
     doc: "What `material` returns. Vanilla's own is `albedo * tint * vec4(lightmap, 1.0)`; \
-          Horizon then applies the alpha test (cutout and translucent) and fog.",
+          Horizon then applies the alpha test (cutout and translucent; on the texture's alpha \
+          unless `[material] coverage = \"pack\"`) and fog.",
     fields: fields! {
-        color: "vec4<f32>" = "The lit colour, 0..1, with its alpha.",
+        color: "vec4<f32>" = "The lit colour: rgb linear light, 0 or more and unbounded (more than 1 is brighter than white); alpha translucent terrain's opacity, and what the alpha test reads under `[material] coverage = \"pack\"`.",
     },
 };
 
-/// The entity stage's input (0.2): one point of a surface that is no block terrain.
+/// The entity stage's input: one point of a surface that is no block terrain.
 pub const ENTITY_INPUT: Struct = Struct {
     name: "EntityInput",
     doc: "One point of the surface of an entity, a block entity, an item or a particle, for `fn entity(input: EntityInput) -> Surface`.",
@@ -435,7 +425,7 @@ pub const WEATHER_INPUT: Struct = Struct {
     },
 };
 
-/// What `trace` and `trace_layers` return (0.2, `[ray_tracing]`): the nearest surface along a ray.
+/// What `trace` and `trace_layers` return (`[ray_tracing]`): the nearest surface along a ray.
 pub const RAY_HIT: Struct = Struct {
     name: "RayHit",
     doc: "The nearest surface along a ray, from `trace` or `trace_layers`. Its `albedo`, `tint`, `light`, `uv`, `material`, `tags`, `emission`, `fluid`, `translucent` and `tangent` are what `MaterialInput` gives the material stage for the same point, so one function can shade both. On a miss `distance` is negative and every other field is 0 (`translucent` false).",
@@ -457,7 +447,7 @@ pub const RAY_HIT: Struct = Struct {
     },
 };
 
-/// The tonemap stage's input (0.2): one pixel of the window.
+/// The tonemap stage's input: one pixel of the window.
 pub const TONEMAP_INPUT: Struct = Struct {
     name: "TonemapInput",
     doc: "One pixel of an output (the window), for `fn tonemap(input: TonemapInput) -> vec3<f32>`, which returns its colour for the output `frame` describes: linear light, 1.0 at paper white, from 0 to `frame.headroom` (Horizon clamps it there).",
@@ -477,8 +467,8 @@ mod tests {
         let wgsl = Frame::WGSL;
         assert_eq!(wgsl.fields.len(), 61);
         assert!(wgsl.fields.iter().all(|f| !f.doc.trim().is_empty()));
-        // 0.1's 49 fields, then 0.2's twelve: `luminance` is a `vec3`, on the next 16 bytes,
-        // the epochs after it to the end of the next 16.
+        // `luminance` is a `vec3`, on the next 16 bytes, the epochs after it to the end of the
+        // next 16.
         let size = std::mem::size_of::<Frame>();
         assert_eq!(size, 6 * 64 + 15 * 16 + 8 * 16 + 4 * 16);
         assert_eq!(
@@ -488,27 +478,22 @@ mod tests {
         // The scene's two fields are only a `[ray_tracing]` pack's, the epochs only a
         // `[[resource]]` pack's.
         let names = |s: Struct| s.fields.iter().map(|f| f.name).collect::<Vec<_>>();
-        let traced = names(Frame::declared(crate::Api::V0_2, true, false));
+        let traced = names(Frame::declared(true, false));
         assert_eq!(
             traced[Frame::RAY_FIELDS],
             ["has_ray_tracing", "ray_distance"]
         );
         assert_eq!(traced.last(), Some(&"luminance"));
-        let untraced = names(Frame::line(crate::Api::V0_2));
+        let untraced = names(Frame::declared(false, false));
         assert_eq!(untraced.len(), 56);
         assert!(!untraced.iter().any(|n| n.contains("ray")));
         assert_eq!(untraced.last(), Some(&"luminance"));
         let epochs = ["view_epoch", "world_epoch", "reset_reasons"];
         for ray_tracing in [false, true] {
-            let kept = names(Frame::declared(crate::Api::V0_2, ray_tracing, true));
+            let kept = names(Frame::declared(ray_tracing, true));
             assert_eq!(kept[kept.len() - 3..], epochs);
         }
         assert_eq!(names(Frame::WGSL)[Frame::KEPT_FIELDS], epochs);
-        assert_eq!(Frame::OFFSETS[Frame::FIELDS_0_1], 6 * 64 + 15 * 16 + 8 * 16);
-        assert_eq!(
-            Frame::line(crate::Api::V0_1).fields.len(),
-            Frame::FIELDS_0_1
-        );
         assert!(
             wgsl.wgsl()
                 .contains("    camera_position: vec3<f32>,\n    time: f32,\n")

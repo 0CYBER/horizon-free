@@ -58,7 +58,7 @@ READERS = {
     ],
     "horizon-release-sign": ["tools/ci/sign_native_build.sh", "tools/ci/sign_release.sh"],
     "horizon-server": ["crates/horizon-theme/fonts", "crates/horizon-theme/icons", "docs/api/server-reference.md"],
-    "horizon-shader-api": ["docs/api/shaders-reference.md", "docs/api/shaders-reference-0.2.md"],
+    "horizon-shader-api": ["docs/api/shaders-reference-0.2.md"],
     "horizon-world": ["crates/horizon-core", "Cargo.lock"],
     # Commands (tokens, icons, package), not tests: listed so the scan finds nothing unexplained.
     "xtask": [

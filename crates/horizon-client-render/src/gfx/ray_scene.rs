@@ -64,8 +64,8 @@ impl Renderer {
         if let (Some(new), Some(old)) = (&mut pack, &mut self.native) {
             new.carry(old);
         }
-        let old = self.native.as_mut().and_then(|p| p.post.as_mut());
-        let new = pack.as_mut().and_then(|p| p.post.as_mut());
+        let old = self.native.as_mut().map(|p| &mut p.post);
+        let new = pack.as_mut().map(|p| &mut p.post);
         crate::gfx::native_post::kept::install(&self.device, new, old);
         let traces = pack.as_ref().is_some_and(|p| p.traces);
         follow(

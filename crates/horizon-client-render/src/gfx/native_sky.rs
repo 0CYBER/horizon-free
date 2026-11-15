@@ -39,13 +39,13 @@ fn vanilla_sky() -> String {
     prefixed(&text, PREFIX)
 }
 
-/// The sky shader for the pack's sky stage `source`, of the line `api`, onto a frame that holds
-/// linear light when `linear`.
-fn shader_source(source: &str, (api, linear): (horizon_shader_api::Api, bool)) -> String {
+/// The sky shader for the pack's sky stage `source`, onto a frame that holds linear light when
+/// `linear`.
+fn shader_source(source: &str, linear: bool) -> String {
     format!(
         "{source}\n// Horizon's sky (terrain.wgsl)\n{}{}{PACK_ENTRY}",
         vanilla_sky(),
-        super::native_post::line_helpers(api, linear)
+        super::native_post::line_helpers(linear)
     )
 }
 
@@ -103,7 +103,7 @@ fn build(
     frame: &NativeFrame,
     stage: &CheckedStage,
 ) -> Result<(naga::Module, wgpu::PipelineLayout), String> {
-    let text = shader_source(&stage.source, (frame.api, frame.linear));
+    let text = shader_source(&stage.source, frame.linear);
     let module = naga::front::wgsl::parse_str(&text)
         .map_err(|e| format!("{}: {}", stage.file, e.emit_to_string(&text)))?;
     let mut groups: [Option<&wgpu::BindGroupLayout>; GROUP as usize + 1] = Default::default();
@@ -244,7 +244,7 @@ mod tests {
     use horizon_shader_api::{Frame as FrameInputs, MANIFEST, Pack, StageKind, check};
 
     fn stage(sky: &str) -> CheckedStage {
-        let mut manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.1\"\n\
+        let mut manifest = "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\n\
             [sky]\nfile = \"sky.wgsl\"\n"
             .to_owned();
         if sky.contains("gain") {
@@ -277,7 +277,7 @@ mod tests {
         // A pack may use the renderer's names for its own things.
         let own = "override gain: f32;\nconst PI: f32 = 3.0;\nfn view_ray() -> f32 { return PI; }\n\
             fn sky(input: SkyInput) -> vec4<f32> { return input.color * gain * view_ray(); }\n";
-        let text = shader_source(&stage(own).source, (horizon_shader_api::Api::V0_1, false));
+        let text = shader_source(&stage(own).source, false);
         let module = naga::front::wgsl::parse_str(&text).unwrap_or_else(|e| {
             panic!("{}", e.emit_to_string(&text));
         });
@@ -307,14 +307,7 @@ mod tests {
     }
 
     fn frame(device: &wgpu::Device) -> NativeFrame {
-        NativeFrame::new(
-            device,
-            None,
-            Vec::new(),
-            Default::default(),
-            None,
-            (horizon_shader_api::Api::V0_1, false),
-        )
+        NativeFrame::new(device, None, Vec::new(), Default::default(), None, false)
     }
 
     /// A pack names its stages, and the module's label comes from that name: one with a
@@ -369,7 +362,8 @@ mod tests {
     }
 
     /// Vanilla's sky and two packs over the same globals: one that returns its input draws
-    /// vanilla's pixels, one that inverts them draws the inverse (and stays opaque).
+    /// vanilla's pixels within an 8-bit step (decoded on the way in, encoded on the way out), one
+    /// that halves their light draws that (and stays opaque).
     #[test]
     fn a_pack_gets_vanilla_s_colour_and_draws_opaque() {
         let instance = crate::gfx::test_gpu::instance();
@@ -511,17 +505,22 @@ mod tests {
         };
         let same = stage("fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n");
         let vanilla = draw(&same, true);
-        assert_eq!(draw(&same, false), vanilla);
+        for (got, want) in draw(&same, false).iter().zip(&vanilla) {
+            assert!(got.abs_diff(*want) <= 1, "{got} {want}");
+        }
         // The top row looks up into the sky disc, the bottom one down into the fog.
         assert_ne!(vanilla[..4], vanilla[vanilla.len() - 4..]);
-        let inverse = stage(
-            "override gain: f32;\nfn sky(input: SkyInput) -> vec4<f32> { return vec4(vec3(gain) - input.color.rgb, 0.25); }\n",
+        let half = stage(
+            "override gain: f32;\nfn sky(input: SkyInput) -> vec4<f32> { return vec4(input.color.rgb * gain * 0.5, 0.25); }\n",
         );
-        let inverted = draw(&inverse, false);
-        for (got, want) in inverted.chunks(4).zip(vanilla.chunks(4)) {
+        let halved = draw(&half, false);
+        // Half the light is 0.5^(1/2.2) of the encoded value.
+        let encoded_half = 0.5f32.powf(1.0 / 2.2);
+        for (got, want) in halved.chunks(4).zip(vanilla.chunks(4)) {
             assert_eq!(got[3], 255);
             for i in 0..3 {
-                assert!(got[i].abs_diff(255 - want[i]) <= 1, "{got:?} {want:?}");
+                let want = (f32::from(want[i]) * encoded_half).round() as u8;
+                assert!(got[i].abs_diff(want) <= 1, "{got:?} {want}");
             }
         }
     }

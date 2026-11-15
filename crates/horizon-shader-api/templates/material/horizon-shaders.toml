@@ -2,7 +2,7 @@ schema = 1
 id = "{{id}}"
 name = "{{name}}"
 version = "0.1.0"
-api = "0.1"
+api = "0.2"
 description = "How block surfaces are lit."
 
 [material]

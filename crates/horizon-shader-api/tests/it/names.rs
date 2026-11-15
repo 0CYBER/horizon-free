@@ -9,7 +9,7 @@
 //! manifest key (and compose the pack here without it), or add its line to the list in a pull
 //! request that says why no pack can hold the name. A stage added later starts its own list:
 //! no pack had it, so its names collide with nothing.
-use horizon_shader_api::{Api, MANIFEST, Pack, Problem, StageKind, check, compose, compose_scene};
+use horizon_shader_api::{MANIFEST, Pack, Problem, StageKind, check, compose, compose_scene};
 use std::collections::BTreeSet;
 
 const STAGES: &str = "[sky]\nfile = \"sky.wgsl\"\n[material]\nfile = \"material.wgsl\"\n\
@@ -178,7 +178,7 @@ fn listed_names(kind: StageKind) -> (BTreeSet<String>, String) {
 #[test]
 fn a_0_2_prelude_declares_only_the_names_on_its_list() {
     let pack = pack(None);
-    for &kind in Api::V0_2.stages() {
+    for kind in StageKind::ALL {
         let file = format!("{}.wgsl", kind.name());
         let have = prelude_names(&compose(&pack, kind, &file), kind);
         let (listed, path) = listed_names(kind);
@@ -248,7 +248,7 @@ fn ray_tracing_brings_its_names_to_the_stages_of_the_pack_that_trace() {
                     return Surface(input.albedo * f32(trace_any(input.position, input.normal, 8.0)));\n}\n";
     for (replaced, traces) in [(None, false), (Some(("material.wgsl", material)), true)] {
         let pack = pack_with("[ray_tracing]\n", replaced);
-        for &kind in Api::V0_2.stages() {
+        for kind in StageKind::ALL {
             let file = format!("{}.wgsl", kind.name());
             let mut want = listed(kind.name());
             if kind == StageKind::Post || kind == StageKind::Material && traces {
@@ -274,7 +274,7 @@ fn motion_brings_the_post_stage_only_the_motion_names() {
     let manifest = files.get_mut(MANIFEST).unwrap();
     manifest.extend_from_slice(b"[motion]\n");
     let pack = Pack::from_files(files).unwrap();
-    for &kind in Api::V0_2.stages() {
+    for kind in StageKind::ALL {
         let composed = compose(&pack, kind, &format!("{}.wgsl", kind.name()));
         let have: BTreeSet<String> = declared(&composed.text[composed.parts[0].1.clone()])
             .into_iter()
@@ -307,7 +307,7 @@ fn kept_resources_bring_the_frame_s_epochs_to_their_pack_only() {
         "REASON_OPTION",
     ];
     let kept = pack_with(resource, None);
-    for &kind in Api::V0_2.stages() {
+    for kind in StageKind::ALL {
         let file = format!("{}.wgsl", kind.name());
         let composed = compose(&kept, kind, &file);
         assert!(composed.text.contains(epochs), "{kind:?}");

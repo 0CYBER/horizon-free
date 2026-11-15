@@ -138,7 +138,7 @@ fn content() -> serde_json::Value {
         // 0.1 was the WebAssembly code line: no build runs it any more.
         "mod": { "api": manifest::APIS.iter().filter(|a| **a != manifest::API).collect::<Vec<_>>() },
         "native_mod": { "hooks": super::native_hooks::NATIVE_HOOKS_API, "rebuild": true },
-        // The lines it draws: a newer one is read and checked, not drawn yet.
+        // The line it draws: a pack for another is refused.
         "shader": { "schema": horizon_shader_api::SCHEMA, "api": [horizon_shader_api::API] },
         "resourcepack": { "format": horizon_core::version::RESOURCE_PACK_FORMAT },
         "datapack": { "format": horizon_core::version::DATA_PACK_FORMAT },
@@ -220,7 +220,7 @@ pub fn markdown() -> String {
          what works on it: content \
          mods of the manifest `api` lines in `mod.api`; native mods built for hooks up to \
          `native_mod.hooks`, which need the game rebuilt (`rebuild`); shader packs of \
-         `shader.schema` and the lines in `shader.api` (a newer line is read, not drawn); resource \
+         `shader.schema` and the lines in `shader.api` (a pack for another is refused); resource \
          and data packs of `format` (`[major, minor]`; others still load, marked too old or too \
          new as vanilla marks them); modpacks of `modpack.format`; the mod index of \
          `index.schema`.\n"

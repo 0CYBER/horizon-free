@@ -28,18 +28,6 @@ fn the_example_pack_passes() {
 }
 
 #[test]
-fn the_example_pack_s_0_2_port_passes() {
-    let dir = Path::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/packs/golden_hour_0_2"
-    ));
-    let report = check(&Pack::read(dir).unwrap()).unwrap();
-    assert_eq!(report.manifest.api, horizon_shader_api::Api::V0_2);
-    let labels: Vec<_> = report.stages.iter().map(|s| s.label.as_str()).collect();
-    assert_eq!(labels, ["Warm horizon", "Glow", "Colour grade"]);
-}
-
-#[test]
 fn the_traced_examples_pass_without_the_scene_and_with_it() {
     for (pack, label) in [
         ("traced_shadows", "Sun shadows"),
@@ -57,7 +45,7 @@ fn the_traced_examples_pass_without_the_scene_and_with_it() {
 }
 
 #[test]
-fn the_tool_checks_a_0_2_pack() {
+fn the_tool_checks_a_pack_with_a_tonemap_stage() {
     let dir = scratch("api-0-2");
     let files = [
         (

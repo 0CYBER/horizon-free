@@ -2,7 +2,7 @@
 
 A design note, before any code: what a colour means to a shader pack from API 0.2 on, how the frame stores the
 picture, and how HDR output stops reading light from the frame's alpha. Part of [#3125](https://github.com/horizon-rust/horizon/issues/3125)
-and [#1441](https://github.com/horizon-rust/horizon/issues/1441). The shader API is experimental (0.1), which needs a
+and [#1441](https://github.com/horizon-rust/horizon/issues/1441). The shader API is experimental, which needs a
 design note for a new line ([api/stability.md](../api/stability.md)); this is that note.
 
 ## Why
@@ -42,11 +42,12 @@ tone curve down to SDR at the end. A pack API capped at gamma 0..1 would have to
 
 1. **HDR off and no pack: the picture is today's, bit for bit**, pinned by a screenshot test (below). Players without
    HDR or a pack run the code they run today.
-2. **0.1 packs keep working until 0.2 is on by default**: unchanged in SDR, through a documented shim (below).
+2. **0.1 packs kept working until 0.2 was on by default**: unchanged in SDR, through a shim that went with them
+   (below).
 3. **Packs write light above white, on SDR and HDR alike.** SDR is HDR with no headroom: one pack, one tone curve,
    both displays.
 4. **No light in alpha** for HDR without a pack and for 0.2 packs: the light-source and HDR-lighting marks give way
-   to real values. Alpha keeps only how much the HUD covers, and 0.1 packs keep today's path (below).
+   to real values. Alpha keeps only how much the HUD covers.
 
 Not goals: changing vanilla's look; physically based lighting without a pack; HDR for `shaders/`-format packs (see
 below); where HDR's settings live (a later note).
@@ -99,13 +100,12 @@ The frame depends on what draws the picture, not on the display:
 | HDR off, no pack | the swapchain's 8-bit format, as today | vanilla's gamma, clipped |
 | HDR on, no pack | `Rgba16Float` | vanilla's gamma, values above 1 kept |
 | a 0.2 pack (SDR or HDR) | `Rgba16Float` | vanilla's gamma, values above 1 kept; linear light with `[frame] blend = "linear"` |
-| a 0.1 pack | as today | as today (see 0.1 packs) |
 | a `shaders/`-format pack | as today | as today, with nothing lifted in HDR (see `shaders/`-format packs) |
 
 **When it changes.** Today the frame's format is chosen when the renderer is made and then kept: HDR turned off keeps
 the 16-bit frame until the next start, and dropping a pack rebuilds nothing. A float frame can't stay behind like that,
 because it doesn't clip as the 8-bit one does. Whenever the row above changes (HDR on or off, a 0.2 pack picked or
-dropped, a 0.2 pack swapped for a 0.1 one), the frame and the pipelines that draw into it are rebuilt before the next
+dropped), the frame and the pipelines that draw into it are rebuilt before the next
 frame. What that costs is measured in the series.
 
 **Why gamma storage.** Vanilla blends glass, water, clouds, particles and weather by fixed-function blending in
@@ -189,7 +189,7 @@ likely 0.2 addition, not designed here. Wide colour is one that is: a pack asks 
 
 The HUD always draws in gamma, with vanilla's blends, onto a picture clipped to white, as today:
 
-- **HDR off without a pack, and any 0.1 pack**: onto the frame, as today.
+- **HDR off without a pack**: onto the frame, as today.
 - **A 0.2 pack in SDR**: the display pass writes the tone curve's result to the swapchain in gamma, and the camera
   overlays and the HUD draw on it, as they draw after a pack's post chain today.
 - **HDR on**, with or without a 0.2 pack, as below.
@@ -226,26 +226,19 @@ With HDR on:
   doesn't change the picture's brightness.
 - `shows_world` and the hand's mark go.
 
-## 0.1 packs: the shim
+## 0.1 packs
 
-Horizon serves both lines (`manifest.rs` `API` becomes a list). A 0.1 pack runs on today's path, in SDR and in HDR:
+Shader API 0.1, the gamma line before this one, was served beside 0.2 until step 5b, on the path it had: its frame,
+inputs and gamma values, and the marks its stages passed on in alpha. It is retired:
 
-- today's frame (8-bit, or `Rgba16Unorm` with HDR on), inputs and gamma values;
-- its post chain through half-float targets that keep values above 1 between passes, onto the frame;
-- the marks its stages pass on (`input.color.a`), and the HDR pass lifting light sources on the pack's final colour,
-  with HDR lighting off.
-
-That path stays, as a variant of the pipelines that write marks, while 0.1 is served. Golden Hour stays at 0.1 as
-its test pack until then; a 0.2 port sits beside it.
-
-**0.1 ends at step 5.** The shader API is experimental: it may change in any release without notice, with no
-deprecation window ([api/stability.md](../api/stability.md)). Serving 0.1 beside 0.2 for longer would keep this shim,
-the pipeline variants that write marks and the HDR pass's lift from them, only for 0.1 packs, which can move to 0.2.
-So when step 5 turns 0.2 on by default, Horizon stops serving 0.1:
-- a 0.1 pack is refused with the message stability.md asks for (`needs API 0.1; this Horizon serves 0.2`);
+- a 0.1 pack is refused with the message stability.md asks for (`needs shader API 0.1; this Horizon serves 0.2`);
 - the registry lists 0.2 packs instead of 0.1 ones;
-- Golden Hour's 0.2 port replaces it as the example and test pack;
+- Golden Hour's 0.2 port replaced it as the example and test pack;
 - the changelog says so.
+
+The shader API is experimental: it may change in any release without notice, with no deprecation window
+([api/stability.md](../api/stability.md)). Serving 0.1 for longer would have kept its shim, the pipeline variants
+that write marks and the HDR pass's lift from them, only for packs that can move to 0.2.
 
 Later lines follow the same rule while the API is experimental: a line is served until the next one is on by default.
 From preview on, stability.md's deprecation windows apply.
@@ -260,7 +253,7 @@ paper white) are a later, optional addition for pack authors.
 
 ## Upscaling, anti-aliasing, frame generation
 
-They read the frame as it is stored and, outside the 0.1 path, have no marks to keep, which fixes the alpha problems
+They read the frame as it is stored and have no marks to keep, which fixes the alpha problems
 above. Native upscaling
 ([#1403](https://github.com/horizon-rust/horizon/issues/1403)) should take the float frame. Horizon's TAA
 blends the gamma-stored frame as it is; a tone-weighted resolve is for passes that accumulate linear light (a 0.2
@@ -277,9 +270,8 @@ Where a 0.2 pack's stages, post chain and `[tonemap]` sit around them is in [sha
    Minecraft's textures and can't be committed, so it is differential. A runner with a copy of Minecraft and Mesa's
    software Vulkan builds main and the change, captures fixed scenes offscreen with `HORIZON_STILL=1` (repeatable
    frames, [#9398](https://github.com/horizon-rust/horizon/pull/9398), in review), and requires identical PNGs, also
-   after turning HDR on and off, picking and dropping a 0.2 pack, and, while 0.1 is served, swapping it for a 0.1 one.
-2. **Golden Hour (0.1) against main**, while 0.1 is served: the same capture in SDR, and the offscreen HDR capture in
-   HDR, identical.
+   after turning HDR on and off, and picking and dropping a 0.2 pack.
+2. **Golden Hour against main**: the same capture in SDR, and the offscreen HDR capture in HDR, identical.
 3. **HDR on, HDR Lighting off, against SDR**: the offscreen HDR capture ([#8947](https://github.com/horizon-rust/horizon/pull/8947)),
    within one 8-bit step outside the spots vanilla clips.
 4. **HDR look against today**: the same captures within a tolerance, with the differences allowed above (Light above
@@ -319,7 +311,8 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
      switch, which is gone. HDR is offered only on devices that draw the float frame and keep the HUD on a layer of
      its own: the compatibility frame no longer stands in for it there. It stays, with its marks, for HDR under a
      0.1 or a `shaders/` pack. The HDR setting's default stays Off; Auto as the default is a change of its own.
-   - 5b: shader API 0.1 retired; the examples and the registry on 0.2.
+   - 5b (done): shader API 0.1 retired; the examples and the registry on 0.2. The compatibility frame stays for
+     HDR under a `shaders/` pack.
    - 5c: the shim, its marks and Smooth Gradients' 16-bit frame deleted.
 6. One curve from the scene to the display, its constants chosen from captures.
    - 6a, one peak (before step 5, so players see one change of look): the world's light is the same on every

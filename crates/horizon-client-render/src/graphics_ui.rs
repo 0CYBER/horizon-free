@@ -1148,7 +1148,7 @@ impl Item {
     /// only where it is offered (`graphics::gpu_culling_offer`), with the reason it isn't. HDR
     /// Lighting has nothing to switch where the running shader pack lights the world itself,
     /// and Smooth Gradients nothing on the layered float frame, which takes the 16-bit one's
-    /// place but under a 0.1 or `shaders/` pack.
+    /// place but under a `shaders/` pack.
     fn blocked(self, s: &Settings, out: &EffectiveOutput) -> Option<&'static str> {
         if !self.available() {
             return Some("This feature is not yet available in Horizon.");

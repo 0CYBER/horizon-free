@@ -3,6 +3,7 @@ import json
 import math
 import re
 import struct
+import tomllib
 import tempfile
 import unittest
 import zlib
@@ -113,7 +114,8 @@ class SessionCheckTests(unittest.TestCase):
         """Each session's log with its pack's load line, as the game prints it."""
         for name in sessions:
             pack = identity.SESSIONS[name][1]['HORIZON_SHADER_PACK']
-            (self.dir / f'{name}.log').write_text(f'INFO shader pack {pack} 1.0.0: Warm horizon in 12 ms\n')
+            meta = tomllib.loads((identity.pack_dir(pack) / 'horizon-shaders.toml').read_text(encoding='utf-8'))
+            (self.dir / f'{name}.log').write_text(f'INFO shader pack {meta["id"]} {meta["version"]}: Warm horizon in 12 ms\n')
 
     def test_a_missing_scene_cannot_pass_when_other_screenshots_exist(self):
         scenes = identity.SESSIONS['vanilla'][2]
@@ -166,7 +168,7 @@ class SessionCheckTests(unittest.TestCase):
         for scene in identity.SESSIONS['terrain_pack'][2]:
             self.shot(f'terrain_pack.{scene}.png')
         log = self.dir / 'terrain_pack.log'
-        log.write_text('INFO shader pack golden_hour_0_2 1.0.0: Warm horizon in 12 ms\n')
+        log.write_text('INFO shader pack golden_hour 2.0.0: Warm horizon in 12 ms\n')
         self.assertEqual(identity.session_checks(self.dir, ['terrain_pack']), [
             'terrain_pack: the log has no load line of shader pack frame_identity_terrain',
             'terrain_pack: no LabPBR maps were loaded'])

@@ -29,7 +29,7 @@ fn smooth_gradients_wait_for_a_device_that_draws_the_16_bit_frame() {
     assert_eq!(item.switch(&s, &out), Some(true));
     s.horizon.hdr = HdrMode::Off;
     assert_eq!(item.blocked(&s, &out), Some("Turn HDR on to use it."));
-    // With HDR on it switches a 0.1 or `shaders/` pack's frame only: the layered float frame
+    // With HDR on it switches a `shaders/` pack's frame only: the layered float frame
     // of every other picture has no 16-bit one to switch.
     use crate::gfx::{FrameRequest, HdrOutput, output::tests};
     s.horizon.hdr = HdrMode::On;
@@ -39,11 +39,11 @@ fn smooth_gradients_wait_for_a_device_that_draws_the_16_bit_frame() {
         item.blocked(&s, &layered),
         Some("HDR's own frame is smooth without it.")
     );
-    let pack_0_1 = FrameRequest {
+    let shaders_pack = FrameRequest {
         compatibility: true,
         ..FrameRequest::default()
     };
-    let marked = tests::snapshot(&s.horizon, pack_0_1, caps, reading);
+    let marked = tests::snapshot(&s.horizon, shaders_pack, caps, reading);
     assert_eq!(item.blocked(&s, &marked), None);
 }
 
@@ -76,44 +76,23 @@ fn hdr_waits_for_a_device_that_draws_its_frame() {
 }
 
 #[test]
-fn hdr_lighting_is_greyed_only_where_the_running_pack_lights_the_world() {
-    use horizon_shader_api::Api;
+fn hdr_lighting_is_greyed_only_while_a_pack_runs() {
     let mut s = Settings::default();
     s.horizon.hdr = HdrMode::On;
     let item = Item::Horizon(H::HdrLighting);
     let lights = Some("The shader pack lights the world itself.");
     let out = offering(true, None);
     // No pack running, as with one picked but refused, missing or its mod off: live.
-    assert_eq!(item.blocked(&s, &out.with_pack(false, None)), None);
-    // A 0.1 pack on the 16-bit frame: the light sources and the sun still shine.
-    assert_eq!(
-        item.blocked(&s, &out.with_pack(false, Some(Api::V0_1))),
-        None
-    );
-    assert_eq!(
-        item.blocked(&s, &out.with_pack(false, Some(Api::V0_2))),
-        lights
-    );
-    assert_eq!(item.blocked(&s, &out.with_pack(true, None)), lights);
-    let float = EffectiveOutput {
-        frame: crate::gfx::FrameConfiguration {
-            format: wgpu::TextureFormat::Rgba16Float,
-            ..out.frame
-        },
-        ..out
-    };
-    assert_eq!(
-        item.blocked(&s, &float.with_pack(false, Some(Api::V0_1))),
-        lights
-    );
+    assert_eq!(item.blocked(&s, &out.with_pack(false)), None);
+    assert_eq!(item.blocked(&s, &out.with_pack(true)), lights);
     // HDR's own reasons come first.
     assert_eq!(
-        item.blocked(&s, &NONE.with_pack(true, None)),
+        item.blocked(&s, &NONE.with_pack(true)),
         Some("Your display or system doesn't offer HDR output.")
     );
     s.horizon.hdr = HdrMode::Off;
     assert_eq!(
-        item.blocked(&s, &out.with_pack(true, None)),
+        item.blocked(&s, &out.with_pack(true)),
         Some("Turn HDR on to use it.")
     );
 }
