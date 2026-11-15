@@ -85,6 +85,18 @@ pub trait ClientSession {
         )
     }
     /// Side: client.
+    /// The player list as the Tab overlay draws it: each listed player's drawn name, profile
+    /// name, UUID, game mode and latency in drawn order, at most the 80 it draws, with the
+    /// header and footer. What this client has been sent; None outside a logged-in client
+    /// world. Sends nothing.
+    fn client_tab_list(&self) -> Option<ClientTabList> {
+        crate::world::phase::unprovided(
+            "ClientSession::client_tab_list",
+            "client_tab_list",
+            crate::world::phase::LoadAccess::ClientSetup,
+        )
+    }
+    /// Side: client.
     /// Existing local frame counters; None outside a logged-in client world.
     /// This read collects no history and sends nothing anywhere.
     fn client_frame_stats(&self) -> Option<ClientFrameStats> {

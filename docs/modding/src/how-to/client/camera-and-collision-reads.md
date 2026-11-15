@@ -120,6 +120,14 @@ These read the local player as the client sees it. They take no mod-controlled n
   tab list draws it (`PlayerInfo.getLatency`): the server's smoothed keep-alive average, refreshed by
   the server's own broadcast. It reads 0 before the server's first measurement, as vanilla does, and
   `None` outside a world.
+- `ClientHost::client_session().client_tab_list()` is the player list as the Tab overlay draws it:
+  `ClientTabList { entries, header, footer }`. Each `ClientTabListEntry` has the profile `name`,
+  `uuid`, `game_mode`, `latency` and the `display` text as drawn (`getNameForDisplay`: the display
+  name the server set, else the name with its team's prefix, suffix and colour; italic for a
+  spectator). Entries come in the overlay's order (`getPlayerInfos`: list order, spectators last,
+  team name, name) and stop at the 80 it draws. Header and footer are `None` when empty. It is what
+  this client has been sent and changes as the server updates the list; `None` outside a world.
+  There is no NeoForge call for this: it is Horizon's own read.
 - `ClientHost::local_item_use()` is the item in use: `ItemUse { hand, ticks_used, ticks_remaining }`
   (`isUsingItem`, `getUsedItemHand`, `getTicksUsingItem`, `getUseItemRemainingTicks`).
   `ticks_used + ticks_remaining` is the use duration. It is `None` when no item is in use or no world

@@ -89,6 +89,7 @@ mod entity_section_steps;
 mod item_use;
 mod queued_keys;
 mod remote_attributes;
+mod tab_entries;
 mod tables;
 
 pub(super) use super::villager_client::builtin_registries;

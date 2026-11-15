@@ -1,1 +1,3 @@
-pub use client::client_session::{BlockBreakingState, ClientFrameStats, ClientServer, ItemUse};
+pub use client::client_session::{
+    BlockBreakingState, ClientFrameStats, ClientServer, ClientTabList, ClientTabListEntry, ItemUse,
+};
