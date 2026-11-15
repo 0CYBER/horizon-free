@@ -96,6 +96,8 @@ pub(super) fn picked_pack(settings: &horizon_client::settings::Settings) -> &str
 pub(crate) struct PickedPack {
     /// It draws flat where the device can (`pack_draws_flat`): the sections are laid out so.
     pub draws_flat: bool,
+    /// Its passes read the solid quads' vertices (`pack_reads_vertices`): they start wide.
+    pub starts_wide: bool,
     /// It is a shader API 0.2 pack under `HORIZON_HDR_FRAME=float`, with its `[frame] blend`:
     /// the frame is float.
     pub linear: Option<horizon_shader_api::Blend>,
@@ -136,6 +138,7 @@ pub(super) fn picked_pack_shape(settings: &horizon_client::settings::Settings) -
         .map(|m| m.blend);
     PickedPack {
         draws_flat: active && pack_draws_flat(&path),
+        starts_wide: active && pack_reads_vertices(&path),
         linear,
         hdr_float: (!active || linear.is_some()) && super::native_shaders::linear_frame_switch(),
     }
@@ -147,6 +150,14 @@ pub(super) fn picked_pack_shape(settings: &horizon_client::settings::Settings) -
 fn pack_draws_flat(path: &std::path::Path) -> bool {
     !horizon_shader_api::package::is_pack(path)
         || horizon_shader_api::Pack::read_manifest(path).is_ok_and(|m| m.shadow.is_some())
+}
+
+/// Whether the pack at `path` reads the solid quads as vertices, not their compact records
+/// (`NativePack::reads_terrain_vertices`): a `shaders/` pack, taken to draw terrain, or one of
+/// Horizon's own with `[displacement]`.
+fn pack_reads_vertices(path: &std::path::Path) -> bool {
+    !horizon_shader_api::package::is_pack(path)
+        || horizon_shader_api::Pack::read_manifest(path).is_ok_and(|m| m.displacement.is_some())
 }
 
 // A native mod can bundle a pack as `native-<mod-id>`; its Mods toggle controls it too.
@@ -1067,7 +1078,7 @@ mod rendered_item_tests {
 
 #[cfg(test)]
 mod native_pack_tests {
-    use super::{active_pack, pack_draws_flat, picked_pack_shape};
+    use super::{active_pack, pack_draws_flat, pack_reads_vertices, picked_pack_shape};
     use horizon_client::mod_list::{Installed, ModList, NativePage};
 
     #[test]
@@ -1159,6 +1170,14 @@ mod native_pack_tests {
         assert!(pack_draws_flat(&pack("shaders_pack", None)));
         assert!(!pack_draws_flat(&pack("unshadowed", Some(""))));
         assert!(pack_draws_flat(&pack("shadowed", Some("[shadow]\n"))));
+        // Only a `shaders/` pack and `[displacement]` read the solid quads' vertices: a
+        // material and a shadow pass start in the compact layout.
+        assert!(pack_reads_vertices(&root.join("shaders_pack")));
+        assert!(!pack_reads_vertices(&root.join("shadowed")));
+        assert!(pack_reads_vertices(&pack(
+            "displaced",
+            Some("[displacement]\n")
+        )));
         std::fs::remove_dir_all(&root).ok();
     }
 

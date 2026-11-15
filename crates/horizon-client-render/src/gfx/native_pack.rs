@@ -322,11 +322,11 @@ impl NativePack {
     }
 
     /// Whether a stage reads the arena's solid quads as `TerrainVertex`es, so they upload
-    /// wide (`Renderer::follow_packed_layout`): the material's vertex entries, the shadow
-    /// pass and `[displacement]`'s copy of the quads. A pack with none of them draws solid
-    /// terrain through the engine's own pipelines, which unpack compact records.
+    /// wide (`Renderer::follow_packed_layout`): `[displacement]`'s copy of the quads. The
+    /// material's and the shadow pass's solid entries unpack compact records as the engine's
+    /// own pipelines do (`native_material::SECTION_CORNER`).
     pub fn reads_terrain_vertices(&self) -> bool {
-        self.material.is_some() || self.shadow.is_some() || self.displacement.is_some()
+        self.displacement.is_some()
     }
 }
 
@@ -402,7 +402,7 @@ file = \"material.wgsl\"
             return;
         };
         let (globals, empty) = terrain_layouts(&device);
-        let report = pack("0.1", false);
+        let report = pack("0.1", "");
         let built = NativePack::new(
             &device,
             &queue,
@@ -414,11 +414,12 @@ file = \"material.wgsl\"
         assert!(built.is_err(), "the pack should be refused");
     }
 
-    /// A 0.2 pack whose stages read no terrain vertices (a sky, and the post every 0.2 pack
-    /// runs) leaves the solid quads in the compact layout; one with a material stage, whose
-    /// vertex entries take `TerrainVertex`es, does not (#16127).
+    /// A 0.2 pack whose stages read no terrain vertices (a sky, the post every 0.2 pack runs, a
+    /// material and a shadow pass, whose solid entries read the flat draws' page) leaves the
+    /// solid quads in the compact layout; one with `[displacement]`, which copies the quads'
+    /// vertices, does not (#16127).
     #[test]
-    fn only_a_pack_with_a_material_shadow_or_displacement_reads_terrain_vertices() {
+    fn only_a_pack_with_displacement_reads_terrain_vertices() {
         let instance = crate::gfx::test_gpu::instance();
         let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
             return;
@@ -432,30 +433,87 @@ file = \"material.wgsl\"
             return;
         };
         let (globals, empty) = terrain_layouts(&device);
-        let reads = |material: bool| {
-            let report = pack("0.2", material);
-            let shape = terrain_shape(&globals, &empty);
+        // The flat draws' group 1 (`Flat::new`): block slots, origins and the page.
+        let read = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let flat = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[read(0), read(1), read(super::super::flat::ARENA_BINDING)],
+        });
+        // Height maps, without which there is no `[displacement]`.
+        let pbr = [0; 2].map(|_| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 16,
+                    height: 16,
+                    depth_or_array_layers: 2,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        });
+        // The entities' atlas, which the shadow pass's entity draw samples.
+        let atlas = |binding, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        };
+        let entities = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                atlas(
+                    1,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                atlas(
+                    2,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
+            ],
+        });
+        let reads = |stages: &str| {
+            let shape = TerrainShape {
+                flat: Some(&flat),
+                pbr: Some(&pbr),
+                entities: &entities,
+                ..terrain_shape(&globals, &empty)
+            };
+            let report = pack("0.2", stages);
             let (pack, _) =
                 NativePack::new(&device, &queue, &shape, report, &[], Default::default()).unwrap();
             assert!(pack.post.is_some() && pack.sky.is_some());
-            assert_eq!(pack.material.is_some(), material);
             pack.reads_terrain_vertices()
         };
-        assert!(!reads(false));
-        assert!(reads(true));
+        let material = "[material]\nfile = \"material.wgsl\"\n";
+        assert!(!reads(""));
+        assert!(!reads(&format!("{material}[shadow]\n")));
+        assert!(reads(&format!("{material}[displacement]\n")));
     }
 
-    /// A pack of API `api` with a sky stage, and a material stage if `material`.
-    fn pack(api: &str, material: bool) -> horizon_shader_api::Report {
+    /// A pack of API `api` with a sky stage and the manifest's `stages` after it.
+    fn pack(api: &str, stages: &str) -> horizon_shader_api::Report {
         use horizon_shader_api::{MANIFEST, Pack, check};
         let manifest = format!(
             "schema = 1\nid = \"t\"\nname = \"T\"\nversion = \"1\"\napi = \"{api}\"\n\
-             [sky]\nfile = \"sky.wgsl\"\n{}",
-            if material {
-                "[material]\nfile = \"material.wgsl\"\n"
-            } else {
-                ""
-            }
+             [sky]\nfile = \"sky.wgsl\"\n{stages}"
         );
         let mut files = vec![
             (MANIFEST, manifest.as_str()),
@@ -464,11 +522,17 @@ file = \"material.wgsl\"
                 "fn sky(input: SkyInput) -> vec4<f32> { return input.color; }\n",
             ),
         ];
-        if material {
-            files.push((
-                "material.wgsl",
-                "fn material(input: MaterialInput) -> Surface { return Surface(input.albedo); }\n",
-            ));
+        // `[displacement]` takes its function from the material's file.
+        let material = format!(
+            "fn material(input: MaterialInput) -> Surface {{ return Surface(input.albedo); }}\n{}",
+            if stages.contains("[displacement]") {
+                "fn displacement(input: DisplacementInput) -> f32 { return 0.0; }\n"
+            } else {
+                ""
+            }
+        );
+        if stages.contains("[material]") {
+            files.push(("material.wgsl", &material));
         }
         let files = files
             .into_iter()

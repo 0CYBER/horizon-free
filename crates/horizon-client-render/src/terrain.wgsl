@@ -621,11 +621,23 @@ fn unorm8x4(c: u32) -> vec4<f32> {
 fn corner_layer(c: ArenaCorner) -> u32 {
     return c.r.y & 0xffffu;
 }
+// A corner's inputs as `TERRAIN_ATTRIBUTES` name them; a shader pack's material and shadow
+// pass read their solid corners through this too (gfx/native_material.rs's `SECTION_CORNER`).
+struct CornerInputs {
+    position: vec3<f32>,
+    uv: vec2<u32>,
+    layer: u32,
+    color: vec4<f32>,
+    light: vec2<u32>,
+}
+fn corner_inputs(c: ArenaCorner) -> CornerInputs {
+    return CornerInputs(bitcast<vec3<f32>>(c.p), vec2(c.r.x & 0xffffu, c.r.x >> 16u),
+        corner_layer(c), unorm8x4(c.r.z), vec2((c.r.y >> 16u) & 0xffu, c.r.y >> 24u));
+}
 fn corner_vertex(c: ArenaCorner, origin: vec4<f32>) -> TerrainOut {
-    let uv = vec2(c.r.x & 0xffffu, c.r.x >> 16u);
-    let light = vec2((c.r.y >> 16u) & 0xffu, c.r.y >> 24u);
-    return terrain_vertex(bitcast<vec3<f32>>(c.p), terrain_uv(uv, origin.w), corner_layer(c),
-        unorm8x4(c.r.z), light, origin.xyz, origin.w);
+    let i = corner_inputs(c);
+    return terrain_vertex(i.position, terrain_uv(i.uv, origin.w), i.layer, i.color, i.light,
+        origin.xyz, origin.w);
 }
 @vertex fn vs_section(@builtin(vertex_index) vertex: u32,
     @location(5) origin: vec4<f32>) -> TerrainWire {
