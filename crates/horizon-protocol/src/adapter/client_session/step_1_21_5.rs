@@ -1,7 +1,8 @@
 //! 1.21.6 to 1.21.5: the mirror of `translate`'s `v1_21_5` (1.21.5 to 1.21.6), for a [`super::ClientSession`] whose
 //! client is 1.21.5 (roadmap `older-clients`).
 //!
-//! Clientbound nothing changes (see `translate::v1_21_5`), so there is no packet to write here. Serverbound, a
+//! Clientbound, a hanging entity's data loses the direction 1.21.6 added at index 8 ([`entity_data`]); no packet
+//! is laid out differently. Serverbound, a
 //! 1.21.5 client's `player_command` has a sneak press and release (actions 0 and 1) that 1.21.6 no longer has;
 //! the sneak is in `player_input` (bit 0x20) for both. The press and release are dropped, the other actions are
 //! numbered two up in 1.21.5 and come back down here.
@@ -11,8 +12,10 @@
 //! TODO(step3): 1.21.6's dialog registries are not written for 1.21.5; see translate's `v1_21_5`.
 use crate::{
     Result, State,
+    adapter::pinned_ids::entity_type as entity,
     buf::{Reader, Writer},
     ids as packet_ids,
+    packets::play,
 };
 
 /// What becomes of a payload the 1.21.5 client sent.
@@ -23,6 +26,26 @@ pub(super) enum Out {
     Rewritten(Vec<u8>),
     /// A sneak press or release (or an action 1.21.5 has no number for), which the pinned version doesn't read.
     Dropped,
+}
+
+/// 1.21.6 gave hanging entities (item frames, glow item frames, paintings) a synchronised direction at index 8
+/// and moved their other fields up one (`translate::v1_21_5::entity_data`, back): a client through 1.21.5 is
+/// not sent the direction (it has it from `add_entity`), and the fields after it come back down. A real 1.21.5
+/// client left with "Invalid entity data item type for field 8" at the first item frame holding an item.
+/// `kind` is the entity's type in the pinned ids, `None` when unknown, which leaves the data as it is.
+pub(super) fn entity_data(kind: Option<i32>, data: &mut play::SetEntityData) {
+    if !matches!(
+        kind,
+        Some(entity::GLOW_ITEM_FRAME | entity::ITEM_FRAME | entity::PAINTING)
+    ) {
+        return;
+    }
+    data.values.retain(|(index, _, _)| *index != 8);
+    for (index, _, _) in &mut data.values {
+        if *index > 8 {
+            *index -= 1;
+        }
+    }
 }
 
 /// Nothing: no packet the pinned version sends is laid out differently for 1.21.5 (see `translate::v1_21_5`).

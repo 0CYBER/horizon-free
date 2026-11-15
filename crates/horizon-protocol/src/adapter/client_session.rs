@@ -522,6 +522,9 @@ impl ClientSession {
                 if self.version.at_most(ServerVersion::V1_21_8) {
                     step_1_21_8::entity_data(kind, d);
                 }
+                if self.version.at_most(ServerVersion::V1_21_5) {
+                    step_1_21_5::entity_data(kind, d);
+                }
                 // 1.21.5's indexes go back to 1.21.4's last.
                 if self.version.at_most(ServerVersion::V1_21_4) {
                     step_1_21_4::entity_data(kind, d);
@@ -1873,6 +1876,48 @@ mod tests {
                 assert_eq!(p.item.map(|i| (i.item, i.count)), Some((1012, 3)));
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// A client through 1.21.5 has no synchronised direction on hanging entities (1.21.6 added it at index 8):
+    /// an item frame's rotation (26.3's field 10) is its field 9 again and the direction is not sent. A real
+    /// 1.21.5 client left with "Invalid entity data item type for field 8" at the first item frame with an item.
+    #[test]
+    fn a_hanging_entitys_direction_is_not_sent_to_a_client_through_1_21_5() {
+        use crate::adapter::pinned_ids::entity_type as entity;
+        let add = play::Clientbound::AddEntity(play::AddEntity {
+            id: 469,
+            uuid: 99,
+            kind: entity::ITEM_FRAME,
+            position: [85.5, 45.0, 69.5],
+            velocity: [0.0; 3],
+            pitch: 0,
+            yaw: 0,
+            head_yaw: 0,
+            data: 1,
+        });
+        let data = play::Clientbound::SetEntityData(play::SetEntityData {
+            id: 469,
+            values: vec![
+                (8, serializer::DIRECTION, Value::Id(1)),
+                (10, serializer::INT, Value::Int(3)),
+            ],
+        });
+        for (version, tail) in [
+            // 1.21.6 has the direction: the rotation stays at 10.
+            (ServerVersion::V1_21_6, &[10, 1, 3, 0xff][..]),
+            // Entity id 469 as a VarInt, the rotation at 9 (an int, serializer 1), the end marker: nothing else.
+            (ServerVersion::V1_21_5, &[0xd5, 0x03, 9, 1, 3, 0xff][..]),
+            (ServerVersion::V1_21_4, &[0xd5, 0x03, 9, 1, 3, 0xff][..]),
+            (ServerVersion::V1_21_1, &[0xd5, 0x03, 9, 1, 3, 0xff][..]),
+            (ServerVersion::V1_20_6, &[0xd5, 0x03, 9, 1, 3, 0xff][..]),
+        ] {
+            let s = ClientSession::new(version);
+            s.reading.store(to_u8(State::Play), Ordering::Release);
+            s.writing.store(to_u8(State::Play), Ordering::Release);
+            s.clientbound(&add.encode()).unwrap().unwrap();
+            let sent = s.clientbound(&data.encode()).unwrap().unwrap();
+            assert!(sent.ends_with(tail), "{version:?}: {sent:?}");
         }
     }
 }
