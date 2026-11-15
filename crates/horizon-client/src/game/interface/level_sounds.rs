@@ -363,6 +363,7 @@ mod tests {
             max_players: 3,
             integrated: true,
             levels: game.level_shapes,
+            level_seeds: game.levels.runtime.seeds(),
         };
         let settings = LanSettings {
             port: 0,
@@ -485,6 +486,7 @@ mod tests {
                     max_players: 3,
                     integrated: true,
                     levels: game.level_shapes,
+                    level_seeds: game.levels.runtime.seeds(),
                 };
                 let settings = LanSettings {
                     port: 0,

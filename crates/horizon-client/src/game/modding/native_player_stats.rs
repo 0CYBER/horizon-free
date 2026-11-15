@@ -187,6 +187,7 @@ mod tests {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             };
             game.lan_host(settings, net, config).unwrap();
             let (tx, _rx) = mpsc::channel();

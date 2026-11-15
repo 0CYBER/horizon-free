@@ -2581,6 +2581,7 @@ mod pumpkin_equippable_use_tests {
                     max_players: 2,
                     integrated: false,
                     levels: Default::default(),
+                    level_seeds: Default::default(),
                 },
             )
             .unwrap();

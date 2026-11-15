@@ -85,6 +85,7 @@ fn lan_game() -> (Game<'static>, mpsc::Receiver<horizon_client::lan::Out>) {
             max_players: 4,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

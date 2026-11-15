@@ -74,6 +74,7 @@ fn scene(resources: &mut Option<Arc<crate::game::Resources>>) -> Game<'_> {
             max_players: 2,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

@@ -171,6 +171,7 @@ fn profession_hub(name: &str, vanilla_professions: bool) -> horizon_client::lan:
         max_players: 20,
         integrated: false,
         levels: Default::default(),
+        level_seeds: Default::default(),
     };
     hub::Hub::new(
         lan,

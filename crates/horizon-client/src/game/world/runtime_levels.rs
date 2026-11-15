@@ -8,7 +8,7 @@
 //! later open of the same id. A delete is an unload and then the removal of the level's files, on
 //! the server thread in the same pass, so a reopen is applied only after the files are gone.
 use super::{Dim, Game};
-use horizon_client::chunk::{ExtraLevel, LevelShape, LevelShapes};
+use horizon_client::chunk::{ExtraLevel, LevelShape};
 use horizon_core::LevelKey;
 use horizon_world::{
     dimension_type::DimensionFacts,
@@ -211,6 +211,14 @@ impl RuntimeTable {
         self.entries
             .get(id)
             .is_some_and(|entry| entry.state != State::Opening)
+    }
+
+    /// The own seed of each level in the table, by id: what the hub tells a joining client.
+    pub(in crate::game) fn seeds(&self) -> BTreeMap<String, i64> {
+        self.entries
+            .iter()
+            .map(|(id, entry)| (id.clone(), entry.level.seed))
+            .collect()
     }
 
     /// The mod that opened `id`, or "?" for a level the table no longer holds.
@@ -806,9 +814,9 @@ impl Game<'_> {
             shape,
         });
         self.level_shapes.extra = leaked_table(extras);
-        LevelShapes::set_seed(id, level.seed);
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.levels = self.level_shapes;
+            host.hub.config.level_seeds = self.levels.runtime.seeds();
         }
         if let Ok(key) = LevelKey::parse(id) {
             DimensionFacts::add_level(key, facts);
@@ -914,9 +922,9 @@ impl Game<'_> {
             .filter(|level| level.id != id)
             .collect();
         self.level_shapes.extra = leaked_table(extras);
-        LevelShapes::forget_seed(id);
         if let Some(host) = self.lan.as_mut() {
             host.hub.config.levels = self.level_shapes;
+            host.hub.config.level_seeds = self.levels.runtime.seeds();
             host.hub.close_views_of(id);
         }
         if let Ok(key) = LevelKey::parse(id) {

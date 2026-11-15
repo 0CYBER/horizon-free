@@ -1208,6 +1208,7 @@ pub(super) mod tests {
                 max_players: 2,
                 integrated: true,
                 levels: game.level_shapes,
+                level_seeds: game.levels.runtime.seeds(),
             },
         )
         .unwrap();
@@ -2502,6 +2503,7 @@ pub(super) mod tests {
                 max_players: 2,
                 integrated: true,
                 levels: game.level_shapes,
+                level_seeds: game.levels.runtime.seeds(),
             };
             game.lan_host(settings, net, config).unwrap();
             let host = game.lan.as_mut().unwrap();
@@ -2912,6 +2914,7 @@ pub(super) mod tests {
                 max_players: 20,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             };
             let mut hub = Hub::new(
                 lan,

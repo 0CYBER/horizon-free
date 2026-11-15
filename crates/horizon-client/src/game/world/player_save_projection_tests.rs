@@ -156,6 +156,7 @@ fn actual_player_save_tracks_mutable_body_and_keeps_guest_context() {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();

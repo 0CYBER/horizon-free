@@ -1294,6 +1294,7 @@ mod tests {
                     max_players: 2,
                     integrated: true,
                     levels: game.level_shapes,
+                    level_seeds: game.levels.runtime.seeds(),
                 };
                 game.lan_host(settings, net, config).unwrap();
                 let (tx, _rx) = std::sync::mpsc::channel();
@@ -2449,6 +2450,7 @@ mod respawn_world_point_tests {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -2615,6 +2617,7 @@ mod swing_echo_tests {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -2850,6 +2853,7 @@ mod guest_close_listener_tests {
                 max_players: 4,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -3119,6 +3123,7 @@ mod item_on_block_cooldown_tests {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();

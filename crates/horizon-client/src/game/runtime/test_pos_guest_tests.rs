@@ -82,6 +82,7 @@ pub(super) fn game(resources: &mut Option<std::sync::Arc<Resources>>) -> Game<'_
             max_players: 2,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

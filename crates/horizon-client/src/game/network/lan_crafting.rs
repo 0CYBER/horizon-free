@@ -1653,6 +1653,7 @@ mod machine_recipe_placement_tests {
                     max_players: 2,
                     integrated: false,
                     levels: Default::default(),
+                    level_seeds: Default::default(),
                 },
             )
             .unwrap();
@@ -2014,6 +2015,7 @@ mod recipe_check_tests {
                     max_players: 2,
                     integrated: false,
                     levels: Default::default(),
+                    level_seeds: Default::default(),
                 },
             )
             .unwrap();
@@ -2301,6 +2303,7 @@ mod empty_ingredient_placement_tests {
                             max_players: 2,
                             integrated: false,
                             levels: Default::default(),
+                            level_seeds: Default::default(),
                         },
                     )
                     .unwrap();

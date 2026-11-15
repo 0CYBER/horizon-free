@@ -79,6 +79,7 @@ fn hub_answered(uuids: &[u128], answer: Answer) -> (Hub, Vec<Receiver<Out>>) {
         max_players: 20,
         integrated: false,
         levels: Default::default(),
+        level_seeds: Default::default(),
     };
     let mut hub = Hub::new(
         lan,

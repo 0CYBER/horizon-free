@@ -270,6 +270,7 @@ fn server_sync(sync: Arc<SyncData>, net: NetConfig) -> Server {
             seed: 1234,
             max_players: 8,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
         Arc::new(
             server_load().loop_context(horizon_world::native_load_context::LoopSide::Server, []),

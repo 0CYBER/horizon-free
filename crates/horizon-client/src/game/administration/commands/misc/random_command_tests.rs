@@ -86,6 +86,7 @@ fn server_with_guests() -> (Game<'static>, Vec<mpsc::Receiver<Out>>) {
             max_players: 4,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         },
     )
     .unwrap();

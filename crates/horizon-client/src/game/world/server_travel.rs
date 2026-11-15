@@ -2286,6 +2286,7 @@ mod credits_respawn_tests {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();
@@ -2394,6 +2395,7 @@ mod credits_respawn_tests {
                 max_players: 2,
                 integrated: false,
                 levels: Default::default(),
+                level_seeds: Default::default(),
             },
         )
         .unwrap();

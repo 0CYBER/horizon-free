@@ -1325,7 +1325,7 @@ fn reopening_one_id_with_any_seed_reuses_the_metadata_its_first_open_leaked() {
             game.apply_runtime_levels();
             assert!(game.runtime_level_is_open("cycle:a"));
             assert_eq!(
-                horizon_client::chunk::LevelShapes::seed_of("cycle:a"),
+                game.levels.runtime.seeds().get("cycle:a").copied(),
                 Some(seed)
             );
             let table = game.level_shapes.extra;
@@ -1341,7 +1341,7 @@ fn reopening_one_id_with_any_seed_reuses_the_metadata_its_first_open_leaked() {
             unload_as(game, "cycle", "cycle:a").unwrap();
             game.apply_runtime_levels();
             assert!(!game.runtime_level_is_open("cycle:a"));
-            assert_eq!(horizon_client::chunk::LevelShapes::seed_of("cycle:a"), None);
+            assert_eq!(game.levels.runtime.seeds().get("cycle:a").copied(), None);
         }
     });
 }

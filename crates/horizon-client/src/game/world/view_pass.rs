@@ -202,6 +202,7 @@ pub(in crate::game) mod tests {
             max_players: 2,
             integrated: false,
             levels: Default::default(),
+            level_seeds: Default::default(),
         };
         game.lan_host(settings, net, hub).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
