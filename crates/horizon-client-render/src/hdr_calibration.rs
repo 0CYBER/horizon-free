@@ -223,7 +223,11 @@ impl Calibration {
             Step::Black => format!("{v:.2}"),
             _ => format!("{v:.0}"),
         };
-        Text::literal(format!("{}: {}", step.name(), value))
+        Text::literal(format!(
+            "{}: {}",
+            step.name(),
+            lang::tr("%s nits", &[&value])
+        ))
     }
     /// The current step's test picture in a GUI of `size`.
     pub fn picture(&self, font: &Font, size: (f32, f32)) -> Picture {
@@ -423,6 +427,19 @@ mod tests {
             c.key(KeyCode::Enter);
             assert_eq!(picture(&c).1, paper_white);
         }
+    }
+
+    /// Each step's slider reads in nits, as the HDR page does.
+    #[test]
+    fn each_step_reads_in_nits() {
+        let mut s = Settings::default();
+        s.horizon.hdr_black_level = 5;
+        let mut c = Calibration::new(&s, &NONE);
+        assert_eq!(c.label().plain(), "Black Level: 0.05 nits");
+        c.key(KeyCode::Enter);
+        assert_eq!(c.label().plain(), "Peak Brightness: 1000 nits");
+        c.key(KeyCode::Enter);
+        assert_eq!(c.label().plain(), "Paper White: 203 nits");
     }
 
     #[test]

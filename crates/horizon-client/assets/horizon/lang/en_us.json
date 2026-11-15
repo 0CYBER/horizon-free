@@ -351,6 +351,8 @@
   "Upscaling Sharpness": "Upscaling Sharpness",
   "Paper White": "Paper White",
   "Peak Brightness": "Peak Brightness",
+  "%s nits": "%s nits",
+  "Auto (%s nits)": "Auto (%s nits)",
   "Black Level": "Black Level",
   "UI Brightness": "UI Brightness",
   "HDR Lighting": "HDR Lighting",
