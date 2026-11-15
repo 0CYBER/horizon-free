@@ -48,7 +48,8 @@ one of three classes:
   contract changed (a hook's side or kind, a retyped field or argument, a signature, a method no longer on wasm); a
   variant added to an exhaustive enum; a required item added to a trait mods implement; an impl a type no longer
   has; a behaviour removed.
-- **Conditional**: it breaks only some mods, which the [fit test](04-fit.md) finds from each mod's source. A field
+- **Conditional**: it breaks only some mods, which the [fit test](04-fit.md) finds from each mod's source (except a
+  behaviour's `version`, which no fit report shows: a mod relies on a behaviour without naming it). A field
   added to a struct mods can build, or an argument added to a hook (only a mod that writes it out in full); a struct
   no longer constructible; a public path that goes (only a mod that writes that path); a hook's `version` (only a mod
   whose manifest names it) or a behaviour's `version` (only a mod that relies on it); a type's wire form or layout

@@ -17,6 +17,8 @@ use std::path::Path;
 pub enum BehaviourError {
     /// The folder or a file could not be read.
     Read { file: String, error: String },
+    /// A test's file is not Rust.
+    Unparsable { file: String, error: String },
     /// Not TOML.
     Toml { file: String, error: String },
     /// A key a behaviour does not have.
@@ -43,6 +45,9 @@ impl std::fmt::Display for BehaviourError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Read { file, error } => write!(f, "behaviour {file}: {error}"),
+            Self::Unparsable { file, error } => {
+                write!(f, "behaviour test file {file} is not Rust: {error}")
+            }
             Self::Toml { file, error } => write!(f, "behaviour {file} is not TOML: {error}"),
             Self::UnknownKey { file, key } => write!(
                 f,
@@ -156,11 +161,15 @@ pub fn parse(
     ))
 }
 
-/// Whether the text has `fn <name>` as a whole word.
-fn declares(text: &str, name: &str) -> bool {
-    let word = format!("fn {name}");
-    text.match_indices(&word).any(|(at, _)| {
-        !text[at + word.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+/// Whether `items` hold a function called `name`, in an inline module too.
+fn declares(items: &[syn::Item], name: &str) -> bool {
+    items.iter().any(|item| match item {
+        syn::Item::Fn(function) => function.sig.ident == name,
+        syn::Item::Mod(module) => module
+            .content
+            .as_ref()
+            .is_some_and(|(_, items)| declares(items, name)),
+        _ => false,
     })
 }
 
@@ -186,10 +195,12 @@ pub fn read(root: &Path, dir: &Path) -> Result<Vec<Behaviour>, BehaviourError> {
     paths.sort();
     let exists = |path: &str, name: &str| {
         let file = root.join(path);
-        match std::fs::read_to_string(&file) {
-            Ok(text) => Ok(declares(&text, name)),
-            Err(e) => Err(error(&file, e)),
-        }
+        let text = std::fs::read_to_string(&file).map_err(|e| error(&file, e))?;
+        let parsed = syn::parse_file(&text).map_err(|e| BehaviourError::Unparsable {
+            file: file.display().to_string(),
+            error: e.to_string(),
+        })?;
+        Ok(declares(&parsed.items, name))
     };
     paths
         .iter()
@@ -331,12 +342,15 @@ mod tests {
     }
 
     #[test]
-    fn a_test_is_found_by_a_whole_word_fn_name() {
-        let text = "#[test]\nfn holds_for_all() {}\nasync fn holds() {}\n";
-        assert!(declares(text, "holds"));
-        assert!(declares(text, "holds_for_all"));
-        assert!(!declares(text, "holds_for"));
-        assert!(!declares(text, "hold"));
+    fn a_test_is_found_by_parsing_for_an_fn_item() {
+        let text = "// fn commented() {}\nconst S: &str = \"fn quoted\";\n#[test]\nfn\n spaced() {}\nfn holds_for_all() {}\n#[cfg(test)]\nmod tests { mod deeper { fn nested() {} } }\n";
+        let items = syn::parse_file(text).unwrap().items;
+        for name in ["spaced", "holds_for_all", "nested"] {
+            assert!(declares(&items, name), "{name}");
+        }
+        for name in ["commented", "quoted", "holds_for", "hold", "tests"] {
+            assert!(!declares(&items, name), "{name}");
+        }
     }
 
     #[test]
@@ -369,6 +383,12 @@ mod tests {
                 test: "t.rs::gone".into()
             })
         );
+        std::fs::write(dir.path().join("bad.rs"), "fn (").unwrap();
+        write("zeta.toml", "bad.rs::pins_it");
+        assert!(matches!(
+            read(dir.path(), &folder),
+            Err(BehaviourError::Unparsable { .. })
+        ));
         write("zeta.toml", "missing.rs::pins_it");
         assert!(matches!(
             read(dir.path(), &folder),
