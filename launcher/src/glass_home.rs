@@ -68,8 +68,10 @@ impl Launcher {
         let settings = |this: &mut Self, cx: &mut Context<Self>| {
             let instance = this.selected_instance().cloned()?;
             Some(
-                ui::big_icon("home-settings", "sliders-horizontal", &this.theme)
-                    .tooltip(ui::tip(tr("Instance settings")))
+                ui::big_icon("home-settings", "pencil-edit-02", &this.theme)
+                    .tooltip(ui::tip(tr(
+                        "Edit this instance: its name, version, memory and more",
+                    )))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.open_instance_sheet(instance.clone(), glass_sheet::SheetTab::General);
                         cx.notify();
@@ -158,9 +160,12 @@ impl Launcher {
             .border_1()
             .border_color(white(ui::edge::REST))
             .child(ui::pill_origin(&origin));
-        for (i, (label, mark)) in [("Rust Edition", horizon), ("Java Edition", grass)]
-            .into_iter()
-            .enumerate()
+        for (i, (label, mark)) in [
+            ("Horizon: your Horizon instances", horizon),
+            ("Java Edition: your Java instances", grass),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let on = (i == 1) == java;
             let d = div()

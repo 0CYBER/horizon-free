@@ -578,8 +578,8 @@ impl Launcher {
             }
         }
 
-        // Discord keeps its own blurple in every theme: a filled square while the rail is
-        // narrow, the square and "Join the Discord" while it is open. No pulse.
+        // Discord keeps its own blurple in every theme, as the icon at rest and the fill under the
+        // pointer, so it never reads as the selected page. No pulse.
         if !self.links.discord.is_empty() {
             let url = self.links.discord.clone();
             let did = SharedString::from("discord");
@@ -598,28 +598,24 @@ impl Launcher {
                         .mb(px(4.))
                         .px(px(17.5))
                         .rounded(px(radius::ROW))
-                        .bg(ui::color(if hovered { DISCORD_HOVER } else { DISCORD }))
-                        .shadow(ui::glows(vec![
-                            gpui::BoxShadow {
-                                color: gpui::white().opacity(if hovered { 0.2 } else { 0.12 }),
-                                offset: point(px(0.), px(0.)),
-                                blur_radius: px(0.5),
-                                spread_radius: px(0.5),
-                                inset: true,
-                            },
-                            gpui::BoxShadow {
-                                color: ui::color(DISCORD).opacity(if hovered { 0.9 } else { 0.7 }),
-                                offset: point(px(0.), px(if hovered { 10. } else { 6. })),
-                                blur_radius: px(if hovered { 28. } else { 20. }),
-                                spread_radius: px(-6.),
-                                inset: false,
-                            },
-                        ]))
+                        .when(hovered, |d| d.bg(ui::color(DISCORD_HOVER)))
                         .cursor_pointer()
-                        .child(ui::icon("discord", 19., gpui::white()))
+                        .child(ui::icon(
+                            "discord",
+                            19.,
+                            if hovered {
+                                gpui::white()
+                            } else {
+                                ui::color(DISCORD)
+                            },
+                        ))
                         .child(
                             fade(ui::text(14., FontWeight::SEMIBOLD, 1.))
-                                .text_color(gpui::white())
+                                .text_color(if hovered {
+                                    gpui::white()
+                                } else {
+                                    white(ink::STRONG)
+                                })
                                 .whitespace_nowrap()
                                 .child(tr("Join the Discord")),
                         )
@@ -695,7 +691,13 @@ impl Launcher {
                         .id("launcher-version")
                         .whitespace_nowrap()
                         .truncate()
-                        .child(version),
+                        .child(version)
+                        .when(!open, |d| {
+                            d.tooltip(ui::tip(trf(
+                                "Launcher {version}",
+                                &[("version", backend::VERSION)],
+                            )))
+                        }),
                 ),
         );
 
