@@ -13,11 +13,69 @@ impl Launcher {
         else {
             // No hero without a version: the page starts below the top bar like the others.
             let memory = self.memory_row(cx);
-            // The first version, downloading since an instance was made to play it.
-            let waiting = match &self.installing {
-                Some((_, p)) => format!("{} {:.0}%", tr("Installing"), p * 100.),
-                None => tr("No version installed yet.").to_string(),
+            // The first version, downloading since an instance was made to play it; or why it
+            // could not be, with a way to try again.
+            let failed = match (&self.installing, &self.install_error, &self.releases) {
+                (Some(_), _, _) => None,
+                (None, Some((tag, e)), _) => Some((
+                    tr("Couldn't download Horizon.").to_string(),
+                    e.clone(),
+                    Some(tag.clone()),
+                )),
+                (None, None, Load::Failed(e)) => Some((
+                    tr("Couldn't get the list of Horizon versions.").to_string(),
+                    e.clone(),
+                    None,
+                )),
+                _ => None,
             };
+            let waiting = match (&self.installing, &failed) {
+                (Some((_, p)), _) => format!("{} {:.0}%", tr("Installing"), p * 100.),
+                (None, Some((what, _, _))) => what.clone(),
+                (None, None) => tr("No version installed yet.").to_string(),
+            };
+            let mut actions = div().flex().gap(px(8.));
+            if let Some((_, _, tag)) = &failed {
+                let tag = tag.clone();
+                actions = actions.child(
+                    button("retry-first", "Try again", Kind::Primary, &t).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.install_error = None;
+                            let release = match (&tag, &this.releases) {
+                                (Some(tag), Load::Ready(list)) => {
+                                    list.iter().find(|r| &r.tag == tag).cloned()
+                                }
+                                _ => None,
+                            };
+                            match release {
+                                Some(release) => this.install(&release),
+                                None => this.fetch_releases(),
+                            }
+                            cx.notify();
+                        },
+                    )),
+                );
+            }
+            actions = actions.child(
+                button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.go(Page::Versions);
+                        cx.notify();
+                    }),
+                ),
+            );
+            let mut middle = centered(&waiting, &t);
+            if let Some((_, why, _)) = &failed {
+                middle = middle.child(
+                    text(theme::CAPTION)
+                        .text_color(t.muted)
+                        .max_w(px(520.))
+                        .child(trf(
+                        "Check your internet connection, then try again. What went wrong: {error}",
+                        &[("error", why)],
+                    )),
+                );
+            }
             return div()
                 .flex()
                 .flex_col()
@@ -28,14 +86,7 @@ impl Launcher {
                     "Start the game, or run a server for others to join.",
                     &t,
                 ))
-                .child(centered(&waiting, &t).child(
-                    button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.go(Page::Versions);
-                            cx.notify();
-                        }),
-                    ),
-                ))
+                .child(middle.child(actions))
                 .children(memory);
         };
         let prepared = backend::is_prepared(&tag);
