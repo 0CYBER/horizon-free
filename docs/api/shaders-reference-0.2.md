@@ -375,6 +375,60 @@ Bindings 48 to 59 of group 3 hold the scene while the game traces, and in a post
 12 and 13 the LabPBR maps (the material stage has them there already). They are Horizon's, as their
 `horizon_` names say, and change with the renderer.
 
+## Kept resources and compute passes
+
+**Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a
+`[[resource]]` or a compute `[[post]]` entry: it needs a later Horizon.
+
+- `[[resource]]`: `name`; `buffer` (bytes) with `element` (`u32`, `atomic<u32>`, `f32`, `vec4<u32>`, `vec4<f32>`), or `format`
+  (`rgba16float`, `r32float`, `rgba32float`, `rgba32uint`) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `"view"`
+  (screen history) or `"world"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in
+  blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer
+  has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.
+- `[[post]]` with `compute = true`: a dispatch in the chain where it stands, with `dispatch` (`[x, y, z]` cells,
+  or `"pixels"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`. It has no
+  `output` or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its
+  `output` may name a kept texture, which it draws at that texture's size.
+- An option's `resets = "view"` clears the view's kept resources when the player changes it, `"world"` all
+  of them.
+
+A pass lists every resource it uses: in `reads` this frame's `x` or last frame's `x_previous`, in `writes` (a
+compute pass's) `x`, once. An `output` is its pass's write. Its prelude declares only what it lists, so a name
+it doesn't list is the file's own, and using such a resource is refused as unlisted. The check also refuses a
+compute pass that writes a texture and reads it back (read `_previous`, or a buffer), and a pass that reads its
+own `output`.
+
+A compute file defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's
+workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`
+reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute
+`[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`.
+
+**Not yet, in later steps:** a compute file doesn't get `trace` or the other ray functions under
+`[ray_tracing]`, and `[material]` can't read kept resources.
+
+### `ComputeInput`
+
+One invocation of a dispatch, for `fn compute(input: ComputeInput)`.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `cell` | `vec3<u32>` | The invocation's cell: where it is in the whole dispatch. |
+| `local` | `u32` | Its index in its workgroup, from 0 to the workgroup's invocations less 1. |
+| `size` | `vec3<u32>` | The dispatch's cells: its `dispatch`, or the render size and 1 for `"pixels"`. |
+| `in_bounds` | `bool` | Whether `cell` is within `size`. Every invocation of every workgroup runs: one beyond `size` touches no resource, but still reaches every `workgroupBarrier()`. |
+
+A pass's prelude declares the resources it lists, the pack's resource i at binding 64 + 2i of group
+3 and its `_previous` at 65 + 2i: a buffer `var<storage, read_write> x: array<element>` where written,
+`var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture
+`texture_storage_2d<format, write>` where written, else `texture_2d<f32>` (`texture_2d<u32>` for
+`rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read
+with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.
+
+Limits: 8 resources, 8 compute `[[post]]` entries; 32 MiB of buffers and 1024 KiB of
+fixed-size textures, both versions counted; each R-relative kept texture takes two of the post targets `output`s share; a workgroup of up to [256, 256, 64] and
+256 invocations; 33554432 invocations a dispatch and 67108864 a frame over every
+compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160 (R isn't known at load).
+
 ### Motion guide
 
 How each pixel's surface moved since last frame, for temporal passes (TAA, denoisers, light caches) that reproject

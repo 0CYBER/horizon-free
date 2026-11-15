@@ -942,6 +942,36 @@ fn a_traced_material_stage_is_checked_without_the_scene_and_with_it() {
     assert!(report.stages[0].scene.is_some());
 }
 
+/// Ordinary `[[post]]` entries sharing a file are built from the first entry's, `files` and all,
+/// as before compute passes: only compute entries are built per entry.
+#[test]
+fn ordinary_post_entries_sharing_a_file_build_as_the_first() {
+    let manifest = "schema = 1\nid = \"p\"\nname = \"P\"\nversion = \"1\"\napi = \"0.1\"\n\
+                    [[post]]\nfile = \"post.wgsl\"\nfiles = [\"first.wgsl\"]\n\
+                    [[post]]\nfile = \"post.wgsl\"\nfiles = [\"second.wgsl\"]\n";
+    let post = "fn post(input: PostInput) -> vec4<f32> { return input.color * tint(); }\n";
+    let files = [
+        (MANIFEST, manifest),
+        ("post.wgsl", post),
+        (
+            "first.wgsl",
+            "fn tint() -> vec4<f32> { return vec4<f32>(1.0); }\n",
+        ),
+        ("second.wgsl", "fn shade() -> f32 { return 0.5; }\n"),
+    ]
+    .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+    .into();
+    let pack = Pack::from_files(files).unwrap();
+    // The second entry's `files` would leave `tint` undefined.
+    let report = check(&pack).unwrap();
+    let [a, b] = &report.stages[..] else {
+        panic!("two stages")
+    };
+    assert_eq!(format!("{:?}", a.module), format!("{:?}", b.module));
+    let composed = horizon_shader_api::compose(&pack, StageKind::Post, "post.wgsl").text;
+    assert!(composed.contains("fn tint") && !composed.contains("fn shade"));
+}
+
 #[test]
 fn a_material_stage_that_doesn_t_trace_is_built_as_before() {
     let quiet = "// Not traced: trace and trace_any only in /* nested /* comments */ trace */.\n\

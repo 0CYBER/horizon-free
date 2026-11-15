@@ -317,6 +317,18 @@ if input.translucent && frame.has_ray_tracing == 1u {
 `crates/horizon-shader-api/packs/traced_water` is the smallest pack that traces from `material`: water that mixes in
 what a reflected ray hits.
 
+## Compute passes and kept resources
+
+Shader API 0.2 has the keys for storage a pack keeps between frames and for compute passes: `[[resource]]` (buffers,
+and textures with this frame's and last frame's versions), `[kept] reach`, `[[post]]` entries with `compute = true`,
+and an option's `resets`. A compute file defines `fn compute(input: ComputeInput)`.
+`horizon-shader check` takes them now, but **they run in a later Horizon**: this game refuses a pack that declares a
+resource or a compute pass. The keys, their limits and the WGSL each pass sees are in the
+[reference](api/shaders-reference-0.2.md#kept-resources-and-compute-passes).
+
+Two parts come in later steps, not with these keys: a compute file doesn't get `trace` or the
+other ray functions under `[ray_tracing]`, and `[material]` can't read kept resources.
+
 ## Options
 
 A picked pack with options gets a Shader Options... button at the top of the Shader Packs page. Float and int options

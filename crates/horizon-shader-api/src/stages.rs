@@ -3,8 +3,8 @@
 //! pack's files to build a stage: the prelude before (the inputs and the
 //! resources), the entry points after.
 use crate::inputs::{
-    DISPLACEMENT_INPUT, ENTITY_INPUT, Frame, MATERIAL_INPUT, POST_INPUT, RAY_HIT, SKY_INPUT,
-    SURFACE, Struct, TONEMAP_INPUT, VERTEX_INPUT, WEATHER_INPUT,
+    COMPUTE_INPUT, DISPLACEMENT_INPUT, ENTITY_INPUT, Frame, MATERIAL_INPUT, POST_INPUT, RAY_HIT,
+    SKY_INPUT, SURFACE, Struct, TONEMAP_INPUT, VERTEX_INPUT, WEATHER_INPUT,
 };
 use crate::manifest::Api;
 use crate::package::Pack;
@@ -31,6 +31,9 @@ pub enum StageKind {
     /// 0.2: the colour of surfaces that are no block terrain (entities, block entities, items,
     /// particles), before the alpha test, the glint and fog. Checked, not yet drawn.
     Entity,
+    /// 0.2: a dispatch in the post chain (`[[post]] compute = true`), which reads what a post
+    /// pass does. Checked, not yet run; not in `ALL`, since each pass's entry is its own.
+    Compute,
 }
 
 /// A resource a stage reads, declared by its prelude.
@@ -1122,6 +1125,7 @@ impl StageKind {
             StageKind::Post => "post",
             StageKind::Tonemap => "tonemap",
             StageKind::Entity => "entity",
+            StageKind::Compute => "compute",
         }
     }
 
@@ -1139,31 +1143,36 @@ impl StageKind {
             StageKind::Post => &POST_INPUT,
             StageKind::Tonemap => &TONEMAP_INPUT,
             StageKind::Entity => &ENTITY_INPUT,
+            StageKind::Compute => &COMPUTE_INPUT,
         }
     }
 
-    /// The type the function returns.
+    /// The type the function returns (empty: none).
     pub fn output(self) -> &'static str {
         match self {
+            StageKind::Compute => "",
             StageKind::Material | StageKind::Entity => SURFACE.name,
             StageKind::Vertex | StageKind::Tonemap => "vec3<f32>",
             StageKind::Sky | StageKind::Weather | StageKind::Post => "vec4<f32>",
         }
     }
 
-    /// `fn <name>(input: <Input>) -> <Output>`.
+    /// `fn <name>(input: <Input>) -> <Output>`, without `->` for a function returning nothing.
     pub fn signature(self) -> String {
+        let output = match self.output() {
+            "" => String::new(),
+            ty => format!(" -> {ty}"),
+        };
         format!(
-            "fn {}(input: {}) -> {}",
+            "fn {}(input: {}){output}",
             self.function(),
-            self.input().name,
-            self.output()
+            self.input().name
         )
     }
 
     pub fn resources(self) -> &'static [Resource] {
         match self {
-            StageKind::Post => &POST_RESOURCES,
+            StageKind::Post | StageKind::Compute => &POST_RESOURCES,
             StageKind::Sky | StageKind::Vertex | StageKind::Weather => std::slice::from_ref(&FRAME),
             StageKind::Material => &MATERIAL_RESOURCES,
             StageKind::Tonemap => &TONEMAP_RESOURCES,
@@ -1215,7 +1224,7 @@ impl StageKind {
             out += COLOR_HELPERS;
         }
         match self {
-            StageKind::Post => {
+            StageKind::Post | StageKind::Compute => {
                 out += POST_HELPERS;
                 out += POST_SURFACE;
                 out += SHADOW_HELPERS;
@@ -1270,6 +1279,8 @@ impl StageKind {
             // 0.1 has no tonemap or entity stage: a manifest with one is refused before it is built.
             (_, StageKind::Tonemap) => TONEMAP_ENTRIES,
             (_, StageKind::Entity) => ENTITY_ENTRIES,
+            // Each compute pass has its own (`compute_entries`).
+            (_, StageKind::Compute) => "",
         }
     }
 }
@@ -1395,19 +1406,111 @@ fn motion_at(texel: vec2<i32>) -> MotionData {
 }
 ";
 
+/// The binding of a pack's first `[[resource]]` in group 3, a texture's last-frame version the
+/// next; the others after, two each.
+pub const KEPT_BINDING: u32 = 64;
+
+/// The declarations of the `[[resource]]`s the pass `stage` lists, part of its prelude: a buffer
+/// as `array<element>`, read-write where written (an `atomic<u32>` read as `u32` where only
+/// read); this frame's texture a storage texture where written, else read as `texture_2d`;
+/// last frame's (`_previous`) read only.
+pub fn kept_declarations(manifest: &crate::manifest::Manifest, stage: &crate::Stage) -> String {
+    use crate::kept::{Element, Shape};
+    let mut out = String::new();
+    for (i, r) in manifest.kept.resources.iter().enumerate() {
+        let (binding, name) = (KEPT_BINDING + 2 * i as u32, &r.name);
+        let (read, written) = (stage.reads.contains(name), stage.writes.contains(name));
+        let ty = match r.shape {
+            Shape::Buffer { element, .. } if written => {
+                format!("var<storage, read_write> {name}: array<{}>", element.wgsl())
+            }
+            Shape::Buffer { element, .. } if read => {
+                let element = match element {
+                    Element::AtomicU32 => Element::U32,
+                    e => e,
+                };
+                format!("var<storage, read> {name}: array<{}>", element.wgsl())
+            }
+            Shape::Fixed { format, .. } | Shape::Scaled { format, .. } if written => {
+                format!("var {name}: texture_storage_2d<{}, write>", format.wgsl())
+            }
+            Shape::Fixed { format, .. } | Shape::Scaled { format, .. } if read => {
+                format!("var {name}: texture_2d<{}>", format.texel())
+            }
+            _ => String::new(),
+        };
+        if !ty.is_empty() {
+            out += &format!("@group({GROUP}) @binding({binding}) {ty};\n");
+        }
+        if let Some(format) = r.format()
+            && stage.reads.contains(&format!("{name}_previous"))
+        {
+            out += &format!(
+                "@group({GROUP}) @binding({}) var {name}_previous: texture_2d<{}>;\n",
+                binding + 1,
+                format.texel()
+            );
+        }
+    }
+    out
+}
+
+/// A compute pass's entry point: its workgroup size, every invocation calling `compute`, with
+/// `in_bounds` false beyond the dispatch's size.
+fn compute_entries(stage: &crate::Stage) -> String {
+    let [x, y, z] = stage.workgroup.unwrap_or([1, 1, 1]);
+    let size = match stage.dispatch {
+        Some(crate::kept::Dispatch::Cells([a, b, c])) => format!("vec3<u32>({a}u, {b}u, {c}u)"),
+        _ => "vec3<u32>(vec2<u32>(frame.resolution), 1u)".to_owned(),
+    };
+    format!(
+        "@compute @workgroup_size({x}, {y}, {z})\n\
+         fn horizon_cs_compute(@builtin(global_invocation_id) cell: vec3<u32>, \
+         @builtin(local_invocation_index) local: u32) {{\n    \
+         let size = {size};\n    \
+         compute(ComputeInput(cell, local, size, all(cell < size)));\n}}\n"
+    )
+}
+
 /// The WGSL of the stage `kind` whose own file is `file`: the prelude, the
 /// pack's shared files in order, the file, then the entry points, all of the pack's line. A
 /// pack with `[ray_tracing]` gets `trace` without the scene (`Tracing::Stub`), which every
 /// device takes.
 pub fn compose(pack: &Pack, kind: StageKind, file: &str) -> Composed {
-    compose_traced(pack, kind, file, false)
+    compose_traced(pack, kind, file, None, false)
 }
 
 /// `compose` for a pack with `[ray_tracing]` where the renderer binds the scene: its post
 /// stage traces it, and its material stage where that calls a trace function (`TRACE_NAMES`).
 /// Such a module needs a device with ray queries.
 pub fn compose_scene(pack: &Pack, kind: StageKind, file: &str) -> Composed {
-    compose_traced(pack, kind, file, true)
+    compose_traced(pack, kind, file, None, true)
+}
+
+/// The manifest entry of the stage `kind` whose file is `file`: with `at`, the entry at that
+/// index of its list (`[[post]]` for a post or compute pass), since two entries may share a file
+/// and differ in the rest; else the first.
+pub fn entry<'a>(
+    m: &'a crate::Manifest,
+    kind: StageKind,
+    file: &str,
+    at: Option<usize>,
+) -> Option<&'a crate::Stage> {
+    let (list, compute) = match kind {
+        StageKind::Post => (&m.post, false),
+        StageKind::Compute => (&m.post, true),
+        StageKind::Sky => return m.sky.as_ref(),
+        StageKind::Material => return m.material.as_ref(),
+        StageKind::Vertex => return m.vertex.as_ref(),
+        StageKind::Weather => return m.weather.as_ref(),
+        StageKind::Tonemap => return m.tonemap.as_ref(),
+        StageKind::Entity => return m.entity.as_ref(),
+    };
+    let fits = |s: &&crate::Stage| s.file == file && s.compute == compute;
+    match at {
+        Some(at) => list.get(at).filter(fits),
+        None => list.iter().find(fits),
+    }
 }
 
 /// The names in WGSL `text` outside its comments (block comments nest), each with its byte
@@ -1456,7 +1559,14 @@ fn traces<'a>(mut texts: impl Iterator<Item = &'a str>) -> bool {
     texts.any(|text| identifiers(text).iter().any(ray))
 }
 
-fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Composed {
+/// `compose` (`scene`: `compose_scene`) of the entry `at` of the stage's list (`entry`).
+pub(crate) fn compose_traced(
+    pack: &Pack,
+    kind: StageKind,
+    file: &str,
+    at: Option<usize>,
+    scene: bool,
+) -> Composed {
     let api = pack.manifest.api;
     let tracing = match (&pack.manifest.ray_tracing, scene) {
         (None, _) => Tracing::None,
@@ -1486,15 +1596,7 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
         .map(String::as_str)
         .filter(|s| *s != file)
         .collect();
-    let stage = match kind {
-        StageKind::Sky => m.sky.as_ref(),
-        StageKind::Material => m.material.as_ref(),
-        StageKind::Vertex => m.vertex.as_ref(),
-        StageKind::Weather => m.weather.as_ref(),
-        StageKind::Post => m.post.iter().find(|s| s.file == file),
-        StageKind::Tonemap => m.tonemap.as_ref(),
-        StageKind::Entity => m.entity.as_ref(),
-    };
+    let stage = entry(m, kind, file, at);
     let extras = stage.into_iter().flat_map(|s| &s.files);
     files.extend(
         extras
@@ -1521,11 +1623,14 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
     };
     let mut prelude =
         kind.prelude_rays(api, tracing, rays) + &texture_declarations(&pack.manifest.textures);
-    if kind == StageKind::Post {
+    if matches!(kind, StageKind::Post | StageKind::Compute) {
         prelude += &post_target_declarations(&pack.manifest);
-        if api == Api::V0_2 && pack.manifest.motion.is_some() {
-            prelude += MOTION;
-        }
+    }
+    if kind == StageKind::Post && api == Api::V0_2 && pack.manifest.motion.is_some() {
+        prelude += MOTION;
+    }
+    if let Some(stage) = stage {
+        prelude += &kept_declarations(m, stage);
     }
     push("<prelude>", &prelude);
     for f in &files {
@@ -1536,6 +1641,8 @@ fn compose_traced(pack: &Pack, kind: StageKind, file: &str, scene: bool) -> Comp
             "<entries>",
             &(kind.entries(api).to_owned() + DISPLACEMENT_ENTRIES),
         );
+    } else if let (StageKind::Compute, Some(stage)) = (kind, stage) {
+        push("<entries>", &compute_entries(stage));
     } else {
         push("<entries>", kind.entries(api));
     }

@@ -269,6 +269,17 @@ draws them itself (the material stage covers terrain only). The first-person han
   `MOTION_OBJECT`, `MOTION_NEW` and `MOTION_NO_HISTORY` kinds: how each pixel's surface moved since last frame, for
   temporal passes. `horizon-shader check` takes it; the game refuses a pack with `[motion]` until it draws the guide.
   A pack without the key is built from the same WGSL as before, a test holds; API 0.1 is unchanged.
+- 2026-11-13: API 0.2 (additions, experimental, not run yet): compute passes (#16011 item 4). `[[post]]`
+  entries with `compute = true` are dispatches in the chain, with `dispatch` (`[x, y, z]` cells or `"pixels"`),
+  `workgroup`, `reads` and `writes`, at most 8; an ordinary pass lists the kept resources it `reads`. A compute file
+  defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's workgroup size,
+  every invocation running and `in_bounds` false past the dispatch. Each pass's prelude declares only the resources it
+  lists, at group 3 from binding 64. `horizon-shader check` builds compute files as it builds post passes, refuses a
+  file that uses a resource its pass doesn't list, and refuses sampling or gathering an `r32float` or `rgba32float`
+  texture (`textureLoad` only). Compute work is capped at 2^25 invocations a dispatch and 2^26 a frame over every
+  compute pass, counted as whole workgroups, a `"pixels"` dispatch as 3840×2160. Compute files don't get `trace` yet, and `[material]` can't read kept resources yet:
+  both come in later steps. The game refuses a pack with a compute pass until a later Horizon runs it. Packs without
+  them are built from the same WGSL as before, a test holds.
 - 2026-11-13: API 0.2 (additions, experimental, not run yet): kept resources (#16011 item 4). `[[resource]]`
   declares a buffer (`buffer` bytes of an `element`: `u32`, `atomic<u32>`, `f32`, `vec4<u32>` or `vec4<f32>`) or a
   texture (`format`: `rgba16float`, `r32float`, `rgba32float` or `rgba32uint`, the last read as `texture_2d<u32>` and

@@ -1,12 +1,17 @@
 //! docs/api/shaders-reference.md (0.1) and shaders-reference-0.2.md, generated from the stages
 //! and inputs this crate defines (`tests/reference.rs` fails when a file drifts).
 use crate::check::{MAX_EXPRESSIONS, MAX_TEXTURE_READS};
-use crate::inputs::{DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, Struct};
+use crate::inputs::{COMPUTE_INPUT, DISPLACEMENT_INPUT, Frame, RAY_HIT, SURFACE, Struct};
+use crate::kept::{
+    Element, Format, MAX_BUFFER_BYTES, MAX_COMPUTE_POST, MAX_DISPATCH_INVOCATIONS,
+    MAX_FIXED_TEXTURE_BYTES, MAX_FRAME_INVOCATIONS, MAX_RESOURCES, MAX_WORKGROUP,
+    MAX_WORKGROUP_INVOCATIONS, PIXELS_COUNTED_AS,
+};
 use crate::manifest::{Api, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
 use crate::stages::{
-    GROUP, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING, RAY_SCENE_BINDING,
-    RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
+    GROUP, KEPT_BINDING, MOTION_BINDING, PBR_NORMALS_BINDING, PBR_SPECULAR_BINDING,
+    RAY_SCENE_BINDING, RAY_SPRITE_ARRAYS, RAY_SPRITES_BINDING, StageKind,
 };
 
 fn table(s: &Struct, offsets: Option<&[usize]>) -> String {
@@ -166,6 +171,63 @@ fn ray_tracing() -> String {
     out
 }
 
+/// 0.2's kept resources and compute passes, after the post stage.
+fn kept() -> String {
+    let list = |names: Vec<&str>| {
+        let quoted: Vec<String> = names.iter().map(|n| format!("`{n}`")).collect();
+        quoted.join(", ")
+    };
+    let elements = list(Element::ALL.iter().map(|e| e.wgsl()).collect());
+    let formats = list(Format::ALL.iter().map(|f| f.wgsl()).collect());
+    let mut out = format!(
+        "## Kept resources and compute passes\n\n\
+         **Checked, not run yet:** `horizon-shader check` takes these keys, and the game refuses a pack that declares a\n\
+         `[[resource]]` or a compute `[[post]]` entry: it needs a later Horizon.\n\n\
+         - `[[resource]]`: `name`; `buffer` (bytes) with `element` ({elements}), or `format`\n  \
+         ({formats}) with `size = [w, h]` texels or `scale` (1, 0.5 or 0.25 of the render size); `keep`, `\"view\"`\n  \
+         (screen history) or `\"world\"` (a cache, fixed `size` only, which needs `[kept] reach`: a teleport further, in\n  \
+         blocks, clears it). A texture has this frame's version, `<name>`, and last frame's, `<name>_previous`; a buffer\n  \
+         has one. Both names are free WGSL names, as an `output`'s, and no word WGSL reserves.\n\
+         - `[[post]]` with `compute = true`: a dispatch in the chain where it stands, with `dispatch` (`[x, y, z]` cells,\n  \
+         or `\"pixels\"`, one per texel of the render size), `workgroup = [x, y, z]`, `reads` and `writes`. It has no\n  \
+         `output` or `scale`, isn't the last entry and doesn't advance `previous`. An ordinary pass lists what it `reads`, and its\n  \
+         `output` may name a kept texture, which it draws at that texture's size.\n\
+         - An option's `resets = \"view\"` clears the view's kept resources when the player changes it, `\"world\"` all\n  \
+         of them.\n\n\
+         A pass lists every resource it uses: in `reads` this frame's `x` or last frame's `x_previous`, in `writes` (a\n\
+         compute pass's) `x`, once. An `output` is its pass's write. Its prelude declares only what it lists, so a name\n\
+         it doesn't list is the file's own, and using such a resource is refused as unlisted. The check also refuses a\n\
+         compute pass that writes a texture and reads it back (read `_previous`, or a buffer), and a pass that reads its\n\
+         own `output`.\n\n\
+         A compute file defines `fn compute(input: ComputeInput)`, and Horizon adds the `@compute` entry with the pass's\n\
+         workgroup size. Every invocation of every workgroup runs it, so `var<workgroup>` and `workgroupBarrier()`\n\
+         reductions stay uniform: one beyond the dispatch has `in_bounds` false and touches no resource. A compute\n\
+         `[[post]]` pass's prelude is the post stage's with `ComputeInput` for `PostInput`.\n\n\
+         **Not yet, in later steps:** a compute file doesn't get `trace` or the other ray functions under\n\
+         `[ray_tracing]`, and `[material]` can't read kept resources.\n\n"
+    );
+    out += &table(&COMPUTE_INPUT, None);
+    out += &format!(
+        "A pass's prelude declares the resources it lists, the pack's resource i at binding {KEPT_BINDING} + 2i of group\n\
+         {GROUP} and its `_previous` at {} + 2i: a buffer `var<storage, read_write> x: array<element>` where written,\n\
+         `var<storage, read>` where only read (an `atomic<u32>` buffer then reads as `array<u32>`); a texture\n\
+         `texture_storage_2d<format, write>` where written, else `texture_2d<f32>` (`texture_2d<u32>` for\n\
+         `rgba32uint`, which only a compute pass writes). An `r32float`, `rgba32float` or `rgba32uint` texture is read\n\
+         with `textureLoad` only: the check refuses sampling or gathering one, also through a function's argument. Data is data: Horizon doesn't decode, clamp or force the alpha of a kept resource.\n\n",
+        KEPT_BINDING + 1
+    );
+    out + &format!(
+        "Limits: {MAX_RESOURCES} resources, {MAX_COMPUTE_POST} compute `[[post]]` entries; {} MiB of buffers and {} KiB of\n\
+         fixed-size textures, both versions counted; each R-relative kept texture takes two of the post targets `output`s share; a workgroup of up to {MAX_WORKGROUP:?} and\n\
+         {MAX_WORKGROUP_INVOCATIONS} invocations; {MAX_DISPATCH_INVOCATIONS} invocations a dispatch and {MAX_FRAME_INVOCATIONS} a frame over every\n\
+         compute pass, counted as whole workgroups, a `\"pixels\"` dispatch as {}×{} (R isn't known at load).\n\n",
+        MAX_BUFFER_BYTES >> 20,
+        MAX_FIXED_TEXTURE_BYTES >> 10,
+        PIXELS_COUNTED_AS[0],
+        PIXELS_COUNTED_AS[1]
+    )
+}
+
 /// 0.2's `[material] coverage`, after the paragraph on what a stage is.
 const COVERAGE_0_2: &str = "\
 ## `[material] coverage`
@@ -271,6 +333,7 @@ pub fn markdown(api: Api) -> String {
             StageKind::Weather => "[weather]",
             StageKind::Tonemap => "[tonemap]",
             StageKind::Entity => "[entity]",
+            StageKind::Compute => "[[post]] compute = true",
         };
         out += &format!("| {} | `{key}` | `{}` |\n", kind.name(), kind.signature());
     }
@@ -370,6 +433,7 @@ pub fn markdown(api: Api) -> String {
                     pass reads a blank one in place of the target it writes).\n\n";
             if api == Api::V0_2 {
                 out += &ray_tracing();
+                out += &kept();
                 out += &MOTION_NOTES.replace("{binding}", &MOTION_BINDING.to_string());
             }
         }

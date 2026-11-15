@@ -1,15 +1,31 @@
-//! Shader API 0.2's kept resources (#16011 item 4): `[kept]`, `[[resource]]`, a `[[post]]`
-//! `output` naming a kept texture and options' `resets`. The check takes them; the game doesn't
-//! run them yet and refuses a pack that declares any (`Manifest::computes`).
+//! Shader API 0.2's kept resources and compute passes (#16011 item 4): `[kept]`, `[[resource]]`,
+//! `[[post]] compute = true` and options' `resets`. The check takes them;
+//! the game doesn't run them yet and refuses a pack that declares any (`Manifest::computes`).
 use crate::manifest::{POST_SCALES, Stage};
 use serde::Deserialize;
 
 /// `[[resource]]` entries a pack may declare.
 pub const MAX_RESOURCES: usize = 8;
+/// `[[post]]` entries with `compute = true` a pack may declare.
+pub const MAX_COMPUTE_POST: usize = 8;
 /// The bytes of every buffer of a pack together, per view.
 pub const MAX_BUFFER_BYTES: u64 = 32 << 20;
 /// The bytes of every fixed-size kept texture of a pack together, both versions counted.
 pub const MAX_FIXED_TEXTURE_BYTES: u64 = 1 << 20;
+/// A workgroup's largest size along each axis, and its invocations: wgpu's default limits,
+/// which every device with compute has.
+pub const MAX_WORKGROUP: [u32; 3] = [256, 256, 64];
+pub const MAX_WORKGROUP_INVOCATIONS: u32 = 256;
+/// The workgroups a fixed dispatch may need along an axis (wgpu's default limit).
+pub const MAX_WORKGROUPS: u32 = 65535;
+/// The invocations of one dispatch, and of every compute pass of a frame (per view) together,
+/// counted as whole workgroups (`invocations`).
+pub const MAX_DISPATCH_INVOCATIONS: u64 = 1 << 25;
+pub const MAX_FRAME_INVOCATIONS: u64 = 1 << 26;
+/// The size a `"pixels"` dispatch counts as: R isn't known at load, and such a dispatch scales
+/// with R as a fragment pass does, so the caps measure the pack, not the window.
+pub const PIXELS_COUNTED_AS: [u32; 2] = [3840, 2160];
+
 /// What clears a kept resource (docs/api/shaders-reference-0.2.md, "Kept resources").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keep {
@@ -85,6 +101,14 @@ impl Format {
         }
     }
 
+    /// The scalar a read of it gives (`texture_2d<_>`).
+    pub const fn texel(self) -> &'static str {
+        match self {
+            Format::Rgba32Uint => "u32",
+            _ => "f32",
+        }
+    }
+
     pub const fn bytes(self) -> u64 {
         match self {
             Format::R32Float => 4,
@@ -128,7 +152,31 @@ impl Resource {
     }
 }
 
-/// The pack's kept resources, and the options that clear them.
+/// `dispatch`: how many invocations a compute entry runs.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "toml::Value")]
+pub enum Dispatch {
+    /// `"pixels"`: one per texel of the render size R.
+    Pixels,
+    /// `[x, y, z]` cells.
+    Cells([u32; 3]),
+}
+
+impl TryFrom<toml::Value> for Dispatch {
+    type Error = String;
+
+    fn try_from(v: toml::Value) -> Result<Self, String> {
+        match v {
+            toml::Value::String(s) if s == "pixels" => Ok(Dispatch::Pixels),
+            v => v
+                .try_into()
+                .map(Dispatch::Cells)
+                .map_err(|_| "dispatch is \"pixels\" or [x, y, z] cells".into()),
+        }
+    }
+}
+
+/// The pack's kept resources, the passes before the world, and the options that clear them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Kept {
     /// `[kept] reach`: a teleport further than this, in blocks, clears the world resources.
@@ -243,10 +291,162 @@ fn resource(r: RawResource, ray_tracing: bool, motion: bool) -> Result<Resource,
     })
 }
 
+/// The invocations a compute entry of a valid shape runs, as whole workgroups (every invocation
+/// of a partly filled one runs `compute`), its `"pixels"` at `PIXELS_COUNTED_AS`.
+pub fn invocations(s: &Stage) -> u64 {
+    let (Some(workgroup), Some(dispatch)) = (s.workgroup, s.dispatch) else {
+        return 0;
+    };
+    let [w, h] = PIXELS_COUNTED_AS;
+    let cells = match dispatch {
+        Dispatch::Pixels => [w, h, 1],
+        Dispatch::Cells(cells) => cells,
+    };
+    (cells.iter().zip(workgroup))
+        .map(|(c, w)| u64::from(c.div_ceil(w)) * u64::from(w))
+        .product()
+}
+
+/// The frame's compute entries `computes`, together within `MAX_FRAME_INVOCATIONS`.
+fn frame_invocations<'a>(computes: impl Iterator<Item = &'a Stage>) -> Result<(), String> {
+    let total: u64 = computes.map(invocations).sum();
+    if total > MAX_FRAME_INVOCATIONS {
+        return Err(format!(
+            "the compute passes run {total} invocations a frame (whole workgroups, \"pixels\" \
+             counted at 3840×2160); a pack may run {MAX_FRAME_INVOCATIONS}"
+        ));
+    }
+    Ok(())
+}
+
+/// A compute entry's `workgroup` and `dispatch`.
+fn compute_shape(s: &Stage) -> Result<(), String> {
+    let (Some(workgroup), Some(dispatch)) = (s.workgroup, s.dispatch) else {
+        return Err(format!(
+            "{}: a compute pass needs `dispatch` and `workgroup`",
+            s.file
+        ));
+    };
+    let fits = workgroup
+        .iter()
+        .zip(MAX_WORKGROUP)
+        .all(|(w, max)| (1..=max).contains(w));
+    if !fits || workgroup.iter().product::<u32>() > MAX_WORKGROUP_INVOCATIONS {
+        return Err(format!(
+            "{}: workgroup {workgroup:?}: 1 to {MAX_WORKGROUP:?} a side, at most \
+             {MAX_WORKGROUP_INVOCATIONS} invocations",
+            s.file
+        ));
+    }
+    if let Dispatch::Cells(cells) = dispatch {
+        let groups = cells.iter().zip(workgroup).map(|(c, w)| c.div_ceil(w));
+        if cells.contains(&0) || groups.clone().any(|g| g > MAX_WORKGROUPS) {
+            return Err(format!(
+                "{}: dispatch {cells:?}: at least 1 cell a side, at most {MAX_WORKGROUPS} \
+                 workgroups a side",
+                s.file
+            ));
+        }
+    }
+    let n = invocations(s);
+    if n > MAX_DISPATCH_INVOCATIONS {
+        return Err(format!(
+            "{}: {n} invocations (whole workgroups, \"pixels\" counted at 3840×2160); a \
+             dispatch may run {MAX_DISPATCH_INVOCATIONS}",
+            s.file
+        ));
+    }
+    Ok(())
+}
+
+/// `reads`, `writes` and `output` of one pass name declared resources: `x` or a texture's
+/// `x_previous` read, `x` written once, and nothing both the pass's attachment and read, nor a
+/// texture a compute pass writes read back.
+fn access(s: &Stage, resources: &[Resource]) -> Result<(), String> {
+    let find = |n: &str| resources.iter().find(|r| r.name == n);
+    for (i, read) in s.reads.iter().enumerate() {
+        let previous = read.strip_suffix("_previous").and_then(find);
+        if find(read).is_none() && !previous.is_some_and(Resource::is_texture) {
+            return Err(format!(
+                "{}: reads {read:?}, no [[resource]] or texture's _previous",
+                s.file
+            ));
+        }
+        if s.reads[..i].contains(read) {
+            return Err(format!("{}: reads {read:?} twice", s.file));
+        }
+    }
+    for (i, write) in s.writes.iter().enumerate() {
+        let Some(r) = find(write) else {
+            return Err(format!("{}: writes {write:?}, no [[resource]]", s.file));
+        };
+        if s.writes[..i].contains(write) {
+            return Err(format!(
+                "{}: writes {write:?} twice: one writer a pass",
+                s.file
+            ));
+        }
+        if r.is_texture() && s.reads.contains(write) {
+            return Err(format!(
+                "{}: writes {write:?} and reads it back: read {write}_previous, or a buffer",
+                s.file
+            ));
+        }
+    }
+    if let Some(output) = s.output.as_ref().filter(|o| find(o).is_some())
+        && (s.reads.contains(output) || s.writes.contains(output))
+    {
+        return Err(format!(
+            "{}: {output:?} is its output: a pass's attachment is no texture it reads, and \
+             the output is its write",
+            s.file
+        ));
+    }
+    Ok(())
+}
+
+/// The keys `[[post]]` gains: on a compute entry `dispatch`, `workgroup` and `writes`, no
+/// `output` or `scale`, never last; elsewhere none of the three.
+fn post_entries(post: &[Stage]) -> Result<(), String> {
+    let computes = post.iter().filter(|p| p.compute).count();
+    if computes > MAX_COMPUTE_POST {
+        return Err(format!(
+            "{computes} compute [[post]] entries; a pack may have {MAX_COMPUTE_POST}"
+        ));
+    }
+    for (i, p) in post.iter().enumerate() {
+        if !p.compute {
+            if p.dispatch.is_some() || p.workgroup.is_some() || !p.writes.is_empty() {
+                return Err(format!(
+                    "{}: `dispatch`, `workgroup` and `writes` are a compute pass's: an \
+                     ordinary pass writes its `output`",
+                    p.file
+                ));
+            }
+            continue;
+        }
+        if p.output.is_some() || p.scale.is_some() {
+            return Err(format!(
+                "{}: a compute pass has no `output` or `scale`",
+                p.file
+            ));
+        }
+        if i + 1 == post.len() {
+            return Err(format!(
+                "{}: a compute pass can't be the last [[post]] entry: that one draws the picture",
+                p.file
+            ));
+        }
+        compute_shape(p)?;
+    }
+    frame_invocations(post.iter().filter(|p| p.compute))
+}
+
 /// Every rule of the keys above but the targets `check_post_targets` counts.
 pub(crate) fn check(
     kept: Option<RawKept>,
     raw: Vec<RawResource>,
+    post: &[Stage],
     ray_tracing: bool,
     motion: bool,
     resets: Vec<(String, String)>,
@@ -319,6 +519,10 @@ pub(crate) fn check(
         }
         None => None,
     };
+    post_entries(post)?;
+    for s in post {
+        access(s, &resources)?;
+    }
     let mut kept_resets = Vec::new();
     for (id, value) in resets {
         if resources.is_empty() {

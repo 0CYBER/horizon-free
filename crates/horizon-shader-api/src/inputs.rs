@@ -295,6 +295,18 @@ pub const POST_INPUT: Struct = Struct {
     },
 };
 
+/// A compute pass's input (0.2): one invocation of its dispatch.
+pub const COMPUTE_INPUT: Struct = Struct {
+    name: "ComputeInput",
+    doc: "One invocation of a dispatch, for `fn compute(input: ComputeInput)`.",
+    fields: fields! {
+        cell: "vec3<u32>" = "The invocation's cell: where it is in the whole dispatch.",
+        local: "u32" = "Its index in its workgroup, from 0 to the workgroup's invocations less 1.",
+        size: "vec3<u32>" = "The dispatch's cells: its `dispatch`, or the render size and 1 for `\"pixels\"`.",
+        in_bounds: "bool" = "Whether `cell` is within `size`. Every invocation of every workgroup runs: one beyond `size` touches no resource, but still reaches every `workgroupBarrier()`.",
+    },
+};
+
 /// The material stage's input: one point of a block's surface.
 pub const MATERIAL_INPUT: Struct = Struct {
     name: "MaterialInput",
