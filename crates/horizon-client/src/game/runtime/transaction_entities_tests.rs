@@ -963,6 +963,12 @@ fn a_nested_commit_from_a_join_listener_tells_its_join_before_its_removal() {
 fn a_level_commit_told_inside_another_levels_commit_keeps_its_own_batch() {
     const NAME: &str = "game::transaction_entities_tests::a_level_commit_told_inside_another_levels_commit_keeps_its_own_batch";
     with_observer(NAME, |game| {
+        game.set_allow_commands(true);
+        game.build_registries();
+        assert!(game.run_command("difficulty normal"));
+        let _rx = super::lan::world_spawn_sync_tests::host_for(game);
+        game.lan.as_mut().unwrap().hub.guests.clear();
+        heard();
         game.enter_level(Dim::Nether).unwrap();
         game.world
             .chunks
