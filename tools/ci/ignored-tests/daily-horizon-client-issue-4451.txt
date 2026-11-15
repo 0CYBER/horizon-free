@@ -49,7 +49,6 @@ horizon-client game::attachment_index::saved_entity_tests::saved_entity_loaders_
 horizon-client game::attachment_index::saved_entity_tests::saved_spit_and_bullet_query_before_access_and_round_trip lib daily resources
 horizon-client game::attachment_index::tests::chunk_residency_uses_the_owning_level_through_cow_and_swaps lib daily resources
 horizon-client game::attachment_index::tests::loaded_levels_keep_independent_index_through_swaps_and_close lib daily resources
-horizon-client game::attachment_instruction_bench::attachment_instruction_count lib daily resources
 horizon-client game::beehives::changed_tests::a_bee_going_in_marks_the_chunk lib daily resources
 horizon-client game::beehives::changed_tests::a_released_bee_marks_the_chunk lib daily resources
 horizon-client game::beehives::honey_overflow_tests::a_honey_bottle_that_does_not_fit_is_thrown_ahead lib daily resources

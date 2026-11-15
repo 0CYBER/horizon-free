@@ -11,7 +11,7 @@ static VALUE: mod_api::AttachmentType<u32> = mod_api::AttachmentType {
     sync: false,
 };
 #[test]
-#[ignore = "daily"]
+#[ignore = "callgrind fixture; needs HORIZON_TEST_RESOURCES"]
 fn attachment_instruction_count() {
     let Some(passes) = std::env::var("ATTACHMENT_PASSES")
         .ok()

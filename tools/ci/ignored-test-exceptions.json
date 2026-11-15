@@ -18,6 +18,14 @@
   {
     "package": "horizon-client",
     "target": "lib",
+    "test": "game::attachment_instruction_bench::attachment_instruction_count",
+    "path": "crates/horizon-client/src/game/modding/attachment_instruction_bench.rs",
+    "reason": "callgrind fixture; needs HORIZON_TEST_RESOURCES",
+    "rationale": "Opt-in instruction-count measurement, not a daily correctness check: returns without measuring unless ATTACHMENT_PASSES parses as usize. Run by hand with HORIZON_TEST_RESOURCES and ATTACHMENT_PASSES, exact-selecting this full test path with --ignored --exact --nocapture under the intended measurement tooling. No automated runner currently supplies ATTACHMENT_PASSES; the source diagnostic naming a parity harness does not establish such a runner. All assertions remain in the test."
+  },
+  {
+    "package": "horizon-client",
+    "target": "lib",
     "test": "game::block_entity_part_state_tests::native_and_compiled_wasm_part_state_count_ticks",
     "path": "crates/horizon-client/src/game/modding/block_entity_part_state_tests.rs",
     "reason": "needs prepared resources and compiled HORIZON_WASM_FIXTURE/HORIZON_WASM_STD",
