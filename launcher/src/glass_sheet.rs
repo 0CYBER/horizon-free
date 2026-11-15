@@ -195,8 +195,8 @@ impl Launcher {
             java: (
                 self.servers.value(Field::JavaArgs).trim().to_string(),
                 (
-                    self.servers.value(Field::WindowWidth).to_string(),
-                    self.servers.value(Field::WindowHeight).to_string(),
+                    self.servers.value(Field::WindowWidth).trim().to_string(),
+                    self.servers.value(Field::WindowHeight).trim().to_string(),
                 ),
             ),
             hooks: self.hooks_typed(&saved.id),

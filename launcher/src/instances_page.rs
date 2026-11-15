@@ -557,9 +557,14 @@ impl Launcher {
                         } else {
                             trf("Created {name}", &name)
                         });
-                        this.instances.dialog = None;
                         this.select_instance(&instance);
                         this.reload_instances();
+                        // Edits typed while it saved are still open: the sheet stays for them.
+                        let typed_meanwhile = edited && this.sheet_changed();
+                        match (typed_meanwhile, &mut this.instances.dialog) {
+                            (true, Some(d)) => d.busy = false,
+                            _ => this.instances.dialog = None,
+                        }
                         // Play shows the download's progress; Versions shows it too.
                         if let Some(release) = download {
                             this.install_for_instance(release);
