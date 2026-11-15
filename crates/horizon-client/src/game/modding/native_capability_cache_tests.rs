@@ -144,7 +144,7 @@ fn slots(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_cache_asks_once_while_nothing_changes_and_again_when_invalidated() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_cache_asks_once_while_nothing_changes_and_again_when_invalidated",
@@ -170,7 +170,7 @@ fn a_cache_asks_once_while_nothing_changes_and_again_when_invalidated() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_cache_lends_nothing_while_its_level_is_parked_and_asks_again_once_back() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_cache_lends_nothing_while_its_level_is_parked_and_asks_again_once_back",
@@ -199,7 +199,7 @@ fn a_cache_lends_nothing_while_its_level_is_parked_and_asks_again_once_back() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_cache_first_asked_while_its_level_is_parked_asks_again_once_in_place() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_cache_first_asked_while_its_level_is_parked_asks_again_once_in_place",
@@ -223,7 +223,7 @@ fn a_cache_first_asked_while_its_level_is_parked_asks_again_once_in_place() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_cache_asks_again_when_the_block_state_changes() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_cache_asks_again_when_the_block_state_changes",
@@ -248,7 +248,7 @@ fn a_cache_asks_again_when_the_block_state_changes() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_cache_follows_its_block_entity_removed_and_replaced() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_cache_follows_its_block_entity_removed_and_replaced",
@@ -276,7 +276,7 @@ fn a_cache_follows_its_block_entity_removed_and_replaced() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_cache_finds_nothing_while_its_chunk_is_unloaded() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_cache_finds_nothing_while_its_chunk_is_unloaded",
@@ -306,7 +306,7 @@ fn a_cache_finds_nothing_while_its_chunk_is_unloaded() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_cache_finds_nothing_once_its_level_closes() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_cache_finds_nothing_once_its_level_closes",
@@ -324,7 +324,7 @@ fn a_cache_finds_nothing_once_its_level_closes() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_cache_asks_again_when_a_mod_is_switched_off_or_on() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_cache_asks_again_when_a_mod_is_switched_off_or_on",
@@ -350,7 +350,7 @@ fn a_cache_asks_again_when_a_mod_is_switched_off_or_on() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn moves_through_kept_handlers_conserve_every_item_when_some_abort() {
     with_cache_mod(
         "game::native_capability_cache_tests::moves_through_kept_handlers_conserve_every_item_when_some_abort",
@@ -431,7 +431,7 @@ fn moves_through_kept_handlers_conserve_every_item_when_some_abort() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_providers_invalidation_counts_once_after_its_commit_and_not_when_aborted() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_providers_invalidation_counts_once_after_its_commit_and_not_when_aborted",
@@ -484,7 +484,7 @@ fn a_providers_invalidation_counts_once_after_its_commit_and_not_when_aborted() 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn a_block_invalidated_before_its_chunk_unloads_is_asked_again_after_it_reloads() {
     with_cache_mod(
         "game::native_capability_cache_tests::a_block_invalidated_before_its_chunk_unloads_is_asked_again_after_it_reloads",

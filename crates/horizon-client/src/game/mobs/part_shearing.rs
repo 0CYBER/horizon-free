@@ -193,7 +193,7 @@ mod tests {
     /// A dispenser's shears ask the mob's entity parts: a cow whose part says yes drops what
     /// the part returns, and a woolly sheep whose part says no keeps its wool.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn entity_parts_decide_and_perform_a_dispensers_shearing() {
         use super::super::native_entity_refs::tests::{run_fresh_cases, with_game};
         if run_fresh_cases(

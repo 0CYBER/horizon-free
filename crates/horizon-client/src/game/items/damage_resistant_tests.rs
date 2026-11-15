@@ -62,7 +62,7 @@ fn lava(game: &mut Game<'_>) {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn effective_resistance_matches_the_six_stack_five_damage_table() {
     with_game(|game| {
         let damage = [
@@ -114,7 +114,7 @@ fn effective_resistance_matches_the_six_stack_five_damage_table() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn removed_netherite_resistance_dies_on_the_second_lava_hurt() {
     with_game(|game| {
         prepare(game);
@@ -131,7 +131,7 @@ fn removed_netherite_resistance_dies_on_the_second_lava_hurt() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn environmental_tag_stone_keeps_five_health_for_forty_lava_ticks() {
     with_game(|game| {
         prepare(game);
@@ -151,7 +151,7 @@ fn environmental_tag_stone_keeps_five_health_for_forty_lava_ticks() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn tnt_destroys_an_unprotected_star_and_spares_an_explosion_resistant_diamond() {
     with_game(|game| {
         prepare(game);
@@ -174,7 +174,7 @@ fn tnt_destroys_an_unprotected_star_and_spares_an_explosion_resistant_diamond() 
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn a_mod_items_default_cactus_resistance_keeps_five_health_for_ten_ticks() {
     // Give the owning resource load a private mod-item report and registry, as
     // native_components' changed-default fixture does. Shared resources are read-only.
@@ -242,7 +242,7 @@ fn a_mod_items_default_cactus_resistance_keeps_five_health_for_ten_ticks() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn damage_command_uses_effective_item_resistance() {
     with_game(|game| {
         prepare(game);

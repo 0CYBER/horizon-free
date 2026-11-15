@@ -36,7 +36,7 @@ fn component_from_json(json: &str, registries: &Registries) -> Result<Option<Tex
             let (value, used) = match horizon_client::component::parse_snbt(json) {
                 Ok(parsed) => parsed,
                 // NBT's own limit of 512: the named refusal, not "not a component".
-                Err(error) if error.starts_with("tag nesting too deep") => {
+                Err(error) if error.starts_with("arguments.nbtpath.too_deep at ") => {
                     return Err(TextFormError::TooDeep);
                 }
                 Err(_) => return Ok(None),

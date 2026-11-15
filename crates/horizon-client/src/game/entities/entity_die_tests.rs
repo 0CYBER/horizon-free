@@ -76,7 +76,7 @@ fn with_game(f: impl FnOnce(&mut Game<'_>)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn entity_die_commands() {
     with_game(|game| {
         let at = [4.25, 200.0, 4.75];
@@ -152,7 +152,7 @@ fn entity_die_commands() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn entity_die_explosions() {
     with_game(|game| {
         let at = [4.25, 200.0, 4.75];

@@ -837,7 +837,7 @@ mod tests {
     /// multiplies the wear by 5 makes it 5, one that halves it leaves 0 (the item stays whole), one
     /// that cancels it none; an iron sword without a part wears as vanilla.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+    #[ignore = "daily"]
     fn a_damage_item_part_changes_the_wear_of_a_weapon_hit() {
         use crate::game::damage_item_tests::{Rule, with_wear_part};
         with_wear_part("minecraft:mace", Rule::Times(5), |game, wear| {

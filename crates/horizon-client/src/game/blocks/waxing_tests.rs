@@ -8,7 +8,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn honeycomb_and_the_axe_read_the_block_maps_before_vanillas_tables() {
     with_game(|game| {
         let registry = game.pack.assets.registry;

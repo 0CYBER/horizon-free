@@ -32,7 +32,7 @@ mod tests {
     use crate::game::api_values::TryIntoEngine;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn plain_text_reads_resolve_current_language_arguments_keys_and_siblings() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let key = mod_api::Text::new(mod_api::text::TextContent::Keybind(
@@ -78,7 +78,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn styled_text_reads_use_live_font_language_and_wrapping_outside_drawing() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let mut text = mod_api::Text::literal("AA AA");

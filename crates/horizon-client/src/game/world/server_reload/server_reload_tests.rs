@@ -138,7 +138,7 @@ fn install_mod_resources(
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn reload_command_uses_applied_listener_state_and_preserves_tables_on_refusal() {
     use mod_api::{DataPackFilesEvent, Registrar, RegistrationContext, ServerHost};
     use std::sync::atomic::AtomicUsize;
@@ -263,7 +263,7 @@ fn request(root: &Path) -> WorldRequest {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn missing_original_at_reload_preserves_the_published_data_and_reports_its_owners() {
     const MODE: &str = "HORIZON_JAR_RELOAD_CHILD";
     let root = if let Some(root) = std::env::var_os(MODE) {
@@ -380,7 +380,7 @@ fn missing_original_at_reload_preserves_the_published_data_and_reports_its_owner
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn server_reload_delivers_mod_files_overrides_and_preserves_all_data_on_failure() {
     let root = std::env::current_dir()
         .unwrap()
@@ -523,7 +523,7 @@ fn server_reload_delivers_mod_files_overrides_and_preserves_all_data_on_failure(
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
     // Vanilla's `SimpleJsonResourceReloadListener.scanDirectory` logs and skips one bad
     // file; only a listener's own error aborts the reload. This listener follows it.
@@ -659,7 +659,7 @@ fn server_reload_skips_unparsable_files_and_delivers_the_rest() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn server_reload_registration_failure_stops_world_open_and_quiet_mods_never_listen() {
     struct Quiet;
     #[mod_api::__subscriptions]
@@ -766,7 +766,7 @@ impl Hooks for RetainedData {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn server_reload_retains_listeners_for_other_hooks() {
     let root = std::env::current_dir()
         .unwrap()
@@ -866,7 +866,7 @@ fn server_reload_retains_listeners_for_other_hooks() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn server_completion_reads_published_data_without_world_access_on_first_open() {
     use mod_api::__private::{ModPhase, PhaseOwner};
     use mod_api::{HostSide, TagsUpdateCause, TagsUpdatedEvent};
@@ -922,7 +922,7 @@ fn server_completion_reads_published_data_without_world_access_on_first_open() {
 /// through the handles: a newer file's override, a tag's members, a removal
 /// and an entry with no value, typed.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn data_maps_updated_fires_for_each_registry_on_first_open_and_every_reload() {
     use mod_api::{
         BlockKey, DataMap, DataMapError, DataMapTypesEvent, DataMapsUpdateCause,
@@ -1036,21 +1036,28 @@ fn data_maps_updated_fires_for_each_registry_on_first_open_and_every_reload() {
             game.load_world(request(&root)).unwrap();
             let both = |count: usize| -> Vec<(String, DataMapsUpdateCause)> {
                 // In registry id order.
-                ["minecraft:block", "minecraft:item"]
-                    .into_iter()
-                    .cycle()
-                    .take(count)
-                    .map(|registry| (registry.to_owned(), DataMapsUpdateCause::ServerReload))
-                    .collect()
+                [
+                    "minecraft:block",
+                    "minecraft:entity_type",
+                    "minecraft:game_event",
+                    "minecraft:item",
+                    "minecraft:villager_profession",
+                    "minecraft:worldgen/biome",
+                ]
+                .into_iter()
+                .cycle()
+                .take(count)
+                .map(|registry| (registry.to_owned(), DataMapsUpdateCause::ServerReload))
+                .collect()
             };
             let unknown = Err(DataMapError::UnknownType);
-            assert_eq!(*seen.lock().unwrap(), both(2));
+            assert_eq!(*seen.lock().unwrap(), both(6));
             assert_eq!(
                 *reads.lock().unwrap(),
                 [[Ok(Some(10)), Ok(Some(5)), Ok(None), unknown, Ok(Some(3))]]
             );
             assert!(game.run_command("reload"));
-            assert_eq!(*seen.lock().unwrap(), both(4));
+            assert_eq!(*seen.lock().unwrap(), both(12));
             assert_eq!(
                 reads.lock().unwrap()[1],
                 [Ok(Some(25)), Ok(None), Ok(None), unknown, Ok(Some(3))]

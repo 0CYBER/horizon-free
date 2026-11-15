@@ -140,7 +140,7 @@ mod tests {
     /// naming its breaker; a listener that answers nothing changes neither
     /// the drops nor either random.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn a_listener_sets_the_level_a_block_table_reads() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());

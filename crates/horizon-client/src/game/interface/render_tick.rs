@@ -1001,7 +1001,7 @@ mod tests {
     /// leaves the frame's block overlays as they are with no block there, the fire overlay
     /// included; dirt in the same place keeps its overlay.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_cancels_the_screen_effect_of_one_block() {
         use horizon_core::{geometry::Vec3, position::BlockPos};
         use mod_api::{

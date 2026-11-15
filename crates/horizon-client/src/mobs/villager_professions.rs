@@ -98,6 +98,13 @@ impl ResolvedProfessions {
     pub fn entries(&self) -> &[Profession] {
         &self.entries
     }
+    /// Canonical identities in this world's accepted profession table.
+    pub fn registry_ids(&self) -> impl Iterator<Item = &str> {
+        self.by_name.keys().map(String::as_str)
+    }
+    pub fn registry_contains(&self, id: &str) -> bool {
+        self.by_name.contains_key(id)
+    }
     pub fn get(&self, index: u8) -> &Profession {
         &self.entries[index as usize % 15]
     }

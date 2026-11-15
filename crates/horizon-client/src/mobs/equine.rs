@@ -1308,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn tame_listener_defers_the_successful_tame() {
         use horizon_core::random::{LegacyRandom, RandomSource};
         assert!(crate::mobs::world::with_test_world(&[], |world, _| {
@@ -1358,7 +1358,7 @@ mod tests {
     /// The existing goal reads the loaded counter; only its failed attempt
     /// modifies it, with the gameplay clamp. The random continuation is kept.
     #[test]
-    #[ignore = "needs prepared resources for the existing mob world fixture"]
+    #[ignore = "daily"]
     fn temper_preservation_reaches_the_existing_taming_consumer() {
         use horizon_core::random::LegacyRandom;
         let ran = crate::mobs::world::with_test_world(&[], |w, types| {

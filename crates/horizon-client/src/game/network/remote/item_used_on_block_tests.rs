@@ -39,7 +39,7 @@ pub(super) fn install_criteria(game: &mut Game<'_>, counts: &[u32], item: &str) 
 }
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn the_item_phase_criterion_sees_the_stack_from_before_the_block_phase() {
     let observer = Observer::default();
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -80,7 +80,7 @@ fn the_item_phase_criterion_sees_the_stack_from_before_the_block_phase() {
 }
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn compass_criterion_sees_two_compasses_before_the_block_takes_one() {
     let observer = Observer::default();
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(

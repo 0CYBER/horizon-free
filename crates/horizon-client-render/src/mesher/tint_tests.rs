@@ -29,7 +29,7 @@ fn filled(cx: i32, cz: i32, biome: u16) -> Chunk {
 }
 
 #[test]
-#[ignore = "requires prepared 26.3 resources (HORIZON_MESH_TEST_RESOURCES or .local/horizon-client/26.3)"]
+#[ignore = "daily"]
 fn one_biome_shortcut_blends_like_the_full_square() {
     let biomes = biomes();
     let desert = biomes.id("minecraft:desert");

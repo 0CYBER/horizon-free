@@ -434,7 +434,7 @@ mod tests {
     /// `CrafterBlockEntity.setSlotState`: a slot toggled in the menu lands on
     /// the block entity itself, whose `setChanged` marks the chunk.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_slot_toggled_in_the_menu_lands_on_the_crafter() {
         use crate::game::game_tests::tests::server_game;
         let mut resources = None;
@@ -597,7 +597,7 @@ mod part_remainder_tests {
         }
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn crafter_dispense_observes_part_replaced_remainders() {
         let mods: mod_api::Mods = vec![mod_api::ModEntry::new("milk", Box::new(Remainders))].into();
         crate::game::api_values::install_parts(&mods).unwrap();

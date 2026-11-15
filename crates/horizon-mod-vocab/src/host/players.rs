@@ -397,6 +397,30 @@ pub trait PlayersBackend {
     /// `Player.getAbilities`; Paper `Player#getAllowFlight/isFlying/getFlySpeed/getWalkSpeed`.
     #[access(WorldOnly)]
     fn player_abilities(&self, player: PlayerRef) -> Option<PlayerAbilities>;
+    /// Side: both.
+    /// `IPlayerExtension.mayFly` (NeoForge): whether the player may start flying, by game mode
+    /// or ability. Read this rather than `player_abilities`' `may_fly`, which a creative-flight
+    /// attribute would not show; Horizon has no such attribute yet, so today the two agree.
+    /// None for a stale or unavailable player.
+    #[access(WorldOnly)]
+    fn player_may_fly(&self, player: PlayerRef) -> Option<bool>;
+    /// Side: server.
+    /// Whether `entity` is within the player's reach by the server's rule
+    /// `reach` ([`EntityReach`]): from the player's eyes to the closest point
+    /// of the entity's box, with the rule's own buffer, the range from the
+    /// player's `minecraft:entity_interaction_range` (3.0, 5.0 in creative)
+    /// and, for an attack, the main hand's `attack_range` component. With the
+    /// eyes inside the box the distance is 0; there is no ray and no other
+    /// fallback. This is the server's check, not the client's pick. None for a
+    /// stale player or entity, one whose box Horizon doesn't keep, or one in
+    /// another level.
+    #[access(WorldOnly)]
+    fn player_within_entity_reach(
+        &self,
+        player: PlayerRef,
+        entity: EntityRef,
+        reach: EntityReach,
+    ) -> Option<bool>;
     /// Side: server.
     /// The value of statistic `stat_type` for `key` (`minecraft:stone`,
     /// `minecraft:jump`...), as `ServerStatsCounter.getValue`: 0 when never
@@ -943,6 +967,33 @@ pub trait PlayersBackendMut {
         player: PlayerRef,
         areas: &[ChunkArea],
     ) -> Result<(), ChunkAreaRefusal>;
+    /// Side: server.
+    /// `ServerPlayerGameMode.destroyBlock`: breaks the block at `pos` in the player's level as
+    /// this player breaks it, as FTB Ultimine does for each block of a vein. The player's own
+    /// checks hold: a spectator, an adventure player whose tool can't break it, a held item that
+    /// can't break blocks (a sword in creative), a game master block without the permission and
+    /// a dedicated server's spawn protection leave it. Then `break_block` hears it and may cancel
+    /// it, and the break runs as the player's own: the block's effects, events, particles and
+    /// sound, `player_destroyed_block`, the loot rolled for the held item and its enchantments,
+    /// `block_drops` with this player as the breaker, the item's wear, the mined statistic and
+    /// the exhaustion. A vein miner takes each block's drops and experience in `block_drops` and
+    /// sets them down where it wants with `LevelRef::pop_resource` and
+    /// `LevelRef::award_experience`; what else the break sets loose (a torch losing its support,
+    /// a container's contents) still drops in the world. With `into_inventory`, the drops left
+    /// after `block_drops` go to the player's inventory instead, and what doesn't fit drops from
+    /// them as `Inventory.placeItemBackInInventory` drops it. The player needn't reach or look at
+    /// the block. Breaking from `break_block` or `block_drops` makes them hear these breaks too:
+    /// a mod keeps its own guard, and a break started from inside eight others is refused (a
+    /// Horizon safeguard that the reference does not have). True when the block was removed; false, with nothing broken, for a stale handle, a player who
+    /// isn't here or is dead, air, an unloaded block, a block no survival player can break
+    /// (bedrock), a canceled break, and off a server.
+    #[access(WorldOnly)]
+    fn player_destroy_block(
+        &mut self,
+        player: PlayerRef,
+        pos: [i32; 3],
+        into_inventory: bool,
+    ) -> bool;
     /// Side: both.
     /// Simulate one client movement tick for this server player without changing the player. Refuses stale, absent, dead, spectator or riding players and invalid input.
     #[access(WorldOnly)]

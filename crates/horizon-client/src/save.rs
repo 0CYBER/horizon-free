@@ -5493,7 +5493,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn loaded_chunk_uses_saved_monument_from_its_referenced_start_chunk() {
         use horizon_core::{
             geometry::Direction,
@@ -9301,7 +9301,7 @@ mod tests {
     /// (`SerializableChunkData.postLoadChunk`, `ServerLevel.addLegacyChunkEntities`), so its
     /// minecart is in the world (#14424).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_chunk_from_before_1_17_loads_the_entities_it_keeps() {
         let root = PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let assets = crate::assets::Assets::load(&root).expect("assets");

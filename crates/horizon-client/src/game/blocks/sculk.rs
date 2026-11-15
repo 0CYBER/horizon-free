@@ -2687,7 +2687,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn dropped_wool_dampens_its_own_vibrations() {
         use crate::game::native_entity_refs::tests::with_game;
         use horizon_client::{chunk::Chunk, items::ItemStack};
@@ -2755,7 +2755,7 @@ mod tests {
     /// `vanilla_game_event` hears `GameEvent.Context.affectedState`: the state a context
     /// was made with reaches the listener, and a context made with none reads as None.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn vanilla_game_event_carries_the_affected_state() {
         use crate::game::native_entity_refs::tests::with_game;
         use mod_api::{Hooks, ModEntry, VanillaGameEventEvent};
@@ -2798,7 +2798,7 @@ mod tests {
     /// The wardens that hear an event are those in the list when it is
     /// posted, however the list changed since the last one.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn wardens_hear_events_however_the_list_changed_between_them() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.sculk_prepare();
@@ -2967,7 +2967,7 @@ mod command_damage_listener_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn command_damage_posts_before_teleport_and_deduplicates_the_scan() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),
@@ -3101,7 +3101,7 @@ mod shriek_capture_tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn level_event_shriek_keeps_local_play_and_random_but_not_shared_capture() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),

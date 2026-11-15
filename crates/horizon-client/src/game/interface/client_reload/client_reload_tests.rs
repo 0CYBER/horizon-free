@@ -182,7 +182,7 @@ fn a_converted_file_outside_the_pack_is_absent_not_empty() {
 /// the applies it delivers run once the game exists — before any F3+T
 /// reload.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn initial_load_stages_and_applies_client_reload_listeners() {
     use crate::game::{Progress, load_resources, native_entity_refs::tests::with_game};
     use mod_api::{self, ModEntry};
@@ -292,7 +292,7 @@ fn initial_load_stages_and_applies_client_reload_listeners() {
 /// A listener registered through the real dispatch, staged against a real
 /// merged root (the game's own resources with a dev mod and a resource pack).
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn client_reload_reads_real_assets_with_pack_overrides() {
     use crate::game::native_entity_refs::tests::with_game;
     use mod_api::{self, ModEntry};
@@ -511,7 +511,7 @@ fn client_reload_reads_real_assets_with_pack_overrides() {
 /// `client_setup` reaches every listener with the game's client host, one call per
 /// firing; `run` fires it once per process, so a listener sees one start.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn client_setup_reaches_each_listener_once_per_firing() {
     use crate::game::native_entity_refs::tests::with_game;
     use mod_api::{ClientHost, Hooks, ModEntry};
@@ -546,7 +546,7 @@ fn client_setup_reaches_each_listener_once_per_firing() {
 /// The process's client start is a client that is not a splitscreen guest: a dedicated
 /// server has no client, and a guest's `run` is another local player of the same process.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn only_the_first_local_client_is_the_client_start() {
     use crate::game::execution_role::ExecutionRole;
     use crate::game::native_entity_refs::tests::with_game;
@@ -568,7 +568,7 @@ fn only_the_first_local_client_is_the_client_start() {
 /// per open and not for a failed one), its stop (`server_stopping`, then the final close),
 /// and the client's own close (`client_stopping`).
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn the_lifecycle_moments_fire_once_each_in_order() {
     use crate::game::native_entity_refs::tests::with_game;
     use mod_api::{ClientHost, Hooks, ModEntry, ServerHost};
@@ -699,7 +699,7 @@ fn the_lifecycle_moments_fire_once_each_in_order() {
 /// `get_arm_pose`'s answer is the pose of that hand's stack; a hand it does not answer for,
 /// or no listener at all, leaves the item's own (declared) pose, which a vanilla stick lacks.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn an_arm_pose_answer_replaces_the_pose_the_item_gives() {
     use crate::game::native_entity_refs::tests::with_game;
     use mod_api::{ArmPose, ClientHost, GetArmPoseEvent, Hand, Hooks, ModEntry};
@@ -786,7 +786,7 @@ fn resolved_ui_resources_do_not_restore_a_filtered_panorama_face() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn refused_client_context_keeps_pack_and_listeners() {
     use crate::game::{Progress, native_entity_refs::tests::with_client_game, packs::stage_pack};
     use mod_api::__private::reload::PreparedStep;
@@ -840,7 +840,7 @@ fn refused_client_context_keeps_pack_and_listeners() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn client_completion_reads_published_resources_without_world_access() {
     use crate::game::native_entity_refs::tests::with_client_game;
     use mod_api::__private::{ModPhase, PhaseOwner};
@@ -894,7 +894,7 @@ fn client_completion_reads_published_resources_without_world_access() {
 }
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn client_startup_finishes_configs_before_the_first_runtime_callback() {
     // Startup holds two Game values, which exceed libtest's default thread stack.
     std::thread::Builder::new()
@@ -1019,7 +1019,7 @@ fn client_startup_finishes_configs_before_the_first_runtime_callback() {
 /// the animated model. Other entities, both player paths, and a later no-listener
 /// extraction retain their normal poses.
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
     use crate::game::native_entity_refs::tests::with_client_game;
     use horizon_client::{

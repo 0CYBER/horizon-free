@@ -39,7 +39,7 @@ fn apply_packets(rx: &std::sync::mpsc::Receiver<Out>) -> usize {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated homes"]
+#[ignore = "daily"]
 fn datapack_game_reload_delivers_only_successful_generations_and_disconnects_refused_guests() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();

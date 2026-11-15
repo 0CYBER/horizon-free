@@ -1,0 +1,4 @@
+# Opt-in measurements, never selected by daily shards; exact reasons/rationales are in ../ignored-test-exceptions.json.
+horizon-client-lib entities::entity_collision_tests::obstacle_grid_beats_scanning_every_box_for_a_big_farm by-hand manual # timing; opt-in measurement on an idle machine, not a daily correctness check
+horizon-client-lib mobs::render::scroll_tests::benchmark_mob_farm_geometry by-hand manual # manual benchmark; needs the prepared resources; opt-in measurement on an idle machine, not a daily correctness check
+horizon-client-lib save::compression_bench::benches::bench_chunk_compression_speedup by-hand manual # a measurement, not a check; opt-in measurement on an idle machine, not a daily correctness check

@@ -1,5 +1,5 @@
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; runs in an isolated scratch process"]
+#[ignore = "daily"]
 fn stateful_creation_uses_actual_state_and_preserves_existing_entity() {
     use crate::game::native_entity_refs::tests::{record_key, run_fresh_cases, with_game_at};
     use horizon_client::{chunk::Chunk, containers::BlockEntity};

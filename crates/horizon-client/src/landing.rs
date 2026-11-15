@@ -765,7 +765,7 @@ mod tests {
     /// Both landing sources use the world's frozen definitions and current
     /// damage tags, including a tag-only reload with no pack definitions left.
     #[test]
-    #[ignore = "requires prepared vanilla resources"]
+    #[ignore = "daily"]
     fn datapack_damage_landing_uses_world_armor_tags_and_exhaustion() {
         use crate::{assets::Assets, motion::MotionResources, world::World};
         use horizon_world::loot::PackOverlay;

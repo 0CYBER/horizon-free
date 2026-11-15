@@ -847,6 +847,21 @@ impl Items {
         ingredient_defaults::load_component_damage_registry(root, overlay, &mut items)?;
         Ok(items)
     }
+    /// Build a standalone catalog against the owning world's already loaded
+    /// damage registry. Reloading recipes must not decode new damage definitions.
+    pub fn catalog_with_damage_registry(
+        root: &Path,
+        overlay: &PackOverlay,
+        defaults: &ItemDefaults,
+        damage: horizon_client_core::registries::RegistryIds,
+    ) -> Result<Self> {
+        let mut items = Self::load_with(root, &HashMap::new(), overlay, defaults)?;
+        items.block_items = Arc::new(ingredient_defaults::block_items(root)?);
+        Arc::make_mut(&mut items.component_registry)
+            .by_registry
+            .insert("minecraft:damage_type".into(), damage);
+        Ok(items)
+    }
     fn load_with(
         root: &Path,
         block_for_item: &HashMap<&str, BlockStateId>,

@@ -3,7 +3,7 @@
 /// `AbstractMinecart.getMaxSpeed`, which `MinecartFurnace` halves, and
 /// `comeOffTrack` clamps with it too.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_furnace_cart_is_capped_at_half_the_rule_speed_under_the_new_physics() {
     super::super::native_entity_refs::tests::with_game(|game| {
         let mut features = game.level.enabled_features.to_vec();
@@ -113,7 +113,7 @@ fn cart_index_finds_what_a_scan_finds() {
 /// The cart index hands a cart every mob a scan finds in its box, and
 /// knows whether a mob rides it, however the mob list changed since.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cart_index_finds_the_mobs_a_scan_finds() {
     use super::{CartIndex, CartKind, Minecart};
     use horizon_client::mobs::Mob;

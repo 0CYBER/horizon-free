@@ -8,7 +8,7 @@ use super::*;
 /// `readPersistentAngerSaveData` read it, past ones included, and a mob
 /// that missed ticks while the clock went on does not move it forward.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn h13076_loaded_anger_end_time_is_kept() {
     with_game(|game| {
         crate::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood(

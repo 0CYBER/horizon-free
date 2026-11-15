@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_block_part_answers_the_friction_an_entity_reads() {
         // The fixture's parts: glass is 0.98 to a player only, white wool 0.98 to every entity,
         // red wool NaN, blue wool 3.0, green wool infinity and black wool -0.5.
@@ -260,7 +260,7 @@ mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_travel_and_both_leash_sites_use_the_parts_answer_once() {
         use super::super::boats::Boat;
         use horizon_client::mobs::{Mob, leash};

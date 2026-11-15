@@ -34,6 +34,9 @@ UPDATE hub_queue SET state = 'new' WHERE state = 'filing';
 /// Days the upkeep keeps trying to open a report's issue.
 const RETRY_DAYS: u32 = 7;
 
+/// A queued report awaiting an issue: its row id, kind and fields.
+type UnfiledReport = (i64, String, Map<String, Value>);
+
 /// A field's rules: its name, whether it is needed, its length in characters, whether it may hold lines.
 struct Field(&'static str, bool, std::ops::RangeInclusive<usize>, bool);
 
@@ -125,7 +128,7 @@ impl Store {
     }
 
     /// Reports (the website's and the game's) whose issue isn't open yet, from `since` on: id, kind and fields.
-    pub fn unfiled(&self, since: u32) -> rusqlite::Result<Vec<(i64, String, Map<String, Value>)>> {
+    pub fn unfiled(&self, since: u32) -> rusqlite::Result<Vec<UnfiledReport>> {
         let mut statement = self.db.prepare(
             "SELECT id, kind, body FROM hub_queue WHERE kind IN ('report', 'game') AND state = 'new' AND day >= ?1 ORDER BY id",
         )?;

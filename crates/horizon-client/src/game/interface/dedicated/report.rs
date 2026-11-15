@@ -673,7 +673,7 @@ mod tests {
 
     /// A server that holds a seed, a world name, a player's name, a named mob and a sign writes a capture with none of them.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_capture_of_a_server_with_names_text_and_a_seed_holds_none_of_them() {
         use horizon_client::containers::BlockEntity;
         use horizon_client::signs::{SignData, SignText};

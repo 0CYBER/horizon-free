@@ -54,7 +54,7 @@ mod player_game_mode_changed_tests {
     /// A redirect is what the player gets; a redirect to the current mode
     /// changes nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_listener_redirects_the_new_game_mode() {
         let mods: mod_api::Mods = vec![ModEntry::new("lobby", Box::new(Lobby))].into();
         mod_platform::testing::with_mods(mods, || {
@@ -112,7 +112,7 @@ mod player_game_mode_changed_tests {
     /// The redirected mode is the one sent to the client, and a redirect to the current mode
     /// sends nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_redirect_sends_its_mode_and_a_redirect_to_the_current_mode_sends_none() {
         let mods: mod_api::Mods = vec![ModEntry::new("lobby", Box::new(Lobby))].into();
         mod_platform::testing::with_mods(mods, || {
@@ -147,7 +147,7 @@ mod player_game_mode_changed_tests {
 
     /// Listeners run in order: the second sees the first's write.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_second_listener_sees_the_first_listeners_write() {
         let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mods: mod_api::Mods = vec![

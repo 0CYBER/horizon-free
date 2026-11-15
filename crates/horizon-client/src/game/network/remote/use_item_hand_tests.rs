@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn identical_instant_stacks_report_the_selected_interaction_hand() {
     let observer = Observer::default();
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
@@ -60,7 +60,7 @@ fn item_observer() -> (Observer, mod_api::Mods) {
 }
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn the_item_event_names_the_guest_who_clicked_not_the_host() {
     let (observer, mods) = item_observer();
     mod_platform::testing::with_mods(mods, || {
@@ -81,7 +81,7 @@ fn the_item_event_names_the_guest_who_clicked_not_the_host() {
 }
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn the_item_event_names_the_host_player_on_its_own_click() {
     let (observer, mods) = item_observer();
     mod_platform::testing::with_mods(mods, || {
@@ -114,7 +114,7 @@ fn the_item_event_names_the_host_player_on_its_own_click() {
 }
 
 #[test]
-#[ignore = "requires prepared game resources"]
+#[ignore = "daily"]
 fn the_item_event_names_this_client_on_a_predicted_use() {
     let (observer, mods) = item_observer();
     mod_platform::testing::with_mods(mods, || {

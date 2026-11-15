@@ -38,7 +38,7 @@ impl ItemPart for NoMod {
 /// The Part's answer wins for its own item, the namespace stands when it leaves it, and an item
 /// without the Part reports its namespace. A Part may answer no mod, and an unknown item has no answer.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_part_names_the_mod_that_made_the_stack() {
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new("creator", Box::new(Bucket))].into();
     mod_platform::testing::with_mods(mods.clone(), || {

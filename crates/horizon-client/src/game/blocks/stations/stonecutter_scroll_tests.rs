@@ -35,7 +35,7 @@ fn pick_recipe(game: &mut Game<'_>, index: i32) -> bool {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn the_stonecutter_list_returns_to_the_top_when_its_input_changes() {
     crate::game::native_entity_refs::tests::with_game(|g| {
         g.options.dedicated = Some(Vec::new());

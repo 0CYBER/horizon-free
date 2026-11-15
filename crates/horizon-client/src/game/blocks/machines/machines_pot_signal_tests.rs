@@ -23,7 +23,7 @@ fn saved_count(game: &Game<'_>, pos: Pos) -> u32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn a_pot_feeds_a_comparator_from_its_saved_slot_like_a_chest() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
@@ -60,7 +60,7 @@ fn a_pot_feeds_a_comparator_from_its_saved_slot_like_a_chest() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+#[ignore = "daily"]
 fn a_hopper_inserted_item_updates_the_comparator_beside_the_pot() {
     let mut resources = None;
     let mut game = server_game(&mut resources);

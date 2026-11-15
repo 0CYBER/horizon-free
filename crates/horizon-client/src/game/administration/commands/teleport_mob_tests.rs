@@ -3,7 +3,7 @@ use horizon_client::mobs::{Mob, path::Path};
 use horizon_core::geometry::Vec3;
 
 #[test]
-#[ignore = "needs prepared resources"]
+#[ignore = "daily"]
 fn command_stops_navigation_and_dismounts() {
     with_game(|game| {
         let kind = game

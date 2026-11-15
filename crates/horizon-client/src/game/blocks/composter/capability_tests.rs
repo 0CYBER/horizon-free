@@ -65,7 +65,7 @@ fn assert_quiet(game: &Game<'_>, heard: &Mutex<Vec<String>>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn sided_composter_transactions_preserve_literal_chance_and_defer_all_effects() {
     struct Heard(Arc<Mutex<Vec<String>>>);
     #[mod_api::__subscriptions]
@@ -473,7 +473,7 @@ fn sided_composter_transactions_preserve_literal_chance_and_defer_all_effects() 
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_copy_never_answers_composter_items() {
     crate::game::native_entity_refs::tests::with_client_game(|game| {
         game.world

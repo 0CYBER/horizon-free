@@ -2696,7 +2696,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_edge_bounce_uses_supporting_column() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -3664,7 +3664,7 @@ mod tests {
     /// On honey blocks the jump factor is 0.5, halving the jump impulse.
     /// Jump Boost effects add 0.1 * (amplifier + 1.0).
     #[test]
-    #[ignore = "requires prepared vanilla resources; run explicitly with --ignored"]
+    #[ignore = "daily"]
     fn living_jump_power_respects_honey_block_and_jump_boost() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {

@@ -92,7 +92,7 @@ pub(in crate::game) fn reload(game: &mut super::Game<'_>) {
 /// does not; a reload fires it once more before `client_resources_reloaded`, the handle from it
 /// resolves and the first load's is stale.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_mod_hears_model_baking_completed_once_per_load_and_keeps_its_handles() {
     let _fixture = horizon_client::models::standalone_fixture(vec![PART.into()]);
     let (kept, mods) = keeper();
@@ -147,7 +147,7 @@ fn a_client_mod_hears_model_baking_completed_once_per_load_and_keeps_its_handles
 
 /// Real Game/resource-load/model-registry proof, not a GPU render proof.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn standalone_forms_resolve_as_one_model_and_republish_after_resource_reload() {
     use horizon_client::models::StandaloneFormRegistration;
     use mod_api::StandaloneModelForm;
@@ -240,7 +240,7 @@ fn standalone_forms_resolve_as_one_model_and_republish_after_resource_reload() {
 /// A reload whose application is refused fires nothing: the mod hears no
 /// `model_baking_completed`, and the handle from the last successful load stays right.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_failed_reload_fires_no_model_baking_completed() {
     use super::{Progress, packs::stage_pack};
     let _fixture = horizon_client::models::standalone_fixture(vec![PART.into()]);

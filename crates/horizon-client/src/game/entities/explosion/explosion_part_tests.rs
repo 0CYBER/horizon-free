@@ -104,7 +104,7 @@ impl Hooks for Parts {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated native mod state"]
+#[ignore = "daily"]
 fn block_parts_xp_and_explosion_contract() {
     let amount = Arc::new(AtomicI32::new(7));
     let add = Arc::new(AtomicBool::new(false));
@@ -377,7 +377,7 @@ fn blast() -> ExplosionStart<'static> {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated native mod state"]
+#[ignore = "daily"]
 fn block_parts_answer_explosion_resistance() {
     let answers = Answers::default();
     with_answers(&answers, |game| {
@@ -470,7 +470,7 @@ fn block_parts_answer_explosion_resistance() {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated native mod state"]
+#[ignore = "daily"]
 fn block_parts_answer_drops_from_explosions() {
     with_answers(&Answers::default(), |game| {
         let registry = game.pack.assets.registry;
@@ -560,7 +560,7 @@ impl Hooks for SkullMod {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated native mod state"]
+#[ignore = "daily"]
 fn a_block_part_keeps_its_block_from_a_dangerous_skull_cap() {
     let part = SkullProof {
         proof: Arc::new(AtomicBool::new(false)),

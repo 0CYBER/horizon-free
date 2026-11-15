@@ -67,7 +67,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn contextual_game_event_keeps_guest_cause_until_emission() {
         use crate::game::native_item_places::tests::open_to_lan;
         use crate::game::native_sound_refs::tests::guest;
@@ -121,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn sensor_receives_context_source_and_affected_state_at_requested_position() {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());

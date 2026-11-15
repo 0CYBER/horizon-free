@@ -65,6 +65,12 @@ Extra views also omit the sun, moon, stars, clouds and block outline. Translucen
 terrain uses the player camera's sorting. See the generated `world_views` hook notes
 for the rendering contract.
 
+Views draw the player's own level for now. The other levels a server opens for the
+client (viewed levels) are meshed only while a view names one, after the player's own
+level's work and on one worker at a time, and their meshes stay 5 seconds after no view
+names the level. Once views of a viewed level are drawn, such a view draws the sections
+meshed so far and nothing where a section is not meshed yet.
+
 ## Muffling sounds
 
 `ClientHost::muffle_sounds(amount, lowpass, ticks, exempt)` temporarily muffles the sound output, for example to accompany ringing ears after a nearby blast:

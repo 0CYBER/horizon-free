@@ -122,7 +122,7 @@ fn answer(game: &Game<'_>, y: i32) -> Option<u8> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_dynamic_light_part_answers_by_position_for_declared_blocks_only() {
     with_lights(
         "game::dynamic_light_emission_tests::a_dynamic_light_part_answers_by_position_for_declared_blocks_only",
@@ -189,7 +189,7 @@ fn a_dynamic_light_part_answers_by_position_for_declared_blocks_only() {
 /// dimension's handle. A server's light update asks a client's part again, for the changed
 /// sections only.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn check_light_and_a_light_update_ask_the_part_again() {
     with_lights(
         "game::dynamic_light_emission_tests::check_light_and_a_light_update_ask_the_part_again",

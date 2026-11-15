@@ -102,7 +102,7 @@ fn events() -> Vec<(&'static str, [f64; 3], Option<Who>)> {
 /// `CushionItem.useOn` builds the entity with `EntityType.createDefaultStackConfig`,
 /// whose `applyComponentsFromItemStack` copies `CUSTOM_NAME` onto the cushion.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_placed_cushion_keeps_its_stacks_custom_name() {
     let mut game = game();
     game.creative = true;
@@ -134,7 +134,7 @@ fn a_placed_cushion_keeps_its_stacks_custom_name() {
 /// item otherwise. `BlockAttachedEntity.hurtServer` passes the damage source's
 /// causing entity.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_creative_blast_leaves_no_cushion_item() {
     let mut game = game();
     // (creative, the TNT's owner is a player, the guest behind it, drops)
@@ -193,7 +193,7 @@ fn a_creative_blast_leaves_no_cushion_item() {
 /// and then dropped with `causedBy = null`, which posts no `entity_die`;
 /// `kill` (a player's break) still does.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_cushion_that_loses_its_support_is_discarded_silently() {
     let mut game = game();
     game.creative = true;

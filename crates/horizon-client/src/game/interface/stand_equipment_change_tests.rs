@@ -36,7 +36,7 @@ impl Hooks for Counter {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_stands_body_and_saddle_writes_are_told_once_each() {
     let heard = Arc::new(Mutex::new(Heard::new()));
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new(

@@ -123,7 +123,7 @@ fn run(game: &mut Game<'_>, command: &str) -> (bool, Vec<String>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn test_pos_as_a_guest_uses_the_guest_s_view() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -164,7 +164,7 @@ fn test_pos_as_a_guest_uses_the_guest_s_view() {
 /// connected player and a guest whose view finds no test are refused as
 /// before, and every place and view is back afterwards.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn test_pos_refuses_other_sources_and_restores_the_views() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);

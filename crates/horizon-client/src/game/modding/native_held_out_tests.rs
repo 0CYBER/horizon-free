@@ -64,7 +64,7 @@ fn with_observer(test: impl FnOnce(&mut super::Game<'_>, &Arc<Mutex<Observation>
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn boat_tick_refuses_a_write_from_a_leash_drop_hook() {
     with_observer(|game, state| {
         let mut boat = Boat::new(100, "oak".into(), Vec3::new(0.5, 64.0, 0.5), 0.0);
@@ -81,7 +81,7 @@ fn boat_tick_refuses_a_write_from_a_leash_drop_hook() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn statue_conversion_refuses_a_write_from_an_item_spawn_hook() {
     with_observer(|game, state| {
         let kind = game
@@ -104,7 +104,7 @@ fn statue_conversion_refuses_a_write_from_an_item_spawn_hook() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn cart_tick_refuses_a_write_from_a_mount_hook() {
     with_observer(|game, state| {
         game.options.dedicated = Some(Vec::new());
@@ -125,7 +125,7 @@ fn cart_tick_refuses_a_write_from_a_mount_hook() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn leash_interaction_keeps_the_stored_boat_writable() {
     with_observer(|game, state| {
         let mut boat = Boat::new(106, "oak".into(), Vec3::new(0.5, 64.0, 0.5), 0.0);
@@ -140,7 +140,7 @@ fn leash_interaction_keeps_the_stored_boat_writable() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn nested_held_out_entities_both_refuse() {
     with_observer(|game, state| {
         game.carts.push(Minecart::new(

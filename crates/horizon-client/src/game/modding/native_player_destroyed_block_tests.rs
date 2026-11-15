@@ -81,8 +81,12 @@ fn block(game: &super::Game<'_>, pos: [i32; 3]) -> String {
 }
 
 /// A server's game with its own player standing in the origin chunk, as the native player-break
-/// tests set one up: their UUID.
-fn with_player(game: &mut super::Game<'_>, mode: GameMode, held: Option<ItemStack>) -> u128 {
+/// tests set one up: their handle.
+fn with_player(
+    game: &mut super::Game<'_>,
+    mode: GameMode,
+    held: Option<ItemStack>,
+) -> mod_api::PlayerRef {
     game.options.dedicated = Some(Vec::new());
     let _ = game
         .block_ticks
@@ -97,11 +101,13 @@ fn with_player(game: &mut super::Game<'_>, mode: GameMode, held: Option<ItemStac
     game.lan_acting_permission = Some(0);
     game.set_mode(mode);
     game.inventory[game.selected] = held;
-    game.native_acting_id()
+    // The acting player as a hook would name them: this server's entity 20.
+    let epoch = game.native_lifecycle.epoch().unwrap();
+    mod_api::__private::game::player_ref(mod_api::EntityRef::new(epoch, 20), 123)
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_players_completed_break_is_heard_once_with_the_removed_state() {
     let heard = Arc::new(Mutex::new(Vec::new()));
     let order = Arc::new(Mutex::new(Vec::new()));
@@ -120,14 +126,14 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
             let take = || std::mem::take(&mut *heard.lock().unwrap());
 
             // Survival, with the right tool: stone drops, and the break is heard.
-            let uuid = with_player(
+            let player = with_player(
                 game,
                 GameMode::Survival,
                 Some(ItemStack::new("minecraft:diamond_pickaxe", 1)),
             );
             let stone = [6, 64, 4];
             place(game, stone, "minecraft:stone");
-            assert!(game.native_player_break_block(uuid, stone, false));
+            assert!(game.player_destroy_block(player, stone, false));
             assert_eq!(block(game, stone), "minecraft:air");
             assert_eq!(take(), [(stone, "minecraft:stone".to_owned(), None)]);
             // Heard before `playerDestroy` counts the block mined; the count comes after.
@@ -138,7 +144,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
 
             // Creative: no drops and an early return in vanilla, still heard once. A chest
             // carries its saved contents.
-            let uuid = with_player(game, GameMode::Creative, None);
+            let player = with_player(game, GameMode::Creative, None);
             let chest = [7, 64, 4];
             place(game, chest, "minecraft:chest");
             let mut contents = vec![None; 27];
@@ -147,7 +153,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
                 (chest[0], chest[1], chest[2]),
                 horizon_client::containers::BlockEntity::Chest(contents),
             );
-            assert!(game.native_player_break_block(uuid, chest, false));
+            assert!(game.player_destroy_block(player, chest, false));
             assert_eq!(block(game, chest), "minecraft:air");
             let heard_now = take();
             assert_eq!(heard_now.len(), 1);
@@ -173,7 +179,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
             );
 
             // A break `break_block` cancels keeps the block and is not heard.
-            let uuid = with_player(
+            let player = with_player(
                 game,
                 GameMode::Survival,
                 Some(ItemStack::new("minecraft:diamond_pickaxe", 1)),
@@ -181,7 +187,7 @@ fn a_players_completed_break_is_heard_once_with_the_removed_state() {
             cancel_break.store(true, Ordering::Relaxed);
             let kept = [8, 64, 4];
             place(game, kept, "minecraft:stone");
-            assert!(!game.native_player_break_block(uuid, kept, false));
+            assert!(!game.player_destroy_block(player, kept, false));
             assert_eq!(block(game, kept), "minecraft:stone");
             assert!(take().is_empty());
             cancel_break.store(false, Ordering::Relaxed);
@@ -331,7 +337,7 @@ fn with_order_probe(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_fakes_break_action_is_heard_before_the_drops_and_the_experience() {
     use mod_api::PlayerAction;
     let stone = [1, 63, 0];
@@ -364,7 +370,7 @@ fn a_fakes_break_action_is_heard_before_the_drops_and_the_experience() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_listener_writes_the_level_where_the_block_stood() {
     use mod_api::PlayerAction;
     let stone = [1, 63, 0];
@@ -388,7 +394,7 @@ fn a_listener_writes_the_level_where_the_block_stood() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn shears_disarm_a_tripwire_and_the_hook_is_told_the_disarmed_string() {
     use mod_api::PlayerAction;
     let wire = [1, 64, 0];
@@ -412,7 +418,7 @@ fn shears_disarm_a_tripwire_and_the_hook_is_told_the_disarmed_string() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_target_break_block_replaced_is_told_with_its_own_block_entity() {
     use mod_api::PlayerAction;
     let target = [1, 63, 0];
@@ -529,7 +535,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
-            let uuid = with_player(
+            let player = with_player(
                 game,
                 GameMode::Survival,
                 Some(ItemStack::new("minecraft:diamond_axe", 1)),
@@ -541,7 +547,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
                 mod_api::Tag::String("Loot Chest".into()),
             );
             game.dropped.clear();
-            assert!(game.native_player_break_block(uuid, chest, false));
+            assert!(game.player_destroy_block(player, chest, false));
             assert_eq!(block(game, chest), "minecraft:air");
             // The listener read the name the removal clears from the level and put it on the
             // chest item the break dropped.
@@ -560,7 +566,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
             let heard = std::mem::take(&mut *seen.lock().unwrap());
             assert_eq!(heard.len(), 1);
             let (breaker, breaker_entity, items, has_block_entity) = &heard[0];
-            assert_eq!(*breaker, Some(uuid));
+            assert_eq!(*breaker, Some(123));
             assert_eq!(
                 breaker_entity.map(|entity| entity.id()),
                 Some(20),
@@ -587,7 +593,7 @@ fn block_drops_reads_the_chest_a_players_break_removed_and_the_handle_goes_stale
             // A block with no block entity gives none.
             let dirt = [8, 64, 4];
             place(game, dirt, "minecraft:dirt");
-            assert!(game.native_player_break_block(uuid, dirt, false));
+            assert!(game.player_destroy_block(player, dirt, false));
             let heard = std::mem::take(&mut *seen.lock().unwrap());
             assert_eq!(heard.len(), 1);
             assert!(!heard[0].3);
@@ -659,7 +665,7 @@ fn block_drops_holds_nothing_after_a_listener_panics() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
-            let uuid = with_player(
+            let player = with_player(
                 game,
                 GameMode::Survival,
                 Some(ItemStack::new("minecraft:diamond_axe", 1)),
@@ -668,7 +674,7 @@ fn block_drops_holds_nothing_after_a_listener_panics() {
             put_chest(game, chest);
             // The platform may contain the panic or let it unwind through the break: either way.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                game.native_player_break_block(uuid, chest, false)
+                game.player_destroy_block(player, chest, false)
             }));
             assert_eq!(
                 seen.lock().unwrap().len(),

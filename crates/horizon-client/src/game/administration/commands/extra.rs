@@ -819,7 +819,7 @@ impl Game<'_> {
         }
         if ctx.literals.iter().any(|l| l == "id") {
             let id = match ctx.get("id") {
-                Some(Arg::Str(s)) => horizon_client::command::selector::java_uuid(s),
+                Some(Arg::Str(s)) => horizon_core::text::parse_java_uuid(s),
                 _ => None,
             }
             .unwrap_or_default();

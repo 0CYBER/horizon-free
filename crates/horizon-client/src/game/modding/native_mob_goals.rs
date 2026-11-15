@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn goal_constructors_follow_vanilla_classes() {
         use horizon_client::mobs::Species;
         with_game(|game| {
@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn follow_mob_uses_the_mobs_actual_navigation() {
         with_game(|game| {
             let mob = mob_in_game(game, "minecraft:cow", 501);
@@ -596,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn removing_running_goal_supplies_snapshot_and_persists_level_random() {
         use horizon_client::mobs::goals::{Cx, Goal};
         use horizon_core::random::RandomSource;
@@ -654,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn removing_hold_ground_notifies_nearby_raiders() {
         use horizon_client::mobs::{
             Who,
@@ -697,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn removing_school_goal_updates_the_leader() {
         use horizon_client::mobs::{aquatic::FollowFlockLeader, goals::Cx};
         with_game(|game| {
@@ -746,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn goals_read_add_remove_and_refuse_what_the_mob_does_not_hold() {
         crate::game::entity::taken_pass_tests::in_both_dimensions(|game, balance| {
             game.world

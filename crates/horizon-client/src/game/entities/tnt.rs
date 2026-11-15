@@ -1618,7 +1618,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_transfer_tnt_state_follows_memory_but_not_saved_nbt() {
         use super::super::commands::Target;
         let mut resources = None;
@@ -1647,7 +1647,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_transfer_ordinary_nbt_cannot_supply_runtime_immunity() {
         use horizon_core::nbt::Tag;
         let mut resources = None;
@@ -1668,7 +1668,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn portal_blast_sulfur_cube_uses_only_positive_cooldown() {
         use horizon_client::mobs::Mob;
         use horizon_client::nether_portal::PortalState;
@@ -1827,7 +1827,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn live_data_commands_adopt_into_the_existing_tnt() {
         use crate::game::commands::Target;
         use horizon_core::nbt::Tag;
@@ -2371,7 +2371,7 @@ mod entity_collision_tests {
     /// a boat holds the TNT and the orb up, a shulker the sand, as they hold
     /// up a dropped item (`canBeCollidedWith`).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn tnt_sand_and_orbs_land_on_boats_and_shulkers() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.build_registries();

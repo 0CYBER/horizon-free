@@ -20,9 +20,12 @@ fn update(host: &mut dyn ServerHost) -> Result<(), ()> {
 - Writes apply immediately, so subsequent steps in the transaction see them.
 - The game snapshots each storage before its first write. Handlers use the game's
   journal rather than keeping their own.
-- A nested commit merges into its parent. Only the outermost commit makes changes
-  final and publishes their notifications.
-- An abort restores the recorded storage without publishing commit effects.
+- A nested commit merges into its parent. Only the outermost commit makes storage
+  changes final and publishes deferred game-held vanilla container effects.
+- An abort restores recorded storage without publishing those commit effects.
+- Raw mod-owned storage writes and restores issue no synthetic notifications.
+- Explicit changed/comparator/neighbour/data-send notifications run when issued,
+  including inside a transaction, and survive abort.
 - A panic unwinding out of the closure aborts its transaction. The parent remains
   open if you catch the panic inside the parent closure.
 - Closing a transaction aborts any transactions left open inside it before closing
@@ -41,10 +44,10 @@ The journal covers writes through capability handlers to these storages:
 | Entity inventory | Chest or hopper minecart, chest boat, chested donkey, mule or llama inventory |
 | Item entity | Stack; an emptied entity remains until the outermost commit removes it |
 
-At the outermost commit, the game publishes change notifications and deferred
-effects: `setChanged`, comparators, jukebox playback, cauldron and composter block updates and
-item drops. Drops include items placed at a block, thrown by a player or entity,
-or split off an item entity.
+At the outermost commit, game-held vanilla containers publish their implicit change
+notifications. Other deferred effects include jukebox playback, cauldron and composter block updates and
+item drops, including items placed at a block, thrown by a player or entity, or split off an
+item entity. Explicit mod-issued world notifications are not deferred with these effects.
 
 A world pickup or placement of fluid (`level.pickup_fluid`, `level.place_fluid`) writes
 its block at the call and the rest at the outermost commit; an aborted one leaves the world
@@ -118,8 +121,8 @@ These methods are server-only:
 | `Closing` | A nested transaction is committing into its parent or aborting |
 | `RootClosing` | The outermost transaction is closing |
 
-On a root commit, `contents_changed` listeners run during `RootClosing`. Their
-writes are outside the transaction whose commit triggered them.
+Implicit vanilla container notices run during `RootClosing`, outside the transaction whose
+commit triggered them. Explicit mod notices issued during a transaction run during `Open`.
 
 ## Entity inventory slots
 

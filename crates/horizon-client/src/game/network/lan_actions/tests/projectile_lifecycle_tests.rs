@@ -35,7 +35,7 @@ static VALUE: AttachmentType<i32> = AttachmentType {
 };
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn projectile_restore_entries_keep_the_bound_arrow() {
     for path in 0..3 {
         let exercise = |game: &mut Game<'_>| {

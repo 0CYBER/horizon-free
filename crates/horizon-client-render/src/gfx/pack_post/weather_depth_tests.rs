@@ -4,7 +4,7 @@ use std::io::{Cursor, Write};
 use wgpu::util::DeviceExt;
 
 #[test]
-#[ignore = "requires a host GPU; missing adapter is a failure"]
+#[ignore = "daily"]
 fn rain_and_snow_leave_depth_alone_whatever_rain_depth_says() {
     let _gpu = crate::gfx::test_gpu::lock();
     let instance = crate::gfx::test_gpu::instance();

@@ -1,7 +1,7 @@
 use horizon_core::geometry::Vec3;
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn warning_dispatch_uses_neutral_at_tick_four() {
     use crate::game::{Audio, Game, Options, Progress, Settings, load_resources};
     use horizon_client::motion::PlayerMotion;
@@ -115,7 +115,7 @@ fn warning_dispatch_uses_neutral_at_tick_four() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn residency_spawner_load_expiry_and_spawn_order() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         game.ominous_spawners.clear();
@@ -149,7 +149,7 @@ fn residency_spawner_load_expiry_and_spawn_order() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn taken_spawner_tick_keeps_survivors_before_both_spawns() {
     use horizon_client::items::ItemStack;
     crate::game::native_entity_refs::tests::with_game(|game| {
@@ -188,7 +188,7 @@ fn taken_spawner_tick_keeps_survivors_before_both_spawns() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {
     use crate::game::{
         commands::Target,
@@ -247,7 +247,7 @@ fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn residency_command_positions_and_client_spawner_clock() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         game.set_allow_commands(true);

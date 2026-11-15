@@ -378,7 +378,7 @@ mod tests {
     /// with the rule on, a zombie walking into a wooden door may break it,
     /// and a mod that denies it griefing keeps the door.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_hard_zombie_breaks_a_wooden_door_unless_a_mod_denies_it() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {

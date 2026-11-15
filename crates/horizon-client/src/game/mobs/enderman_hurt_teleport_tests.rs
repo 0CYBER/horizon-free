@@ -85,7 +85,7 @@ fn enderman(game: &Game, id: u32, at: Vec3, seed: i64) -> Mob {
 /// `ServerExplosion.hurtEntities` -> `Enderman.hurtServer`: an enderman the
 /// blast hurts has teleported (or drawn not to) when the explosion returns.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_explosion_teleports_endermen_before_it_returns() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let mut resources = None;
@@ -132,7 +132,7 @@ fn an_explosion_teleports_endermen_before_it_returns() {
 /// `Enderman.hurtServer` teleports: the silverfish come out where the enderman
 /// was hurt, from its random's next draws.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_infested_endermans_silverfish_come_out_where_it_was_hurt() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let mut resources = None;
@@ -197,7 +197,7 @@ fn shulker(game: &Game, id: u32, at: Vec3, seed: i64) -> Mob {
 /// bullet hurts runs `hitByShulkerBullet` (its teleport) inside the hurt, so
 /// it has moved when the hit returns, and the levitation still lands on it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_shulker_bullets_hit_teleports_an_open_shulker_before_it_returns() {
     use horizon_client::projectiles::{Hit, Projectile, ProjectileKind};
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
@@ -252,7 +252,7 @@ fn a_shulker_bullets_hit_teleports_an_open_shulker_before_it_returns() {
 /// gets off where the shulker stood (`ejectPassengers`) instead of being
 /// carried to where it teleports.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_teleporting_shulker_leaves_its_rider_behind() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let mut resources = None;
@@ -302,7 +302,7 @@ fn a_teleporting_shulker_leaves_its_rider_behind() {
 /// the block it left, between its sound and level event 2016, so a sculk
 /// sensor where it stood hears the shulker arrive.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_teleporting_shulker_posts_teleport_where_it_stood() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let mut resources = None;

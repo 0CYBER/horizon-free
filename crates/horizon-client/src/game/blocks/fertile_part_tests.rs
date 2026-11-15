@@ -25,7 +25,7 @@ impl Hooks for Parts {
 }
 
 #[test]
-#[ignore = "needs prepared resources and isolated native mod state"]
+#[ignore = "daily"]
 fn a_farmland_part_answers_fertility_and_hydration() {
     let mods: mod_api::Mods = vec![mod_api::ModEntry::new("farmland", Box::new(Parts))].into();
     mod_platform::testing::with_mods(mods.clone(), || {

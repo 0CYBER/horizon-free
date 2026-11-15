@@ -1592,7 +1592,7 @@ mod tests {
     /// there is one a baby model name maps to, and so are the parts a sample of part names is
     /// renamed to.
     #[test]
-    #[ignore = "requires prepared entity models in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn names_reach_horizons_models() {
         let root = std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES");
         let types: HashMap<String, Arc<MobType>> = super::super::MobTypes::load(Path::new(&root))

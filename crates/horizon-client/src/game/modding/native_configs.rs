@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn config_permissions_and_once_per_side_survive_two_worlds() {
         use mod_api::{Hooks, Host, HostSide, HostTransaction, ModEntry};
         use std::sync::{Arc, Mutex};

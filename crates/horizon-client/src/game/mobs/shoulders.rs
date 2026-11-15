@@ -232,7 +232,7 @@ mod mod_parrot_tests {
     /// shoulder variant, as `ServerPlayer.extractParrotVariant` reads only that
     /// id: a mod draws its own parrot there.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_parrot_type_rides_a_shoulder_as_itself() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let owner = [1, 2, 3, 4];

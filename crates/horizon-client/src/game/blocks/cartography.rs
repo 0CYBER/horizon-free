@@ -294,7 +294,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn crafting_map_takes_use_real_saved_maps() {
         use horizon_client::menu::{Env, Input, Kind, Menu};
         super::super::native_entity_refs::tests::with_game(|game| {

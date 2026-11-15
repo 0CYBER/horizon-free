@@ -445,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn item_and_block_registry_facts_use_the_loaded_tables() {
         use super::super::api_values::TryIntoApi;
         use mod_api::Host;
@@ -508,7 +508,7 @@ mod tests {
     /// A mod item maps back to the content block it places: the item's
     /// binding is the block the content root registered for it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn item_block_maps_a_mod_items_back_to_its_block() {
         use super::super::native_entity_refs::tests::{run_fresh_cases, with_game_at};
         use mod_api::{self, Hooks, Host};
@@ -555,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn host_key_iteration_matches_the_26_3_registries_in_registry_order() {
         use mod_api::Host;
         let base = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
@@ -618,7 +618,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires prepared resources"]
+    #[ignore = "daily"]
     fn public_host_resolves_literal_block_and_effect_names() {
         mod_platform::testing::with_mods(std::sync::Arc::from([]), || {
             let root =
@@ -649,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fluid_type_properties_answer_each_fluid_family() {
         use mod_api::{Host, HostFluidStates};
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -714,7 +714,7 @@ mod tests {
     /// `FluidState.createLegacyBlock`: a source is its block at level 0, flowing water of amount
     /// 3 is level 5, falling adds 8, the empty fluid is air; states no fluid can be in have none.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn legacy_blocks_follow_the_liquid_levels() {
         use mod_api::{Host, HostFluidStates};
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -774,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fluid_definitions_and_constraints_use_the_loaded_registry() {
         use mod_api::{Host, HostFluidStates};
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -1003,7 +1003,7 @@ mod facts_tests {
     use mod_api::{BlockStateRecord, HostBlockStates};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn block_state_facts_read_vanillas_tables_through_the_host() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let state = |name: &str| {
@@ -1140,7 +1140,7 @@ mod crafting_remainder_tests {
         }
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn crafting_remainder_without_parts_matches_data() {
         let mods: mod_api::Mods = Vec::new().into();
         crate::game::api_values::install_parts(&mods).unwrap();
@@ -1172,7 +1172,7 @@ mod crafting_remainder_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn crafting_remainder_part_override_and_default() {
         let mods: mod_api::Mods =
             vec![mod_api::ModEntry::new("remainder", Box::new(RemainderMod))].into();

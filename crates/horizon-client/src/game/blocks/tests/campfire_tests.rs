@@ -74,7 +74,7 @@ fn slots(game: &Game<'_>, pos: [i32; 3]) -> usize {
 /// the sneak the campfire takes the beef, and the use it consumed triggers
 /// ITEM_USED_ON_BLOCK with the stack before the use.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_sneak_keeps_the_food_and_placing_it_fires_item_used_on_block() {
     const POS: [i32; 3] = [2, 4, 3];
     let mut resources = None;

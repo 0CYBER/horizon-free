@@ -466,7 +466,7 @@ fn glint_atlas_reads_prepared_images_and_metadata_together() {
 }
 
 #[test]
-#[ignore = "requires the player's prepared pinned 26.3 resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn prepared_item_atlas_matches_pinned_vanilla() {
     let root =
         PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources"));

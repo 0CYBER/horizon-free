@@ -23,7 +23,7 @@ static VALUE: AttachmentType<i32> = AttachmentType {
 };
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
     with_game(|game| {
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));

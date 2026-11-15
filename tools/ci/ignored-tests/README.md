@@ -24,19 +24,50 @@ failure. The one-process runner selects it with `--exact` without `--ignored`; o
 when the variable is absent and require it to pass when present.
 
 `daily` marks a test moved out of `verify` into the daily run (CONTRIBUTING.md "CI tiers"): it is
-`#[ignore = "daily"]` in its source, and its row, in `daily-<package>.txt` with the rows sorted, names its cargo target
+`#[ignore = "daily"]` in its source, and its row, in a new `daily-PACKAGE-TOPIC.txt` with the rows sorted,
+names its cargo target
 (`lib`, `bin:NAME` or `test:NAME`) and why it is a daily test (`slow`, `game-boot`, `resources`, `child-process`,
 `network`, `wasm-fixture`). It is not a known failure: it runs every day and must pass, and a row whose test no
 longer runs fails. Its package's shard runs it when that shard builds its target, and the `daily-rows` leg runs
 every other one; verify-static fails a row no leg runs. `python3 tools/ci/move_to_daily.py apply LIST` writes the
 attribute and the row (its docstring has the list format). The attribute is the source's mark and the row is the
 daily run's list of what must run: an attribute without a row in a package no shard covers would run nowhere.
-A launcher test is moved the same way (`daily-horizon-launcher.txt`): its own leg, `daily-rows-launcher`, runs it
+A launcher test is moved the same way (a new `daily-horizon-launcher-TOPIC.txt`): its own leg, `daily-rows-launcher`, runs it
 from `launcher/`, its own workspace, against its own lockfile. A launcher test that starts the launcher binary also belongs to
 the Windows release job `launcher-processes` (`launcher-windows-check.yml`), which runs those `tests/` targets by
 `--test` name: add its target there too.
 verify-static also checks both directions statically: a `#[ignore = "daily"]` function with no row, or a row with no
-such function, fails (`check_ignored_test_rows.py`; matched by package and function name).
+such function, fails (`check_ignored_test_rows.py`). Daily selection matches the package, Cargo target and complete
+logical libtest path, including inline modules. Game area folders do not add path segments: the source-only
+`horizon-game-discovery` CLI calls the build script's canonical discovery and traverses Rust modules with `syn`.
+The guard invokes that small helper once for all targets; it does not build Game, the SDK or prepared resources.
+
+Every descriptive `#[ignore = "..."]` other than `daily` fails unless its exact package, logical test path and
+reason appear in `tools/ci/ignored-test-exceptions.json`, with a concrete rationale. These are not prefix
+exemptions: a new test or a changed reason needs its own review. Exceptions cover separate parity/wasm fixture
+runners, opt-in measurements and fixture writers, interactive/device tests, and intentionally destructive or
+private-input checks. Their existing `harness`, `needs`, `gpu` or `manual` rows retain who runs them; these tests
+must not be indiscriminately selected as prepared-resource daily tests. Ordinary prepared-resource tests instead
+use `daily` and one `resources` or `child-process` row here.
+
+`python3 tools/ci/ignored_inventory.py` emits the machine-readable inventory with canonical identities and ignore
+reasons. It accepts `HORIZON_GAME_DISCOVERY=/absolute/path/to/horizon-game-discovery` to reuse a built helper;
+otherwise it builds/runs only that lightweight package. Comments, examples in strings and unreferenced source
+copies are not treated as runnable tests.
+
+The #4451 source inventory found 3,996 actual Rust ignore attributes in 1,139 files, including 3,022 non-daily
+descriptive attributes in 853 files (not string/comment examples). Of those, 3,021 have runnable canonical
+identities: 2,896 become daily rows (2,872 `resources`, 24 `child-process`), and 125 retain exact documented
+exceptions: 77 manual/measurement cases, 22 parity-harness steps, 23 separately supplied inputs, and three
+adapter-gated GPU cases. Ordinary `needs HORIZON_TEST_RESOURCES`/`HORIZON_RESOURCES` rows are migrated, not treated
+as external-fixture exceptions. The fishing RNG step specifically needs the independent oracle supplied by
+`tools/test_fishing_rng_parity.py`, not just prepared resources; every parity assertion stays in that harness step.
+
+One preserved source copy, `crates/horizon-client/src/mobs/living_tests.rs`, is not declared or included by any
+Cargo target. Its `living_jump_power_respects_honey_block_and_jump_boost` attribute retains the exact reason
+`requires prepared vanilla resources; run explicitly with --ignored`. It has no logical libtest identity while
+uncompiled; no prefix exemption is granted. If a target declares it later, its descriptive reason fails the guard
+until it is explicitly scheduled. No tests or assertions are removed from this source copy or the migrated tests.
 
 `manual` marks an ignored test that never runs in the daily shards, in `manual-<package>.txt`: WHO runs it
 (`by-hand`, `subprocess` for a child process its parent test starts, or the workflow file that runs it, such as

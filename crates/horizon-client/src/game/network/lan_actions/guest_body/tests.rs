@@ -32,7 +32,7 @@ fn guest(entity_id: i32) -> Guest {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn co_located_guests_own_distinct_streams_and_restore_the_saved_body() {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let assets = Assets::load(&root).unwrap();
@@ -73,7 +73,7 @@ fn co_located_guests_own_distinct_streams_and_restore_the_saved_body() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn accepted_hit_moves_through_teleport_restore_but_not_respawn() {
     use horizon_client::health::{AcceptedHit, Attack, HurtSource};
     use horizon_client::items::ItemStack;

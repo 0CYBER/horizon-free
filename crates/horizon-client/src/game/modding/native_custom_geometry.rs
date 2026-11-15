@@ -406,7 +406,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs software Vulkan"]
+    #[ignore = "daily"]
     fn persistent_groups_match_batch() {
         use mod_api::{GroupError, InstanceGroups};
         let _fixture = horizon_client::models::standalone_fixture(vec![
@@ -659,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs software Vulkan"]
+    #[ignore = "daily"]
     fn persistent_groups_cpu_routes_and_lifetime() {
         use mod_api::__private::game::Fields;
         use mod_api::{GroupError, InstanceGroups};
@@ -855,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and software Vulkan"]
+    #[ignore = "daily"]
     fn draw_model_instances_matches_cpu_pixels() {
         let _fixture =
             horizon_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);
@@ -953,7 +953,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and software Vulkan"]
+    #[ignore = "daily"]
     fn a_partial_tint_alpha_matches_on_tinted_faces_only() {
         let _fixture =
             horizon_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);
@@ -1013,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn draw_model_instances_bakes_overflow_after_the_instanced_prefix() {
         let _fixture =
             horizon_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);
@@ -1076,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn draw_model_instances_refuses_offscreen_and_over_budget() {
         let _fixture =
             horizon_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);
@@ -1197,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn each_stage_is_asked_in_frame_order_and_its_lines_draw_there() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             mod_platform::__private::install(
@@ -1242,7 +1242,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fill_world_geometry_commits_an_accepted_batch() {
         let _fixture =
             horizon_client::models::standalone_fixture(vec!["minecraft:block/grass_block".into()]);

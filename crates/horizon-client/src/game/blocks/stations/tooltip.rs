@@ -327,7 +327,7 @@ fn layout(sizes: &[[f32; 2]], extra_space: bool) -> ([f32; 2], Vec<f32>) {
 mod tests {
     use super::*;
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn rendered_image_callback_receives_whole_box() {
         use mod_api::{
             ClientHost, Hooks, ItemPart, ModEntry, Mods, Registrar,

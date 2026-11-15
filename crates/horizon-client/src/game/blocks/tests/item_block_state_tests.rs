@@ -36,7 +36,7 @@ fn property(game: &Game<'_>, pos: [i32; 3], key: &str) -> Option<String> {
 /// not light the lamp beside it; the ordinary placement that follows (flag 11)
 /// does, which is what tells the two writes apart.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_state_component_does_not_update_neighbours() {
     const LAMP: [i32; 3] = [2, 4, 0];
     const BESIDE: [i32; 3] = [2, 4, 1];

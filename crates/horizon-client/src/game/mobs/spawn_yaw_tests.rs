@@ -68,7 +68,7 @@ fn yaw_of(game: &Game<'_>, id: u32) -> f32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_summoned_mob_without_nbt_faces_south() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -79,7 +79,7 @@ fn a_summoned_mob_without_nbt_faces_south() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_spawn_eggs_yaw_is_the_wrapped_level_draw() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -107,7 +107,7 @@ fn a_spawn_eggs_yaw_is_the_wrapped_level_draw() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_dispensed_mob_takes_the_wrapped_draw_too() {
     let mut resources = None;
     let mut game = game(&mut resources);

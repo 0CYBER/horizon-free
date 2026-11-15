@@ -5,8 +5,11 @@ WORKDIR /src
 COPY Cargo.toml Cargo.toml
 # Every crate the server's Cargo.lock builds from a path (tests/test_service_images.py checks the list).
 COPY crates/horizon-addresses crates/horizon-addresses
+COPY crates/horizon-bench crates/horizon-bench
 COPY crates/horizon-core crates/horizon-core
+COPY crates/horizon-guest-stack crates/horizon-guest-stack
 COPY crates/horizon-hooks crates/horizon-hooks
+COPY crates/horizon-perf-format crates/horizon-perf-format
 COPY crates/horizon-platform crates/horizon-platform
 COPY crates/horizon-system crates/horizon-system
 COPY crates/horizon-telemetry crates/horizon-telemetry

@@ -49,7 +49,7 @@ impl mod_api::Hooks for Probe {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn death_loot_uses_call_scoped_source_and_hand() {
     use crate::game::native_entity_refs::tests::with_game;
     use horizon_client::mobs::{Damage, DamageKind, Who};
@@ -225,7 +225,7 @@ impl mod_api::Hooks for ChangeKillerHand {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn death_loot_killer_is_not_the_acting_guest() {
     use crate::game::native_guest_turn_tests::with_guests;
     use horizon_client::mobs::Damage;
@@ -306,7 +306,7 @@ impl mod_api::Hooks for Nested {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+#[ignore = "daily"]
 fn death_loot_nested_death_keeps_outer_context() {
     use crate::game::native_guest_turn_tests::with_guests as with_game;
     use horizon_client::mobs::{Damage, DamageKind, Who};
@@ -367,7 +367,7 @@ impl mod_api::Hooks for BlockTool {
     }
 }
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn death_loot_change_preserves_block_tool() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         game.build_registries();

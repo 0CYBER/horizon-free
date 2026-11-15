@@ -43,7 +43,7 @@ fn dfa_baseline_quick_move() {
 // Vanilla 26.3 ServerPlaceRecipe.placeRecipe stages one set; ResultSlot.onTake
 // consumes one item per occupied grid cell, once, when the result is taken.
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn dfa_baseline_recipe_placement() {
     let mut ran = false;
     with_menu(Kind::Crafting, |env, menu| {
@@ -79,7 +79,7 @@ fn dfa_baseline_recipe_placement() {
 // the result leaves one stone per cell, and the grid offers the plate again
 // (CraftingMenu.slotChangedCraftingGrid).
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn dfa_baseline_recipe_take_consumes_one_per_cell() {
     let mut ran = false;
     with_menu(Kind::Crafting, |env, menu| {

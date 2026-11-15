@@ -156,7 +156,7 @@ fn setup(game: &mut Game<'_>) -> &'static ModMenuType {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn lent_chest_supplies_transfer_and_placement_and_is_written_back() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         setup(game);
@@ -208,7 +208,7 @@ fn lent_chest_supplies_transfer_and_placement_and_is_written_back() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn sources_skip_invalid_answers_and_keep_exactly_first_sixty_four() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         let t = setup(game);
@@ -254,7 +254,7 @@ fn sources_skip_invalid_answers_and_keep_exactly_first_sixty_four() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn inventory_menu_does_not_ask_recipe_sources() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         setup(game);
@@ -270,7 +270,7 @@ fn inventory_menu_does_not_ask_recipe_sources() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn menu_links_expose_chest_contents_in_the_answering_tick() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         setup(game);
@@ -323,7 +323,7 @@ fn menu_links_expose_chest_contents_in_the_answering_tick() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn menu_links_skip_a_furnace_the_mod_names() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         setup(game);

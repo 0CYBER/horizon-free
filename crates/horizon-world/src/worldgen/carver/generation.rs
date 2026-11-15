@@ -72,6 +72,13 @@ impl CarverCatalog {
             definitions: result,
         })
     }
+    /// Direct reads of the accepted immutable registry, shared with generic level lookups.
+    pub(crate) fn contains(&self, id: &str) -> bool {
+        self.definitions.contains_key(id)
+    }
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.definitions.keys().map(String::as_str)
+    }
     pub fn decode_set(&self, json: &str) -> Result<Vec<Arc<WorldCarver>>, DecodeError> {
         use serde_json::value::RawValue;
         let raw: Box<RawValue> = serde_json::from_str(json)?;

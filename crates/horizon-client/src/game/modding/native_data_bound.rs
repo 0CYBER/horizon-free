@@ -39,7 +39,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn defaults_are_announced_bound_before_the_tags() {
         let heard = Arc::new(Mutex::new(Vec::new()));
         let mods = vec![ModEntry::new("bound_probe", Box::new(Probe(heard.clone())))].into();
@@ -119,7 +119,7 @@ mod tests {
     /// cause, and a listener's read inside the notice returns the stack
     /// size its own `modify_default_components` published.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_first_open_announces_bound_defaults_readable() {
         install_default_component_loads();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -181,7 +181,7 @@ mod tests {
     /// with the client cause, before the tags notice; a listener's read
     /// inside returns the published defaults. An update in play refires.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_remote_login_announces_the_client_cause_before_the_tags() {
         install_default_component_loads();
         struct Both(Arc<Mutex<Vec<&'static str>>>);

@@ -3429,7 +3429,7 @@ mod carried_component_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared item resources"]
+    #[ignore = "daily"]
     fn default_component_presence_and_removal() {
         let items = crate::items::prepared_items().expect("prepared item resources");
         let info = items.get("minecraft:stick").expect("stick");

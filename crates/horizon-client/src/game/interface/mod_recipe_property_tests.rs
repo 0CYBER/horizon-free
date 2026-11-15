@@ -23,7 +23,7 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn host_and_slot_prediction_use_replacement_property_generation() {
         let mods: Mods = vec![ModEntry::new("pot", Box::new(Pot))].into();
         crate::game::api_values::install_parts(&mods).unwrap();

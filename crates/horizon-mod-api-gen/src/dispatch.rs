@@ -12,6 +12,8 @@ pub(super) struct HookSources {
     /// A `()` constant named after each hook a mod may cancel, which `#[listener(receive_cancelled)]`
     /// names so that the option on any other hook fails to compile.
     pub cancel_hooks: String,
+    /// `(HookId::X, "x"),` for each client-side hook: what a `side = "server"` mod may not hear.
+    pub client_hooks: String,
     pub hook_count: usize,
 }
 
@@ -62,6 +64,7 @@ pub(super) fn emit<'a>(
     let mut hook_ids = String::new();
     let mut hook_constants = String::new();
     let mut cancel_hooks = String::new();
+    let mut client_hooks = String::new();
     let mut hook_count = 0;
     let mut traits = String::new();
     let mut dispatch = String::new();
@@ -355,6 +358,9 @@ pub(super) fn emit<'a>(
                 "pub const {name}: Option<super::HookId> = Some(super::HookId::{hook_id});\n"
             ));
             hook_count += 1;
+            if hook.side == Side::Client {
+                client_hooks.push_str(&format!("(HookId::{hook_id}, \"{name}\"),\n"));
+            }
         }
         // A mod listener may still be told of a cancelled event, and see and clear its cancel; a
         // part never is.
@@ -1026,6 +1032,7 @@ pub(super) fn emit<'a>(
         hook_ids,
         hook_constants,
         cancel_hooks,
+        client_hooks,
         hook_count,
     })
 }

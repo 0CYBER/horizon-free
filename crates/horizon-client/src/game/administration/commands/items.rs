@@ -1826,7 +1826,7 @@ mod stand_equip_event_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn commands_post_stand_equipment_events_after_its_first_tick() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -1974,7 +1974,7 @@ mod mob_equipment_command_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn world_pack_enchantments_reach_actual_game_catalog() {
         use horizon_client::enchant::EffectContext;
         use horizon_core::random::LegacyRandom;
@@ -2091,7 +2091,7 @@ mod mob_equipment_command_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn body_commands_reject_wrong_items_without_changing_head() {
         with_game(|game| {
             for (n, kind, slot, item) in [
@@ -2148,7 +2148,7 @@ mod mob_equipment_command_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn saddle_commands_round_trip_existing_model_and_saved_equipment() {
         use super::Slot;
         use horizon_core::nbt::Tag;
@@ -2214,7 +2214,7 @@ mod mob_equipment_command_tests {
     /// `SulfurCube.getEquipmentSlotForItem`: a `#sulfur_cube_swallowable`
     /// item is a body item, so the body's `SlotAccess` takes it (#12038).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_sulfur_cubes_body_takes_a_swallowable_block() {
         with_game(|game| {
             assert!(game.run_command("summon sulfur_cube 4.5 200 4.5 {NoAI:1b,Tags:[\"cube\"]}"));
@@ -2241,7 +2241,7 @@ mod mob_equipment_command_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn effective_item_composition_rejects_before_destination_mutation() {
         use super::Slot;
         with_game(|game| {
@@ -2279,7 +2279,7 @@ mod mob_equipment_command_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn effective_item_validation_view_uses_loaded_prototypes_and_typed_removals() {
         use horizon_core::nbt::Tag;
         with_game(|game| {
@@ -2405,7 +2405,7 @@ mod mob_equipment_stack_tests {
         );
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn offhand_commands_adopt_and_copy_the_whole_stack() {
         use super::Slot;
         with_game(|game| {
@@ -2465,7 +2465,7 @@ mod mob_equipment_stack_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn armor_command_copy_keeps_the_already_adopted_stack() {
         use super::Slot;
         with_game(|game| {
@@ -2534,7 +2534,7 @@ mod builtin_component_delivery_tests {
     use std::sync::{Arc, atomic::AtomicI32, mpsc};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h283_actual_command_inventory_bridge_encodes_four_builtin_components() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -2745,7 +2745,7 @@ mod builtin_component_delivery_tests {
 mod registered_slot_source_read_tests {
     use super::*;
     #[test]
-    #[ignore = "needs prepared resources and isolated homes/cwd"]
+    #[ignore = "daily"]
     fn registered_first_three_reads_match_inline_and_keep_the_chest() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -2878,7 +2878,7 @@ mod registered_slot_source_preservation_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and isolated homes/cwd"]
+    #[ignore = "daily"]
     fn loaded_snapshot_changes_only_on_existing_reload_with_pack_precedence() {
         let mut resources = None;
         let directory = tempfile::tempdir().unwrap();
@@ -2902,7 +2902,7 @@ mod registered_slot_source_preservation_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and isolated homes/cwd"]
+    #[ignore = "daily"]
     fn admitted_absent_executor_sources_fail_without_player_fallback() {
         let mut resources = None;
         let (mut game, _) = scene(&mut resources, "slot-source-unsupported-world");
@@ -2960,7 +2960,7 @@ mod registered_slot_source_preservation_tests {
     /// LimitSlotSource's limit is ExtraCodecs.POSITIVE_INT: a string or 0
     /// fails to parse, and the command changes nothing.
     #[test]
-    #[ignore = "needs prepared resources and isolated homes/cwd"]
+    #[ignore = "daily"]
     fn quoted_holders_resolve_and_a_non_int_limit_fails_to_parse() {
         let mut resources = None;
         let (mut game, _) = scene(&mut resources, "slot-source-quoted-world");
@@ -3000,7 +3000,7 @@ mod registered_slot_source_preservation_tests {
     /// `Codec.INT` gives `limit:1b` and `limit:2.5d` their `Number.intValue()`:
     /// a read counts that many slots and a write changes that many.
     #[test]
-    #[ignore = "needs prepared resources and isolated homes/cwd"]
+    #[ignore = "daily"]
     fn a_byte_or_fractional_limit_selects_its_int_value() {
         let mut resources = None;
         let (mut game, _) = scene(&mut resources, "slot-source-numeric-limit-world");
@@ -3051,7 +3051,7 @@ mod registered_slot_source_preservation_tests {
     /// A command the player types runs as them (`CommandSourceStack.getEntity`),
     /// so `source:"this"` is their own slots without an `execute as`.
     #[test]
-    #[ignore = "needs prepared resources and isolated homes/cwd"]
+    #[ignore = "daily"]
     fn a_command_the_player_types_binds_this_to_them() {
         let mut resources = None;
         let (mut game, _) = scene(&mut resources, "slot-source-player-this-world");

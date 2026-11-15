@@ -250,7 +250,7 @@ mod tests {
     /// The material rule runs over the mod's stone after its terrain: plains grass and dirt on
     /// top, deepslate below y 8 and the bedrock floor.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_surface_covers_the_mods_terrain() {
         let level = level(VanillaStages {
             surface: true,
@@ -274,7 +274,7 @@ mod tests {
     /// A carver cuts the mod's stone at seed 12345, the aquifer of the Overworld's noise filling
     /// it below sea level; the top stays the mod's stone without the surface.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_carvers_cut_the_mods_terrain() {
         let level = level(VanillaStages {
             carvers: true,
@@ -289,7 +289,7 @@ mod tests {
     /// FEATURES (not without the structures), and the plains' grass grows on the surface in
     /// chunk 0 0.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn structures_and_features_place_after_the_terrain() {
         let all = VanillaStages {
             surface: true,
@@ -341,7 +341,7 @@ mod tests {
     /// A level whose stem names no noise settings, or ones the world lacks, is refused naming
     /// the generator and the settings.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_level_without_its_noise_settings_is_refused_by_name() {
         let refusal = |settings| {
             let slab = Arc::new(Slab(VanillaStages {
@@ -376,7 +376,7 @@ mod tests {
     /// (y -64 to 319) over the Nether's noise settings (y 0 to 127) gets the mod's stone there
     /// and nowhere else.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_mods_terrain_fills_the_noise_range_not_the_levels() {
         struct Column;
         impl ModChunkGenerator for Column {
@@ -419,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn staged_mod_terrain_receives_its_level_id() {
         struct Pocket;
         impl ModChunkGenerator for Pocket {
@@ -448,7 +448,7 @@ mod tests {
     /// surface and the carvers opens, and its FEATURES status places nothing; one that asks for
     /// features or structures is refused, naming the generator and what is missing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn without_placed_features_only_the_terrain_stages_open() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("resources"),
@@ -635,7 +635,7 @@ mod tests {
     /// structure reference, a cave crossing a chunk border and features written into a
     /// neighbour chunk.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn complete_chunks_do_not_depend_on_order_or_workers() {
         let mut stem = stem(Value::from("minecraft:overworld"));
         stem["generator"]["biome_source"] =

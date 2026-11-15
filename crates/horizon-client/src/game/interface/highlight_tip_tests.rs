@@ -28,7 +28,7 @@ impl Hooks for Parts {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn a_part_names_the_selected_stick_while_its_name_shows() {
     crate::game::in_own_process(
         "game::highlight_tip_tests::a_part_names_the_selected_stick_while_its_name_shows",

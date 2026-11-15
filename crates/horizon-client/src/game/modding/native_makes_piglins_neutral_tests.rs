@@ -81,7 +81,7 @@ fn asked() -> Vec<(&'static str, u32)> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn a_part_decides_whether_a_worn_piece_counts_as_gold() {
     crate::game::in_own_process(
         "game::native_makes_piglins_neutral_tests::a_part_decides_whether_a_worn_piece_counts_as_gold",
@@ -150,7 +150,7 @@ fn a_part_decides_whether_a_worn_piece_counts_as_gold_isolated() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn without_parts_the_piglin_safe_armor_tag_decides() {
     crate::game::in_own_process(
         "game::native_makes_piglins_neutral_tests::without_parts_the_piglin_safe_armor_tag_decides",
@@ -204,7 +204,7 @@ fn targets_the_wearer(game: &mut super::Game<'_>, head: Option<&str>, feet: Opti
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn a_calm_piglin_spares_a_wearer_the_part_answers_for() {
     crate::game::in_own_process(
         "game::native_makes_piglins_neutral_tests::a_calm_piglin_spares_a_wearer_the_part_answers_for",
@@ -234,7 +234,7 @@ fn a_calm_piglin_spares_a_wearer_the_part_answers_for_isolated() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn without_parts_a_calm_piglin_targets_a_player_in_leather() {
     crate::game::in_own_process(
         "game::native_makes_piglins_neutral_tests::without_parts_a_calm_piglin_targets_a_player_in_leather",

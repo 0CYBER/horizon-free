@@ -49,7 +49,7 @@ fn with_game(check: impl FnOnce(&mut Game<'_>)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn item_replace_jukebox_accepts_music_disc_cat() {
     with_game(|game| {
         assert!(game.run_command("setblock 4 200 4 jukebox"));
@@ -67,7 +67,7 @@ fn item_replace_jukebox_accepts_music_disc_cat() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn loot_empty_replace_jukebox_preserves_music_disc_13() {
     with_game(|game| {
         assert!(game.run_command("setblock 4 200 4 jukebox"));
@@ -91,7 +91,7 @@ fn loot_empty_replace_jukebox_preserves_music_disc_13() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn loot_replace_furnace_fuel_refuses_non_fuel() {
     with_game(|game| {
         assert!(game.run_command("setblock 4 200 4 furnace"));
@@ -106,7 +106,7 @@ fn loot_replace_furnace_fuel_refuses_non_fuel() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn item_commands_bypass_block_acceptance() {
     with_game(|game| {
         for slot in [1, 2] {
@@ -146,7 +146,7 @@ fn item_commands_bypass_block_acceptance() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn empty_loot_preserves_restricted_slots_but_clears_chest() {
     with_game(|game| {
         for (block, slot, item) in [
@@ -189,7 +189,7 @@ fn empty_loot_preserves_restricted_slots_but_clears_chest() {
 /// (`Container.canPlaceItem`): a furnace's fuel slot takes the coal an ore drops, refuses the
 /// raw iron another ore drops and keeps what it held, while the input slot takes the raw iron.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn loot_replace_mine_fills_an_accepting_slot_and_leaves_a_refusing_one() {
     with_game(|game| {
         let slot = |game: &mut Game<'_>, n| {
@@ -220,7 +220,7 @@ fn loot_replace_mine_fills_an_accepting_slot_and_leaves_a_refusing_one() {
 /// The same for a `kill` source: a sheared sheep's loot is mutton, which a furnace's input slot
 /// takes and its fuel slot refuses, leaving the coal there.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn loot_replace_kill_fills_an_accepting_slot_and_leaves_a_refusing_one() {
     with_game(|game| {
         let slot = |game: &mut Game<'_>, n| {

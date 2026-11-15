@@ -70,7 +70,7 @@ fn run(game: &mut Game<'_>, commands: &[&str]) {
 /// to it with it. The wire between connected to the torch when it was placed, and loses it again: a
 /// wire that has lost its connection is a cross, not a dot (`RedStoneWireBlock.getConnectionState`).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_that_pops_off_in_the_neighbours_notice_leaves_the_wire_a_cross() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -93,7 +93,7 @@ fn a_block_that_pops_off_in_the_neighbours_notice_leaves_the_wire_a_cross() {
 
 /// With nothing to take it off again the torch stays, and the wire is the line it connected.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_torch_that_stays_connects_the_wire_in_a_line_and_powers_it() {
     let mut game_resources = None;
     let mut game = game(&mut game_resources);
@@ -120,7 +120,7 @@ fn a_torch_that_stays_connects_the_wire_in_a_line_and_powers_it() {
 /// changed and its update tag reaches the clients. Horizon applied the edit
 /// without marking the chunk.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn editing_a_command_block_marks_its_chunk() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -147,7 +147,7 @@ fn editing_a_command_block_marks_its_chunk() {
 /// entity's saved copy: a `start` state with a powered block entity answers
 /// 15 even when `/data merge` left a different mode in the entity.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_test_block_reads_the_state_mode_for_its_own_signal() {
     let mut resources = None;
     let mut game = game(&mut resources);

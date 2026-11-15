@@ -2400,7 +2400,7 @@ mod tests {
     /// Box bounds come from mod code: one that is not finite reads no orb and never
     /// panics, and an inverted box reads what the ordered one does.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn experience_orbs_refuse_bounds_that_are_not_finite_and_swap_an_inverted_box() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -2451,7 +2451,7 @@ mod tests {
     /// The integrated server thread keeps the launch configuration (`options.dedicated`) too,
     /// so it cannot be what decides.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn server_events_are_posted_only_on_the_dedicated_role() {
         use crate::game::execution_role::ExecutionRole;
         let mut resources = None;
@@ -2509,7 +2509,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn native_command_feedback_respects_track_output_and_silence() {
         use super::super::commands::execute::Source;
         use horizon_client::chunk::block_entity::BlockEntity;
@@ -2596,7 +2596,7 @@ mod tests {
     /// with the player (entity id and UUID, even after they left) and the
     /// chunk in its level; a level the server doesn't hold is skipped.
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn the_hubs_chunk_watches_reach_the_mods_in_order() {
         use horizon_client::lan::chunk_watch::{
             ChunkWatch, ChunkWatchKind, ChunkWatchLog, LevelWatches,
@@ -3458,7 +3458,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn command_refresh_rebuilds_the_typed_dispatcher_only_on_request() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         struct ChangingCommands {
@@ -3559,7 +3559,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn native_typed_commands_reach_listeners_after_parse_and_source_resolution() {
         use mod_api::{CommandArgumentValue as Value, CommandInvocation};
         struct Commands(Arc<Mutex<Vec<(bool, CommandInvocation)>>>);
@@ -3749,7 +3749,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn native_commands_keep_function_block_and_cart_sources() {
         use horizon_client::{
             chunk::block_entity::BlockEntity,
@@ -3857,7 +3857,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn native_unauthorized_commands_never_reach_the_listener() {
         struct Commands(Arc<Mutex<Vec<mod_api::CommandInvocation>>>);
         #[mod_api::__subscriptions]
@@ -4235,7 +4235,7 @@ pub(super) mod fake_action_tests {
     /// opened closes through the merchant's own close path, so the trader is
     /// not left trading and the next use opens it as the first did.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_trader_a_fake_player_used_trades_with_the_next_one() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (player, ..) = fake(game, Some("minecraft:stick"), 0);
@@ -4268,7 +4268,7 @@ pub(super) mod fake_action_tests {
     /// on the vehicle, and the menu's stand-in is out of the level, where a
     /// transfer would edit it instead of the vehicle.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_vehicles_chest_a_fake_player_used_keeps_its_items_and_no_stand_in() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (player, fake_conn, _) = fake(game, None, 0);
@@ -4329,7 +4329,7 @@ pub(super) mod fake_action_tests {
     /// uses: the refused open closes only a stand-in nobody is looking at,
     /// and the staging does not reset what the viewer's menu is editing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_viewer_keeps_the_vehicle_menu_a_fake_player_used() {
         use super::super::minecarts::{CART_KEY_Y, CartKind, Minecart};
         use horizon_client::containers::BlockEntity;
@@ -4430,7 +4430,7 @@ pub(super) mod fake_action_tests {
     /// at the open: no open count climbs, no stand-in chest enters the level
     /// and no lid opens.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_shulker_box_and_an_ender_chest_a_fake_player_used_are_left_shut() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (player, ..) = fake(game, None, 0);
@@ -4490,7 +4490,7 @@ pub(super) mod fake_action_tests {
     /// Each field holds a value the use can't have written, so a swap that
     /// forgets one fails whether the use changed it or not.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn the_servers_own_player_state_comes_back_after_a_fake_use() {
         use mod_api::PlayerActionSetup;
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -4550,7 +4550,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_fake_uses_items_through_the_players_own_path() {
         use super::super::native_entity_refs::tests::with_game;
         // A log on stone: placed, one used up.
@@ -4627,7 +4627,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn scoped_fake_use_returns_items_and_restores_persistent_state() {
         use mod_api::PlayerActionSetup;
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -4720,7 +4720,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn scoped_fake_use_restores_the_persistent_menu_owner() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (player, conn, _) = fake(game, Some("minecraft:diamond"), 1);
@@ -4767,7 +4767,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn scoped_fake_use_uses_viewpoint_secondary_use_and_restores_on_refusal() {
         use mod_api::PlayerActionSetup;
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -4878,7 +4878,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn fake_entity_interaction_checks_targets_and_does_not_use_items_in_air() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (player, ..) = fake(game, Some("minecraft:ender_pearl"), 0);
@@ -4915,7 +4915,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn scoped_fake_use_hooks_see_the_setup_and_fail_is_not_consumed() {
         use mod_api::{Flow, Hooks, HostSide, PlayerActionSetup, RightClickBlockEvent};
         use std::sync::{
@@ -4996,7 +4996,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_target_setters_refuse_persistent_and_acting_fakes() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (player, conn, _) = fake(game, None, 0);
@@ -5015,7 +5015,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_fake_attacks_through_the_players_own_path() {
         use super::super::native_entity_refs::tests::with_game;
         with_game(|game| {
@@ -5101,7 +5101,7 @@ pub(super) mod fake_action_tests {
     /// gets in the hook is `PlayerRef::attack_strength_scale` (part of the same
     /// issue, landed separately).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attack_entity_runs_before_the_blow_resets_the_attack_charge() {
         use super::super::native_entity_refs::tests::with_game;
         use std::sync::{
@@ -5193,7 +5193,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attack_strength_rejects_non_finite_partial_without_restricting_finite_ticks() {
         use super::super::native_entity_refs::tests::with_game;
         with_game(|game| {
@@ -5248,7 +5248,7 @@ pub(super) mod fake_action_tests {
     /// swing resets the ticker. After the blow the same read sees 0. A
     /// resting player reads its saved ticker and body too.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn attack_strength_scale_reads_the_charge_at_the_hook_and_not_after_the_swing() {
         use super::super::native_entity_refs::tests::with_game;
         use std::sync::{Arc, Mutex};
@@ -5303,7 +5303,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_fake_breaks_blocks_at_once_by_the_game_modes_rules() {
         use super::super::native_entity_refs::tests::with_game;
         let level_block = |game: &mut Game<'_>, pos| {
@@ -5381,7 +5381,7 @@ pub(super) mod fake_action_tests {
     /// `as_guest_at` starts a turn only for the guest it names: another `conn` at that place,
     /// a place past the list's end, and a guest already in a turn are refused, not a panic.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_turn_at_a_place_is_refused_for_another_guest() {
         use super::super::lan_actions::TurnRefused;
         super::super::native_entity_refs::tests::with_game(|game| {
@@ -5410,7 +5410,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_fakes_effects_are_stopped_where_they_start() {
         use super::super::native_entity_refs::tests::with_game;
         // A chest's menu (Game::open_menu).
@@ -5478,7 +5478,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_fakes_action_is_refused_before_anything_runs() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (player, ..) = fake(game, Some("minecraft:water_bucket"), 0);
@@ -5603,7 +5603,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_fakes_action_leaves_the_per_action_state_as_it_was() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (player, ..) = fake(game, Some("minecraft:oak_log"), 0);
@@ -5628,7 +5628,7 @@ pub(super) mod fake_action_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_real_player_is_unaffected_at_every_effect_site() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (_, _, real_conn) = fake(game, None, 0);
@@ -5702,7 +5702,7 @@ mod player_rule_tests {
 
     /// `/spawnpoint`'s write and `getRespawnConfig`'s read, on each player's own record.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_respawn_point_is_read_and_written_in_the_players_own_record() {
         with_guests(|game| {
             let (a, b) = (game.player(12).unwrap(), game.player(13).unwrap());
@@ -5752,7 +5752,7 @@ mod player_rule_tests {
 
     /// The write goes through `spawn_point_change`, so a mod's `player_set_spawn` veto refuses it, as it does `/spawnpoint`.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mods_veto_refuses_the_respawn_write() {
         struct Veto;
         #[mod_api::__subscriptions]
@@ -5779,7 +5779,7 @@ mod player_rule_tests {
 
     /// The client's text-filtering option, as its `ClientInformation` said.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn text_filtering_is_what_the_clients_information_said() {
         with_guests(|game| {
             let (a, b) = (game.player(12).unwrap(), game.player(13).unwrap());
@@ -5798,7 +5798,7 @@ mod player_rule_tests {
 
     /// The sleep reads and the counter write, with the night skip's own counts as the oracle.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn sleep_eligibility_and_the_timer_follow_the_players_state() {
         with_guests(|game| {
             in_this_level(game);

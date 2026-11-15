@@ -4,7 +4,7 @@ use crate::game::commands::Target;
 use horizon_client::motion::PlayerMotion;
 
 #[test]
-#[ignore = "needs prepared resources and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn constructed_and_saved_mob_uuids_survive_repeated_reconstruction() {
     // Opt in only in a fresh child; never mutate the parallel parent's environment.
     if crate::game::native_entity_refs::tests::run_fresh_cases(
@@ -82,7 +82,7 @@ fn positioned(kind: &str, uuid: Option<[i32; 4]>) -> Tag {
 }
 
 #[test]
-#[ignore = "needs prepared resources and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn cloud_fangs_and_kept_entities_keep_their_constructor_uuid() {
     // Opt in only in a fresh child; never mutate the parallel parent's environment.
     if crate::game::native_entity_refs::tests::run_fresh_cases(
@@ -198,7 +198,7 @@ fn uuid(n: i32) -> Option<Tag> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn pruning_keeps_graph_owned_objects_without_aliasing_duplicate_owners() {
     with_game(|game, _| {
         assert!(summon(
@@ -251,7 +251,7 @@ fn pruning_keeps_graph_owned_objects_without_aliasing_duplicate_owners() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn rejected_passenger_does_not_destroy_its_resident_duplicates_scores() {
     for score_at_destruction in [false, true] {
         with_game(|game, _| {
@@ -312,7 +312,7 @@ fn rejected_passenger_does_not_destroy_its_resident_duplicates_scores() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn data_load_keeps_passenger_links_on_both_sides_of_an_offlevel_object() {
     with_game(|game, _| {
         assert!(summon(
@@ -341,7 +341,7 @@ fn data_load_keeps_passenger_links_on_both_sides_of_an_offlevel_object() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn dismount_uses_the_retained_vehicle_and_repairs_both_object_lists() {
     with_game(|game, _| {
         assert!(summon(
@@ -411,7 +411,7 @@ fn with_game(test: impl FnOnce(&mut Game<'_>, u32)) {
 /// ServerLevel.tryAddFreshEntityWithPassengers refuses the whole tree
 /// when any of its UUIDs is loaded, before anything joins.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn summon_refuses_a_tree_holding_a_live_uuid() {
     with_game(|game, existing| {
         let stand = live(game, 150);
@@ -536,7 +536,7 @@ fn summon_refuses_a_tree_holding_a_live_uuid() {
 /// unique grandchild is resident, but its rejected vehicle disconnects it
 /// from level ticking. Saving retains the object graph, not a stale NBT copy.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn a_resident_below_an_offlevel_passenger_round_trips_and_resumes_after_dismount() {
     with_game(|game, _| {
         crate::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood(
@@ -627,7 +627,7 @@ fn a_resident_below_an_offlevel_passenger_round_trips_and_resumes_after_dismount
 /// Official 26.3 retains the removed root long enough to dismount its
 /// rejected child at max(child.y, root.y), then seats the frozen grandchild.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn removed_root_retains_its_geometry_until_offlevel_passengers_dismount() {
     with_game(|game, _| {
         crate::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood(
@@ -682,7 +682,7 @@ fn removed_root_retains_its_geometry_until_offlevel_passengers_dismount() {
 /// Official 26.3 teleports passengers before their copied vehicle. The
 /// previously rejected child takes the UUID, so the copied root is off-level.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn dimension_travel_admits_the_duplicate_child_before_the_copied_root() {
     with_game(|game, _| {
         game.options.execution_role = crate::game::execution_role::ExecutionRole::IntegratedServer;
@@ -760,7 +760,7 @@ fn dimension_travel_admits_the_duplicate_child_before_the_copied_root() {
 /// vanilla adds a tree's members in order and skips one whose UUID an earlier member took;
 /// that one still rides its vehicle and saves under its Passengers (#11807).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn summon_skips_a_uuid_taken_earlier_in_the_same_tree() {
     with_game(|game, _| {
         let mut failures = Vec::new();
@@ -1026,7 +1026,7 @@ fn vehicle_root_travel(expected: &RootTravel, dismount: Option<&str>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn boat_root_refused_by_its_passenger_uuid_stays_off_level_through_travel() {
     for dismount in [None, Some("grandchild"), Some("rejected")] {
         vehicle_root_travel(&OAK_BOAT_TRAVEL, dismount);
@@ -1034,7 +1034,7 @@ fn boat_root_refused_by_its_passenger_uuid_stays_off_level_through_travel() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and a scratch HORIZON_HOME"]
+#[ignore = "daily"]
 fn minecart_root_refused_by_its_passenger_uuid_stays_off_level_through_travel() {
     for dismount in [None, Some("grandchild"), Some("rejected")] {
         vehicle_root_travel(&MINECART_TRAVEL, dismount);

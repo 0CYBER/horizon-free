@@ -25,7 +25,14 @@ pub(crate) fn module_files(
     if let Some(files) = WALKS.with(|walks| walks.borrow().as_ref()?.get(&key).cloned()) {
         return Ok(files);
     }
-    let files = walk_module_files(module, path, dir, every_build, crate::game_modules::parse)?;
+    let files = walk_module_files(
+        module,
+        path,
+        dir,
+        every_build,
+        false,
+        crate::game_modules::parse,
+    )?;
     WALKS.with(|walks| {
         if let Some(walks) = walks.borrow_mut().as_mut() {
             walks.insert(key, files.clone());

@@ -118,13 +118,13 @@ preserves the requested resource-drop flag.
 `BlockPart::contents_changed(host, event)` observes a world block's storage at `setChanged`,
 with a `ServerHost`, typed `event.level`, `event.pos: BlockPos` and `event.state`. Attach it to the specific
 blocks you observe, including vanilla containers; it has no global `Hooks` counterpart. The backing
-contents are already written, before dirty/comparator updates. Native transactions notify once per
-backing block at root commit, never on abort or simulation. An explicit `BlockEntityRef::set_changed`
-notifies even if contents are unchanged. A double container notifies each component, not once again
-for the other half's comparator refresh. A listener's writes still apply, but a nested notice for that
-same backing block does not re-enter the listener; writes to a different backing block notify normally.
-Entity/menu placeholder coordinates are not block notices.
-Read the committed items through the typed level:
+contents are already written, before dirty/comparator updates. Game-held vanilla container writes
+coalesce their implicit notice per backing block at root commit. Explicit `BlockEntityRef::set_changed`
+notifies immediately, even inside a transaction and for unchanged contents; abort does not retract
+it. Raw mod-owned storage writes and restores synthesize no notification. A double container
+notifies each component, not again for the other half's comparator refresh. A listener's writes
+still apply, but its backing block does not re-enter; another block notifies normally.
+Entity/menu placeholder coordinates are not block notices. Explicit notices may read tentative items:
 
 ```rust,ignore
 {{#include ../../../../../crates/horizon-client/src/game/blocks/machines/contents_changed_tests.rs:contents_changed_listener}}
@@ -152,3 +152,6 @@ is not empty, passing the fluid (`FluidState`) and its position. The contract is
 
 Rain on the block above, the watered-area ticket, moisture changes and drying out are unchanged. With no part on the
 farmland the scan is vanilla's.
+Bookshelf slot-occupancy flags and the last-interacted slot are transactional storage bookkeeping,
+not notification effects. Aborting restores them with the items. Changed observers, comparator
+ticks and data-send requests already issued still survive that abort.

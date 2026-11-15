@@ -110,7 +110,7 @@ mod tests {
     /// default; a mod sends one orb to a guest out of range and stops another,
     /// and an orb it leaves alone keeps the default.
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn a_mod_chooses_whom_each_orb_follows() {
         let heard = Heard::default();
         let mods = vec![ModEntry::new("shepherd", Box::new(Shepherd(heard.clone())))].into();

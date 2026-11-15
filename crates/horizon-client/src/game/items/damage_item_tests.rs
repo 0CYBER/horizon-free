@@ -108,7 +108,7 @@ fn used(game: &mut Game<'_>, tool: &str, points: u32) -> u32 {
 /// A part that halves the wear makes its tool lose half the durability per use, a part that cancels
 /// it stops the wear, and a tool without a part wears as vanilla and is never asked.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_part_changes_the_wear_of_its_own_tool_on_the_player() {
     with_wear_part("minecraft:iron_pickaxe", Rule::Halve, |game, wear| {
         assert_eq!(used(game, "minecraft:iron_pickaxe", 10), 5);
@@ -137,7 +137,7 @@ fn a_part_changes_the_wear_of_its_own_tool_on_the_player() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn part_amount_boundaries_and_threshold_crossing() {
     with_wear_part("minecraft:iron_pickaxe", Rule::Set(0), |game, wear| {
         for amount in [i32::MIN, -1, 0] {
@@ -186,7 +186,7 @@ fn part_amount_boundaries_and_threshold_crossing() {
 /// Unbreaking III saves a point three times in four, the part hears each wear that remains, and it
 /// is never asked about a point Unbreaking saved.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_part_is_asked_after_unbreaking() {
     with_wear_part("minecraft:iron_pickaxe", Rule::Times(1), |game, wear| {
         game.world.random = horizon_core::random::LevelRandom::for_level(
@@ -225,7 +225,7 @@ fn a_part_is_asked_after_unbreaking() {
 /// the slot empties, the break event goes out and the stat counts it. The part is told who wears
 /// the tool: the player.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_part_breaks_its_tool_now() {
     with_wear_part("minecraft:iron_pickaxe", Rule::Break, |game, wear| {
         game.player = Some(
@@ -255,7 +255,7 @@ fn a_part_breaks_its_tool_now() {
 
 /// A zombie's helmet names the zombie as the entity wearing it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_mob_armour_wear_names_the_mob() {
     use crate::game::creatures::SpawnSite;
     use mod_api::{EntityRef, EquipmentSlot, LivingRef};
@@ -277,7 +277,7 @@ fn a_mob_armour_wear_names_the_mob() {
 /// A part's `break_now` on a mob's glider breaks it through the vanilla
 /// break: the slot empties instead of keeping the stack at its maximum damage.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES; process-wide parts, run this test alone"]
+#[ignore = "daily"]
 fn a_part_breaks_a_mobs_glider_now() {
     use crate::game::creatures::SpawnSite;
     use horizon_core::equipment_slot::EquipmentSlot;

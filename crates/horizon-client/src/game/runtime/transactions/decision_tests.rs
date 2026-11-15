@@ -22,8 +22,9 @@ enum Published {
     Cost(u32),
 }
 
+// A genuinely deferred packet effect; explicit block notifications survive abort.
 fn packet() -> Effect {
-    Effect::NotifyClients((0, 64, 0))
+    Effect::BreakProgress(1, [0, 64, 0], 1)
 }
 fn dropped() -> Effect {
     Effect::Drop([0, 64, 0], ItemStack::new("minecraft:dirt", 2))
@@ -37,7 +38,7 @@ fn cost(amount: u32) -> Effect {
 }
 fn observed(effect: Effect) -> Published {
     match effect {
-        Effect::NotifyClients((0, 64, 0)) => Published::Packet,
+        Effect::BreakProgress(1, [0, 64, 0], 1) => Published::Packet,
         Effect::Drop([0, 64, 0], stack) => {
             assert_eq!(stack, ItemStack::new("minecraft:dirt", 2));
             Published::Drop

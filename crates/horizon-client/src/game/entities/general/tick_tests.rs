@@ -312,7 +312,7 @@ fn seeded_row(game: &mut Game<'_>, uuid: [i32; 4], value: i32) -> u32 {
 
 /// One tick of `test:counter` (the matrix's single row): 40 becomes 41.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn counter_advances_one_per_tick() {
     with_counter(|game, l| {
         let id = seeded_row(game, [1, 2, 3, 4], 40);
@@ -325,7 +325,7 @@ fn counter_advances_one_per_tick() {
 
 /// Two instances of one type: the part is shared, their counters are not.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn two_rows_share_the_part_but_not_their_counters() {
     with_counter(|game, l| {
         let first = seeded_row(game, [1, 2, 3, 4], 40);
@@ -341,7 +341,7 @@ fn two_rows_share_the_part_but_not_their_counters() {
 /// `tickNonPassenger`'s order — the root, then its rider subtree depth-first
 /// (`tickPassenger` recurses before the next rider), a rider never a root.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn parent_ticks_before_its_depth_first_rider_subtree() {
     with_counter(|game, l| {
         let grandchild = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
@@ -371,7 +371,7 @@ fn parent_ticks_before_its_depth_first_rider_subtree() {
 /// which stage 4 does not ship, joins exactly there) first ticks the next
 /// phase, the vanilla tick list's passive swap.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_row_joined_during_the_tick_span_ticks_the_next_phase() {
     with_counter(|game, l| {
         let first = seeded_row(game, [1, 2, 3, 4], 40);
@@ -395,7 +395,7 @@ fn a_row_joined_during_the_tick_span_ticks_the_next_phase() {
 /// rebuild — the next pass would walk off it. Without the panic, the root
 /// and the remaining rider each tick once.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_removed_last_rider_leaves_no_stale_index_link() {
     with_counter(|game, l| {
         let first = record_at("mymod:robot", [9, 9, 9, 9], [0.5, 64.0, 0.5], Vec::new());
@@ -422,7 +422,7 @@ fn a_removed_last_rider_leaves_no_stale_index_link() {
 /// The same shrink with the tree's only rider: the root's own first-child
 /// link pointed at the removed place, and a reused buffer keeps it.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_removed_only_rider_leaves_no_stale_index_link() {
     with_counter(|game, l| {
         let rider = record_at("mymod:robot", [9, 9, 9, 9], [0.5, 64.0, 0.5], Vec::new());
@@ -449,7 +449,7 @@ fn a_removed_only_rider_leaves_no_stale_index_link() {
 /// the handle, and the row stays in the list until the sweep — the walk
 /// re-checks liveness at every step, so it ticks nothing more.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_listener_discarded_row_gets_no_callback() {
     with_counter(|game, l| {
         let first = seeded_row(game, [1, 2, 3, 4], 0);
@@ -472,7 +472,7 @@ fn a_listener_discarded_row_gets_no_callback() {
 /// and neither does the rider's own subtree: the edge is re-checked at the
 /// parent's callback (`tickPassenger`'s `getVehicle` gate).
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_listener_discarded_rider_stops_its_subtree() {
     with_counter(|game, l| {
         let grandchild = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
@@ -495,7 +495,7 @@ fn a_listener_discarded_rider_stops_its_subtree() {
 /// this same pass: the vehicle's subtree no longer holds it (the edge's
 /// mount check), and the root walk reaches its place after the vehicle.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_listener_dismounted_rider_walks_as_a_root_after() {
     with_counter(|game, l| {
         let first = record_at("mymod:robot", [9, 9, 9, 9], [0.5, 64.0, 0.5], Vec::new());
@@ -515,7 +515,7 @@ fn a_listener_dismounted_rider_walks_as_a_root_after() {
 /// A row discarded from another row's Pre never reaches its own: no
 /// bookkeeping, no Pre of its own, no callback.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_row_discarded_from_an_earlier_pre_ticks_nothing() {
     with_counter(|game, l| {
         let first = seeded_row(game, [1, 2, 3, 4], 0);
@@ -536,7 +536,7 @@ fn a_row_discarded_from_an_earlier_pre_ticks_nothing() {
 /// is that insertion order (Ari's #792 ruling); the row's fresh admission on
 /// reload is its re-entry.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_reloaded_row_reenters_ticking_behind_later_joins() {
     with_counter(|game, l| {
         let early = spawn_tree(game, [1, 2, 3, 4], [0.5, 64.0, 0.5], Vec::new());
@@ -572,7 +572,7 @@ fn a_reloaded_row_reenters_ticking_behind_later_joins() {
 /// from the next phase; its old handle — the id is spent, never reused
 /// (`next_entity` only rises) — no longer reaches the row.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_reloaded_row_resumes_the_counter_and_refuses_its_old_handle() {
     with_counter(|game, _| {
         let old = seeded_row(game, [1, 2, 3, 4], 41);
@@ -594,7 +594,7 @@ fn a_reloaded_row_resumes_the_counter_and_refuses_its_old_handle() {
 /// runs for the level in place — and the first tick after it returns gives
 /// the next count.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_parked_level_holds_the_counter_until_it_returns() {
     with_counter(|game, l| {
         let id = seeded_row(game, [1, 2, 3, 4], 41);
@@ -618,7 +618,7 @@ fn a_parked_level_holds_the_counter_until_it_returns() {
 /// the panicking row's own next tick proceeds. A subscriber is not
 /// auto-disabled.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_panicking_row_rolls_back_and_the_next_tick_proceeds() {
     with_counter(|game, l| {
         let first = seeded_row(game, [1, 2, 3, 4], 41);
@@ -643,7 +643,7 @@ fn a_panicking_row_rolls_back_and_the_next_tick_proceeds() {
 /// passenger's own triple, then that passenger's passengers, depth first —
 /// a branching three-generation tree spells its whole pass out.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn every_row_gets_its_pre_tick_post_in_the_flat_rider_order() {
     with_counter(|game, l| {
         let grandchild = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
@@ -681,7 +681,7 @@ fn every_row_gets_its_pre_tick_post_in_the_flat_rider_order() {
 /// skips only the vehicle — no bookkeeping, no tick, no Post — and its
 /// passengers still ride their own ticks.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_canceled_vehicle_pre_still_ticks_its_passengers() {
     with_counter(|game, l| {
         let rider = record_at("mymod:robot", [9, 9, 9, 9], [0.5, 64.0, 0.5], Vec::new());
@@ -710,7 +710,7 @@ fn a_canceled_vehicle_pre_still_ticks_its_passengers() {
 /// vehicle, the bookkeeping runs, and its own passengers still tick. A
 /// stack of three covers the depth.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_canceled_passenger_still_follows_and_his_passengers_tick() {
     with_counter(|game, l| {
         let bottom = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
@@ -748,7 +748,7 @@ fn a_canceled_passenger_still_follows_and_his_passengers_tick() {
 /// ended. A stack of three covers the depth: the middle rider's own Pre
 /// discards it, and the bottom row hears nothing at all.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_rider_removed_in_its_own_pre_walks_no_descendants() {
     with_counter(|game, l| {
         let bottom = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
@@ -783,7 +783,7 @@ fn a_rider_removed_in_its_own_pre_walks_no_descendants() {
 /// not the check — so a rider that removed itself in its canceled Pre
 /// walks no descendants, and a live one keeps the ruling's follow.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_rider_removed_in_its_own_canceled_pre_walks_no_descendants() {
     with_counter(|game, l| {
         let bottom = record_at("mymod:robot", [8, 8, 8, 8], [0.5, 64.0, 0.5], Vec::new());
@@ -821,7 +821,7 @@ fn a_rider_removed_in_its_own_canceled_pre_walks_no_descendants() {
 /// rider index, not a scan of the rows. A stable pass allocates nothing:
 /// the index's buffers hold their capacity across ticks.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn five_hundred_part_free_trees_walk_each_edge_once_and_allocate_nothing() {
     with_counter(|game, l| {
         for index in 0..500u32 {
@@ -866,7 +866,7 @@ fn five_hundred_part_free_trees_walk_each_edge_once_and_allocate_nothing() {
 /// and reinstating the mod restores the row with its counter — 41 resumed,
 /// 42 on the next tick.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn quarantine_then_reinstall_restores_the_counter() {
     // With the mod: spawn at 41 and save the record out.
     let mut saved = None;
@@ -910,7 +910,7 @@ fn quarantine_then_reinstall_restores_the_counter() {
 /// The command's own argument parser still names only vanilla entity types;
 /// feeding it the declared general types is the negotiation's follow-up.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn summon_answers_a_target_with_a_network_id() {
     with_counter(|game, _| {
         let mut tag = record_at("mymod:robot", [1, 2, 3, 4], [0.5, 64.0, 0.5], Vec::new());

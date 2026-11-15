@@ -211,7 +211,7 @@ fn in_scene(test: &str, check: impl FnOnce(&mut Game<'_>, &Shared, &Flaky)) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_registered_living_type_draws_its_renderer_in_place_of_its_model() {
     in_scene(
         "a_registered_living_type_draws_its_renderer_in_place_of_its_model",
@@ -274,7 +274,7 @@ fn a_screens_entity_keeps_the_layers_beside_a_registered_renderer() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_canceled_living_pre_skips_a_registered_renderer() {
     in_scene(
         "a_canceled_living_pre_skips_a_registered_renderer",
@@ -290,7 +290,7 @@ fn a_canceled_living_pre_skips_a_registered_renderer() {
 /// A failing renderer leaves the type its model and is asked no more; only a reload's fresh table
 /// asks it again.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_failed_renderer_draws_the_types_model_until_a_resource_reload() {
     in_scene(
         "a_failed_renderer_draws_the_types_model_until_a_resource_reload",
@@ -314,7 +314,7 @@ fn a_failed_renderer_draws_the_types_model_until_a_resource_reload() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_sleeping_or_baby_frame_reads_as_the_model_lays_it() {
     super::native_entity_refs::tests::with_client_game(|game| {
         let kind = game
@@ -338,7 +338,7 @@ fn a_sleeping_or_baby_frame_reads_as_the_model_lays_it() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn own_yaw_is_independent_of_body_rotation_across_a_wrap() {
     super::native_entity_refs::tests::with_client_game(|game| {
         let kind = game
@@ -366,7 +366,7 @@ fn own_yaw_is_independent_of_body_rotation_across_a_wrap() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn extracted_living_signs_death_time_and_hurt_overlay_are_literal() {
     super::native_entity_refs::tests::with_client_game(|game| {
         let kind = game

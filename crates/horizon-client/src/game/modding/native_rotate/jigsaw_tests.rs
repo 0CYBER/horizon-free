@@ -403,7 +403,7 @@ fn publish(game: &mut crate::game::Game<'_>) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn position_sensitive_part_connects_at_built_height_in_both_assemblers() {
     let _publishing = native_worldgen_parts::PUBLISHING
         .lock()
@@ -566,7 +566,7 @@ fn saved(pieces: &[PoolPiece]) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn no_part_fixed_seed_layout_bytes_and_draws_stay_unchanged() {
     let _publishing = native_worldgen_parts::PUBLISHING
         .lock()
@@ -675,7 +675,7 @@ fn no_part_fixed_seed_layout_bytes_and_draws_stay_unchanged() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn placed_palette_keeps_connector_identity_and_named_start_requirement() {
     let _publishing = native_worldgen_parts::PUBLISHING
         .lock()

@@ -93,7 +93,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_players_absorption_is_cut_to_zero_and_max_absorption_and_synced() {
         with_game(|game| {
             let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();
@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mobs_absorption_takes_a_hit_before_its_health() {
         with_game(|game| {
             let zombie = absorbing_zombie(game);
@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mobs_set_absorption_survives_a_save_and_reload() {
         with_game(|game| {
             let zombie = absorbing_zombie(game);
@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn an_aborted_transaction_restores_the_absorption_of_a_player_and_a_mob() {
         with_game(|game| {
             let mut player = PlayerMotion::new(game.motion, Vec3::ZERO).unwrap();

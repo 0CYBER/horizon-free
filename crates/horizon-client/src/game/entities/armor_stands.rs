@@ -2544,7 +2544,7 @@ mod pumpkin_equippable_use_tests {
     use std::sync::{atomic::AtomicI32, mpsc};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h207_connected_use_item_adopts_actual_pumpkin_equippable_and_preserves_controls() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.build_registries();
@@ -2678,7 +2678,7 @@ mod stand_lodestone_inventory_tick_tests {
     use horizon_core::{geometry::Vec3, position::BlockPos};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn actual_stand_equipment_compasses_tick_after_loaded_lodestone_removal() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);
@@ -2866,7 +2866,7 @@ mod postbaseline_lodestone_controls {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn postbaseline_six_slots_noncompass_guard_and_dimension_preservation() {
         let mut resources = None;
         let mut game = crate::game::game_tests::tests::server_game(&mut resources);

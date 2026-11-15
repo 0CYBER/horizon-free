@@ -4,7 +4,7 @@ use super::*;
 use crate::game::api_values::{TryIntoApi, TryIntoEngine};
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn stack_particle_crosses_server_packet_and_resolves_apple() {
     let mut transfer = None;
     crate::game::native_entity_refs::tests::with_game(|game| {

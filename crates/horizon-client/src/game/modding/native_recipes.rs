@@ -794,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn recipe_for_matches_the_grid_and_returns_what_each_slot_keeps() {
         with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();
@@ -870,7 +870,7 @@ mod tests {
     /// Vanilla expected outputs, ordered smithing, and a data-pack recipe parsed by the
     /// production recipe loader. These assertions do not derive expectations from matcher output.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn recipe_for_dispatches_cooking_and_stonecutting_and_pack_recipes() {
         mod_platform::testing::with_mods(Vec::new().into(), || {
             with_game(|game| {
@@ -972,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn recipe_for_preserves_smithing_order_and_damage() {
         mod_platform::testing::with_mods(Vec::new().into(), || {
             with_game(|game| {
@@ -1024,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn recipe_for_refuses_mod_owned_types_instead_of_empty_matches() {
         mod_platform::testing::with_mods(Vec::new().into(), || {
             with_game(|game| {

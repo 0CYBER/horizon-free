@@ -1800,7 +1800,7 @@ mod lectern_books_tag_tests {
     /// `LecternBlock.useItemOn` checks `ItemTags.LECTERN_BOOKS`; a world's
     /// data pack adds its own book to that tag, and the lectern takes it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_packs_lectern_books_entry_goes_onto_the_lectern() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -1902,7 +1902,7 @@ mod lectern_signal_tests {
     /// `LecternBlock.getAnalogOutputSignal` reads the block entity only while
     /// the state's `HAS_BOOK` is true.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_lectern_without_the_has_book_state_feeds_no_comparator() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -1958,7 +1958,7 @@ mod lectern_signal_tests {
     /// An entity with no book at all reads 14 too: a page count of 0 is a page
     /// progress of 1.0 with no book to add.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_lecterns_signal_adds_one_only_for_a_book() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
@@ -2054,7 +2054,7 @@ mod lectern_book_removal_tests {
     /// `LecternBlock.resetBookState`: the book coming off a lectern clears
     /// `has_book` and posts `block_change` at it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_lectern_book_removal_posts_block_change() {
         let mut game_resources = None;
         let mut game = server_game(&mut game_resources);
@@ -2117,7 +2117,7 @@ mod lectern_reach_tests {
     /// lectern screen closes once the player is out of the interaction range
     /// (with vanilla's four-block buffer), as the guest path already does.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_lectern_screen_closes_out_of_reach() {
         let mut game_resources = None;
         let mut game = server_game(&mut game_resources);

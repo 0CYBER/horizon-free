@@ -777,6 +777,10 @@ pub(super) fn content_overlay(
                 continue;
             }
         };
+        // What every client must have refuses a server package outright, code or content alone.
+        if let Some(e) = content.server_only_refusal(m) {
+            return Err(e.into());
+        }
         let known = match &mut known {
             Some(types) => types,
             None => match mod_content::known_components(root) {
@@ -815,6 +819,24 @@ pub(super) fn content_overlay(
     } = native_declared();
     if !errors.is_empty() {
         return Err(errors.join("\n").into());
+    }
+    let declared_ids = (blocks.iter().map(|b| ("block", b.id.as_str())))
+        .chain(items.iter().map(|i| ("item", i.id.as_str())))
+        .chain(types.iter().map(|t| ("block entity type", t.id.as_str())))
+        .chain(fluids.iter().map(|f| ("fluid", f.id.as_str())));
+    for m in packages.iter().map(|s| s.manifest) {
+        if let Some(e) = m.server_only_declaration(declared_ids.clone()) {
+            return Err(e.into());
+        }
+        if m.side == horizon_mod_package::manifest::Side::Server
+            && let Some(requirement) = mod_api::__private::client_requirement(&m.id)
+        {
+            return Err(format!(
+                "{}: a side = \"server\" mod {requirement}; declare side = \"both\"",
+                m.id
+            )
+            .into());
+        }
     }
     if !blocks.is_empty() || !items.is_empty() || !types.is_empty() {
         let known = match &mut known {
@@ -1177,11 +1199,11 @@ fn announced_entry(
     mod_list::Entry {
         id: id.to_owned(),
         version: version.to_owned(),
-        // `Side` is open to new kinds; until the list carries one, such a mod stays local.
-        side: if side == Side::Both {
-            mod_list::Side::Both
-        } else {
-            mod_list::Side::Client
+        side: match side {
+            Side::Both => mod_list::Side::Both,
+            Side::Server => mod_list::Side::Server,
+            // `Side` is open to new kinds; until the list carries one, such a mod stays local.
+            _ => mod_list::Side::Client,
         },
     }
 }
@@ -2150,7 +2172,7 @@ mod tests {
     /// built from the template's, so the reads of #1469 and #1493 answer the
     /// declared values with no second copy.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mods_declared_entity_attributes_reach_spawn_and_the_live_map() {
         use horizon_client::mobs::Mob;
         use horizon_core::geometry::Vec3;
@@ -2219,7 +2241,7 @@ mod tests {
     /// by string id — a guest's catalog built from the same mods decodes the
     /// same network id.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mods_declared_attribute_reaches_rows_the_live_map_saves_and_sync() {
         use horizon_client::lan;
         use horizon_client::living_attributes::{self, LivingAttributes};
@@ -2366,7 +2388,7 @@ mod tests {
     /// ghoul's 40 health) gives way to the template's, so a mob of the type
     /// spawns with what the live attribute map answers (#845, review).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_declared_type_spawns_with_its_merged_row_not_its_content_row() {
         use horizon_client::mobs::Mob;
         use horizon_core::geometry::Vec3;
@@ -2782,6 +2804,63 @@ mod tests {
         );
     }
 
+    /// A `side = "server"` content package goes through the real loader: a registry
+    /// declaration fails the load by name even when it would not parse, and assets load.
+    #[test]
+    #[ignore = "daily"]
+    fn a_server_package_is_refused_at_load_for_registry_files_and_loads_with_assets() {
+        const MODE: &str = "HORIZON_SERVER_PACKAGE_TEST";
+        if std::env::var_os(MODE).is_none() {
+            run_in_child(
+                "game::mods::tests::a_server_package_is_refused_at_load_for_registry_files_and_loads_with_assets",
+                MODE,
+            );
+            return;
+        }
+        let f = Fixture::new("server-package");
+        let package = f.0.join("srv");
+        let write = |file: &str, text: &str| {
+            let path = package.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            "horizon-mod.toml",
+            "id='srv'\nname='srv'\nversion='1'\napi='0.2'\nside='server'\ncapabilities=['registries']\n",
+        );
+        write("data/srv/horizon/item/gem.json", "{ not json");
+        let base = f.0.join("resources");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join("horizon-resources.json"), "{}").unwrap();
+        let mut sources = ModsState {
+            dev: vec![package.clone()],
+            ..Default::default()
+        };
+        let enabled = Default::default();
+        sources.select(&f.0, &enabled);
+        let error = content_overlay(&base, &sources, &f.0.join("jars"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            error,
+            "srv: a side = \"server\" mod carries data/srv/horizon/item/gem.json, which every \
+             client must have; declare side = \"both\""
+        );
+        std::fs::remove_dir_all(package.join("data")).unwrap();
+        write("assets/srv/lang/en_us.json", "{}");
+        sources.select(&f.0, &enabled);
+        let overlay = content_overlay(&base, &sources, &f.0.join("jars")).unwrap();
+        assert_eq!(
+            overlay
+                .mods
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            ["srv"]
+        );
+    }
+
     #[test]
     #[ignore = "daily"]
     fn native_content_follows_the_build_and_misplaced_content_follows_its_selection() {
@@ -3095,5 +3174,88 @@ mod concurrent_content_tests {
             );
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod server_side_tests {
+    use mod_api::*;
+
+    struct Reloads;
+    #[mod_api::__subscriptions]
+    impl Hooks for Reloads {
+        fn add_client_reload_listeners(
+            &self,
+            _: &dyn ClientHost,
+            _: &mut AddClientReloadListenersEvent<'_>,
+        ) {
+        }
+    }
+    struct Hider;
+    #[mod_api::horizon_part]
+    impl BlockPart for Hider {
+        fn block_render_visibility(&self, _: &dyn ClientHost, _: &mut BlockRenderVisibilityEvent) {}
+    }
+    struct HidesLogs;
+    #[mod_api::__subscriptions]
+    impl Hooks for HidesLogs {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.block_part_tag("minecraft:logs", Hider);
+        }
+    }
+    struct Pings;
+    #[mod_api::__subscriptions]
+    impl Hooks for Pings {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            let mut payloads = r.payload_handlers();
+            let mut required = payloads.registrar("1");
+            required.play_to_client(PayloadId("pings:ping".into()), None);
+            required.play_to_client(PayloadId("pings:pong".into()), None);
+            required
+                .optional()
+                .play_to_client(PayloadId("pings:hint".into()), None);
+        }
+    }
+    struct Quiet;
+    #[mod_api::__subscriptions]
+    impl Hooks for Quiet {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.payload_handlers()
+                .registrar("1")
+                .optional()
+                .play_to_client(PayloadId("quiet:hint".into()), None);
+        }
+    }
+
+    /// What a joining client must have is named for its own mod only: a client hook, a part
+    /// listening to one, the first required clientbound payload. An optional payload is not.
+    #[test]
+    fn what_a_client_must_have_is_named_for_its_mod_only() {
+        let mods: Mods = vec![
+            ModEntry::new("reloads", Box::new(Reloads)),
+            ModEntry::new("hides_logs", Box::new(HidesLogs)),
+            ModEntry::new("pings", Box::new(Pings)),
+            ModEntry::new("quiet", Box::new(Quiet)),
+        ]
+        .into();
+        mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
+        mod_platform::testing::with_mods(mods, || {
+            assert_eq!(
+                mod_api::__private::client_requirement("reloads").unwrap(),
+                "listens to the client hook add_client_reload_listeners"
+            );
+            assert_eq!(
+                mod_api::__private::client_requirement("hides_logs").unwrap(),
+                format!(
+                    "attaches the part {}, which listens to the client hook block_render_visibility",
+                    std::any::type_name::<Hider>()
+                )
+            );
+            assert_eq!(
+                mod_api::__private::client_requirement("pings").unwrap(),
+                "sends the required payload pings:ping to clients"
+            );
+            assert_eq!(mod_api::__private::client_requirement("quiet"), None);
+        });
     }
 }

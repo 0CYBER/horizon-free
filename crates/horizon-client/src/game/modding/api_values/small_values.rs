@@ -99,7 +99,7 @@ impl TryIntoApi for horizon_mod_package::manifest::JarInputsError {
 #[cfg(test)]
 mod recipe_tests {
     #[test]
-    #[ignore = "requires prepared game resources"]
+    #[ignore = "daily"]
     fn recipe_json_text_fields() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             assert_eq!(

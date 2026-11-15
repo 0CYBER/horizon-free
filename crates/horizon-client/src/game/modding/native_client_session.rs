@@ -155,7 +155,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn client_session_reads_follow_connection_language_and_frame_state() {
         with_client_game(|game| {
             assert_eq!(game.client_session().client_server(), None);
@@ -297,7 +297,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn local_player_status_tracks_mining_mood_and_refuses_other_handles() {
         with_client_game(|game| {
             let _server = logged_client(game);

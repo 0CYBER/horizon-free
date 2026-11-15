@@ -1376,7 +1376,7 @@ mod order_tests {
     /// ticked first, still in the way when it ticks second (#11399). A block
     /// moving the push's own way would not collide at all (`NOCLIP`).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_pushed_entity_meets_the_other_moving_blocks_as_they_are_at_its_push() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -1601,7 +1601,7 @@ mod order_tests {
     /// horizontal velocity, matching `Entity.move(MoverType.PISTON, …)`
     /// restitution even in a chunk that does not tick entities (#12022).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_pushed_tnt_loses_velocity_into_a_wall() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -1694,7 +1694,7 @@ mod order_tests {
     /// A primed TNT pushed down by a piston onto a slime block bounces up,
     /// matching vanilla's restitution even in a lazy chunk (#12022).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_pushed_tnt_bounces_on_slime() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -1889,7 +1889,7 @@ mod h255_mob_piston_ground_tests {
         game.mobs.iter().position(|m| m.id == id).unwrap()
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h255_real_honey_piston_lifecycle_clears_mob_ground_before_second_drag() {
         with_game(|game| {
             game.world.game_time = 0;
@@ -2018,7 +2018,7 @@ mod h255_mob_piston_ground_tests {
     /// `AbstractArrow.move` after a push the collisions cut to nothing: a stuck
     /// arrow with nothing within 0.06 of it starts falling all the same.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_stuck_arrow_whose_push_a_wall_stops_falls_when_nothing_holds_it() {
         with_game(|game| {
             assert!(game.run_command("setblock 6 202 4 minecraft:stone"));
@@ -2058,7 +2058,7 @@ mod h255_mob_piston_ground_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h255_added_tnt_authority_and_exhausted_budget() {
         use crate::game::execution_role::ExecutionRole;
         for role in [
@@ -2107,7 +2107,7 @@ mod h255_mob_piston_ground_tests {
         }
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h255_added_no_request_and_exhausted_budget_keep_state() {
         with_game(|game| {
             let i = added_mob(game, 20, "horse", true, 8.5);
@@ -2148,7 +2148,7 @@ mod h255_mob_piston_ground_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h255_added_blocked_request_updates_ground_before_tiny_return() {
         with_game(|game| {
             assert!(game.run_command("fill 9 202 4 9 204 4 stone"));
@@ -2170,7 +2170,7 @@ mod h255_mob_piston_ground_tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h255_added_client_role_ai_and_vertical_ground_state() {
         use crate::game::execution_role::ExecutionRole as Role;
         for (role, no_ai, movement, on_ground) in [
@@ -2199,7 +2199,7 @@ mod h255_mob_piston_ground_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn h255_added_partial_push_reads_slime_after_the_position_changes() {
         with_game(|game| {
             assert!(game.run_command("setblock 8 201 4 slime_block"));
@@ -2256,7 +2256,7 @@ mod lid_push_tests {
     /// arrow rise with the lid as a mob does: each by the whole 0.25 up, as
     /// nothing is above them.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_shulker_lid_pushes_an_item_a_boat_and_a_projectile() {
         with_game(|game| {
             let shulker = shulker(game);
@@ -2285,7 +2285,7 @@ mod lid_push_tests {
     /// at its 0.9 high one and the player at its 1.8 high one, two blocks up,
     /// short of the whole 1.0 or 0.5 the lid asked for.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_wall_stops_what_a_shulker_lid_pushes() {
         with_game(|game| {
             let shulker = shulker(game);
@@ -2330,7 +2330,7 @@ mod lid_push_tests {
     /// the stick it held (drop chance 1), the white cushion a white cushion.
     /// `ItemFrame.move` leaves a fixed frame where it is, its stick in it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_shulker_lid_breaks_the_hanging_entities_it_meets() {
         with_game(|game| {
             let shulker = shulker(game);
@@ -2370,7 +2370,7 @@ mod lid_push_tests {
     /// client's own player. Once the shulker rides nothing, the same lid
     /// lifts the client's player the whole 0.25.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_shulker_lid_spares_what_shares_its_vehicle() {
         with_game(|game| {
             let shulker = shulker(game);
@@ -2400,7 +2400,7 @@ mod lid_push_tests {
     /// a shulker box's lid has no such rule, and its `Entity.move` moves the
     /// stand the whole way (`noPhysics`: `setPos`).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_shulker_lid_leaves_no_physics_bodies_and_shulkers_be() {
         with_game(|game| {
             let shulker = shulker(game);

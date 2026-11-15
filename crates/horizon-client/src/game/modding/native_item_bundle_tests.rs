@@ -3,7 +3,7 @@ use crate::game::native_item_places::tests::{guest, open_to_lan};
 use horizon_client::items::ItemStack;
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn bundle_handler_weight_front_order_and_refusal() {
     with_game(|game| {
         let empty = ItemStack::new("minecraft:bundle", 1);
@@ -71,7 +71,7 @@ fn bundle_handler_weight_front_order_and_refusal() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn bundle_items_place_handler_reads_and_rolls_back() {
     use mod_api::{HostTransaction, ITEM_ITEMS, ItemPlace};
     with_game(|game| {
@@ -121,7 +121,7 @@ fn bundle_items_place_handler_reads_and_rolls_back() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn nested_bundle_weight_limits_arrow_capacity_and_insertion() {
     with_game(|game| {
         let empty = ItemStack::new("minecraft:bundle", 1);
@@ -147,7 +147,7 @@ fn nested_bundle_weight_limits_arrow_capacity_and_insertion() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn stacked_bundle_insertion_splits_one_and_restores_inventory_on_abort() {
     use crate::game::api_values::TryIntoApi;
     use mod_api::{HostTransaction, ITEM_ITEMS, ItemPlace};
@@ -204,7 +204,7 @@ impl mod_api::Hooks for BundleMod {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn mod_registered_bundle_items_uses_weight_and_front_extraction() {
     use mod_api::{HostTransaction, ITEM_ITEMS, ItemPlace};
     let mods: mod_api::Mods =

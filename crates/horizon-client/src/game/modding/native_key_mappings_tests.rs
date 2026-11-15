@@ -54,7 +54,7 @@ fn heard() -> Vec<String> {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_control_socket_key_counts_as_a_window_key() {
     if run_fresh_cases(
         "game::native_key_mappings_tests::a_control_socket_key_counts_as_a_window_key",

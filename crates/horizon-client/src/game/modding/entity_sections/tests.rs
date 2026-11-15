@@ -231,7 +231,7 @@ fn what_a_listener_moves_waits_for_the_next_telling() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn no_listener_files_no_entity() {
     with_game(|game| {
         let id = game
@@ -247,7 +247,7 @@ fn no_listener_files_no_entity() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_server_mob_moved_twice_in_one_tick_is_told_each_move() {
     observe(|calls| {
         with_game(|game| {
@@ -316,11 +316,15 @@ impl horizon_client::mobs::goals::Goal for Teleports {
     fn start(
         &mut self,
         m: &mut horizon_client::mobs::Mob,
-        _: &mut horizon_client::mobs::goals::Cx<'_, '_, '_>,
+        cx: &mut horizon_client::mobs::goals::Cx<'_, '_, '_>,
     ) {
         for [x, y, z] in self.0.drain(..) {
             let at = horizon_core::geometry::Vec3::new(x, y, z);
-            horizon_client::mobs::living::teleports::snap_to(m, at);
+            horizon_client::mobs::living::teleports::snap_to_with(
+                m,
+                at,
+                cx.w.section_writer.clone(),
+            );
         }
     }
     fn box_clone(&self) -> Box<dyn horizon_client::mobs::goals::Goal> {
@@ -354,7 +358,7 @@ fn teleport_then_walk(
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mobs_teleport_and_its_walk_in_one_tick_are_two_crossings() {
     observe(|calls| {
         with_game(|game| {
@@ -375,7 +379,7 @@ fn a_mobs_teleport_and_its_walk_in_one_tick_are_two_crossings() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_real_mob_tick_exposes_each_intermediate_position_to_the_listener() {
     observe_positions(|positions| {
         with_game(|game| {
@@ -463,7 +467,14 @@ fn a_real_mob_tick_tells_inside_each_position_write() {
                     },
                 )
             });
-            game.tick_creature_entities().unwrap();
+            // Mob.serverAiStep only scans for new goals on alternating ticks.
+            // The first tick after installing this goal may tick running goals only.
+            for _ in 0..2 {
+                game.tick_creature_entities().unwrap();
+                if callbacks.load(Ordering::SeqCst) != 0 {
+                    break;
+                }
+            }
             assert!(!failed.load(Ordering::SeqCst));
             assert_eq!(callbacks.load(Ordering::SeqCst), 2);
         })
@@ -471,7 +482,7 @@ fn a_real_mob_tick_tells_inside_each_position_write() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mobs_teleport_out_and_its_walk_back_in_one_tick_are_two_crossings() {
     observe(|calls| {
         with_game(|game| {
@@ -492,7 +503,7 @@ fn a_mobs_teleport_out_and_its_walk_back_in_one_tick_are_two_crossings() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mob_that_teleports_twice_in_its_tick_then_walks_is_three_crossings() {
     observe(|calls| {
         with_game(|game| {
@@ -547,7 +558,7 @@ impl horizon_client::mobs::goals::Goal for Grows {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_size_change_nudge_in_a_mobs_tick_then_its_walk_are_two_crossings() {
     observe(|calls| {
         with_game(|game| {
@@ -581,7 +592,7 @@ fn a_size_change_nudge_in_a_mobs_tick_then_its_walk_are_two_crossings() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_mods_random_teleport_of_a_mob_is_told_at_once() {
     observe(|calls| {
         with_game(|game| {
@@ -601,7 +612,7 @@ fn a_mods_random_teleport_of_a_mob_is_told_at_once() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_server_entity_that_leaves_is_forgotten() {
     observe(|_| {
         with_game(|game| {
@@ -627,7 +638,7 @@ fn a_server_entity_that_leaves_is_forgotten() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_server_mobs_own_move_is_not_reconstructed_after_its_post() {
     use horizon_core::geometry::Vec3;
     observe(|calls| {
@@ -660,7 +671,7 @@ fn a_server_mobs_own_move_is_not_reconstructed_after_its_post() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_client_is_told_each_teleport_and_where_its_entities_really_are() {
     use horizon_core::geometry::Vec3;
     use horizon_protocol::packets::play::{self, Clientbound as C};
@@ -755,7 +766,7 @@ fn a_client_is_told_each_teleport_and_where_its_entities_really_are() {
 /// recreated entity is filed in the new level untold (its join), this call tells nothing of its
 /// own, and its next move there over a section edge is told once.
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn an_entity_moved_into_another_level_is_told_once_at_its_next_crossing() {
     observe(|calls| {
         with_game(|game| {

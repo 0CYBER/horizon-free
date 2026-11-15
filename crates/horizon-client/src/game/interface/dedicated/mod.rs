@@ -2697,7 +2697,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn broadcast_console_destination_follows_role_not_launch_marker() {
         use crate::game::execution_role::ExecutionRole;
         let mut resources = None;
@@ -2766,7 +2766,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn console_name_lookup_skips_fake_players() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let level = game.level("minecraft:overworld").unwrap();
@@ -2783,7 +2783,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn console_and_management_ip_ban_sets_skip_fake_players() {
         crate::game::native_guest_turn_tests::with_guests(|game| {
             let level = game.level("minecraft:overworld").unwrap();
@@ -3177,7 +3177,7 @@ mod console_source_tests {
     /// (an RCON client's, `RconConsoleSource`, "Rcon"): `/me` says so, and `teammsg`, which needs an entity,
     /// refuses it (`permissions.requires.entity`) instead of running as the player in place.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn the_console_runs_as_the_server_not_the_player_in_place() {
         let root = std::path::PathBuf::from(
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("prepared resources required"),

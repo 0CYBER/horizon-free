@@ -897,7 +897,7 @@ mod use_overflow_tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "requires prepared entity resources in .local/horizon-client"]
+    #[ignore = "daily"]
     fn bow_use_counter_saturates_when_target_hidden() {
         assert!(
             with_test_world(&[], |w, types| {
@@ -1918,7 +1918,7 @@ mod turtle_egg_target_tests {
     /// the zombie: refused, the egg at (2, 64, 0) is no target; the one at
     /// (4, 64, 0), and the same egg for another zombie, still are.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_refused_turtle_egg_is_no_target() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {

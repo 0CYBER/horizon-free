@@ -134,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn chunk_residency_uses_the_owning_level_through_cow_and_swaps() {
         use horizon_client::chunk::{Chunk, ChunkExtras};
         use horizon_mod_runtime::attachments::{AttachmentError, AttachmentType, Holder};
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn loaded_levels_keep_independent_index_through_swaps_and_close() {
         with_game(|game| {
             let key = ("test".into(), "mana".into());

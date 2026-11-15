@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and an isolated process for startup registration"]
+    #[ignore = "daily"]
     fn custom_enchantment_changes_real_hit_damage_and_observes_hit_context() {
         let reads: Observations = Default::default();
         with_mods(

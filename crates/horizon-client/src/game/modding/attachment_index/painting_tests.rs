@@ -53,7 +53,7 @@ fn contents() -> Tag {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_painting_residency_precedes_reads_and_retires_at_the_sweep() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -111,7 +111,7 @@ fn saved_painting_residency_precedes_reads_and_retires_at_the_sweep() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_painting_membership_follows_transactions_and_chunk_unload() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -158,7 +158,7 @@ fn saved_painting_membership_follows_transactions_and_chunk_unload() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn saved_paintings_stay_in_their_dimension_and_empty_reads_do_not_bind() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
@@ -210,7 +210,7 @@ fn saved_paintings_stay_in_their_dimension_and_empty_reads_do_not_bind() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn first_write_painting_publication_and_rollback() {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());

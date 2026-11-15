@@ -65,7 +65,7 @@ impl Hooks for Declares {
 }
 
 #[test]
-#[ignore = "needs HORIZON_TEST_RESOURCES; starts an integrated server and a physical TCP client"]
+#[ignore = "daily"]
 fn a_failing_raw_handler_rolls_back_alone_and_the_next_one_commits() {
     super::tests::require_resources();
     if super::super::native_entity_refs::tests::run_fresh_cases(

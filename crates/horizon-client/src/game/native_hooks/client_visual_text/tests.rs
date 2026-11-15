@@ -1,7 +1,7 @@
 use mod_api::{ClientHost, Text};
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn visual_read_uses_live_translations_styles_and_bidi_outside_drawing() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         let host: &dyn ClientHost = game;

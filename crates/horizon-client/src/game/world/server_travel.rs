@@ -1614,7 +1614,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn guest_portal_entry_uses_body_sleep_and_vehicle() {
         super::super::native_guest_turn_tests::with_guests(|game| {
             let mut chunk = horizon_client::chunk::Chunk::empty(0, 0);
@@ -1667,7 +1667,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn arriving_vehicle_is_announced_once_after_destination_entities() {
         use mod_api::{self, EntityJoinLevelEvent, Flow, Hooks};
         use std::sync::Mutex;
@@ -1738,7 +1738,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn natural_carrier_moves_full_objects_and_readmits_the_tree_in_order() {
         use mod_api::{AttachmentType, EntityConstructingEvent, Holder, Hooks, HostSide};
         use std::sync::Mutex;
@@ -1865,7 +1865,7 @@ mod tests {
     /// vehicle, so a pig that shares its boat's or minecart's UUID takes it in
     /// the destination and the vehicle is retained off-level below it.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn natural_carrier_retains_a_vehicle_root_refused_by_its_passenger() {
         for (kind, uuid) in [("minecraft:oak_boat", 705), ("minecraft:minecart", 706)] {
             super::super::native_entity_refs::tests::with_game(|game| {
@@ -1911,7 +1911,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn natural_portal_schedules_a_player_on_a_retained_indirect_vehicle() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.options.dedicated = Some(Vec::new());
@@ -2077,7 +2077,7 @@ mod transfer_lifetime_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn transfer_arrival_rebinds_only_bound_owners_with_the_same_id() {
         for kind in ["minecraft:minecart", "minecraft:oak_boat", "minecraft:pig"] {
             for bound in [true, false] {

@@ -11,7 +11,7 @@ fn summoned_pig(game: &mut Game<'_>) -> u32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn facing_wraps_and_uses_mth_atan2() {
     let mut resources = None;
     let mut game = server_game(&mut resources);
@@ -52,7 +52,7 @@ fn facing_wraps_and_uses_mth_atan2() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn over_world_surface_skips_cave_air_and_void_air() {
     let mut resources = None;
     let mut game = server_game(&mut resources);

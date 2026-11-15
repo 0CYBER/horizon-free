@@ -209,7 +209,7 @@ impl Game<'_> {
 #[cfg(test)]
 mod nested_spawn_tests {
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn lifted_mob_callback_keeps_nested_spawns_until_the_next_pass() {
         crate::game::entity::taken_pass_tests::in_both_dimensions(|game, balance| {
             let kind = game.res.mob_types().get("minecraft:panda").unwrap().clone();
@@ -268,7 +268,7 @@ mod pickup_tests {
     /// `CriteriaTriggers.THROWN_ITEM_PICKED_UP_BY_ENTITY` for whoever threw the
     /// bamboo, as the fox's pickup does (`LivingEntity.onItemPickup`).
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_panda_that_takes_a_thrown_item_credits_the_thrower() {
         let mut resources = None;
         let mut game = server_game(&mut resources);

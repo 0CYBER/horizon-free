@@ -97,7 +97,7 @@ mod tests {
     use mod_api::{LevelRef, WorldEpoch};
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn border_writes_move_the_shared_border_and_refuse_bad_values() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let level = game.level(game.dim.id()).unwrap();

@@ -45,7 +45,7 @@ impl Hooks for Probe {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated mod registry"]
+#[ignore = "daily"]
 fn the_active_stack_survives_a_partial_contact_and_consumption_removes_the_entity() {
     crate::game::in_own_process(
         "game::item_contact_tests::the_active_stack_survives_a_partial_contact_and_consumption_removes_the_entity",

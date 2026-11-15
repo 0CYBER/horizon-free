@@ -184,7 +184,7 @@ mod texture_atlas_stitched_tests {
     /// `TextureAtlasStitchedEvent`: the mod hears the blocks' atlas and then the GUI's, finds a
     /// sprite of each, and hears both again after a resource reload.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_client_mod_finds_its_sprites_each_time_an_atlas_is_stitched() {
         let kept = Arc::new(Mutex::new(Kept::default()));
         let mods: mod_api::Mods =
@@ -352,7 +352,7 @@ mod block_tint_color_tests {
     /// (tint index 0, as `block_sprites` reports it); stone has no tint, and an untinted
     /// face (-1) none either.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_tinted_face_takes_its_colour_where_it_stands() {
         super::super::native_entity_refs::tests::with_client_game(|game| {
             let registry = game.pack.context.assets.registry;

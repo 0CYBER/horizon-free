@@ -178,7 +178,7 @@ mod tests {
     /// A rim and a light a mod builds with their constructors and pushes from `visuals` reach
     /// the frame: the rim as outline edges in its colour and width, the light in its colour.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_mod_built_rim_and_light_reach_the_frame() {
         use mod_api::{BlockRim, ClientHost, ColoredLight, Hooks, ModEntry, VisualsEvent};
         use mod_platform::testing::with_mods;

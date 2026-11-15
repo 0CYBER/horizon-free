@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn components_match_damage_ignore_count_and_refuse_empty() {
     let items = resources();
     let ingredient = parse(
@@ -134,7 +134,7 @@ fn components_map_id_decodes_signed_numbers_and_matches_live_values() {
 }
 
 #[test]
-#[ignore = "requires prepared resources"]
+#[ignore = "daily"]
 fn components_strict_counts_max_damage_default_and_custom_name() {
     let items = resources();
     let ingredient = parse(

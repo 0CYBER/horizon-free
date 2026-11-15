@@ -197,7 +197,7 @@ mod tests {
     /// each character sees what the one before it left, a cancelled one is not typed and
     /// its edit stays, and the box's filter, limit and responders hold.
     #[test]
-    #[ignore = "needs prepared resources and a display"]
+    #[ignore = "daily"]
     fn a_mod_edits_the_focused_box_before_each_character() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let taken = || std::mem::take(&mut *seen.lock().unwrap());

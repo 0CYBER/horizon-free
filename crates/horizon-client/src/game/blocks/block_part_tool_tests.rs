@@ -15,7 +15,7 @@ fn hit_on(pos: [i32; 3]) -> Hit {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_part_allows_replaces_or_denies_a_tool_action_and_a_preview_changes_nothing() {
     use crate::game::api_values::TryIntoApi;
 
@@ -105,7 +105,7 @@ fn a_block_part_allows_replaces_or_denies_a_tool_action_and_a_preview_changes_no
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_block_part_can_deny_a_shovel_putting_out_a_campfire() {
     // The fixture's parts: a campfire is left alone by every tool.
     mod_platform::__private::part_tests::tool_modified_state_game_thread();

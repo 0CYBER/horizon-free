@@ -45,7 +45,7 @@ fn depart(game: &mut Game<'_>, id: u32, restart_waiting: bool) -> Vec3 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn portal_arrival_effects_merge_items_before_their_first_tick() {
     for (incoming, waiting, incoming_age, waiting_age, restart) in [
         (3, 5, 5999, 41, false),
@@ -142,7 +142,7 @@ pub(in crate::game) fn assert_tnt_blast(game: &mut Game<'_>, protected: bool) {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn portal_arrival_effects_tnt_protection_is_live_but_not_saved() {
     for restart_waiting in [false, true] {
         with_game(|game| {
@@ -252,7 +252,7 @@ fn complete_callback_arrival(game: &mut Game<'_>, id: u32, portal: bool, at: Vec
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn portal_arrival_effects_join_removals_cannot_consume_live_stacks() {
     for portal in [true, false] {
         for remove_incoming in [false, true] {
@@ -364,7 +364,7 @@ impl Hooks for SpawnDuringArrival {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn portal_arrival_effects_nested_spawns_do_not_hide_the_real_arrival() {
     for portal in [true, false] {
         let armed = Arc::new(AtomicBool::new(false));

@@ -218,17 +218,17 @@ fn walk_stop(assert_trajectory: bool) {
     }
 }
 #[test]
-#[ignore = "needs prepared resources and isolated homes/cwd"]
+#[ignore = "daily"]
 fn empty_markers_preserve_actual_walk_and_still_movement_bookkeeping() {
     walk_stop(false);
 }
 #[test]
-#[ignore = "needs prepared resources and isolated homes/cwd"]
+#[ignore = "daily"]
 fn boat_tick_uses_stopped_players_known_movement() {
     walk_stop(true);
 }
 #[test]
-#[ignore = "needs prepared resources and isolated homes/cwd"]
+#[ignore = "daily"]
 fn walking_then_still_tick_end_preserves_the_accepted_displacement() {
     let mut resources = None;
     let (mut g, _rx) = scene(&mut resources);

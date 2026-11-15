@@ -40,7 +40,7 @@ impl LevelAccess for RemovalLevel {
 }
 
 #[test]
-#[ignore = "requires prepared block behavior resources"]
+#[ignore = "daily"]
 fn removal_writes_chosen_state_or_vanilla_and_reports_original_arguments() {
     let f = fixture().expect("prepared resources for removal contract test");
     let stone = f.registry.default_state("minecraft:stone").unwrap();

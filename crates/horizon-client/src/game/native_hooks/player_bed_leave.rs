@@ -84,6 +84,16 @@ mod player_bed_leave_tests {
         }
     }
 
+    fn with_guests(test: impl FnOnce(&mut Game<'_>)) {
+        crate::game::native_guest_turn_tests::with_guests(|game| {
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+            );
+            test(game);
+        });
+    }
+
     fn in_bed(game: &mut Game<'_>, conn: u32) {
         game.lan
             .as_mut()
@@ -112,7 +122,7 @@ mod player_bed_leave_tests {
         let mods: mod_api::Mods =
             vec![ModEntry::new("wake", Box::new(Wake(heard.clone(), false)))].into();
         mod_platform::testing::with_mods(mods, || {
-            crate::game::native_guest_turn_tests::with_guests(|game| {
+            with_guests(|game| {
                 in_bed(game, 12);
                 game.wake_guests();
                 assert_eq!(
@@ -145,7 +155,7 @@ mod player_bed_leave_tests {
         let mods: mod_api::Mods =
             vec![ModEntry::new("wake", Box::new(Wake(heard.clone(), true)))].into();
         mod_platform::testing::with_mods(mods, || {
-            crate::game::native_guest_turn_tests::with_guests(|game| {
+            with_guests(|game| {
                 in_bed(game, 12);
                 let id = game.command_guest(12).unwrap().entity_id;
                 let leave = PlayerCommand {
@@ -177,7 +187,7 @@ mod player_bed_leave_tests {
         let mods: mod_api::Mods =
             vec![ModEntry::new("wake", Box::new(Wake(heard.clone(), false)))].into();
         mod_platform::testing::with_mods(mods, || {
-            crate::game::native_guest_turn_tests::with_guests(|game| {
+            with_guests(|game| {
                 let air = game
                     .pack
                     .assets
@@ -250,7 +260,7 @@ mod player_bed_leave_tests {
         let mods: mod_api::Mods =
             vec![ModEntry::new("wake", Box::new(Wake(heard.clone(), false)))].into();
         mod_platform::testing::with_mods(mods, || {
-            crate::game::native_guest_turn_tests::with_guests(|game| {
+            with_guests(|game| {
                 let air = game
                     .pack
                     .assets
@@ -313,7 +323,7 @@ mod player_bed_leave_tests {
     #[ignore = "daily"]
     fn guest_wake_counters_match_the_same_reasons_without_listeners() {
         mod_platform::testing::with_mods(Vec::new().into(), || {
-            crate::game::native_guest_turn_tests::with_guests(|game| {
+            with_guests(|game| {
                 let air = game
                     .pack
                     .assets

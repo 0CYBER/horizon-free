@@ -118,7 +118,7 @@ mod tests {
     /// then finalized with the caller's reason, and it joins not persistent. Every refusal
     /// spawns nothing and tells no mod.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES and an isolated process for native mods"]
+    #[ignore = "daily"]
     fn a_level_spawns_a_mob_as_its_entity_type_does_and_refuses_the_rest() {
         let heard = Heard::default();
         let mods = vec![mod_api::ModEntry::new(
@@ -209,7 +209,7 @@ mod tests {
     /// drop out; 2 lets them back. The flags take categories away, and the limits hold
     /// beside them. A stale handle and a client read nothing and set nothing.
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_levels_spawn_policy_changes_what_its_next_pass_spawns() {
         use Category as C;
         let friendly = [

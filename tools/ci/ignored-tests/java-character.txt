@@ -1,0 +1,2 @@
+# The daily test of the Java character tables: it runs the JDK (README.md). Rows: PACKAGE TEST TARGET daily REASON.
+horizon-core java_character::tests::matches_java_character lib daily child-process

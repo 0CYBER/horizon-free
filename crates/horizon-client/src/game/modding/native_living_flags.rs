@@ -456,7 +456,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn mob_flags_write_the_stored_state_and_survive_the_save() {
         with_game(|game| {
             let mob = cow(game, 12);
@@ -552,7 +552,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_summons_join_write_survives_the_spawn() {
         use mod_api::{EntityJoinLevelEvent, Flow, Hooks, ModEntry, ServerHost};
         struct Joiner;
@@ -769,7 +769,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn living_flags_normal_guest_sleep_writes_survive_turns_and_sync() {
         use horizon_client::pose::Pose;
         use horizon_protocol::packets::play::Clientbound as C;
@@ -836,7 +836,8 @@ pub(in crate::game) mod tests {
                 .unwrap();
                 let g = game.command_guest(12).unwrap();
                 assert!(!g.sleeping && g.bed.is_none());
-                assert_eq!(g.sleep_timer, 100);
+                // Generic LivingEntity.stopSleeping uses stopSleepInBed(true, true).
+                assert_eq!(g.sleep_timer, 0);
                 assert_eq!(g.pose(), Pose::Standing);
                 assert_ne!(g.position, [at.x, at.y, at.z]);
                 sync_guests(game);
@@ -914,7 +915,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn living_flags_foreign_level_guest_sleep_writes_refuse_without_mutation() {
         for sleeping in [false, true] {
             for acting in [false, true] {
@@ -1060,7 +1061,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn living_flags_guest_glide_stop_survives_own_turn_and_vines() {
         use horizon_client::pose::Pose;
         with_game(|game| {
@@ -1135,7 +1136,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn living_flags_nested_guest_flags_restore_outer_and_refuse_fake_sleep() {
         use horizon_client::{lan::guest::Guest, motion::PlayerMotion};
         with_game(|game| {
@@ -1205,7 +1206,7 @@ pub(in crate::game) mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn living_flags_villager_sleep_rejects_invalid_beds_without_mutation() {
         crate::game::entity::taken_pass_tests::in_both_dimensions(|game, balance| {
             guest_server(game, true, false);
@@ -1293,7 +1294,7 @@ pub(in crate::game) mod tests {
         });
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn a_block_part_decides_what_a_living_entity_climbs() {
         // The fixture's parts: glass is a ladder to even entity ids, a vine to none.
         mod_platform::__private::part_tests::ladder_game_thread();

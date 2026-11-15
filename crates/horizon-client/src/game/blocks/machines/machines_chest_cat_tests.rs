@@ -87,7 +87,7 @@ fn wire_power(game: &Game<'_>) -> i32 {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_sitting_cat_silences_the_comparator_reading_a_chest() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -105,7 +105,7 @@ fn a_sitting_cat_silences_the_comparator_reading_a_chest() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_sitting_cat_leaves_the_hopper_and_the_menu_alone() {
     let mut resources = None;
     let mut game = game(&mut resources);
@@ -125,7 +125,7 @@ fn a_sitting_cat_leaves_the_hopper_and_the_menu_alone() {
 }
 
 #[test]
-#[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+#[ignore = "daily"]
 fn a_conductor_above_a_chest_still_silences_the_comparator() {
     let mut resources = None;
     let mut game = game(&mut resources);

@@ -1494,7 +1494,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn first_world_open_admits_block_function() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             let folder = "first-open-block-function";
@@ -1549,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn prepared_function_calls_keep_causality_and_fallback_boundaries() {
         use crate::game::native_entity_refs::tests::with_game;
         use horizon_client::motion::PlayerMotion;
@@ -1853,7 +1853,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    #[ignore = "daily"]
     fn forked_function_replies_keep_task_order_and_actual_callbacks() {
         use crate::game::native_entity_refs::tests::with_game;
         use horizon_client::motion::PlayerMotion;
@@ -2034,7 +2034,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn function_frames_restore_outer_frame() {
         use crate::game::native_entity_refs::tests::with_game;
         use horizon_client::datapack::{Function, FunctionLine};
@@ -2059,7 +2059,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn refused_item_key_reload_keeps_previous_world_generation() {
         use mod_api::{Hooks, ModEntry, Registrar, RegistrationContext};
 
@@ -2153,7 +2153,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn pack_changes_publish_the_new_zip_generation_for_template_reads() {
         use std::{io::Write, path::PathBuf};
         use {
@@ -2227,7 +2227,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn world_open_loads_functions_before_first_tick() {
         use crate::game::{native_entity_refs::tests::with_game, world_loading::WorldRequest};
 
@@ -2352,7 +2352,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn function_pack_rejects_invalid_ordinary_lines_before_execution() {
         use crate::game::{Audio, Options, Settings, load_resources};
         use std::time::Instant;
@@ -2630,7 +2630,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn unless_function_keeps_a_fallthrough_after_running_it_once() {
         use crate::game::{Audio, Options, Settings, load_resources};
         use horizon_client::datapack::FunctionLine;
@@ -2890,7 +2890,7 @@ mod entity_score_tests {
     use horizon_core::nbt::Tag;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn named_scores_follow_the_registered_target_holder_and_mutations() {
         let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
         let settings = Settings::default();
@@ -2991,7 +2991,7 @@ mod entity_score_tests {
         assert_eq!(game.world.game_time, time);
     }
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn folder_metadata_rejection_reaches_actual_function_commands() {
         use crate::game::{Audio, Options, Settings, load_resources};
         use std::time::Instant;
@@ -3124,7 +3124,7 @@ mod required_tag_tests {
     use super::*;
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn real_pack_required_tag_failures_execute_no_partial_functions() {
         use crate::game::{Audio, Options, Settings, load_resources};
         use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -3339,7 +3339,7 @@ mod required_tag_tests {
     }
 
     #[test]
-    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    #[ignore = "daily"]
     fn named_predicates_resolve_loaded_references_for_actual_sources() {
         crate::game::native_entity_refs::tests::with_game(|game| {
             game.build_registries();
