@@ -576,7 +576,7 @@ impl Launcher {
             });
             let tip = match (follows, self.selected_instance()) {
                 (false, Some(i)) => trf(
-                    "Play this version in {instance} only. To go back to the latest, choose Latest in its settings, Installation.",
+                    "Play this version only in {instance}. To go back to the latest, choose Latest in its settings, Installation.",
                     &[("instance", &i.name)],
                 ),
                 _ => tr("Play this version in every instance set to Latest.")
