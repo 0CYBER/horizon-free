@@ -1495,6 +1495,7 @@ fn a_custom_argument_parses_completes_and_keeps_its_id() {
                 .map(|text| CustomSuggestion {
                     text: text.to_owned(),
                     tooltip: None,
+                    replace_start: None,
                 })
                 .collect()
         },
@@ -1560,6 +1561,115 @@ fn a_greedy_custom_argument_takes_the_rest_of_the_line() {
             value: "hello there".into(),
         })
     );
+}
+
+#[test]
+fn an_ask_server_node_replies_with_the_token_range_when_it_has_no_suggestion_of_its_own() {
+    // The free `id` node: vanilla's identifier parser with `minecraft:ask_server`. It computes
+    // nothing locally, so the range the server sends must still be the token being typed: the
+    // completions a mod adds in `tab_complete` are applied there, not at the start of the line.
+    let mut dispatcher = Dispatcher::new();
+    let probe = dispatcher.literal(0, "probe");
+    let value = dispatcher.argument(probe, "value", ArgType::Identifier);
+    dispatcher.suggests(value, Suggests::AskServer);
+    let registries = reg();
+    let typed = "probe ston";
+    let parse = dispatcher.parse(typed, &registries);
+    let (range, list, ask) = dispatcher.client_suggestions_asking(&parse, typed.len(), &registries);
+    assert!(ask, "the client asks the server for this node");
+    assert!(list.is_empty(), "the identifier itself suggests nothing");
+    assert_eq!(range, (6, typed.len()), "the token, never (0, 0)");
+    // The server answers the same way; its dispatcher has no provider to ask, only its mods.
+    let (range, list) = dispatcher.suggestions(&parse, typed.len(), &registries);
+    assert!(list.is_empty());
+    assert_eq!(range, (6, typed.len()));
+}
+
+#[test]
+fn an_expanded_suggestion_past_the_packet_text_limit_is_left_out() {
+    // Two completions that each fit the packet's 32767 UTF-16 units on their own: one replaces
+    // the whole 32002-character text, the other only its last character. Padding the second with
+    // the prefix it starts after expands to 64768 characters, so the packet cannot carry it; it
+    // is left out and the first one stays.
+    let input = "a".repeat(32002);
+    let whole = || Suggestion {
+        range: (0, input.len()),
+        text: "short".into(),
+        tooltip: None,
+        int_value: None,
+    };
+    let from_last = |len: usize| Suggestion {
+        range: (input.len() - 1, input.len()),
+        text: "b".repeat(len),
+        tooltip: None,
+        int_value: None,
+    };
+    let (range, merged) = merge_suggestions(&input, vec![whole(), from_last(32767)]);
+    assert_eq!(range, (0, input.len()));
+    assert_eq!(
+        merged.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
+        ["short"]
+    );
+    // The kept one applies to the whole text, so the chat can still offer it.
+    assert_eq!(merged[0].apply(&input), "short");
+    // The limit counts the expanded text: the 32001 characters in front of the last one plus
+    // its own 766 is exactly 32767 and stays, one character more does not.
+    let (_, merged) = merge_suggestions(&input, vec![whole(), from_last(766)]);
+    assert_eq!(merged.len(), 2);
+    assert!(
+        merged
+            .iter()
+            .any(|s| s.text.encode_utf16().count() == 32767),
+        "a completion expanded to exactly the limit stays"
+    );
+    let (_, merged) = merge_suggestions(&input, vec![whole(), from_last(767)]);
+    assert_eq!(merged.len(), 1, "32768 characters cannot cross the wire");
+}
+
+#[test]
+fn a_custom_suggestion_replaces_only_the_token_it_names() {
+    let argument = ArgType::Custom(CustomArgument::new(
+        "example:pattern",
+        CustomArgumentKind::Greedy,
+        |input| Ok(input.to_owned()),
+        |prefix| {
+            let start = prefix.rfind(' ').map_or(0, |space| space + 1);
+            let mut out: Vec<CustomSuggestion> = ["stone", "dirt"]
+                .into_iter()
+                .filter(|block| block.starts_with(&prefix[start..]))
+                .map(|block| CustomSuggestion {
+                    text: block.to_owned(),
+                    tooltip: None,
+                    replace_start: Some(start),
+                })
+                .collect();
+            // A suggestion past the typed text is left out, never applied.
+            out.push(CustomSuggestion {
+                text: "nowhere".to_owned(),
+                tooltip: None,
+                replace_start: Some(prefix.len() + 1),
+            });
+            out
+        },
+    ));
+    let mut dispatcher = Dispatcher::new();
+    let replace = dispatcher.literal(0, "replace");
+    let pattern = dispatcher.argument(replace, "pattern", argument);
+    dispatcher.executes(pattern, "test");
+
+    let registries = reg();
+    let typed = "replace stone st";
+    let parse = dispatcher.parse(typed, &registries);
+    let (range, suggestions) = dispatcher.suggestions(&parse, typed.len(), &registries);
+    assert_eq!(range, (14, typed.len()), "the range covers the typed token");
+    assert_eq!(
+        suggestions
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>(),
+        ["stone"]
+    );
+    assert_eq!(suggestions[0].apply(typed), "replace stone stone");
 }
 
 #[test]

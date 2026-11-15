@@ -13,7 +13,7 @@ use std::{
 
 /// The argument kinds a native usage may name, each with a [`parser`]; `resource:<registry>`
 /// and `mod_id` come on top.
-pub(super) const KINDS: [&str; 17] = [
+pub(super) const KINDS: [&str; 18] = [
     "word",
     "text",
     "integer",
@@ -31,6 +31,7 @@ pub(super) const KINDS: [&str; 17] = [
     "rotation",
     "dimension",
     "nbt",
+    "id",
 ];
 
 /// The tree property marking `vec3_uncentered`: vanilla's `vec3(false)` has the same parser id
@@ -176,6 +177,15 @@ pub(super) fn parser(kind: &str) -> Option<(&'static str, Value, ArgType)> {
         "rotation" => ("minecraft:rotation", Value::Null, ArgType::Rotation),
         "dimension" => ("minecraft:dimension", Value::Null, ArgType::Dimension),
         "nbt" => ("minecraft:nbt_compound_tag", Value::Null, ArgType::Nbt),
+        // `ResourceLocationArgument`: a free `namespace:path` of identifier characters, with no
+        // registry to check. An unmodded client parses and refuses it the same way; the node
+        // declares `minecraft:ask_server` (`usage_nodes`), so the identifiers it completes are the
+        // mods' own (`tab_complete`).
+        "id" => (
+            "minecraft:resource_location",
+            Value::Null,
+            ArgType::Identifier,
+        ),
         _ => return None,
     })
 }
@@ -245,6 +255,26 @@ fn refused_argument_text(error: mod_api::CommandArgumentError) -> Text {
     }
 }
 
+/// Why a mod's suggestion cannot replace part of the text `prefix` being typed: it names the
+/// argument type and the suggestion, and the reason. A replacement that starts past the typed
+/// text, or inside a character, has no range the chat could apply, so the suggestion is refused
+/// (reported, and left out) rather than panicking on the player's input.
+fn suggestion_refusal(
+    id: &str,
+    prefix: &str,
+    suggestion: &mod_api::CommandSuggestion,
+) -> Option<String> {
+    let offset = suggestion.replace_start?;
+    (offset > prefix.len() || !prefix.is_char_boundary(offset)).then(|| {
+        format!(
+            "mod command argument `{id}` refused the suggestion `{}`: it replaces from byte \
+             {offset} of the {} typed",
+            suggestion.text,
+            prefix.len()
+        )
+    })
+}
+
 /// The dispatcher type of one validated tree node: a vanilla kind, or the mod's registered
 /// argument type with its parser and suggestions.
 pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgType {
@@ -260,6 +290,7 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
             .unwrap_or_else(|| panic!("native command tree names unregistered argument type {id}"));
         let parse = argument.clone();
         let suggest = argument.clone();
+        let kind_id = id.to_owned();
         // Use the validated tree property rather than calling mod code again.
         let kind = if node["properties"]["type"] == "greedy" {
             horizon_client::command::CustomArgumentKind::Greedy
@@ -301,9 +332,19 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
                 }
                 results
                     .into_iter()
-                    .map(|suggestion| horizon_client::command::CustomSuggestion {
-                        text: suggestion.text,
-                        tooltip: suggestion.tooltip,
+                    .filter_map(|suggestion| {
+                        // A completion for one token of the text replaces from its offset; one the
+                        // player's text cannot hold is refused by name instead of panicking where
+                        // the chat applies the range.
+                        if let Some(refusal) = suggestion_refusal(&kind_id, prefix, &suggestion) {
+                            eprintln!("{refusal}");
+                            return None;
+                        }
+                        Some(horizon_client::command::CustomSuggestion {
+                            text: suggestion.text,
+                            tooltip: suggestion.tooltip,
+                            replace_start: suggestion.replace_start,
+                        })
                     })
                     .collect()
             },
@@ -324,6 +365,36 @@ pub(super) fn argument_type(node: &Value, arguments: &CommandArguments) -> ArgTy
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_suggestion_may_replace_from_an_offset_inside_the_typed_text() {
+        let whole = mod_api::CommandSuggestion::new("stone");
+        assert_eq!(suggestion_refusal("test:pattern", "st", &whole), None);
+        let token = mod_api::CommandSuggestion::new("stone").replacing_from(6);
+        assert_eq!(suggestion_refusal("test:pattern", "stone st", &token), None);
+        // Past the typed text: there is no range to replace.
+        let refusal = suggestion_refusal("test:pattern", "st", &token).unwrap();
+        assert!(
+            refusal.contains("test:pattern"),
+            "names the type: {refusal}"
+        );
+        assert!(
+            refusal.contains("`stone`"),
+            "names the suggestion: {refusal}"
+        );
+        // Inside a two-byte character: no boundary to split the replacement on.
+        let inside = mod_api::CommandSuggestion::new("é").replacing_from(1);
+        assert!(suggestion_refusal("test:pattern", "é ", &inside).is_some());
+    }
+
+    #[test]
+    fn the_id_kind_is_vanillas_free_identifier_parser() {
+        let (parser, properties, ty) = super::parser("id").expect("the id kind has a parser");
+        assert_eq!(parser, "minecraft:resource_location");
+        assert_eq!(properties, Value::Null, "the parser takes no properties");
+        assert!(matches!(ty, ArgType::Identifier), "{ty:?}");
+        assert!(KINDS.contains(&"id"));
+    }
 
     #[test]
     fn registry_names_are_resource_locations_within_their_own_budget() {
