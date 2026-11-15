@@ -1,3 +1,0 @@
-# path<TAB>regeneration command
-ROADMAP.md	python3 tools/roadmap.py build
-roadmap/roadmap.json	python3 tools/roadmap.py build

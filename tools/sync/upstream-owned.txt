@@ -1,1 +1,0 @@
-# Only vanilla resource assets are upstream-owned; Horizon translations use the merge driver.
