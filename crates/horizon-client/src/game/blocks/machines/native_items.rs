@@ -69,13 +69,15 @@ impl Game<'_> {
         };
         let resource = mod_api::ItemResource::of(&snapshot);
         mod_api::run_transaction(self, |game, tx| {
+            let (pos, index) = source.locate(slot).ok_or(())?;
+            game.journal_block_entity_slot(pos, index);
+            // Reserve the offered item before writable insertion notices can re-enter.
+            let mut reserved = game.take_one(source, slot).ok_or(())?;
             let went = part.insert_any(game, tx, &resource, 1);
             let accepted = part.checked(went, 1, &at) == Some(1);
-            if accepted {
-                if let Some((pos, index)) = source.locate(slot) {
-                    game.journal_block_entity_slot(pos, index);
-                }
-                let _ = game.take_one(source, slot);
+            if !accepted {
+                reserved.count = snapshot.count();
+                *game.slot_mut_at(source, slot).ok_or(())? = Some(reserved);
             }
             Ok::<_, ()>(accepted)
         })

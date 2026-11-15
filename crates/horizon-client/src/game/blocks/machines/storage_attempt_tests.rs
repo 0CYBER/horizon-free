@@ -30,6 +30,8 @@ struct Rules {
     refuse_extract: bool,
     write_on_refuse: bool,
     rename_source_on_notice: bool,
+    move_source_on_notice: bool,
+    replace_source_on_notice: bool,
     forward_to_vanilla: bool,
     external: Vec<Option<mod_api::ItemStack>>,
     source_seen: Vec<(u32, u32)>,
@@ -213,6 +215,31 @@ impl BlockPart for Probe {
                 "notice:{amount}:{:?}",
                 host.transaction_lifecycle()
             ));
+            if pos == BELOW && self.rules.lock().unwrap().move_source_on_notice {
+                let source = event
+                    .level
+                    .capability(host, &ITEMS, [8, 64, 8], None)
+                    .unwrap();
+                let sink = event.level.capability(host, &ITEMS, OTHER, None).unwrap();
+                host.transaction(|host, tx| {
+                    if let Some(resource) = source.resource(host, 0) {
+                        let taken = source.extract(host, tx, 0, &resource, 1);
+                        assert_eq!(sink.insert_any(host, tx, &resource, taken), taken);
+                    }
+                    if self.rules.lock().unwrap().replace_source_on_notice {
+                        let stick = ItemResource::of(
+                            &mod_api::ItemStack::new(
+                                mod_api::__private::item_key("minecraft:stick").unwrap(),
+                                1,
+                            )
+                            .unwrap(),
+                        );
+                        assert_eq!(source.insert(host, tx, 0, &stick, 1), 1);
+                    }
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+            }
             if pos == BELOW && self.rules.lock().unwrap().rename_source_on_notice {
                 let source = host.block_entity(event.level, [8, 64, 8]).unwrap();
                 assert!(
@@ -1119,6 +1146,48 @@ fn dropper_removes_accepted_source_before_a_real_root_commit_callback() {
             assert_eq!(count(game, HOPPER, 0), 0);
             assert_eq!(count(game, (10, 63, 8), 0), 1);
             assert_eq!(count(game, (11, 63, 8), 0), 0);
+        },
+    );
+}
+
+#[test]
+#[ignore = "daily"]
+fn dropper_reserves_source_across_writable_insertion_notices() {
+    fixture(
+        "game::machines::native_items::storage_attempt_tests::dropper_reserves_source_across_writable_insertion_notices",
+        |game, _, probe| {
+            for replacement in [false, true] {
+                place(game, HOPPER, "minecraft:dropper");
+                let state = game.world.block(8, 64, 8);
+                let state = game.with_props(state, &[("facing", "down")]).unwrap();
+                game.world.set(8, 64, 8, state).unwrap();
+                let mut slots = vec![None; 9];
+                slots[0] = Some(ItemStack::new("minecraft:diamond", 1));
+                hopper(game, slots);
+                storage(game, BELOW, vec![None; 2]);
+                place(game, (11, 63, 8), "minecraft:chest");
+                game.world
+                    .block_entities
+                    .insert((11, 63, 8), BlockEntity::Chest(vec![None; 27]));
+                {
+                    let mut rules = probe.rules.lock().unwrap();
+                    rules.accept = Some("minecraft:diamond");
+                    rules.notify = true;
+                    rules.move_source_on_notice = true;
+                    rules.replace_source_on_notice = replacement;
+                }
+                game.dispense_from(BlockPos::new(8, 64, 8), state).unwrap();
+                assert_eq!(count(game, BELOW, 0), 1);
+                assert_eq!(count(game, (11, 63, 8), 0), 0);
+                assert_eq!(count(game, HOPPER, 0), u32::from(replacement));
+                if replacement {
+                    let view = game.containers().view(HOPPER, false).unwrap();
+                    assert_eq!(
+                        game.containers().get(&view, 0).unwrap().item,
+                        "minecraft:stick"
+                    );
+                }
+            }
         },
     );
 }
