@@ -23,15 +23,49 @@ fn parse_java_decimal(text: &str, max: i128) -> Option<i128> {
     }
     let mut value = 0i128;
     for c in text.chars() {
-        let digit = u16::try_from(u32::from(c))
-            .ok()
-            .and_then(|unit| java_character::digit(unit, 10))?;
+        let digit = java_digit(c, 10)?;
         value = value * 10 + i128::from(digit);
         if value > max + i128::from(negative) {
             return None;
         }
     }
     Some(if negative { -value } else { value })
+}
+
+/// `Character.digit(char, radix)`: the char overload sees no supplementary scalar.
+fn java_digit(c: char, radix: u32) -> Option<u32> {
+    java_character::digit(u16::try_from(u32::from(c)).ok()?, radix)
+}
+
+/// `UUID.fromString`: signed-long hex groups, masked to UUID field widths.
+pub fn parse_java_uuid(name: &str) -> Option<u128> {
+    if name.encode_utf16().count() > 36 {
+        return None;
+    }
+    let mut parts = name.split('-');
+    let mut values = [0u64; 5];
+    for value in &mut values {
+        let group = parts.next()?;
+        let digits = group.strip_prefix('+').unwrap_or(group);
+        if digits.is_empty() {
+            return None;
+        }
+        for digit in digits.chars() {
+            *value = value
+                .checked_mul(16)?
+                .checked_add(u64::from(java_digit(digit, 16)?))?;
+            if *value > i64::MAX as u64 {
+                return None;
+            }
+        }
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    let most =
+        ((values[0] & 0xffff_ffff) << 32) | ((values[1] & 0xffff) << 16) | (values[2] & 0xffff);
+    let least = ((values[3] & 0xffff) << 48) | (values[4] & 0xffff_ffff_ffff);
+    Some((u128::from(most) << 64) | u128::from(least))
 }
 
 #[cfg(test)]
