@@ -382,8 +382,8 @@ impl Launcher {
     }
 
     /// The rail: a strip of instance icons that opens into names, states and links while the
-    /// pointer is on it (or one of its menus is open). The page beside it gives way as it opens,
-    /// so nothing is ever covered. Its foot keeps the launcher's update, Sculk's card, Discord,
+    /// pointer is on it (or one of its menus is open). It opens over the page, which keeps the
+    /// collapsed rail's room, so the page never moves or squeezes under the pointer. Its foot keeps the launcher's update, Sculk's card, Discord,
     /// the project's links, Settings and the version.
     pub(super) fn glass_rail(
         &mut self,
@@ -813,6 +813,9 @@ impl Launcher {
             .px(px(12.))
             .py(px(12.))
             .overflow_hidden()
+            // Open, it lies over the page: a shadow lifts it off what it covers.
+            .when(p > 0.02, |d| d.shadow_lg())
+            .occlude()
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 this.rail.hovered = *hovered;
                 cx.notify();
