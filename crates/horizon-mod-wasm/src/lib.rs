@@ -11,6 +11,7 @@ pub mod copy_probe;
 #[cfg(feature = "runtime-fixture")]
 pub mod fixture;
 pub mod link;
+mod load_times;
 mod module_cache;
 pub use compile_child::compile_child;
 #[cfg(test)]
@@ -477,13 +478,28 @@ pub fn load_installed(
     let mod_list = horizon_mod_package::mod_list::ModList::load(game_dir);
     let memory_cap_mib = mod_list.wasm_memory_cap();
     let enabled = mod_list.enabled;
-    let mut refused: Vec<_> = horizon_mod_package::selection::package_errors(
+    let packages_timer = load_times::timer(load_times::Phase::Packages);
+    let installed: Vec<_> =
         horizon_mod_package::find(&game_dir.join(horizon_mod_package::mod_list::DIR))
             .into_iter()
             .chain(horizon_mod_package::find(
                 &game_dir.join(horizon_mod_package::mod_list::NATIVE_DIR),
             ))
-            .chain(dev.iter().cloned()),
+            .chain(dev.iter().cloned())
+            .collect();
+    // Each installed package is read once: its refusal, whether it is native and whether it is
+    // selected all come from that read, since every read hashes the whole package.
+    let mut reads = std::collections::HashMap::new();
+    for path in &installed {
+        reads
+            .entry(path.clone())
+            .or_insert_with(|| horizon_mod_package::Package::read(path));
+    }
+    let mut refused: Vec<_> = horizon_mod_package::selection::package_errors(
+        installed
+            .iter()
+            .filter(|path| reads[*path].is_err())
+            .cloned(),
     )
     .into_iter()
     .filter(|(id, _)| enabled.contains(id) || !dev.is_empty())
@@ -501,31 +517,42 @@ pub fn load_installed(
                 )
             }))
             .chain(dev.iter().cloned())
-            .filter_map(|path| horizon_mod_package::Package::read(&path).ok())
-            .filter(|package| package.is_native())
-            .collect();
-    let packages: Vec<WasmPackage> =
-        horizon_mod_package::selection::content_packages(game_dir, &enabled, dev)
-            .filter(|selected| selected.package.manifest.wasm.is_some())
-            .filter_map(|selected| {
-                if let Some(reason) = native.iter().find_map(|library| {
-                    horizon_mod_package::layouts::mixed_refusal(&selected.package, library)
-                }) {
-                    refused.push((selected.package.manifest.id, Refusal::Package(reason)));
-                    return None;
+            .filter_map(|path| match reads.remove(&path) {
+                Some(Ok(package)) if package.is_native() => Some(package),
+                Some(other) => {
+                    reads.insert(path, other);
+                    None
                 }
-                match horizon_mod_package::Package::read_wasm(&selected.path) {
-                    Ok(module) => Some(WasmPackage {
-                        manifest: selected.package.manifest,
-                        module,
-                    }),
-                    Err(why) => {
-                        refused.push((selected.package.manifest.id, Refusal::Package(why)));
-                        None
-                    }
-                }
+                None => horizon_mod_package::Package::read(&path)
+                    .ok()
+                    .filter(horizon_mod_package::Package::is_native),
             })
             .collect();
+    let packages: Vec<WasmPackage> =
+        horizon_mod_package::selection::content_packages_read(game_dir, &enabled, dev, |path| {
+            reads.remove(path).and_then(Result::ok)
+        })
+        .filter(|selected| selected.package.manifest.wasm.is_some())
+        .filter_map(|selected| {
+            if let Some(reason) = native.iter().find_map(|library| {
+                horizon_mod_package::layouts::mixed_refusal(&selected.package, library)
+            }) {
+                refused.push((selected.package.manifest.id, Refusal::Package(reason)));
+                return None;
+            }
+            match selected.package.wasm(&selected.path) {
+                Ok(module) => Some(WasmPackage {
+                    manifest: selected.package.manifest,
+                    module,
+                }),
+                Err(why) => {
+                    refused.push((selected.package.manifest.id, Refusal::Package(why)));
+                    None
+                }
+            }
+        })
+        .collect();
+    drop(packages_timer);
     let mut loaded = match budget {
         Err(why) => Loaded {
             refused: packages
@@ -598,12 +625,14 @@ pub fn initialize(inventory: &[mod_api::PackageInfo]) {
         modules.iter().map(|(manifest, module)| (manifest, module)),
         inventory,
     ));
+    load_times::report(modules.len());
     let _ = INITIALIZED_REFUSALS.set(refused);
 }
 fn initialize_selected<'a>(
     modules: impl Iterator<Item = (&'a Manifest, &'a WasmMod)>,
     inventory: &[mod_api::PackageInfo],
 ) -> Vec<(String, Refusal)> {
+    let _timer = load_times::timer(load_times::Phase::Initialize);
     let mut refused = Vec::new();
     for (manifest, module) in modules {
         let result = if initialize_modules(std::slice::from_ref(module), inventory) {
@@ -735,6 +764,7 @@ fn load_with_cache(
                 if mods.len() != indices.len() {
                     return Err(Refusal::Runtime("missing mod boundary exports".into()));
                 }
+                let _timer = load_times::timer(load_times::Phase::Subscribe);
                 let mut checked = Vec::new();
                 for mut module in mods {
                     let subscriptions: Vec<(String, i32, bool)> = module
