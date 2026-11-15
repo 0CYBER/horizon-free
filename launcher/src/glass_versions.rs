@@ -671,7 +671,7 @@ impl Launcher {
                 if let Some(about) = native_mods::about(&tag) {
                     line.push(trf(
                         "Built on {base}",
-                        &[("base", &crate::glass_instance::version_label(&about.base))],
+                        &[("base", &self.version_label(&about.base))],
                     ));
                     // The build's own name stays in the details, for reports.
                     line.push(tag.clone());
@@ -689,7 +689,7 @@ impl Launcher {
                     self.glass_version_actions(&tag, cx).into_any_element()
                 };
                 let title = if native_mods::is_native(&tag) {
-                    crate::glass_instance::version_label(&tag)
+                    self.version_label(&tag)
                 } else {
                     horizon_launcher::nightly::label(&tag)
                         .or_else(|| build_import::label(&tag))

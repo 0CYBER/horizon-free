@@ -245,7 +245,7 @@ impl Launcher {
             },
             None => self.version_of(instance).map_or_else(
                 || tr("No version installed").to_string(),
-                |tag| crate::glass_instance::version_label(tag),
+                |tag| self.version_label(tag),
             ),
         }
     }
