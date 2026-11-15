@@ -5277,6 +5277,7 @@ mod tests {
             options: Vec::new(),
             values: Vec::new(),
             pages: Vec::new(),
+            traces: false,
         };
         let mut s = Settings {
             shader_packs: vec![entry("A.zip"), entry("B.zip")],

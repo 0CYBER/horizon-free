@@ -31,6 +31,8 @@ HORIZON_CLIENT = [
     "docs/api/launch-reference.md", "docs/horizon-ctl-commands.md", "docs/parity/random-chance-seeded.jsonl",
     "native-hooks.json", "tools/native-hook-fragments", "packaging/windows/exe.rs", "research-lock.json",
     "tests/fixtures",
+    # shader_packs.rs tests load the sample pack.
+    "crates/horizon-shader-api/packs/traced_shadows",
 ]
 MOD_API_GEN = [
     "native-hooks.json", "tools/native-hook-fragments",

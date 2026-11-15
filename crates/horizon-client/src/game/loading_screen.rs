@@ -159,6 +159,7 @@ impl Loading {
             None,
             None,
             self.settings.horizon.api,
+            shader_packs::picked_pack_shape(&self.settings).ray_tracing,
         ) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => {
@@ -224,6 +225,7 @@ impl Loading {
             Some(&bundle.panorama),
             self.renderer.as_ref(),
             self.settings.horizon.api,
+            shader_packs::picked_pack_shape(&self.settings).ray_tracing,
         ) {
             Ok(r) => {
                 horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);

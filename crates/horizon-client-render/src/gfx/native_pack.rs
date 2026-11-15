@@ -35,6 +35,8 @@ pub struct NativePack {
     pub light_colors: Vec<horizon_shader_api::manifest::LightColor>,
     /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
     pub timing: Option<PassTiming>,
+    /// It declares `[ray_tracing]`: the renderer keeps a scene for it (`replace_native`).
+    pub traces: bool,
 }
 
 /// Whether the option `id` (a bool, or a number above 0) is on, or there is none to ask.
@@ -334,6 +336,7 @@ impl NativePack {
         let pack = Self {
             particle_lights: report.manifest.particle_lights.clone(),
             light_colors: report.manifest.lights.clone(),
+            traces: report.manifest.ray_tracing.is_some(),
             frame,
             sky,
             material,

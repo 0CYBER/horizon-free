@@ -30,6 +30,8 @@ pub struct Entry {
     pub values: Vec<f64>,
     /// Its options page's `[[pages]]`; empty for one page of every option.
     pub pages: Vec<OptionPage>,
+    /// A Horizon pack that declares `[ray_tracing]`.
+    pub traces: bool,
 }
 
 impl Entry {
@@ -117,9 +119,18 @@ fn entry(path: &Path) -> Option<Entry> {
         // Its manifest's name; a pack that can't be read is still listed, under its file
         // name: picking it says why in the chat.
         let manifest = horizon_shader_api::Pack::read_manifest(path).ok();
-        let (key, title, options, pages) = manifest.map_or_else(
-            || (file.clone(), file.clone(), Vec::new(), Vec::new()),
-            |m| (format!("horizon:{}", m.id), m.name, m.options, m.pages),
+        let (key, title, options, pages, traces) = manifest.map_or_else(
+            || (file.clone(), file.clone(), Vec::new(), Vec::new(), false),
+            |m| {
+                let traces = m.ray_tracing.is_some();
+                (
+                    format!("horizon:{}", m.id),
+                    m.name,
+                    m.options,
+                    m.pages,
+                    traces,
+                )
+            },
         );
         return Some(Entry {
             key,
@@ -129,6 +140,7 @@ fn entry(path: &Path) -> Option<Entry> {
             options,
             values: Vec::new(),
             pages,
+            traces,
         });
     }
     let zip = path.is_file()
@@ -143,6 +155,7 @@ fn entry(path: &Path) -> Option<Entry> {
         options: Vec::new(),
         values: Vec::new(),
         pages: Vec::new(),
+        traces: false,
     })
 }
 
@@ -625,6 +638,7 @@ mod tests {
             ],
             values: vec![1.0, 2.0, 1.0, 0.0],
             pages: Vec::new(),
+            traces: false,
         };
         assert_eq!(entry.slider_position(0), Some(0.5));
         assert_eq!(entry.slider_position(1), Some(0.2));
@@ -673,6 +687,7 @@ mod tests {
             }],
             values: vec![0.0],
             pages: Vec::new(),
+            traces: false,
         };
         let steps = float_steps(0.0, 1.0, 0.3) as u32;
         let mut walk = |forward: bool| {

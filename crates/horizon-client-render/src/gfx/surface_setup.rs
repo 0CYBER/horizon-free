@@ -106,6 +106,22 @@ pub(super) struct Adapted {
     pub(super) device_lost: Arc<std::sync::atomic::AtomicBool>,
     pub(super) configured: Option<(wgpu::SurfaceConfiguration, wgpu::SurfaceCapabilities)>,
 }
+/// What the device has to offer from its creation: the sprite arrays' `layers`, and ray queries
+/// when the pack picked at startup declares `[ray_tracing]` (`rays`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DeviceNeeds {
+    pub(super) layers: u32,
+    pub(super) rays: bool,
+}
+impl super::output::FrameRequest {
+    /// What a device opened for this request and `layers` sprite layers needs.
+    pub(super) fn needs(self, layers: u32) -> DeviceNeeds {
+        DeviceNeeds {
+            layers,
+            rays: self.ray_tracing,
+        }
+    }
+}
 /// Opens a device on `adapter` and configures the window's `surface` on it (none
 /// offscreen). An adapter the surface offers no format on fails before its device opens.
 pub(super) async fn open_adapter(
@@ -113,7 +129,7 @@ pub(super) async fn open_adapter(
     window: &Arc<Window>,
     surface: Option<&wgpu::Surface<'static>>,
     adapter: &wgpu::Adapter,
-    layers: u32,
+    needs: DeviceNeeds,
 ) -> std::result::Result<Adapted, AdapterFailure> {
     let caps = surface.map(|surface| surface.get_capabilities(adapter));
     if caps.as_ref().is_some_and(|caps| caps.formats.is_empty()) {
@@ -124,7 +140,7 @@ pub(super) async fn open_adapter(
     describe_adapter(adapter);
     let info = adapter.get_info();
     let limits = adapter.limits();
-    if let Err(e) = check_layers(adapter, layers) {
+    if let Err(e) = check_layers(adapter, needs.layers) {
         return Err(AdapterFailure::Failed(format!("{name}: {e}")));
     }
     // Mappable primary buffers: section pages that no longer fit in
@@ -138,7 +154,7 @@ pub(super) async fn open_adapter(
         | pack_timing::PassTiming::features(adapter)
         | cull::Cull::features(adapter)
         | oit::features(adapter)
-        | ray_query::features(adapter)
+        | ray_query::features(adapter, needs.rays)
         | (adapter.features()
             & (wgpu::Features::INDIRECT_FIRST_INSTANCE
                 | wgpu::Features::MULTI_DRAW_INDIRECT_COUNT

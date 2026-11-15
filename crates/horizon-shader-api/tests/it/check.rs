@@ -666,6 +666,40 @@ fn a_traced_post_stage_is_checked_without_the_scene_and_with_it() {
     );
 }
 
+/// Spec #16011 item 5: turning its rays off is the pack's choice. A bool option's `override` may
+/// guard `trace`: the stage is taken with the option off and on, without the scene and with it.
+#[test]
+fn a_pack_option_may_turn_its_rays_off() {
+    let post = "override rt_shadows: bool = true;
+fn post(input: PostInput) -> vec4<f32> {
+    if !rt_shadows || frame.has_ray_tracing == 0u || input.depth == 0.0 {
+        return input.color;
+    }
+    let hit = trace(view_position(input.uv, input.depth), frame.sun_direction, 64.0);
+    return vec4<f32>(input.color.rgb * select(1.0, 0.5, hit.distance >= 0.0), input.color.a);
+}
+";
+    let option = "[ray_tracing]\n[[options]]\nid = \"rt_shadows\"\nname = \"Ray traced shadows\"\n\
+                  type = \"bool\"\ndefault = true\n";
+    let report = pack_0_2(post, TONEMAP, option).unwrap();
+    let stage = &report.stages[0];
+    let plain = naga::valid::Capabilities::default();
+    let scene = (stage.scene.as_ref()).map(|m| (m, plain | naga::valid::Capabilities::RAY_QUERY));
+    for (module, capabilities) in [(&stage.module, plain)].into_iter().chain(scene) {
+        let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities)
+            .validate(module)
+            .unwrap();
+        for on in [0.0, 1.0] {
+            let constants = [("rt_shadows".to_owned(), on)].into_iter().collect();
+            let (specialized, _) =
+                naga::back::pipeline_constants::process_overrides(module, &info, None, &constants)
+                    .unwrap();
+            assert!(valid(&specialized, capabilities), "rt_shadows = {on}");
+        }
+    }
+    assert!(stage.scene.as_ref().is_some_and(ray_queries));
+}
+
 #[test]
 fn a_traced_pack_names_no_ray_query_of_its_own() {
     let own = "// A ray_query in a comment is no use of one.

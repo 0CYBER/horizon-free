@@ -113,6 +113,7 @@ impl ApplicationHandler for Missing {
                     Some(&self.gui.panorama),
                     None,
                     self.api,
+                    false,
                 )?;
                 Ok((window, renderer))
             });

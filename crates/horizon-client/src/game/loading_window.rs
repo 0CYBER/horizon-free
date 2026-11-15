@@ -116,6 +116,7 @@ pub(super) fn loading_renderer(
     panorama: Option<&Arc<horizon_client::gfx::panorama::Faces>>,
     previous: Option<&Renderer>,
     api: horizon_client::graphics::GraphicsApi,
+    rays: bool, // The startup pick declares `[ray_tracing]`: the world renderer keeps this device.
 ) -> Result<Renderer> {
     static FORCEFIELD: [u8; 4] = [0; 4];
     static EMPTY_HUD: [u8; 4] = [0, 0, 0, 255];
@@ -158,7 +159,10 @@ pub(super) fn loading_renderer(
         (false, false),
         // An 8-bit frame, which HDR output takes as well: HDR off until the settings apply.
         &horizon_client::graphics::Graphics::default(),
-        Default::default(),
+        horizon_client::gfx::FrameRequest {
+            ray_tracing: rays,
+            ..Default::default()
+        },
         previous.map(|r| r.display_reading()).unwrap_or_default(),
     ))?;
     if let Some(atlas) = atlas {

@@ -213,3 +213,76 @@ fn the_chat_delay_slider_says_its_delay() {
     s.file.set("chatDelay", crate::options_file::V::Double(0.0));
     assert_eq!(chat_delay_label(&s).plain(), "options.chat.delay_none");
 }
+
+/// Spec #16011 item 5: the picked pack with `[ray_tracing]` says why it draws without it, as the
+/// renderer the options are drawn for has it, after its row and on the pack list; nothing while
+/// it traces or before a renderer, and nothing for a pack without `[ray_tracing]`.
+#[test]
+fn a_tracing_pack_says_why_it_draws_without_ray_tracing() {
+    use crate::gfx::output::RayStatus::{Off, Ready, Restart, Unsupported};
+    use crate::settings_shell::Screen;
+    use crate::shader_pack_list::{Entry, Kind};
+    let atlas = atlas();
+    let pack = |key: &str, traces| Entry {
+        file: key.into(),
+        key: key.into(),
+        title: key.into(),
+        kind: Kind::Horizon,
+        options: Vec::new(),
+        values: Vec::new(),
+        pages: Vec::new(),
+        traces,
+    };
+    let mut s = Settings {
+        shader_packs: vec![pack("horizon:rt", true), pack("horizon:plain", false)],
+        ..Settings::default()
+    };
+    let mut ui = OptionsUi {
+        size: (427.0, 240.0),
+        ..Default::default()
+    };
+    ui.show(Page::ShaderPacks);
+    // The pack list's description, and the picked pack's (`i`) row's.
+    let mut shown = |s: &Settings, rays, i| {
+        let output = EffectiveOutput {
+            rays,
+            ..EffectiveOutput::NONE
+        };
+        ui.draw(
+            s,
+            output,
+            &mut HudBatch::new([427, 240]),
+            &atlas,
+            (-1.0, -1.0),
+        );
+        let sheets = ui.shader.screen.sheets(s);
+        let row = (sheets[0].groups[0].rows.iter())
+            .find(|r| r.id == crate::shader_ui::Item::Pack(i))
+            .unwrap();
+        (sheets[0].about.clone(), row.about.clone())
+    };
+    s.horizon.shader_pack = "horizon:rt".into();
+    let (list, row) = shown(&s, Some(Ready), 0);
+    assert_eq!(shown(&s, None, 0), (list.clone(), row.clone()));
+    let restart = lang::tr(
+        "Ray tracing: %s Until then the pack draws without it.",
+        &[&lang::get("options.needsRestart")],
+    );
+    for (rays, note) in [
+        (Restart, restart),
+        (
+            Unsupported,
+            lang::get("This GPU or graphics API has no ray tracing: the pack draws without it."),
+        ),
+        (
+            Off,
+            lang::get("Ray tracing is off: HORIZON_RAY_TRACING is set to something other than 1."),
+        ),
+    ] {
+        let noted = shown(&s, Some(rays), 0);
+        assert_eq!(noted, (format!("{list} {note}"), format!("{row} {note}")));
+    }
+    s.horizon.shader_pack = "horizon:plain".into();
+    let (list, row) = shown(&s, Some(Ready), 1);
+    assert_eq!(shown(&s, Some(Restart), 1), (list, row));
+}

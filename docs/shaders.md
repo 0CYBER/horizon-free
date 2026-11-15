@@ -235,7 +235,7 @@ and the check refuses a pack that names one itself.
 | --- | --- |
 | In the scene today | Solid terrain (cut-outs included) within 8 chunks of the camera; `frame.ray_distance` is how far it surely reaches |
 | Not in it yet | Water, glass and other translucent terrain, entities, block entities, the hand, distant terrain tiles |
-| Turning it on | Start the game with `HORIZON_RAY_TRACING=1` on a GPU with hardware ray queries (the device needs them from its creation, so there is no setting yet) |
+| Turning it on | Pick the pack and start the game with it, on a GPU and graphics API with hardware ray queries: the device needs them from its creation, so in a game started without them a pack picked while it runs traces from the next start, and the shader pack screen says so. `HORIZON_RAY_TRACING=1` asks for ray queries and keeps the scene with any pack or none; any other value of it turns ray tracing off |
 | Without it | The pack loads and runs as it is: `frame.has_ray_tracing` is 0, `trace` misses and `trace_any` is false. Branch on `has_ray_tracing` and keep a look that works without rays |
 
 The scene trails the world by a frame or two where chunks load or blocks change, and is empty for the first frames in
