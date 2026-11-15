@@ -1376,12 +1376,15 @@ impl Codec<Option<Stack>> for DelimitedSlot {
             v1_21_4::write_stack(v.as_ref(), w);
             return;
         }
-        let Some(s) = v else {
+        // What the other side lacks (-1) is left out, as `write_slot` does: an item as an empty slot,
+        // a component dropped from the patch.
+        let item = v.as_ref().map_or(-1, |s| ids::item(s.item));
+        let Some(s) = v.as_ref().filter(|_| item >= 0) else {
             w.varint(0);
             return;
         };
         w.varint(s.count);
-        w.varint(ids::item(s.item));
+        w.varint(item);
         // The patch as read holds the pinned version's component ids: written again from the values when
         // they are being renumbered.
         if let Some(patch) = &s.wire.0
@@ -1390,15 +1393,18 @@ impl Codec<Option<Stack>> for DelimitedSlot {
             w.bytes(patch);
             return;
         }
-        w.varint(s.added.len() as i32);
-        w.varint(s.removed.len() as i32);
-        for (kind, c) in &s.added {
+        let has = |kind: i32| ids::component(kind) >= 0;
+        let added: Vec<_> = s.added.iter().filter(|(k, _)| has(*k)).collect();
+        let removed: Vec<_> = s.removed.iter().filter(|k| has(**k)).collect();
+        w.varint(added.len() as i32);
+        w.varint(removed.len() as i32);
+        for (kind, c) in added {
             w.varint(ids::component(*kind));
             let mut value = Writer::new();
             write_value(*kind, c, &mut value);
             w.byte_array(&value.data);
         }
-        for kind in &s.removed {
+        for kind in removed {
             w.varint(ids::component(*kind));
         }
     }
@@ -1464,14 +1470,17 @@ impl Codec<Option<Hashed>> for HashedSlot {
         if !r.bool()? {
             return Ok(None);
         }
-        let item = r.varint()?;
+        // An older client's own item and component ids, as every other stack reader maps them.
+        let item = ids::item(r.varint()?);
         let count = r.varint()?;
         let n = r.count(256)?;
         let added = (0..n)
-            .map(|_| Ok((r.varint()?, r.i32()?)))
+            .map(|_| Ok((ids::component(r.varint()?), r.i32()?)))
             .collect::<Result<_>>()?;
         let n = r.count(256)?;
-        let removed = (0..n).map(|_| r.varint()).collect::<Result<_>>()?;
+        let removed = (0..n)
+            .map(|_| r.varint().map(ids::component))
+            .collect::<Result<_>>()?;
         Ok(Some(Hashed {
             item,
             count,
@@ -1480,19 +1489,35 @@ impl Codec<Option<Hashed>> for HashedSlot {
         }))
     }
     fn write(v: &Option<Hashed>, w: &mut Writer) {
-        w.bool(v.is_some());
-        if let Some(h) = v {
-            w.varint(ids::item(h.item));
-            w.varint(h.count);
-            w.varint(h.added.len() as i32);
-            for (k, hash) in &h.added {
-                w.varint(ids::component(*k));
-                w.i32(*hash);
-            }
-            w.varint(h.removed.len() as i32);
-            for k in &h.removed {
-                w.varint(ids::component(*k));
-            }
+        // As in `DelimitedSlot::write`: an item the other side lacks as no stack, its components left out.
+        let item = v.as_ref().map_or(-1, |h| ids::item(h.item));
+        let Some(h) = v.as_ref().filter(|_| item >= 0) else {
+            w.bool(false);
+            return;
+        };
+        w.bool(true);
+        w.varint(item);
+        w.varint(h.count);
+        let added: Vec<(i32, i32)> = h
+            .added
+            .iter()
+            .map(|(k, hash)| (ids::component(*k), *hash))
+            .filter(|(k, _)| *k >= 0)
+            .collect();
+        w.varint(added.len() as i32);
+        for (k, hash) in added {
+            w.varint(k);
+            w.i32(hash);
+        }
+        let removed: Vec<i32> = h
+            .removed
+            .iter()
+            .map(|k| ids::component(*k))
+            .filter(|k| *k >= 0)
+            .collect();
+        w.varint(removed.len() as i32);
+        for k in removed {
+            w.varint(k);
         }
     }
 }
@@ -1500,6 +1525,51 @@ impl Codec<Option<Hashed>> for HashedSlot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hashed_stacks_go_to_an_older_side_and_back_in_its_ids() {
+        use crate::adapter::{ServerVersion, ids::Way};
+        let old = ServerVersion::V1_21_5.ids().unwrap();
+        // An item whose id moved since 1.21.5.
+        let moved = {
+            let _down = ids::renumbering(old, Way::Down);
+            (1..2000)
+                .find(|&id| ids::item(id) >= 0 && ids::item(id) != id)
+                .unwrap()
+        };
+        let hashed = Some(Hashed {
+            item: moved,
+            count: 3,
+            added: Vec::new(),
+            removed: Vec::new(),
+        });
+        let mut w = Writer::new();
+        {
+            let _down = ids::renumbering(old, Way::Down);
+            HashedSlot::write(&hashed, &mut w);
+        }
+        let _up = ids::renumbering(old, Way::Up);
+        assert_eq!(HashedSlot::read(&mut Reader::new(&w.data)).unwrap(), hashed);
+    }
+
+    #[test]
+    fn an_item_the_older_side_lacks_goes_as_no_stack_not_as_minus_one() {
+        use crate::adapter::{ServerVersion, ids::Way};
+        let old = ServerVersion::V1_21_5.ids().unwrap();
+        let _down = ids::renumbering(old, Way::Down);
+        let missing = (1..3000)
+            .find(|&id| ids::item(id) < 0)
+            .expect("an item 1.21.5 lacks");
+        let hashed = Some(Hashed {
+            item: missing,
+            count: 1,
+            added: Vec::new(),
+            removed: Vec::new(),
+        });
+        let mut w = Writer::new();
+        HashedSlot::write(&hashed, &mut w);
+        assert_eq!(w.data, [0]);
+    }
     use crate::text::literal;
 
     fn round<T: PartialEq + std::fmt::Debug, C: Codec<T>>(v: T) {

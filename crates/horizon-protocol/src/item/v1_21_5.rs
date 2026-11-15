@@ -102,12 +102,23 @@ fn rewrite(kind: i32, r: &mut Reader, up: bool) -> Result<Option<Vec<u8>>> {
                 w.varint(1448); // Pinned item.shears.snip (1447) as a sound holder.
             } else {
                 r.bool()?;
-                sound(r, &mut Writer::new())?;
+                skip_sound(r)?;
             }
         }
         _ => return Ok(None),
     }
     Ok(Some(w.data))
+}
+
+/// A sound holder that isn't written on: read past, whatever the other side has.
+fn skip_sound(r: &mut Reader) -> Result<()> {
+    if r.varint()? == 0 {
+        r.string(32767)?;
+        if r.bool()? {
+            r.f32()?;
+        }
+    }
+    Ok(())
 }
 
 fn sound(r: &mut Reader, w: &mut Writer) -> Result<()> {
@@ -121,7 +132,13 @@ fn sound(r: &mut Reader, w: &mut Writer) -> Result<()> {
             w.f32(r.f32()?);
         }
     } else {
-        w.varint(ids::sound_event(holder - 1) + 1);
+        // 0 would say a direct sound follows: an event the other side lacks is refused instead.
+        let id = holder
+            .checked_sub(1)
+            .map(ids::sound_event)
+            .filter(|id| *id >= 0)
+            .ok_or_else(|| Error::new("equip sound absent from the other side's registry"))?;
+        w.varint(id + 1);
     }
     Ok(())
 }
@@ -130,6 +147,26 @@ fn sound(r: &mut Reader, w: &mut Writer) -> Result<()> {
 mod tests {
     use super::*;
     use crate::adapter::{ServerVersion, ids::Way};
+
+    #[test]
+    fn an_equip_sound_the_other_side_lacks_is_refused_not_written_as_direct() {
+        let _down = ids::renumbering(ServerVersion::V1_21_5.ids().unwrap(), Way::Down);
+        let missing = (0..4000).find(|&id| ids::sound_event(id) < 0).unwrap();
+        let mut w = Writer::new();
+        w.varint(missing + 1);
+        let mut out = Writer::new();
+        assert!(sound(&mut Reader::new(&w.data), &mut out).is_err());
+        // A sound it has is written in its id.
+        let known = (0..4000).find(|&id| ids::sound_event(id) >= 0).unwrap();
+        let mut w = Writer::new();
+        w.varint(known + 1);
+        let mut out = Writer::new();
+        sound(&mut Reader::new(&w.data), &mut out).unwrap();
+        assert_eq!(
+            Reader::new(&out.data).varint().unwrap(),
+            ids::sound_event(known) + 1
+        );
+    }
 
     fn bytes(hex: &str) -> Vec<u8> {
         (0..hex.len())

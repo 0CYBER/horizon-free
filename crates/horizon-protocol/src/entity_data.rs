@@ -198,7 +198,16 @@ impl Particle {
                 LEGACY_ENTITY_EFFECT_PARTICLE_ID
             }
         } else {
-            ids::particle(id)
+            // An id the pinned registry lacks maps to -1, which is also the mod-particle sentinel:
+            // it would read the bytes after it as a name.
+            match ids::particle(id) {
+                mapped if mapped < 0 => {
+                    return Err(crate::Error::new(format!(
+                        "particle type {id} has no pinned counterpart"
+                    )));
+                }
+                mapped => mapped,
+            }
         };
         // A native mod's type: the namespaced name follows the sentinel id.
         if id == MOD_PARTICLE_ID {
@@ -593,6 +602,20 @@ pub const ITEM_ENTITY_ITEM: u8 = 8;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_old_particle_with_no_pinned_counterpart_is_refused() {
+        use crate::adapter::{ServerVersion, ids::Way};
+        let _up = ids::renumbering(ServerVersion::V1_20_3.ids().unwrap(), Way::Up);
+        let missing = (0..200)
+            .find(|&id| !matches!(id, 0 | 21) && ids::particle(id) < 0)
+            .unwrap();
+        // A name-like tail: read as a mod particle's name before.
+        let mut w = Writer::new();
+        w.varint(missing);
+        w.string("minecraft:flame");
+        assert!(Particle::read(&mut Reader::new(&w.data)).is_err());
+    }
 
     #[test]
     fn an_older_client_is_written_its_own_serializer_ids_and_none_it_lacks() {

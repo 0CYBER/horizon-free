@@ -241,10 +241,10 @@ fn container_click(ids: &'static Ids, payload: &[u8]) -> Result<Vec<u8>> {
     for _ in 0..n {
         w.i16(r.i16()?);
         let stack = slot(ids, &mut r)?;
-        HashedSlot::write(&hashed(stack), &mut w);
+        hashed_slot(ids, stack, &mut w);
     }
     let carried = slot(ids, &mut r)?;
-    HashedSlot::write(&hashed(carried), &mut w);
+    hashed_slot(ids, carried, &mut w);
     w.bytes(r.rest());
     Ok(w.data)
 }
@@ -253,6 +253,13 @@ fn container_click(ids: &'static Ids, payload: &[u8]) -> Result<Vec<u8>> {
 fn slot(ids: &'static Ids, r: &mut Reader<'_>) -> Result<Option<Stack>> {
     let _up = ids::renumbering(ids, Way::Up);
     Slot::read(r)
+}
+
+/// A hashed slot in the client's own ids, as a 1.21.5 client sends it: the session maps the whole
+/// click to the pinned ids afterwards, as for every newer client.
+fn hashed_slot(ids: &'static Ids, stack: Option<Stack>, w: &mut Writer) {
+    let _down = ids::renumbering(ids, Way::Down);
+    HashedSlot::write(&hashed(stack), w);
 }
 
 fn hashed(stack: Option<Stack>) -> Option<Hashed> {
