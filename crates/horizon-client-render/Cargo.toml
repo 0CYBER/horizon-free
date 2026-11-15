@@ -96,6 +96,14 @@ path = "tests/render_slots.rs"
 name = "world_view_slots"
 path = "tests/world_view_slots.rs"
 
+[[test]]
+name = "standard_pack_gpu_entities"
+path = "fixtures/standard_pack_gpu_entities.rs"
+
+[[example]]
+name = "standard_pack_gpu_entities"
+path = "fixtures/standard_pack_gpu_entities.rs"
+
 [dev-dependencies]
 tempfile = "3"
 mod_platform = { package = "horizon-mod-api", path = "../horizon-mod-api", features = ["testing"] }
