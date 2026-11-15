@@ -102,7 +102,9 @@ fn loading_blocks_movement_and_attacks_until_the_load_timeout_expires() {
             g.loaded = false;
             g.load_timeout = timeout;
         });
-        let events = drain(&mut hub);
+        let mut events = drain(&mut hub);
+        // Delivering an attack yields before the following movement packet.
+        events.extend(drain(&mut hub));
         assert_eq!(
             events.iter().any(|event| matches!(event,
             HostEvent::Packet(_, packet) if matches!(&**packet, S::Attack(_)))),
