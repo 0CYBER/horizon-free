@@ -3,12 +3,49 @@
 //! drops and experience in `block_drops`.
 use super::Game;
 use mod_api::PlayerRef;
+use std::cell::Cell;
+
+/// How many player breaks may be inside one another on the server thread. A `break_block` or
+/// `block_drops` listener may break again as the player, which runs the hooks again, and the
+/// block it started from is still there: a listener with no guard of its own would recurse until
+/// the stack overflows. At the limit the call is refused (false). A guarded miner nests one
+/// level deep, so this is far beyond any use, and each level costs only a few frames of the
+/// thread's stack. A Horizon safeguard: NeoForge has none, and there the same listener crashes
+/// the server.
+const MAX_NESTED_BREAKS: u32 = 8;
+
+thread_local! {
+    /// The player breaks now inside one another on this thread.
+    static NESTED_BREAKS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// One level of [`NESTED_BREAKS`], given back when dropped, a panic unwinding included.
+struct NestedBreak;
+
+impl NestedBreak {
+    /// A level, or none at [`MAX_NESTED_BREAKS`].
+    fn enter() -> Option<Self> {
+        NESTED_BREAKS.with(|depth| {
+            (depth.get() < MAX_NESTED_BREAKS).then(|| {
+                depth.set(depth.get() + 1);
+                Self
+            })
+        })
+    }
+}
+
+impl Drop for NestedBreak {
+    fn drop(&mut self) {
+        NESTED_BREAKS.with(|depth| depth.set(depth.get() - 1));
+    }
+}
 
 impl Game<'_> {
     /// `ServerPlayerGameMode.destroyBlock` at `pos` as `player` breaks it, as FTB Ultimine does
     /// (`PlayersBackendMut::player_destroy_block` says what holds and what is refused). With
     /// `into_inventory`, the drops `block_drops` leaves go to the player's inventory, and what
-    /// doesn't fit drops from them as `Inventory.placeItemBackInInventory` drops it.
+    /// doesn't fit drops from them as `Inventory.placeItemBackInInventory` drops it. Refused
+    /// (false) once [`MAX_NESTED_BREAKS`] breaks are inside one another.
     pub(super) fn player_destroy_block(
         &mut self,
         player: PlayerRef,
@@ -18,6 +55,9 @@ impl Game<'_> {
         if !self.native_authoritative() || !self.native_player_current(player) {
             return false;
         }
+        let Some(_nested) = NestedBreak::enter() else {
+            return false;
+        };
         let mut broke = false;
         self.native_as_player_handle(player, |game| {
             broke = game.break_as_acting_player(pos, into_inventory);
@@ -201,10 +241,8 @@ mod tests {
             assert_eq!(block(game, bedrock), "minecraft:bedrock");
             assert!(!game.player_destroy_block(player, air, false));
             let epoch = game.native_lifecycle.epoch().unwrap();
-            let stranger = mod_api::__private::game::player_ref(
-                mod_api::EntityRef::new(epoch, 21),
-                124,
-            );
+            let stranger =
+                mod_api::__private::game::player_ref(mod_api::EntityRef::new(epoch, 21), 124);
             assert!(!game.player_destroy_block(stranger, stone, false));
             game.set_mode(GameMode::Adventure);
             assert!(!game.player_destroy_block(player, stone, false));
@@ -343,11 +381,60 @@ mod tests {
                 );
                 // Each diamond ore gives 3 to 7 points, all of them awarded at the origin.
                 let points: u32 = game.orbs.iter().map(|o| o.points()).sum();
-                assert!((3 * ores as u32..=7 * ores as u32).contains(&points), "{points}");
+                assert!(
+                    (3 * ores as u32..=7 * ores as u32).contains(&points),
+                    "{points}"
+                );
                 assert!(game.orbs.iter().all(|o| {
                     let p = o.position;
                     near([p.x, p.y, p.z], 0.01)
                 }));
+            });
+        });
+    }
+
+    /// A listener that breaks the block it hears about as the player, with no guard: the block
+    /// is still there, so each break hears the next. The engine refuses the break past its limit
+    /// instead of overflowing the stack, and the listener ran once per allowed level.
+    struct Unguarded;
+
+    /// How many times `Unguarded` heard a break.
+    static UNGUARDED_HEARD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for Unguarded {
+        fn break_block(
+            &self,
+            host: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::BreakBlockEvent<'_>,
+        ) -> mod_api::Flow {
+            UNGUARDED_HEARD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let player = host.players().acting_player().expect("the breaker acts");
+            player.destroy_block(host, event.pos, false);
+            mod_api::Flow::Cancel
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn an_unguarded_listener_is_cut_off_at_the_nesting_limit() {
+        let mods: mod_api::Mods =
+            vec![mod_api::ModEntry::new("unguarded", Box::new(Unguarded))].into();
+        mod_platform::testing::with_mods(mods, || {
+            with_game(|game| {
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(horizon_client::chunk::Chunk::empty(0, 0)),
+                );
+                let player = with_player(game, ItemStack::new("minecraft:diamond_pickaxe", 1));
+                let pos = [6, 64, 4];
+                place(game, pos, "minecraft:stone");
+                assert!(!game.player_destroy_block(player, pos, false));
+                assert_eq!(
+                    UNGUARDED_HEARD.load(std::sync::atomic::Ordering::Relaxed),
+                    8
+                );
+                assert_eq!(block(game, pos), "minecraft:stone");
             });
         });
     }

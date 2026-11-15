@@ -66,3 +66,7 @@ impl Hooks for VeinMiner {
 breaker too when other players can break the same blocks while the vein runs. What else a break
 sets loose (a torch losing its support, a container's contents) is not the block's own drop and
 still drops where it was.
+
+Keep a guard like `busy`: the engine only bounds the nesting as a safety net. A break started from
+inside eight others is refused with `false`, which ends an unguarded listener's recursion but not
+its eight levels of work.
