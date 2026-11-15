@@ -225,7 +225,24 @@ impl Launcher {
         ];
         self.mod_preview.state = Some(native_status::State::Outdated);
         let (kind, key) = name.split_once('-').unwrap_or((name, ""));
+        // A build only ran after the player allowed native mods; the other states show the
+        // row before that.
+        if matches!(kind, "step" | "error") && key != "no-consent" {
+            self.settings.native_mods_allowed_at = Some(1);
+            *self.mods.native_state.borrow_mut() = Some((
+                String::new(),
+                native_status::State::Outdated,
+                vec!["fast-ore".into(), "greeter".into()],
+            ));
+        }
         match (kind, key) {
+            // How a build that worked looks once it ended: the step is cleared, the line says
+            // how it went and the mods read as built (`Msg::Native`).
+            ("step", "done") => {
+                self.settings.native_mods_allowed_at = Some(1);
+                self.mod_preview.state = Some(native_status::State::UpToDate);
+                self.native_done = step("done").map(|step| step.label());
+            }
             ("step", "start") => {
                 self.native_step = Some(tr("Starting the build").into());
                 self.first_build = Some(180_000_000);

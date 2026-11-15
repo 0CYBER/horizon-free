@@ -310,7 +310,7 @@ struct Launcher {
     /// Play was pressed while the instance's native mods needed a build (Build and play): the
     /// game starts once the build worked.
     play_after_build: bool,
-    /// How the last native build ended ("Built (balanced, incremental)", or "Up to date").
+    /// How the last native build ended ("Your mods are built", or "Up to date").
     native_done: Option<String>,
     native_error: Option<String>,
     /// The mods that stopped the last build (`native_mods::Failed::Mods`): their rows say Failed,

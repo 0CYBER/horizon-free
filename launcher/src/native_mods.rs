@@ -245,14 +245,6 @@ impl Plan {
             Self::Prebuilt => tr("Prebuilt game: only the mods compile").into(),
         }
     }
-
-    /// The plan's short name in a completed build's status.
-    fn kind(&self) -> &'static str {
-        match self {
-            Self::UpToDate => "up to date",
-            Self::Prebuilt => "prebuilt",
-        }
-    }
 }
 
 /// What a cargo output line says about the compile.
@@ -1107,9 +1099,9 @@ impl Step {
             },
             Self::Install => tr("Installing the build").into(),
             Self::LeftOut(left) => left.label(),
-            Self::Done { profile, plan, .. } => trf(
-                "Built ({profile}, {plan})",
-                &[("profile", profile.name()), ("plan", tr(plan.kind()))],
+            Self::Done { secs, .. } => trf(
+                "Your mods are built (took {secs} s).",
+                &[("secs", &secs.to_string())],
             ),
         }
     }
