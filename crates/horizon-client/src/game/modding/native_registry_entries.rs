@@ -83,7 +83,9 @@ impl Game<'_> {
             "minecraft:recipe" => LocalRegistry::Recipes(self.recipes()),
             "minecraft:trade_set" => LocalRegistry::HashJson(&self.stations().trades.sets),
             "minecraft:villager_trade" => LocalRegistry::HashJson(&self.stations().trades.trades),
-            "minecraft:villager_profession" => LocalRegistry::Professions(&self.stations().professions),
+            "minecraft:villager_profession" => {
+                LocalRegistry::Professions(&self.stations().professions)
+            }
             _ => LocalRegistry::HashJson(self.context_registry(registry)?),
         })
     }
@@ -93,8 +95,7 @@ impl Game<'_> {
             self.mods.datapack_registries.clone()
         } else if self.remote.is_some() {
             // This set has already been filtered by the offer, sync policy and accepted schema.
-            horizon_client::datapack_net::received()
-                .filter(|set| set.registry_available(registry))
+            horizon_client::datapack_net::received().filter(|set| set.registry_available(registry))
         } else {
             None
         }
@@ -120,7 +121,9 @@ impl Game<'_> {
             })
     }
 
-    fn registry_generator_data(&self) -> Option<Arc<horizon_world::worldgen::generator::GeneratorData>> {
+    fn registry_generator_data(
+        &self,
+    ) -> Option<Arc<horizon_world::worldgen::generator::GeneratorData>> {
         self.end
             .locator()
             .map(|terrain| Arc::clone(terrain.generator_data()))
@@ -160,7 +163,10 @@ impl Game<'_> {
         if registry == "minecraft:trial_spawner" {
             return horizon_client::mobs::trial_spawner::registry_contains(id).unwrap_or(false);
         }
-        if let Some(found) = self.res.behaviours().live_features()
+        if let Some(found) = self
+            .res
+            .behaviours()
+            .live_features()
             .and_then(|features| features.registry_contains(registry, id))
         {
             return found;
@@ -219,14 +225,16 @@ impl Game<'_> {
             return identifiers(horizon_client::mobs::trial_spawner::registry_ids()?);
         }
         if let Some(entries) = self.res.behaviours().live_features().and_then(|features| {
-            features.registry_ids(&registry)
+            features
+                .registry_ids(&registry)
                 .map(|entries| identifiers(entries.iter().map(String::as_str)))
         }) {
             return entries;
         }
-        if let Some(entries) = self.registry_generator_data().and_then(|data| {
-            data.registry_ids(&registry).map(identifiers)
-        }) {
+        if let Some(entries) = self
+            .registry_generator_data()
+            .and_then(|data| data.registry_ids(&registry).map(identifiers))
+        {
             return entries;
         }
         let sync = self.registry_sync()?;
@@ -297,14 +305,18 @@ impl Game<'_> {
                     .is_some_and(|members| members.iter().any(|member| member == &id)),
             );
         }
-        if let Some(found) = self.res.behaviours().live_features()
+        if let Some(found) = self
+            .res
+            .behaviours()
+            .live_features()
             .and_then(|features| features.registry_tag_contains(&registry, &id, &tag))
         {
             return Some(found);
         }
-        if let Some(found) = self.registry_generator_data().and_then(|data| {
-            data.registry_tag_contains(&registry, &id, &tag)
-        }) {
+        if let Some(found) = self
+            .registry_generator_data()
+            .and_then(|data| data.registry_tag_contains(&registry, &id, &tag))
+        {
             return Some(found);
         }
         if let Some(tables) = &self.world_tables

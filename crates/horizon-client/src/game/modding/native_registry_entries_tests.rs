@@ -128,14 +128,25 @@ fn generic_entries_follow_real_server_tables_and_atomic_reload() {
                     "no synthetic registry aliases"
                 );
                 assert_eq!(
-                    host(game).registry_entry("minecraft:worldgen/noise_settings", "registry_entry_test:broken"),
+                    host(game).registry_entry(
+                        "minecraft:worldgen/noise_settings",
+                        "registry_entry_test:broken"
+                    ),
                     None,
                     "an unused resource is not an accepted noise-settings definition",
                 );
-                assert!(!host(game).registry_entries("minecraft:worldgen/noise_settings")
-                    .unwrap().contains(&id("registry_entry_test:broken")));
-                assert!(!host(game).registry_entries("minecraft:worldgen/noise_settings")
-                    .unwrap().contains(&id("registry_entry_test:overflow")));
+                assert!(
+                    !host(game)
+                        .registry_entries("minecraft:worldgen/noise_settings")
+                        .unwrap()
+                        .contains(&id("registry_entry_test:broken"))
+                );
+                assert!(
+                    !host(game)
+                        .registry_entries("minecraft:worldgen/noise_settings")
+                        .unwrap()
+                        .contains(&id("registry_entry_test:overflow"))
+                );
                 let village = host(game)
                     .registry_entry("minecraft:worldgen/structure", "minecraft:village_plains")
                     .unwrap();
@@ -417,45 +428,87 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
     with_game(|game| {
         game.load_world(request(scratch.path())).unwrap();
         let mut overrides = WorldgenOverrides::default();
-        overrides.set("features", "registry_entry_test:accepted",
-            r#"{"type":"minecraft:no_op","config":{}}"#.into());
-        overrides.set("features", "registry_entry_test:rejected",
-            r#"{"type":"registry_entry_test:unknown","config":{}}"#.into());
+        overrides.set(
+            "features",
+            "registry_entry_test:accepted",
+            r#"{"type":"minecraft:no_op","config":{}}"#.into(),
+        );
+        overrides.set(
+            "features",
+            "registry_entry_test:rejected",
+            r#"{"type":"registry_entry_test:unknown","config":{}}"#.into(),
+        );
         // FeatureCatalog also uses this tag bundle for placed-holder expansion.
-        overrides.set("placed_features", "registry_entry_test:accepted",
-            r#"{"feature":"registry_entry_test:accepted","placement":[]}"#.into());
-        overrides.set("placed_features", "registry_entry_test:rejected",
-            r#"{"feature":"registry_entry_test:rejected","placement":[]}"#.into());
-        overrides.set("state_providers", "registry_entry_test:accepted",
-            r#"{"type":"minecraft:simple","state":{"id":"minecraft:stone"}}"#.into());
-        overrides.set("state_providers", "registry_entry_test:rejected",
-            r#"{"type":"registry_entry_test:unknown"}"#.into());
-        overrides.set("feature_tags", "registry_entry_test:accepted",
-            r#"{"values":["registry_entry_test:accepted"]}"#.into());
+        overrides.set(
+            "placed_features",
+            "registry_entry_test:accepted",
+            r#"{"feature":"registry_entry_test:accepted","placement":[]}"#.into(),
+        );
+        overrides.set(
+            "placed_features",
+            "registry_entry_test:rejected",
+            r#"{"feature":"registry_entry_test:rejected","placement":[]}"#.into(),
+        );
+        overrides.set(
+            "state_providers",
+            "registry_entry_test:accepted",
+            r#"{"type":"minecraft:simple","state":{"id":"minecraft:stone"}}"#.into(),
+        );
+        overrides.set(
+            "state_providers",
+            "registry_entry_test:rejected",
+            r#"{"type":"registry_entry_test:unknown"}"#.into(),
+        );
+        overrides.set(
+            "feature_tags",
+            "registry_entry_test:accepted",
+            r#"{"values":["registry_entry_test:accepted"]}"#.into(),
+        );
         overrides.set("carvers", "registry_entry_test:accepted",
             r#"{"type":"minecraft:cave","probability":1.0,"y":{"absolute":0},"count":1,"thickness":1.0,"room_vertical_radius_multiplier":1.0,"horizontal_radius_multiplier":1.0,"vertical_radius_multiplier":1.0,"floor_level":-0.7}"#.into());
-        overrides.set("conditions", "registry_entry_test:accepted",
-            r#"{"type":"minecraft:steep"}"#.into());
+        overrides.set(
+            "conditions",
+            "registry_entry_test:accepted",
+            r#"{"type":"minecraft:steep"}"#.into(),
+        );
         let data = GeneratorData::load_with(
             &game.options.resources.join("worldgen"),
             game.pack.assets.registry,
             &overrides,
-        ).unwrap();
+        )
+        .unwrap();
         let features = Arc::new(LiveFeatures::new(&data).unwrap().unwrap());
-        assert!(features.configured("registry_entry_test:accepted").is_some());
-        assert!(features.configured("registry_entry_test:rejected").is_none());
+        assert!(
+            features
+                .configured("registry_entry_test:accepted")
+                .is_some()
+        );
+        assert!(
+            features
+                .configured("registry_entry_test:rejected")
+                .is_none()
+        );
         assert!(features.placed("registry_entry_test:accepted").is_some());
         for registry in [
             "minecraft:worldgen/feature",
             "minecraft:worldgen/placed_feature",
             "minecraft:worldgen/block_state_provider",
         ] {
-            assert_eq!(features.registry_contains(registry, "registry_entry_test:accepted"),
-                Some(true), "{registry}: fixture must pass the live owner's canonical decoder");
+            assert_eq!(
+                features.registry_contains(registry, "registry_entry_test:accepted"),
+                Some(true),
+                "{registry}: fixture must pass the live owner's canonical decoder"
+            );
         }
-        for registry in ["minecraft:worldgen/carver", "minecraft:worldgen/material_condition"] {
-            assert_eq!(data.registry_contains(registry, "registry_entry_test:accepted"),
-                Some(true), "{registry}: fixture must belong to the decoded generator owner");
+        for registry in [
+            "minecraft:worldgen/carver",
+            "minecraft:worldgen/material_condition",
+        ] {
+            assert_eq!(
+                data.registry_contains(registry, "registry_entry_test:accepted"),
+                Some(true),
+                "{registry}: fixture must belong to the decoded generator owner"
+            );
         }
         game.res.behaviours().set_live_features(features);
         game.end.set_locator(None);
@@ -467,31 +520,56 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
             "minecraft:worldgen/carver",
             "minecraft:worldgen/material_condition",
         ] {
-            let accepted = host(game).registry_entry(registry, "registry_entry_test:accepted")
-                .unwrap_or_else(|| panic!("{registry}: decoded entry must not depend on a terrain locator"));
-            let entries = host(game).registry_entries(registry)
-                .unwrap_or_else(|| panic!("{registry}: published decoded registry must be available"));
-            assert!(entries.contains(&id("registry_entry_test:accepted")), "{registry}");
-            assert!(!entries.contains(&id("registry_entry_test:rejected")), "{registry}");
-            assert_eq!(host(game).registry_entry(registry, "registry_entry_test:rejected"), None);
-            assert_eq!(host(game).registry_entry_in_tag(&accepted, "registry_entry_test:missing"),
-                Some(false));
-            if matches!(registry, "minecraft:worldgen/feature" | "minecraft:worldgen/placed_feature") {
-                assert_eq!(host(game).registry_entry_in_tag(&accepted, "registry_entry_test:accepted"),
-                    Some(true));
+            let accepted = host(game)
+                .registry_entry(registry, "registry_entry_test:accepted")
+                .unwrap_or_else(|| {
+                    panic!("{registry}: decoded entry must not depend on a terrain locator")
+                });
+            let entries = host(game).registry_entries(registry).unwrap_or_else(|| {
+                panic!("{registry}: published decoded registry must be available")
+            });
+            assert!(
+                entries.contains(&id("registry_entry_test:accepted")),
+                "{registry}"
+            );
+            assert!(
+                !entries.contains(&id("registry_entry_test:rejected")),
+                "{registry}"
+            );
+            assert_eq!(
+                host(game).registry_entry(registry, "registry_entry_test:rejected"),
+                None
+            );
+            assert_eq!(
+                host(game).registry_entry_in_tag(&accepted, "registry_entry_test:missing"),
+                Some(false)
+            );
+            if matches!(
+                registry,
+                "minecraft:worldgen/feature" | "minecraft:worldgen/placed_feature"
+            ) {
+                assert_eq!(
+                    host(game).registry_entry_in_tag(&accepted, "registry_entry_test:accepted"),
+                    Some(true)
+                );
             }
         }
         // Replacing the published owner must retire its entries even while the old Arc lives.
         let mut replacement = WorldgenOverrides::default();
-        replacement.set("conditions", "registry_entry_test:replacement",
-            r#"{"type":"minecraft:steep"}"#.into());
+        replacement.set(
+            "conditions",
+            "registry_entry_test:replacement",
+            r#"{"type":"minecraft:steep"}"#.into(),
+        );
         let replacement = GeneratorData::load_with(
             &game.options.resources.join("worldgen"),
             game.pack.assets.registry,
             &replacement,
-        ).unwrap();
-        game.res.behaviours().set_live_features(
-            Arc::new(LiveFeatures::new(&replacement).unwrap().unwrap()));
+        )
+        .unwrap();
+        game.res
+            .behaviours()
+            .set_live_features(Arc::new(LiveFeatures::new(&replacement).unwrap().unwrap()));
         for registry in [
             "minecraft:worldgen/feature",
             "minecraft:worldgen/placed_feature",
@@ -499,17 +577,39 @@ fn generic_worldgen_entries_use_published_decoded_owner_without_terrain_locator(
             "minecraft:worldgen/carver",
             "minecraft:worldgen/material_condition",
         ] {
-            assert_eq!(host(game).registry_entry(registry, "registry_entry_test:accepted"), None);
-            assert!(!host(game).registry_entries(registry).unwrap()
-                .contains(&id("registry_entry_test:accepted")), "{registry}");
-            let retired = mod_api::RegistryEntry::new(id(registry), id("registry_entry_test:accepted"));
-            assert_eq!(host(game).registry_entry_in_tag(&retired, "registry_entry_test:accepted"), None);
+            assert_eq!(
+                host(game).registry_entry(registry, "registry_entry_test:accepted"),
+                None
+            );
+            assert!(
+                !host(game)
+                    .registry_entries(registry)
+                    .unwrap()
+                    .contains(&id("registry_entry_test:accepted")),
+                "{registry}"
+            );
+            let retired =
+                mod_api::RegistryEntry::new(id(registry), id("registry_entry_test:accepted"));
+            assert_eq!(
+                host(game).registry_entry_in_tag(&retired, "registry_entry_test:accepted"),
+                None
+            );
         }
-        let replacement_entry = host(game).registry_entry(
-            "minecraft:worldgen/material_condition", "registry_entry_test:replacement").unwrap();
-        assert!(host(game).registry_entries("minecraft:worldgen/material_condition").unwrap()
-            .contains(&id("registry_entry_test:replacement")));
-        assert_eq!(host(game).registry_entry_in_tag(&replacement_entry, "registry_entry_test:missing"),
-            Some(false));
+        let replacement_entry = host(game)
+            .registry_entry(
+                "minecraft:worldgen/material_condition",
+                "registry_entry_test:replacement",
+            )
+            .unwrap();
+        assert!(
+            host(game)
+                .registry_entries("minecraft:worldgen/material_condition")
+                .unwrap()
+                .contains(&id("registry_entry_test:replacement"))
+        );
+        assert_eq!(
+            host(game).registry_entry_in_tag(&replacement_entry, "registry_entry_test:missing"),
+            Some(false)
+        );
     });
 }

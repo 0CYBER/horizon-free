@@ -362,7 +362,8 @@ impl DatapackSnapshot {
         resolve_references(declarations, &registries).map_err(DatapackSnapshotError::Unresolved)?;
         let snapshot_bytes = snapshot_size(declarations, &registries, |declaration| {
             seen.contains(declaration.key.as_str())
-        }).ok_or(DatapackSnapshotError::TooLarge)?;
+        })
+        .ok_or(DatapackSnapshotError::TooLarge)?;
         let mut candidate = DatapackCandidate {
             registries,
             tags: BTreeMap::new(),
@@ -737,7 +738,9 @@ mod tests {
         let declarations = [required, empty, omitted, secret];
         let received = DatapackSnapshot::decode(&snapshot.encode().unwrap()).unwrap();
         let client = DatapackRegistrySet::received(
-            &received, received.candidate(&declarations).unwrap(), 51,
+            &received,
+            received.candidate(&declarations).unwrap(),
+            51,
         );
         assert!(client.registry_available("example:spell"));
         assert!(client.registry_available("example:empty"));
@@ -748,17 +751,23 @@ mod tests {
             assert!(client.entries(registry).unwrap().is_empty());
         }
         snapshot.generation += 1;
-        snapshot.registries.retain(|registry| registry.key != "example:empty");
-        let next = client.received_next(
-            &snapshot, snapshot.candidate(&declarations).unwrap(),
-        ).unwrap();
+        snapshot
+            .registries
+            .retain(|registry| registry.key != "example:empty");
+        let next = client
+            .received_next(&snapshot, snapshot.candidate(&declarations).unwrap())
+            .unwrap();
         assert!(!next.registry_available("example:empty"));
         assert!(next.registry_available("example:spell"));
         assert!(next.entries("example:empty").unwrap().is_empty());
-        assert!(client.registry_available("example:empty"), "the previous publication remains intact");
-        assert!(next.received_next(
-            &snapshot, snapshot.candidate(&declarations).unwrap(),
-        ).is_none());
+        assert!(
+            client.registry_available("example:empty"),
+            "the previous publication remains intact"
+        );
+        assert!(
+            next.received_next(&snapshot, snapshot.candidate(&declarations).unwrap(),)
+                .is_none()
+        );
         assert!(!next.registry_available("example:empty"));
     }
 
@@ -769,7 +778,8 @@ mod tests {
             mod_id: "example".into(),
             key: "example:payload".into(),
             fields: vec![DatapackField::required(
-                "body", DatapackFieldKind::Text { max_len: 1 << 20 },
+                "body",
+                DatapackFieldKind::Text { max_len: 1 << 20 },
             )],
             sync: DatapackRegistrySync::Required,
         };
@@ -791,10 +801,12 @@ mod tests {
             registries: vec![DatapackSnapshotRegistry {
                 key: payload.key,
                 fields: payload.fields,
-                entries: (0..64).map(|index| DatapackSnapshotEntry {
-                    id: format!("example:e{index}"),
-                    values: vec![DatapackValue::Text("x".repeat(ENTRY_BYTES))],
-                }).collect(),
+                entries: (0..64)
+                    .map(|index| DatapackSnapshotEntry {
+                        id: format!("example:e{index}"),
+                        values: vec![DatapackValue::Text("x".repeat(ENTRY_BYTES))],
+                    })
+                    .collect(),
                 tags: BTreeMap::from([("example:hot".into(), vec!["example:e63".into()])]),
             }],
         };
@@ -815,6 +827,9 @@ mod tests {
         };
         assert_eq!(body.len(), ENTRY_BYTES);
         assert!(body.bytes().all(|byte| byte == b'x'));
-        assert_eq!(client.tag_contains("example:payload", "example:e63", "example:hot"), Some(true));
+        assert_eq!(
+            client.tag_contains("example:payload", "example:e63", "example:hot"),
+            Some(true)
+        );
     }
 }

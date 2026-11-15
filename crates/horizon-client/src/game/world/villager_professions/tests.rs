@@ -375,13 +375,20 @@ fn assert_engineer_acquisition(game: &mut Game<'_>) {
     assert_eq!(table.entries().len(), 16);
     assert_eq!(table.resolve("test:engineer"), Some(15));
     let host: &dyn mod_api::Host = game;
-    let engineer = host.registry_entry("minecraft:villager_profession", "test:engineer")
+    let engineer = host
+        .registry_entry("minecraft:villager_profession", "test:engineer")
         .expect("the registered gameplay profession is a generic registry entry");
     assert_eq!(engineer.id.to_string(), "test:engineer");
-    assert!(host.registry_entries("minecraft:villager_profession").unwrap()
-        .contains(&Identifier::parse("test:engineer").unwrap()));
-    assert!(host.registry_entries("minecraft:villager_profession").unwrap()
-        .contains(&Identifier::parse("minecraft:farmer").unwrap()));
+    assert!(
+        host.registry_entries("minecraft:villager_profession")
+            .unwrap()
+            .contains(&Identifier::parse("test:engineer").unwrap())
+    );
+    assert!(
+        host.registry_entries("minecraft:villager_profession")
+            .unwrap()
+            .contains(&Identifier::parse("minecraft:farmer").unwrap())
+    );
     assert_eq!(table.acquiring("test:assembler"), Some(15));
     assert_eq!(table.trade_key("test:engineer", 1), Some("test:engineer"));
     assert_eq!(table.trade_key("test:engineer", 2), None);

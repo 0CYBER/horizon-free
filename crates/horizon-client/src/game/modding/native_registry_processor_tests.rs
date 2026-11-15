@@ -60,11 +60,18 @@ fn generic_processor_and_referencing_pool_accept_pillar_block_properties() {
             "minecraft:worldgen/processor_list",
             "minecraft:worldgen/template_pool",
         ] {
-            assert!(host.registry_entry(registry, "registry_processor_test:pillar").is_some(), "{registry}");
+            assert!(
+                host.registry_entry(registry, "registry_processor_test:pillar")
+                    .is_some(),
+                "{registry}"
+            );
             let entries = host.registry_entries(registry).unwrap();
             assert!(entries.contains(&accepted), "{registry}");
             assert!(!entries.contains(&rejected), "{registry}");
-            assert_eq!(host.registry_entry(registry, "registry_processor_test:rejected"), None);
+            assert_eq!(
+                host.registry_entry(registry, "registry_processor_test:rejected"),
+                None
+            );
         }
     });
 }

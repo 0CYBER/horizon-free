@@ -566,7 +566,9 @@ mod tests {
             &mut |_, _| unreachable!(),
         )
         .unwrap();
-        let fixture = std::env::current_dir().unwrap().join("compute-owner-providers");
+        let fixture = std::env::current_dir()
+            .unwrap()
+            .join("compute-owner-providers");
         for (registry, value) in [
             ("context_int_provider", json!(17)),
             ("context_float_provider", json!(2.5)),
@@ -602,11 +604,19 @@ mod tests {
         let context = ComputeContext::default();
         for id in ["nested/value", "minecraft:nested/value"] {
             assert_eq!(
-                game.provider_int(&json!({"type": "minecraft:add", "inputs": [id, 3]}), &context, 0),
+                game.provider_int(
+                    &json!({"type": "minecraft:add", "inputs": [id, 3]}),
+                    &context,
+                    0
+                ),
                 Ok(20),
             );
             assert_eq!(
-                game.provider_float(&json!({"type": "minecraft:add", "inputs": [id, 0.5]}), &context, 0),
+                game.provider_float(
+                    &json!({"type": "minecraft:add", "inputs": [id, 0.5]}),
+                    &context,
+                    0
+                ),
                 Ok(3.0),
             );
         }
