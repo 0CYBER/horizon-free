@@ -2522,6 +2522,7 @@ mod tests {
         .unwrap();
         let chunk = std::sync::Arc::new(Chunk::empty(0, 0));
         game.world.chunks.insert((0, 0), chunk);
+        game.reset_entity_residency();
         game.native_lifecycle
             .begin_open(Authority::IntegratedServer);
         let id = game

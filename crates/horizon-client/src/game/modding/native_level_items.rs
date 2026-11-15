@@ -196,6 +196,7 @@ mod tests {
             None,
         )
         .unwrap();
+        game.reset_entity_residency();
         game.native_lifecycle
             .begin_open(Authority::IntegratedServer);
         let level = game.level(game.dim.id()).unwrap();
