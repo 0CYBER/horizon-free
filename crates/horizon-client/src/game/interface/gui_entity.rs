@@ -120,13 +120,7 @@ impl Game<'_> {
                 &mut scratch.made[at].mob
             }
             GuiEntity::Existing(handle) => {
-                // One copy of the entity, as vanilla's `createRenderState` makes one a frame.
-                let found = match self.native_entity_read_target(*handle) {
-                    Some(Target::Mob(id)) => self.mobs.iter().find(|m| m.id == id && !m.removed),
-                    Some(Target::Player) => self.player_model.as_ref(),
-                    _ => None,
-                };
-                existing = found.ok_or(GuiEntityError::NoEntity)?.clone();
+                existing = self.existing_gui_entity(*handle)?;
                 &mut existing
             }
             // An entity a later API adds is one this game can't name.
@@ -174,7 +168,49 @@ impl Game<'_> {
         if let Some(at) = made.iter().position(same) {
             return Ok(at);
         }
-        let mob = if data.is_empty() {
+        let mob = self.new_gui_entity(kind, data)?;
+        if made.len() == KEPT {
+            made.remove(0);
+        }
+        made.push(Made {
+            kind: kind.into(),
+            data: data.clone(),
+            mob,
+        });
+        Ok(made.len() - 1)
+    }
+
+    /// `entity` prepared for drawing, as `DrawContext::entity` prepares it (a screen scene's
+    /// entities too): a new entity of a type made for drawing only, or a copy of the
+    /// client's entity as it is this frame. Refused by the same named causes.
+    pub(in crate::game) fn prepare_gui_entity(
+        &self,
+        entity: &GuiEntity,
+    ) -> Result<Mob, GuiEntityError> {
+        match entity {
+            GuiEntity::Kind { kind, data } => self.new_gui_entity(kind, data),
+            GuiEntity::Existing(handle) => self.existing_gui_entity(*handle),
+            // An entity a later API adds is one this game can't name.
+            _ => Err(GuiEntityError::UnknownType),
+        }
+    }
+
+    /// One copy of the client's entity `handle`, as vanilla's `createRenderState` makes one a
+    /// frame.
+    fn existing_gui_entity(&self, handle: mod_api::EntityRef) -> Result<Mob, GuiEntityError> {
+        let found = match self.native_entity_read_target(handle) {
+            Some(Target::Mob(id)) => self.mobs.iter().find(|m| m.id == id && !m.removed),
+            Some(Target::Player) => self.player_model.as_ref(),
+            _ => None,
+        };
+        Ok(found.ok_or(GuiEntityError::NoEntity)?.clone())
+    }
+
+    /// A new entity of living type `kind` loaded from `data`, made for drawing only.
+    fn new_gui_entity(&self, kind: &str, data: &Compound) -> Result<Mob, GuiEntityError> {
+        let types = self.res.mob_types();
+        let ty = types.get(kind).ok_or(GuiEntityError::UnknownType)?;
+        Ok(if data.is_empty() {
             // Built for drawing only, as a client's copy of a server's mob: no mod part's
             // `register_goals` or behaviour registration runs for a screen's entity.
             Mob::new_remote(u32::MAX, ty.clone(), Position::ZERO, 0.0)
@@ -197,16 +233,7 @@ impl Game<'_> {
             )
             .filter(|m| Arc::ptr_eq(&m.kind, ty))
             .ok_or(GuiEntityError::BadData)?
-        };
-        if made.len() == KEPT {
-            made.remove(0);
-        }
-        made.push(Made {
-            kind: kind.into(),
-            data: data.clone(),
-            mob,
-        });
-        Ok(made.len() - 1)
+        })
     }
 
     /// `mob`'s geometry around its feet, as the world draws it: a mod's
@@ -214,12 +241,23 @@ impl Game<'_> {
     /// mods' layers. Full bright, seen from its own position.
     pub(in crate::game) fn gui_entity_geometry(&self, mob: &Mob, out: &mut Vec<Vertex>) {
         let p = mob.position;
-        let camera = DVec3::new(p.x, p.y, p.z);
+        self.gui_entity_geometry_at(mob, 1.0, DVec3::new(p.x, p.y, p.z), out);
+    }
+
+    /// `gui_entity_geometry` at `partial` into the tick, around `camera`: what a screen
+    /// scene's entities submit, in the scene's own coordinates.
+    pub(in crate::game) fn gui_entity_geometry_at(
+        &self,
+        mob: &Mob,
+        partial: f32,
+        camera: DVec3,
+        out: &mut Vec<Vertex>,
+    ) {
         let added = self.mod_layers(mob);
         let mut parts = None;
         // A mod's renderer for the type draws in place of the model only: the mods' layers
         // still follow, as in the world.
-        let modded = self.mod_living_renderer_geometry(mob, 1.0, camera, FULL_BRIGHT, out);
+        let modded = self.mod_living_renderer_geometry(mob, partial, camera, FULL_BRIGHT, out);
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         // A screen's entity: custom entity model animations see is_in_gui = 1.
@@ -229,7 +267,7 @@ impl Game<'_> {
             }
             horizon_client::mobs::render::render_with_hidden(
                 mob,
-                1.0,
+                partial,
                 camera,
                 &lookup,
                 FULL_BRIGHT,
@@ -240,7 +278,7 @@ impl Game<'_> {
                 out,
             );
         });
-        self.mod_layer_geometry(mob, None, parts, added, 1.0, camera, FULL_BRIGHT, out);
+        self.mod_layer_geometry(mob, None, parts, added, partial, camera, FULL_BRIGHT, out);
     }
 }
 
