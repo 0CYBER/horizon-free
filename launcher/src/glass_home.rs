@@ -336,8 +336,14 @@ impl Launcher {
             .and_then(|tag| {
                 horizon_launcher::developer_install::instance_status(tag, backend::is_prepared(tag))
             });
+        // A soft dark scrim keeps the line readable over the brightest sky (a low sun, snow).
         ui::text(15., FontWeight::NORMAL, ink::STRONG)
-            .mt(px(16.))
+            .mt(px(10.))
+            .ml(px(-10.))
+            .px(px(10.))
+            .py(px(6.))
+            .rounded(px(radius::CONTROL))
+            .bg(gpui::black().opacity(0.28))
             .flex()
             .flex_wrap()
             .gap(px(4.))

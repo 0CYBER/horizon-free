@@ -96,9 +96,9 @@ fn light_look(look: tokens::glass::Glass) -> tokens::glass::Glass {
 }
 
 /// How much of the accent's dark base a content plate takes over the sunset. The mockup's 22 %
-/// let the bright sun shine through settings, dialogs and lists; at 62 % text sits on a steady
+/// let the bright sun shine through settings, dialogs and lists; at 85 % text sits on a steady
 /// surface and the scene stays decoration around it. Glass (the white tint) still lightens it.
-const STEADY_BASE: f32 = 0.62;
+const STEADY_BASE: f32 = 0.85;
 
 /// The look's plates mixed as `Glass::new` does, from `base` at [`STEADY_BASE`] instead of the
 /// mockup's.
@@ -410,6 +410,13 @@ mod tests {
         let worst = over(theme.look.plate, theme.look.plate_alpha, 0xffd98c);
         let ratio = tokens::contrast(0xffffff, worst);
         assert!(ratio >= 4.5, "white on a plate over the sun: {ratio:.2}");
+        // Body text is white at 70 %: it reads at 4.5:1 there too, at the default Glass and Blur 0.
+        let body = over(0xffffff, tokens::glass::ink::BODY, worst);
+        let ratio = tokens::contrast(body, worst);
+        assert!(
+            ratio >= 4.5,
+            "body text on a plate over the sun: {ratio:.2}"
+        );
     }
 
     /// The light look keeps Horizon's violet as it is and darkens only accents too pale for white.
