@@ -2828,9 +2828,10 @@ fn flower_contact_effects(m: &mut Mob, w: &MobWorld) {
     if !m.alive() {
         return;
     }
+    let inset = f64::from(1.0e-5_f32);
     let box_at_end = m
         .bounds_at(m.position)
-        .deflate(Vec3::new(1.0e-5, 1.0e-5, 1.0e-5));
+        .deflate(Vec3::new(inset, inset, inset));
     let _ = horizon_core::geometry::sweep_intersected_blocks(
         m.previous,
         m.position,
