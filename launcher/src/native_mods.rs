@@ -987,7 +987,7 @@ impl Stage {
     pub fn label(self) -> &'static str {
         match self {
             Self::Prepare => tr("Prepare"),
-            Self::Compile => tr("Compile"),
+            Self::Compile => tr("Build"),
             Self::Install => tr("Install"),
         }
     }
@@ -1111,8 +1111,8 @@ impl Step {
     /// and the log keep [`Self::label`].
     pub fn shown(&self) -> String {
         match self {
-            Self::Rust(_) => tr("Downloading the compiler (first time only)").into(),
-            Self::Tool => tr("Getting the mod tools ready (first time only)").into(),
+            Self::Rust(_) => tr("Downloading the compiler").into(),
+            Self::Tool => tr("Getting the mod tools ready").into(),
             Self::Source(_) | Self::Crates | Self::Plan(..) => tr("Getting ready to build").into(),
             Self::Mixins | Self::CachedMixins | Self::PrebuiltMods => {
                 tr("Preparing your mods").into()
@@ -1125,6 +1125,14 @@ impl Step {
                 ],
             ),
             Self::Compile { .. } => tr("Building the game with your mods").into(),
+            Self::Mod { id, done, total } => trf(
+                "Building {mod} ({done} of {total})",
+                &[
+                    ("mod", id),
+                    ("done", &done.to_string()),
+                    ("total", &total.to_string()),
+                ],
+            ),
             _ => self.label(),
         }
     }
