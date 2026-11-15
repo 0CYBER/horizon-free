@@ -504,7 +504,12 @@ impl Launcher {
     /// Searches; with `keep`, the rows already listed stay on screen until the new ones arrive,
     /// so the page doesn't shrink (and the scroll doesn't jump to the top) while it waits.
     pub(super) fn mods_search_keeping(&mut self, offset: usize, keep: bool) {
+        // The glass look offers Show everything for Modrinth only: carried over to Horizon's
+        // registry, where it can't be seen or turned off, it would list what the note says is
+        // hidden.
+        let glass = self.theme.glass;
         let m = &mut self.mods;
+        let everything = m.everything && !(glass && m.source == SourceId::Horizon);
         m.search += 1;
         m.searching = true;
         if offset == 0 {
@@ -522,7 +527,7 @@ impl Launcher {
                 ..target.search(m.text.text(), m.kind, &m.browse.filters)
             },
             None => Query {
-                everything: m.everything,
+                everything,
                 offset,
                 limit: PAGE,
                 filters: m.browse.filters.clone(),

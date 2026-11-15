@@ -544,12 +544,6 @@ impl Launcher {
                     }))
                 })
                 .into_any_element()
-            } else if p.source == SourceId::Horizon {
-                // The registry's rows have no verdict column: the slot says it, in its place.
-                ui::text(13., FontWeight::MEDIUM, 0.5)
-                    .flex_none()
-                    .child(tr(m.support(&p).label()))
-                    .into_any_element()
             } else {
                 div().flex_none().w(px(20.)).into_any_element()
             };
