@@ -14,6 +14,7 @@ pub(crate) mod mod_settings;
 pub(crate) mod package_side;
 pub(crate) mod packets;
 pub(crate) mod payload_codec;
+pub(crate) mod registry_entry;
 pub(crate) mod registry_keys;
 pub(crate) mod resource;
 

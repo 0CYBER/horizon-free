@@ -153,6 +153,10 @@ impl MaterialConditionRegistry {
                 value: value.clone(),
             })
     }
+    /// A direct lookup in the accepted decoded registry, without constructing a holder.
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.values.contains_key(name)
+    }
     pub fn entries(&self) -> impl Iterator<Item = (&str, &MaterialCondition)> {
         self.values
             .iter()

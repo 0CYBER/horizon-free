@@ -48,13 +48,12 @@ impl Game<'_> {
     }
     /// A registered provider's definition.
     fn provider_file(&self, registry: &str, id: &str) -> Option<Value> {
-        let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
-        let dir = registry.trim_start_matches("minecraft:");
-        let file = self
-            .options
-            .resources
-            .join(format!("data/{ns}/{dir}/{path}.json"));
-        serde_json::from_slice(&std::fs::read(file).ok()?).ok()
+        let id = horizon_client::command::args::normalized(id);
+        match registry {
+            "minecraft:predicate" => self.fns.store.predicates.get(id.as_ref()),
+            _ => self.context_registry(registry)?.get(id.as_ref()),
+        }
+        .cloned()
     }
     /// The compute context the command's source literal selects.
     pub(in crate::game) fn compute_context(&mut self, ctx: &Context) -> R<ComputeContext> {
@@ -533,6 +532,118 @@ impl Game<'_> {
                 }
             }
             _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs prepared resources and scratch homes/cwd"]
+    fn published_predicates_and_nested_provider_shorthand_evaluate() {
+        use crate::game::*;
+        use horizon_assets::resource_source::{ResourceRoot, ResourceSource};
+        use serde_json::json;
+        use std::{path::PathBuf, sync::Arc, time::Instant};
+
+        let root = PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES")
+                .expect("set HORIZON_TEST_RESOURCES to prepared resources"),
+        );
+        let settings = Settings::default();
+        let mut loaded = load_resources(
+            ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            Instant::now(),
+            false,
+            execution_role::ExecutionRole::IntegratedServer,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let fixture = std::env::current_dir()
+            .unwrap()
+            .join("compute-owner-providers");
+        for (registry, value) in [
+            ("context_int_provider", json!(17)),
+            ("context_float_provider", json!(2.5)),
+        ] {
+            let dir = fixture.join("data/minecraft").join(registry).join("nested");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("value.json"), value.to_string()).unwrap();
+        }
+        Arc::get_mut(&mut loaded.resources)
+            .unwrap()
+            .rest
+            .get_mut()
+            .unwrap()
+            .providers = horizon_client::providers::Providers::load(&fixture);
+        std::fs::remove_dir_all(&fixture).unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = execution_role::ExecutionRole::IntegratedServer;
+        let mut game = Game::new(
+            &loaded.resources,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&ResourceSource::directory(root)),
+            None,
+        )
+        .unwrap();
+        game.fns.store.predicates.insert(
+            "minecraft:nested/true".into(),
+            json!({"condition": "minecraft:all_of", "terms": []}),
+        );
+        let context = ComputeContext::default();
+        for id in ["nested/value", "minecraft:nested/value"] {
+            assert_eq!(
+                game.provider_int(
+                    &json!({"type": "minecraft:add", "inputs": [id, 3]}),
+                    &context,
+                    0
+                ),
+                Ok(20),
+            );
+            assert_eq!(
+                game.provider_float(
+                    &json!({"type": "minecraft:add", "inputs": [id, 0.5]}),
+                    &context,
+                    0
+                ),
+                Ok(3.0),
+            );
+        }
+        for predicate in ["nested/true", "minecraft:nested/true"] {
+            assert_eq!(
+                game.provider_int(
+                    &json!({
+                        "type": "minecraft:conditional", "condition": predicate,
+                        "on_true": "nested/value", "on_false": -1
+                    }),
+                    &context,
+                    0,
+                ),
+                Ok(17),
+            );
+            assert_eq!(
+                game.provider_float(
+                    &json!({
+                        "type": "minecraft:number_dispatcher",
+                        "cases": [{"condition": predicate, "value": "nested/value"}],
+                        "default": -1
+                    }),
+                    &context,
+                    0,
+                ),
+                Ok(2.5),
+            );
         }
     }
 }

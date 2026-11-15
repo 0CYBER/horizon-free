@@ -20,7 +20,7 @@ use horizon_core::random::RandomSource;
 use serde_json::Value;
 use std::{
     collections::{BTreeSet, HashMap},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 type Cache<T> = Mutex<HashMap<String, Option<Arc<T>>>>;
@@ -32,6 +32,10 @@ pub struct LiveFeatures {
     blocks: FeatureBlocks,
     configured: Cache<FeatureDefinition>,
     placed: Cache<PlacedFeatureDefinition>,
+    configured_ids: OnceLock<BTreeSet<String>>,
+    placed_ids: OnceLock<BTreeSet<String>>,
+    provider_ids: OnceLock<BTreeSet<String>>,
+    configured_tags: OnceLock<std::collections::BTreeMap<String, Vec<String>>>,
     /// `BiomeGenerationSettings.getBoneMealFeatures` per biome, in vanilla order.
     bone_meal: Vec<Vec<String>>,
     /// Temperature settings per biome (`Biome.getTemperature`).
@@ -210,11 +214,84 @@ impl LiveFeatures {
             blocks: FeatureBlocks::from_registry(registry)?,
             configured: Mutex::new(HashMap::new()),
             placed: Mutex::new(HashMap::new()),
+            configured_ids: OnceLock::new(),
+            placed_ids: OnceLock::new(),
+            provider_ids: OnceLock::new(),
+            configured_tags: OnceLock::new(),
             bone_meal,
         }))
     }
     pub fn data(&self) -> &Arc<GeneratorData> {
         &self.data
+    }
+    /// Registry identities are admitted by the same codecs used for live placement,
+    /// not by the presence of source JSON in the worldgen bundle.
+    pub fn registry_ids(&self, registry: &str) -> Option<&BTreeSet<String>> {
+        Some(match registry {
+            "minecraft:worldgen/feature" => self.configured_ids.get_or_init(|| {
+                self.catalog
+                    .feature_names()
+                    .filter(|name| self.configured(name).is_some())
+                    .map(str::to_owned)
+                    .collect()
+            }),
+            "minecraft:worldgen/placed_feature" => self.placed_ids.get_or_init(|| {
+                self.catalog
+                    .placed_names()
+                    .filter(|name| self.placed(name).is_some())
+                    .map(str::to_owned)
+                    .collect()
+            }),
+            "minecraft:worldgen/block_state_provider" => self.provider_ids.get_or_init(|| {
+                let Some((bindings, catalog, _)) = &self.bindings.simple_blocks else {
+                    return BTreeSet::new();
+                };
+                catalog
+                    .names()
+                    .filter(|name| {
+                        catalog
+                            .provider(&Value::from(*name).to_string(), bindings)
+                            .is_ok()
+                    })
+                    .map(str::to_owned)
+                    .collect()
+            }),
+            _ => return None,
+        })
+    }
+    pub fn registry_contains(&self, registry: &str, id: &str) -> Option<bool> {
+        Some(self.registry_ids(registry)?.contains(id))
+    }
+    pub fn registry_tag_contains(&self, registry: &str, id: &str, tag: &str) -> Option<bool> {
+        if !self.registry_contains(registry, id)? {
+            return None;
+        }
+        if registry == "minecraft:worldgen/placed_feature" {
+            return Some(self.catalog.placed_in_tag(id, tag));
+        }
+        if registry != "minecraft:worldgen/feature" {
+            return Some(false);
+        }
+        let tags = self.configured_tags.get_or_init(|| {
+            let mut definitions = TagDefinitions::default();
+            if let Some(resources) = &self.data.feature_resources {
+                for (name, json) in &resources.feature_tags {
+                    let _ = definitions.apply_json(name, "live features", json);
+                }
+            }
+            definitions
+                .build(|name, _| {
+                    self.registry_contains(registry, name)
+                        .filter(|accepted| *accepted)
+                        .map(|_| name.to_owned())
+                })
+                .map(|built| built.tags)
+                .unwrap_or_default()
+        });
+        Some(
+            tags.get(tag)
+                .is_some_and(|members| members.iter().any(|member| member == id)),
+        )
     }
     /// The structure templates and processor lists of this bundle, for the
     /// pieces a level places live (`/place structure`).

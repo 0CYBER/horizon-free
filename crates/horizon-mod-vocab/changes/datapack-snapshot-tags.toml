@@ -1,0 +1,3 @@
+ids = ["type:DatapackSnapshot", "type:DatapackSnapshotRegistry"]
+why = "A synced datapack registry now carries its tags to the client: DatapackSnapshotRegistry gains a tags field, which changes its wasm layout and that of DatapackSnapshot, which holds it. Hook versions are unchanged."
+migrate = "Rebuild wasm mods against the new SDK. Code that builds a DatapackSnapshotRegistry sets tags, empty when the registry has none."

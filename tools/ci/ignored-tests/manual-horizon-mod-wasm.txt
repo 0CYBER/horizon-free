@@ -14,5 +14,4 @@ horizon-mod-wasm real_guest_point_is_refused_without_staging wasm-mods.yml manua
 horizon-mod-wasm real_member wasm-mods.yml manual # needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, which the wasm-mods workflow builds
 horizon-mod-wasm real_member_self_refusal wasm-mods.yml manual # needs HORIZON_WASM_FIXTURE and HORIZON_WASM_STD, built by wasm-mods
 horizon-mod-wasm real_wasm_command_listener_receives_ordered_selector_handles by-hand manual # requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree
-horizon-mod-wasm real_wasm_datapack_reads_preserve_values_and_ordering by-hand manual # requires HORIZON_WASM_FIXTURE and HORIZON_WASM_STD built from this tree
 horizon-mod-wasm runtime::runtime_tests::guest_input_pool_stays_flat_for_100k_no_import_calls wasm-mods.yml manual # requires shared std and the real noop fixture

@@ -1,0 +1,2 @@
+# The compiled wasm fixture read of datapack registry entries, a daily test (README.md). Rows: PACKAGE TEST TARGET daily REASON.
+horizon-mod-wasm real_wasm_datapack_reads_preserve_values_and_ordering test:datapack_reads daily wasm-fixture
