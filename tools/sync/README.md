@@ -5,6 +5,18 @@ changed launcher files and fork commits. It marks whole upstream takes without
 judging whether a fork hunk is a permitted Horizon-layer restoration or mod work
 that must remain. Reviewers check the inventory and the resulting corrections.
 
+## Upstream changes the merge dropped
+
+A conflict resolved to the fork's side drops upstream's change silently: the sync builds, and the fork later looks
+like it reverted upstream's work. Every sync runs, on its merge commit, before the senior read:
+
+    python3 tools/sync/dropped_upstream.py <merge commit> --markdown
+
+It lists each upstream commit with a file whose upstream-added lines are missing from the merge (kept fork side,
+partly missing, no fork file, or an upstream deletion undone). The list over-reports: sort each commit by hand
+(`git show`, `git grep` at the merge) into carried, rightly kept fork side (say why), or lost, re-apply every lost
+one in the sync, and put the table with its "Sorted as" column filled in the sync PR body.
+
 ## File-size baseline provenance
 
 `tools/check_file_size.py --base <base>` permits additions or raised caps only
