@@ -100,6 +100,8 @@ pub struct ComputeProgram {
     pub notes: Vec<Error>,
     pub work_groups: Option<[u32; 3]>,
     pub work_groups_render: [f32; 2],
+    /// An indirect request overrides both direct work-group declarations.
+    pub indirect: Option<crate::IndirectDispatch>,
 }
 
 /// The uniforms a gbuffers program reads per draw (5.3's "D"), in a block of their own
@@ -861,6 +863,13 @@ fn resources(
 
 /// Translates a compute program (`.csh`).
 pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<Error>> {
+    translate_compute_dispatch(compute, None)
+}
+
+pub(crate) fn translate_compute_dispatch(
+    compute: &Preprocessed,
+    indirect: Option<crate::IndirectDispatch>,
+) -> Result<ComputeProgram, Vec<Error>> {
     let named = anonymous_structs::name(&compute.code).map(|code| Preprocessed {
         code,
         ..compute.clone()
@@ -905,10 +914,16 @@ pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<E
         }
         Some(v)
     };
-    let mut work_groups =
-        sizes("workGroups", &[3]).map(|v| [v[0] as u32, v[1] as u32, v[2] as u32]);
-    let work_groups_render =
-        sizes("workGroupsRender", &[2, 3]).map_or([1.0, 1.0], |v| [v[0] as f32, v[1] as f32]);
+    let mut work_groups = if indirect.is_none() {
+        sizes("workGroups", &[3]).map(|v| [v[0] as u32, v[1] as u32, v[2] as u32])
+    } else {
+        None
+    };
+    let work_groups_render = if indirect.is_none() {
+        sizes("workGroupsRender", &[2, 3]).map_or([1.0, 1.0], |v| [v[0] as f32, v[1] as f32])
+    } else {
+        [1.0, 1.0]
+    };
     let code = c.rewrite(&samplers, &uniforms);
     let mut folded = None;
     let code = match work_groups.map(|g| fold_work_groups(&code, g)) {
@@ -1011,6 +1026,7 @@ pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<E
         interface,
         work_groups,
         work_groups_render,
+        indirect,
     })
 }
 

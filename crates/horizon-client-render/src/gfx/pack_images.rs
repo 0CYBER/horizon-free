@@ -464,6 +464,7 @@ impl Buffers {
             .max_buffer_size
             .min(limits.max_storage_buffer_binding_size)
             & !3;
+        let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
         self.buffers = self
             .objects
             .iter()
@@ -486,13 +487,13 @@ impl Buffers {
                         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some("Shader pack buffer"),
                             contents: &contents,
-                            usage: wgpu::BufferUsages::STORAGE,
+                            usage,
                         })
                     }
                     None => device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("Shader pack buffer"),
                         size,
-                        usage: wgpu::BufferUsages::STORAGE,
+                        usage,
                         mapped_at_creation: false,
                     }),
                 }
@@ -518,6 +519,14 @@ impl Buffers {
     /// Whether the pack declares buffer `binding`.
     pub(super) fn has(&self, binding: u32) -> bool {
         self.objects.contains_key(&binding)
+    }
+
+    /// A complete indirect argument range in the currently allocated buffer. Re-resolve
+    /// after resize/reset rather than retaining a handle to an earlier allocation.
+    pub(super) fn indirect_source(&self, binding: u32, offset: u64) -> Option<&wgpu::Buffer> {
+        let index = self.objects.keys().position(|&b| b == binding)?;
+        let buffer = self.buffers.get(index)?;
+        (offset.is_multiple_of(4) && offset.checked_add(12)? <= buffer.size()).then_some(buffer)
     }
 }
 

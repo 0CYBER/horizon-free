@@ -15,10 +15,30 @@ use std::collections::BTreeSet;
 use crate::config::{self, Config};
 use crate::custom::Custom;
 use crate::{
-    ComputeProgram, eval_condition, preprocess, translate_composite, translate_compute,
-    translate_gbuffers, translate_shadow,
+    ComputeProgram, eval_condition, preprocess, translate_composite, translate_gbuffers,
+    translate_shadow,
 };
 use crate::{GbuffersInputs, Macros, Pack, Preprocessed, Program, Properties, Target};
+
+/// `indirect.<pass>`: three unsigned work-group counts in a storage buffer (3.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IndirectDispatch {
+    pub buffer: u32,
+    pub offset: u64,
+}
+
+impl IndirectDispatch {
+    fn parse(value: &str) -> Option<Self> {
+        let mut words = value.split_whitespace();
+        let buffer = words.next()?.parse().ok()?;
+        let offset: u64 = words.next()?.parse().ok()?;
+        if buffer > 8 || !offset.is_multiple_of(4) || words.next().is_some() {
+            return None;
+        }
+        offset.checked_add(12)?;
+        Some(Self { buffer, offset })
+    }
+}
 
 /// Which group of 2.1 a program belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1647,6 +1667,19 @@ impl Loader<'_> {
             {
                 continue;
             }
+            let indirect = match self.properties.get(&format!("indirect.{name}")) {
+                Some(value) => match IndirectDispatch::parse(&self.options.expand(value)) {
+                    Some(request) => Some(request),
+                    None => {
+                        self.post.notes.push(format!(
+                            "{name}: skipped: invalid indirect request; expected SSBO index 0–8 \
+                             and a four-byte-aligned byte offset"
+                        ));
+                        continue;
+                    }
+                },
+                None => None,
+            };
             let pp = self.preprocess(&path);
             let problems = diagnostics(&pp);
             let notes = &mut self.post.notes;
@@ -1655,7 +1688,7 @@ impl Loader<'_> {
                 notes.push(format!("{name}: skipped"));
                 continue;
             }
-            match translate_compute(&pp) {
+            match crate::translate::translate_compute_dispatch(&pp, indirect) {
                 Ok(program) => {
                     notes.extend(
                         program
@@ -1827,6 +1860,46 @@ fn flips(properties: &Properties, program: &str) -> Vec<(u32, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_indirect_requests_skip_the_compute_instead_of_dispatching_directly() {
+        let pack = Pack::from_zip_bytes(
+            "original-indirect-property",
+            crate::pack::tests::zip(&[(
+                "shaders/composite.csh",
+                "#version 430\nlayout(local_size_x=1) in; void main() {}",
+            )]),
+        )
+        .unwrap();
+        for value in [
+            "",
+            "2",
+            "2 0 extra",
+            "-1 0",
+            "9 0",
+            "2 -4",
+            "2 2",
+            "2 18446744073709551612",
+        ] {
+            let properties =
+                Properties::parse(&format!("indirect.composite={value}"), &Macros::standard());
+            let post = load_post(
+                &pack,
+                "",
+                &properties,
+                &Macros::standard(),
+                &GameInputs::default(),
+            );
+            assert!(post.programs.is_empty(), "{value}: silently became direct");
+            assert!(
+                post.notes
+                    .iter()
+                    .any(|n| n.contains("invalid indirect request")),
+                "{value}: {:?}",
+                post.notes
+            );
+        }
+    }
 
     #[test]
     fn unsupported_defaults_are_notes_without_skipping_render_or_compute() {
