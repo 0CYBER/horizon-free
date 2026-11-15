@@ -17,8 +17,8 @@ impl Launcher {
         let t = self.theme;
         let (rows, ping) = ui::flat_rows(|| {
             let mut rows = vec![self.launcher_theme_row(cx), self.glass_accent_row(cx)];
-            rows.extend(self.effects_rows(cx));
             rows.push(self.motion_row(cx));
+            rows.extend(self.effects_rows(cx));
             // Not in the scrolling list: it stays in view above Continue.
             let detail = div()
                 .flex()
@@ -75,7 +75,7 @@ impl Launcher {
                     .child(tr("Make Horizon yours")),
             )
             .child(ui::text(14., FontWeight::NORMAL, ink::BODY).child(tr(
-                "Pick a look to start with, and choose whether to be counted as playing. Every choice here stays in Settings.",
+                "Pick a look to start with, and choose whether to be counted as playing. You can change all of this later in Settings.",
             )));
         let body = div()
             .id("welcome-body")
@@ -114,7 +114,7 @@ impl Launcher {
             .border_t_1()
             .border_color(white(0.1))
             .child(
-                button("welcome-calm", "Keep it calm", Kind::Secondary, &t).on_click(cx.listener(
+                button("welcome-calm", "Fewer effects", Kind::Secondary, &t).on_click(cx.listener(
                     |this, _: &ClickEvent, _, cx| {
                         this.settings.effects = horizon_launcher::effects::Effects::CALM;
                         this.save_settings();
