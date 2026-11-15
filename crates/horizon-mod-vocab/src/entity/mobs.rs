@@ -133,11 +133,12 @@ impl PathType {
     }
 }
 /// Why a path a mod computed was not taken ([`crate::MobRef::move_to_path`] and
-/// [`crate::GoalContext::move_to_path`]). A refused path leaves the navigation
-/// as it was. [`PathNode`] coordinates are never refused for being large:
-/// extreme finite ones are classified and followed with saturating block
-/// arithmetic, so only the reasons below refuse a path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// [`crate::GoalContext::move_to_path`]). `NotFinite` and `Unavailable` leave
+/// navigation unchanged; `Empty` leaves no path in progress. [`PathNode`]
+/// coordinates are never refused for being large: extreme finite ones are
+/// classified and followed with saturating block arithmetic, so only the
+/// reasons below refuse a path.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
 pub enum MoveToPathError {
@@ -146,7 +147,8 @@ pub enum MoveToPathError {
     /// No mob stands behind the handle: a stale handle, one of another world
     /// or dimension, a player, the dragon (which flies by its phase and keeps
     /// no navigation), a mob taken out for ticking, or a client that does not
-    /// know the entity. A goal tick's own mob is always there.
+    /// know the entity. A goal tick's own mob is always there. This is the default refusal.
+    #[default]
     Unavailable,
     /// The path had no node left to follow: an empty node list, or a path the
     /// trim cut at its first node.
@@ -170,6 +172,7 @@ impl crate::NoBackend for MoveToPathError {
 /// finite one is followed with saturating block arithmetic rather than
 /// refused.
 #[derive(Clone, Copy, Debug, Default, PartialEq, horizon_mod_api_macros::Wire)]
+// exhaustive: plain coordinates a mod builds by struct literal; the engine adds nothing to it
 pub struct PathNode {
     /// The node's X, in blocks.
     pub x: f64,

@@ -439,7 +439,7 @@ mod tests {
     /// A refusal names its cause, so a mod tells an invalid number from a mob
     /// that is not there and from a path with nothing left to follow (#4443).
     #[test]
-    #[ignore = "needs prepared resources"]
+    #[ignore = "daily"]
     fn a_supplied_path_refusal_names_its_cause() {
         with_game(|game| {
             let kind = game

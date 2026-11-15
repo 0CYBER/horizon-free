@@ -33,9 +33,16 @@ tick sees, and every other entity from the tick's snapshot — a `getEntities` o
 list was taken out — so a read the snapshot does not carry (a mob's gear or effects, its species id)
 answers `None`, and the handle docs mark the reads that carry the snapshot rule. Writes apply to the
 mob itself through the engine's own paths: `move_to(pos, speed)` and `stop_navigation()`
-(`PathNavigation`), `move_to_path(Vec<PathNode>, speed)` to follow a path the mod computed — the
-engine classifies and trims it, follows it as given, and drops it on a block change or the stuck
-check instead of searching again — `look_at(pos)` (`LookControl`), `jump()`, and `set_target(Option<LivingRef>)`
+(`PathNavigation`), `move_to_path(Vec<PathNode>, speed)` to follow a path the mod computed.
+It returns `Result<(), MoveToPathError>`: `NotFinite` for a non-finite speed or coordinate,
+`Unavailable` when no navigable mob is available, and `Empty` when no node remains after trimming.
+`NotFinite` and `Unavailable` preserve navigation; `Empty` leaves no path in progress.
+The engine classifies and trims every supplied node, follows the path as given, and drops it on a
+block change or the stuck check instead of searching again. Unloaded and out-of-world positions
+are classified using void air without loading chunks; finite positions are not refused for their
+size. Submission, classification and trimming take linear work and allocate per-node storage.
+Optional per-node type overrides are not supported: the engine supplies every classification.
+Other writes include `look_at(pos)` (`LookControl`), `jump()`, and `set_target(Option<LivingRef>)`
 (`Mob.setTarget`, with the write handle's rules: a fox, an enderman or a zombified piglin stores it
 with its setter's side effects, and a brain-backed species refuses, since its target is a brain
 memory that `MobRef::set_brain_target` writes from a server host). Writes to other entities

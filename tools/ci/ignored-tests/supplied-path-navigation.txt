@@ -1,0 +1,10 @@
+horizon-client-lib mobs::nav::supplied_path_tests::a_supplied_path_is_followed_and_finishes_at_its_node_count lib daily resources
+horizon-client-lib mobs::nav::supplied_path_tests::unloaded_and_out_of_world_nodes_are_accepted_without_loading_chunks lib daily resources
+horizon-client-lib mobs::nav::supplied_path_tests::a_node_the_engine_calls_blocked_is_recorded_not_refused lib daily resources
+horizon-client-lib mobs::nav::supplied_path_tests::a_supplied_path_is_trimmed_like_any_move_to lib daily resources
+horizon-client-lib mobs::nav::supplied_path_tests::a_block_change_drops_a_supplied_path_without_re_searching lib daily resources
+horizon-client-lib mobs::nav::supplied_path_tests::the_stuck_check_stops_a_supplied_path lib daily resources
+horizon-client-lib mobs::nav::supplied_path_tests::the_per_node_timeout_stops_a_supplied_path lib daily resources
+horizon-client-lib mobs::nav::supplied_path_tests::an_extreme_walking_node_is_classified_and_followed lib daily resources
+horizon-client-lib mobs::nav::supplied_path_tests::an_extreme_flying_node_is_classified_and_followed lib daily resources
+horizon-client game::native_mob_navigation::tests::a_supplied_path_refusal_names_its_cause lib daily resources
