@@ -7,6 +7,13 @@ values through `command.argument(name)` and `CommandArgumentValue`. An integer i
 already an `i32`; a player argument is a live `PlayerRef`, not selector text.
 Return `Flow::Cancel` when your listener handles the command.
 
+The server asks for commands when it builds the session command tree: at world open before
+functions compile, and again on every `/reload` and data pack change. No player or network hub
+needs to exist yet. Register the complete current set on each call. Plain function lines and
+substituted macro lines are checked against this session tree; commands no longer registered
+are refused when functions next load. Starting the hub reuses the session registration rather
+than asking again.
+
 Literal words use lowercase letters, digits, `_` and `-`. Only the first word may
 additionally begin with one `/`: register `/set <x:word>` and type `//set stone` in chat.
 The command's literals retain `/set`. A slash alone, repeated leading slashes and
