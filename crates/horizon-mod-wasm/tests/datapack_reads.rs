@@ -15,13 +15,35 @@ impl Host for World {
 }
 impl Backend for World {}
 mod_api::impl_backend_areas!(World, except(levels));
-mod_api::impl_host_areas!(World, except(levels));
+mod_api::impl_host_areas!(World, except(levels, keys));
 impl mod_api::prelude::LevelsHost for World {
     fn is_loaded(&self, id: &str) -> bool {
         if id == "datapack_fixture_completed" {
             self.2.set(true);
         }
         id == "datapack_fixture" || id == "datapack_fixture_completed"
+    }
+}
+impl mod_api::prelude::KeysHost for World {
+    fn registry_entry(&self, registry: &str, id: &str) -> Option<RegistryEntry> {
+        self.0.contains_entry(registry, id).then(|| {
+            RegistryEntry::new(
+                Identifier::parse(registry).unwrap(),
+                Identifier::parse(id).unwrap(),
+            )
+        })
+    }
+    fn registry_entries(&self, registry: &str) -> Option<Vec<Identifier>> {
+        self.0
+            .entries(registry)
+            .ok()?
+            .into_iter()
+            .map(|id| Identifier::parse(id).ok())
+            .collect()
+    }
+    fn registry_entry_in_tag(&self, entry: &RegistryEntry, tag: &str) -> Option<bool> {
+        self.0
+            .tag_contains(&entry.registry.to_string(), &entry.id.to_string(), tag)
     }
 }
 impl mod_api::prelude::LevelsBackend for World {
@@ -110,7 +132,7 @@ fn real_wasm_datapack_reads_preserve_values_and_ordering() {
             )],
             sync: DatapackRegistrySync::ServerOnly,
         };
-        let candidate = DatapackCandidate::build(
+        let mut candidate = DatapackCandidate::build(
             &[declaration],
             &[
                 (
@@ -124,6 +146,12 @@ fn real_wasm_datapack_reads_preserve_values_and_ordering() {
             ],
         )
         .unwrap();
+        candidate
+            .bind_tags(
+                "wasm_fixture:spell",
+                [("wasm_fixture:hot".into(), vec!["wasm_fixture:fire".into()])].into(),
+            )
+            .unwrap();
         let mut world = World(
             DatapackRegistrySet::first(candidate, 8),
             std::cell::Cell::new([0; 3]),

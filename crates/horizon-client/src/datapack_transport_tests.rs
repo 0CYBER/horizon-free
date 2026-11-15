@@ -23,6 +23,7 @@ fn snapshot(generation: u64, text: String) -> DatapackSnapshot {
         registries: vec![DatapackSnapshotRegistry {
             key: "large:blob".into(),
             fields: declaration().fields,
+            tags: Default::default(),
             entries: vec![DatapackSnapshotEntry {
                 id: "large:entry".into(),
                 values: vec![DatapackValue::Text(text)],

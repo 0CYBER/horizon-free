@@ -242,7 +242,7 @@ impl StartCache {
 /// A structure's biome holder set in any form `crate::holder_set` reads. An
 /// absent field, an unknown biome or tag names nothing, and a list may also
 /// hold tags, as this reader always allowed.
-fn biome_set(
+pub(super) fn biome_set(
     lookup: &impl crate::holder_set::HolderLookup<Id = BiomeId>,
     value: &Value,
 ) -> Result<BTreeSet<BiomeId>, super::DecodeError> {
@@ -263,7 +263,7 @@ fn biome_set(
         _ => Ok(BTreeSet::new()),
     }
 }
-struct StructureBiomes<'a>(&'a GeneratorData);
+pub(super) struct StructureBiomes<'a>(&'a GeneratorData);
 impl crate::holder_set::HolderLookup for StructureBiomes<'_> {
     type Id = BiomeId;
     fn what(&self) -> &str {
@@ -282,6 +282,23 @@ impl crate::holder_set::HolderLookup for StructureBiomes<'_> {
             .collect())
     }
 }
+impl GeneratorData {
+    pub(in crate::worldgen) fn structure_block_bindings(
+        &self,
+    ) -> Result<FeatureBlockBindings<'static>, super::DecodeError> {
+        let mut bindings = self.feature_block_bindings()?;
+        // Processors that test what a block is made of read canOcclude.
+        if let Some(blocks) = self
+            .feature_resources
+            .as_ref()
+            .and_then(|r| r.blocks.as_ref())
+        {
+            bindings = bindings.with_block_properties(&blocks.properties)?;
+        }
+        Ok(bindings)
+    }
+}
+
 impl StructureState {
     pub(super) fn new(
         data: &Arc<GeneratorData>,
@@ -313,15 +330,7 @@ impl StructureState {
         for (i, def) in registry.structures.iter().enumerate() {
             by_step[def.step].push(i);
         }
-        let mut bindings = data.feature_block_bindings()?;
-        // Processors that test what a block is made of read canOcclude.
-        if let Some(blocks) = data
-            .feature_resources
-            .as_ref()
-            .and_then(|r| r.blocks.as_ref())
-        {
-            bindings = bindings.with_block_properties(&blocks.properties)?;
-        }
+        let bindings = data.structure_block_bindings()?;
         let zone_reach = registry.zone_reach();
         Ok(Some(Self {
             zone_reach,

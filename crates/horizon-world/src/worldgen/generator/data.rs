@@ -18,6 +18,10 @@ pub(in crate::worldgen) struct StructureBundles {
     pub(in crate::worldgen) pools: BTreeMap<String, String>,
 }
 
+type RegistryNames = BTreeSet<String>;
+type RegistryDecoder = fn(&GeneratorData) -> Option<RegistryNames>;
+type RegistryCache = BTreeMap<&'static str, (OnceLock<Option<RegistryNames>>, RegistryDecoder)>;
+
 /// Seed-independent generation resources, loaded once and shared by every
 /// generator. Biome identities are indices into the sorted biome registry.
 pub struct GeneratorData {
@@ -45,6 +49,9 @@ pub struct GeneratorData {
     pub(super) biome_json: Vec<String>,
     pub(super) temperatures: Vec<BiomeTemperatureSettings>,
     pub(super) biome_carvers: Vec<Vec<Arc<WorldCarver>>>,
+    carvers: CarverCatalog,
+    accepted_registries: OnceLock<RegistryCache>,
+    decoded_structures: OnceLock<Option<super::super::structure::start::StructureRegistry>>,
     pub(super) carving_blocks: CarvingBlocks,
     pub(in crate::worldgen) block_tags: BTreeMap<String, Vec<String>>,
     /// `block_tags` bound to block states, once for the feature bindings of
@@ -360,6 +367,9 @@ impl GeneratorData {
             biome_json,
             temperatures,
             biome_carvers,
+            carvers,
+            accepted_registries: OnceLock::new(),
+            decoded_structures: OnceLock::new(),
             carving_blocks,
             block_tags,
             biome_tags,
@@ -578,5 +588,227 @@ impl GeneratorData {
             }
         };
         FeatureBlockBindings::with_bound_tags(self.registry, self.integers.clone(), bound)
+    }
+}
+
+impl GeneratorData {
+    /// The loaded worldgen registry's retained table, not files present in a resource pack.
+    /// Lazily retain successful codec results. Raw bundles are resources, not registry entries.
+    fn named_registry(&self, registry: &str) -> Option<&RegistryNames> {
+        let decoders = self.accepted_registries.get_or_init(|| {
+            let decoders: [(&str, RegistryDecoder); 9] = [
+                ("minecraft:worldgen/noise", Self::decode_noise_names),
+                (
+                    "minecraft:worldgen/density_function",
+                    Self::decode_density_names,
+                ),
+                ("minecraft:worldgen/material_rule", Self::decode_rule_names),
+                (
+                    "minecraft:worldgen/noise_settings",
+                    Self::decode_settings_names,
+                ),
+                (
+                    "minecraft:worldgen/multi_noise_biome_source_parameter_list",
+                    Self::decode_preset_names,
+                ),
+                (
+                    "minecraft:worldgen/processor_list",
+                    Self::decode_processor_names,
+                ),
+                ("minecraft:worldgen/structure", Self::decode_structure_names),
+                (
+                    "minecraft:worldgen/structure_set",
+                    Self::decode_structure_set_names,
+                ),
+                ("minecraft:worldgen/template_pool", Self::decode_pool_names),
+            ];
+            decoders
+                .into_iter()
+                .map(|(name, decode)| (name, (OnceLock::new(), decode)))
+                .collect()
+        });
+        let (names, decode) = decoders.get(registry)?;
+        names.get_or_init(|| decode(self)).as_ref()
+    }
+
+    fn decode_noise_names(&self) -> Option<RegistryNames> {
+        DensityRegistry::from_json(&self.noises, &BTreeMap::new()).ok()?;
+        Some(
+            self.noises
+                .keys()
+                .filter_map(|name| super::super::density::identifier(name).ok())
+                .collect(),
+        )
+    }
+
+    fn decode_density_names(&self) -> Option<RegistryNames> {
+        let densities = DensityRegistry::from_json(&self.noises, &self.densities).ok()?;
+        Some(
+            densities
+                .entries()
+                .map(|(name, _)| name.to_owned())
+                .collect(),
+        )
+    }
+
+    fn decode_rule_names(&self) -> Option<RegistryNames> {
+        let densities = DensityRegistry::from_json(&self.noises, &self.densities).ok()?;
+        let codec =
+            crate::registry::BlockStateJsonCodec::new(self.registry, self.integers.clone()).ok()?;
+        let rules = MaterialRuleLibrary::from_json(
+            &self.rules,
+            &self.conditions,
+            &codec,
+            densities,
+            0,
+            false,
+        )
+        .ok()?;
+        Some(rules.names().map(str::to_owned).collect())
+    }
+
+    fn decode_settings_names(&self) -> Option<RegistryNames> {
+        Some(
+            self.settings
+                .iter()
+                .filter_map(|(name, json)| {
+                    let value: Value = serde_json::from_str(json).ok()?;
+                    self.decode_noise_settings(&value, 0, None).ok()?;
+                    super::super::density::identifier(name).ok()
+                })
+                .collect(),
+        )
+    }
+
+    fn decode_preset_names(&self) -> Option<RegistryNames> {
+        Some(
+            self.presets
+                .keys()
+                .filter_map(|name| {
+                    let source = BiomeSourceDefinition::Preset {
+                        name: name.clone(),
+                        inline: false,
+                    };
+                    source.resolve(&self.presets).ok()?;
+                    super::super::density::identifier(name).ok()
+                })
+                .collect(),
+        )
+    }
+
+    fn decode_processor_names(&self) -> Option<RegistryNames> {
+        let resources = self.structures.as_ref()?;
+        let bindings = self.structure_block_bindings().ok()?;
+        Some(
+            resources
+                .processor_lists
+                .iter()
+                .filter_map(|(name, json)| {
+                    resources.processor_list(json, &bindings).ok()?;
+                    super::super::density::identifier(name).ok()
+                })
+                .collect(),
+        )
+    }
+
+    fn decoded_structure_registry(
+        &self,
+    ) -> Option<&super::super::structure::start::StructureRegistry> {
+        self.decoded_structures
+            .get_or_init(|| {
+                let raw = self.structure_resources.as_ref()?;
+                super::super::structure::start::StructureRegistry::new(
+                    &raw.structures,
+                    &raw.sets,
+                    raw.pools.clone(),
+                    &|value| {
+                        super::super::generator_structures::biome_set(
+                            &super::super::generator_structures::StructureBiomes(self),
+                            value,
+                        )
+                    },
+                    super::super::structure::mod_types::mod_structure_types(),
+                )
+                .ok()
+            })
+            .as_ref()
+    }
+
+    fn decode_structure_names(&self) -> Option<RegistryNames> {
+        Some(
+            self.decoded_structure_registry()?
+                .structures
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect(),
+        )
+    }
+
+    fn decode_structure_set_names(&self) -> Option<RegistryNames> {
+        Some(
+            self.decoded_structure_registry()?
+                .sets
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect(),
+        )
+    }
+
+    fn decode_pool_names(&self) -> Option<RegistryNames> {
+        let structures = self.decoded_structure_registry()?;
+        let raw = self.structure_resources.as_ref()?;
+        let resources = self.structures.as_ref()?;
+        let bindings = self.structure_block_bindings().ok()?;
+        Some(
+            raw.pools
+                .keys()
+                .filter_map(|name| {
+                    structures.pools.get(name, resources, &bindings)?;
+                    super::super::density::identifier(name).ok()
+                })
+                .collect(),
+        )
+    }
+
+    /// `RegistryAccess.lookup` / `Registry.containsKey` on this generator's immutable snapshot.
+    /// None distinguishes an unavailable registry from an absent entry in a loaded registry.
+    pub fn registry_contains(&self, registry: &str, id: &str) -> Option<bool> {
+        Some(match registry {
+            "minecraft:worldgen/biome" => self.biome_ids.contains_key(id),
+            "minecraft:worldgen/carver" => self.carvers.contains(id),
+            "minecraft:worldgen/material_condition" => self.conditions.contains(id),
+            _ => self.named_registry(registry)?.contains(id),
+        })
+    }
+
+    /// `HolderLookup.listElementIds` from the same table used by `registry_contains`.
+    pub fn registry_ids(&self, registry: &str) -> Option<Vec<&str>> {
+        Some(match registry {
+            "minecraft:worldgen/biome" => self.biome_names.iter().map(AsRef::as_ref).collect(),
+            "minecraft:worldgen/carver" => self.carvers.names().collect(),
+            "minecraft:worldgen/material_condition" => {
+                self.conditions.entries().map(|(id, _)| id).collect()
+            }
+            _ => self
+                .named_registry(registry)?
+                .iter()
+                .map(String::as_str)
+                .collect(),
+        })
+    }
+
+    /// Tags retained by the generator, resolved against its own accepted entry names.
+    pub fn registry_tag_contains(&self, registry: &str, id: &str, tag: &str) -> Option<bool> {
+        if !self.registry_contains(registry, id)? {
+            return None;
+        }
+        let tags = match registry {
+            "minecraft:worldgen/biome" => Some(&self.biome_tags),
+            _ => None,
+        };
+        Some(
+            tags.and_then(|tags| tags.get(tag))
+                .is_some_and(|members| members.iter().any(|member| member == id)),
+        )
     }
 }

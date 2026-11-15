@@ -96,6 +96,35 @@ game thread.
 `DataLoadOrigin` to identify the load origin and `LoopSide` to identify the owning side.
 Registry entries retain registry ID order on native and wasm.
 
+In World, both client and server hosts expose `registry_entry(registry, id)`,
+`registry_entries(registry)` and `registry_entry_in_tag(&entry, tag)`. These read the
+current side's live registry and merged tags, not pending reload data. Unknown or
+unavailable registries and entries return `None`; an absent tag or a tag that does
+not contain the entry returns `Some(false)`. Enumeration yields each identity once.
+
+Server world-generation reads use the published decoded owners, including the
+live feature data in worlds without a terrain locator. Invalid source files do
+not establish entries. Prepared world-preset files have no published complete
+registry owner, so `minecraft:worldgen/world_preset` is unavailable; selecting a
+preset, sharing generator resources or reopening a saved stem does not change that.
+
+`RegistryEntry` is a plain Wire value containing `registry: Identifier` and
+`id: Identifier`, identical on native and wasm. Its names may be retained across
+reloads; constructing the value does not establish that the entry exists.
+`as_block_key(host)`, `as_item_key(host)` and the corresponding narrowing methods
+for block entity types, boolean game rules, dimensions, effects, enchantments,
+entity types, fluids, menus and particles resolve a real host-issued typed key.
+A different registry or unknown entry returns `None`. Typed keys remain
+process-local; narrowing never treats a protocol numeric ID as a key slot.
+
+Mod-declared datapack registries resolve tags against the accepted candidate
+before publication; tags with missing required members are omitted. Synchronized
+snapshots carry those exact tag names and members (including empty tags);
+server-only and unnegotiated registries send neither entries nor tags. Clients
+validate membership before activating a snapshot.
+On clients, generic reads never fall back to prepared server-only datapack files:
+built-ins and the connection's currently synchronized registries are the entire view.
+
 The game alone advances phases. An illegal or wrong-thread advance is refused before dispatch;
 a forbidden mod call panics naming the phase, rather than returning a `Result`.
 There is no separate common-setup, load-complete or intermod event: registration and the first server

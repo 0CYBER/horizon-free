@@ -27,6 +27,27 @@ pub trait KeysHost {
     #[access(Metadata)]
     fn effect_key(&self, id: &str) -> Option<EffectKey>;
     /// Side: both.
+    /// Resolve a canonical entry in the current side's live registry. None for an
+    /// unknown registry or entry, or before that registry is available.
+    #[access(WorldOnly)]
+    fn registry_entry(&self, registry: &str, id: &str) -> Option<RegistryEntry>;
+    /// Side: both.
+    /// Entry identifiers in the current table, each once. None for an unavailable or unknown
+    /// registry; an available empty registry returns an empty list.
+    #[access(WorldOnly)]
+    fn registry_entries(&self, registry: &str) -> Option<Vec<Identifier>>;
+    /// Side: both.
+    /// Membership in the current side's merged tags. None for an unavailable registry or
+    /// entry; an absent tag, or a tag not containing the entry, returns false.
+    #[access(WorldOnly)]
+    fn registry_entry_in_tag(&self, entry: &RegistryEntry, tag: &str) -> Option<bool>;
+    /// Side: both.
+    /// Resolve a live typed key's load-owned slot, never its protocol numeric id.
+    // hidden: RegistryEntry narrowing transports a host-issued opaque key.
+    #[doc(hidden)]
+    #[access(WorldOnly)]
+    fn registry_entry_key_slot(&self, entry: &RegistryEntry) -> Option<u32>;
+    /// Side: both.
     /// Every block key in the registry's registration order: vanilla's first, then
     /// mod blocks in the order they registered. A block registry lists a name once
     /// per state; this yields it once. Empty before the block table completes.
