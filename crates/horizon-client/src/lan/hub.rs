@@ -1044,32 +1044,31 @@ impl Hub {
     }
     /// PlayerList.broadcastSystemMessage.
     pub fn system_message(&self, content: Tag) {
-        self.broadcast(&C::SystemChat(play::SystemChat {
-            content,
-            overlay: false,
-        }));
+        self.system_message_to(content, |_| true);
     }
     /// A system message for the guests `hears` picks by name
     /// (`PlayerList.broadcastSystemToTeam` and its kin).
     pub fn system_message_to(&self, content: Tag, hears: impl Fn(&str) -> bool) {
-        let body = C::SystemChat(play::SystemChat {
-            content,
-            overlay: false,
-        })
-        .encode();
-        for g in self.guests.iter().filter(|g| g.placed && hears(&g.name)) {
-            g.sender.send(body.clone());
-        }
+        self.send_system(content, |g| hears(&g.name));
     }
     /// `ServerPlayer.sendSystemMessage` to the guest with `uuid`, in any
     /// dimension.
     pub fn system_message_to_player(&self, uuid: u128, content: Tag) {
+        self.send_system(content, |g| g.uuid == uuid);
+    }
+    /// `ServerPlayer.sendSystemMessage(Component, false)` to the placed guests `to` picks: not to one whose
+    /// chat is hidden (`acceptsSystemMessages`: HIDDEN, 2, takes only an overlay).
+    fn send_system(&self, content: Tag, to: impl Fn(&Guest) -> bool) {
         let body = C::SystemChat(play::SystemChat {
             content,
             overlay: false,
         })
         .encode();
-        for g in self.guests.iter().filter(|g| g.placed && g.uuid == uuid) {
+        for g in self
+            .guests
+            .iter()
+            .filter(|g| g.placed && g.info.chat_visibility != 2 && to(g))
+        {
             g.sender.send(body.clone());
         }
     }

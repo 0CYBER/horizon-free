@@ -837,6 +837,39 @@ fn a_transferred_player_is_sent_the_host_and_the_port() {
     );
 }
 
+/// `ServerPlayer.acceptsSystemMessages`: a guest whose chat is hidden (2) is sent no system message, only an overlay
+/// one; a guest who shows chat (0) or only commands (1) is sent both.
+#[test]
+fn a_system_message_skips_a_guest_whose_chat_is_hidden() {
+    let (mut hub, rx) = hub_with_a_guest();
+    let count = |rx: &std::sync::mpsc::Receiver<crate::lan::Out>| {
+        let (mut plain, mut bar) = (0, 0);
+        while let Ok(out) = rx.try_recv() {
+            let crate::lan::Out::Packet(body) = out else {
+                continue;
+            };
+            let mut r = horizon_protocol::buf::Reader::new(&body);
+            let id = r.varint().unwrap();
+            if let C::SystemChat(p) = C::decode(id, r.rest()).unwrap() {
+                if p.overlay {
+                    bar += 1;
+                } else {
+                    plain += 1;
+                }
+            }
+        }
+        (plain, bar)
+    };
+    for (visibility, expected) in [(0, (3, 1)), (1, (3, 1)), (2, (0, 1))] {
+        hub.guests[0].info.chat_visibility = visibility;
+        hub.system_message(literal("all"));
+        hub.system_message_to(literal("by name"), |name| name == "Bob");
+        hub.system_message_to_player(1, literal("to one"));
+        hub.overlay_message(literal("bar"));
+        assert_eq!(count(&rx), expected, "chat visibility {visibility}");
+    }
+}
+
 /// `/effect give Bob minecraft:speed 30 1` from a dedicated server's
 /// console (#7115). Vanilla runs the console after the players' tick
 /// (`DedicatedServer.tickConnection`) and `ServerPlayer.onEffectAdded`
