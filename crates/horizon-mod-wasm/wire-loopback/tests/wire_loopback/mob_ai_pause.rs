@@ -3,7 +3,7 @@
 //! each named refusal comes back as the native call returns it (#4478).
 use super::*;
 use mod_api::__private::game::{BackendMutRefOf, BackendRefOf};
-use mod_api::{MobAiPauseRefusal, EntityRef, MobRef, WorldEpoch};
+use mod_api::{EntityRef, MobAiPauseRefusal, MobRef, WorldEpoch};
 
 thread_local! {
     static ASKED: std::cell::RefCell<Vec<(MobRef, bool)>> =

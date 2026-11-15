@@ -165,7 +165,11 @@ mod tests {
             game.mobs.push(m);
             tick(game, 20);
             let m = mob(game, pig);
-            assert!(m.position.y < 65.1, "fell under gravity to the floor: {}", m.position.y);
+            assert!(
+                m.position.y < 65.1,
+                "fell under gravity to the floor: {}",
+                m.position.y
+            );
             assert!(
                 (m.position.z - before.position.z).abs() > 0.2,
                 "carried the knockback: {} from {}",
@@ -174,17 +178,30 @@ mod tests {
             );
             assert_eq!(m.ai.no_action_time, 0, "no AI step ran");
             assert_eq!(m.ai.target, Some(Who::Mob(41)), "the target is kept");
-            assert_eq!(m.ai.nav.target_pos, before.ai.nav.target_pos, "the path is kept");
+            assert_eq!(
+                m.ai.nav.target_pos, before.ai.nav.target_pos,
+                "the path is kept"
+            );
             assert_eq!(pig.is_done(game), Some(false));
-            assert_eq!(m.ai.mov.wanted, before.ai.mov.wanted, "the move target is kept");
-            assert_eq!((m.ai.xxa, m.ai.yya, m.ai.zza, m.ai.jumping), (0.0, 0.0, 0.0, false));
+            assert_eq!(
+                m.ai.mov.wanted, before.ai.mov.wanted,
+                "the move target is kept"
+            );
+            assert_eq!(
+                (m.ai.xxa, m.ai.yya, m.ai.zza, m.ai.jumping),
+                (0.0, 0.0, 0.0, false)
+            );
 
             assert_eq!(pig.set_ai_paused(game, false), Ok(()));
             let x = mob(game, pig).position.x;
             tick(game, 20);
             let m = mob(game, pig);
             assert!(m.ai.no_action_time >= 1, "the AI step runs again");
-            assert!(m.position.x > x + 0.5, "walks its path on: {} from {x}", m.position.x);
+            assert!(
+                m.position.x > x + 0.5,
+                "walks its path on: {} from {x}",
+                m.position.x
+            );
             assert_eq!(m.ai.target, Some(Who::Mob(41)));
         });
     }
@@ -213,11 +230,43 @@ mod tests {
     /// A paused allay (a brain mob) and a paused zombie (a goal mob) run no
     /// AI step while their unpaused neighbours do; a flying mob's vertical
     /// input is zeroed every paused tick, its move target kept. The witness
-    /// is `noActionTime`: `checkDespawn` sets it to 0 before each tick near a
-    /// player, and only `serverAiStep` adds to it.
+    /// is `noActionTime`, cleared after warm-up so only a later `serverAiStep`
+    /// can advance it during the observed interval. The zombie also retains a
+    /// running goal without ticking, stopping or restarting it during pause.
     #[test]
     #[ignore = "daily"]
     fn a_paused_brain_or_goal_mob_runs_no_ai_step_and_holds_no_input() {
+        use horizon_client::mobs::goals::{Cx, Goal};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Clone, Debug)]
+        struct PauseProbe(Arc<[AtomicUsize; 3]>);
+        impl Goal for PauseProbe {
+            fn flags(&self) -> u8 {
+                0
+            }
+            fn can_use(&mut self, _: &mut Mob, _: &mut Cx<'_, '_, '_>) -> bool {
+                true
+            }
+            fn start(&mut self, _: &mut Mob, _: &mut Cx<'_, '_, '_>) {
+                self.0[0].fetch_add(1, Ordering::SeqCst);
+            }
+            fn tick(&mut self, _: &mut Mob, _: &mut Cx<'_, '_, '_>) {
+                self.0[1].fetch_add(1, Ordering::SeqCst);
+            }
+            fn stop(&mut self, _: &mut Mob, _: &mut Cx<'_, '_, '_>) {
+                self.0[2].fetch_add(1, Ordering::SeqCst);
+            }
+            fn every_tick(&self) -> bool {
+                true
+            }
+            fn box_clone(&self) -> Box<dyn Goal> {
+                Box::new(self.clone())
+            }
+            fn name(&self) -> &'static str {
+                "PauseProbe"
+            }
+        }
         with_game(|game| {
             level(game);
             let paused = [
@@ -228,7 +277,20 @@ mod tests {
                 add(game, 32, "minecraft:allay", Vec3::new(2.5, 67.0, 10.5)),
                 add(game, 33, "minecraft:zombie", Vec3::new(6.5, 65.0, 10.5)),
             ];
+            let counts = Arc::new(std::array::from_fn(|_| AtomicUsize::new(0)));
+            let zombie = mob_mut(game, paused[1]);
+            zombie.ai.goals.clear();
+            zombie.ai.targets.clear();
+            zombie.ai.goals.add(0, PauseProbe(Arc::clone(&counts)));
+            let observed = || counts.each_ref().map(|count| count.load(Ordering::SeqCst));
+            tick(game, 1);
+            assert_eq!(observed(), [1, 1, 0]);
+            assert_eq!(
+                mob(game, paused[1]).ai.goals.running_names(),
+                vec!["PauseProbe"]
+            );
             for handle in paused {
+                mob_mut(game, handle).ai.no_action_time = 0;
                 assert_eq!(handle.set_ai_paused(game, true), Ok(()));
             }
             let allay = paused[0];
@@ -239,6 +301,11 @@ mod tests {
                 mob_mut(game, allay).ai.yya = 0.6;
                 tick(game, 1);
                 assert_eq!(mob(game, allay).ai.yya, 0.0, "the vertical input is zeroed");
+                assert_eq!(observed(), [1, 1, 0], "the running goal is held");
+                assert_eq!(
+                    mob(game, paused[1]).ai.goals.running_names(),
+                    vec!["PauseProbe"]
+                );
             }
             let m = mob(game, allay);
             assert!(m.position.y < 67.5, "did not climb: {}", m.position.y);
@@ -255,7 +322,16 @@ mod tests {
             for handle in paused {
                 assert_eq!(handle.set_ai_paused(game, false), Ok(()));
             }
-            tick(game, 1);
+            tick(game, 3);
+            assert_eq!(
+                observed(),
+                [1, 4, 0],
+                "the same goal resumes without restarting"
+            );
+            assert_eq!(
+                mob(game, paused[1]).ai.goals.running_names(),
+                vec!["PauseProbe"]
+            );
             for handle in paused {
                 assert!(mob(game, handle).ai.no_action_time >= 1, "resumed");
             }
@@ -301,7 +377,11 @@ mod tests {
             let (saved, pig) = reload(game, 40);
             assert_eq!(paused_value(&saved), Some(&Tag::Byte(1)));
             assert!(saved.get("NoAI").is_none(), "no NoAI tag: {saved:?}");
-            assert_eq!(pig.ai_paused(game), Some(true), "still paused after the reload");
+            assert_eq!(
+                pig.ai_paused(game),
+                Some(true),
+                "still paused after the reload"
+            );
             assert_eq!(pig.no_ai(game), Some(false));
 
             assert_eq!(pig.set_ai_paused(game, false), Ok(()));
@@ -312,7 +392,10 @@ mod tests {
                 .get(horizon_mod_runtime::attachments::ATTACHMENTS_KEY)
                 .unwrap();
             assert!(attachments.get("horizon").is_none(), "nothing left behind");
-            assert!(attachments.get("example").is_some(), "the mods' attachment is kept");
+            assert!(
+                attachments.get("example").is_some(),
+                "the mods' attachment is kept"
+            );
             assert_eq!(pig.ai_paused(game), Some(false));
         });
     }
@@ -322,8 +405,8 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn each_refusal_is_named_and_changes_nothing() {
-        use super::super::execution_role::ExecutionRole;
         use super::super::dragon::Dragon;
+        use super::super::execution_role::ExecutionRole;
         with_game(|game| {
             level(game);
             let pig = add(game, 40, "minecraft:pig", Vec3::new(3.5, 65.0, 3.5));
@@ -345,14 +428,25 @@ mod tests {
             let mut dragon = Dragon::new(Vec3::new(8.0, 80.0, 8.0), 0.0, 0);
             dragon.id = 50;
             game.dragon.replace(dragon);
-            refused(game, MobRef::new(EntityRef::new(epoch, 50)), MobAiPauseRefusal::NoAiStep);
-            refused(game, MobRef::new(EntityRef::new(epoch, 51)), MobAiPauseRefusal::NoAiStep);
+            refused(
+                game,
+                MobRef::new(EntityRef::new(epoch, 50)),
+                MobAiPauseRefusal::NoAiStep,
+            );
+            refused(
+                game,
+                MobRef::new(EntityRef::new(epoch, 51)),
+                MobAiPauseRefusal::NoAiStep,
+            );
 
             let player = MobRef::new(game.entity(20).unwrap());
             refused(game, player, MobAiPauseRefusal::NotAMob);
 
             game.options.execution_role = ExecutionRole::Client;
-            assert_eq!(pig.set_ai_paused(game, true), Err(MobAiPauseRefusal::Client));
+            assert_eq!(
+                pig.set_ai_paused(game, true),
+                Err(MobAiPauseRefusal::Client)
+            );
             game.options.execution_role = ExecutionRole::IntegratedServer;
 
             assert_eq!(pig.ai_paused(game), Some(false), "no refusal paused it");

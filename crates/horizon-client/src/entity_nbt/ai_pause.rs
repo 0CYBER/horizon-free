@@ -70,8 +70,14 @@ mod tests {
         assert!(read(&tag));
         assert!(tag.get("NoAI").is_none());
         let saved = tag.get("horizon:attachments").unwrap();
-        assert_eq!(saved.get("horizon").unwrap().get("ai_paused"), Some(&Tag::Byte(1)));
-        assert!(saved.get("example").is_some(), "the mod's attachment is kept");
+        assert_eq!(
+            saved.get("horizon").unwrap().get("ai_paused"),
+            Some(&Tag::Byte(1))
+        );
+        assert!(
+            saved.get("example").is_some(),
+            "the mod's attachment is kept"
+        );
         write_ai_paused(false, &mut tag);
         assert!(!read(&tag));
         assert_eq!(tag.get("horizon:attachments"), Some(&Tag::Compound(mods)));
