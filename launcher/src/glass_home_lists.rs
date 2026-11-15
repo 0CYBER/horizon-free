@@ -165,6 +165,7 @@ impl Launcher {
             menu_open,
             &t,
         )
+        .tooltip(ui::tip(tr("More for this world")))
         .on_click(cx.listener({
             let key = key.clone();
             move |this, event: &ClickEvent, _, cx| {
@@ -445,6 +446,7 @@ impl Launcher {
                             false,
                             &t,
                         )
+                        .tooltip(ui::tip(tr("Remove this server")))
                         .on_click(cx.listener(
                             move |this, _: &ClickEvent, _, cx| {
                                 this.multiplayer.confirm_remove = Some(i);

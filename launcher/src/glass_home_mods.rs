@@ -444,6 +444,7 @@ impl Launcher {
             open,
             &t,
         )
+        .tooltip(ui::tip(tr("More for this mod")))
         .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
             if this.closed_by_this_press(event) {
                 return;

@@ -165,6 +165,7 @@ impl Launcher {
         let folder = dir.to_path_buf();
         corner = corner.child(
             ui::icon_button("server-folder", "folder-01", 32., 17., 10., false, &t)
+                .tooltip(ui::tip(tr("Open the server's folder")))
                 .on_click(move |_, _, cx| crate::glass_toast::open(cx, &folder)),
         );
         // Start, or Restart and Stop.

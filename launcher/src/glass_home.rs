@@ -949,6 +949,7 @@ impl Launcher {
                     .cursor_pointer()
                     .active(|s| s.bg(white(0.1)))
                     .child(ui::icon("folder-01", 21., white(ink::STRONG)))
+                    .tooltip(ui::tip(tr("Open this instance's folder")))
                     .on_click(move |_, _, cx| {
                         let _ = std::fs::create_dir_all(&opener);
                         crate::glass_toast::open(cx, &opener);

@@ -164,6 +164,7 @@ impl Launcher {
                     false,
                     &t,
                 )
+                .tooltip(ui::tip(tr("Remove this pack")))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.game_packs.confirm_remove = Some(confirm.clone());
                     cx.notify();
@@ -244,6 +245,7 @@ impl Launcher {
                             false,
                             &t,
                         )
+                        .tooltip(ui::tip(tr("Open the screenshots folder")))
                         .on_click(move |_, _, cx| {
                             let _ = std::fs::create_dir_all(&folder);
                             crate::glass_toast::open(cx, &folder);
