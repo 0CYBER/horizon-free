@@ -1238,5 +1238,7 @@
   "In the last build, on Horizon {commit} for {mods}, not on {horizon}": "ในการบิลด์ล่าสุด บน Horizon {commit} เพื่อ {mods} ไม่ใช่บน {horizon}",
   "In the last build, on {horizon}": "ในการบิลด์ล่าสุด บน {horizon}",
   "Duplicate native mod {id}.": "พบม็อดเนทีฟ {id} ซ้ำกัน",
-  "Native and content mod ids differ.": "ID ของม็อดเนทีฟและม็อดเนื้อหาไม่ตรงกัน"
+  "Native and content mod ids differ.": "ID ของม็อดเนทีฟและม็อดเนื้อหาไม่ตรงกัน",
+  "The server gets a copy: your single-player world stays as it is.": "The server gets a copy: your single-player world stays as it is.",
+  "You have no single-player world yet: play one first, or choose New world.": "You have no single-player world yet: play one first, or choose New world."
 }
