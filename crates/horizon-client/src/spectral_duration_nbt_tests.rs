@@ -32,6 +32,22 @@ fn spectral_duration_uses_live_identity_and_preserves_saved_values() {
             Some(&Tag::Int(supplied.unwrap_or(200)))
         );
     }
+    // `getIntOr` is `NumericTag.intValue`: a float or double duration floors
+    // (and saturates) rather than truncating toward zero.
+    for (supplied, expected) in [
+        (Tag::Double((-0.5f64).to_bits()), -1),
+        (Tag::Double((3.0e9f64).to_bits()), i32::MAX),
+    ] {
+        let source = Tag::compound([
+            ("id", string("minecraft:spectral_arrow")),
+            ("Pos", doubles(&[0.5, 200.0, 0.5])),
+            ("Motion", doubles(&[0.0; 3])),
+            ("Duration", supplied),
+        ]);
+        let (loaded, _) = arrow_from_nbt(&source, None, |_| None).unwrap();
+        let saved = arrow_to_nbt(&loaded, [7, 8, 9, 10], None, None, None).unwrap();
+        assert_eq!(saved.get("Duration"), Some(&Tag::Int(expected)));
+    }
     model.arrow.as_mut().unwrap().spectral = false;
     for raw in [
         None,

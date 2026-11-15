@@ -3017,7 +3017,7 @@ pub fn arrow_to_nbt(
     };
     let base = Base {
         // A spectral arrow is its own entity type.
-        id: if a.spectral || &*a.pickup_item.item == "minecraft:spectral_arrow" {
+        id: if a.is_spectral_type() {
             "minecraft:spectral_arrow"
         } else {
             "minecraft:arrow"
@@ -3138,7 +3138,7 @@ pub fn arrow_from_nbt(
     a.spectral = spectral;
     // `SpectralArrow.readAdditionalSaveData`: absent Duration defaults to 200.
     if spectral {
-        a.spectral_duration = number(tag.get("Duration")).unwrap_or(200) as i32;
+        a.read_spectral_duration(tag);
     }
     a.pickup_item = item;
     a.load_weapon_and_sound(tag, item_from_nbt);

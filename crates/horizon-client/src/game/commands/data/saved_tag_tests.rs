@@ -5,7 +5,7 @@ use horizon_core::geometry::Vec3;
 use std::collections::HashSet;
 
 /// A server-side game that runs commands, its world in a scratch folder.
-fn with_command_game(name: &str, test: impl FnOnce(&mut Game<'_>)) {
+pub(super) fn with_command_game(name: &str, test: impl FnOnce(&mut Game<'_>)) {
     let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
     let settings = Settings::default();
     let loaded = load_resources(

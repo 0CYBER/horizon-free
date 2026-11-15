@@ -311,6 +311,20 @@ impl ArrowState {
         (!crate::brewing::contents_empty(&self.pickup_item))
             .then(|| crate::brewing::contents_color(&self.pickup_item))
     }
+    /// Its entity type is `SpectralArrow`: the type it loaded with, or the
+    /// item it was fired as (a bow's spectral ammo).
+    pub fn is_spectral_type(&self) -> bool {
+        self.spectral || &*self.pickup_item.item == "minecraft:spectral_arrow"
+    }
+    /// `SpectralArrow.readAdditionalSaveData`: the glow `Duration` of the
+    /// compound being loaded, 200 when it has none. `getIntOr` is
+    /// `NumericTag.intValue`, so a float or double one floors.
+    pub fn read_spectral_duration(&mut self, tag: &Tag) {
+        self.spectral_duration = tag
+            .get("Duration")
+            .and_then(crate::nbt_path::int_value)
+            .unwrap_or(200);
+    }
     /// The `AbstractArrow` constructor's `pickupItemStack`: the drawn ammo
     /// (one item). Ammo drawn without being used up (`INTANGIBLE_PROJECTILE`)
     /// makes the arrow CREATIVE_ONLY; vanilla takes the component off the

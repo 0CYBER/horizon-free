@@ -41,6 +41,19 @@ def cases(cmd, setup):
         else:
             ops += [cmd(f'/execute if data entity {uuid} {{Duration:{expected}}}', expect_result=1)]
         ops += [cmd(f'/execute if data entity {uuid} {{Pos:[{x}d,200d,164.5d],NoGravity:1b}}', expect_result=1)]
+    # `/data merge` is an `Entity.load`: `SpectralArrow.readAdditionalSaveData`
+    # reads the glow Duration again, so the merge restarts the glow.
+    merged = '000000b7-0000-0001-0000-000000000008'
+    ops += [cmd('/summon minecraft:spectral_arrow 164.5 200 166.5 {UUID:[I;183,1,0,8],Tags:["h183_merge"],NoGravity:1b,Motion:[0d,0d,0d],Duration:120}', expect_result=1),
+            cmd(f'/data get entity {merged} Duration', expect_result=120),
+            cmd(f'/data merge entity {merged} {{Duration:600}}', expect_result=1),
+            cmd(f'/data get entity {merged} Duration', expect_result=600),
+            cmd(f'/execute if data entity {merged} {{Duration:600}}', expect_result=1),
+            cmd(f'/data merge entity {merged} {{Duration:0}}', expect_result=1),
+            cmd(f'/data get entity {merged} Duration', expect_result=0),
+            cmd(f'/data remove entity {merged} Duration', expect_result=1),
+            cmd(f'/data get entity {merged} Duration', expect_result=200),
+            cmd(f'/execute if data entity {merged} {{Duration:200}}', expect_result=1)]
     ops += setup('/execute store result score elapsed spectral_time run time query gametime',
                  '/scoreboard players operation elapsed spectral_time -= start spectral_time')
     return ops + [cmd('/scoreboard players get elapsed spectral_time', expect_result=0)]
