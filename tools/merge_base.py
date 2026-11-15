@@ -20,17 +20,8 @@ def lines(text):
     return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
 
 
-def sync_provenance(marker, base, head="HEAD"):
-    """Require a freshly verified upstream-main ancestor and its exact merge parent."""
-    shallow = git("rev-parse", "--is-shallow-repository").strip()
-    if shallow == "true":
-        return ["sync baseline provenance needs full history; fetch --unshallow before checking"]
-    if marker is None:
-        return ["sync baseline provenance needs a sync-baseline header"]
-    ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", marker, base], cwd=ROOT,
-                              capture_output=True)
-    if ancestor.returncode == 0:
-        return ["sync baseline SHA is already an ancestor of the base"]
+def fetch_upstream_main():
+    """Fetch upstream main afresh into refs/sync/upstream-main; the errors, empty when it is there."""
     upstream_url = os.environ.get("HORIZON_UPSTREAM_URL", "https://github.com/horizon-rust/horizon.git")
     try:
         fetched = subprocess.run(
@@ -42,6 +33,23 @@ def sync_provenance(marker, base, head="HEAD"):
     if fetched.returncode != 0:
         return ["cannot verify sync baseline: upstream main fetch failed; network access is required: "
                 + fetched.stderr.strip()]
+    return []
+
+
+def sync_provenance(marker, base, head="HEAD"):
+    """Require a freshly verified upstream-main ancestor and its exact merge parent."""
+    shallow = git("rev-parse", "--is-shallow-repository").strip()
+    if shallow == "true":
+        return ["sync baseline provenance needs full history; fetch --unshallow before checking"]
+    if marker is None:
+        return ["sync baseline provenance needs a sync-baseline header"]
+    ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", marker, base], cwd=ROOT,
+                              capture_output=True)
+    if ancestor.returncode == 0:
+        return ["sync baseline SHA is already an ancestor of the base"]
+    errors = fetch_upstream_main()
+    if errors:
+        return errors
     upstream_ancestor = subprocess.run(
         ["git", "merge-base", "--is-ancestor", marker, "refs/sync/upstream-main"],
         cwd=ROOT, capture_output=True)
@@ -72,19 +80,26 @@ def pull_request_base(base, merged):
 
 
 def verified_sync_config(base, config_path):
-    """Read an upstream inventory only after verifying a changed sync declaration."""
-    try:
-        from .check_file_size import parse_baseline
-    except ImportError:
-        from check_file_size import parse_baseline
-    baseline = ROOT / "tools/file_size_baseline.txt"
-    marker, _ = parse_baseline(baseline.read_text() if baseline.exists() else "")
-    previous = subprocess.run(["git", "show", f"{base}:tools/file_size_baseline.txt"],
-                              cwd=ROOT, capture_output=True, text=True)
-    old_marker, _ = parse_baseline(previous.stdout if previous.returncode == 0 else "")
-    if marker is None or marker == old_marker:
-        return None, []
+    """(upstream's `config_path` inventory, errors) for a sync in base..HEAD, else (None, []).
+
+    A sync is a merge in the branch whose non-first parent is a commit of upstream main that the merge base lacks;
+    the newest such parent is the sync's upstream commit, and sync_provenance proves it."""
     merge_base = git("merge-base", base, "HEAD").strip()
+    merges = git("rev-list", "--merges", "--parents", f"{merge_base}..HEAD").splitlines()
+    parents = [parent for row in merges for parent in row.split()[2:]]
+    outside = [parent for parent in parents if subprocess.run(
+        ["git", "merge-base", "--is-ancestor", parent, merge_base], cwd=ROOT).returncode != 0]
+    if not outside:
+        return None, []
+    if git("rev-parse", "--is-shallow-repository").strip() == "true":
+        return None, ["sync provenance needs full history; fetch --unshallow before checking"]
+    errors = fetch_upstream_main()
+    if errors:
+        return None, errors
+    marker = next((parent for parent in outside if subprocess.run(
+        ["git", "merge-base", "--is-ancestor", parent, "refs/sync/upstream-main"], cwd=ROOT).returncode == 0), None)
+    if marker is None:
+        return None, []
     errors = sync_provenance(marker, merge_base)
     if errors:
         return None, errors
@@ -92,5 +107,4 @@ def verified_sync_config(base, config_path):
                             capture_output=True, text=True)
     if source.returncode != 0:
         return None, [f"verified upstream commit has no {config_path} inventory"]
-    config = json.loads(source.stdout)
-    return config, []
+    return json.loads(source.stdout), []
