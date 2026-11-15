@@ -310,6 +310,38 @@ pub fn start_riding<M: super::MobSlot>(mobs: &mut [M], rider: u32, vehicle: u32)
     link(mobs, rider, vehicle);
     true
 }
+/// `Mob.startRiding` for a brain's `StartRiding` event: link the rider, and
+/// when it is leashed replace the event with the `LeashBreak` the game applies
+/// (`dropLeash()`: the lead item at the mob). The game seats riders
+/// (`positionRider`) before it handles events, so the event keeps where the
+/// mob stood when it boarded. Returns the index after the event: one past it
+/// when kept, the same when removed.
+pub fn start_riding_event<M: super::MobSlot>(
+    mobs: &mut [M],
+    events: &mut Vec<super::MobEvent>,
+    i: usize,
+    rider: u32,
+    vehicle: u32,
+) -> usize {
+    let leashed_at = mobs
+        .iter()
+        .map(super::MobSlot::mob)
+        .find(|m| m.id == rider && m.extra.leash.is_some())
+        .map(|m| [m.position.x, m.position.y, m.position.z]);
+    let boarded = start_riding(mobs, rider, vehicle);
+    if let Some(at) = leashed_at.filter(|_| boarded) {
+        events[i] = super::MobEvent::LeashBreak {
+            mob: rider,
+            drop: true,
+            sound: false,
+            at: Some(at),
+        };
+        i + 1
+    } else {
+        events.remove(i);
+        i
+    }
+}
 /// `LivingEntity.stopRiding` for the mob itself: it leaves its vehicle (which
 /// forgets it when the riders are next synced), cannot board again for 60
 /// ticks (`Entity.removePassenger`) and is set down at `at`, where

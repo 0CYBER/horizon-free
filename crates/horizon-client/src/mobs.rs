@@ -2249,11 +2249,12 @@ pub enum MobEvent {
         at: [f64; 3],
         pitch: f32,
     },
-    /// A lead snaps or loses its holder: the lead item drops when asked.
+    /// A lead snaps or loses its holder: the lead drops when asked, at `at` or else the mob.
     LeashBreak {
         mob: u32,
         drop: bool,
         sound: bool,
+        at: Option<[f64; 3]>,
     },
     /// `Leashable.whenLeashedTo`: the holder is told a quad-leashed mob hangs
     /// on it (`HappyGhast.notifyLeashHolder`).
@@ -2673,8 +2674,7 @@ pub fn apply_brain_events<M: MobSlot>(mobs: &mut [M], events: &mut Vec<MobEvent>
                 events.remove(i);
             }
             MobEvent::StartRiding { rider, vehicle } => {
-                riders::start_riding(mobs, rider, vehicle);
-                events.remove(i);
+                i = riders::start_riding_event(mobs, events, i, rider, vehicle);
             }
             MobEvent::StartFollowing { fish, leader } => {
                 aquatic::start_following(mobs, fish, leader);

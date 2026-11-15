@@ -3257,16 +3257,13 @@ impl Game<'_> {
                     }
                 }
                 MobEvent::StartRiding { rider, vehicle } => {
-                    if horizon_client::mobs::riders::start_riding(&mut self.mobs, rider, vehicle) {
-                        // sendEventAndTriggers: the server players already on it.
-                        self.note_started_riding(vehicle);
-                    }
+                    self.start_riding_mob(rider, vehicle);
                 }
                 // Applied after the fish's tick (`apply_brain_events`).
                 MobEvent::StartFollowing { .. }
                 | MobEvent::SchoolSize { .. }
                 | MobEvent::PufferfishSting { .. } => {}
-                MobEvent::LeashBreak { mob, drop, sound } => self.break_leash(mob, drop, sound),
+                e @ MobEvent::LeashBreak { .. } => self.leash_break_event(e),
                 MobEvent::NotifyLeashHolder { holder } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == holder) {
                         horizon_client::mobs::happy_ghast::notify_leash_holder(m);

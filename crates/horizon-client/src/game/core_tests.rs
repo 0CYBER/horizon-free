@@ -207,6 +207,8 @@ fn glfw_modifier_bits_are_glfw_modifier_bits() {
 
 #[path = "knot_identity_tests.rs"]
 mod knot_identity_tests;
+#[path = "ride_tests.rs"]
+mod ride_tests;
 /// The `button` a native mod's mouse hooks hand over is GLFW's index (0
 /// left, 1 right, 2 middle, 3 back, 4 forward, else the button's number),
 /// the one `keybinds::mouse_name` names (`key.mouse.<index + 1>` from the

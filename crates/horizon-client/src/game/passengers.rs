@@ -67,9 +67,25 @@ impl Game<'_> {
             return false;
         }
         riders::link(&mut self.mobs, rider, vehicle);
-        // sendEventAndTriggers: the server players already on the vehicle.
-        self.note_started_riding(vehicle);
+        self.boarded_mob(rider, vehicle);
         true
+    }
+    /// `Mob.startRiding` from a brain event, which `riders::start_riding`
+    /// decides (`canAddPassenger` and the boarding cooldown): false when the
+    /// mob did not board.
+    pub(super) fn start_riding_mob(&mut self, rider: u32, vehicle: u32) -> bool {
+        if !riders::start_riding(&mut self.mobs, rider, vehicle) {
+            return false;
+        }
+        self.boarded_mob(rider, vehicle);
+        true
+    }
+    /// The tail of `Mob.startRiding` for a mob that boarded: `startRiding`'s
+    /// `sendEventAndTriggers` (the server players already on the vehicle),
+    /// then `Mob.startRiding`'s `dropLeash()`.
+    fn boarded_mob(&mut self, rider: u32, vehicle: u32) {
+        self.note_started_riding(vehicle);
+        self.break_leash(rider, true, false);
     }
     /// Riders sit on their vehicles (`Entity.positionRider`), mobs or boats,
     /// and let go when the vehicle dies or is gone.

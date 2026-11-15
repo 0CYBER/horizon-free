@@ -4,6 +4,7 @@
 //! breaking, and drawing the rope (`LeashFeatureRenderer`) and the knot.
 use super::Game;
 use horizon_client::actions::Action;
+use horizon_client::mobs::MobEvent;
 use horizon_client::{
     items::ItemStack,
     mesher::Vertex,
@@ -297,7 +298,20 @@ impl Game<'_> {
     }
     /// `Leashable.dropLeash` / `removeLeash`: the lead falls as an item.
     pub(super) fn break_leash(&mut self, id: u32, drop: bool, sound: bool) {
-        self.drop_leash(id, drop, sound, false);
+        self.drop_leash(id, drop, sound, false, None);
+    }
+    /// A mob's `MobEvent::LeashBreak`: the lead drops where the event says
+    /// (`Mob.startRiding` drops it before the rider is seated), else at the mob.
+    pub(super) fn leash_break_event(&mut self, event: MobEvent) {
+        if let MobEvent::LeashBreak {
+            mob,
+            drop,
+            sound,
+            at,
+        } = event
+        {
+            self.drop_leash(mob, drop, sound, false, at);
+        }
     }
     /// `Entity.dropAllLeashConnections`: every mob and boat leashed to the
     /// acting player, inside the 32-block box around the player's centre,
@@ -333,15 +347,17 @@ impl Game<'_> {
     }
     /// `break_leash` by the acting player's use (untying it, shears).
     fn break_leash_used(&mut self, id: u32, drop: bool) {
-        self.drop_leash(id, drop, false, true);
+        self.drop_leash(id, drop, false, true, None);
     }
-    fn drop_leash(&mut self, id: u32, drop: bool, sound: bool, used: bool) {
+    /// `Leashable.dropLeash`; `from` is where the mob stood when it let go,
+    /// when that is not where it is now.
+    fn drop_leash(&mut self, id: u32, drop: bool, sound: bool, used: bool, from: Option<[f64; 3]>) {
         let killer = self.lead_killers.remove(&id).map(|(killer, _)| killer);
         let Some((alive, at, kind)) = self.mobs.iter_mut().find(|m| m.id == id).and_then(|m| {
             horizon_client::mobs::leash::remove(m)?;
             Some((
                 m.alive(),
-                [m.position.x, m.position.y, m.position.z],
+                from.unwrap_or([m.position.x, m.position.y, m.position.z]),
                 super::native_hooks::mob_kind(m),
             ))
         }) else {

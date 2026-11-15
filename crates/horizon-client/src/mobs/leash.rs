@@ -376,6 +376,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             mob: m.id,
             drop: true,
             sound: false,
+            at: None,
         });
         return;
     }
@@ -390,6 +391,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             mob: m.id,
             drop: true,
             sound: false,
+            at: None,
         });
         return;
     }
@@ -406,6 +408,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                 mob: m.id,
                 drop: true,
                 sound: false,
+                at: None,
             });
         }
         return;
@@ -443,6 +446,7 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             mob: m.id,
             drop: true,
             sound: true,
+            at: None,
         });
         return;
     }
