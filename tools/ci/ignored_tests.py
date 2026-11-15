@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run every library test, ignored or not, with the prepared vanilla data, against a list of known failures.
 
-Usage: ignored_tests.py SHARD...  (HORIZON_TEST_RESOURCES points at the prepared 26.3 data)
+Usage: ignored_tests.py [--without-data] SHARD...  (HORIZON_TEST_RESOURCES points at the prepared 26.3 data)
        ignored_tests.py --needs VARIABLE (--one-process-each | --list) [--jobs N]
 
 A SHARD is a package, or one leg of it written `PACKAGE#NofM` (tools/ci/ignored_shards.py splits the biggest
@@ -23,6 +23,10 @@ shard, and with it, it runs and must pass; one marked `gpu` needs a graphics ada
 the runner has a Vulkan driver (an ICD file), and must pass there.
 
 `needs-plain` is like `needs`, but selects a plain test without `--ignored`.
+
+`--without-data` is for a machine with no prepared vanilla data (GitHub's runners): it leaves out the daily rows whose
+reason is `resources` or `game-boot` and every `harness`, `needs`, `needs-plain` and `gpu` row, and prints how many
+tests it left out. The tests left out run nowhere until a machine with the data runs the shards without the flag.
 
 A row marked `daily` (`PACKAGE TEST TARGET daily REASON`, in `daily-<package>.txt`) is a test moved out of
 `verify` into the daily run with `#[ignore = "daily"]` (tools/ci/move_to_daily.py): not a known failure, it must
@@ -106,6 +110,9 @@ DAILY_REASONS = ("slow", "game-boot", "resources", "child-process", "network", "
 # a workflow of .github/workflows/ by file name.
 MANUAL_RUNNERS = re.compile(r"^(?:by-hand|subprocess|[\w.-]+\.ya?ml)$")
 WORKFLOWS = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+# The daily reasons that need the prepared vanilla data, and the other marks that do (`--without-data` leaves them out).
+DATA_REASONS = ("resources", "game-boot")
+DATA_MARKS = ("harness", "gpu")
 ICD_DIRS = ("/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d")
 # The largest tracked Rust file read to check a panic location's line: above every source in the tree (the largest
 # are near 0.7 MB), so a location in any tracked source of any package is reported, while a blob stays bounded.
@@ -911,7 +918,7 @@ def run(package, skip, number=None, count=None, only=None):
     return results
 
 
-def main(shards, report=None):
+def main(shards, report=None, without_data=False):
     global _active_budget
     _active_budget = [FAILURE_TOTAL_BYTES]
     _panic_locations.clear()
@@ -923,8 +930,8 @@ def main(shards, report=None):
     known = known_failures()
     inputs = harness_inputs()
     files = {(row.package, row.test): row.file for row in listed_entries()}
-    skipped = {"harness", "manual"} if has_vulkan() else {"harness", "manual", "gpu"}
-    if "gpu" in skipped:
+    skipped = {"harness", "manual"} if has_vulkan() and not without_data else {"harness", "manual", "gpu"}
+    if "gpu" in skipped and not without_data:
         print("no Vulkan driver on this runner: the tests marked `gpu` are skipped")
     problems = []
     accepted_unshown = 0
@@ -932,6 +939,19 @@ def main(shards, report=None):
     # Resource-backed client-lib families retain registries across tests; releasing
     # the process between halves bounds that retention without another CI leg.
     daily = daily_rows()
+    # With --without-data: every test that needs the vanilla data, as (package, test); none otherwise.
+    left_out, left_out_count = set(), 0
+    if without_data:
+        left_out = ({key for key, mark in known.items() if mark in DATA_MARKS} | set(inputs)
+                    | {(row.package, row.test) for row in daily if row.reason in DATA_REASONS})
+        # The daily-rows legs' own rows that go with it (a package shard counts its tests below).
+        if set(shards) & set(ignored_shards.DAILY_ROWS_LEGS.values()):
+            left_out_count = sum(1 for row in daily if (row.package, row.test) in left_out
+                                 and not shard_runs(row.package, row.reference)
+                                 and ignored_shards.daily_rows_leg(row.package) in shards)
+        daily = [row for row in daily if (row.package, row.test) not in left_out]
+        known = {key: mark for key, mark in known.items() if key not in left_out}
+        inputs = {}
     groups = daily_rows_groups(daily)
     selections = [
         selection
@@ -961,6 +981,9 @@ def main(shards, report=None):
             expected_daily = [row.test for row in daily if row.package == package
                               and shard_runs(package, row.reference) and in_leg(row.test, number, count)]
             skip = [test for (listed, test), mark in known.items() if listed == package and mark in skipped]
+            out = sorted(test for listed, test in left_out if listed == package and in_leg(test, number, count))
+            skip += out
+            left_out_count += len(out)
             for (listed, test), variable in sorted(inputs.items()):
                 if listed == package and in_leg(test, number, count) and not os.environ.get(variable):
                     print(f"{package} {safe_identity(test)}: refused, needs {variable}; run by the parity harness")
@@ -1002,6 +1025,9 @@ def main(shards, report=None):
             if listed == package and mark not in skipped and in_leg(test, number, count) and test not in results:
                 problems.append(f"{package} {safe_identity(test)}: listed in {files.get((package, test), POLICY_PATH)} but no longer runs")
                 problem(package, test, "no-longer-runs", files.get((package, test), POLICY_PATH))
+    if without_data:
+        print(f"--without-data: {left_out_count} tests left out, they need the vanilla data "
+              f"(daily rows with reason {' or '.join(DATA_REASONS)}, and {', '.join(DATA_MARKS)}, needs and needs-plain rows)")
     shown = 0
     for problem in problems:
         emitted, _ = bounded_record(f"::error::{problem}\n", _active_budget)
@@ -1024,6 +1050,8 @@ if __name__ == "__main__":
     each.add_argument("--list", action="store_true", help="print their commands")
     parser.add_argument("--jobs", type=int, help="cargo's -j for --needs")
     parser.add_argument("--report", metavar="FILE", help="also write the verdict as JSON for the daily summary")
+    parser.add_argument("--without-data", action="store_true",
+                        help="leave out the tests that need the prepared vanilla data (a runner that has none)")
     parser.add_argument("--daily-tests", nargs=2, metavar=("PACKAGE", "TARGET"),
                         help="print the daily rows' tests of one package's target, one per line")
     args = parser.parse_args()
@@ -1037,4 +1065,4 @@ if __name__ == "__main__":
     elif args.needs or args.one_process_each or args.list:
         parser.error("--needs takes --one-process-each or --list, and they take --needs")
     else:
-        sys.exit(main(args.shards, args.report))
+        sys.exit(main(args.shards, args.report, args.without_data))

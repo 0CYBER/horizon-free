@@ -18,17 +18,14 @@ class DataLegTimingTests(unittest.TestCase):
         steps = yaml.safe_load((ROOT / ".github/workflows/ignored-tests.yml").read_text())["jobs"]["ignored-tests-shards"]["steps"]
         start = next(i for i, s in enumerate(steps) if s.get("name") == "Record data-leg start and compiler cache")
         end = next(i for i, s in enumerate(steps) if s.get("name") == "Record data-leg end and compiler cache")
-        run = next(i for i, s in enumerate(steps) if s.get("name") == "Run the ignored tests that need prepared data")
+        run = next(i for i, s in enumerate(steps) if s.get("name") == "Run the ignored tests that need no vanilla data")
         self.assertLess(start, run)
         self.assertLess(run, end)
         self.assertEqual(steps[end]["if"], "always()")
         self.assertEqual(steps[run]["env"]["HORIZON_DATA_LEG_TIMING"], "1")
         # The workflow may invoke only the existing filtered runner, not raw cargo
         # or a tee/cat pipeline forwarding its captured output.
-        lines = steps[run]["run"].strip().splitlines()
-        self.assertEqual(len(lines), 2)
-        self.assertTrue(lines[0].startswith("export HORIZON_TEST_RESOURCES="))
-        self.assertEqual(shlex.split(lines[1]), ["python3", "tools/ci/with_xvfb.py", "python3", "tools/ci/ignored_tests.py", "--report", "$RUNNER_TEMP/daily-report.json", "$SHARD"])
+        self.assertEqual(shlex.split(steps[run]["run"]), ["python3", "tools/ci/with_xvfb.py", "python3", "tools/ci/ignored_tests.py", "--without-data", "--report", "$RUNNER_TEMP/daily-report.json", "$SHARD"])
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / "sccache"
             fake.write_text("#!/bin/sh\n[ \"$1\" = --show-stats ] || exit 1\necho 'Compile requests 0'\necho 'Cache hits 0'\n")

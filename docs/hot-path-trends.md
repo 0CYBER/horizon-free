@@ -1,11 +1,9 @@
 # Hot-path performance trends
 
-The `hot-paths` workflow measures the game's hot paths on main once a day and records the result, so a slow drift over many
-small merges shows up as a trend. It measures; it never judges: nothing in it fails on a slow result, it never runs
-on a pull request, and no contributor has to run it.
-
-The trend page is `index.html` on the [`perf-history`](https://github.com/arismoko/horizon/tree/perf-history) branch
-(download it, or read the run's summary in Actions); `runs/` beside it holds one small JSON record per run.
+The `hot-paths` workflow measures the game's hot paths when a maintainer dispatches it, on a machine that holds the
+prepared resources, and prints the measurement in the run's summary. It measures; it never judges: nothing in it fails on a
+slow result, it never runs on a pull request or on a schedule, and no contributor has to run it. It records nothing:
+keep the results of two runs to compare them (below).
 
 ## What is measured
 
@@ -66,8 +64,8 @@ python3 tools/hot_paths.py measure --game target/release/horizon-hot-paths-game 
 python3 tools/hot_paths.py measure ... --only server.tick.mobs      # some workloads only
 ```
 
-In CI, dispatch the workflow with a commit to measure that commit on a runner: the result is the run's `hot-paths`
-artifact and its summary, and nothing is recorded. That narrows a step between two daily runs to one commit.
+In CI, dispatch the workflow, with a commit to measure that commit: the result is the run's `hot-paths` artifact and
+its summary.
 
 To compare two commits, measure each and read the two tables; `record` and `page` build a page from any folder of
 results:

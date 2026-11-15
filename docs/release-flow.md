@@ -238,12 +238,13 @@ commit of main. `prebuilt-game.yml` is the hand dispatch of the same build and p
 
 ### Daily run
 
-`.github/workflows/daily.yml` runs the in-game legs once a day, at 09:00 UTC on main's head, and when a maintainer
+`.github/workflows/daily.yml` runs its legs once a day, at 09:00 UTC on main's head, and when a maintainer
 dispatches it (`-f commit=<sha>`, `-f dry_run=false` to write). One run runs and at most one waits; a newer waiting
 dispatch replaces an older waiting one. The schedule stops when main's head already has a completed real daily run;
 a hand dispatch never does, so it retries a run whose issues failed. Its legs are the workflows that left main pushes:
-the ignored-tests data shards (`ignored-tests.yml`), the wasm fixture and guest stacks (`wasm-mods.yml`),
-`fn-replace-check.yml`, the native linkage probe (`native-dylib-probe.yml`) and the launcher's Windows runtime-lease
+the ignored-tests shards (`ignored-tests.yml`: on GitHub's runners, with no vanilla data, so `--without-data` leaves out
+the tests that need it and says how many), the wasm guest stacks (`wasm-mods.yml`; its fixture job needs the data and
+runs by dispatch only), `fn-replace-check.yml`, the native linkage probe (`native-dylib-probe.yml`) and the launcher's Windows runtime-lease
 tests (`launcher-windows-check.yml`), each called with the commit. The daily run publishes nothing and gates nothing:
 the Nightly does not wait for it. Its summary (`tools/ci/daily_summary.py`) reads each leg's result and its sanitised
 verdict file, never a log, and files issues:
@@ -253,6 +254,9 @@ verdict file, never a log, and files issues:
   name gets one issue per leg.
 
 Only a run on `main` with `dry_run` false files issues; any other run prints what it would do.
+
+The tests that need the vanilla data run nowhere in the daily run, as no GitHub runner holds it. `hot-paths.yml`,
+`paper-parity.yml` and `wasm-coverage.yml` have no schedule either: they run when a maintainer dispatches them.
 
 ### When it releases
 

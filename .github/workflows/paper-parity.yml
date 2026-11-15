@@ -2,8 +2,6 @@ name: Paper event parity
 # Informational only; never add push or pull_request triggers (issue #2090).
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '37 4 * * *'
 permissions:
   contents: read
 concurrency:
@@ -12,7 +10,7 @@ concurrency:
 jobs:
   paper-parity:
     # Upstream's Mac runner holds the Paper server and Mojang files it compares with; this fork has no
-    # runner with that label, so its scheduled run only sat queued until GitHub cancelled it.
+    # runner with that label.
     if: github.repository == 'horizon-rust/horizon'
     runs-on: [self-hosted, horizon-game, macOS]
     timeout-minutes: 240

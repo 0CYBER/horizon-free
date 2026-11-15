@@ -44,10 +44,9 @@ DISCLOSURE = "> 🤖 Filed by the daily run."
 # daily.yml's leg jobs (each a called workflow), and the called workflows' own routing jobs, which test nothing.
 LEGS = ("shards", "wasm-mods", "fn-replace-check", "linkage", "windows-runtime-leases")
 HELPERS = ("plan", "route", "fresh", "gate")
-# Jobs of a called workflow that the daily run does not use: launcher-windows-check's push and pull-request tests.
-NOT_DAILY = ("windows-runtime-leases / test",)
-# The wasm fixture step whose failures its verdict file names test by test.
-FIXTURE_TESTS_STEP = "Run the client tests that load the compiled fixture"
+# Jobs of a called workflow that the daily run does not use: launcher-windows-check's push and pull-request tests,
+# and the wasm fixture, which needs the vanilla data and runs by dispatch only (wasm-mods.yml).
+NOT_DAILY = ("windows-runtime-leases / test", "wasm-mods / fixture")
 MAX_PAGES = 100
 # How far back a closed issue's fix is looked for: a fix that merged after the commit under test is hours old.
 FIX_LOOKBACK = dt.timedelta(days=14)
@@ -136,12 +135,10 @@ def failed_steps(job):
 
 
 def report_for(job, reports):
-    """The verdict file a leg job wrote: a shard's names its shard, the fixture's its `needs` variable."""
+    """The verdict file a leg job wrote: a shard's names its shard."""
     name = job["name"]
     for report in reports:
         if any(name.endswith(f"({shard})") for shard in report.get("shards", ())):
-            return report
-        if report.get("needs") and name == "wasm-mods / fixture":
             return report
     return None
 
@@ -235,8 +232,6 @@ def verdicts(jobs, reports, results):
                           if report["incomplete"] else
                           "failed tests whose names are withheld" if problems else "failed outside its tests")
                 unfinished.append((job["name"], job["conclusion"], steps, reason))
-        elif job["name"] == "wasm-mods / fixture" and steps == [FIXTURE_TESTS_STEP] and by_name:
-            tests += by_name
         else:
             unfinished.append((job["name"], job["conclusion"], steps, "failed at the steps named"))
     for job in jobs:

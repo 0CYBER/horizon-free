@@ -1,5 +1,7 @@
 name: wasm-mods
 # The daily run and manual dispatch only, never pull requests or main pushes (owner, 2026-11-12; CI tiers 2026-11-13).
+# The daily run calls only `guest-stack`, on GitHub's runners. `fixture` needs the prepared vanilla data, which
+# GitHub's runners don't have: it runs by hand (a dispatch of this workflow) on a machine that has it.
 on:
   # The daily run (daily.yml) calls it with the commit to check; a maintainer dispatches it on a branch that changes
   # what it builds.
@@ -21,7 +23,9 @@ concurrency:
 jobs:
   fixture:
     # The client tests below need the prepared vanilla data: a self-hosted Linux runner holding the maintainer's
-    # own Minecraft files (label horizon-game, as ci.yml's vanilla-parity).
+    # own Minecraft files (label horizon-game, as ci.yml's vanilla-parity). A call from the daily run passes a
+    # commit; only a dispatch (no commit) runs it.
+    if: inputs.commit == ''
     runs-on: [self-hosted, linux, horizon-game]
     timeout-minutes: 120
     env:

@@ -23,7 +23,7 @@ def job(name, conclusion="success", failed=()):
 
 
 GREEN_JOBS = [job("shards / plan"), job("shards / ignored-tests-shards (horizon-world)"),
-              job("wasm-mods / fixture"), job("wasm-mods / Guest stack / ubuntu-latest"),
+              job("wasm-mods / fixture", "skipped"), job("wasm-mods / Guest stack / ubuntu-latest"),
               job("fn-replace-check / route"), job("fn-replace-check / fn-replace-check"),
               job("linkage / route"), job("linkage / linkage x86_64-unknown-linux-gnu"),
               job("windows-runtime-leases / gate"), job("windows-runtime-leases / test", "skipped"),
@@ -175,8 +175,8 @@ class DailySummaryTests(unittest.TestCase):
                               ["Daily: horizon-world a::fixed_before", "Daily: horizon-world a::closed_by_hand"])
 
     def test_a_leg_that_failed_without_test_names_gets_one_issue_per_leg(self):
-        jobs = [job("shards / ignored-tests-shards (horizon-world)", "cancelled", ["Prepare checkout-keyed vanilla data"]),
-                job("wasm-mods / fixture", "failure", ["Build tool and shared member"]),
+        jobs = [job("shards / ignored-tests-shards (horizon-world)", "cancelled", ["Run the ignored tests that need no vanilla data"]),
+                job("wasm-mods / Guest stack / ubuntu-latest", "failure", ["Build tool and shared member"]),
                 job("fn-replace-check / fn-replace-check", "failure", ["Refusals by name"])] + GREEN_JOBS[6:]
         api = Api(jobs)
         self.run_summary(api, [], results=dict(LEGS, shards={"result": "cancelled"}, **{"wasm-mods": {"result": "failure"}},
@@ -184,7 +184,7 @@ class DailySummaryTests(unittest.TestCase):
         titles = sorted(body["title"] for method, path, body in api.writes if path == "issues")
         self.assertEqual(titles, ["Daily: fn-replace-check / fn-replace-check did not complete",
                                   "Daily: shards / ignored-tests-shards (horizon-world) did not complete",
-                                  "Daily: wasm-mods / fixture did not complete"])
+                                  "Daily: wasm-mods / Guest stack / ubuntu-latest did not complete"])
         bodies = " ".join(body["body"] for _, path, body in api.writes if path == "issues")
         self.assertIn("`Refusals by name`", bodies)
 
@@ -247,15 +247,6 @@ class DailySummaryTests(unittest.TestCase):
         api = Api([job for job in GREEN_JOBS if not job["name"].startswith("shards")])
         self.run_summary(api, [], results=dict(LEGS, shards={"result": "skipped"}))
         self.assertIn("Daily: shards did not complete", [body["title"] for _, path, body in api.writes if path == "issues"])
-
-    def test_fixture_test_failures_are_filed_by_test_name(self):
-        jobs = GREEN_JOBS[:2] + [job("wasm-mods / fixture", "failure", [summary.FIXTURE_TESTS_STEP])] + GREEN_JOBS[3:]
-        report = {"needs": "HORIZON_WASM_FIXTURE", "incomplete": [], "passed": [],
-                  "problems": [failure("game::wasm::wasm_interaction_shared_matrix", None, package="horizon-client")]}
-        api = Api(jobs)
-        self.run_summary(api, [report], results=dict(LEGS, **{"wasm-mods": {"result": "failure"}}))
-        titles = [body["title"] for _, path, body in api.writes if path == "issues"]
-        self.assertEqual(titles, ["Daily: horizon-client game::wasm::wasm_interaction_shared_matrix"])
 
     def test_a_second_invocation_for_one_run_posts_nothing_twice(self):
         jobs = [job("shards / ignored-tests-shards (horizon-world)", "failure", ["Run"])] + GREEN_JOBS[2:]

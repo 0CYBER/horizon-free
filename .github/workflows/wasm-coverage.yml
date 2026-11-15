@@ -1,11 +1,9 @@
 name: wasm-coverage
 # The full internals coverage (#1659): every crossable real internal has a compiling host binding and guest
 # binding, generated from the real catalog and checked in one universal crate each. It alone takes about an
-# hour on a large runner, so it runs once a day and on dispatch instead of on every main push (wasm-mods keeps
-# the fast checks). A red run is a main break. Same shape as the daily prebuilt game.
+# hour on a large runner, so it runs on dispatch only, not on every main push (wasm-mods keeps the fast checks).
+# A red run is a main break.
 on:
-  schedule:
-    - cron: '0 6 * * *'
   workflow_dispatch:
 permissions:
   contents: read

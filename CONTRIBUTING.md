@@ -128,7 +128,7 @@ network and are still in `verify` are being moved by the next change of #4022.
 | Tier | Runs on | What |
 | --- | --- | --- |
 | Push | every pull request push, pushes to main | `checks`: `verify` (format, lint, unit tests only, the test-tier and mod API surface checks), `launcher` |
-| Daily | once a day on main's head | every test that boots the game or needs prepared resources, the wasm fixture, `fn-replace-check` and the linkage probe |
+| Daily | once a day on main's head | the ignored tests that need no vanilla data (slow, child process, network), the wasm guest stacks, `fn-replace-check` and the linkage probe, on GitHub's runners; those that need the data run when a machine with it runs the shards without `--without-data` |
 
 **A unit test** uses no prepared resources, boots no game, starts no child process, uses no network and no compiled
 wasm fixture, and finishes in under 2 seconds. Any other test is a daily test: it carries `#[ignore]` and a row in

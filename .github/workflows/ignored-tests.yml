@@ -1,6 +1,8 @@
 name: ignored-tests
-# The #[ignore]d library tests that need the prepared vanilla data, which verify doesn't have. Run by the daily run
-# (daily.yml) and by hand, never on pull requests or main pushes (CI tiers, owner 2026-11-13).
+# The #[ignore]d tests that verify doesn't run (slow, child process, network), on GitHub's runners. GitHub's runners have
+# no prepared vanilla data and Horizon never downloads it, so a shard runs only the tests that need none
+# (tools/ci/ignored_tests.py --without-data, which prints how many it left out). Run by the daily run (daily.yml) and by
+# hand, never on pull requests or main pushes (CI tiers, owner 2026-11-13).
 #   gh workflow run ignored-tests.yml --ref <branch>
 on:
   workflow_call:
@@ -31,21 +33,15 @@ jobs:
       - name: The ignored-tests shard matrix
         id: matrix
         run: python3 tools/ci/ignored_shards.py --matrix --all >> "$GITHUB_OUTPUT"
-  # A self-hosted Linux runner holding the maintainer's own Minecraft files (label horizon-game, as ci.yml's
-  # vanilla-parity) runs them with the prepared vanilla data. Every shard runs, with one package per shard (the plan
-  # lives in tools/ci/ignored_shards.py). tools/ci/ignored_tests.py fails on a new failure and on a known one that
-  # passes, and prints only test names and results: the data is Mojang's.
+  # One package per shard (the plan lives in tools/ci/ignored_shards.py). tools/ci/ignored_tests.py fails on a new
+  # failure and on a known one that passes, and prints only test names and results.
   ignored-tests-shards:
     needs: plan
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    # Owner-approved stopgap: #2944 removes this when the legs run under 15 minutes.
-    runs-on: [self-hosted, linux, horizon-game]
-    # Temporary: #2944 brings client data legs under 15 minutes and restores the 60-minute cap.
-    # Interim: 180 so the client legs finish and report at all (the 2026-11-13 dry run's #1of2 was killed at 90 with
-    # 61 tests past 60 s). Cutting the slow client tests (#4022's next change) brings it back down.
-    timeout-minutes: ${{ (matrix.shard == 'horizon-client#1of2' || matrix.shard == 'horizon-client#2of2') && 180 || 60 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
@@ -54,54 +50,22 @@ jobs:
           persist-credentials: false
           # The daily run's commit; empty (this event's commit) on a dispatch of this workflow.
           ref: ${{ inputs.commit }}
+      - name: ALSA and udev headers, and a virtual display
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev xvfb
       - name: Install Rust toolchain
         run: bash tools/ci/rustup_install.sh --profile minimal
-      - name: Tools from the runner
-        run: bash tools/ci/runner-env.sh
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '25'
       - name: Record data-leg start and compiler cache
         run: |
           date -u '+data-leg start utc=%Y-%m-%dT%H:%M:%SZ'
           sccache --show-stats || echo 'data-leg compiler-cache statistics unavailable'
-      # Every job that builds in this runner's persistent target keeps its source snapshot true: a
-      # build of another tree without it left artifacts that a later job judged fresh (stale generated
-      # sources, 2026-11-13). Only byte-identical Git objects regain their previous timestamps.
-      - name: Restore unchanged source timestamps
-        run: python3 tools/ci/source_mtimes.py "${CARGO_TARGET_DIR:-target}/ci-source-mtimes-v2.json"
       # Every build and test in this job runs at the runner's size, not the host's (tools/ci/cargo_jobs.py).
       - name: Cap build parallelism to the runner
         run: python3 tools/ci/cargo_jobs.py --job-mib 3072 --cap
-      # Missing data fails the leg.
-      - name: Prepare checkout-keyed vanilla data
-        id: data
-        run: bash tools/ci/vanilla-data.sh
-      - name: Retain typed preparation diagnostics only
-        if: failure() && steps.data.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: preparation-diagnostic-${{ strategy.job-index }}
-          path: |
-            ${{ runner.temp }}/prepare-build.diagnostic.json
-            ${{ runner.temp }}/prepare.diagnostic.json
-            ${{ runner.temp }}/seed-extras.diagnostic.json
-          if-no-files-found: ignore
-          retention-days: 3
-      - name: Generate the fishing test's vanilla reference inputs
-        if: steps.data.outputs.present != 'false' && (matrix.shard == 'horizon-client' || startsWith(matrix.shard, 'horizon-client#'))
-        run: |
-          reference=$(mktemp -d "$RUNNER_TEMP/fishing-reference.XXXXXX")
-          python3 tools/test_fishing_rng_parity.py --prepare-reference "$reference" --env-file "$GITHUB_ENV"
-      - name: Run the ignored tests that need prepared data
-        if: steps.data.outputs.present != 'false'
+      - name: Run the ignored tests that need no vanilla data
         env:
           SHARD: ${{ matrix.shard }}
           HORIZON_DATA_LEG_TIMING: '1'
-        run: |
-          export HORIZON_TEST_RESOURCES="$PWD/.local/horizon-client/26.3"
-          python3 tools/ci/with_xvfb.py python3 tools/ci/ignored_tests.py --report "$RUNNER_TEMP/daily-report.json" "$SHARD"
+        run: python3 tools/ci/with_xvfb.py python3 tools/ci/ignored_tests.py --without-data --report "$RUNNER_TEMP/daily-report.json" "$SHARD"
       # The leg's verdict for the daily summary: test names, panic locations and policy only (ignored_tests.py --report).
       - name: Upload the leg report
         if: always()

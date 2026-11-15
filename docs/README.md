@@ -43,7 +43,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Resource packs](resource-packs.md): everything a 26.3 resource pack can change, whether Horizon honours it, and the proof.
 - [Horizon sends nothing](telemetry.md): no telemetry; crash, benchmark and bug reports stay local files.
 - [Benchmark report format](benchmark-report.md): the versioned JSON every benchmark writes (game, launcher, `tools/perf_bench.py`) and the local log.
-- [Hot-path performance trends](hot-path-trends.md): the main-only job that counts instructions and allocations of the tick, commands, chunk saving and mod dispatch on fixed workloads, and where its trend page is.
+- [Hot-path performance trends](hot-path-trends.md): the dispatch-only job that counts instructions and allocations of the tick, commands, chunk saving and mod dispatch on fixed workloads, and how to compare two runs.
 - [Security](security.md): how Horizon protects code, CI and automatic releases against untrusted input while work is performed by AI agents.
 - [Known issues](known-issues.md): player-facing issues listed in each game release and removed as pull requests fix them.
 - [Horizon APIs](api/README.md): every surface other programs build on (mods, shaders, agent control, servers, the launcher, data formats), each with its guide, generated reference, stability and changelog, and the [stability and versioning policy](api/stability.md).

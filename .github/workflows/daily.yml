@@ -1,9 +1,9 @@
 name: daily
 run-name: daily ${{ inputs.commit || github.sha }}${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run || github.ref != 'refs/heads/main') && ' (dry run)' || '' }}
-# The daily tier (CI tiers, owner 2026-11-13; docs/release-flow.md "Daily run"): every in-game test, once a day on
-# main's head and by a maintainer's dispatch. Its legs are the workflows that used to run on main pushes, called unchanged:
-# the ignored-tests data shards, the wasm fixture and guest stacks, fn-replace-check and the native linkage probe,
-# plus the launcher's Windows runtime-lease tests (launcher-windows-check.yml). The summary files one issue per
+# The daily tier (CI tiers, owner 2026-11-13; docs/release-flow.md "Daily run"): the tests `verify` doesn't run, once a
+# day on main's head and by a maintainer's dispatch, on GitHub's runners with no vanilla data. Its legs are the
+# workflows that used to run on main pushes: the ignored-tests shards without data, the wasm guest stacks,
+# fn-replace-check and the native linkage probe, plus the launcher's Windows runtime-lease tests (launcher-windows-check.yml). The summary files one issue per
 # failing test (tools/ci/daily_summary.py). The Nightly and its SDK are built by nightly-build.yml, not here.
 # Only a run on main with dry_run false writes anything: issues.
 #   gh workflow run daily.yml --ref main -f dry_run=false             # the real run, as the schedule starts it

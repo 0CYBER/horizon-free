@@ -193,6 +193,35 @@ class IgnoredTests(unittest.TestCase):
             self.assertRegex(variable, r"^[A-Z][A-Z0-9_]*$")
             self.assertNotIn((package, test), ignored_tests.known_failures())
 
+    def test_without_data_leaves_out_the_tests_that_need_it_and_says_how_many(self):
+        def row(name, reason):
+            return ignored_tests.Row("example", name, "lib", "daily", "daily-example.txt", reason)
+        rows = [row("slow_one", "slow"), row("needs_files", "resources"), row("boots", "game-boot")]
+        known = {("example", "harness_step"): "harness", ("example", "gpu_draw"): "gpu"}
+        inputs = {("example", "needs_input"): "HORIZON_EXAMPLE_INPUT"}
+        with patch.object(ignored_tests, "known_failures", return_value=known), \
+                patch.object(ignored_tests, "harness_inputs", return_value=inputs), \
+                patch.object(ignored_tests, "daily_rows", return_value=rows), \
+                patch.object(ignored_tests, "has_vulkan", return_value=True), \
+                patch.object(ignored_tests, "run", return_value={"slow_one": True}) as execute, \
+                contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertEqual(ignored_tests.main(["example"], None, True), 0)
+        self.assertCountEqual(execute.call_args.args[1], ["needs_files", "boots", "harness_step", "gpu_draw", "needs_input"])
+        self.assertIn("--without-data: 5 tests left out", log.getvalue())
+        self.assertNotIn("refused", log.getvalue())
+
+    def test_without_data_does_not_hide_what_runs(self):
+        rows = [ignored_tests.Row("example", "needs_files", "lib", "daily", "daily-example.txt", "resources"),
+                ignored_tests.Row("example", "child", "lib", "daily", "daily-example.txt", "child-process")]
+        with patch.object(ignored_tests, "known_failures", return_value={}), \
+                patch.object(ignored_tests, "harness_inputs", return_value={}), \
+                patch.object(ignored_tests, "daily_rows", return_value=rows), \
+                patch.object(ignored_tests, "run", return_value={"child": False}), \
+                contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertEqual(ignored_tests.main(["example"], None, True), 1)
+        self.assertIn("example child: failed, and isn't a known failure", log.getvalue())
+        self.assertNotIn("needs_files", log.getvalue().replace("1 tests left out", ""))
+
     def test_explicit_client_lib_selection_is_not_split_again(self):
         with patch.object(ignored_tests, "known_failures", return_value={}), \
                 patch.object(ignored_tests, "daily_rows", return_value=[]), \

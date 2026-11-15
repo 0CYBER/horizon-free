@@ -2,15 +2,13 @@ name: hot-paths
 # Performance trends of the game's hot paths (docs/hot-path-trends.md): the server tick over mobs and hoppers,
 # command and selector resolution, hook dispatch and attachment access, each on a fixed, seeded workload in the
 # release game as shipped (ThinLTO). tools/hot_paths.py counts instructions and allocator calls per operation
-# under Callgrind, which do not depend on the runner's speed, and takes wall time beside them. A run on main is
-# recorded on the `perf-history` branch, whose index.html is the trend page.
+# under Callgrind, which do not depend on the runner's speed, and takes wall time beside them. A run
+# prints its measurement in the run's summary and uploads it as an artifact.
 #
-# It measures; it never judges. No threshold fails this workflow, and it never runs on a pull request.
-# Once a day on main, and by dispatch. A dispatch may name a commit to measure instead of the branch's head, to
-# narrow a step in the trend to one commit; such a run, like any run off main, uploads its result and records nothing.
+# It measures; it never judges. No threshold fails this workflow, and it never runs on a pull request or on a
+# schedule: by dispatch only, on a machine that holds the prepared vanilla data. A dispatch may name a commit to
+# measure instead of the branch's head.
 on:
-  schedule:
-    - cron: '43 8 * * *'
   workflow_dispatch:
     inputs:
       commit:
@@ -81,44 +79,3 @@ jobs:
           name: hot-paths
           path: ${{ runner.temp }}/hot-paths.json
           if-no-files-found: error
-
-  # The only job that may write, and only results of main's head: it checks the result against the record's schema,
-  # keeps the known fields and nothing else, and commits to the `perf-history` branch, which it creates the first time.
-  record:
-    needs: measure
-    if: github.ref == 'refs/heads/main' && !inputs.commit
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    concurrency:
-      group: hot-paths-record
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: tools/hot_paths.py
-          sparse-checkout-cone-mode: false
-      - uses: actions/download-artifact@v4
-        with:
-          name: hot-paths
-          path: ${{ runner.temp }}/result
-      - name: Record the run and redraw the page
-        run: |
-          set -euo pipefail
-          history="$RUNNER_TEMP/history"
-          url="https://x-access-token:${{ github.token }}@github.com/$GITHUB_REPOSITORY.git"
-          if git ls-remote --exit-code --heads "$url" perf-history > /dev/null; then
-            git clone --quiet --depth 1 --branch perf-history "$url" "$history"
-          else
-            git init --quiet --initial-branch perf-history "$history"
-            git -C "$history" remote add origin "$url"
-          fi
-          python3 tools/hot_paths.py record "$RUNNER_TEMP/result/hot-paths.json" "$history"
-          python3 tools/hot_paths.py page "$history"
-          git -C "$history" add runs index.html README.md
-          git -C "$history" -c user.name="github-actions[bot]" \
-            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit --quiet -m "Hot paths at ${GITHUB_SHA::12}"
-          git -C "$history" push --quiet origin perf-history
-          echo "Recorded. Trend page: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/perf-history/index.html (history: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/perf-history)" >> "$GITHUB_STEP_SUMMARY"
