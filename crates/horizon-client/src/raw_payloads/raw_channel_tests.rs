@@ -99,6 +99,7 @@ fn serverbound(channel: &str, len: usize) -> CustomPayload {
 
 #[test]
 fn a_raw_channel_reaches_every_declaring_mod_in_load_order() {
+    mod_platform::__private::initialize().unwrap();
     with_vanilla_peer(|transport| {
         let (sender, _out) = PlayerSender::payload_executor_test_sender(transport.clone());
         let (events, receiver) = crate::lan::event_channel_with_capacity(1 << 20);
