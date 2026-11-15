@@ -67,17 +67,30 @@ pub fn day(date: &str) -> String {
 static SAME_DAY: std::sync::RwLock<Vec<(String, String)>> = std::sync::RwLock::new(Vec::new());
 
 /// Keeps, from the release list `releases`, when each Nightly that shares its day with another
-/// came out, so every name of it says its time.
+/// came out, so every name of it says its time. A Nightly the list no longer has (older than a
+/// week, say) keeps the time it was seen with, and still counts toward its day.
 pub fn note_published(releases: &[Release]) {
-    let nightlies: Vec<&Release> = releases.iter().filter(|r| r.nightly.is_some()).collect();
-    let same_day = nightlies
-        .iter()
-        .filter(|r| !r.time.is_empty() && nightlies.iter().filter(|o| o.date == r.date).count() > 1)
-        .map(|r| (r.tag.clone(), r.time.clone()))
-        .collect();
-    *SAME_DAY
+    let mut kept = SAME_DAY
         .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = same_day;
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut known: Vec<(&str, &str, &str)> = releases
+        .iter()
+        .filter(|r| r.nightly.is_some())
+        .map(|r| (r.tag.as_str(), r.date.as_str(), r.time.as_str()))
+        .collect();
+    for (tag, time) in kept.iter() {
+        if let Some(date) = date_of(tag).filter(|_| known.iter().all(|(t, ..)| t != tag)) {
+            known.push((tag, date, time));
+        }
+    }
+    let same_day = known
+        .iter()
+        .filter(|(_, date, time)| {
+            !time.is_empty() && known.iter().filter(|(_, d, _)| d == date).count() > 1
+        })
+        .map(|(tag, _, time)| (tag.to_string(), time.to_string()))
+        .collect();
+    *kept = same_day;
 }
 
 /// When Nightly `version` came out, `HH:MM` UTC, if another came out the same day.
@@ -239,6 +252,28 @@ mod tests {
         assert_eq!(
             update_name("nightly-2031-03-03-ccccccc"),
             update_name("nightly-2031-03-03")
+        );
+    }
+
+    #[test]
+    fn a_nightly_the_list_no_longer_has_keeps_its_time() {
+        let nightly = |version: &str, time: &str| Release {
+            tag: version.into(),
+            time: time.into(),
+            nightly: Some(NIGHTLY.into()),
+            ..release("", "2032-05-06")
+        };
+        let late = nightly("nightly-2032-05-06-bbbbbbb", "18:05");
+        note_published(&[late.clone(), nightly("nightly-2032-05-06-aaaaaaa", "07:22")]);
+        // A later list without the earlier build: both still read apart.
+        note_published(&[late]);
+        assert_eq!(
+            same_day_time("nightly-2032-05-06-aaaaaaa").as_deref(),
+            Some("07:22")
+        );
+        assert_eq!(
+            same_day_time("nightly-2032-05-06-bbbbbbb").as_deref(),
+            Some("18:05")
         );
     }
 
