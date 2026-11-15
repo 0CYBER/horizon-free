@@ -197,7 +197,8 @@ impl Launcher {
         let mut card = crate::glass::plate(horizon_theme::glass::radius::PANEL).p(px(8.));
         if self.settings.native_mods_allowed_at.is_some() {
             // Turn off asks first: it switches mods off in every instance, and each comes back
-            // only from its own instance.
+            // only from its own instance. Counting and switching off read every instance's
+            // mods, so both run off the window's thread.
             let (detail, actions) = match self.storage_revoke {
                 None => (
                     tr(
@@ -206,23 +207,16 @@ impl Launcher {
                     )
                     .to_string(),
                     div().child(
-                        button("storage-revoke", "Turn off", Kind::Secondary, &t).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                let counts: Vec<usize> = instances::list()
-                                    .iter()
-                                    .map(|i| native_status::enabled(&i.home).len())
-                                    .filter(|n| *n > 0)
-                                    .collect();
-                                this.storage_revoke = Some((counts.iter().sum(), counts.len()));
-                                cx.notify();
-                            }),
-                        ),
+                        button("storage-revoke", "Turn off", Kind::Secondary, &t)
+                            .on_click(cx.listener(|this, _, _, cx| this.storage_count_native(cx))),
                     ),
                 ),
                 Some((mods, instances_)) => (
                     match (mods, instances_) {
-                        (0, _) => tr("No native mod is switched on: only the permission goes.")
-                            .to_string(),
+                        (0, _) => tr("No native mods are switched on. Turning off only takes \
+                                      the permission back; Horizon asks again before the next \
+                                      build.")
+                        .to_string(),
                         (1, _) => tr("This switches off your one native mod. Turn it back on \
                                       from its instance's Installed mods.")
                         .to_string(),
@@ -240,44 +234,21 @@ impl Launcher {
                             ],
                         ),
                     },
+                    // Keeping them is the leading choice, as on the other questions.
                     div()
                         .flex()
                         .gap(px(8.))
                         .child(
-                            button("storage-revoke-cancel", "Cancel", Kind::Secondary, &t)
+                            button("storage-revoke-yes", "Turn off", Kind::Secondary, &t).on_click(
+                                cx.listener(|this, _, _, cx| this.turn_off_native_mods(cx)),
+                            ),
+                        )
+                        .child(
+                            button("storage-revoke-cancel", "Keep them", Kind::Primary, &t)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.storage_revoke = None;
                                     cx.notify();
                                 })),
-                        )
-                        .child(
-                            button("storage-revoke-yes", "Turn off", Kind::Primary, &t).on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.storage_revoke = None;
-                                    let result =
-                                        this.settings.revoke_native_mods().and_then(|()| {
-                                            let mut failure = None;
-                                            for instance in instances::list() {
-                                                for (id, _, _) in
-                                                    native_status::enabled(&instance.home)
-                                                {
-                                                    if let Err(error) = browser::java::set_enabled(
-                                                        &instance.home,
-                                                        &id,
-                                                        false,
-                                                    ) {
-                                                        failure.get_or_insert(error);
-                                                    }
-                                                }
-                                            }
-                                            failure.map_or(Ok(()), Err)
-                                        });
-                                    if let Err(error) = result {
-                                        this.storage_error = Some(error);
-                                    }
-                                    cx.notify();
-                                }),
-                            ),
                         ),
                 ),
             };
@@ -306,6 +277,63 @@ impl Launcher {
             .child(summary)
             .child(breakdown)
             .child(card)
+    }
+
+    /// Counts the switched-on native mods and the instances holding them, on a worker, then
+    /// asks before Turn off.
+    fn storage_count_native(&mut self, cx: &mut Context<Self>) {
+        let task = cx.background_executor().spawn(async move {
+            let counts: Vec<usize> = instances::list()
+                .iter()
+                .map(|i| native_status::enabled(&i.home).len())
+                .filter(|n| *n > 0)
+                .collect();
+            (counts.iter().sum::<usize>(), counts.len())
+        });
+        cx.spawn(async move |this, cx| {
+            let counted = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.storage_revoke = Some(counted);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Takes the permission back (saved first: nothing changes if it can't be), then switches
+    /// every native mod off, on a worker; a build card still open is cleared, so its buttons ask
+    /// again rather than fail.
+    fn turn_off_native_mods(&mut self, cx: &mut Context<Self>) {
+        self.storage_revoke = None;
+        if let Err(error) = self.settings.revoke_native_mods() {
+            self.storage_error = Some(error);
+            cx.notify();
+            return;
+        }
+        self.native_error = None;
+        self.native_worlds = None;
+        self.native_failed_mods.clear();
+        let task = cx.background_executor().spawn(async move {
+            let mut failure = None;
+            for instance in instances::list() {
+                for (id, _, _) in native_status::enabled(&instance.home) {
+                    if let Err(error) = browser::java::set_enabled(&instance.home, &id, false) {
+                        failure.get_or_insert(error);
+                    }
+                }
+            }
+            failure
+        });
+        cx.spawn(async move |this, cx| {
+            let failure = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.storage_error = failure;
+                this.instance_mods_changed();
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     /// The question before a manual Clear: which files, and how much space they hold now.

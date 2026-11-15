@@ -415,6 +415,8 @@ impl Launcher {
             self.load_auth_statuses(false);
         }
         self.load_profile_heads();
+        // A Turn off question left open isn't still asked the next time Settings opens.
+        self.storage_revoke = None;
         self.wardrobe_reload |= matches!(page, Page::Wardrobe | Page::Shop);
         // The glass look's Settings is a dialog over the page: opening or closing it keeps the
         // page under it as it was (its scroll, no fade).
