@@ -766,7 +766,9 @@ impl Game<'_> {
         let near: Vec<(u32, bool, Vec3, f64)> = self
             .mobs
             .iter()
-            .filter(|m| m.hostile() && !m.removed && m.bounds().intersects(area))
+            // `instanceof Enemy`, not the monster category: the zombie horse,
+            // camel husk and zombie nautilus are `Animal`s.
+            .filter(|m| m.is_enemy() && !m.removed && m.bounds().intersects(area))
             .map(|m| {
                 let top = m.position.y + f64::from(m.height());
                 (m.id, m.fluids.in_water, m.position, top)
@@ -787,9 +789,14 @@ impl Game<'_> {
             .unwrap_or(0);
         Some(candidates[pick as usize])
     }
-    /// The conduit's `destroyTarget` as the client draws it.
+    /// The conduit's `destroyTarget` as the client draws it: the block
+    /// entity's `Target`, which `sendBlockUpdated` keeps in step for every
+    /// window; the server's own copy answers where there is no block entity.
     fn conduit_target(&self, pos: [i32; 3]) -> Option<ConduitTarget> {
-        let id = self.be_anims.conduit_servers.get(&pos)?.target?;
+        let id = match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+            Some(BlockEntity::Conduit(target)) => self.mob_by_uuid((*target)?)?,
+            _ => self.be_anims.conduit_servers.get(&pos)?.target?,
+        };
         let m = self.mobs.iter().find(|m| m.id == id && !m.removed)?;
         Some(ConduitTarget {
             position: [m.position.x, m.position.y, m.position.z],
@@ -1130,6 +1137,217 @@ mod bell_ownership_tests {
         assert!(anims.pots.is_empty());
         anims.retain_present(&[]);
         assert!(anims.bells.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod conduit_target_tests {
+    //! `ConduitBlockEntity.selectNewTarget` picks `Enemy`s only, and its
+    //! `Target` reaches every window through `sendBlockUpdated`; the window
+    //! then spits a nautilus particle at the mob.
+    use super::*;
+    use crate::game::{Audio, Options, Progress, Settings, execution_role, load_resources};
+    use horizon_client::chunk::Chunk;
+    use std::sync::Arc;
+
+    const CONDUIT: [i32; 3] = [8, 100, 8];
+
+    fn game_with(
+        resources: &mut Option<Arc<crate::game::Resources>>,
+        role: execution_role::ExecutionRole,
+    ) -> Game<'_> {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES")
+                .expect("set HORIZON_TEST_RESOURCES to prepared resources"),
+        );
+        let settings = Settings::default();
+        let loaded = load_resources(
+            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
+            Vec::new(),
+            None,
+            &root,
+            &settings,
+            std::time::Instant::now(),
+            false,
+            role,
+            &Progress::new(),
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
+        options.resources = root.clone();
+        options.execution_role = role;
+        let res = resources.insert(loaded.resources);
+        let mut game = Game::new(
+            res,
+            loaded.pack,
+            loaded.gui.unwrap(),
+            options,
+            settings,
+            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
+                root.clone(),
+            )),
+            None,
+        )
+        .unwrap();
+        game.build_registries();
+        game.set_allow_commands(true);
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game
+    }
+
+    /// A conduit in a loaded chunk.
+    fn setup(game: &mut Game<'_>) {
+        for command in [
+            "difficulty normal",
+            "forceload add 0 0",
+            "setblock 8 100 8 minecraft:conduit",
+        ] {
+            assert!(game.run_command(command), "{command}");
+        }
+    }
+
+    /// A level of a server.
+    fn game(resources: &mut Option<Arc<crate::game::Resources>>) -> Game<'_> {
+        let mut game = game_with(resources, execution_role::ExecutionRole::IntegratedServer);
+        setup(&mut game);
+        game
+    }
+
+    /// A window of one: a client game with no conduit state of its own, and a
+    /// conduit block whose block entity arrives from the server.
+    fn client(resources: &mut Option<Arc<crate::game::Resources>>) -> Game<'_> {
+        let mut game = game_with(resources, execution_role::ExecutionRole::Client);
+        let (pipe, _server) = horizon_protocol::connection::Pipe::pair();
+        game.connect_local(pipe, "Window").unwrap();
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        let state = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:conduit")
+            .expect("the conduit's block state");
+        game.world
+            .set(CONDUIT[0], CONDUIT[1], CONDUIT[2], state)
+            .unwrap();
+        // The block entity a chunk's block entities build (`from_name`).
+        game.world.block_entities.insert(
+            (CONDUIT[0], CONDUIT[1], CONDUIT[2]),
+            BlockEntity::Conduit(None),
+        );
+        game
+    }
+
+    /// A mob of `kind` beside the conduit, in the water.
+    fn summon(game: &mut Game<'_>, kind: &str) -> u32 {
+        assert!(game.run_command(&format!("summon minecraft:{kind} 4.5 100 8.5")));
+        let id = game.mobs.last().unwrap().id;
+        game.mobs.last_mut().unwrap().fluids.in_water = true;
+        id
+    }
+
+    /// `selectNewTarget`'s `instanceof Enemy`: the monster-category animals
+    /// (a zombie horse, camel husk, zombie nautilus) are not enemies, so a
+    /// conduit beside them picks nothing; a zombie is.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_conduit_hunts_only_enemies() {
+        let mut resources = None;
+        let mut game = game(&mut resources);
+        for kind in ["zombie_horse", "camel_husk", "zombie_nautilus"] {
+            summon(&mut game, kind);
+        }
+        assert_eq!(
+            game.conduit_new_target(CONDUIT),
+            None,
+            "monster-category animals are not Enemy"
+        );
+        let zombie = summon(&mut game, "zombie");
+        assert_eq!(game.conduit_new_target(CONDUIT), Some(zombie));
+    }
+
+    /// `updateAndAttackTarget` puts the target in the block entity's `Target`
+    /// and sends it (`sendBlockUpdated`); the window loads that tag, finds the
+    /// mob and `animationTick` draws one nautilus particle at its eye. A tag
+    /// without a `Target` takes the mob away again.
+    #[test]
+    #[ignore = "needs prepared resources in HORIZON_TEST_RESOURCES"]
+    fn a_conduits_target_reaches_the_client_as_a_particle() {
+        let mut server_resources = None;
+        let mut server = game(&mut server_resources);
+        let drowned = summon(&mut server, "drowned");
+        server.world.block_log = Some(Vec::new());
+        server.conduit_attack(&mut ConduitServer::default(), CONDUIT, true);
+        let uuid = server.persist.uuids[&drowned];
+        let key = (CONDUIT[0], CONDUIT[1], CONDUIT[2]);
+        // What `sendBlockUpdated` puts on the wire.
+        let tag = crate::lan::chunks::entity_tag(&server.world.block_entities[&key], false)
+            .expect("a conduit has an update tag");
+        assert_eq!(tag.get("Target"), Some(&Tag::IntArray(uuid.to_vec())));
+        assert!(
+            server.world.block_log.as_ref().unwrap().contains(&key),
+            "the new target is sent"
+        );
+        // The window: no `conduit_servers` of its own, the same mob, and the
+        // server's tag through `handleBlockEntityData`.
+        let mut client_resources = None;
+        let mut client = client(&mut client_resources);
+        let watched = client
+            .spawn_mob(
+                "drowned",
+                [4.5, 100.0, 8.5],
+                false,
+                crate::game::creatures::SpawnSite::Plain,
+            )
+            .expect("a mob for the window");
+        client.persist.uuids.insert(watched, uuid);
+        let kind = client
+            .remote
+            .as_ref()
+            .and_then(|r| r.builtin.get("minecraft:block_entity_type"))
+            .and_then(|ids| ids.id("minecraft:conduit"))
+            .expect("the conduit's block entity type");
+        client.remote_block_entity_data(
+            CONDUIT,
+            kind,
+            mod_api::BlockEntityDataSource::UpdatePacket,
+            &tag,
+        );
+        let target = client
+            .conduit_target(CONDUIT)
+            .expect("the window sees the hunted mob");
+        let (position, eye_y) = {
+            let m = client.mobs.iter().find(|m| m.id == watched).unwrap();
+            (m.position, m.eye_y())
+        };
+        assert_eq!(target.eye_y, eye_y);
+        let mut anims = horizon_client::block_entity_anim::Conduit::default();
+        let particles = anims.client_tick(
+            CONDUIT,
+            1,
+            |_| true,
+            |_| false,
+            Some(target),
+            &mut client.world.random,
+        );
+        // One particle, at the eye: a frame's own particles need a frame block.
+        assert_eq!(particles.len(), 1);
+        assert_eq!(particles[0].0, [position.x, eye_y, position.z]);
+        // The conduit stopped hunting: its empty tag drops the target.
+        client.remote_block_entity_data(
+            CONDUIT,
+            kind,
+            mod_api::BlockEntityDataSource::UpdatePacket,
+            &Tag::Compound(Default::default()),
+        );
+        assert!(
+            client.conduit_target(CONDUIT).is_none(),
+            "the target is dropped"
+        );
     }
 }
 

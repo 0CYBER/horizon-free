@@ -6,9 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 description = "The official game executable: the platform's game with Horizon's own in-game parts plugged in (docs/layers.md)"
 
+# The binaries hold no tests (the library does): `cargo test` builds no empty test harness for them, each of which
+# linked the whole crate again. They still build for integration tests (CARGO_BIN_EXE_*) and clippy --all-targets.
 [[bin]]
 name = "horizon-official"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 horizon-game = { path = "../horizon-game" }

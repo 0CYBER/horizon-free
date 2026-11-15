@@ -11,6 +11,15 @@ pub struct RandomSequences {
     include_world_seed: bool,
     include_sequence_id: bool,
     sequences: BTreeMap<String, XoroshiroRandom>,
+    /// `SavedData.dirty`: a draw marks it (`DirtyMarkingRandomSource`), the save clears
+    /// it (`SavedDataStorage.collectDirtyTagsToSave`); `clear`, `setSeedDefaults` and
+    /// `reset` leave it alone.
+    dirty: bool,
+    /// The sequence `get` handed out last, as it was then: it was drawn from if it moved
+    /// (a draw always moves a xoroshiro stream), the moment vanilla's wrapper marks the data.
+    watched: Option<(String, XoroshiroRandom)>,
+    /// Sequences out on `lend`, as they left: still the world's, so the save keeps them.
+    lent: BTreeMap<String, XoroshiroRandom>,
 }
 impl Default for RandomSequences {
     fn default() -> Self {
@@ -19,6 +28,9 @@ impl Default for RandomSequences {
             include_world_seed: true,
             include_sequence_id: true,
             sequences: BTreeMap::new(),
+            dirty: false,
+            watched: None,
+            lent: BTreeMap::new(),
         }
     }
 }
@@ -35,30 +47,75 @@ fn create(id: &str, world_seed: i64, salt: i32, world: bool, with_id: bool) -> X
     XoroshiroRandom::from_state(mix_stafford13(lo), mix_stafford13(hi))
 }
 impl RandomSequences {
+    /// `RandomSequences.get`: the caller's draws on it mark the data dirty.
     pub fn get(&mut self, id: &str, world_seed: i64) -> &mut XoroshiroRandom {
+        self.settle();
         let (salt, w, i) = (self.salt, self.include_world_seed, self.include_sequence_id);
-        self.sequences
+        let random = self
+            .sequences
             .entry(id.to_owned())
-            .or_insert_with(|| create(id, world_seed, salt, w, i))
+            .or_insert_with(|| create(id, world_seed, salt, w, i));
+        self.watched = Some((id.to_owned(), random.clone()));
+        random
     }
-    /// Lends sequence `id` out (created if missing); `give_back` returns it.
+    /// Whether the sequence `get` handed out last was drawn from.
+    fn drew(&self) -> bool {
+        self.watched
+            .as_ref()
+            .is_some_and(|(id, then)| self.sequences.get(id).is_some_and(|now| now != then))
+    }
+    /// Marks the data for a draw on the sequence `get` handed out last, which nothing
+    /// can draw from any more once another method runs.
+    fn settle(&mut self) {
+        self.dirty |= self.drew();
+        self.watched = None;
+    }
+    /// New data for a world with no `random_sequences.dat`: `MinecraftServer`'s
+    /// `savedDataStorage.computeIfAbsent(RandomSequences.TYPE)` builds it and
+    /// `SavedDataStorage.set` marks it dirty, so the world's first save writes it.
+    pub fn new_dirty() -> Self {
+        Self {
+            dirty: true,
+            ..Self::default()
+        }
+    }
+    /// `SavedDataStorage.collectDirtyTagsToSave`: the data to write when it is dirty,
+    /// which `setDirty(false)` then clears.
+    pub fn take_dirty_nbt(&mut self) -> Option<horizon_core::nbt::Tag> {
+        self.settle();
+        std::mem::take(&mut self.dirty).then(|| self.to_nbt())
+    }
+    /// Lends sequence `id` out (created if missing); `give_back` returns it. Lending
+    /// is no draw; what was drawn from it marks the data when it comes back.
     pub fn lend(&mut self, id: &str, world_seed: i64) -> XoroshiroRandom {
-        self.get(id, world_seed);
-        self.sequences.remove(id).expect("created")
+        self.settle();
+        let (salt, w, i) = (self.salt, self.include_world_seed, self.include_sequence_id);
+        let random = self
+            .sequences
+            .remove(id)
+            .unwrap_or_else(|| create(id, world_seed, salt, w, i));
+        self.lent.insert(id.to_owned(), random.clone());
+        random
     }
     pub fn give_back(&mut self, id: String, random: XoroshiroRandom) {
+        self.settle();
+        if self.lent.remove(&id).is_none_or(|then| then != random) {
+            self.dirty = true;
+        }
         self.sequences.insert(id, random);
     }
     /// `RandomSequences.CODEC` (`random_sequences.dat`'s data).
     pub fn to_nbt(&self) -> horizon_core::nbt::Tag {
         use horizon_core::nbt::Tag;
-        let sequences = self
-            .sequences
-            .iter()
+        let mut all: BTreeMap<&str, &XoroshiroRandom> =
+            self.lent.iter().map(|(id, r)| (id.as_str(), r)).collect();
+        all.extend(self.sequences.iter().map(|(id, r)| (id.as_str(), r)));
+        let sequences = all
+            .into_iter()
             .map(|(id, r)| {
                 let (lo, hi) = r.state_words();
                 (
-                    id.as_str(),
+                    id,
                     Tag::compound([("source", Tag::LongArray(vec![lo as i64, hi as i64]))]),
                 )
             })
@@ -88,6 +145,9 @@ impl RandomSequences {
             include_world_seed: int("include_world_seed").unwrap_or(1) != 0,
             include_sequence_id: int("include_sequence_id").unwrap_or(1) != 0,
             sequences: BTreeMap::new(),
+            dirty: false,
+            watched: None,
+            lent: BTreeMap::new(),
         };
         if let Some(Tag::Compound(c)) = tag.get("sequences") {
             for (id, v) in c {
@@ -111,6 +171,7 @@ impl RandomSequences {
         self.sequences.keys().cloned().collect()
     }
     pub fn clear(&mut self) -> usize {
+        self.settle();
         let n = self.sequences.len();
         self.sequences.clear();
         n
@@ -121,11 +182,13 @@ impl RandomSequences {
         self.include_sequence_id = include_sequence_id;
     }
     pub fn reset(&mut self, id: &str, world_seed: i64) {
+        self.settle();
         let (salt, w, i) = (self.salt, self.include_world_seed, self.include_sequence_id);
         self.sequences
             .insert(id.to_owned(), create(id, world_seed, salt, w, i));
     }
     pub fn reset_with(&mut self, id: &str, world_seed: i64, salt: i32, w: bool, i: bool) {
+        self.settle();
         self.sequences
             .insert(id.to_owned(), create(id, world_seed, salt, w, i));
     }

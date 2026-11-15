@@ -196,10 +196,16 @@ fn quote(out: &mut String, s: &str, html_safe: bool) {
 }
 
 /// A strict JSON document: one value, optionally followed only by whitespace
-/// when `whole` is set.
+/// when `whole` is set. One U+FEFF at the very start (a UTF-8 byte-order mark,
+/// which Windows editors add) is skipped, as Gson's `JsonReader` skips it; a
+/// second one, or one after whitespace, is an error as in Gson.
 pub fn parse(text: &str, whole: bool) -> Result<Json, String> {
     let chars: Vec<char> = text.chars().collect();
-    let mut p = Parser { c: &chars, i: 0 };
+    let start = usize::from(chars.first() == Some(&'\u{feff}'));
+    let mut p = Parser {
+        c: &chars,
+        i: start,
+    };
     let v = p.value(0)?;
     if whole {
         p.ws();
@@ -412,6 +418,22 @@ fn is_number(w: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Gson's `JsonReader` skips one byte-order mark at the start of the text (checked with Gson 2.14.0:
+    /// `\uFEFF[]` is an empty array; two marks, a mark after a space and a mark after the value are errors).
+    #[test]
+    fn a_leading_byte_order_mark_is_skipped() {
+        assert_eq!(parse("\u{feff}[]", true).unwrap().compact(), "[]");
+        assert_eq!(
+            parse("\u{feff}[{\"name\":\"Alex\"}]", false)
+                .unwrap()
+                .compact(),
+            r#"[{"name":"Alex"}]"#
+        );
+        for bad in ["\u{feff}\u{feff}[]", " \u{feff}[]"] {
+            assert!(parse(bad, true).is_err(), "{bad:?}");
+        }
+        assert!(parse("[]\u{feff}", true).is_err());
+    }
     #[test]
     fn round_trips() {
         let v = parse(r#" { "a" : 1.50 , "b":[true,null,"x<"] , "a": 2 } "#, true).unwrap();

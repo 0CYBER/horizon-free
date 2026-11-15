@@ -90,16 +90,7 @@ impl Metadata {
     }
 }
 
-/// A raw timestamped clientbound network packet from a replay stream.
-#[derive(Clone, Debug, PartialEq)]
-pub struct TimestampedPacket {
-    /// Milliseconds since recording start.
-    pub timestamp_ms: u32,
-    /// Protocol packet ID.
-    pub id: i32,
-    /// Unframed packet payload bytes (excluding the VarInt packet ID).
-    pub payload: Vec<u8>,
-}
+pub use crate::packet_source::TimestampedPacket;
 
 impl TimestampedPacket {
     pub fn new(timestamp_ms: u32, id: i32, payload: Vec<u8>) -> Self {

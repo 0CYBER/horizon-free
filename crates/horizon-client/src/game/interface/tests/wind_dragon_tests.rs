@@ -1,4 +1,4 @@
-use crate::game::{Game, creatures::SpawnSite, wind::BurstCause};
+use crate::game::{Game, creatures::SpawnSite, wind::Source};
 use horizon_client::chunk::Chunk;
 use horizon_client::mobs::spawn_rules::Reason;
 use horizon_core::geometry::Vec3;
@@ -36,15 +36,8 @@ fn a_wind_burst_pushes_the_dragon_without_damage() {
     .expect("spawned dragon");
     game.dragon.as_mut().expect("dragon").velocity = Vec3::ZERO;
 
-    game.wind_burst(
-        [0.0, 66.0, 0.0],
-        5.0,
-        1.0,
-        false,
-        false,
-        BurstCause::default(),
-    )
-    .unwrap();
+    game.wind_burst([0.0, 66.0, 0.0], 5.0, 1.0, Source::WIND_BURST)
+        .unwrap();
 
     let dragon = game.dragon.as_ref().expect("dragon");
     assert_eq!(dragon.health, 200.0);
@@ -65,15 +58,8 @@ fn a_wind_burst_scales_the_dragons_push_by_its_multiplier() {
     )
     .expect("spawned dragon");
     game.dragon.as_mut().expect("dragon").velocity = Vec3::ZERO;
-    game.wind_burst(
-        [0.0, 66.0, 0.0],
-        5.0,
-        1.22,
-        false,
-        false,
-        BurstCause::default(),
-    )
-    .unwrap();
+    game.wind_burst([0.0, 66.0, 0.0], 5.0, 1.22, Source::WIND_BURST)
+        .unwrap();
 
     let push = game.dragon.as_ref().expect("dragon").velocity.y;
     assert!(push > 0.0, "Wind Burst did not push the dragon");

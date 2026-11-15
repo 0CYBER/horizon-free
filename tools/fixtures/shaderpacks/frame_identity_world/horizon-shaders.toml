@@ -1,0 +1,27 @@
+schema = 1
+id = "frame_identity_world"
+name = "Frame identity: world"
+version = "1.0.0"
+api = "0.2"
+description = "A test fixture of the frame identity harness: its own sky, weather, a material reading the water mirror and opaque copies, and a post pass reading the surface target. Not a look."
+authors = ["Horizon"]
+license = "MIT"
+
+[sky]
+file = "sky.wgsl"
+name = "Sky"
+clouds = false
+sun = false
+stars = false
+
+[material]
+file = "material.wgsl"
+name = "Mirror"
+
+[weather]
+file = "weather.wgsl"
+name = "Weather"
+
+[[post]]
+file = "post.wgsl"
+name = "Surface"

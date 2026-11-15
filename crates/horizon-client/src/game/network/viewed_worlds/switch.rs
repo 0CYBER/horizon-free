@@ -43,7 +43,7 @@ impl Game<'_> {
         };
         self.keep_as_viewed(travel.slot, travel.entered.columns, p.spawn.seed);
         self.enter_remote_dimension(&p.spawn, true, reason);
-        self.adopt(travel.entered);
+        self.adopt_viewed_world(travel.entered);
     }
 
     /// The viewed world `p` travels into, taken out, if it is one: a Respawn keeping all data
@@ -94,7 +94,7 @@ impl Game<'_> {
     /// then those its chunk packets carried, with the data sent since. Each column then loads for
     /// the mods, as a chunk packet's does. The level is on the client already: no loading screen
     /// waits for it, and the server hears at once that it is loaded.
-    fn adopt(&mut self, entered: ViewedWorld) {
+    fn adopt_viewed_world(&mut self, entered: ViewedWorld) {
         let ViewedWorld {
             mut world,
             block_entities: mut sent,

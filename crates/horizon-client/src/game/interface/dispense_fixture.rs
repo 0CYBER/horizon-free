@@ -333,9 +333,7 @@ impl Game<'_> {
                 center,
                 op["radius"].as_f64().unwrap_or(3.0) as f32,
                 1.0,
-                breeze,
-                !breeze,
-                Default::default(),
+                super::wind::Source::charge(breeze, false),
             )?;
         } else if let Some(op) = case.get("remove") {
             used = self.fixture_remove(origin, op)?;

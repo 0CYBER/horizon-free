@@ -159,6 +159,10 @@ impl Mob {
         if self.species() == super::Species::Turtle {
             return super::turtle::move_control(self);
         }
+        // Camel.CamelMoveControl.tick: a walk target stands it up first.
+        if super::camel::is_camel(self.species()) {
+            return super::camel::move_control(self, w, events);
+        }
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
             MoveKind::Custom => super::ai::custom_move_control(self, w, events),

@@ -83,3 +83,59 @@ fn a_pack_colour_change_shows_although_the_particle_type_id_is_cached() {
     assert_eq!(after, pack, "the pack's colour, not the one first cached");
     assert_eq!(colour(shown(&mut ids)), vanilla);
 }
+
+/// `MobEffects` registers Wind Charged, Weaving, Oozing and Infested with a
+/// particle of their own (`WindChargedMobEffect` passes `SMALL_GUST`, Weaving
+/// `ITEM_COBWEB`, Oozing `ITEM_SLIME`, Infested `INFESTED`), so the synced
+/// list carries those types without data; every other effect keeps an entity
+/// effect in its colour, faint (alpha 38 of 255) when ambient.
+#[test]
+fn the_four_party_effects_sync_their_own_particle_types() {
+    use horizon_protocol::entity_data::Value;
+    let mut sync = crate::lan::data::SyncData::empty();
+    sync.builtin.registries.insert(
+        "minecraft:particle_type".to_owned(),
+        horizon_protocol::registry::Ids::from_names(
+            [
+                "minecraft:entity_effect",
+                "minecraft:small_gust",
+                "minecraft:item_cobweb",
+                "minecraft:item_slime",
+                "minecraft:infested",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        ),
+    );
+    let meta = sync.effect_meta([
+        ("oozing", false),
+        ("minecraft:weaving", false),
+        ("wind_charged", false),
+        ("infested", false),
+        // Speed is 0x33EBFF, slowness 0x8BAFE0 in `MobEffects`.
+        ("speed", false),
+        ("slowness", true),
+    ]);
+    assert_eq!(meta.len(), 1, "not every effect is ambient: no ambience id");
+    assert_eq!(meta[0].0, 10, "LivingEntity.DATA_EFFECT_PARTICLES");
+    let particles = match &meta[0].2 {
+        Value::Particles(list) => list.clone(),
+        other => panic!("not a particle list: {other:?}"),
+    };
+    let simple = |id| Particle { id, data: None };
+    let colored = |argb: u32| Particle {
+        id: 0,
+        data: Some(ParticleData::Color(argb as i32)),
+    };
+    assert_eq!(
+        particles,
+        [
+            simple(3),
+            simple(2),
+            simple(1),
+            simple(4),
+            colored(0xFF33_EBFF),
+            colored(0x268B_AFE0),
+        ]
+    );
+}

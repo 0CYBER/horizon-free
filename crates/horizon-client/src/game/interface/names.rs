@@ -11,7 +11,7 @@ use horizon_client::{
     block_entity_render::vertex_light,
     hud::{HudAtlas, HudBatch, HudVertex},
     mesher::Vertex,
-    mobs::Mob,
+    mobs::{Mob, Who},
     save::uuid_text,
     scoreboard as sb,
     text::Text,
@@ -139,8 +139,14 @@ impl Game<'_> {
         m.custom_name = Some(name);
         m.custom_name_text = text;
         m.persistent = true;
-        // itemStack.shrink(1), in creative too.
+        let at = [m.position.x, m.position.y, m.position.z];
+        // itemStack.shrink(1); `Player.interactOn` puts a creative player's
+        // count back, which `consume_held` skips for them.
         self.consume_held();
+        // `Mob.interact`: the tag consumed the use, so
+        // `gameEvent(GameEvent.ENTITY_INTERACT, player)` at the mob.
+        let ctx = self.who_context(Some(Who::Player), None);
+        self.post_game_event("minecraft:entity_interact", at, ctx);
         self.swing_arm();
         if let (Some(player), Some(player_name)) =
             (self.lan_acting_uuid, self.lan_acting_name.clone())
@@ -463,17 +469,10 @@ impl Game<'_> {
                 continue;
             }
             let team = self.mob_team(a.id);
-            let invisible = sb::invisible_to(team, viewer, self.spectator(), false);
-            let view = sb::NameView {
-                discrete: false,
-                distance_sqr,
-                invisible_to_viewer: invisible,
-                hud_hidden: self.ui.hide_gui,
-                is_camera: false,
-                is_vehicle: false,
-            };
-            let name_shown =
-                a.custom_name.is_some() && a.name_visible && sb::name_shown(team, viewer, view);
+            // `ArmorStandRenderer.shouldShowName` overrides the living
+            // entity's rule with `isCustomNameVisible` alone: no team
+            // visibility, no F1, no invisibility.
+            let name_shown = a.custom_name.is_some() && a.name_visible;
             let mut visible = name_shown;
             let mut text = None;
             if hooks {
@@ -898,15 +897,16 @@ fn collect_vehicle_ids(
 fn named_by_player_list(players: &[(&Mob, String)]) -> std::collections::HashSet<u32> {
     players.iter().map(|(player, _)| player.id).collect()
 }
-/// `EntityAttachment.NAME_TAG`: `(0, bbHeight, 0)` of the box of the entity's
-/// current pose, which the submitter lifts 0.5 more, between the last two tick
-/// positions. The player box is `Pose::dimensions(1.0)`.
+/// `EntityAttachment.NAME_TAG` of the entity's current pose
+/// (`Mob::name_tag_height`), which `SubmitNodeCollector.submitNameTag` lifts
+/// 0.5 more, between the last two tick positions. The player box is
+/// `Pose::dimensions(1.0)`.
 /// shortcut: the scale attribute is not in the tag height, add `model_scale`
 /// when tags on scaled players matter.
 pub(super) fn name_tag_at(m: &Mob, alpha: f64) -> glam::DVec3 {
     glam::DVec3::new(
         m.previous.x + (m.position.x - m.previous.x) * alpha,
-        m.previous.y + (m.position.y - m.previous.y) * alpha + f64::from(m.height()) + 0.5,
+        m.previous.y + (m.position.y - m.previous.y) * alpha + m.name_tag_height() + 0.5,
         m.previous.z + (m.position.z - m.previous.z) * alpha,
     )
 }
@@ -963,6 +963,10 @@ pub(super) fn name_component(m: &Mob, name: &str) -> horizon_core::nbt::Tag {
         None => horizon_protocol::text::literal(name),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/name_tag_tests.rs"]
+mod name_tag_tests;
 
 #[cfg(test)]
 mod tests {

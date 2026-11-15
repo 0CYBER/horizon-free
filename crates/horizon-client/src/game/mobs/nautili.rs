@@ -3,10 +3,7 @@
 //! nautilus a drowned with a trident sometimes rides.
 use super::Game;
 use horizon_client::actions::Action;
-use horizon_client::{
-    items::ItemStack,
-    mobs::{Species, nautilus},
-};
+use horizon_client::{items::ItemStack, mobs::nautilus};
 use horizon_core::random::RandomSource;
 
 impl Game<'_> {
@@ -35,6 +32,17 @@ impl Game<'_> {
         let at = self.mobs[index].center();
         self.audio
             .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
+    }
+    /// `AbstractNautilus.interact` (`super.interact` is `Mob.interact`): any
+    /// click on a nautilus, used or not, makes it persistent before its own
+    /// handling runs.
+    pub(super) fn nautilus_clicked(&mut self, id: Option<i32>) {
+        let Some(index) = id.and_then(|id| Self::named_entity(&self.mobs, id, |m| m.id)) else {
+            return;
+        };
+        if nautilus::is_nautilus(self.mobs[index].species()) {
+            self.mobs[index].persistent = true;
+        }
     }
     /// `AbstractNautilus.mobInteract`. Returns whether the click was used.
     pub(super) fn interact_nautilus(&mut self, index: usize, item: &str) -> bool {
@@ -148,20 +156,22 @@ impl Game<'_> {
             }
         }
         if tame && !food {
-            // doPlayerRide.
+            // doPlayerRide: `player.startRiding(this)`, which keeps the
+            // rider's view (`ServerPlayer.startRiding`'s `Relative.ROTATION`).
             let id = self.mobs[index].id;
             if !self.native_may_board(id) {
                 return true;
             }
             self.break_leash(id, true, false);
-            self.yaw = self.mobs[index].yaw;
             self.mount.reset_jump();
             self.start_riding(id);
             return true;
         }
-        // Animal.mobInteract: a tame adult fed falls in love (not a zombie).
+        // Animal.mobInteract: a tame adult fed at full health falls in love
+        // (a zombie nautilus too: `ZombieNautilus` overrides neither `isFood`
+        // nor `mobInteract`, and its brain simply has no make-love goal).
         let m = &mut self.mobs[index];
-        if food && m.species() == Species::Nautilus && m.extra.age == 0 && m.extra.in_love <= 0 {
+        if food && m.extra.age == 0 && m.extra.in_love <= 0 {
             m.extra.in_love = 600;
             m.extra.love_player = true;
             let sound = nautilus::eat_sound(m);
@@ -178,3 +188,7 @@ impl Game<'_> {
         false
     }
 }
+
+#[cfg(test)]
+#[path = "tests/nautili_tests.rs"]
+mod nautili_tests;

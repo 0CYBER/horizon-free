@@ -230,8 +230,7 @@ pub fn face_world_spawn(guest: &mut Guest, known: bool, [yaw, pitch]: [f32; 2]) 
 /// Give a guest the player state read into `level`.
 pub fn apply(guest: &mut Guest, level: &Level) {
     if let Some(p) = level.position {
-        guest.position = p;
-        guest.previous_position = p;
+        guest.place(p);
     }
     guest.yaw = level.rotation[0];
     guest.pitch = level.rotation[1];

@@ -338,6 +338,7 @@ mod tests {
                         age: 0,
                         on_ground: true,
                         count: 1,
+                        fire_ticks: 0,
                         ticks,
                         health: 5,
                         air: 300,

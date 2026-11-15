@@ -1,0 +1,10 @@
+# The council (GOVERNANCE.md): each member holds the release tools' owner powers (tools/ci/nightly_set.py COUNCIL):
+# `/nightly clear` and `remove` that stick, commands while the trusted reviewers are paused, triage without a limit.
+# One member per line: `<numeric GitHub ID> <login>`. The ID decides; a line in any other form grants nothing.
+# A council poll changes this list (GOVERNANCE.md 4.3). An ID: `gh api users/<login> --jq .id`.
+136255825 ludovic111      # founding council, 2026-11-09
+54669067 kacpherek       # founding council, 2026-11-09
+86072227 levzzz5154      # founding council, 2026-11-09
+87152661 rdbtCVS         # founding council, 2026-11-09
+84875247 Online5277      # founding council, 2026-11-09
+229321837 dezer-x        # founding council, 2026-11-09

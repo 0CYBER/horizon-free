@@ -86,6 +86,8 @@ pub(super) struct Pads {
     pub(super) device: Option<Device>,
     /// Controllers that came and went at this game's own reader since the last poll.
     connections: Vec<Connection>,
+    /// The right stick's turn still easing out under the cinematic camera.
+    look: gamepad::SmoothLook,
     /// The cursor the pad drives in menus.
     pub(super) menu: super::pad_menu::MenuCursor,
     /// The radial menu while its opener is held, and the page it stays on.
@@ -817,16 +819,14 @@ impl Game<'_> {
             return;
         }
         // A long frame (a hitch) must not spin the view.
-        let (yaw, pitch) = gamepad::look_delta(
-            self.pad.state.right,
-            settings,
-            seconds.min(0.1),
-            self.scoping(),
-        );
+        let seconds = seconds.min(0.1);
+        let turn = gamepad::look_delta(self.pad.state.right, settings, seconds, self.scoping());
+        // The cinematic camera eases the stick's turn in and out, as it does the mouse's.
+        let (yaw, pitch) = self.pad.look.turn(turn, seconds, self.smooth_camera);
         if yaw == 0.0 && pitch == 0.0 {
             return;
         }
-        self.look_turn(f64::from(yaw / 0.15), f64::from(pitch / 0.15));
+        self.look_turn(yaw / 0.15, pitch / 0.15);
     }
 
     /// Vibrate the active pad, when vibration is on and the pad is the one

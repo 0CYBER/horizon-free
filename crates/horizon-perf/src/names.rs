@@ -2,22 +2,75 @@
 
 /// The name two builds of the same source agree on: no hash, no generic arguments, no closure numbers, `<X as Trait>::f` as `X::f`.
 pub fn normalize(name: &str) -> String {
-    if name.starts_with('[') || !name.contains(['<', '{', ':']) {
+    if (name.starts_with('[') && !name.contains("::")) || !name.contains(['<', '{', ':']) {
         return name.to_string();
     }
     let name = strip_hash(name);
-    let name = numbered_braces(&name);
+    let name = numbered_braces(&pdb_segments(&name));
     let out = path(&name).unwrap_or(name);
     out.replace("::::", "::").trim_end_matches("::").to_string()
 }
 
-/// The last two path segments: `Game::tick_blocks`.
+/// The last two path segments: `Game::tick_blocks`. A slice keeps its brackets around its type's last segment:
+/// `[Team]::clone_into`.
 pub fn short(normalized: &str) -> String {
-    let parts: Vec<&str> = normalized.split("::").filter(|p| !p.is_empty()).collect();
+    let parts: Vec<&str> = segments(normalized)
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect();
     match parts.len() {
         0 | 1 => normalized.to_string(),
-        n => parts[n - 2..].join("::"),
+        n => parts[n - 2..]
+            .iter()
+            .map(
+                |part| match part.strip_prefix('[').and_then(|p| p.strip_suffix(']')) {
+                    Some(inner) => format!("[{}]", segments(inner).last().unwrap_or(&inner)),
+                    None => (*part).to_string(),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join("::"),
     }
+}
+
+/// `text` split at each `::` outside brackets, so `[a::T]::f` is two segments.
+fn segments(text: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start, mut previous) = (0usize, 0, ' ');
+    for (i, c) in text.char_indices() {
+        match c {
+            '[' | '<' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            '>' if previous != '-' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 && i > start && previous == ':' => {
+                parts.push(&text[start..i - 1]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        previous = c;
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// The PDB's `impl$3` and `closure$0` (Windows' inlined and line-tables-only names) as Linux's `{impl#3}` and
+/// `{closure#0}`, which [`numbered_braces`] then drops the numbers of.
+fn pdb_segments(name: &str) -> String {
+    if !name.contains('$') {
+        return name.to_string();
+    }
+    name.split("::")
+        .map(|part| match part.split_once('$') {
+            Some((word @ ("impl" | "closure"), digits))
+                if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                format!("{{{word}#{digits}}}")
+            }
+            _ => part.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 /// `name::h0123456789abcdef`, the legacy symbol hash, without the hash.
@@ -144,7 +197,7 @@ mod tests {
     use super::*;
 
     /// (as symbolized, full normalized name, short name)
-    const TABLE: [(&str, &str, &str); 17] = [
+    const TABLE: [(&str, &str, &str); 22] = [
         (
             "<horizon_world::level::Sim<horizon_world::level::NoHooks>>::set_block_limit",
             "horizon_world::level::Sim::set_block_limit",
@@ -209,6 +262,31 @@ mod tests {
             "core::iter::adapters::map::map_fold::<T,B,Acc>::{{closure}}",
             "core::iter::adapters::map::map_fold::{closure}",
             "map_fold::{closure}",
+        ),
+        (
+            "<[horizon_client_core::scoreboard::Team]>::clone_into",
+            "[horizon_client_core::scoreboard::Team]::clone_into",
+            "[Team]::clone_into",
+        ),
+        (
+            "[horizon_client_core::scoreboard::Team]::clone_into",
+            "[horizon_client_core::scoreboard::Team]::clone_into",
+            "[Team]::clone_into",
+        ),
+        (
+            "[horizon_world::Pos]::sort_by::closure$1",
+            "[horizon_world::Pos]::sort_by::{closure}",
+            "sort_by::{closure}",
+        ),
+        (
+            "horizon_client_core::who::impl$5::eq",
+            "horizon_client_core::who::{impl}::eq",
+            "{impl}::eq",
+        ),
+        (
+            "horizon_world::block_collision_scan::impl$2::find_next::closure$0",
+            "horizon_world::block_collision_scan::{impl}::find_next::{closure}",
+            "find_next::{closure}",
         ),
         ("mi_free", "mi_free", "mi_free"),
         (

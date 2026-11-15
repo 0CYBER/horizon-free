@@ -300,10 +300,20 @@ pub(super) fn reports_dir() -> PathBuf {
 
 /// The path as the player sees it: under the game home's folder when it is there.
 pub(super) fn shown(path: &Path) -> String {
-    path.strip_prefix(horizon_client::logging::game_home())
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    shown_in(path, &horizon_client::logging::game_home())
+}
+
+/// `path` under `home` as `reports/profile-….hzperf`, with `/` on every platform so replies and chat read the same
+/// everywhere; a path outside `home` as the platform writes it, ready to paste into its file manager.
+fn shown_in(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(inside) => inside
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 fn gpu_readout(
@@ -1126,6 +1136,18 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_capture_under_the_home_is_shown_with_slashes() {
+        let home = std::env::temp_dir().join("horizon-home");
+        let inside = home.join("reports").join("profile-20261113-190003Z.hzperf");
+        assert_eq!(
+            shown_in(&inside, &home),
+            "reports/profile-20261113-190003Z.hzperf"
+        );
+        let elsewhere = std::env::temp_dir().join("captures").join("a.hzperf");
+        assert_eq!(shown_in(&elsewhere, &home), elsewhere.display().to_string());
+    }
 
     fn chat_request(line: &str) -> std::result::Result<request::Parsed, String> {
         let tree = Dispatcher::profiler();

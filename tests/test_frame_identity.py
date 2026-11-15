@@ -1,4 +1,5 @@
 """The frame identity harness's PNG comparison: pixels decide, not how the encoder filtered its rows."""
+import json
 import math
 import re
 import struct
@@ -108,6 +109,12 @@ class SessionCheckTests(unittest.TestCase):
     def shot(self, name, rows=None):
         encode(self.dir / name, 4, 4, 8, rows or self.rows, 0)
 
+    def loaded(self, *sessions):
+        """Each session's log with its pack's load line, as the game prints it."""
+        for name in sessions:
+            pack = identity.SESSIONS[name][1]['HORIZON_SHADER_PACK']
+            (self.dir / f'{name}.log').write_text(f'INFO shader pack {pack} 1.0.0: Warm horizon in 12 ms\n')
+
     def test_a_missing_scene_cannot_pass_when_other_screenshots_exist(self):
         scenes = identity.SESSIONS['vanilla'][2]
         for scene in scenes[1:]:
@@ -129,6 +136,7 @@ class SessionCheckTests(unittest.TestCase):
         for scene in hdr_scenes:
             self.shot(f'golden_hour_hdr.{scene}.png')
             self.shot(f'golden_hour_hdr.{scene}-hdr.png')
+        self.loaded('golden_hour', 'golden_hour_hdr')
         problems = identity.session_checks(self.dir, ['vanilla', 'golden_hour', 'golden_hour_hdr', 'hdr_toggle'])
         self.assertEqual(sorted(problems), sorted(
             [f'golden_hour.{s}: the same as without the pack: it didn\'t run' for s in scenes]
@@ -149,8 +157,42 @@ class SessionCheckTests(unittest.TestCase):
             self.shot(f'hdr_toggle.{scene}.png')
             self.shot(f'hdr_toggle.{scene}-hdr.png')
             self.shot(f'hdr_toggle.off.{scene}.png')
+        self.loaded('golden_hour', 'golden_hour_hdr')
         self.assertEqual(identity.session_checks(
             self.dir, ['vanilla', 'golden_hour', 'golden_hour_hdr', 'hdr_toggle']), [])
+
+    def test_a_terrain_pack_session_needs_its_pack_and_labpbr_maps_in_the_log(self):
+        # 🤖 Agent: relief is shot only with the pack, so no picture without it shows whether the pack ran.
+        for scene in identity.SESSIONS['terrain_pack'][2]:
+            self.shot(f'terrain_pack.{scene}.png')
+        log = self.dir / 'terrain_pack.log'
+        log.write_text('INFO shader pack golden_hour_0_2 1.0.0: Warm horizon in 12 ms\n')
+        self.assertEqual(identity.session_checks(self.dir, ['terrain_pack']), [
+            'terrain_pack: the log has no load line of shader pack frame_identity_terrain',
+            'terrain_pack: no LabPBR maps were loaded'])
+        log.write_text('INFO Horizon: LabPBR maps at 16 px, 900 layers\n'
+                       'INFO shader pack frame_identity_terrain 1.0.0: Terrain, Colour in 40 ms\n')
+        self.assertEqual(identity.session_checks(self.dir, ['terrain_pack']), [])
+
+    def test_a_world_pack_is_held_to_the_plain_float_frame_and_its_timed_session_to_timed_passes(self):
+        # 🤖 Agent: vanilla shoots none of world_plain's scenes, so those are what shows the pack ran.
+        other = [bytes(255 - v for v in r) for r in self.rows]
+        plain = identity.SESSIONS['world_plain'][2]
+        for scene in plain:
+            self.shot(f'world_plain.{scene}.png')
+        for name in ('world_pack', 'world_pack_timed'):
+            for scene in identity.SESSIONS[name][2]:
+                self.shot(f'{name}.{scene}.png', self.rows if scene == 'night_sky' else other)
+        self.loaded('world_pack', 'world_pack_timed')
+        sessions = ['world_plain', 'world_pack', 'world_pack_timed']
+        self.assertEqual(sorted(identity.session_checks(self.dir, sessions)), [
+            "world_pack.night_sky: the same as without the pack: it didn't run",
+            "world_pack_timed.night_sky: the same as without the pack: it didn't run",
+            'world_pack_timed: no GPU pass was timed'])
+        self.shot('world_pack.night_sky.png', other)
+        self.shot('world_pack_timed.night_sky.png', other)
+        (self.dir / 'world_pack_timed.stats.json').write_text(json.dumps({'gpu_passes': {'World': 0.1}}))
+        self.assertEqual(identity.session_checks(self.dir, sessions), [])
 
     def test_float_oit_must_change_the_float_picture(self):
         for scene in identity.SESSIONS['float_hdr'][2]:
@@ -171,6 +213,39 @@ class SessionCheckTests(unittest.TestCase):
                          ["float_visbuffer: the visibility buffer didn't run"])
         (self.dir / 'float_visbuffer.log').write_text('drawing through a visibility buffer')
         self.assertEqual(identity.session_checks(self.dir, ['float_visbuffer']), [])
+
+    def test_a_change_that_stops_the_visibility_buffer_fails_where_the_base_ran_it(self):
+        for label in ('base', 'change'):
+            (self.dir / label).mkdir()
+            for scene in identity.SESSIONS['visbuffer'][2]:
+                encode(self.dir / label / f'visbuffer.{scene}.png', 4, 4, 8, self.rows, 0)
+        (self.dir / 'base' / 'visbuffer.log').write_text('Horizon: solid terrain through a visibility buffer')
+        (self.dir / 'change' / 'visbuffer.log').write_text('Horizon: drawing forward')
+        self.assertEqual(identity.build_checks(self.dir, ['visbuffer']),
+                         ["change: visbuffer: the visibility buffer didn't run"])
+
+    def test_improved_transparency_beside_a_missing_reference_shot_reports_the_missing_shot(self):
+        missing, *rest = identity.SESSIONS['vanilla'][2]
+        self.assertIn(missing, identity.SESSIONS['oit'][2])
+        for scene in rest:
+            self.shot(f'vanilla.{scene}.png')
+        for scene in identity.SESSIONS['oit'][2]:
+            self.shot(f'oit.{scene}.png', [row[::-1] for row in self.rows])
+        self.assertEqual(identity.session_checks(self.dir, ['vanilla', 'oit']),
+                         [f'vanilla.{missing}: screenshot missing'])
+
+    def test_the_visibility_buffer_line_stays_in_a_log_longer_than_400_lines(self):
+        for scene in identity.SESSIONS['visbuffer'][2]:
+            self.shot(f'visbuffer.{scene}.png')
+        log = self.dir / 'latest.log'
+        lines = [f'line {i}' for i in range(16)] + ['Horizon: solid terrain through a visibility buffer']
+        log.write_text('\n'.join(lines + [f'line {i}' for i in range(600)]) + '\n')
+
+        def ctl(*words, **options):
+            # 🤖 Agent: horizon-ctl logs prints the log's last --lines lines.
+            return '\n'.join(log.read_text().splitlines()[-int(words[words.index('--lines') + 1]):])
+        identity.save_log(SimpleNamespace(ctl=ctl), self.dir / 'visbuffer.log')
+        self.assertEqual(identity.session_checks(self.dir, ['visbuffer']), [])
 
 
 class HdrGateTests(unittest.TestCase):
@@ -248,6 +323,24 @@ class HdrGateTests(unittest.TestCase):
         for scene in ('sun', 'hud_sun'):
             self.assertIn(f'float_unlit.{scene}: the SDR screenshot isn\'t HDR off\'s within rounding', lifted)
             self.assertIn(f'float_unlit.{scene}: the HDR shot isn\'t its SDR screenshot\'s picture: 4 pixels', lifted)
+
+
+class ReliefPackTests(unittest.TestCase):
+    def test_the_normal_maps_hold_the_heights_and_lean_down_their_slopes(self):
+        folder = Path(tempfile.mkdtemp()) / 'relief'
+        identity.relief_pack(folder)
+        width, height, bpp, raw, (depth, colour) = identity.read_png(
+            folder / 'assets/minecraft/textures/block/stone_n.png')
+        self.assertEqual((width, height, depth, colour), (16, 16, 8, 6))
+        rows = identity.unfilter(width, height, bpp, raw)
+        texel = lambda x, y: tuple(rows[y][4 * x:4 * x + 4])
+        # 🤖 Agent: The top of a bump: flat, at full height. Halfway down its east side, at height 0.55, the
+        # normal leans east (r above 128) and not along y.
+        self.assertEqual(texel(0, 0), (128, 128, 255, 255))
+        r, g, _, a = texel(2, 0)
+        self.assertGreater(r, 160)
+        self.assertEqual((g, a), (128, 140))
+        self.assertEqual(json.loads((folder / 'pack.mcmeta').read_text())['pack']['min_format'], 97)
 
 
 class BaseTests(unittest.TestCase):

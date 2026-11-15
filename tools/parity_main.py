@@ -197,7 +197,7 @@ def bisect(since, timeout, comment, budget=90):
         git("checkout", "-q", "--detach", head)
     for culprit, hit in blames:
         subject = git("log", "-1", "--format=%s", culprit).stdout.strip()
-        number = re.search(r"Merge pull request #(\d+)", subject)
+        number = re.search(r"Merge pull request #(\d+)", subject) or re.search(r"\(#(\d+)\)$", subject)
         report(f"parity-main: {', '.join(hit)} first fail at {culprit[:9]} ({subject}), "
                f"of {len(commits)} merges since {since[:9]}.")
         hit = [name for name in hit if state["named"].get(name) != culprit]

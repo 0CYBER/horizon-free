@@ -107,7 +107,9 @@ impl Goal for SwimToTreasure {
         let (y, x) = (m.kind.max_head_y_rot + 20.0, m.kind.max_head_x_rot);
         m.look_at_speed(next, y, x);
         m.nav_move_to(cx.w, next, 1.3);
-        if m.random.next_int_bound(80).unwrap_or(1) == 0 {
+        // `adjustedTickDelay(80)`: this goal does not require every tick, so
+        // 40, and the draw is the level's random, not the dolphin's.
+        if cx.level.random().next_int_bound(reduced(80)).unwrap_or(1) == 0 {
             // Entity event 38: happy villager particles about the dolphin.
             cx.events.push(MobEvent::AroundSelf {
                 mob: m.id,
@@ -462,12 +464,8 @@ impl Goal for MoveToItem {
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         if let Some(at) = m.extra.point {
             m.nav_move_to_entity(cx.w, at, 0, f64::from(1.2_f32));
-            cx.events.push(MobEvent::Sound(
-                "entity.dolphin.play",
-                [m.position.x, m.position.y, m.position.z],
-                1.0,
-                1.0,
-            ));
+            // `Entity.playSound(DOLPHIN_PLAY, 1.0, 1.0)` is silent-aware.
+            m.sound("entity.dolphin.play", cx.events);
         }
         self.cooldown = 0;
     }
@@ -590,6 +588,104 @@ mod target_tests {
                 !dolphin(false).spares_target(w, Who::Mob(7)),
                 "an adult dolphin takes its attacker"
             );
+        });
+        let _ = ran;
+    }
+}
+
+#[cfg(test)]
+mod treasure_play_tests {
+    use super::*;
+    use crate::mobs::world::with_test_world;
+    use crate::mobs::{Species, sensor_scan_tests::kind};
+    use horizon_core::geometry::Vec3;
+
+    fn dolphin() -> Mob {
+        let mut kind = kind();
+        let k = std::sync::Arc::make_mut(&mut kind);
+        k.id = "minecraft:dolphin".into();
+        k.species = Species::Dolphin;
+        Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0)
+    }
+
+    /// `DolphinSwimToTreasureGoal.tick`: `level.getRandom().nextInt(this.adjustedTickDelay(80))`,
+    /// the level's random and 40 ticks for a goal that does not tick every tick.
+    #[test]
+    fn a_dolphin_hearts_its_treasure_on_the_levels_random_every_40_ticks() {
+        let mut out = None;
+        if !with_test_world(&[], |w, _| {
+            let mut runs = Vec::new();
+            // 119: `new Random(119).nextInt(40) == 0`, but `nextInt(80) != 0`;
+            // 1: neither is 0. Vanilla draws 40 from the level's random.
+            for seed in [119, 1] {
+                let mut m = dolphin();
+                // A treasure far enough that `canContinueToUse` holds.
+                m.extra.home = Some([40, 64, 40]);
+                let mut lr = crate::health::TestLevel::new(seed);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w,
+                    level: &mut lr.level(),
+                    events: &mut events,
+                };
+                let mut goal = SwimToTreasure::default();
+                goal.tick(&mut m, &mut cx);
+                let heart = events
+                    .iter()
+                    .any(|e| matches!(e, MobEvent::AroundSelf { event: 38, .. }));
+                runs.push((seed, goal.stuck, heart));
+            }
+            out = Some(runs);
+        }) {
+            return;
+        }
+        for (seed, stuck, _) in out.as_ref().unwrap() {
+            assert!(!stuck, "seed {seed}: the dolphin found no spot to swim to");
+        }
+        let runs = out.unwrap();
+        assert!(
+            runs[0].2,
+            "seed 119: the level's random says heart (nextInt(40) == 0)"
+        );
+        assert!(
+            !runs[1].2,
+            "seed 1: the level's random says no heart (nextInt(40) != 0)"
+        );
+    }
+
+    /// `Dolphin.MoveToItemGoal.start`: `playSound(DOLPHIN_PLAY, 1.0, 1.0)`,
+    /// which `Entity.playSound` drops for a silent dolphin.
+    #[test]
+    fn a_silent_dolphin_makes_no_sound_swimming_to_an_item() {
+        let ran = with_test_world(&[], |w, _| {
+            for silent in [false, true] {
+                let mut m = dolphin();
+                m.extra.point = Some([8.5, 64.0, 0.5]);
+                m.silent = silent;
+                let mut lr = crate::health::TestLevel::new(0);
+                let mut events = Vec::new();
+                let mut cx = Cx {
+                    w,
+                    level: &mut lr.level(),
+                    events: &mut events,
+                };
+                MoveToItem::default().start(&mut m, &mut cx);
+                let sounds: Vec<_> = events
+                    .iter()
+                    .filter_map(|e| match e {
+                        MobEvent::Sound(name, at, volume, pitch) => {
+                            Some((*name, *at, *volume, *pitch))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if silent {
+                    assert!(sounds.is_empty(), "a silent dolphin squeaked: {sounds:?}");
+                } else {
+                    let feet = [m.position.x, m.position.y, m.position.z];
+                    assert_eq!(sounds, vec![("entity.dolphin.play", feet, 1.0, 1.0)]);
+                }
+            }
         });
         let _ = ran;
     }

@@ -359,10 +359,14 @@ impl Game<'_> {
                 {
                     // Built-in and content seats follow the rider's actual
                     // place in getPassengers, including retained objects.
-                    let seat = self.mobs[..i]
-                        .iter()
-                        .filter(|r| r.extra.mount == Some(v))
-                        .count();
+                    // `Entity.addPassenger` puts a player first, so a mob that
+                    // boards after one sits at index 1.
+                    let player_aboard = vehicle.rider.is_some() || self.riding == Some(v);
+                    let seat = usize::from(player_aboard)
+                        + self.mobs[..i]
+                            .iter()
+                            .filter(|r| r.extra.mount == Some(v))
+                            .count();
                     let seat = if self.persist.off_level.is_empty() {
                         seat
                     } else {

@@ -679,6 +679,12 @@ pub enum HealthEvent {
         source: DamageTypeId,
         amount: f32,
     },
+    /// `LivingEntity.hurtServer`'s `for (MobEffectInstance effect :
+    /// getActiveEffects()) effect.onMobHurt(level, this, source, damage)`: an
+    /// accepted hit's effects answer it, with the damage before armor and
+    /// absorption, so a hit they take whole still reaches them. The game runs
+    /// them (`InfestedMobEffect`).
+    MobHurt,
     Phase(&'static str),
     /// `Player.hurtArmor`: a hit that doesn't bypass armor wears the worn
     /// pieces (`LivingEntity.getDamageAfterArmorAbsorb`); the game applies it.
@@ -718,6 +724,7 @@ impl HealthEvent {
             Self::RecordedDamage { amount, .. } => {
                 format!("record-damage {:08x}", amount.to_bits())
             }
+            Self::MobHurt => "mob-hurt".into(),
             Self::Phase(name) => name.into(),
             Self::ArmorHurt { amount, .. } => format!("hurt-armor {:08x}", amount.to_bits()),
             Self::DamageBroadcast { .. } => "broadcast-damage".into(),
@@ -1864,6 +1871,12 @@ impl HurtWorld for Environment<'_> {
         Ok(self.game_time)
     }
     fn effects_on_hurt(&mut self, _: &mut State, _: f32) -> io::Result<()> {
+        // `for (MobEffectInstance effect : getActiveEffects()) effect.onMobHurt(..)`:
+        // Infested is the only effect that answers a hit, and its roll draws
+        // from the level's random, so the game runs it.
+        if self.status.infested {
+            self.event(HealthEvent::MobHurt);
+        }
         Ok(())
     }
     fn player_hurt_criterion(

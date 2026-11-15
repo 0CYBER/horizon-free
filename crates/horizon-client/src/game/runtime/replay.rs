@@ -5,6 +5,7 @@
 use super::{Game, PendingWorldEntry, Screen};
 use horizon_client::{
     Result,
+    packet_source::PacketSource,
     studio::{Metadata, ReplayDriver},
     text::Text,
 };
@@ -18,7 +19,7 @@ use std::{
 #[derive(Default)]
 pub(super) struct Replay {
     /// The packet replay playing, if any.
-    pub(super) driver: Option<ReplayDriver>,
+    pub(super) driver: Option<Box<dyn PacketSource>>,
     /// Camera perspective to restore after leaving replay playback.
     pub(super) previous_camera_type: Option<horizon_client::camera::CameraType>,
     /// Replay opened from the title screen owns the synthetic remote session.
@@ -313,7 +314,7 @@ impl Game<'_> {
             .replay
             .driver
             .as_ref()
-            .map_or(0, ReplayDriver::position_ms);
+            .map_or(0, |driver| driver.position_ms());
         let packets = if self.replay.standalone {
             let packets = self
                 .replay
@@ -669,7 +670,7 @@ impl Game<'_> {
             self.replay.previous_camera_type = Some(self.camera_type);
             self.replay.standalone = standalone;
         }
-        self.replay.driver = Some(driver);
+        self.replay.driver = Some(Box::new(driver));
         self.camera_type = horizon_client::camera::CameraType::FirstPerson;
         self.title = None;
         self.screen = Screen::Playing;

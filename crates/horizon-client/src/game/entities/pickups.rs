@@ -192,6 +192,7 @@ mod tests {
             health: 5,
             air: 300,
             following: None,
+            fire_ticks: 0,
         }))
     }
 

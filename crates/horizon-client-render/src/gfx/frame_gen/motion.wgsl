@@ -23,33 +23,42 @@ struct Out {
     @location(0) current: vec4<f32>,
     @location(1) previous: vec4<f32>,
     @location(2) uv: vec2<f32>,
-    // 1: a translucent item.
-    @location(3) @interpolate(flat) translucent: u32,
+    // TRANSLUCENT, NEW.
+    @location(3) @interpolate(flat) flags: u32,
 };
 
+// A translucent item, whose texture says where it shows.
+const TRANSLUCENT: u32 = 1u;
+// Nothing to match last frame: drawn as w = 1 only.
+const NEW: u32 = 2u;
+
 @vertex fn vs_motion(@location(0) position: vec3<f32>, @location(1) previous: vec3<f32>,
-    @location(2) uv: vec2<f32>, @location(3) translucent: u32) -> Out {
+    @location(2) uv: vec2<f32>, @location(3) flags: u32) -> Out {
     var out: Out;
     out.uv = uv;
-    out.translucent = translucent;
+    out.flags = flags;
     out.clip = params.jittered * vec4(position, 1.0);
     out.current = params.current * vec4(position, 1.0);
     out.previous = params.previous * vec4(previous, 1.0);
     return out;
 }
 
-// xy: the motion vector in UV (to where the pixel was last frame, FSR's convention), z: 1.
+// xy: the motion vector in UV (to where the pixel was last frame, FSR's convention), z: 1;
+// w: 1 alone for NEW.
 @fragment fn fs_motion(in: Out) -> @location(0) vec4<f32> {
     let stored = textureLoad(depth, vec2<i32>(in.clip.xy), 0).r;
     let tolerance = stored * 1e-3 + 1e-7;
     // Not what the world shows here: a transparent texel, or behind something.
-    if in.translucent != 0u {
+    if (in.flags & TRANSLUCENT) != 0u {
         let alpha = textureSampleLevel(atlas, atlas_sampler, in.uv, 0.0).a;
         if alpha < 0.1 || in.clip.z < stored - tolerance {
             discard;
         }
     } else if abs(in.clip.z - stored) > tolerance {
         discard;
+    }
+    if (in.flags & NEW) != 0u {
+        return vec4(0.0, 0.0, 0.0, 1.0);
     }
     if in.previous.w <= 0.0 {
         discard;

@@ -1,8 +1,8 @@
-// Appended to terrain.wgsl (gfx/ray_query.rs's `Unpacker`): the solid quads of sections
-// about to get a BLAS, written out as plain vertices (`TerrainVertex`, six words each), so
-// ray tracing keeps the section arena in its compact layout. `section_corner` reads a corner
-// exactly as the solid draws do, from a record or a vertex, out of the page bound at
-// `arena_page`.
+// Appended to terrain.wgsl (gfx/ray_scene.rs's `Unpacker`): the solid quads of sections
+// about to get a BLAS, written into their slots of the ray tracing scene's store as plain
+// vertices (`TerrainVertex`, six words each), so ray tracing keeps the section arena in its
+// compact layout. `section_corner` reads a corner exactly as the solid draws do, from a record
+// or a vertex, out of the page bound at `arena_page`.
 struct RtJob {
     // The draw vertex index of the section's first solid quad's first corner (`solid_base`).
     base: u32,

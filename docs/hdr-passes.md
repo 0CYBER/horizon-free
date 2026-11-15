@@ -39,7 +39,8 @@ Under a shader pack its post passes take step 2's place. A 0.2 pack's `[tonemap]
 
 A pass on the world's light belongs in steps 2 and 3, before the tone curve, and never sees the HUD. After the tone
 curve the frame is what the display will show, so no pass there treats it as light. Frame generation interpolates
-the world without the hand and the HUD, and is off with HDR output until #12989 makes the two work together.
+the world's light without the hand and the HUD, on the float frame only, and its made frame goes through the tone
+curve, the HUD's layer and the last pass as the real one does.
 
 ## Rules
 

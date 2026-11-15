@@ -8,7 +8,7 @@ A comment on an issue, on its first line:
 
     /claim             assigns the commenter (GitHub lets an issue's commenters be assigned, no role needed)
     /unclaim           unassigns the commenter
-    /unclaim @login    the repository owner, Ludovic and trusted reviewers release someone else's claim
+    /unclaim @login    the repository owner, the council and trusted reviewers release someone else's claim
 
 Trailing command punctuation is allowed. `/claim` ignores explanatory text; `/unclaim` targets the commenter
 unless the entire remainder of that first line is a login.
@@ -343,7 +343,7 @@ def run(api, cmd: Command, actor: ns.Actor, number: int, reviewers: ns.Reviewers
         return None
     who = cmd.who or login
     if who.lower() != login.lower() and not is_team(actor, reviewers, api.repo):
-        raise Refused(f"Only the repository owner, Ludovic and the trusted reviewers in `{ns.REVIEWERS}` "
+        raise Refused(f"Only the repository owner, the council and the trusted reviewers in `{ns.REVIEWERS}` "
                       "release someone else's claim.")
     if who.lower() not in held:
         raise Refused("You don't hold this issue." if who.lower() == login.lower() else f"`{safe(who)}` doesn't hold this issue.")

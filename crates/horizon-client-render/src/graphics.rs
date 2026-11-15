@@ -902,8 +902,9 @@ pub struct Graphics {
     /// HDR brightness of the HUD and menus, in nits; 0 is Auto: at paper white
     /// ([`Graphics::ui_nits`]). The first-person hand stays at the world's.
     pub hdr_ui_nits: u32,
-    /// HDR Lighting: Horizon's own HDR look, light sources, the sun and sunlight above paper
-    /// white. Off, HDR output shows the same picture as SDR, for shader packs or the vanilla look.
+    /// HDR Lighting: Horizon's lift of light sources and the sun above paper white; lit surfaces
+    /// stay at it. Off, HDR output shows the same picture as SDR, for shader packs or the vanilla
+    /// look.
     pub hdr_lighting: bool,
     /// The graphics driver whose last start ended before HDR output showed a frame (the
     /// marker found, [`HDR_MARKER`]): a window on it stays SDR whatever the mode, until the

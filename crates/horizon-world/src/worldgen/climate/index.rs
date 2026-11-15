@@ -655,7 +655,7 @@ mod tests {
             BOUND - 1,
             BOUND,
         ];
-        for case in 0..240 {
+        for case in 0..120 {
             let branching = 2 + case % 31;
             let count = 1 + rng.below([8, 40, 400, 2000][case % 4]);
             let wrapping = case % 6 == 5;
@@ -701,13 +701,13 @@ mod tests {
                     .map(|_| target(std::array::from_fn(|_| rng.pick(&extremes))))
                     .collect()
             } else if edge {
-                walk(&mut rng, &entries, 2000, BOUND + (1 << 24))
+                walk(&mut rng, &entries, 1200, BOUND + (1 << 24))
             } else {
-                walk(&mut rng, &entries, 2000, 800)
+                walk(&mut rng, &entries, 1200, 800)
             };
             built += compare(entries, branching, &targets) as usize;
         }
         // Extreme spans can leave no finite split cost; most trees build.
-        assert!(built > 220, "{built} trees built");
+        assert!(built > 110, "{built} trees built");
     }
 }

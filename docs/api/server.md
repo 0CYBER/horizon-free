@@ -12,9 +12,9 @@ address), op and deop, the whitelist, and metrics as Prometheus text.
 
 | | Count |
 | --- | --- |
-| Commands | 30 (`init`, `run`, `start`, `stop`, `restart`, `status`, `cmd`, `logs`, `console`, `backup`, `backups`, `restore`, `service`, `panel`, `update`, `rollback`, `config`, `config set`, `import`, `mcp`, `op`, `deop`, `whitelist`, `players`, `kick`, `ban`, `pardon`, `ban-ip`, `pardon-ip`, `version`) |
-| `server.toml` keys | 25 in 7 sections, plus `[properties]` for any other vanilla key |
-| Control API endpoints | 30 under `/api/v1` |
+| Commands | 32 (`init`, `run`, `start`, `stop`, `restart`, `status`, `cmd`, `report`, `logs`, `console`, `backup`, `backups`, `restore`, `service`, `panel`, `update`, `rollback`, `config`, `config set`, `import`, `import-resources`, `mcp`, `op`, `deop`, `whitelist`, `players`, `kick`, `ban`, `pardon`, `ban-ip`, `pardon-ip`, `version`) |
+| `server.toml` keys | 40 in 9 sections, plus `[properties]` for any other vanilla key |
+| Control API endpoints | 32 under `/api/v1` |
 
 ## Guide
 

@@ -89,7 +89,14 @@ impl Game<'_> {
     }
     /// A saved spawner, as `readAdditionalSaveData` leaves it: its tick
     /// count starts again from 0.
-    pub(super) fn load_ominous_item_spawner(&mut self, mut tag: horizon_core::nbt::Tag) {
+    pub(super) fn load_ominous_item_spawner(&mut self, tag: horizon_core::nbt::Tag) {
+        self.load_ominous_item_spawner_transferred(tag, None);
+    }
+    pub(super) fn load_ominous_item_spawner_transferred(
+        &mut self,
+        mut tag: horizon_core::nbt::Tag,
+        transferred: Option<super::entity_initialization::TransferredEntityState>,
+    ) {
         let Some((item, at, spawn_item_after)) =
             horizon_client::entity_nbt::ominous_item_spawner_from_nbt(&tag)
         else {
@@ -99,6 +106,9 @@ impl Game<'_> {
         let id = self.next_entity;
         let saved = horizon_client::entity_nbt::uuid(&tag);
         // Its saved UUID and the attachments saved under it (#7398).
+        if let Some(state) = transferred {
+            self.adopt_transferred_entity_state(id, state);
+        }
         self.remember_uuid(id, saved, &tag);
         // Entity.load's `setXRot` keeps the pitch in -90..90 and its `setRot`
         // takes both `% 360`; the save writes the rotation back from this tag.

@@ -1657,6 +1657,7 @@ impl Def {
             S::Goat => "goat_food",
             S::Sniffer => "sniffer_food",
             S::HappyGhast => "happy_ghast_food",
+            S::Camel => "camel_food",
             S::CamelHusk => "camel_husk_food",
             S::Nautilus | S::ZombieNautilus => "nautilus_food",
             S::SulfurCube => "sulfur_cube_food",

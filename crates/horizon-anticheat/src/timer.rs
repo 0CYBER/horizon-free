@@ -113,6 +113,23 @@ mod tests {
         }
     }
 
+    /// A quiet connection banks at most `max_lag_ms` (1000) and the tick that ends the stall: with
+    /// the tolerance (300), the ticks sent during a stall of up to 1.35 s are not flagged, and those
+    /// of a longer one are (docs/anticheat.md, the timer row).
+    #[test]
+    fn a_stall_banks_at_most_max_lag_ms() {
+        let flagged = |ticks: usize| {
+            let (mut b, c) = (Balance::default(), TimerConfig::default());
+            // `ticks` server ticks with nothing arriving, then the client ticks sent meanwhile.
+            for _ in 0..ticks {
+                b.elapse(50.0, &c);
+            }
+            (0..ticks).any(|_| b.tick_end(20.0, &c).is_some())
+        };
+        assert!(!flagged(26), "a 1.3 s stall");
+        assert!(flagged(28), "a 1.4 s stall");
+    }
+
     #[test]
     fn a_sped_up_client_is_flagged_again_and_again() {
         let mut b = Balance::default();

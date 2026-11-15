@@ -25,7 +25,7 @@ SOURCES = [
     'crates/horizon-client/src/game/native_client_particles.rs',
     'crates/horizon-client/src/game/native_client_particles_fixture.rs',
     'crates/horizon-client-render/src/particles.rs',
-    'tools/native-hook-fragments/client_particles.json',
+    'native-hooks.json',  # Stamping moves the helper here and consumes its fragment.
     'tools/test_native_client_particles_parity.py',
 ]
 

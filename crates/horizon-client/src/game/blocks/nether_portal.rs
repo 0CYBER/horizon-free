@@ -12,6 +12,7 @@
 use super::entity::{Entity as _, entity_lists_of, for_each_entity};
 use super::{Dim, Game, Result, Screen};
 use horizon_client::fast_hash::FxHashMap;
+use horizon_client::mobs::{Species, spawn_rules};
 use horizon_client::nether_portal::{ENTITY_DELAY, PortalState};
 use horizon_client::world::PendingEntity;
 use horizon_core::{
@@ -31,6 +32,10 @@ use {
 
 #[path = "nether_portal/respawn_attributes.rs"]
 mod respawn_attributes;
+
+#[cfg(test)]
+#[path = "tests/portal_spawn_tests.rs"]
+mod portal_spawn_tests;
 
 /// `Player.getDimensionChangingDelay`.
 pub(super) const PLAYER_DELAY: i32 = 10;
@@ -643,27 +648,23 @@ impl Game<'_> {
         )
     }
     /// `LocalPlayer.handlePortalTransitionEffect`: whether the confusion
-    /// effect grows this tick. Entering a portal closes screens other than
-    /// the chat and death screens and plays `block.portal.trigger` when the
-    /// effect starts from nothing.
+    /// effect grows this tick. Entering a portal closes the screen only when
+    /// it does not allow it (`Screen.isAllowedInPortal`), and plays
+    /// `block.portal.trigger` when the effect starts from nothing.
     pub(super) fn client_portal_effect(&mut self) -> bool {
         let inside = std::mem::take(&mut self.portals.client_inside);
         self.portals.client_was_inside = inside;
         if !inside {
             return false;
         }
-        match self.screen {
-            Screen::Playing | Screen::Chat | Screen::Dead => {}
-            Screen::Inventory | Screen::Creative => {
+        // No screen at all (`screen() == null`) is nothing to close.
+        if self.screen != Screen::Playing && !self.screen.allowed_in_portal() {
+            if matches!(self.screen, Screen::Creative | Screen::Inventory) {
                 self.close_container();
                 self.carried = None;
-                self.set_screen(Screen::Playing);
-                self.capture(true);
             }
-            _ => {
-                self.set_screen(Screen::Playing);
-                self.capture(true);
-            }
+            self.set_screen(Screen::Playing);
+            self.capture(true);
         }
         if self.screen_fx.portal == 0.0 {
             let pitch = self.world.random.next_float() * 0.4 + 0.8;
@@ -905,6 +906,56 @@ impl Game<'_> {
         self.player
             .as_ref()
             .is_some_and(|p| self.can_use_portal_of(p, self.riding.is_some(), p.sleeping))
+    }
+    /// The rest of `NetherPortalBlock.randomTick` after a won roll: with a
+    /// player close enough for spawning, a zombified piglin spawns on the block
+    /// under the portal column when it is a valid spawn, plays its ambient
+    /// sound (`EntityType.spawn`) and waits out a portal cooldown.
+    pub(super) fn portal_spawn(&mut self, pos: [i32; 3]) {
+        // ChunkMap.anyPlayerCloseEnoughForSpawning: a non-spectator within 128
+        // blocks of the chunk centre.
+        let centre = [
+            f64::from((pos[0] >> 4) * 16 + 8),
+            f64::from((pos[2] >> 4) * 16 + 8),
+        ];
+        let close = self.level_players().iter().any(|p| {
+            let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
+            !p.spectator && dx * dx + dz * dz < 16384.0
+        });
+        if !close {
+            return;
+        }
+        let facts = self.res.facts();
+        let mut y = pos[1];
+        while &*facts.get(self.world.block(pos[0], y, pos[2])).name == "minecraft:nether_portal" {
+            y -= 1;
+        }
+        // `BlockState.isValidSpawn(level, pos, ZOMBIFIED_PIGLIN)`: the same
+        // per-state table the natural spawns read, so glowstone's 15 light and
+        // bedrock's `isValidSpawn(never)` both refuse it.
+        let w = self.mob_world_base(&[]);
+        if !spawn_rules::is_valid_spawn(Species::ZombifiedPiglin, &w, pos[0], y, pos[2]) {
+            return;
+        }
+        let at = [
+            f64::from(pos[0]) + 0.5,
+            f64::from(y + 1),
+            f64::from(pos[2]) + 0.5,
+        ];
+        if let Some(id) = self.spawn_mob(
+            "minecraft:zombified_piglin",
+            at,
+            false,
+            super::creatures::SpawnSite::Finalizing(
+                horizon_client::mobs::spawn_rules::Reason::Structure,
+            ),
+        ) {
+            // `EntityType.spawn` calls `Mob.playAmbientSound` once the mob is in
+            // the level, before the cooldown below.
+            let _ = self.mob_ambient(id);
+            // setPortalCooldown: the new piglin does not travel at once.
+            self.set_portal_cooldown(id);
+        }
     }
     /// `canUsePortal(false)` of a mob: what the mob itself decides
     /// (`mobs::mob_can_use_portal`), riding nothing, not asleep, and not
@@ -1209,6 +1260,26 @@ impl Game<'_> {
         if let Some(o) = self.orbs.iter().find(|o| o.id == id) {
             return Some((o.position, 0.5, 0.5));
         }
+        let entity = self.entity(id)?;
+        let target = self.native_entity_target(entity)?;
+        if matches!(
+            target,
+            super::commands::Target::Stand(_)
+                | super::commands::Target::Frame(_)
+                | super::commands::Target::Painting(_)
+                | super::commands::Target::Falling(_)
+                | super::commands::Target::Cushion(_)
+                | super::commands::Target::Other(_)
+                | super::commands::Target::Fangs(_)
+                | super::commands::Target::Crystal(_)
+                | super::commands::Target::Dragon(_)
+                | super::commands::Target::Spawner(_)
+                | super::commands::Target::Cloud(_)
+        ) {
+            let at = self.target_position(target)?;
+            let [width, height] = self.entity_dimensions(entity)?;
+            return Some((Vec3::new(at[0], at[1], at[2]), width as f32, height as f32));
+        }
         let p = self
             .creatures
             .projectiles
@@ -1227,6 +1298,44 @@ impl Game<'_> {
         &mut self,
         id: u32,
     ) -> Option<(Tag, super::entity_initialization::TransferredEntityState)> {
+        use super::commands::Target;
+        let entity = self.entity(id)?;
+        let target = self.native_entity_target(entity)?;
+        if matches!(
+            target,
+            Target::Stand(_)
+                | Target::Frame(_)
+                | Target::Painting(_)
+                | Target::Falling(_)
+                | Target::Cushion(_)
+                | Target::Other(_)
+                | Target::Fangs(_)
+                | Target::Crystal(_)
+                | Target::Dragon(_)
+                | Target::Spawner(_)
+                | Target::Cloud(_)
+        ) {
+            let mut tag = self.command_target_nbt(target)?;
+            super::persist::write_attachments(&mut tag, id, &self.entity_attachments);
+            let state = self.take_transferred_entity_state(id);
+            // Remove only the resident body: no death, drops, or discard effects.
+            match target {
+                Target::Stand(_) => self.armor_stands.retain(|e| e.id != id),
+                Target::Frame(_) => self.item_frames.retain(|e| e.id != id),
+                Target::Painting(_) => self.paintings.retain(|e| e.id != id),
+                Target::Falling(_) => self.falling.retain(|e| e.id != id),
+                Target::Cushion(_) => self.cushions.retain(|e| e.id != id),
+                Target::Other(_) => self.others.retain(|e| e.id != id),
+                Target::Fangs(_) => self.fangs.list.retain(|e| e.id != id),
+                Target::Crystal(_) => self.crystals.retain(|e| e.id != id),
+                Target::Dragon(_) => self.discard_resident_dragon(),
+                Target::Spawner(_) => self.ominous_spawners.retain(|e| e.id != id),
+                Target::Cloud(_) => self.breath_clouds.retain(|e| e.id != id),
+                _ => unreachable!("lone traveller kind selected above"),
+            }
+            self.forget_entity(id);
+            return Some((tag, state));
+        }
         enum List {
             Item,
             Tnt,
@@ -1320,7 +1429,8 @@ impl Game<'_> {
         // restoreFrom copies to the arriving entity.
         let cooldown = self.dimension_changing_delay(id);
         if let Some((at, width, height)) = self.lone_traveller_box(id) {
-            let plan = self.entity_plan(entry, at, width, height, false);
+            let living = self.armor_stands.iter().any(|stand| stand.id == id);
+            let plan = self.entity_plan(entry, at, width, height, living);
             if !self.may_travel_through(id, &plan) {
                 return;
             }
@@ -2498,3 +2608,7 @@ impl Game<'_> {
         Ok(false)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/nether_portal_stand_tests.rs"]
+mod stand_tests;

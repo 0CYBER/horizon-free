@@ -1,5 +1,6 @@
-//! Vehicles with nothing of their own to steer or seat with: armor stands, display entities, markers,
-//! interactions and the other entities Horizon keeps as their compound. `RideCommand.mount` forces the ride
+//! Vehicles with nothing of their own to steer or seat with: armor stands, display entities,
+//! interactions and the other entities Horizon keeps as their compound (a marker, which takes no rider at
+//! all, is not one of them). `RideCommand.mount` forces the ride
 //! (`startRiding(vehicle, true, true)`), so any of them takes a rider; the rider then sits at the vehicle's
 //! default passenger attachment and gets off on sneak, as vanilla's `Entity` does for a vehicle that
 //! overrides neither.
@@ -78,6 +79,11 @@ impl Game<'_> {
             });
         }
         let o = self.others.iter().find(|o| o.id == id)?;
+        // `Marker.couldAcceptPassenger` is false: not even `/ride`'s forced
+        // `startRiding(vehicle, true, true)` puts a rider on a marker.
+        if matches!(o.kind.as_str(), "minecraft:marker" | "marker") {
+            return None;
+        }
         let (height, width) = other_height(&o.kind, self.persist_raw(id));
         Some(Seat {
             position: o.position,

@@ -8,6 +8,11 @@ fn saved_silent(extra: Option<&Tag>) -> bool {
 }
 
 impl Game<'_> {
+    /// `Entity.isSilent` for the player this window plays: its saved `Silent`,
+    /// which its sounds already read.
+    pub(super) fn player_silent(&self) -> bool {
+        saved_silent(self.level.player_extra.as_ref())
+    }
     /// `Level.playSound(except, mob, ...)`: the category and actor exclusion
     /// belong to the call site, not to the event's name.
     pub(super) fn play_mob_bound_sound(

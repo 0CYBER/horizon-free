@@ -145,9 +145,16 @@ impl Game<'_> {
     /// One guest's command as that guest, its feedback sent to them; false
     /// when it failed (or the guest is gone).
     pub(in crate::game) fn run_guest_command(&mut self, c: GuestCommand) -> bool {
-        let Some(swap) = self.enter_guest(c.conn) else {
-            return false;
-        };
+        self.run_guest_command_told(c).is_some_and(|(ok, _)| ok)
+    }
+
+    /// `run_guest_command`, with the lines it sent the guest; None when the
+    /// guest is gone.
+    pub(in crate::game) fn run_guest_command_told(
+        &mut self,
+        c: GuestCommand,
+    ) -> Option<(bool, Vec<horizon_client::text::Text>)> {
+        let swap = self.enter_guest(c.conn)?;
         self.chat_capture = Some(Vec::new());
         let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
         let ok = if self.perform_native_command(c.conn, c.permission, &c.command) {
@@ -172,9 +179,9 @@ impl Game<'_> {
         }
         // What the command earned is announced before its feedback.
         self.announce_guest_advancements();
-        for line in lines {
+        for line in &lines {
             let Some(host) = self.lan.as_ref() else {
-                return ok;
+                return Some((ok, lines));
             };
             host.hub.send_to(
                 c.conn,
@@ -186,7 +193,7 @@ impl Game<'_> {
         }
         // The other operators hear of it; never the player whose command it was.
         self.send_admin_feedback(Some(c.conn));
-        ok
+        Some((ok, lines))
     }
 
     /// The `broadcastToAdmins` lines a command queued (`source`: the guest
@@ -292,7 +299,7 @@ impl Game<'_> {
             }
             None => Default::default(),
         };
-        let reg = &mut self.ui.registries;
+        let reg = self.suggestion_registries();
         let level = std::mem::replace(&mut reg.permission, permission);
         let own_players = std::mem::replace(&mut reg.players, players);
         let own_ops = std::mem::replace(&mut reg.ops, ops);
@@ -310,7 +317,7 @@ impl Game<'_> {
             [start, end],
             &mut suggestions,
         );
-        let reg = &mut self.ui.registries;
+        let reg = self.suggestion_registries();
         reg.permission = level;
         reg.players = own_players;
         reg.ops = own_ops;

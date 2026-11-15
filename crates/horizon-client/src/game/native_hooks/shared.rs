@@ -5148,6 +5148,7 @@ pub(super) mod particle_count_tests {
             age: 0,
             on_ground: false,
             count: 1,
+            fire_ticks: 0,
             ticks: 0,
             health: 5,
             air: 300,

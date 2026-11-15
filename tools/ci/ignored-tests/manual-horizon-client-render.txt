@@ -4,4 +4,4 @@ horizon-client-render component_qualified_outputs_write_their_own_channels by-ha
 horizon-client-render reads_of_atomic_members_see_the_atomic_updates by-hand manual # requires a host GPU; run with --ignored --nocapture
 horizon-client-render sunrise_sectors_match_reference_on_real_gpu by-hand manual # requires a host GPU; run with --ignored --nocapture
 horizon-client-render texture_matrix_is_the_identity_in_the_vertex_stage_and_zero_in_the_fragment_stage by-hand manual # requires a host GPU; run with --ignored --nocapture
-horizon-client-render world_view_slot_delivers_only_drawable_requests by-hand manual # requires a Vulkan/Metal/DX12 adapter
+horizon-client-render world_view_slot_delivers_only_drawable_requests by-hand manual # requires a Vulkan/Metal/DX12 adapter; cargo test -p horizon-client-render --test world_view_slots -- --ignored

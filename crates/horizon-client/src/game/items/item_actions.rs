@@ -150,6 +150,9 @@ impl Game<'_> {
                 return Ok(self.interaction_consumed(answer));
             }
         }
+        // `AbstractNautilus.interact` keeps a clicked nautilus
+        // (`setPersistenceRequired`), used or not, before its own handling runs.
+        self.nautilus_clicked(named);
         Ok(self.interact_frame(target)
             || self.interact_armor_stand(target)
             || self.interact_cushion(target)

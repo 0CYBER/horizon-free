@@ -1884,6 +1884,7 @@ mod tests {
     /// occlusion test's (the pass's with `gpu_occlusion.wgsl`) with it.
     #[test]
     fn the_shaders_validate() {
+        let _gpu = crate::gfx::test_gpu::lock();
         use naga::valid::Capabilities as C;
         let pass = include_str!("gpu_culling.wgsl");
         let test = [pass, include_str!("gpu_occlusion.wgsl")].concat();
@@ -1904,6 +1905,7 @@ mod tests {
     /// mark the whole table.
     #[test]
     fn records_keep_ids_page_counts_and_moves() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mut records = Records::default();
         let a = records.insert(Record::new((0, 0, 0), 0, 0, 1, 7));
         let b = records.insert(Record::new((1, 0, 0), 0, 256, 2, 9));
@@ -2058,6 +2060,7 @@ mod tests {
     /// finite, are `UNBOUNDED`; no bounds are the cell.
     #[test]
     fn boxes_round_outward_and_meet_their_cell() {
+        let _gpu = crate::gfx::test_gpu::lock();
         // Each axis's low and high ends.
         let ends = |packed: u32| -> [[i32; 2]; 3] {
             std::array::from_fn(|axis| {
@@ -2095,6 +2098,7 @@ mod tests {
     /// constants both sides use.
     #[test]
     fn params_and_records_match_the_shader() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let module = naga::front::wgsl::parse_str(include_str!("gpu_culling.wgsl")).unwrap();
         let mut layouter = naga::proc::Layouter::default();
         layouter.update(module.to_ctx()).unwrap();
@@ -2192,6 +2196,7 @@ mod tests {
     /// from the camera's at every render distance to 130.
     #[test]
     fn the_shaders_near_is_in_view_distance() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let (cam_x, cam_z) = (-37, 1_234_567);
         for r in 0..=130 {
             let params = Params {
@@ -2220,6 +2225,7 @@ mod tests {
     /// float's key passes a NaN threshold's, either way.
     #[test]
     fn order_keys_compare_as_their_floats() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mut floats = Vec::new();
         for x in [
             0.0,
@@ -2265,6 +2271,7 @@ mod tests {
     /// which GPU culling never meets, is drawn whole.
     #[test]
     fn the_shaders_runs_are_facing_runs() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mut rng = Rng(0xBB67_AE85_84CA_A73B);
         let mut meshes: Vec<Sides> = (0..2_000).map(|_| sorted_sides(&mut rng)).collect();
         let special = [
@@ -2364,6 +2371,7 @@ mod tests {
     /// exactly the quads of the buckets seen.
     #[test]
     fn a_section_has_at_most_four_runs() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let eye = [order_key(0.0); 3];
         let mut most = 0;
         // Each bucket empty (0), seen (1) or left out (2); the other never left out.
@@ -2402,6 +2410,7 @@ mod tests {
     /// infinity.
     #[test]
     fn planes_past_i32_take_the_cpu_path() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mut rng = Rng(0x0F1E_2D3C_4B5A_6978);
         let mut words = Vec::new();
         for _ in 0..500 {
@@ -2452,6 +2461,7 @@ mod tests {
     /// origin, the difference facing compares.
     #[test]
     fn the_integer_test_keeps_what_the_walk_keeps() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mut rng = Rng(0x5DEE_CE66_D1CE_4E5B);
         let mut words = Vec::new();
         let (mut listed, mut near_sections, mut rejected, mut inside) = (0, 0, 0, 0);
@@ -2605,6 +2615,7 @@ mod tests {
     /// somewhere: the margin is needed.
     #[test]
     fn the_margin_covers_production_rounding() {
+        let _gpu = crate::gfx::test_gpu::lock();
         let mut rng = Rng(0x1405_7B7E_F767_814F);
         let min_y = crate::chunk::MIN_Y;
         let mut words = Vec::new();
@@ -2731,7 +2742,44 @@ mod tests {
         assert!(worst[2].max(worst[3]) > 1.0 / SCALE, "{worst:?}");
     }
 
-    use crate::gfx::test_gpu::culling::on_each_device;
+    /// A device on `adapter` that draws counts with first instances, if it
+    /// can. Not Intel's Gen11 and Gen12 Vulkan driver, which gets first
+    /// instances wrong and is never offered GPU culling (`supported`).
+    fn device(adapter: &wgpu::Adapter, name: &str) -> Option<(wgpu::Device, wgpu::Queue)> {
+        let needed =
+            wgpu::Features::MULTI_DRAW_INDIRECT_COUNT | wgpu::Features::INDIRECT_FIRST_INSTANCE;
+        let timing = adapter.features()
+            & (wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
+                | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+                | wgpu::Features::SHADER_EARLY_DEPTH_TEST);
+        if !adapter.features().contains(needed)
+            || super::super::flat::is_broken_intel_vulkan(&adapter.get_info())
+        {
+            return None;
+        }
+        eprintln!("GPU culling on {} ({name})", adapter.get_info().name);
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: needed | timing,
+            ..Default::default()
+        }))
+        .ok()
+    }
+
+    /// `test` on each device here that draws counts with first instances
+    /// (`test_gpu::each_adapter`).
+    fn on_each_device(test: impl Fn(&wgpu::Device, &Queue)) {
+        let mut tested = false;
+        for (adapter, name) in crate::gfx::test_gpu::each_adapter() {
+            if let Some((device, queue)) = device(&adapter, name) {
+                test(&device, &Queue::new(queue, false));
+                tested = true;
+            }
+        }
+        if !tested {
+            eprintln!("no GPU with indirect count draws: skipped");
+        }
+    }
 
     fn read(
         device: &wgpu::Device,
@@ -2777,6 +2825,7 @@ mod tests {
     /// them to the CPU.
     #[test]
     fn the_gpu_draws_what_the_integer_test_keeps() {
+        let _gpu = crate::gfx::test_gpu::lock();
         on_each_device(draws_match);
     }
 
@@ -3139,6 +3188,7 @@ mod tests {
     /// Detail times both phases and the uploads and leaves counts and draws as an untimed frame's.
     #[test]
     fn detail_times_both_phases_and_leaves_the_draws_alone() {
+        let _gpu = crate::gfx::test_gpu::lock();
         on_each_device(|device, queue| {
             let mut rng = Rng(0x1F83_D9AB_FB41_BD6B);
             let (frustum, _) = view(&mut rng);
@@ -3251,6 +3301,7 @@ mod tests {
     /// or unmapped again (as `timing::GpuTimer`'s), so the statistics stop.
     #[test]
     fn the_statistics_come_back_with_their_frame() {
+        let _gpu = crate::gfx::test_gpu::lock();
         use super::super::submit::{AfterSubmit, Job};
         on_each_device(|device, queue| {
             for threaded in [false, true] {
@@ -3322,6 +3373,7 @@ mod tests {
     /// pixel clear.
     #[test]
     fn the_count_draws_draw_each_kept_section_with_its_origin() {
+        let _gpu = crate::gfx::test_gpu::lock();
         on_each_device(draws_land);
     }
 
