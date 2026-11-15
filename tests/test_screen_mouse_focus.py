@@ -22,8 +22,8 @@ class ScreenMouseFocusTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("rustc"), "requires Rust")
     def test_accepted_press_focus(self):
-        source = (ROOT / "crates/horizon-client/src/game/pad_menu.rs").read_text()
-        source = source.replace("pub(super) fn", "fn")
+        source = (ROOT / "crates/horizon-client/src/game/pad_menu/keys.rs").read_text()
+        source = source.replace("pub(in crate::game) fn", "fn")
         fixture = r"""
 #[derive(Clone, Copy, PartialEq)]
 enum ElementState { Pressed, Released }
