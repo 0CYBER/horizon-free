@@ -15,7 +15,7 @@ pub trait Hooks {
         side = "client",
         contract = "cancel",
         out = "canceled",
-        neoforge = "InputEvent.InteractionKeyMappingTriggered, InputEvent.Key"
+        neoforge = "none (nearest: InputEvent.InteractionKeyMappingTriggered, InputEvent.Key)"
     )]
     fn key_mapping_pre();
 }

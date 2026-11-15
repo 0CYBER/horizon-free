@@ -37,6 +37,7 @@ pub trait Hooks {
         out = "movable",
         scope = "block",
         key = "state",
+        neoforge = "none (NeoForge has no counterpart; IBlockExtension.getRelocability is unrelated)",
         target = "horizon_client::game::native_hooks::piston_carries_block_entity::GameLevel<'_>::native_piston_carries_block_entity"
     )]
     fn piston_carries_block_entity();
