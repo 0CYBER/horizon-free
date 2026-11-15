@@ -2445,11 +2445,18 @@ mod brute_sound_tests {
     /// the fight activity and growls `entity.piglin_brute.angry`, losing the
     /// target is silent, and a piglin keeps `entity.piglin.angry`.
     #[test]
+    fn a_brute_with_a_target_selects_the_fight_activity() {
+        let mut brute = mob(Species::PiglinBrute);
+        brute.ai.target = Some(Who::Player);
+        assert_eq!(activity(&brute), Activity::Fight);
+    }
+
+    /// The growl itself, with the activity switch.
+    #[test]
     #[ignore = "daily"]
     fn a_brute_names_the_brute_growl() {
         let mut brute = mob(Species::PiglinBrute);
         brute.ai.target = Some(Who::Player);
-        assert_eq!(activity(&brute), Activity::Fight);
         // The switch itself takes a level; it runs where the vanilla data is.
         with_test_world(&[], |w, _| {
             let mut events = Vec::new();

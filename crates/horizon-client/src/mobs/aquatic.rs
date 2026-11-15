@@ -1738,8 +1738,7 @@ mod squid_tests {
 
     /// `Squid.aiStep`: sinking velocity on land is applied even when NoAI skips server AI (#14467).
     #[test]
-    #[ignore = "daily"]
-    fn noai_squid_on_land_sets_sinking_velocity() {
+    fn noai_squid_sinks_in_squid_ai_step() {
         let mut k = crate::mobs::sensor_scan_tests::kind();
         let km = Arc::make_mut(&mut k);
         km.id = "minecraft:squid".into();
@@ -1749,7 +1748,12 @@ mod squid_tests {
         squid.no_ai = true;
         squid_ai_step(&mut squid);
         assert_eq!(squid.velocity, Vec3::new(0.0, -0.0784000015258789, 0.0));
+    }
 
+    /// The same sinking velocity through a whole mob tick in a world.
+    #[test]
+    #[ignore = "daily"]
+    fn noai_squid_on_land_sets_sinking_velocity() {
         use crate::mobs::world::with_test_world;
         let _ = with_test_world(&[], |w, types| {
             let kind = Arc::new(types.types["minecraft:squid"].clone());
