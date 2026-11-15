@@ -4,9 +4,16 @@
 pub trait Hooks {
     /// A recipe ingredient of a mod's own kind: the entry named a type in a
     /// namespace outside `minecraft:`, and the loader kept it for this call.
-    /// The kind and the converted NBT compound the file wrote are here; fill `items` with the
+    /// The kind and the converted NBT compound the file wrote are here. JSON `true` and
+    /// `false` become `Byte` 1 and 0 (a bool cannot be told from a number); an integer
+    /// becomes the smallest of `Byte`, `Short`, `Int` and `Long` that holds it, and so does
+    /// a decimal that is an exact integer fitting in `Long` (`1.0`, `1e3`, `-0.0`). Any other
+    /// decimal becomes `Float` if it round-trips through `f32`, else `Double`. The width depends
+    /// on the value, so read numeric tags by value across variants. Fill `items` with the
     /// item ids the ingredient matches (item ids only: components are not
-    /// checked here; a match-time hook follows separately). Duplicates are
+    /// checked here; a match-time hook follows separately). A non-empty list rejects every
+    /// item outside it before the match-time hook runs, so it must contain every item the
+    /// hook should accept; the hook can only narrow it. Duplicates are
     /// removed keeping first-seen order. The hook is called once per
     /// occurrence of the kind (nested inside a compound, intersection or
     /// difference too, and under any slot a recipe reads an ingredient from) in
