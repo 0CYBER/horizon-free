@@ -36,6 +36,13 @@ class IgnoredTests(unittest.TestCase):
         self.assertIn("target 2 started 2 tests", log)
         self.assertIn("cargo exit 0", log)
 
+    def test_a_target_whose_source_is_in_another_package_folder_completes(self):
+        # horizon-client-lib's `[[test]]` targets point at ../horizon-client/tests/, as the daily-rows leg runs them.
+        output = ("     Running ../horizon-client/tests/lan_bot.rs (target/debug/deps/lan_bot-0123)\nrunning 1 test\n"
+                  "test synced ... ok\n" + summary(passed=1))
+        result, _ = self.run_output(output)
+        self.assertEqual(result, {"synced": True})
+
     def test_known_failure_is_still_available_to_policy(self):
         result, _ = self.run_output(target(2, "test good ... ok\ntest bad ... FAILED\n", summary(passed=1, failed=1)), 101)
         self.assertEqual(result, {"good": True, "bad": False})
