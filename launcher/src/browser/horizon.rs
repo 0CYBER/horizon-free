@@ -69,6 +69,22 @@ pub fn is_native_mod(id: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// How many of the registry's projects this Horizon left out because none of their versions
+/// passes the index's rules (mods published for the earlier mod system), by the index already
+/// read (never the network): None when no index was read.
+pub fn projects_left_out() -> Option<usize> {
+    let index = known_index()?;
+    let mut ids: Vec<&str> = index
+        .left_out
+        .iter()
+        .filter(|l| l.version.is_none() && index.project(&l.id).is_none())
+        .map(|l| l.id.as_str())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    Some(ids.len())
+}
+
 /// The GitHub stars of the registry's project `id`, by the index already read (never the
 /// network): None when it has none, when its source isn't a GitHub repository, or when no index
 /// was read.

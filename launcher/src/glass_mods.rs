@@ -165,7 +165,8 @@ impl Launcher {
                 d.child(self.glass_source_switch(cx))
             })
             .child(self.mods_filters(cx))
-            .children(self.mods_target_line(cx));
+            .children(self.mods_target_line(cx))
+            .children(self.mods_left_out_note());
         // The search, and the sort on its right.
         let search = div()
             .m(px(4.))
@@ -356,6 +357,29 @@ impl Launcher {
             );
         }
         wrap
+    }
+
+    /// A quiet line under Horizon's mod list when the registry holds mods this Horizon can't
+    /// use yet (made for the earlier mod system), with how many.
+    fn mods_left_out_note(&self) -> Option<Div> {
+        let m = &self.mods;
+        if m.source != SourceId::Horizon || m.kind != PackKind::Mod || m.java_for(m.kind).is_some()
+        {
+            return None;
+        }
+        let count = browser::horizon::projects_left_out().filter(|n| *n > 0)?;
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .px(px(4.))
+                .child(ui::icon("information-circle", 14., white(ink::QUIET)))
+                .child(ui::text(13., FontWeight::NORMAL, ink::QUIET).child(trf(
+                    "{count} mods made for Horizon's earlier mod system aren't listed here yet.",
+                    &[("count", &count.to_string())],
+                ))),
+        )
     }
 
     /// The search's results as the mockup's rows (`ROW`): a click picks one for the card beside.
