@@ -445,6 +445,41 @@ mod tests {
     }
 
     #[test]
+    fn a_clipped_rectangle_gradient_keeps_its_colour_ramp() {
+        let atlas = atlas();
+        let top = rgba(255, 0, 0, 255);
+        let bottom = rgba(0, 0, 255, 255);
+        let mut contained = batch();
+        contained.fill_gradient(&atlas, (10.0, 10.0, 20.0, 8.0), top, bottom);
+        let original: Vec<_> = contained.vertices.iter().map(|v| v.color).collect();
+        contained.clip_since(0, 0.0, 0.0, 100.0, 100.0);
+        assert_eq!(
+            contained
+                .vertices
+                .iter()
+                .map(|v| v.color)
+                .collect::<Vec<_>>(),
+            original
+        );
+
+        let mut cut = batch();
+        cut.fill_gradient(&atlas, (10.0, 10.0, 20.0, 8.0), top, bottom);
+        cut.clip_since(0, 0.0, 12.0, 100.0, 16.0);
+        let top_cut = crate::hud_kit::shapes::mix_colour(top, bottom, 0.25);
+        let bottom_cut = crate::hud_kit::shapes::mix_colour(top, bottom, 0.75);
+        let colours: Vec<_> = cut.vertices.iter().map(|v| v.color).collect();
+        assert!(
+            colours.contains(&top_cut),
+            "missing interpolated top colour {top_cut:#x}: {colours:?}"
+        );
+        assert!(
+            colours.contains(&bottom_cut),
+            "missing interpolated bottom colour {bottom_cut:#x}: {colours:?}"
+        );
+        assert_ne!(top_cut, bottom_cut);
+    }
+
+    #[test]
     fn alpha_and_translate_change_only_what_came_after_the_mark() {
         let atlas = atlas();
         let mut b = batch();

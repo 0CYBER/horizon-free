@@ -22,6 +22,9 @@ pub(super) fn clip_corner(
             bl.glint_uv[i],
         )
     });
+    let top = crate::hud_kit::shapes::mix_colour(tl.color, tr.color, s);
+    let bottom = crate::hud_kit::shapes::mix_colour(bl.color, br.color, s);
+    v.color = crate::hud_kit::shapes::mix_colour(top, bottom, r);
     v.depth = mix(tl.depth, tr.depth, br.depth, bl.depth);
     v
 }
