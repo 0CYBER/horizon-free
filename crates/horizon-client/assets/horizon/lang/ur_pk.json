@@ -242,8 +242,6 @@
   "Black Level": "بلیک لیول",
   "UI Brightness": "UI کی چمک",
   "HDR Lighting": "HDR لائٹنگ",
-  "Smooth Gradients": "ہموار گریڈینٹس",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-بٹ فریم: اندھیرے آسمان اور سائے پٹی دار نہیں ہوتے۔ تھوڑا زیادہ VRAM۔ اگلی شروعات پر۔",
   "Battery Mode": "بیٹری موڈ",
   "Graphics API": "گرافکس API",
   "Translucent Batching": "ٹرانسلوسنٹ بیچنگ",

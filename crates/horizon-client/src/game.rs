@@ -2117,8 +2117,8 @@ struct Game<'a> {
     /// again only when the feet block (or the dimension) changes.
     debug_density: RefCell<debug_keys::DensityCache>,
     pending_pack_reload: bool,
-    /// HDR, Smooth Gradients, picked path and outcome at the last frame attempt, including a failed
-    /// replacement (`follow_frame`).
+    /// HDR, picked path and outcome at the last frame attempt, including a failed replacement
+    /// (`follow_frame`).
     frame_attempted: render_settings::FrameAttempt,
     /// When `resourcepacks/` was last looked at for the open pack screen, and what it held
     /// (`watch_pack_folder`).
@@ -7077,7 +7077,7 @@ impl Game<'_> {
                         pos: v.to_array(),
                         uv,
                         // ExperienceOrbRenderer: `RenderTypes.entityTranslucent`; in HDR
-                        // output the orbs shine (entity.wgsl fs_hdr_mark).
+                        // output the orbs shine (entity.wgsl hdr_entity_mark).
                         layer: horizon_client::gfx::OIT_ENTITY
                             | u32::from(horizon_client::mesher::VERY_BRIGHT) << 16,
                         color,

@@ -242,8 +242,6 @@
   "Black Level": "Sort niveau",
   "UI Brightness": "UI lysstyrke",
   "HDR Lighting": "HDR-belysning",
-  "Smooth Gradients": "Bløde gradienter",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-bit frame: mørke himle og skygger får ikke bånd. Lidt mere VRAM. Næste start.",
   "Battery Mode": "Batteritilstand",
   "Graphics API": "Grafik API",
   "Translucent Batching": "Gennemskinnelig batching",

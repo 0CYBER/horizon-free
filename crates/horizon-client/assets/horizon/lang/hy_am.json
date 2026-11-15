@@ -242,8 +242,6 @@
   "Black Level": "Սև մակարդակ",
   "UI Brightness": "UI պայծառություն",
   "HDR Lighting": "HDR լուսավորություն",
-  "Smooth Gradients": "Հարթ գրադիենտներ",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-բիթ կադր. մութ երկինքներն ու ստվերները չեն շերտավորվում։ Մի փոքր ավելի շատ VRAM։ Հաջորդ գործարկումից։",
   "Battery Mode": "Մարտկոցի ռեժիմ",
   "Graphics API": "Գրաֆիկական API",
   "Translucent Batching": "Կիսաթափանցիկ փաթեթավորում",

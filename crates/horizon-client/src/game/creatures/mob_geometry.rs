@@ -268,7 +268,7 @@ impl Game<'_> {
                 );
             }
             // HDR output: mobs that are light shine by their kind, as blocks do (entity.wgsl
-            // fs_hdr_mark); a tier's window lifts only their bright texels.
+            // hdr_entity_mark); a tier's window lifts only their bright texels.
             if let Some(tier) = match mob.species() {
                 Species::Blaze => Some(horizon_client::mesher::BRIGHT),
                 Species::MagmaCube | Species::GlowSquid => Some(horizon_client::mesher::LOW),

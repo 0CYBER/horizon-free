@@ -83,10 +83,10 @@ fn shown(
     let frame = hdr.frame(device, SIZE);
     let mut encoder = device.create_command_encoder(&Default::default());
     paint(&mut encoder, &frame);
-    hdr.keep_world(&mut encoder, None);
+    hdr.hud_backdrop(&mut encoder, None);
     super::super::hud_coverage::clear(&mut encoder, &hdr.coverage_view().unwrap());
     let image = if screenshot {
-        hdr.capture(device, queue, &mut encoder, true).unwrap()
+        hdr.capture(device, queue, &mut encoder).unwrap()
     } else {
         let image = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -98,7 +98,7 @@ fn shown(
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        hdr.present(queue, &mut encoder, &image, true, None);
+        hdr.present(queue, &mut encoder, &image, None);
         image
     };
     let row = SIZE[0] * image.format().block_copy_size(None).unwrap();

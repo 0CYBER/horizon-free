@@ -52,8 +52,8 @@ struct HorizonMaterialOut {
     @location(8) @interpolate(flat) face: u32,
     @location(9) @interpolate(flat) fluid_quad: u32,
     @location(10) @interpolate(flat) emission: f32,
-    // terrain.wgsl's `emission`, for HDR output's mark.
-    @location(11) @interpolate(flat) hdr_code: u32,
+    // How far the section's fade-in is from whole, of 65535 (`horizon_material_faded`).
+    @location(11) @interpolate(flat) fade: u32,
     // The point on the flat face (`position` without `[displacement]`'s relief), how much of
     // that relief it has (`MaterialInput.displaced`) and the face's normal (0 when the
     // fragment finds it).
@@ -65,11 +65,11 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
     light: vec2<u32>, origin: vec4<f32>) -> HorizonMaterialOut {
     let pos = horizon_material_displace(position + origin.xyz, uv, layer, color, light);
     var out = horizon_material_out(pos, uv, layer, color, vec2<f32>(light));
-    // The section's fade-in (`RenderSection.getVisibility`), as how far it is from whole, in the
-    // high 16 bits of `hdr_code`: no varying of its own, and 0 (whole) where nothing fades. It is
-    // the same for the whole section, so the flat varying loses nothing.
+    // The section's fade-in (`RenderSection.getVisibility`), as how far it is from whole: 0
+    // (whole) where nothing fades. It is the same for the whole section, so the flat varying
+    // loses nothing.
     let instance = horizon_terrain_instance_visibility(origin.w);
-    out.hdr_code |= u32(round((1.0 - instance) * 65535.0)) << 16u;
+    out.fade = u32(round((1.0 - instance) * 65535.0));
     return out;
 }
 // terrain.wgsl's fade-in (terrain.vsh's chunkVisibility): whole within 16 blocks, the section's
@@ -77,7 +77,7 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
 // the interpolated distance, as vanilla's interpolated `visibility`, not once per triangle. In
 // vanilla's gamma, as the fog: on a frame of linear light, encoded for it.
 fn horizon_material_faded(in: HorizonMaterialOut, color: vec4<f32>) -> vec4<f32> {
-    let instance = 1.0 - f32(in.hdr_code >> 16u) / 65535.0;
+    let instance = 1.0 - f32(in.fade) / 65535.0;
     let visibility = mix(1.0, instance, clamp((in.spherical - 16.0) / 16.0, 0.0, 1.0));
     let gamma = horizon_terrain_frame_gamma(color);
     let faded = mix(horizon_terrain_globals.fog_color.rgb, gamma.rgb, visibility);
@@ -110,9 +110,9 @@ fn horizon_material_out(pos: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f
     out.fluid_quad = u32(fluid);
     // The tier (0 none, 1 low, 2 incandescent, 3 bright, 4 very bright) as how strongly the
     // face shines: a redstone torch 7/15, a torch 14/15, glowstone 1.
-    out.hdr_code = 15u - (flags & 15u);
+    let code = 15u - (flags & 15u);
     // Codes above 4 are the same tiers, shining all over rather than in their bright parts.
-    let tier = select(out.hdr_code, out.hdr_code - 4u, out.hdr_code > 4u);
+    let tier = select(code, code - 4u, code > 4u);
     out.emission = select(min(f32(tier) * 7.0 / 15.0, 1.0), 0.0, tier == 0u);
     out.base = pos;
     out.displaced = 0.0;
@@ -199,24 +199,6 @@ struct HorizonMaterialSolid {
     // Its four floats' bits (`SURFACE_FORMAT` is an integer format).
     @location(1) surface: vec4<u32>,
 }
-// What `fs_solid` leaves in the frame's alpha for HDR output, from the sprite before the pack's
-// material: the pack decides the colour, Horizon still knows which pixels are light sources.
-fn horizon_material_mark(in: HorizonMaterialOut, texel: vec4<f32>) -> f32 {
-    if horizon_terrain_HDR_WRITE_LIGHT { return 1.0; }
-    let code = in.hdr_code & 15u;
-    if code > 0u {
-        let whole = code > 4u;
-        let tier = select(code, code - 4u, whole);
-        let l = in.layer & 0x7fffu;
-        let t = textureLoad(horizon_terrain_emission_thresholds,
-            vec2(i32(l % horizon_terrain_SPRITE_SPLIT), i32(l / horizon_terrain_SPRITE_SPLIT)), 0);
-        let y = horizon_terrain_brightness(texel.rgb);
-        if whole || y >= t.r {
-            return horizon_terrain_hdr_mark(tier, y);
-        }
-    }
-    return 1.0;
-}
 @fragment fn horizon_material_fs_solid(in: HorizonMaterialOut) -> HorizonMaterialSolid {
     // `[displacement]`'s grid draws these pixels.
     if length(in.base) < horizon_displace_distance - 0.05 && horizon_displaced_layer(in.layer) {
@@ -226,15 +208,13 @@ fn horizon_material_mark(in: HorizonMaterialOut, texel: vec4<f32>) -> f32 {
 }
 fn horizon_material_solid(in: HorizonMaterialOut) -> HorizonMaterialSolid {
     let color = horizon_material_faded(in, horizon_material_color(in, false));
-    let texel = horizon_terrain_sprite(in.uv, in.layer & 0x7fffu);
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
     if !horizon_material_covers(in, color, 0.5) && (in.layer & 0x8000u) == 0u { discard; }
     if horizon_surface.w == 0.0 {
         set_surface(horizon_material_face_normal, 0.0, 0.0);
     }
     var out: HorizonMaterialSolid;
-    let mark = horizon_material_mark(in, texel);
-    out.color = horizon_material_fogged(vec4(color.rgb, mark), in.spherical, in.cylindrical);
+    out.color = horizon_material_fogged(vec4(color.rgb, 1.0), in.spherical, in.cylindrical);
     out.surface = bitcast<vec4<u32>>(vec4(horizon_surface.xyz, in.clip.z));
     return out;
 }
@@ -818,7 +798,6 @@ override TEST_OVERLAY: u32 = 0u;
     o.uv = vec2(0.5);
     o.tint = vec4(1.0);
     o.lightmap = vec3(1.0);
-    o.hdr_code = TEST_TIER;
     o.base = vec3(1.0);
     return o;
 }
@@ -843,23 +822,21 @@ mod tests {
         report.stages.remove(0)
     }
 
-    /// The fade-in packed above the HDR code: a section a quarter visible (`section_instance`
-    /// with step 1: mantissa `1 - visibility` = 0.75) keeps its visibility through the code, and
-    /// a fragment 24 blocks away, half-way into the 16-block blend, is 1 - (1 - 0.25) / 2 = 0.625
-    /// visible; the code's low nibble survives.
+    /// The fade-in as its varying carries it: a section a quarter visible (`section_instance`
+    /// with step 1: mantissa `1 - visibility` = 0.75) keeps its visibility, and a fragment 24
+    /// blocks away, half-way into the 16-block blend, is 1 - (1 - 0.25) / 2 = 0.625 visible.
     #[test]
-    fn the_fade_in_rides_the_hdr_code() {
+    fn the_fade_in_keeps_the_sections_visibility() {
         let w = f32::from_bits(1.0f32.to_bits() | (0.75 * 8_388_608.0) as u32);
         // `horizon_material_vertex`.
         let instance = 1.0 - (w.to_bits() & 0x7fffff) as f32 / 8_388_608.0;
-        let code = 7u32 | (((1.0 - instance) * 65535.0).round() as u32) << 16;
-        // `horizon_material_faded` and `horizon_material_mark`.
-        let unpacked = 1.0 - (code >> 16) as f32 / 65535.0;
+        let fade = ((1.0 - instance) * 65535.0).round() as u32;
+        // `horizon_material_faded`.
+        let unpacked = 1.0 - fade as f32 / 65535.0;
         assert!((unpacked - 0.25).abs() < 1.0 / 65535.0);
         let blend = ((24.0f32 - 16.0) / 16.0).clamp(0.0, 1.0);
         let visibility = 1.0 + (unpacked - 1.0) * blend;
         assert!((visibility - 0.625).abs() < 1.0 / 65535.0);
-        assert_eq!(code & 15, 7);
     }
 
     #[test]

@@ -1,38 +1,31 @@
-// Horizon's HDR output pass: the frame, drawn as without HDR in vanilla's gamma
-// space, decoded to linear light at the paper white and written to the swapchain:
-// HDR10 (BT.2020, PQ) or scRGB (1.0 = 80 nits). Bright pixels of light sources that still show the
-// world as it was before the hand and HUD are expanded towards the peak.
+// Horizon's HDR output: the frame's light, stored in vanilla's gamma, fitted to the display (the
+// tone curve), the HUD laid over it, and the picture written to the swapchain at the paper
+// white: HDR10 (BT.2020, PQ) or scRGB (1.0 = 80 nits).
 @group(0) @binding(0) var frame: texture_2d<f32>;
+// The tone curve's input: the frame as the post effects left it (Hdr::tonemap).
 @group(0) @binding(1) var world: texture_2d<f32>;
 
 struct Params {
     // Paper white in scRGB units (nits / 80).
     paper: f32,
-    // Peak brightness relative to paper white; 1 expands nothing.
+    // Peak brightness relative to paper white.
     peak: f32,
-    // 1 when this frame drew a world.
-    world: f32,
-    // 1 greys what isn't expanded and tints what is (HORIZON_HDR_DEBUG=1).
-    debug: f32,
     // 1 for an HDR10 swapchain, 0 for scRGB.
     pq: f32,
     // The display's black level in nits; 0 leaves the picture as it is.
     black: f32,
     // The HUD and menus' brightness as a share of paper white.
     ui: f32,
-    // Per tier, low to very bright (hdr.rs `COMPAT_SHARES`): the share of the headroom
-    // its fully lifted pixels get.
-    share: vec4<f32>,
-    // HDR calibration (hdr_calibration.rs): x its step (0 none, 1 black level,
-    // 2 peak, 3 paper white), y the slider in nits, z where its controls start,
-    // a share of the height.
-    calibration: vec4<f32>,
     // The scene's peak in units of paper white where Horizon lifts the world (hdr.rs
     // `SCENE_PEAK`), else 0: what the tone curve maps onto the display's peak (`tone_scale`).
     scene_peak: f32,
     // The sun's disc's white in units of paper white (hdr.rs `sun_peak`): the scene's peak, and
     // on a display above it the display's, up to `SUN_CAP`. Light past it is held at it.
     sun_peak: f32,
+    // HDR calibration (hdr_calibration.rs): x its step (0 none, 1 black level,
+    // 2 peak, 3 paper white), y the slider in nits, z where its controls start,
+    // a share of the height.
+    calibration: vec4<f32>,
 };
 @group(0) @binding(2) var<uniform> params: Params;
 // Horizon's logo, 1 inside, 0 outside, for calibration's test pictures.
@@ -42,39 +35,6 @@ struct Params {
 // much of the world it hides there (gfx/hud_coverage.rs).
 @group(0) @binding(4) var coverage: texture_2d<f32>;
 @group(0) @binding(5) var hud: texture_2d<f32>;
-
-// Light sources are lifted evenly rather than by a highlight curve: vanilla's
-// textures were drawn for SDR, so a curve on their brightest pixels blows out
-// near-white spots (glowstone) and leaves the rest (lava, a jack o'lantern's
-// face) nearly as it was. Each tier's pixels brighter than its `full` get its
-// `share` of the headroom, dimmer ones less down to none at its `start`
-// (lava's crust, a lantern's metal), and no channel goes past the peak. That
-// brightness is the texel's own, before lighting: the shaders that mark the
-// frame (hdr_mark) work it out, so a light source shines the same at any light
-// level and on every face. Brightness is the mean of luminance and the
-// brightest channel, so saturated light counts as bright.
-
-// Whether `c` still shows the world pixel `w`: the same, or darkened evenly
-// across its channels, as the vignette and other screen-wide tints darken it.
-// The hand, HUD and text replace pixels instead, so they never pass. The
-// channels are held to one factor, the ratio of their sums, so a channel at 0
-// stays 0; a step of 8-bit rounding is allowed on each.
-fn shows_world(c: vec3<f32>, w: vec3<f32>) -> bool {
-    if all(c == w) {
-        return true;
-    }
-    let f = (c.r + c.g + c.b) / max(w.r + w.g + w.b, 1.0 / 255.0);
-    return f <= 1.01 && f > 0.02 && all(abs(c - f * w) <= 0.03 * w + 1.0 / 255.0);
-}
-
-// A texel with its alpha as an 8-bit frame holds it. A 16-bit frame
-// (Renderer::frame_format) keeps alpha between 8-bit steps, where the marks below
-// would read differently (an alpha of 0.001 would count as the hand); its colour
-// keeps the gradients 8 bits would band, and a float frame's (LINEAR_FRAME) the
-// light over 1 that blends added past white. On an 8-bit frame nothing changes.
-fn frame_texel(v: vec4<f32>) -> vec4<f32> {
-    return vec4(max(v.rgb, vec3(0.0)), round(saturate(v.a) * 255.0) / 255.0);
-}
 
 // Linear BT.709 to BT.2020 (ITU-R BT.2087), columns first.
 const BT709_TO_BT2020 = mat3x3<f32>(
@@ -162,15 +122,6 @@ fn calibration_nits(p: vec2<f32>, size: vec2<f32>) -> f32 {
     return vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }
 
-// Hdr::keep_world: once the world is kept, the frame's alpha starts at 0 again.
-@fragment fn fs_clear_alpha() -> @location(0) vec4<f32> {
-    return vec4(0.0);
-}
-
-fn lit(f: vec3<f32>, a: f32, shows: bool, eased: bool) -> Lit {
-    return hdr_mark_light(f, a, shows, eased, vec4(params.peak, 0.0, params.world, params.debug), (params.peak - 1.0) * params.share);
-}
-
 // Calibration: above its controls the test picture, straight in nits, past
 // paper white, the lift and the black level.
 fn calibrating(pos: vec4<f32>) -> bool {
@@ -240,34 +191,17 @@ fn display(light: vec3<f32>, pos: vec4<f32>) -> vec4<f32> {
     return vec4(scrgb, 1.0);
 }
 
+// The last pass over a frame without the HUD's layer, a `shaders/` pack's (gfx/output.rs): its
+// SDR picture, the hand and the HUD with it, at paper white.
 @fragment fn fs_hdr(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     if calibrating(pos) {
         return calibration_picture(pos);
     }
-    let at = vec2<i32>(pos.xy);
-    let f = frame_texel(textureLoad(frame, at, 0));
-    // What covers the world here (Hdr::keep_world): nothing at 0, the hand at
-    // 1/255 (Hdr::mark_hand: drawn at the world's brightness), else the HUD or a
-    // menu, by how much.
-    let covered = f.a > 0.0;
-    let hand = covered && f.a < 1.5 / 255.0;
-    let ui = select(f.a, 0.0, hand);
-    let w = frame_texel(textureLoad(world, at, 0));
-    // The world's marks lift only where nothing was drawn over them since: grey text over
-    // the white sun still looks like the sun darkened, but it raised the frame's alpha. The
-    // hand writes its own alpha there (Hdr::hand_light_view): 1, or a light source it holds.
-    let shows = params.world > 0.5 && params.peak > 1.0
-        && (hand || (!covered && shows_world(f.rgb, w.rgb)));
-    var light = lit(f.rgb, w.a, shows, true).light;
-    // The HUD and menus at their own brightness, by how much they cover, no brighter than the
-    // peak (as `fs_hdr_layered`): UI Brightness can pass paper white.
-    light = min(light * mix(1.0, params.ui, ui), vec3(params.peak));
-    return display(light, pos);
+    return display(pow(textureLoad(frame, vec2<i32>(pos.xy), 0).rgb, vec3(2.2)), pos);
 }
 
 // Where the scene's peak is unknown (`tone_scale`), the curve's knee: up to it light stays as it
-// is. Where HDR lighting eased into the peak before the curve (`lit`), 60% of it, so bright
-// textures keep their detail; at least paper white.
+// is. 60% of the headroom, so bright textures keep their detail; at least paper white.
 fn tone_knee(headroom: f32) -> f32 {
     return max(0.6 * headroom, 1.0);
 }
@@ -336,8 +270,8 @@ fn tone_scale(top: f32, scene_peak: f32, sun_peak: f32, headroom: f32, paper: f3
     return vec4(select(g * pow(s, 1.0 / 2.2), g, s == 1.0), 1.0);
 }
 
-// Hdr::keep_world: the HUD's backdrop, the world clipped to white with alpha 0, the frame as
-// the HUD found it before. The HUD's target is 8-bit, as that frame was.
+// Hdr::hud_backdrop: the world clipped to white with alpha 0, the frame as the HUD finds it
+// with HDR off. The HUD's target is 8-bit, as that frame is.
 @fragment fn fs_keep(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let w = textureLoad(frame, vec2<i32>(pos.xy), 0).rgb;
     return vec4(clamp(w, vec3(0.0), vec3(1.0)), 0.0);

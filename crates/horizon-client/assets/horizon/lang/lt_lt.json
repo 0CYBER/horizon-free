@@ -242,8 +242,6 @@
   "Black Level": "Juodasis lygis",
   "UI Brightness": "UI ryškumas",
   "HDR Lighting": "HDR apšvietimas",
-  "Smooth Gradients": "Glotnūs gradientai",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16 bitų kadras: tamsus dangus ir šešėliai nesuskirstomi. Šiek tiek daugiau VRAM. Kitas paleidimas.",
   "Battery Mode": "Baterijos režimas",
   "Graphics API": "Grafikos API",
   "Translucent Batching": "Permatomos partijos",

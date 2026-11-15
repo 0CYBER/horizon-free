@@ -363,8 +363,8 @@ impl Post {
         gains: [f32; 4],
         windows: [[f32; 4]; 2],
     ) {
-        // These uniforms do not change baked colour without gain. Keep compatibility
-        // history stable when only its final display settings change.
+        // These uniforms do not change baked colour without gain: the history stays through a
+        // change of them alone.
         let key = Some(if gain {
             (true, settings, gains, windows)
         } else {

@@ -18,7 +18,6 @@ struct PostOut {
 }
 
 @fragment fn fs_copy(in: PostOut) -> @location(0) vec4<f32> {
-    // The alpha carries the emissive mark through to HDR output (hdr.wgsl).
     return textureSampleLevel(world, world_sampler, in.uv, 0.0);
 }
 
@@ -78,7 +77,6 @@ override sharpness: f32 = 0.85;
     // Up to -1/5, the most CAS allows (the Upscaling Sharpness setting's 100%).
     let lobe = -sqrt(room) * 0.2 * sharpness;
     let sharp = (c + lobe * (n + s + w + e)) / (1.0 + 4.0 * lobe);
-    // The alpha carries the emissive mark through to HDR output (hdr.wgsl).
     return vec4(clamp(sharp, lo, hi), centre.a);
 }
 
@@ -194,6 +192,5 @@ fn clip_box(c: vec3<f32>, lo: vec3<f32>, hi: vec3<f32>) -> vec3<f32> {
     // motion the history is resampled every frame and blurs, so new frames weigh more.
     let off = (drawn - (vec2<f32>(p) + 0.5)) * vec2<f32>(textureDimensions(history)) / size;
     let share = mix(0.1, 0.3, moving) * exp(-2.0 * dot(off, off));
-    // The alpha carries the emissive mark through to HDR output (hdr.wgsl).
     return vec4(mix(past, centre.rgb, share), centre.a);
 }

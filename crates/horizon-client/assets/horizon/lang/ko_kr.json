@@ -183,8 +183,6 @@
   "GPU Culling": "GPU 컬링",
   "Upscaling Sharpness": "업스케일링 선명도",
   "HDR Lighting": "HDR 조명",
-  "Smooth Gradients": "부드러운 그라데이션",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16비트 프레임: 어두운 하늘과 그림자에 계단 현상이 생기지 않습니다. VRAM 사용이 약간 늘어납니다. 다음 시작 시 적용됩니다.",
   "FIFO": "FIFO",
   "Vulkan": "Vulkan",
   "DirectX 12": "DirectX 12",

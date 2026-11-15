@@ -242,8 +242,6 @@
   "Black Level": "Úroveň černé",
   "UI Brightness": "Jas uživatelského rozhraní",
   "HDR Lighting": "Osvětlení HDR",
-  "Smooth Gradients": "Plynulé přechody",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16bitový snímek: tmavá obloha a stíny nedělají pruhy. O něco více VRAM. Při dalším spuštění.",
   "Battery Mode": "Režim baterie",
   "Graphics API": "Grafické rozhraní API",
   "Translucent Batching": "Průsvitné dávkování",

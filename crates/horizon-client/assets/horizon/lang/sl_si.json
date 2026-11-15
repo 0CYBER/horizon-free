@@ -242,8 +242,6 @@
   "Black Level": "Črna raven",
   "UI Brightness": "Svetlost uporabniškega vmesnika",
   "HDR Lighting": "HDR razsvetljava",
-  "Smooth Gradients": "Gladki prehodi",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-bitni okvir: temno nebo in sence se ne stopničijo. Malo več VRAM. Naslednji zagon.",
   "Battery Mode": "Baterijski način",
   "Graphics API": "Grafični API",
   "Translucent Batching": "Prosojno doziranje",

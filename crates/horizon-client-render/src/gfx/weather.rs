@@ -292,7 +292,7 @@ pub(super) fn native_pipeline(
                 format,
                 blend: Some(wgpu::BlendState {
                     color: wgpu::BlendState::ALPHA_BLENDING.color,
-                    // The frame's alpha stays as the surfaces left it (entities mark it 0).
+                    // The frame's alpha stays as the surfaces left it.
                     alpha: wgpu::BlendComponent {
                         src_factor: wgpu::BlendFactor::Zero,
                         dst_factor: wgpu::BlendFactor::One,

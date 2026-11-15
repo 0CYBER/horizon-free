@@ -270,8 +270,7 @@ impl CustomSky {
                         },
                         targets: &[Some(wgpu::ColorTargetState {
                             format,
-                            // The frame's alpha is HDR output's mark (hdr.wgsl): the sky
-                            // under the layers keeps its own.
+                            // The sky under the layers keeps its alpha.
                             blend: Some(wgpu::BlendState {
                                 color: blend(mode),
                                 alpha: wgpu::BlendComponent {

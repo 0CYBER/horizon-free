@@ -616,8 +616,6 @@
   "horizon.mods.switch.restart": "Перезапустіть гру, щоб застосувати %s: вони додають блоки, предмети або генерацію світу.",
   "GPU Culling": "Відсікання на GPU",
   "HDR Lighting": "HDR-освітлення",
-  "Smooth Gradients": "Плавні градієнти",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-бітний кадр: темне небо й тіні без смуг. Трохи більше відеопам’яті. З наступного запуску.",
   "Not with software rendering, which runs it on the CPU.": "Не з програмним рендерингом, який виконує це на CPU.",
   "Out of video memory: off until the next start.": "Забракло відеопам’яті: вимкнено до наступного запуску.",
   "The graphics device was lost: off until the next start.": "Графічний пристрій втрачено: вимкнено до наступного запуску.",

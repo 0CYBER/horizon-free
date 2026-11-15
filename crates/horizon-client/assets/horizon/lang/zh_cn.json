@@ -234,8 +234,6 @@
   "Black Level": "黑位",
   "UI Brightness": "界面亮度",
   "HDR Lighting": "HDR 光照",
-  "Smooth Gradients": "平滑渐变",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16 位帧缓冲：昏暗的天空和阴影不再出现色带。显存略多。下次启动生效。",
   "Battery Mode": "电池模式",
   "Graphics API": "图形 API",
   "Translucent Batching": "半透明批处理",

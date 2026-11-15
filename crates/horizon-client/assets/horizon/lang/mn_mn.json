@@ -242,8 +242,6 @@
   "Black Level": "Хар түвшин",
   "UI Brightness": "UI гэрэлтүүлэг",
   "HDR Lighting": "HDR гэрэлтүүлэг",
-  "Smooth Gradients": "Гөлгөр градиент",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-бит фрэйм: харанхуй тэнгэр, сүүдэрт тууз үүсэхгүй. Бага зэрэг илүү VRAM. Дараагийн эхлэлтэд.",
   "Battery Mode": "Зайны горим",
   "Graphics API": "График API",
   "Translucent Batching": "Тунгалаг зуурмаг",

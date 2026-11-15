@@ -1,27 +1,19 @@
 //! The frame policy: which frame a renderer draws, what the overlays draw on and whether
 //! Horizon's tone curve runs (tests in `frame_policy_tests.rs`).
 
-use super::{LINEAR_FRAME, WIDE_FRAME};
+use super::LINEAR_FRAME;
 
 /// What a renderer's frame is drawn in: `LINEAR_FRAME` where the device draws it, for a 0.2
 /// pack, or for the layered HDR frame where the surface offers HDR output (`linear`:
-/// `(a 0.2 pack picked, the layered HDR frame, the device draws it)`); else, under a
-/// `shaders/` pack, the compatibility frame: `WIDE_FRAME` when it is made with HDR on and
-/// Smooth Gradients (`wide_frame`, `output::resolve_frame`), the surface offering HDR output
-/// (`hdr_offered`) and the device drawing it (`draws_wide_frame`): an 8-bit frame's steps
-/// band in dark gradients, and HDR shows them. Else the swapchain's 8-bit format, as without
-/// HDR.
+/// `(a 0.2 pack picked, the layered HDR frame, the device draws it)`). Else the swapchain's
+/// 8-bit format, as without HDR: a `shaders/` pack's SDR picture too.
 pub(super) fn frame_format(
-    wide_frame: bool,
     hdr_offered: bool,
-    device_draws_it: bool,
     swapchain: wgpu::TextureFormat,
     linear: (bool, bool, bool),
 ) -> wgpu::TextureFormat {
     if linear.2 && (linear.0 || linear.1 && hdr_offered) {
         LINEAR_FRAME
-    } else if wide_frame && hdr_offered && device_draws_it {
-        WIDE_FRAME
     } else {
         swapchain.remove_srgb_suffix()
     }
@@ -29,24 +21,18 @@ pub(super) fn frame_format(
 
 /// The frame's format, and whether it is the layered HDR frame (HUD coverage): for HDR on
 /// with no pack or a 0.2 one (`hdr_float`), where the device keeps the HUD on a layer of its
-/// own. HDR is on only where it does (`output::OutputCapabilities::hdr_frame`).
+/// own. HDR is on only where it does (`output::OutputCapabilities::hdr_frame`). `device`:
+/// the surface offers HDR output, the device draws the float frame, and it keeps that layer.
 pub(super) fn frame_configuration(
-    wide_frame: bool,
-    device: (bool, bool, bool, bool),
+    device: (bool, bool, bool),
     swapchain: wgpu::TextureFormat,
     linear_pack: bool,
     hdr_float: bool,
 ) -> (wgpu::TextureFormat, bool) {
-    let (hdr_offered, wide_ok, linear_ok, coverage_ok) = device;
+    let (hdr_offered, linear_ok, coverage_ok) = device;
     let layered = hdr_float && hdr_offered && linear_ok && coverage_ok;
     (
-        frame_format(
-            wide_frame,
-            hdr_offered,
-            wide_ok,
-            swapchain,
-            (linear_pack, layered, linear_ok),
-        ),
+        frame_format(hdr_offered, swapchain, (linear_pack, layered, linear_ok)),
         layered,
     )
 }
@@ -63,6 +49,16 @@ pub(super) fn overlay_format(
         swapchain.remove_srgb_suffix()
     } else {
         frame
+    }
+}
+
+/// What the hand's pass does with the depth it drew: kept on HDR's layered frame, where a
+/// resource pack's post effect may read it after the hand (`Overlay::world_depth`).
+pub(super) fn hand_depth_store(layered: bool) -> wgpu::StoreOp {
+    if layered {
+        wgpu::StoreOp::Store
+    } else {
+        wgpu::StoreOp::Discard
     }
 }
 

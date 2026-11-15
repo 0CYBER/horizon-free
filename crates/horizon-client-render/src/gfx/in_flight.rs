@@ -96,7 +96,7 @@ impl Renderer {
             let size = [self.config.width, self.config.height];
             let format = self.config.format.remove_srgb_suffix();
             // The layered float frame maps the world to SDR, then adds the HUD as drawn.
-            // Other 16-bit frames keep their clipped 8-bit copy.
+            // Other float frames keep their clipped 8-bit copy.
             let copy = self
                 .hdr
                 .as_mut()

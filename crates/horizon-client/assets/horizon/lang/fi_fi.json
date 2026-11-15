@@ -242,8 +242,6 @@
   "Black Level": "Musta taso",
   "UI Brightness": "Käyttöliittymän kirkkaus",
   "HDR Lighting": "HDR-valaistus",
-  "Smooth Gradients": "Pehmeät liu'ut",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-bittinen kehys: tummat taivaat ja varjot eivät raidallistu. Hieman enemmän VRAM-muistia. Seuraavalla käynnistyksellä.",
   "Battery Mode": "Akkutila",
   "Graphics API": "Grafiikka API",
   "Translucent Batching": "Läpinäkyvä erä",

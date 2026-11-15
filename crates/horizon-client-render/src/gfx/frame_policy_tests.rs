@@ -2,44 +2,27 @@
 //! from the frame chosen.
 
 #[test]
-fn float_frames_never_schedule_light_mark_passes() {
-    use super::{LINEAR_FRAME, WIDE_FRAME, light_marks};
-    use wgpu::TextureFormat::{Bgra8Unorm, Rgb10a2Unorm, Rgba8Unorm};
-    for hdr in [false, true] {
-        assert!(!light_marks(LINEAR_FRAME, hdr));
-        for format in [WIDE_FRAME, Bgra8Unorm, Rgba8Unorm, Rgb10a2Unorm] {
-            assert_eq!(light_marks(format, hdr), hdr);
-        }
-    }
-}
-
-#[test]
-fn frame_policy_keeps_compatibility_frames_and_requires_layering_for_float_hdr() {
-    use super::{LINEAR_FRAME, WIDE_FRAME, frame_configuration};
+fn frame_policy_requires_layering_for_float_hdr_and_keeps_a_shaders_pack_on_8_bits() {
+    use super::{LINEAR_FRAME, frame_configuration};
     use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb};
 
-    for bits in 0..64 {
+    for bits in 0..16 {
         let hdr = bits & 1 != 0;
         let offered = bits & 2 != 0;
-        let wide_ok = bits & 4 != 0;
-        let float_ok = bits & 8 != 0;
-        let coverage_ok = bits & 16 != 0;
-        let smooth = bits & 32 != 0;
+        let float_ok = bits & 4 != 0;
+        let coverage_ok = bits & 8 != 0;
         for pack in ["none", "0.2", "shaders"] {
             let float_hdr = matches!(pack, "none" | "0.2");
             let expected = if float_ok && float_hdr && hdr && offered && coverage_ok {
                 (LINEAR_FRAME, true)
             } else if float_ok && pack == "0.2" {
                 (LINEAR_FRAME, false)
-            } else if hdr && smooth && offered && wide_ok {
-                (WIDE_FRAME, false)
             } else {
                 (Bgra8Unorm, false)
             };
             assert_eq!(
                 frame_configuration(
-                    hdr && smooth,
-                    (offered, wide_ok, float_ok, coverage_ok),
+                    (offered, float_ok, coverage_ok),
                     Bgra8UnormSrgb,
                     pack == "0.2",
                     hdr && float_hdr,
@@ -52,7 +35,7 @@ fn frame_policy_keeps_compatibility_frames_and_requires_layering_for_float_hdr()
 }
 
 /// A device that can't keep the HUD on a layer of its own, or can't draw the float frame,
-/// gets no HDR, under no pack and no mode: no compatibility frame stands in for HDR's.
+/// gets no HDR, under no pack and no mode: no other frame stands in for HDR's.
 #[test]
 fn hdr_stays_off_for_each_missing_requirement_of_its_frame() {
     use super::output::{FrameRequest, tests};
@@ -83,8 +66,8 @@ fn hdr_stays_off_for_each_missing_requirement_of_its_frame() {
         (true, coverage(2, blend, usages, Fl::empty())),
     ];
     let no_pack = FrameRequest::default();
-    let pack_0_1 = FrameRequest {
-        compatibility: true,
+    let shaders_pack = FrameRequest {
+        shaders_pack: true,
         ..no_pack
     };
     let pack_0_2 = FrameRequest {
@@ -100,7 +83,7 @@ fn hdr_stays_off_for_each_missing_requirement_of_its_frame() {
             let (mut caps, reading) = tests::window(Some(Output::Pq), Some(true));
             (caps.float_frame, caps.hud_layer) = (float_frame, hud_layer);
             let case = format!("{mode:?}, float {float_frame}, layer {hud_layer}");
-            for request in [no_pack, pack_0_1] {
+            for request in [no_pack, shaders_pack] {
                 let out = tests::snapshot(&settings, request, caps, reading);
                 assert_eq!(out.frame.format, F::Bgra8Unorm, "{case}");
                 assert!(!out.frame.hud_layer && !out.hdr_on(), "{case}");
@@ -122,20 +105,16 @@ fn hdr_stays_off_for_each_missing_requirement_of_its_frame() {
 
 #[test]
 fn a_0_2_pack_without_the_hud_layer_finishes_on_the_swapchains_8_bits() {
-    use super::{LINEAR_FRAME, WIDE_FRAME, overlay_format};
+    use super::{LINEAR_FRAME, overlay_format};
     use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgba8Unorm};
     assert_eq!(
         overlay_format(LINEAR_FRAME, false, Bgra8UnormSrgb),
         Bgra8Unorm
     );
     assert_eq!(overlay_format(LINEAR_FRAME, false, Rgba8Unorm), Rgba8Unorm);
-    // Everything else draws its overlays on its frame: the layered frame's light, the
-    // 16-bit frame, the 8-bit frame.
-    for (frame, layered) in [
-        (LINEAR_FRAME, true),
-        (WIDE_FRAME, false),
-        (Bgra8Unorm, false),
-    ] {
+    // Everything else draws its overlays on its frame: the layered frame's light, the 8-bit
+    // frame.
+    for (frame, layered) in [(LINEAR_FRAME, true), (Bgra8Unorm, false)] {
         assert_eq!(overlay_format(frame, layered, Bgra8UnormSrgb), frame);
     }
 }
@@ -147,9 +126,16 @@ fn one_tone_curve_runs_on_the_layered_world() {
     assert!(horizon_tone_curve(true, true, false));
     // A pack's `[tonemap]` mapped it already; never both.
     assert!(!horizon_tone_curve(true, true, true));
-    // No world (the title screen), or no layered frame (SDR, the compatibility frames).
+    // No world (the title screen), or no layered frame (SDR, a `shaders/` pack's picture).
     assert!(!horizon_tone_curve(true, false, false));
     assert!(!horizon_tone_curve(false, true, false));
+}
+
+#[test]
+fn the_hands_depth_is_kept_on_the_layered_frame() {
+    use super::hand_depth_store;
+    assert_eq!(hand_depth_store(true), wgpu::StoreOp::Store);
+    assert_eq!(hand_depth_store(false), wgpu::StoreOp::Discard);
 }
 
 #[test]

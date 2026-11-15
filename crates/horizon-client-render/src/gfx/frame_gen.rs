@@ -462,7 +462,6 @@ impl super::Renderer {
         camera: &Camera,
         overlay: &super::Overlay,
         (view_target, target, generated): (&wgpu::TextureView, &wgpu::Texture, &wgpu::Texture),
-        lifts_world: bool,
     ) -> bool {
         let format = self.output.frame.format;
         let world = self
@@ -500,7 +499,7 @@ impl super::Renderer {
         if made || peak.is_some() && generated_only() {
             self.draw_overlay(encoder, frame, made_onto.0, made_onto.1, overlay);
             if let Some(hdr) = &self.hdr {
-                hdr.present(&self.queue, encoder, generated, lifts_world, None);
+                hdr.present(&self.queue, encoder, generated, None);
             }
         }
         if peak.is_some() {

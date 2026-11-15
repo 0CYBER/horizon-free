@@ -3516,7 +3516,7 @@ impl Game<'_> {
                     normal: [0; 4],
                     pos: m.transform_point3(p).to_array(),
                     uv,
-                    // HDR output: the healing beam shines (entity.wgsl fs_hdr_mark).
+                    // HDR output: the healing beam shines (entity.wgsl hdr_entity_mark).
                     layer: 6 | u32::from(horizon_client::mesher::BRIGHT) << 16,
                     color: c,
                     light: wrap_light,

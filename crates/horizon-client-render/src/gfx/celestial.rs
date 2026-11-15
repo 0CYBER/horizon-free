@@ -65,8 +65,7 @@ impl Celestial {
         };
         use wgpu::{BlendFactor as F, BlendOperation as Op};
         // RenderPipelines.CELESTIAL: additive (src alpha, one), with the colour premultiplied
-        // in fs_sky_celestial. Its alpha is how much a texel adds: HDR output (hdr.wgsl) lets
-        // the sun's and moon's discs shine; nothing else reads the frame's alpha.
+        // in fs_sky_celestial. The frame's alpha is left alone: nothing reads it here.
         let added = pipeline(
             "Celestial bodies",
             "fs_sky_celestial",
@@ -77,7 +76,7 @@ impl Celestial {
             wgpu::ColorWrites::ALL,
         );
         // The float frame clamps neither the fragment's alpha nor the factor, so the sky's
-        // weight may pass 1. The frame's alpha is left alone: nothing reads it here.
+        // weight may pass 1. The frame's alpha is left alone here too.
         let sun = (format == super::LINEAR_FRAME).then(|| {
             let affine = component(F::One, F::SrcAlpha, Op::Add);
             let min = component(F::One, F::One, Op::Min);

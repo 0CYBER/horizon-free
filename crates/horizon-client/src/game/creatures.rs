@@ -271,7 +271,7 @@ fn flame_geometry(
                 normal: [0; 4],
                 pos: p.to_array(),
                 uv,
-                // HDR output: the flames shine like fire (entity.wgsl fs_hdr_mark).
+                // HDR output: the flames shine like fire (entity.wgsl hdr_entity_mark).
                 layer: u32::from(horizon_client::mesher::INCANDESCENT) << 16,
                 color: 0xFFFF_FFFF,
                 light: packed,

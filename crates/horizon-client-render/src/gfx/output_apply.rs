@@ -493,7 +493,7 @@ mod tests {
         linear_pack: false,
         linear_blend: false,
         ray_tracing: false,
-        compatibility: false,
+        shaders_pack: false,
     };
     fn on() -> Graphics {
         Graphics {

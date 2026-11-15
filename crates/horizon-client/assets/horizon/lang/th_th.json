@@ -330,8 +330,6 @@
   "Black Level": "ระดับสีดำ",
   "UI Brightness": "ความสว่าง UI",
   "HDR Lighting": "แสง HDR",
-  "Smooth Gradients": "เกรเดียนต์เรียบ",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "เฟรม 16 บิต: ท้องฟ้ามืดและเงาไม่เป็นแถบ VRAM เพิ่มขึ้นเล็กน้อย เริ่มครั้งถัดไป",
   "Battery Mode": "โหมดแบตเตอรี่",
   "Graphics API": "กราฟิกเอพีไอ",
   "Translucent Batching": "การผสมแบบโปร่งแสง",

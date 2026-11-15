@@ -242,8 +242,6 @@
   "Black Level": "Beltza Maila",
   "UI Brightness": "Interfazearen distira",
   "HDR Lighting": "HDR argiztapena",
-  "Smooth Gradients": "Gradiente leunak",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16 biteko markoa: zeru eta itzal ilunek ez dute banda egiten. VRAM pixka bat gehiago. Hurrengo hasiera.",
   "Battery Mode": "Bateria modua",
   "Graphics API": "Grafikoen APIa",
   "Translucent Batching": "Lote zeharrargitsua",

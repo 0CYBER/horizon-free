@@ -73,7 +73,7 @@ struct Out {
     // 1 drops the quad's back-facing pixels (Vertex::normal w = 1), like a culling render type.
     @location(12) @interpolate(flat) cull: u32,
     // HDR tier of a light-giving particle (mesher::hdr_tier), from the overlay's
-    // high bits (particles.rs): fs_hdr_mark marks the frame with it.
+    // high bits (particles.rs): hdr_entity_mark's.
     @location(13) @interpolate(flat) tier: u32,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
@@ -359,23 +359,13 @@ fn shadow_color(in: Out) -> vec4<f32> {
     return vec4(in.color.rgb, 1.0);
 }
 
-// HDR output: a light-giving particle's pixels marked in the frame's alpha the
-// way terrain.wgsl marks a light source's, drawn again after the entities with
-// only alpha written, so its colour stays as blended.
-@fragment fn fs_hdr_mark(in: Out) -> @location(0) vec4<f32> {
-    // Beams wrap their v in the sprite as fs_entity does: sample where they draw.
-    var uv = in.uv;
-    if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
-    let texel = textureSample(atlas, atlas_sampler, uv);
-    if texel.a < 0.1 { discard; }
-    return vec4(0.0, 0.0, 0.0, hdr_entity_mark(in));
-}
+// HDR's mark (hdr_light.wgsl `hdr_written`) of a light-giving particle's or entity's pixel, the
+// way terrain.wgsl works out a light source's.
 fn hdr_entity_mark(in: Out) -> f32 {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     let texel = textureSample(atlas, atlas_sampler, uv);
-    // Additive and procedural colour draws can survive where the legacy mark pass skips. What
-    // gives no light stays unmarked.
+    // What gives no light stays unmarked.
     if texel.a < 0.1 || in.tier == 0u { return 1.0; }
     // Fog hides a light source as it hides everything else.
     let fogged = max(linear_fog(in.fog_distance.x, globals.fog.x, globals.fog.y),
@@ -388,28 +378,13 @@ fn brightness(c: vec3<f32>) -> f32 {
     let l = pow(max(c, vec3(0.0)), vec3(2.2));
     return 0.5 * (dot(l, vec3(0.2126, 0.7152, 0.0722)) + max(l.r, max(l.g, l.b)));
 }
-// HDR output's mark (hdr.wgsl): the frame's alpha below 0.75, a band of 0.175 per
-// tier (1 low .. 4 very bright, from 0.525 down to 0) and in it how much the pixel
-// lifts, from its own brightness `y` before lighting through the tier's window.
+// The mark: below 0.75, a band of 0.175 per tier (1 low .. 4 very bright, from 0.525 down to
+// 0) and in it how much the pixel lifts, from its own brightness `y` before lighting through
+// the tier's window.
 fn hdr_mark(tier: u32, y: f32) -> f32 {
     let t = clamp(tier, 1u, 4u) - 1u;
     let lift = smoothstep(globals.hdr_windows[0][t], globals.hdr_windows[1][t], y);
     return 0.175 * f32(3u - t) + 0.165 * (1.0 - lift);
-}
-
-// The hand in HDR output (gfx.rs "HDR hand marks"): where it drew, what the world kept there
-// no longer shines; fs_hdr_mark then marks the light sources it holds.
-@fragment fn fs_hdr_hand_unmark(in: Out) -> @location(0) vec4<f32> {
-    if textureSample(atlas, atlas_sampler, in.uv).a < 0.1 { discard; }
-    return vec4(0.0, 0.0, 0.0, 1.0);
-}
-
-// Clouds, drawn again after them with only alpha written: their blending leaves the sun's and
-// moon's marks behind them partly showing. Unmarked, they lift nothing there.
-@fragment fn fs_hdr_cloud_mark(in: Out) -> @location(0) vec4<f32> {
-    let a = in.color.a * (1.0 - linear_fog(in.fog_distance.x, 0.0, globals.fog_ends.y));
-    if a < 0.1 { discard; }
-    return vec4(0.0, 0.0, 0.0, 1.0);
 }
 
 fn celestial_color(in: Out) -> vec4<f32> {
@@ -439,10 +414,10 @@ fn celestial_color(in: Out) -> vec4<f32> {
 }
 
 // The sky's celestial pass (sun, moon, the End sky): fs_celestial's light,
-// premultiplied for an additive (one, one) blend. Where a texel adds light, its
-// alpha leaves the sky's 1 at HDR output's mark (hdr_mark) for the brightest
-// tier, so the sun's and moon's discs shine; the dark rest of their quads and
-// the dim End sky stay unmarked.
+// premultiplied for an additive (one, one) blend. On the float frame, where the world is
+// lifted, a texel past its tier's window shines at the mark (hdr_mark) of its tier, so the
+// sun's and moon's discs shine; the dark rest of their quads and the dim End sky stay
+// unmarked.
 @fragment fn fs_sky_celestial(in: Out) -> @location(0) vec4<f32> {
     return sky_celestial(in);
 }
@@ -461,8 +436,7 @@ fn sky_celestial(in: Out) -> vec4<f32> {
     }
     // Premultiplied after the decode: the light the texel adds, at its coverage.
     if HDR_WRITE_LIGHT { return vec4(frame_stored(color).rgb * color.a, color.a); }
-    if !full { return vec4(added, 0.0); }
-    return vec4(added, 1.0 - hdr_mark(tier, y));
+    return vec4(added, 0.0);
 }
 
 // The sun in Horizon's lifted world (gfx/celestial.rs): its disc shows vanilla's colour, the sky

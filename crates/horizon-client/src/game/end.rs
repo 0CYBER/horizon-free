@@ -1227,7 +1227,7 @@ impl Game<'_> {
                 out,
             );
             // HDR output: the crystal shines; its tier's window leaves the dark base alone
-            // (entity.wgsl fs_hdr_mark).
+            // (entity.wgsl hdr_entity_mark).
             for v in &mut out[start..] {
                 v.layer |= u32::from(horizon_client::mesher::BRIGHT) << 16;
             }

@@ -100,11 +100,11 @@ pub(crate) struct PickedPack {
     pub starts_wide: bool,
     /// It is one of Horizon's own packs, with its `[frame] blend`: the frame is float.
     pub linear: Option<horizon_shader_api::Blend>,
-    /// It is a `shaders/` pack: HDR output keeps the compatibility frame under it. With no
-    /// pack available or one of Horizon's own, the frame is the layered float one where HDR
-    /// output is on (docs/design/hdr-linear-light.md, The HUD and menus; the renderer decides,
-    /// `FrameRequest::compatibility`).
-    pub compatibility: bool,
+    /// It is a `shaders/` pack: it draws its SDR picture on the 8-bit frame, HDR output on or
+    /// off. With no pack available or one of Horizon's own, the frame is the layered float one
+    /// where HDR output is on (docs/design/hdr-linear-light.md, The HUD and menus; the renderer
+    /// decides, `FrameRequest::shaders_pack`).
+    pub shaders_pack: bool,
     /// Its manifest declares `[ray_tracing]`: the device asks for ray queries (spec #16011).
     pub ray_tracing: bool,
 }
@@ -115,7 +115,7 @@ impl PickedPack {
             linear_pack: self.linear.is_some(),
             linear_blend: self.linear == Some(horizon_shader_api::Blend::Linear),
             ray_tracing: self.ray_tracing,
-            compatibility: self.compatibility,
+            shaders_pack: self.shaders_pack,
         }
     }
 }
@@ -144,8 +144,8 @@ pub(super) fn picked_pack_shape(settings: &horizon_client::settings::Settings) -
         draws_flat: active && pack_draws_flat(&path),
         starts_wide: active && pack_reads_vertices(&path),
         linear,
-        compatibility: active && !own,
         ray_tracing: manifest.is_some_and(|m| m.ray_tracing.is_some()),
+        shaders_pack: active && !own,
     }
 }
 
@@ -1115,7 +1115,7 @@ mod native_pack_tests {
             }
             let shape = picked_pack_shape(&settings);
             assert_eq!(shape.linear, Some(Blend::Gamma));
-            assert!(!shape.compatibility);
+            assert!(!shape.shaders_pack);
         }
         // A pack for a shader API line this build doesn't serve asks as no pack does: its
         // manifest doesn't read, and the look that follows refuses it.
@@ -1123,14 +1123,14 @@ mod native_pack_tests {
         let text = std::fs::read_to_string(&manifest).unwrap();
         std::fs::write(&manifest, text.replace("api = \"0.2\"", "api = \"0.1\"")).unwrap();
         let shape = picked_pack_shape(&settings);
-        assert!(shape.linear.is_none() && !shape.compatibility);
+        assert!(shape.linear.is_none() && !shape.shaders_pack);
         std::fs::write(&manifest, &text).unwrap();
-        // A `shaders/` pack keeps the compatibility frame under HDR output.
+        // A `shaders/` pack keeps the 8-bit frame under HDR output.
         let shaders_pack = root.join("shaders_pack");
         std::fs::create_dir_all(shaders_pack.join("shaders")).unwrap();
         settings.horizon.shader_pack = shaders_pack.to_string_lossy().into_owned();
         let shape = picked_pack_shape(&settings);
-        assert!(shape.linear.is_none() && shape.compatibility);
+        assert!(shape.linear.is_none() && shape.shaders_pack);
         settings.horizon.shader_pack = path.to_string_lossy().into_owned();
         // The frame's blend comes with it: the frame a pack that changes it asks for is
         // another, so the game makes the renderer again (`follow_frame`).
@@ -1145,17 +1145,17 @@ mod native_pack_tests {
         settings.mods.disabled.insert("frame_owner".into());
         let shape = picked_pack_shape(&settings);
         assert_eq!(shape.linear, None);
-        assert!(!shape.compatibility);
+        assert!(!shape.shaders_pack);
         settings.mods.disabled.clear();
         assert!(picked_pack_shape(&settings).linear.is_some());
         remember(&path, fingerprint(&path), false);
         let refused = picked_pack_shape(&settings);
-        assert!(refused.linear.is_none() && !refused.compatibility);
+        assert!(refused.linear.is_none() && !refused.shaders_pack);
         remember(&path, fingerprint(&path), true);
         std::fs::remove_dir_all(root).unwrap();
         let missing = picked_pack_shape(&settings);
         assert_eq!(missing.linear, None);
-        assert!(!missing.compatibility);
+        assert!(!missing.shaders_pack);
     }
 
     /// Spec #16011 item 5: the device asks for ray queries when the pick's manifest declares

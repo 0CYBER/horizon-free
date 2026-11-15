@@ -238,8 +238,6 @@
   "Black Level": "Уровень чёрного",
   "UI Brightness": "Яркость интерфейса",
   "HDR Lighting": "HDR-освещение",
-  "Smooth Gradients": "Плавные градиенты",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-битный кадр: тёмное небо и тени без полос. Чуть больше видеопамяти. Со следующего запуска.",
   "Battery Mode": "Режим экономии",
   "Graphics API": "Графический API",
   "Translucent Batching": "Пакетная отрисовка прозрачного",

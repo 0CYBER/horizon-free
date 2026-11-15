@@ -18,40 +18,35 @@ fn frame_gamma(c: vec4<f32>) -> vec4<f32> {
     return c;
 }
 
-// The light of colour `f` under the world's mark `a` (the alpha the world left, hdr_mark) where
-// the world `shows`, else the colour clipped at white; and whether a light source lifted it.
-// `eased` for the last pass, which eases it into the peak itself; the layered frame leaves that
-// to the tone curve (fs_tonemap).
+// The light of colour `f` under its writer's mark `a` (hdr_mark) where the world `shows`
+// lifted, else the colour clipped at white; and whether a light source lifted it. The tone
+// curve eases it into the display's peak afterwards (fs_tonemap).
 struct Lit {
     light: vec3<f32>,
     lifted: bool,
 };
 
-// `settings`: x the peak, z whether the world shows lifted (HDR Lighting on, a world drawn), w debug;
-// y is unused. Alpha from 0.75 up lifts nothing: lit surfaces and the sky stay at their SDR light.
-// `lifts`, per tier: how much its fully lifted pixels gain over their own light (their gain - 1).
-fn hdr_mark_light(f: vec3<f32>, a: f32, shows: bool, eased: bool, settings: vec4<f32>, lifts: vec4<f32>) -> Lit {
+// `settings`: z whether the world shows lifted (HDR Lighting on, a world drawn), w debug; x is
+// the sun's disc's peak (entity.wgsl) and y is unused. A mark from 0.75 up lifts nothing: lit
+// surfaces and the sky stay at their SDR light. `lifts`, per tier: how much its fully lifted
+// pixels gain over their own light (their gain - 1).
+fn hdr_mark_light(f: vec3<f32>, a: f32, shows: bool, settings: vec4<f32>, lifts: vec4<f32>) -> Lit {
     var lifted = false;
-    // Light over 1 (a float frame's) shows only where the world does and carries
-    // no mark (alpha 1), up to the peak: light written as light. Marked pixels clip
-    // at white before their lift, as on a unorm frame, so light sources and the sun
-    // look as they do there; so do the HUD, menus and HDR Lighting off.
+    // Light over 1 shows only where the world does and carries no mark (1): light written as
+    // light. Marked pixels clip at white before their lift, so light sources and the sun keep
+    // the look they were tuned at; so do HDR Lighting off and the title.
     let c = select(min(f, vec3(1.0)), f, shows && a == 1.0);
     // Gamma 2.2, as SDR displays and the compositors' SDR paths decode it.
     var light = pow(c, vec3(2.2));
-    // The world's alpha is below 0.75 on light sources, the sun and the moon
-    // (terrain.wgsl, entity.wgsl): its band of 0.175 is the tier, the lower the
-    // brighter, and where in the band how much (hdr_mark).
+    // The mark is below 0.75 on light sources, the sun and the moon (terrain.wgsl,
+    // entity.wgsl): its band of 0.175 is the tier, the lower the brighter, and where in the
+    // band how much (hdr_mark).
     if shows && a < 0.75 {
         let band = u32(clamp(floor((a + 0.005) / 0.175), 0.0, 3.0));
         let tier = 3u - band;
         let lift = 1.0 - clamp((a - 0.175 * f32(band)) / 0.165, 0.0, 1.0);
         if lift > 0.0 {
-            let top = max(light.r, max(light.g, light.b));
-            var gain = 1.0 + lifts[tier] * lift;
-            if eased {
-                gain = min(gain, settings.x / max(top, 1e-4));
-            }
+            let gain = 1.0 + lifts[tier] * lift;
             light *= max(gain, 1.0);
             lifted = true;
         }
@@ -64,9 +59,6 @@ fn hdr_mark_light(f: vec3<f32>, a: f32, shows: bool, eased: bool, settings: vec4
         } else {
             light = vec3(dot(light, vec3(0.2126, 0.7152, 0.0722)));
         }
-    }
-    if eased {
-        light = min(light, vec3(settings.x));
     }
     return Lit(light, lifted);
 }
@@ -84,7 +76,7 @@ fn hdr_unshade(shade: vec3<f32>, lift: f32, full: f32) -> f32 {
     return mix(1.0, max(full / max(max(shade.r, max(shade.g, shade.b)), 1e-4), 1.0), lift);
 }
 
-// Marks are decoded at the precision of the original 8-bit frame, even in a float target.
+// A mark has 8 bits, the precision the tiers' look was tuned at.
 fn hdr_quantized_mark(mark: f32) -> f32 {
     return round(saturate(mark) * 255.0) / 255.0;
 }
@@ -92,5 +84,5 @@ fn hdr_quantized_mark(mark: f32) -> f32 {
 // The world's writers' light, from the tiers' `gains` (Hdr::draw_params): the same on every
 // display; the tone curve fits it to the display afterwards (fs_tonemap).
 fn hdr_written(color: vec3<f32>, mark: f32, settings: vec4<f32>, gains: vec4<f32>) -> vec3<f32> {
-    return pow(hdr_mark_light(max(color, vec3(0.0)), hdr_quantized_mark(mark), settings.z > 0.5, false, settings, gains - vec4(1.0)).light, vec3(1.0 / 2.2));
+    return pow(hdr_mark_light(max(color, vec3(0.0)), hdr_quantized_mark(mark), settings.z > 0.5, settings, gains - vec4(1.0)).light, vec3(1.0 / 2.2));
 }

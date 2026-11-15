@@ -2235,7 +2235,7 @@ fn render_visible(
             }
         }
         // The eyes render type's glowing eyes also shine in HDR output, at
-        // `EYES_TIER` in the overlay's high bits (entity.wgsl fs_hdr_mark).
+        // `EYES_TIER` in the overlay's high bits (entity.wgsl hdr_entity_mark).
         if layer.full_bright && m.species() != Species::Warden {
             for vertex in &mut out[start..] {
                 vertex.normal = [0; 4];

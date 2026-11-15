@@ -242,8 +242,6 @@
   "Black Level": "المستوى الأسود",
   "UI Brightness": "سطوع واجهة المستخدم",
   "HDR Lighting": "إضاءة HDR",
-  "Smooth Gradients": "تدرجات ناعمة",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "إطار 16 بت: لا تظهر نطاقات في السماوات والظلال الداكنة. ذاكرة VRAM أكثر قليلًا. عند البدء التالي.",
   "Battery Mode": "وضع البطارية",
   "Graphics API": "واجهة برمجة تطبيقات الرسومات",
   "Translucent Batching": "الخلط الشفاف",

@@ -242,8 +242,6 @@
   "Black Level": "Fekete szint",
   "UI Brightness": "UI fényerő",
   "HDR Lighting": "HDR világítás",
-  "Smooth Gradients": "Sima színátmenetek",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16 bites kép: a sötét égbolt és az árnyékok nem sávosodnak. Kicsit több VRAM. Következő indításkor.",
   "Battery Mode": "Akkumulátor üzemmód",
   "Graphics API": "Grafikus API",
   "Translucent Batching": "Átlátszó adagolás",

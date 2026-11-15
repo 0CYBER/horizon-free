@@ -238,8 +238,6 @@
   "Black Level": "Schwarzwert",
   "UI Brightness": "GUI-Helligkeit",
   "HDR Lighting": "HDR-Beleuchtung",
-  "Smooth Gradients": "Weiche Verläufe",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-Bit-Bild: Dunkle Himmel und Schatten zeigen keine Streifen. Etwas mehr VRAM. Nächster Start.",
   "Battery Mode": "Akkumodus",
   "Graphics API": "Grafik-API",
   "Translucent Batching": "Transparenz-Batching",

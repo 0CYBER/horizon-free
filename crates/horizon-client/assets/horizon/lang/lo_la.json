@@ -242,8 +242,6 @@
   "Black Level": "ລະດັບສີດໍາ",
   "UI Brightness": "ຄວາມສະຫວ່າງ UI",
   "HDR Lighting": "ແສງ HDR",
-  "Smooth Gradients": "ການປ່ຽນສີລຽບ",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "ກອບ 16-bit: ທ້ອງຟ້າມືດ ແລະ ເງົາຈະບໍ່ເປັນຊັ້ນໆ. ໃຊ້ VRAM ຫຼາຍຂຶ້ນເລັກນ້ອຍ. ເລີ່ມຄັ້ງຕໍ່ໄປ.",
   "Battery Mode": "ໂໝດແບັດເຕີຣີ",
   "Graphics API": "API ກຣາຟິກ",
   "Translucent Batching": "ການຮວມແບບເຄິ່ງໂປ່ງໃສ",

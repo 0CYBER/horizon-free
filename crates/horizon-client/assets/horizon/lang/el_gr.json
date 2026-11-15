@@ -242,8 +242,6 @@
   "Black Level": "Μαύρο Επίπεδο",
   "UI Brightness": "Φωτεινότητα διεπαφής χρήστη",
   "HDR Lighting": "Φωτισμός HDR",
-  "Smooth Gradients": "Ομαλές διαβαθμίσεις",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "Καρέ 16-bit: οι σκοτεινοί ουρανοί και οι σκιές δεν κάνουν ζώνες. Λίγη περισσότερη VRAM. Στην επόμενη εκκίνηση.",
   "Battery Mode": "Λειτουργία μπαταρίας",
   "Graphics API": "API γραφικών",
   "Translucent Batching": "Ημιδιαφανές παρτίδες",

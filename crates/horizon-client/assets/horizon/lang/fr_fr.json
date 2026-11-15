@@ -236,8 +236,6 @@
   "Black Level": "Niveau de noir",
   "UI Brightness": "Luminosité UI",
   "HDR Lighting": "Éclairage HDR",
-  "Smooth Gradients": "Dégradés doux",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "Image 16 bits : les ciels et les ombres sombres ne se dégradent plus en bandes. Un peu plus de VRAM. Au prochain démarrage.",
   "Battery Mode": "Mode batterie",
   "Graphics API": "API graphique",
   "Translucent Batching": "Regroupement translucide",

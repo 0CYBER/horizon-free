@@ -242,8 +242,6 @@
   "Black Level": "Svartur stig",
   "UI Brightness": "UI birtustig",
   "HDR Lighting": "HDR lýsing",
-  "Smooth Gradients": "Mýkri litbrigði",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-bita rammi: dimmir himnar og skuggar mynda ekki ræmur. Aðeins meira VRAM. Við næstu ræsingu.",
   "Battery Mode": "Rafhlöðustilling",
   "Graphics API": "Grafík API",
   "Translucent Batching": "Gegnsær lotun",

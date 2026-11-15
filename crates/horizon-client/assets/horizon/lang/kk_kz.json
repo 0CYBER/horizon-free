@@ -242,8 +242,6 @@
   "Black Level": "Қара деңгейі",
   "UI Brightness": "UI жарықтығы",
   "HDR Lighting": "HDR жарықтандыру",
-  "Smooth Gradients": "Тегіс градиенттер",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-биттік кадр: қараңғы аспан мен көлеңкелер жолақталмайды. VRAM сәл көбірек. Келесі іске қосу.",
   "Battery Mode": "Батарея режимі",
   "Graphics API": "Графикалық API",
   "Translucent Batching": "Мөлдір топтама",

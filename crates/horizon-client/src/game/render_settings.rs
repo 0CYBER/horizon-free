@@ -52,8 +52,8 @@ impl Game<'_> {
         )
     }
     /// The frame follows what draws the picture (docs/design/hdr-linear-light.md, "When it
-    /// changes"): when HDR, Smooth Gradients or the pick (unless refused) call for another
-    /// frame than the renderer's, it is made again before this frame draws.
+    /// changes"): when HDR or the pick (unless refused) call for another frame than the
+    /// renderer's, it is made again before this frame draws.
     pub(super) fn follow_frame(&mut self) {
         if self.options.paced_by_split || self.options.split_guest {
             return;

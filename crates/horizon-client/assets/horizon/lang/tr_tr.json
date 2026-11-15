@@ -238,8 +238,6 @@
   "Black Level": "Siyah Seviyesi",
   "UI Brightness": "Arayüz Parlaklığı",
   "HDR Lighting": "HDR Işıklandırma",
-  "Smooth Gradients": "Yumuşak Geçişler",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16 bit kare: karanlık gökyüzü ve gölgeler bantlanmaz. Biraz daha fazla VRAM. Sonraki başlatma.",
   "Battery Mode": "Pil Modu",
   "Graphics API": "Grafik API'si",
   "Translucent Batching": "Yarı Saydam Toplu Çizim",

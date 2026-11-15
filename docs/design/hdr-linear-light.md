@@ -246,9 +246,9 @@ From preview on, stability.md's deprecation windows apply.
 ## `shaders/`-format packs
 
 They keep their own buffers and tone map to SDR in their last program, and their alpha is theirs. Their `final`
-program writes all four channels onto the frame (`gfx/pack_post.rs` `target`), and `keep_world` copies that alpha
-into the kept world, but the HDR pass doesn't read it as marks: their picture is shown at paper white with nothing
-lifted, as #3125 suggests. HDR values they could read (`hdr`, headroom,
+program writes all four channels onto the frame (`gfx/pack_post.rs` `target`), and the HDR pass reads its colour
+alone: their picture, on the swapchain's 8-bit frame, is shown at paper white with nothing lifted, the hand and the
+HUD with it, as #3125 suggests. HDR values they could read (`hdr`, headroom,
 paper white) are a later, optional addition for pack authors.
 
 ## Upscaling, anti-aliasing, frame generation
@@ -259,7 +259,7 @@ above. Native upscaling
 blends the gamma-stored frame as it is; a tone-weighted resolve is for passes that accumulate linear light (a 0.2
 pack's post chain, or the frame under linear storage), where bright pixels would otherwise sparkle. Frame generation
 interpolates the float frame's light before the tone curve, and the made frame goes through the tone curve, the HUD's
-layer and HDR output's last pass as the real one does; the compatibility frame keeps it off with HDR output.
+layer and HDR output's last pass as the real one does; a `shaders/` pack's frame keeps it off with HDR output.
 The rules such a pass keeps now are in [hdr-passes.md](../hdr-passes.md).
 Where a 0.2 pack's stages, post chain and `[tonemap]` sit around them is in [shader-api-frame.md](shader-api-frame.md) (proposed).
 
@@ -311,9 +311,10 @@ Behind `HORIZON_HDR_FRAME=float` until step 5, each a small pull request:
      switch, which is gone. HDR is offered only on devices that draw the float frame and keep the HUD on a layer of
      its own: the compatibility frame no longer stands in for it there. It stays, with its marks, for HDR under a
      0.1 or a `shaders/` pack. The HDR setting's default stays Off; Auto as the default is a change of its own.
-   - 5b (done): shader API 0.1 retired; the examples and the registry on 0.2. The compatibility frame stays for
-     HDR under a `shaders/` pack.
-   - 5c: the shim, its marks and Smooth Gradients' 16-bit frame deleted.
+   - 5b (done): shader API 0.1 retired; the examples and the registry on 0.2. The compatibility frame stayed for
+     HDR under a `shaders/` pack until 5c.
+   - 5c (done): the shim, its marks and Smooth Gradients' 16-bit frame deleted. Under a `shaders/` pack HDR output
+     shows the pack's 8-bit picture at paper white, the HUD with it, so UI Brightness doesn't reach it.
 6. One curve from the scene to the display, its constants chosen from captures.
    - 6a, one peak (before step 5, so players see one change of look): the world's light is the same on every
      display, in multiples of paper white, and only the tone curve fits it to the display. Before, the writers'

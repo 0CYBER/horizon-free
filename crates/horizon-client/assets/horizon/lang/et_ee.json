@@ -242,8 +242,6 @@
   "Black Level": "Must tase",
   "UI Brightness": "UI heledus",
   "HDR Lighting": "HDR-valgustus",
-  "Smooth Gradients": "Sujuvad üleminekud",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-bitine kaader: tumedad taevad ja varjud ei triibulise. Natuke rohkem VRAM-i. Järgmisel käivitusel.",
   "Battery Mode": "Akurežiim",
   "Graphics API": "Graafika API",
   "Translucent Batching": "Läbipaistev pakkimine",

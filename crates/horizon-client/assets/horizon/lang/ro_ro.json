@@ -242,8 +242,6 @@
   "Black Level": "Nivelul Negru",
   "UI Brightness": "Luminozitatea interfeței de utilizare",
   "HDR Lighting": "Iluminare HDR",
-  "Smooth Gradients": "Gradienturi netede",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "Cadru pe 16 biți: cerurile și umbrele întunecate nu mai fac benzi. Puțin mai multă VRAM. La următoarea pornire.",
   "Battery Mode": "Modul baterie",
   "Graphics API": "API grafic",
   "Translucent Batching": "Loturi translucide",

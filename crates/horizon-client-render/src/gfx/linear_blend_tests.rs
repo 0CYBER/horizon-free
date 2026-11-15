@@ -291,7 +291,7 @@ fn a_fading_section_mixes_toward_the_fog_in_gamma() {
 @fragment fn test_faded() -> @location(0) vec4<f32> {
     var o: HorizonMaterialOut;
     // Half visible (`horizon_material_vertex`), past 32 blocks.
-    o.hdr_code = 32768u << 16u;
+    o.fade = 32768u;
     o.spherical = 40.0;
     return horizon_material_faded(o, horizon_terrain_globals.sky_color);
 }
@@ -392,7 +392,7 @@ fn only_a_float_frame_holds_linear_light() {
                 linear_pack,
                 linear_blend,
                 ray_tracing: false,
-                compatibility: false,
+                shaders_pack: false,
             };
             let frame = resolve_frame(
                 &settings,

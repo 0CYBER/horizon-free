@@ -16,8 +16,8 @@ pub(super) fn stores_linear(linear: bool, format: wgpu::TextureFormat) -> bool {
 }
 
 /// The constants of a pipeline of Horizon's that draws into the world's frame of `format`
-/// (hdr_light.wgsl): light written, not marked, on the float frame; and decoded where the
-/// frame holds linear light (`linear`).
+/// (hdr_light.wgsl): light written on the float frame; and decoded where the frame holds
+/// linear light (`linear`).
 pub(super) fn frame_constants(
     format: wgpu::TextureFormat,
     linear: bool,

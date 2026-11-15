@@ -33,7 +33,7 @@ pub(super) fn build_renderer(
     api: horizon_client::graphics::GraphicsApi,
     translucent_batching: bool,
     vsync: bool,
-    // HDR and Smooth Gradients pick the frame, with what the window's display reported to the
+    // HDR picks the frame, with what the window's display reported to the
     // renderer before (`display`, `Renderer::new`).
     settings: &horizon_client::graphics::Graphics,
     shader_pack: shader_packs::PickedPack,

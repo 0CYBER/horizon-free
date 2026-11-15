@@ -1,7 +1,7 @@
 //! Screenshots of a swapchain that cannot be copied from. OpenGL's surfaces
 //! offer `RENDER_ATTACHMENT` only, so a frame whose pixels are read back
 //! (the screenshot key, a world's icon) is drawn into a texture that can be,
-//! then drawn onto the swapchain image as a fullscreen triangle. A 16-bit frame
+//! then drawn onto the swapchain image as a fullscreen triangle. A float frame
 //! (`Renderer::frame_format`) with HDR output off goes the same way every frame.
 
 /// The texture a frame to read back is drawn into, and the pass that puts it
@@ -132,7 +132,7 @@ impl Readback {
         self.blit(device, encoder, frame, &target, format);
     }
 
-    /// `frame` (a 16-bit frame) in an 8-bit texture of `format`, clamped to 0..1
+    /// `frame` (a float frame) in an 8-bit texture of `format`, clamped to 0..1
     /// as an 8-bit frame holds it, for a screenshot to read back.
     pub fn unorm_copy(
         &mut self,
@@ -307,7 +307,7 @@ mod tests {
         assert!(readback.texture.is_none() && !readback.drawn);
     }
 
-    /// A 16-bit frame with HDR output off draws into a 16-bit texture of its own, and both
+    /// A float frame with HDR output off draws into a float texture of its own, and both
     /// the swapchain and a screenshot's 8-bit copy get it clamped as an 8-bit frame holds it.
     fn reaches_an_8_bit_swapchain(
         device: &wgpu::Device,
@@ -336,36 +336,6 @@ mod tests {
         }
         assert_eq!(last_pixel(device, &screenshot), expected);
         assert_eq!(last_pixel(device, &presented), expected);
-    }
-
-    /// `Rgba16Unorm`, the frame HDR output draws into where the device can
-    /// (`Renderer::frame_format`).
-    #[test]
-    fn a_16_bit_unorm_frame_reaches_an_8_bit_swapchain() {
-        let instance = crate::gfx::test_gpu::instance();
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-            return;
-        };
-        let wide = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
-        if !adapter.features().contains(wide) {
-            return;
-        }
-        let descriptor = wgpu::DeviceDescriptor {
-            required_features: wide,
-            ..Default::default()
-        };
-        let Ok((device, queue)) = pollster::block_on(adapter.request_device(&descriptor)) else {
-            return;
-        };
-        let color = wgpu::Color {
-            r: 1.0,
-            g: 0.2,
-            b: 0.0,
-            a: 1.0,
-        };
-        let unorm = wgpu::TextureFormat::Rgba16Unorm;
-        reaches_an_8_bit_swapchain(&device, &queue, unorm, color, [0, 51, 255, 255]);
     }
 
     /// `Rgba16Float`, the frame of a shader API 0.2 pack, or of HDR on without a pack

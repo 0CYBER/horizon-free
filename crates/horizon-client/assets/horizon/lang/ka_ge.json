@@ -242,8 +242,6 @@
   "Black Level": "შავი დონე",
   "UI Brightness": "ინტერფეისის სიკაშკაშე",
   "HDR Lighting": "HDR განათება",
-  "Smooth Gradients": "გლუვი გრადიენტები",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-ბიტიანი კადრი: ბნელი ცა და ჩრდილები ზოლებად არ იშლება. ცოტა მეტი VRAM. შემდეგი გაშვება.",
   "Battery Mode": "ბატარეის რეჟიმი",
   "Graphics API": "გრაფიკული API",
   "Translucent Batching": "გამჭვირვალე Batching",

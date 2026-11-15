@@ -242,8 +242,6 @@
   "Black Level": "Ìre Dubh",
   "UI Brightness": "Gile UI",
   "HDR Lighting": "Solais HDR",
-  "Smooth Gradients": "Caiseadan rèidh",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "Frèam 16-bit: chan eil speuran dorcha agus faileasan a' dèanamh bannan. Beagan a bharrachd VRAM. An ath thòiseachadh.",
   "Battery Mode": "Modh bataraidh",
   "Graphics API": "Grafaigeachd API",
   "Translucent Batching": "Baidseadh tar-shoilleir",

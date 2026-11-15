@@ -242,8 +242,6 @@
   "Black Level": "Qara Səviyyə",
   "UI Brightness": "UI Parlaqlığı",
   "HDR Lighting": "HDR işıqlandırma",
-  "Smooth Gradients": "Hamar keçidlər",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-bit kadr: tünd səmalar və kölgələr zolaqlanmır. Bir az daha çox VRAM. Növbəti başlatmada.",
   "Battery Mode": "Batareya rejimi",
   "Graphics API": "Qrafik API",
   "Translucent Batching": "Şəffaf Batching",

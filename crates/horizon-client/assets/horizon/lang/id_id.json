@@ -242,8 +242,6 @@
   "Black Level": "Level Hitam",
   "UI Brightness": "Kecerahan UI",
   "HDR Lighting": "Pencahayaan HDR",
-  "Smooth Gradients": "Gradasi Halus",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "Bingkai 16-bit: langit dan bayangan gelap tidak bergaris. Sedikit lebih banyak VRAM. Mulai peluncuran berikutnya.",
   "Battery Mode": "Mode Baterai",
   "Graphics API": "API Grafis",
   "Translucent Batching": "Pemrosesan Kelompok Tembus Cahaya",

@@ -242,8 +242,6 @@
   "Black Level": "רמה שחורה",
   "UI Brightness": "בהירות ממשק משתמש",
   "HDR Lighting": "תאורת HDR",
-  "Smooth Gradients": "מעברים חלקים",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "מסגרת 16-bit: שמיים חשוכים וצללים לא יוצרים פסים. קצת יותר VRAM. בהפעלה הבאה.",
   "Battery Mode": "מצב סוללה",
   "Graphics API": "גרפיקה API",
   "Translucent Batching": "אצווה שקוף",

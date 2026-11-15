@@ -242,8 +242,6 @@
   "Black Level": "Melnais līmenis",
   "UI Brightness": "UI spilgtums",
   "HDR Lighting": "HDR apgaismojums",
-  "Smooth Gradients": "Vienmērīgi gradienti",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16 bitu kadrs: tumšās debesis un ēnas neveido joslas. Nedaudz vairāk VRAM. Nākamā palaišana.",
   "Battery Mode": "Akumulatora režīms",
   "Graphics API": "Grafikas API",
   "Translucent Batching": "Caurspīdīga partija",

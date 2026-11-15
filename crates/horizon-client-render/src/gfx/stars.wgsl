@@ -15,13 +15,13 @@ struct Stars {
 }
 
 // The colour premultiplied, as the celestial blend (src alpha, one) would: the pipeline adds it.
-// The alpha is HDR output's mark (hdr.wgsl): stars are points of light, at the bright tier,
-// fully lifted wherever they show at all. Nothing else reads the frame's alpha.
+// Stars are points of light: in Horizon's lifted world they shine at the bright tier's mark
+// (0.175), fully lifted wherever they show at all.
 @fragment fn fs_stars() -> @location(0) vec4<f32> {
     let b = stars.color.a;
     if HDR_WRITE_LIGHT && stars.hdr_light.w != 0.0 {
         return vec4(hdr_written(stars.color.rgb * b, 0.175, stars.hdr_settings, stars.hdr_gains), b);
     }
     if HDR_WRITE_LIGHT { return vec4(frame_stored(stars.color).rgb * b, b); }
-    return vec4(stars.color.rgb * b, 0.175);
+    return vec4(stars.color.rgb * b, 1.0);
 }

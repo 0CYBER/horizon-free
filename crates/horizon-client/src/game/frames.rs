@@ -739,7 +739,7 @@ impl Game<'_> {
                     );
                 }
             }
-            // HDR output: a glow frame shines softly (entity.wgsl fs_hdr_mark); the item in it
+            // HDR output: a glow frame shines softly (entity.wgsl hdr_entity_mark); the item in it
             // is only lit, as vanilla draws it.
             if f.glow {
                 for v in &mut out[frame_start..] {

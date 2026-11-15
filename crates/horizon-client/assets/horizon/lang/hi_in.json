@@ -242,8 +242,6 @@
   "Black Level": "ब्लैक लेवल",
   "UI Brightness": "UI चमक",
   "HDR Lighting": "HDR प्रकाश",
-  "Smooth Gradients": "सुचारू ग्रेडिएंट्स",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16-बिट फ्रेम: गहरे आकाश और परछाइयों में पट्टियाँ नहीं बनतीं। थोड़ा अधिक VRAM। अगली शुरुआत पर।",
   "Battery Mode": "बैटरी मोड",
   "Graphics API": "ग्राफिक्स API",
   "Translucent Batching": "पारभासी बैचिंग",

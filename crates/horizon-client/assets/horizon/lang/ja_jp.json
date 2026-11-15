@@ -167,8 +167,6 @@
   "GPU Culling": "GPU カリング",
   "Upscaling Sharpness": "アップスケーリングのシャープネス",
   "HDR Lighting": "HDR ライティング",
-  "Smooth Gradients": "滑らかなグラデーション",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "16 ビットのフレーム: 暗い空や影にバンディングが出ません。VRAM が少し増えます。次回起動時。",
   "FIFO": "FIFO",
   "OpenGL": "OpenGL",
   "FPS": "FPS",

@@ -265,10 +265,10 @@ fn hdr_output_shows_a_made_frame_as_the_real_one() {
         }
         hdr.begin(&run.queue, true);
         hdr.tonemap(&mut encoder, None);
-        hdr.keep_world(&mut encoder, None);
+        hdr.hud_backdrop(&mut encoder, None);
         hud_coverage::clear(&mut encoder, &hdr.coverage_view().unwrap());
         let target = texture(&run.device, hdr::Output::Pq.format());
-        hdr.present(&run.queue, &mut encoder, &target, true, None);
+        hdr.present(&run.queue, &mut encoder, &target, None);
         run.queue.submit([encoder.finish()]);
         of::read(&run.device, &run.queue, &target, 4)
     };

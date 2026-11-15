@@ -145,7 +145,7 @@ impl Stars {
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     // RenderPipelines.STARS: the celestial blend (src alpha, one), with the
-                    // colour premultiplied in fs_stars, so its alpha can carry HDR's mark.
+                    // colour premultiplied in fs_stars.
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::One,

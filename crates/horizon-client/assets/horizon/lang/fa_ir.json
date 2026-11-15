@@ -242,8 +242,6 @@
   "Black Level": "سطح سیاه",
   "UI Brightness": "روشنایی رابط کاربری",
   "HDR Lighting": "نورپردازی HDR",
-  "Smooth Gradients": "گرادیان‌های نرم",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "قاب 16 بیتی: آسمان و سایه‌های تیره نواری نمی‌شوند. کمی VRAM بیشتر. در شروع بعدی.",
   "Battery Mode": "حالت باتری",
   "Graphics API": "API گرافیک",
   "Translucent Batching": "دسته بندی شفاف",

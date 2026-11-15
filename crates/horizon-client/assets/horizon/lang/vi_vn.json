@@ -242,8 +242,6 @@
   "Black Level": "Cấp độ đen",
   "UI Brightness": "Độ sáng giao diện người dùng",
   "HDR Lighting": "Chiếu sáng HDR",
-  "Smooth Gradients": "Chuyển sắc mượt",
-  "16-bit frame: dark skies and shadows don't band. A bit more VRAM. Next start.": "Khung 16-bit: trời tối và bóng đổ không bị vệt. Tốn thêm một chút VRAM. Áp dụng lần khởi động sau.",
   "Battery Mode": "Chế độ pin",
   "Graphics API": "API đồ họa",
   "Translucent Batching": "Trộn mờ",
