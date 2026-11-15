@@ -37,6 +37,7 @@ fn use_item(sequence: i32) -> Serverbound {
 fn a_guest_without_build_rights_neither_empties_nor_fills_a_bucket_under_spawn_protection() {
     let mut resources = None;
     let mut game = crate::game::game_tests::tests::server_game(&mut resources);
+    game.options.execution_role = crate::game::execution_role::ExecutionRole::DedicatedServer;
     game.build_registries();
     game.set_allow_commands(true);
     game.block_ticks

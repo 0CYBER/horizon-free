@@ -95,6 +95,13 @@ mod item_toss_tests {
         with_mods(mods.into(), || {
             crate::game::native_entity_refs::tests::with_game(|game| {
                 game.options.dedicated = Some(Vec::new());
+                game.player = Some(
+                    horizon_client::motion::PlayerMotion::new(
+                        game.motion,
+                        horizon_core::geometry::Vec3::ZERO,
+                    )
+                    .unwrap(),
+                );
                 let eye = [0.5, 65.0, 0.5];
                 let before = game.dropped.len();
                 let stone = ItemStack::new("minecraft:stone", 1);
@@ -192,6 +199,13 @@ mod item_toss_tests {
         with_mods(mods.into(), || {
             crate::game::native_entity_refs::tests::with_game(|game| {
                 game.options.dedicated = Some(Vec::new());
+                game.player = Some(
+                    horizon_client::motion::PlayerMotion::new(
+                        game.motion,
+                        horizon_core::geometry::Vec3::ZERO,
+                    )
+                    .unwrap(),
+                );
                 let dirt = ItemStack::new("minecraft:dirt", 1);
                 assert!(
                     game.throw_from_eyes(dirt, [0.5, 65.0, 0.5], false, true)

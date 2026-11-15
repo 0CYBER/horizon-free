@@ -217,7 +217,6 @@ impl Game<'_> {
                 self.armor[index] = updated;
                 if let Some(stack) = broken {
                     self.player_equipment_broke(armor_slot(index), &stack);
-                    self.award_stat("broken", &stack.item, 1);
                     self.apply_equipment();
                 }
             }

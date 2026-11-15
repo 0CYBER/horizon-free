@@ -1748,7 +1748,6 @@ horizon-client game::native_living_refs::tests::kill_credit_prefers_the_player_r
 horizon-client game::native_living_refs::tests::living_reads_answer_the_vanilla_defaults_and_a_gone_entity_reads_none lib daily resources
 horizon-client game::native_living_refs::tests::mob_equipment_writes_emit_vanilla_equip_events lib daily resources
 horizon-client game::native_living_refs::tests::mob_equipment_writes_keep_full_stacks lib daily resources
-horizon-client game::native_living_refs::tests::player_mod_drop_matches_drop_key_motion lib daily resources
 horizon-client game::native_living_refs::tests::raw_health_write_can_change_a_dead_entity_but_heal_cannot lib daily resources
 horizon-client game::native_living_refs::tests::set_hand_item_writes_the_hands_slot lib daily resources
 horizon-client game::native_living_refs::tests::set_health_can_store_zero lib daily resources

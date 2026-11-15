@@ -2483,104 +2483,71 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_wolf_throws_and_reads_tamed_and_owner() {
-        use super::super::{
-            Audio, Options, Progress, Settings, execution_role::ExecutionRole, load_resources,
-        };
         use horizon_client::{chunk::Chunk, entities::ArmorStand};
         use horizon_core::geometry::Vec3;
-        use mod_api::Authority;
 
-        let root = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
-        let settings = Settings::default();
-        let loaded = load_resources(
-            horizon_assets::resource_source::ResourceRoot::directory(root.clone()),
-            Vec::new(),
-            None,
-            &root,
-            &settings,
-            std::time::Instant::now(),
-            false,
-            ExecutionRole::IntegratedServer,
-            &Progress::new(),
-            &mut |_, _| unreachable!(),
-        )
-        .unwrap();
-        let mut options = Options::parse(std::iter::empty()).unwrap().unwrap();
-        options.resources = root.clone();
-        options.execution_role = ExecutionRole::IntegratedServer;
-        let mut game = Game::new(
-            &loaded.resources,
-            loaded.pack,
-            loaded.gui.unwrap(),
-            options,
-            settings,
-            Audio::silent(&horizon_assets::resource_source::ResourceSource::directory(
-                root.to_path_buf(),
-            )),
-            None,
-        )
-        .unwrap();
-        let chunk = std::sync::Arc::new(Chunk::empty(0, 0));
-        game.world.chunks.insert((0, 0), chunk);
-        game.native_lifecycle
-            .begin_open(Authority::IntegratedServer);
-        let id = game
-            .spawn_mob(
-                "minecraft:wolf",
-                [2.5, 64.0, 2.5],
-                true,
-                super::super::creatures::SpawnSite::Finalizing(
-                    horizon_client::mobs::spawn_rules::Reason::Command,
-                ),
-            )
-            .unwrap();
-        let wolf = game.living(game.entity(id).unwrap()).unwrap();
-        assert_eq!(game.living_is_tamed(wolf), Some(false));
-        assert_eq!(game.living_owner(wolf), None);
-        let m = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
-        (m.extra.tame, m.extra.owner) = (true, Some([1, 2, 3, 4]));
-        assert_eq!(game.living_is_tamed(wolf), Some(true));
-        assert_eq!(
-            game.living_owner(wolf),
-            Some(0x1_0000_0002_0000_0003_0000_0004)
-        );
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
+            let id = game
+                .spawn_mob(
+                    "minecraft:wolf",
+                    [2.5, 64.0, 2.5],
+                    true,
+                    super::super::creatures::SpawnSite::Finalizing(
+                        horizon_client::mobs::spawn_rules::Reason::Command,
+                    ),
+                )
+                .unwrap();
+            let wolf = game.living(game.entity(id).unwrap()).unwrap();
+            assert_eq!(game.living_is_tamed(wolf), Some(false));
+            assert_eq!(game.living_owner(wolf), None);
+            let m = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            (m.extra.tame, m.extra.owner) = (true, Some([1, 2, 3, 4]));
+            assert_eq!(game.living_is_tamed(wolf), Some(true));
+            assert_eq!(
+                game.living_owner(wolf),
+                Some(0x1_0000_0002_0000_0003_0000_0004)
+            );
 
-        let bone = ItemStack::new("minecraft:bone", 1);
-        assert!(
-            game.living_drop(wolf, ItemStack::new("minecraft:air", 1), false, true)
-                .is_none()
-        );
-        let item = game.living_drop(wolf, bone.clone(), false, true).unwrap();
-        assert_eq!(
-            game.entity_kind(item).map(|kind| kind.id(&game)).as_deref(),
-            Some("minecraft:item")
-        );
-        let wolf_uuid = game.uuid_for(id);
-        let thrown = game.dropped.last().unwrap();
-        let eye = game.mobs.iter().find(|m| m.id == id).unwrap().eye_y();
-        assert_eq!(thrown.position.y, eye - f64::from(0.3f32));
-        assert_eq!((thrown.pickup_delay, thrown.thrower), (40, Some(wolf_uuid)));
-        // The drop swung: one tick on, that swing goes on.
-        let m = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
-        assert!(m.ai.swinging);
-        m.ai.swing_time = 1;
-        assert!(!game.living_swing(wolf, Hand::Main, true));
-        let scattered = game.living_drop(wolf, bone, true, false).unwrap();
-        assert_ne!(scattered, item);
-        assert_eq!(game.dropped.last().unwrap().velocity.y, f64::from(0.2f32));
-        assert_eq!(game.dropped.last().unwrap().thrower, None);
+            let bone = ItemStack::new("minecraft:bone", 1);
+            assert!(
+                game.living_drop(wolf, ItemStack::new("minecraft:air", 1), false, true)
+                    .is_none()
+            );
+            let item = game.living_drop(wolf, bone.clone(), false, true).unwrap();
+            assert_eq!(
+                game.entity_kind(item).map(|kind| kind.id(game)).as_deref(),
+                Some("minecraft:item")
+            );
+            let wolf_uuid = game.uuid_for(id);
+            let thrown = game.dropped.last().unwrap();
+            let eye = game.mobs.iter().find(|m| m.id == id).unwrap().eye_y();
+            assert_eq!(thrown.position.y, eye - f64::from(0.3f32));
+            assert_eq!((thrown.pickup_delay, thrown.thrower), (40, Some(wolf_uuid)));
+            // The drop swung: one tick on, that swing goes on.
+            let m = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            assert!(m.ai.swinging);
+            m.ai.swing_time = 1;
+            assert!(!game.living_swing(wolf, Hand::Main, true));
+            let scattered = game.living_drop(wolf, bone, true, false).unwrap();
+            assert_ne!(scattered, item);
+            assert_eq!(game.dropped.last().unwrap().velocity.y, f64::from(0.2f32));
+            assert_eq!(game.dropped.last().unwrap().thrower, None);
 
-        game.armor_stands
-            .push(ArmorStand::new(90, Vec3::new(0.5, 64.0, 0.5), 0.0));
-        let stand = game.living(game.entity(90).unwrap()).unwrap();
-        assert_eq!(game.living_is_tamed(stand), None);
-        let apple = ItemStack::new("minecraft:apple", 1);
-        assert!(game.living_drop(stand, apple, false, false).is_none());
+            game.armor_stands
+                .push(ArmorStand::new(90, Vec3::new(0.5, 64.0, 0.5), 0.0));
+            let stand = game.living(game.entity(90).unwrap()).unwrap();
+            assert_eq!(game.living_is_tamed(stand), None);
+            let apple = ItemStack::new("minecraft:apple", 1);
+            assert!(game.living_drop(stand, apple, false, false).is_none());
+        });
     }
 
     #[test]
     #[ignore = "daily"]
-    fn player_mod_drop_matches_drop_key_motion() {
+    fn player_mod_drop_and_drop_key_have_equivalent_motion() {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.player = Some(
                 horizon_client::motion::PlayerMotion::new(
@@ -2598,12 +2565,20 @@ mod tests {
             *game.world.random = horizon_core::random::LegacyRandom::new(12345);
             let item = ItemStack::new("minecraft:apple", 1);
             game.inventory[game.selected] = Some(item.clone());
-            game.drop_held(true);
+            let player_random = game.player.as_ref().unwrap().random.clone();
+            let (_, seeds) = horizon_client::random_source::record_seeds(|| game.drop_held(true));
             let key_velocity = game.dropped.last().unwrap().velocity;
             *game.world.random = horizon_core::random::LegacyRandom::new(12345);
             crate::game::native_entity_refs::tests::bind_local_player(game, 42, 123);
             let player = game.living(game.entity(42).unwrap()).unwrap();
-            let id = game.living_drop(player, item, false, true).unwrap().id();
+            game.player.as_mut().unwrap().random = player_random;
+            let id = horizon_client::random_source::replay_seeds(seeds.clone(), || {
+                game.living_drop(player, item, false, true).unwrap().id()
+            });
+            assert!(
+                seeds.complete(),
+                "both drop routes allocate the same random streams"
+            );
             let mod_velocity = game
                 .dropped
                 .iter()
@@ -2612,6 +2587,85 @@ mod tests {
                 .velocity;
             assert_eq!(key_velocity, mod_velocity);
         });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn player_drop_spread_uses_the_players_random_even_when_cancelled() {
+        use horizon_core::{
+            geometry::trig::{cos, sin},
+            random::RandomSource,
+        };
+        use mod_api::{Flow, Hooks, ItemTossEvent, ModEntry, ServerHost};
+        struct Veto;
+        #[mod_api::__subscriptions]
+        impl Hooks for Veto {
+            fn item_toss(&self, _: &mut dyn ServerHost, _: &mut ItemTossEvent) -> Flow {
+                Flow::Cancel
+            }
+        }
+        for (randomly, cancelled) in [(false, false), (true, false), (false, true)] {
+            let mods: mod_api::Mods = if cancelled {
+                vec![ModEntry::new("veto", Box::new(Veto))].into()
+            } else {
+                Vec::<ModEntry>::new().into()
+            };
+            mod_platform::testing::with_mods(mods, || {
+                super::super::native_entity_refs::tests::with_game(|game| {
+                    game.player = Some(
+                        horizon_client::motion::PlayerMotion::new(game.motion, Vec3::ZERO).unwrap(),
+                    );
+                    super::super::native_entity_refs::tests::bind_local_player(game, 42, 123);
+                    game.yaw = 0.0;
+                    game.pitch = 0.0;
+                    game.player.as_mut().unwrap().random.set_seed(12345);
+                    let mut expected = game.player.as_ref().unwrap().random.clone();
+                    // Independent vanilla oracle at yaw=pitch=0. The item's
+                    // constructor owns a separate stream, not these floats.
+                    let velocity = if randomly {
+                        let strength = expected.next_float() * 0.5;
+                        let direction = f64::from(expected.next_float() * std::f32::consts::TAU);
+                        [
+                            f64::from(-sin(direction) * strength),
+                            f64::from(0.2f32),
+                            f64::from(cos(direction) * strength),
+                        ]
+                    } else {
+                        let direction = f64::from(expected.next_float() * std::f32::consts::TAU);
+                        let strength = f64::from(expected.next_float() * 0.02);
+                        let jitter = (expected.next_float() - expected.next_float()) * 0.1;
+                        [
+                            horizon_core::jmath::cos(direction) * strength,
+                            f64::from(0.1 + jitter),
+                            f64::from(0.3f32) + horizon_core::jmath::sin(direction) * strength,
+                        ]
+                    };
+                    let level = game.world.random.state();
+                    let before = game.dropped.len();
+                    let id = game.native_player_drop(
+                        ItemStack::new("minecraft:apple", 1),
+                        randomly,
+                        true,
+                    );
+                    assert_eq!(
+                        game.player.as_ref().unwrap().random.state(),
+                        expected.state(),
+                        "randomly={randomly} cancelled={cancelled}"
+                    );
+                    assert_eq!(game.world.random.state(), level, "no level random draws");
+                    if cancelled {
+                        assert!(id.is_none());
+                        assert_eq!(game.dropped.len(), before);
+                    } else {
+                        let drop = game.dropped.iter().find(|d| Some(d.id) == id).unwrap();
+                        assert_eq!(
+                            [drop.velocity.x, drop.velocity.y, drop.velocity.z],
+                            velocity
+                        );
+                    }
+                });
+            });
+        }
     }
 
     #[test]

@@ -172,8 +172,8 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                 );
                 assert_eq!(
                     game.world.random.next_int(),
-                    -716867186,
-                    "two pickup pitches consume four draws"
+                    1553932502,
+                    "client pickup pitches do not consume the server level random"
                 );
                 assert_eq!(
                     game.dropped
