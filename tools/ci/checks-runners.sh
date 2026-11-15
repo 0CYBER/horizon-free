@@ -21,7 +21,7 @@
 #   the workflows ask for.
 # All of them run nice, pinned to CPUs 4-7 inside horizon-ci.slice (linux-runner.sh: CPU quota and memory cap for
 # all CI on the machine), so CPUs 0-3 stay for tools/remote.sh runs, benchmarks and the servers.
-# Before every job, ci-shared/job-started.sh fails a job from a fork's pull request (whatever its workflow file says),
+# Before every job, ci-shared/job-started.sh fails a job from a fork's pull request on a light runner (whatever its workflow file says),
 # empties a cargo target folder grown past MAX_TARGET_GB and drops a checkout's .git grown past MAX_GIT_GB (every
 # fetch adds a pack and nothing repacks them: 6822 packs, 50 GB, in each light runner's checkout on 2026-11-03).
 set -euo pipefail
@@ -50,14 +50,16 @@ shared_files() {
   cat > "$shared/job-started.sh" <<'EOF'
 #!/usr/bin/env bash
 # ACTIONS_RUNNER_HOOK_JOB_STARTED of the checks runners (tools/ci/checks-runners.sh): runs before each job's steps;
-# a failure fails the job. A fork's pull request runs its own copy of the workflows, so its runs-on can name these
-# runners whatever ci.yml says: such a job stops here, before any of its code is on disk.
+# a failure fails the job. A fork's pull request runs its own copy of the workflows, so its runs-on can name any
+# runner whatever ci.yml says: on a runner whose .env lacks HORIZON_RUNNER_POOL=checks (the light runners) such a job
+# stops here, before any of its code is on disk. The checks runners take a fork's pull request (approved by a
+# maintainer first, isolated user, no secret).
 set -euo pipefail
 case ${GITHUB_EVENT_NAME:-} in
   pull_request|pull_request_review|pull_request_review_comment)
     head=$(jq -r '.pull_request.head.repo.full_name // "unknown"' "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null || echo unknown)
-    if [ "$head" != "${GITHUB_REPOSITORY:-}" ]; then
-      echo "::error::A pull request from $head never runs on a self-hosted runner: use runs-on ubuntu-latest for forks"
+    if [ "$head" != "${GITHUB_REPOSITORY:-}" ] && [ "${HORIZON_RUNNER_POOL:-}" != checks ]; then
+      echo "::error::A pull request from $head never runs on this self-hosted runner: use runs-on ubuntu-latest for forks"
       exit 1
     fi;;
   merge_group)
@@ -158,6 +160,7 @@ EOF
       echo "HORIZON_LAUNCHER_NO_SELF_UPDATE=1"
       echo "GH_PROMPT_DISABLED=1"
       if [ "$label" = playhorizon-ci ]; then
+        echo "HORIZON_RUNNER_POOL=checks"
         rust "$dir"
         echo "RUSTUP_HOME=$dir/rustup"
         echo "CARGO_HOME=$shared/cargo"

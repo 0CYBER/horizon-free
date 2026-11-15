@@ -1,8 +1,8 @@
 """Which jobs may run on our own runners (docs/ci-runners.md).
 
 - horizon-light (playhorizon's and other small runners, which refuse a fork's pull request): main's own scripts only.
-- horizon-checks (isolated runners; forks' pull requests run on GitHub's, but a fork's own copy of a workflow could
-  still name them): no secret and no token that writes.
+- horizon-checks (isolated runners; an approved fork's pull request ending in 0 or 1 runs there too): no secret and
+  no token that writes.
 - Neither takes a job that holds a secret or whose token can push, publish or start workflows: playhorizon is a
   partner's server, and a checks runner keeps what a fork's job left behind.
 """
@@ -122,23 +122,32 @@ class OwnRunnerTests(unittest.TestCase):
         # Never skipped: GitHub counts a skipped required check as passed.
         self.assertIn("if: always()", ci["verify"])
 
-    def test_forks_never_wait_for_our_checks_runners(self):
-        # A fork's run sees no repository variable, so SELF_HOSTED_CI can't send it elsewhere when the desktop is off:
-        # every job that may pick horizon-checks on a pull request picks it only for this repository's own branches.
-        for path in sorted(WORKFLOWS.glob("*.yml")):
-            text = path.read_text()
-            if "pull_request:" not in text:
-                continue
-            for name, block in jobs(text):
-                value = runs_on(block)
-                if "horizon-checks" in value:
-                    self.assertIn(FORK_GUARD, value, f"{path.name} {name}")
+    def test_forks_reach_only_the_checks_runners(self):
+        # An approved fork's pull request ending in 0 or 1 runs on horizon-checks like this repository's own (GitHub's
+        # 20-job pool is not the only place it may wait). Never the light runners: every light job that a pull request
+        # can start carries the fork guard (test_light_runners_take_main_code_only), and ci.yml's four runs-on
+        # expressions (the other workflows keep their own guards) no longer test the head repository.
+        ci = dict(jobs((WORKFLOWS / "ci.yml").read_text()))
+        for name in ("verify-tree", "verify-lint", "verify-test", "launcher"):
+            self.assertNotIn("head.repo", runs_on(ci[name]), name)
+        for where, on, _, block, _, pools in routed():
+            if "light" in pools and "pull_request" in on:
+                job_if = next((l for l in block.splitlines() if l.strip().startswith("if:")), "")
+                self.assertIn(FORK_GUARD, job_if, where)
+
+    def test_only_the_checks_runners_take_forks(self):
+        script = (ROOT / "tools/ci/checks-runners.sh").read_text()
+        self.assertIn('[ "${HORIZON_RUNNER_POOL:-}" != checks ]', script)
+        self.assertIn('echo "HORIZON_RUNNER_POOL=checks"', script)
+        # Only inside the branch of the runner that has the rust toolchain (the checks runner), never the light ones.
+        env = script.split('echo "HORIZON_RUNNER_POOL=checks"')[0].rsplit("if [", 1)[1]
+        self.assertTrue(env.startswith(' "$label" = playhorizon-ci'), env)
 
     def test_the_light_runners_refuse_forks_themselves(self):
         script = (ROOT / "tools/ci/checks-runners.sh").read_text()
         self.assertIn("ACTIONS_RUNNER_HOOK_JOB_STARTED=$shared/job-started.sh", script)
         self.assertIn('.pull_request.head.repo.full_name // "unknown"', script)
-        self.assertIn('if [ "$head" != "${GITHUB_REPOSITORY:-}" ]', script)
+        self.assertIn('if [ "$head" != "${GITHUB_REPOSITORY:-}" ]', script)  # refuses unless HORIZON_RUNNER_POOL=checks
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ we have to the max") every job that can runs on our own machines, and GitHub's p
 
 | Runner | Machine | Labels | Takes |
 | --- | --- | --- | --- |
-| `vps-checks-1`, `vps-checks-2` (and `ludodesktop-checks-1`…`-3`, offline) | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha`; ludodesktop (the maintainer's desktop) | `horizon-checks` | `checks`' `verify` and `launcher` for this repository's own pull requests whose number ends in 0 or 1 (never a fork's), `verify` of the merge queue's groups whose pull request number ends in 0-4, `mod-registry`, `telemetry-server`, `pack load bench` |
+| `vps-checks-1`, `vps-checks-2` (and `ludodesktop-checks-1`…`-3`, offline) | the CI VPS (14 vCPU, 62 GB, no GPU), isolated user `gha`; ludodesktop (the maintainer's desktop) | `horizon-checks` | `checks`' `verify` and `launcher` for pull requests whose number ends in 0 or 1 (this repository's own and approved forks'), `verify` of the merge queue's groups whose pull request number ends in 0-4, `mod-registry`, `telemetry-server`, `pack load bench` |
 | `vps-light-1`…`-8` | the CI VPS | `horizon-light` | The bots, as playhorizon's light runners below |
 | `playhorizon-light-1`…`-12` | playhorizon (partner's server, 8 vCPU) | `horizon-light`, `playhorizon-light` | The bots that run main's own scripts: `pr labels`, `overlap note`, `cancel-on-close`, `claim command`, `triage command`, `mojang republish`, `nightly build`'s `answer`, and `checks`' `parity-scope` |
 | `playhorizon-ci-1`, `playhorizon-ci-2` | playhorizon | `playhorizon-ci` | Nothing routed since 2026-11-03 (they took `checks` of this repository's own pull requests with the old `SELF_HOSTED_CI=all`) |
@@ -45,7 +45,7 @@ for):
 
 | `SELF_HOSTED_CI` | Bots (`horizon-light`) | `checks`, `mod-registry`, `telemetry-server`, `pack load bench` (`horizon-checks`) |
 | --- | --- | --- |
-| unset (default) | ours | `verify`, `launcher`: ours for this repository's own pull requests ending in 0 or 1, GitHub's for the others, forks' and main's pushes; the rest ours, forks' pull requests excepted |
+| unset (default) | ours | `verify`, `launcher`: ours for pull requests ending in 0 or 1 (forks' included, see Forks), GitHub's for the others and main's pushes; the rest ours, forks' pull requests excepted |
 | `all` | ours | ours, every pull request |
 | `light` | ours | GitHub's: the desktop is paused |
 | `off` | GitHub's | GitHub's: everything back, in one switch |
@@ -60,14 +60,20 @@ would wait for it. Back to the default when they return.
 
 ## Forks
 
-A fork's pull request runs on GitHub's runners (since 2026-11-10). GitHub gives it no repository variable, so
-`SELF_HOSTED_CI` can't move it: when the desktop was off or paused, the required `verify` of every fork's pull
-request ending in 0 or 1 waited for it until GitHub failed the job a day later, and re-running it waited again
-(#14131 sat on `horizon-checks` with `SELF_HOSTED_CI=light`). The jobs check
-`github.event.pull_request.head.repo.full_name == github.repository` before they pick our runners.
+An approved fork's pull request whose number ends in 0 or 1 runs `verify` and `launcher` on our checks runners (the CI
+VPS, and the desktop when it is on), like this repository's own; the others run on GitHub's. Why: GitHub's pool of 20
+jobs was the only place fork pull requests waited (2026-11-15: 544 runs queued, fork pull requests waiting 7+ hours
+while the VPS's two checks runners sat idle). The jobs no longer check the head repository before they pick our runners.
 
-A fork's pull request is code nobody here wrote. Its own copy of the workflows could still name our labels, so the
-checks runners are the only ones it may reach:
+The risk accepted: fork code runs on an isolated runner user after a maintainer approved it, and the runner's build
+folder persists between jobs. That is why nothing these runners build is shipped or signed.
+
+`SELF_HOSTED_CI` cannot move a fork's run (it sees no repository variable): when our checks runners are off or paused,
+those runs wait until they are back. `runner-watch.yml` opens an issue when no checks runner takes jobs
+([below](#when-our-runners-are-offline)).
+
+A fork's pull request is code nobody here wrote. Its own copy of the workflows could name any of our labels, so only the
+checks runners may take it:
 
 1. The checks runners are an isolated system user on the desktop (`gha`: no sudo, no logins, no SSH keys, `/home`
    invisible, the rest of the system read-only, no GPU or device), and their jobs' tokens write nothing and see no
@@ -77,8 +83,9 @@ checks runners are the only ones it may reach:
    (each workflow's header says how); `checks`' `parity-scope` only for this repository's own branches. The test
    pins both.
 3. A fork's pull request runs its *own* copy of the workflows, so it could name the light labels anyway. Before
-   every job, playhorizon's runners' `job-started.sh` (`ACTIONS_RUNNER_HOOK_JOB_STARTED`) fails any pull request
-   event whose head repository isn't this one, before a line of it is on disk.
+   every job, the runners' `job-started.sh` (`ACTIONS_RUNNER_HOOK_JOB_STARTED`) fails any pull request event whose
+   head repository isn't this one, before a line of it is on disk, unless the runner's `.env` sets
+   `HORIZON_RUNNER_POOL=checks` (only the checks runners do, the light ones never).
 4. The repository asks a maintainer to approve the runs of every outside contributor's pull request (Settings →
    Actions → "Require approval for all external contributors").
 
@@ -108,7 +115,7 @@ ssh ludovic@playhorizon 'bash ~/horizon-install/checks-runners.sh status'
 - All of them run nice and pinned to CPUs 4–7, inside `horizon-ci.slice` (the CPU quota and memory cap of all CI on
   the machine, `linux-runner.sh`). The checks runners have their own `horizon-ci-checks.slice` (memory ≤ 16 GB).
   CPUs 0–3 stay for `tools/remote.sh` runs, benchmarks and the servers.
-- `job-started.sh`, before every job: refuses a fork's pull request; empties a cargo build folder over 40 GB
+- `job-started.sh`, before every job: refuses a fork's pull request unless `HORIZON_RUNNER_POOL=checks`; empties a cargo build folder over 40 GB
   (`MAX_TARGET_GB`); collects a checkout's `.git` over 1.5 GB with `git-slim.sh` (`git gc --prune=now`, installed beside
   the hook; it also folds many packs and removes the `tmp_pack_*` of cut-short fetches) and drops one still over 4 GB
   (`MAX_GIT_GB`), which the checkout then clones again; removes the runner's diagnostic logs older than a day.

@@ -38,19 +38,21 @@ jobs:
   # each passed or had nothing to do. It runs even in a cancelled run (`always()`), so it fails there instead of being
   # skipped, which GitHub would count as passed. A failed part re-runs alone ("Re-run failed jobs"), not the others.
   #
-  # Where (docs/ci-runners.md): our checks runners (label horizon-checks) take this repository's own pull requests
-  # whose number ends in 0 or 1, and the merge queue's groups whose pull request number ends in 0-4 (the queue's
-  # head_ref is gh-readonly-queue/main/pr-<number>-<sha>, so "<digit>-" is the number's last digit); GitHub's runners
-  # take the others, forks' pull requests and main's pushes (which also save the Rust cache GitHub's pull request runs
-  # read), so both pools work at once. The repository variable SELF_HOSTED_CI moves them: `all` every job to ours, `light` (the
-  # desktop paused) or `off` every job to GitHub's. A fork's pull request sees no repository variable, so no switch
-  # could move it off a machine that is off: it always runs on GitHub's. On ours the build folder persists
+  # Where (docs/ci-runners.md): our checks runners (label horizon-checks) take pull requests whose number ends in 0 or 1,
+  # this repository's own and approved forks' alike, and the merge queue's groups whose pull request number ends in 0-4
+  # (the queue's head_ref is gh-readonly-queue/main/pr-<number>-<sha>, so "<digit>-" is the number's last digit);
+  # GitHub's runners take the others and main's pushes (which also save the Rust cache GitHub's pull request runs
+  # read), so both pools work at once. A fork's run starts only after a maintainer approves it, and its code runs on
+  # an isolated runner user with no secret and a token that writes nothing. The repository variable SELF_HOSTED_CI
+  # moves this repository's own runs: `all` every job to ours, `light` (the desktop paused) or `off` every job to
+  # GitHub's. A fork's pull request sees no repository variable, so no switch can move it off a machine that is off:
+  # it waits there until the machine is back (runner-watch.yml opens an issue). On ours the build folder persists
   # (CARGO_TARGET_DIR, outside the checkout), so the apt packages, Python and the Rust cache steps are GitHub's only.
   verify-tree:
     name: verify (tree and tools)
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event_name == 'pull_request' &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1')) ||
       github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
@@ -136,7 +138,7 @@ jobs:
     if: github.event_name != 'merge_group'
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event_name == 'pull_request' &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1')) ||
       github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
@@ -242,7 +244,7 @@ jobs:
     name: verify (Rust tests)
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event_name == 'pull_request' &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1')) ||
       github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
@@ -411,7 +413,7 @@ jobs:
     if: github.event_name != 'merge_group'
     runs-on: >-
       ${{ vars.SELF_HOSTED_CI != 'off' && vars.SELF_HOSTED_CI != 'light' && (vars.SELF_HOSTED_CI == 'all' ||
-      github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event_name == 'pull_request' &&
       (endsWith(format('{0}', github.event.pull_request.number), '0') ||
       endsWith(format('{0}', github.event.pull_request.number), '1')) ||
       github.event_name == 'merge_group' && (contains(github.event.merge_group.head_ref, '0-') ||
