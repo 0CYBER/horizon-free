@@ -813,6 +813,9 @@ impl Launcher {
         let t = self.theme;
         let wide = self.window_width >= crate::glass_home::TOP_BAR_WIDE;
         let compact = self.window_width < crate::glass_home::COMPACT;
+        // Near the window's smallest width (960) the page tabs need all the room: the player is
+        // only a face and Sign in only its logo, each with a tooltip.
+        let tight = self.window_width < 1000.;
         let mark = div()
             .flex()
             .flex_none()
@@ -853,11 +856,12 @@ impl Launcher {
         let open = self.account_menu;
         // Signed out, the chip is only the face: the Sign in with Microsoft button beside it
         // says it once, and the page tabs keep their room.
-        let signed_in = face.is_some();
+        let signed_in = face.is_some() && !tight;
         let chip =
             div()
                 .id("account")
                 .relative()
+                .when(tight, |d| d.tooltip(ui::tip(name.clone())))
                 .flex()
                 .items_center()
                 .gap(px(10.))
@@ -924,16 +928,19 @@ impl Launcher {
                     .items_center()
                     .gap(px(10.))
                     .h(px(44.))
-                    .px(px(16.))
+                    .px(px(if tight { 14. } else { 16. }))
                     .rounded(px(radius::ROW))
                     .bg(white(fill::BUTTON))
                     .hover(|s| s.bg(white(fill::BUTTON_HOVER)))
                     .cursor_pointer()
                     .child(microsoft::logo(16.))
-                    .child(
-                        ui::text(14., FontWeight::MEDIUM, ink::FULL)
-                            .child(tr("Sign in with Microsoft")),
-                    )
+                    .when(!tight, |d| {
+                        d.child(
+                            ui::text(14., FontWeight::MEDIUM, ink::FULL)
+                                .child(tr("Sign in with Microsoft")),
+                        )
+                    })
+                    .when(tight, |d| d.tooltip(ui::tip(tr("Sign in with Microsoft"))))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.start_sign_in();
                         cx.notify();
