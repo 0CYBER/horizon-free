@@ -9,6 +9,29 @@ def record(text):
     return {'cmd': '/data get entity @s', 'messages': [[[text, None]]], 'results': [[True, 1]]}
 
 
+class DispenserSyncTests(unittest.TestCase):
+    def test_a_redstone_dispenser_fire_syncs_the_engines_randoms_again(self):
+        scenarios = [families.FAMILIES['spawn'](random.Random(seed), seed) for seed in range(200)]
+
+        def fires_a_dispenser(scenario):
+            steps = scenario['steps']
+            return (any(str(step.get('block', '')).startswith(('dispenser', 'dropper')) for step in steps)
+                    and any(step.get('block') == 'redstone_block' for step in steps))
+
+        pulse = next(s for s in scenarios if fires_a_dispenser(s))
+        steps = pulse['steps']
+        before_fire = next(i for i, step in enumerate(steps) if step['k'] == 'read_near')
+        self.assertEqual(steps[before_fire + 1], {'k': 'sync'})  # right before the tick that fires the dispenser
+        self.assertNotIn(('drop', before_fire + 1), list(fuzz.edits(pulse)))  # the sync is not shrunk away
+        ops = fuzz.render(pulse, 0)
+        syncs = [i for i, op in enumerate(ops) if op['op'] == 'sync_randoms']
+        self.assertEqual(len(syncs), 2)  # the scenario's own, then the one at the fire
+        self.assertEqual(ops[syncs[0]], ops[syncs[1]])  # the same state, drawn from again at the fire
+        self.assertEqual(ops[syncs[1] + 1]['op'], 'tick')  # the firing tick is the next op
+        quiet = next(s for s in scenarios if not fires_a_dispenser(s))
+        self.assertEqual(sum(op['op'] == 'sync_randoms' for op in fuzz.render(quiet, 0)), 1)
+
+
 class SnbtDiffTests(unittest.TestCase):
     def test_a_difference_names_its_field_and_key_order_is_not_one(self):
         vanilla = record('Pig has the following entity data: {Motion: [0.0d, 0.1d, 0.0d], Tags: ["a b"], '

@@ -167,6 +167,11 @@ def uuid_text(words):
                      f'{words[2] >> 16:04x}', f'{words[2] & 0xffff:04x}{words[3]:08x}'])
 
 
+def sync_op(seed, slot):
+    """Both engines' randoms from one state; entity ids are unique in a batch, the same modulo 4 in every slot."""
+    return {'op': 'sync_randoms', 'uniquifier': seed, 'entity_id': 10_000_000 + 10_000 * slot, 'level_seed': seed}
+
+
 def render(scenario, slot):
     """The scenario's harness operations in this slot, each command op tagged with its step index."""
     x0, y0, z0 = area(slot)
@@ -184,9 +189,7 @@ def render(scenario, slot):
     seed = scenario['seed']
     ops = [cmd(f'/forceload add {x0} {z0}', -1, False), {'op': 'wait_chunks', 'chunks': chunk},
            cmd(f'/fill {x0} {y0 - 1} {z0} {x0 + 15} {y0 - 1} {z0 + 15} minecraft:stone', -1, False),
-           # Entity ids: unique in a batch, the same modulo 4 in every slot (an item's resting tick depends on it).
-           {'op': 'sync_randoms', 'uniquifier': seed, 'entity_id': 10_000_000 + 10_000 * slot,
-            'level_seed': seed}]
+           sync_op(seed, slot)]
     for i, step in enumerate(scenario['steps']):
         kind = step['k']
         if kind == 'summon':
@@ -200,6 +203,10 @@ def render(scenario, slot):
             ops.append({'op': 'tick', 'n': step['n']})
         elif kind == 'dispense':
             ops.append({'op': 'crafter_tick', 'pos': [x0 + step['at'][0], y0 + step['at'][1], z0 + step['at'][2]]})
+        elif kind == 'sync':
+            # A second sync at the tick a redstone dispenser fires: the ticks since the scenario's own sync leave
+            # the engines' randoms apart, so the fire would draw different values (#16834).
+            ops.append(sync_op(seed, slot))
         elif kind == 'reload':
             summoned = [uuid_text(uuid_words(slot, s['n'])) for s in scenario['steps'][:i] if s['k'] == 'summon']
             ops += [cmd(f'/forceload remove {x0} {z0}', i, False), {'op': 'tick', 'n': RELOAD_TICKS},
@@ -344,6 +351,8 @@ def reduce(scenario, edits):
 
 def edits(scenario):
     for i, step in enumerate(scenario['steps']):
+        if step['k'] == 'sync':  # a control for the comparison, not part of the scenario: shrinking keeps it
+            continue
         if step['k'] == 'tick' and step['n'] > 1:
             yield ('half', i)
         yield ('drop', i)
