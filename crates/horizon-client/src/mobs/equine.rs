@@ -1635,6 +1635,7 @@ mod tests {
     /// untamed horse with a mob on its back bolts; a zombie horse with a mob
     /// rider is `isMobControlled()` and does not.
     #[test]
+    #[ignore = "daily"]
     fn a_mob_riding_an_untamed_horse_starts_the_bolt() {
         use crate::mobs::world::with_built_test_world;
         let mut horse = horse(Species::Horse);
@@ -1781,6 +1782,7 @@ mod follow_mommy_tests {
     /// to the nearest bred `AbstractHorse` within 16 blocks while it is more
     /// than two blocks away.
     #[test]
+    #[ignore = "daily"]
     fn a_bred_foal_paths_to_the_nearest_bred_horse() {
         let Some(_) = target_pos((true, true, false), &[]) else {
             return;

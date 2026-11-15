@@ -11,6 +11,7 @@ use std::sync::Arc;
 /// `AnimalMakeLove` only ever pairs a `Camel` with a `Camel`: two husks fed
 /// their food never walk off together, and never spawn a child.
 #[test]
+#[ignore = "daily"]
 fn a_camel_husk_never_breeds() {
     let mut mobs = None;
     let ran = with_test_world(&[], |_, types| {
@@ -79,6 +80,7 @@ fn a_camel_husk_never_breeds() {
 /// answers for a player only when the camel is saddled): a player on an
 /// unsaddled camel is carried down, a saddled one drives.
 #[test]
+#[ignore = "daily"]
 fn an_unsaddled_camel_sits_down_under_its_rider() {
     let sits = |saddled: bool, rider: bool| {
         let mut camel = None;
@@ -128,6 +130,7 @@ fn an_unsaddled_camel_sits_down_under_its_rider() {
 /// is `#minecraft:camel_husk_food` (a rabbit's foot). `FollowTemptation` reads
 /// the same tag, so a cactus tempts a camel.
 #[test]
+#[ignore = "daily"]
 fn a_camel_is_tempted_by_cactus() {
     let mut got = None;
     let ran = with_test_world(&[], |_, types| {

@@ -1424,6 +1424,7 @@ mod conversion_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_drowning_zombie_keeps_its_gear_and_name_tag() {
         let Some(d) = drown("minecraft:zombie", |m| {
             m.custom_name = Some("Bob".into());
@@ -1460,6 +1461,7 @@ mod conversion_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_husk_turns_into_a_zombie_with_its_flags() {
         let Some(z) = drown("minecraft:husk", |m| {
             m.custom_name = Some("Dusty".into());
@@ -1510,6 +1512,7 @@ mod creative_target_tests {
     /// (`TargetGoal.canContinueToUse` / `TargetingConditions` skip invulnerable
     /// players).
     #[test]
+    #[ignore = "daily"]
     fn an_angry_zombified_piglin_drops_a_creative_player() {
         with_test_world(&[], |w, types| {
             let mut w = w.clone();
@@ -1540,6 +1543,7 @@ mod go_to_water_tests {
     /// `DrownedGoToWaterGoal.getWaterPos` takes only `Blocks.WATER` blocks:
     /// an area of kelp (which holds water too) gives it nowhere to go.
     #[test]
+    #[ignore = "daily"]
     fn a_drowned_goes_to_water_blocks_not_kelp() {
         for (block, expect) in [("minecraft:kelp", false), ("minecraft:water", true)] {
             let build =
@@ -1639,6 +1643,7 @@ mod turtle_egg_tests {
     /// random, not the mob's, so the pitch varies with the level seed over
     /// 0.9-1.1 rather than a fixed 1.0.
     #[test]
+    #[ignore = "daily"]
     fn the_egg_break_pitch_draws_from_the_level_random() {
         // java.util.Random(seed)'s first nextFloat, from an independent
         // implementation: 0.7306990027427673 for 7, 0.0978928804397583 for
@@ -1703,6 +1708,7 @@ mod wither_arrow_tests {
     /// The same rule through the shooting path: `perform_ranged_attack` hands
     /// the arrow to `ignite_for_wither_skeleton` before it flies.
     #[test]
+    #[ignore = "daily"]
     fn a_wither_skeletons_shot_leaves_with_the_ignite() {
         let ran = with_test_world(&[], |w, types| {
             let mut w = w.clone();
@@ -1741,6 +1747,7 @@ mod wither_arrow_tests {
     /// #9808: a zombified piglin angry at another mob (a skeleton's arrow
     /// hit it) is not angry at the player (`NeutralMob.isAngryAt`).
     #[test]
+    #[ignore = "daily"]
     fn a_piglin_angry_at_a_mob_does_not_target_the_player() {
         with_test_world(&[], |w, types| {
             let mut w = w.clone();
@@ -1783,6 +1790,7 @@ mod trident_continue_tests {
     /// again. Losing the trident mid-attack must therefore stop the goal;
     /// Horizon's continue asked only the base ranged goal.
     #[test]
+    #[ignore = "daily"]
     fn a_drowned_that_loses_its_trident_stops_the_trident_attack() {
         let mut outcomes = None;
         let ran = with_test_world(&[], |w, types| {
@@ -1830,6 +1838,7 @@ mod trident_continue_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn drowned_and_husk_conversion_starts_at_301_ticks_and_converts_on_tick_301() {
         let ran = with_test_world(&[], |w, types| {
             let kind = Arc::new(types.types["minecraft:zombie"].clone());

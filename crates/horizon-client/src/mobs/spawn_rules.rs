@@ -681,6 +681,7 @@ mod underwater_sky_tests {
     /// `liquid()`) makes it false. A bubble column is `liquid()`, so the scan
     /// continues and the roll is still required.
     #[test]
+    #[ignore = "daily"]
     fn kelp_hides_the_sky_from_a_guardian_and_a_bubble_column_does_not() {
         let ran = with_built_test_world(
             &[],
@@ -750,6 +751,7 @@ mod light_draw_tests {
     /// dimension type's light level draws as its provider does (uniform 0..=7 one
     /// bound-8 int, a constant none).
     #[test]
+    #[ignore = "daily"]
     fn dark_enough_draws_follow_the_dimension_type_provider() {
         with_built_test_world(
             &[],

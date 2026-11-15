@@ -6979,6 +6979,7 @@ mod silent_voice_tests {
     /// the check the silent cow plays `entity.cow.ambient` like the loud one,
     /// and without drawing first its random state falls two draws behind.
     #[test]
+    #[ignore = "daily"]
     fn a_silent_mob_makes_no_ambient_sound() {
         let Some((loud, loud_next)) = ambient(false) else {
             return;
@@ -7205,10 +7206,12 @@ mod hidden_speed_mob_tick_tests {
         let _ = admitted;
     }
     #[test]
+    #[ignore = "daily"]
     fn noai_full_mob_tick_promotes_speed() {
         full_tick_promotes(true)
     }
     #[test]
+    #[ignore = "daily"]
     fn ai_full_mob_tick_promotes_speed() {
         full_tick_promotes(false)
     }

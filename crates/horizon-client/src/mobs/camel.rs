@@ -562,6 +562,7 @@ mod tests {
     /// `Camel.getPassengerAttachmentPoint`: the second of two passengers sits
     /// 0.7 behind the middle, 0.5 ahead for the driver, 0.2 more for an animal.
     #[test]
+    #[ignore = "daily"]
     fn the_second_passenger_sits_behind() {
         with_test_world(&[], |_, types| {
             let kind = std::sync::Arc::new(types.types["minecraft:camel_husk"].clone());
@@ -580,6 +581,7 @@ mod tests {
     /// (`#non_controlling_rider`), so a camel carrying a husk never sits
     /// with it floating above (#3199).
     #[test]
+    #[ignore = "daily"]
     fn a_camel_with_a_husk_on_its_back_never_sits_down() {
         // Whether the goal starts in 64 tries (each passes 1 in 4).
         let sits = |rider: Option<&str>, leashed: bool| {
@@ -788,6 +790,7 @@ mod tests {
     /// always true, so only those two can fail). A hurt or ridden camel must
     /// not start breeding even while it is in love.
     #[test]
+    #[ignore = "daily"]
     fn a_wounded_or_ridden_camel_does_not_breed() {
         let mut pair = None;
         let ran = with_test_world(&[], |_, types| {
@@ -841,6 +844,7 @@ mod tests {
     /// box is 2.375 tall against the sitting pose's 0.945, so a sitting camel
     /// under a two-block ceiling has no room to stand and must not try.
     #[test]
+    #[ignore = "daily"]
     fn a_camel_changes_pose_only_when_the_other_pose_fits() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],

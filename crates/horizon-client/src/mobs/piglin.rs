@@ -2445,6 +2445,7 @@ mod brute_sound_tests {
     /// the fight activity and growls `entity.piglin_brute.angry`, losing the
     /// target is silent, and a piglin keeps `entity.piglin.angry`.
     #[test]
+    #[ignore = "daily"]
     fn a_brute_names_the_brute_growl() {
         let mut brute = mob(Species::PiglinBrute);
         brute.ai.target = Some(Who::Player);
@@ -2550,6 +2551,7 @@ mod hurt_broadcast_tests {
     /// `PiglinBruteAi.wasHurtBy` is `PiglinAi.maybeRetaliate`, which calls the adult piglins
     /// around it, the regular ones too (#7790).
     #[test]
+    #[ignore = "daily"]
     fn a_brute_hit_by_the_player_calls_the_piglins_around_it() {
         let mut events = Vec::new();
         let ran = with_test_world(&[], |w, _| {
@@ -2710,6 +2712,7 @@ mod conversion_tests {
     use crate::mobs::world::with_test_world;
 
     #[test]
+    #[ignore = "daily"]
     fn converting_piglin_drops_its_inventory_before_conversion() {
         let ran = with_test_world(&[], |w, types| {
             let at = [0.5, 64.0, 0.5];
@@ -2776,6 +2779,7 @@ mod conversion_tests {
     /// item in the off hand is dropped at the piglin's feet and the zombified
     /// piglin does not carry it, where Horizon used to hand it over.
     #[test]
+    #[ignore = "daily"]
     fn a_converted_piglin_drops_the_item_it_was_admiring() {
         let ran = with_test_world(&[], |w, types| {
             let mut m = Mob::new(
@@ -2915,6 +2919,7 @@ mod brute_home_tests {
     /// that is near home, past a hundred blocks, or without the memory does
     /// not.
     #[test]
+    #[ignore = "daily"]
     fn a_brute_that_wanders_off_walks_back_home() {
         with_built_test_world(&[], build, |w, _| {
             let mut test_level = crate::health::TestLevel::new(3);
@@ -2946,6 +2951,7 @@ mod brute_home_tests {
     /// `StrollToPoi.nextOkStartTime`: after a try the brute waits 80 ticks before the
     /// next one, so a home out of reach is not searched for on every tick.
     #[test]
+    #[ignore = "daily"]
     fn a_brute_tries_the_way_home_once_every_80_ticks() {
         with_built_test_world(&[], build, |w, _| {
             let mut test_level = crate::health::TestLevel::new(3);
@@ -2970,6 +2976,7 @@ mod brute_home_tests {
     /// the home it walks back to. `PiglinAi.wasHurtBy` erases
     /// CELEBRATE_LOCATION, which is the same field for a piglin.
     #[test]
+    #[ignore = "daily"]
     fn a_hit_leaves_the_brutes_home_alone() {
         with_built_test_world(&[], build, |w, _| {
             let mut lr = LegacyRandom::new(5);
@@ -3083,6 +3090,7 @@ mod hoglin_pacified_feeding_tests {
     /// The baby's branch asks `canAgeUp`, not `canFallInLove`, so a pacified
     /// baby still grows up, and no other species reads the hoglin's memory.
     #[test]
+    #[ignore = "daily"]
     fn a_pacified_hoglin_refuses_breeding_food_and_a_baby_still_grows() {
         let mut level = LegacyRandom::new(0);
         let ran = with_built_test_world(&[], build(true), |w, _| {
@@ -3121,6 +3129,7 @@ mod hoglin_pacified_feeding_tests {
     /// the fungus keeps the adult refusing food for the rest of the 200 ticks,
     /// then it breeds again (`HoglinAi.wasHurtBy` is the other way out).
     #[test]
+    #[ignore = "daily"]
     fn pacification_outlives_the_repellent_by_200_ticks() {
         let mut level = LegacyRandom::new(0);
         let ran = with_built_test_world(&[], build(true), |w, _| {

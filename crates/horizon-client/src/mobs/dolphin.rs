@@ -578,6 +578,7 @@ mod target_tests {
     /// `Dolphin.canAttack`: a baby takes nobody as its target, so a hit on it
     /// is not answered; an adult does take the one that hurt it.
     #[test]
+    #[ignore = "daily"]
     fn a_baby_dolphin_spares_whatever_hurt_it() {
         let ran = with_test_world(&[], |w, _| {
             assert!(
@@ -611,6 +612,7 @@ mod treasure_play_tests {
     /// `DolphinSwimToTreasureGoal.tick`: `level.getRandom().nextInt(this.adjustedTickDelay(80))`,
     /// the level's random and 40 ticks for a goal that does not tick every tick.
     #[test]
+    #[ignore = "daily"]
     fn a_dolphin_hearts_its_treasure_on_the_levels_random_every_40_ticks() {
         let mut out = None;
         if !with_test_world(&[], |w, _| {
@@ -656,6 +658,7 @@ mod treasure_play_tests {
     /// `Dolphin.MoveToItemGoal.start`: `playSound(DOLPHIN_PLAY, 1.0, 1.0)`,
     /// which `Entity.playSound` drops for a silent dolphin.
     #[test]
+    #[ignore = "daily"]
     fn a_silent_dolphin_makes_no_sound_swimming_to_an_item() {
         let ran = with_test_world(&[], |w, _| {
             for silent in [false, true] {

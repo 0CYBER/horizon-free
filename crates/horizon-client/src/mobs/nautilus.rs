@@ -777,6 +777,7 @@ mod tests {
     /// `ChargeAttack.dealKnockBack` is `causeExtraKnockback`: `LivingEntity.knockback`
     /// on the target, away from (sin(yaw), -cos(yaw)), not a raw push of its motion.
     #[test]
+    #[ignore = "daily"]
     fn a_charge_knocks_its_target_back_along_its_facing() {
         let mut events = Vec::new();
         let ran = with_test_world(&[], |w, types| {
@@ -937,6 +938,7 @@ mod hostile_target_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_nautilus_only_targets_a_pufferfish_it_sees() {
         let near = Vec3::new(6.5, 62.0, 0.5);
         // 16 out on x and 3 on z: inside the sensor's box, past range(16).

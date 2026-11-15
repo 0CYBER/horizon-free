@@ -46,6 +46,7 @@ fn forward_rider() -> Rider {
 /// out; `Camel.travel` then keeps it in place for the 52 ticks of the
 /// stand-up, and it walks once the pose settles.
 #[test]
+#[ignore = "daily"]
 fn a_walk_target_stands_a_sitting_camel_up_and_then_it_walks() {
     let mut outcome = None;
     let ran = with_built_test_world(&[], shelf, |w, types| {
@@ -112,6 +113,7 @@ fn a_walk_target_stands_a_sitting_camel_up_and_then_it_walks() {
 /// !isInPoseTransition()` - pressing forward during the 40-tick kneel leaves
 /// the camel sitting until the transition is over.
 #[test]
+#[ignore = "daily"]
 fn pressing_forward_during_the_kneel_waits_for_the_transition() {
     let mut outcome = None;
     let ran = with_test_world(&[], |_, types| {
@@ -144,6 +146,7 @@ fn pressing_forward_during_the_kneel_waits_for_the_transition() {
 /// a sitting baby camel does not follow its parent, whose walk target would
 /// otherwise stand it up.
 #[test]
+#[ignore = "daily"]
 fn a_sitting_baby_camel_does_not_follow_its_parent() {
     use crate::mobs::Species;
     use crate::mobs::sensor_scan_tests::kind as cow_kind;

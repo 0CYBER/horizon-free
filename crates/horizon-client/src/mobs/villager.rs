@@ -1477,6 +1477,7 @@ mod tests {
     /// On its own random, a villager's brain tick leaves the level random alone and takes no draw
     /// from the villager's entity random that the level random's tick would not take.
     #[test]
+    #[ignore = "daily"]
     fn own_random_brain_tick_keeps_the_entity_random_sequence() {
         use horizon_core::geometry::Vec3;
         use horizon_core::random::LegacyRandom;

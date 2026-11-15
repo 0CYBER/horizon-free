@@ -82,6 +82,7 @@ fn wall_with(
 /// in the same block is on a climbable, and `Spider.onClimbable` is its own
 /// `isClimbing` flag, whatever the block.
 #[test]
+#[ignore = "daily"]
 fn an_equine_and_a_flying_monster_are_never_on_a_climbable() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -114,6 +115,7 @@ fn an_equine_and_a_flying_monster_are_never_on_a_climbable() {
 /// standing in vines is still pushed by others (the cache `pushEntities`
 /// refreshes each tick stays false), where a cow in the same block is not.
 #[test]
+#[ignore = "daily"]
 fn a_horse_in_vines_is_still_pushable() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],
@@ -146,6 +148,7 @@ fn a_horse_in_vines_is_still_pushable() {
 /// open air: `handleOnClimbable` never holds it to 0.15 a tick. A cow in the
 /// same column slides down at 0.15, so the column is a real one.
 #[test]
+#[ignore = "daily"]
 fn a_horse_falls_through_vines_at_full_speed() {
     let drop = |vines: bool, id: &str| {
         let mut out = None;
@@ -198,6 +201,7 @@ fn a_horse_falls_through_vines_at_full_speed() {
 /// climbable by 0.2 when it is pressed against a wall. A horse pushed into a
 /// ladder stays at the bottom where a cow climbs it.
 #[test]
+#[ignore = "daily"]
 fn a_horse_pressed_into_a_ladder_gains_no_height() {
     let ran = crate::mobs::world::with_built_test_world(
         &[],

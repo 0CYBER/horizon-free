@@ -812,6 +812,7 @@ mod still_float_tests {
     /// the still-timeout guard is re-checked on a running float goal too: a
     /// ghast a player stands on stops floating instead of hopping in water.
     #[test]
+    #[ignore = "daily"]
     fn a_happy_ghast_on_a_still_timeout_stops_floating() {
         let mut t = (*crate::mobs::sensor_scan_tests::kind()).clone();
         t.species = Species::HappyGhast;
@@ -888,6 +889,7 @@ mod cloud_heal_tests {
     /// `Entity.isInClouds` is half of `isFastHealing`: a hurt ghast whose box
     /// reaches the cloud band heals on tick 20, one just below it on tick 600.
     #[test]
+    #[ignore = "daily"]
     fn a_happy_ghast_in_the_clouds_heals_every_second() {
         let dim = cloudy(0.8);
         let mut seen = None;
@@ -917,6 +919,7 @@ mod cloud_heal_tests {
     /// the bottom is in (`getY() + getBbHeight() < cloudBottom` is false), and
     /// so are feet exactly at the top (`getY() <= cloudTop`), but not above it.
     #[test]
+    #[ignore = "daily"]
     fn the_cloud_band_is_the_four_blocks_over_its_bottom() {
         let dim = cloudy(0.8);
         let mut seen = None;
@@ -947,6 +950,7 @@ mod cloud_heal_tests {
     /// A dimension whose `visual/cloud_color` is transparent has no clouds to
     /// stand in (the Nether and the End), so the slow interval stays.
     #[test]
+    #[ignore = "daily"]
     fn a_dimension_without_clouds_never_counts_as_in_them() {
         let dim = cloudy(0.0);
         let mut seen = None;

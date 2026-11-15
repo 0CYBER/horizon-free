@@ -493,6 +493,7 @@ mod golem_touch_tests {
     use std::sync::Arc;
 
     #[test]
+    #[ignore = "daily"]
     fn split_uses_parent_random_and_width_for_both_cube_types() {
         with_test_world(&[], |_, types| {
             for kind in ["minecraft:slime", "minecraft:magma_cube"] {
@@ -518,6 +519,7 @@ mod golem_touch_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn sulfur_split_has_fixed_count_and_draws_only_yaws() {
         with_test_world(&[], |_, types| {
             let ty = Arc::new(types.types["minecraft:sulfur_cube"].clone());
@@ -578,6 +580,7 @@ mod golem_touch_tests {
     /// into hurts it like a touching player (#3513), for `getAttackDamage`;
     /// a tiny slime (`canDealDamage`) and a cube clear of the golem do not.
     #[test]
+    #[ignore = "daily"]
     fn a_cube_touching_an_iron_golem_hurts_it() {
         let Some(slime) = hits("minecraft:slime", 2, 1.0) else {
             return;
@@ -611,6 +614,7 @@ mod golem_touch_tests {
     /// `CubeHurtPlayer` without queueing `entity.slime.attack` in `ai_step`
     /// (the sound only follows a hit that `hurtServer` accepts).
     #[test]
+    #[ignore = "daily"]
     fn a_cube_touching_a_player_defers_its_attack_sound_to_hurt_server() {
         use horizon_core::geometry::Aabb;
         let mut events = Vec::new();
@@ -700,6 +704,7 @@ mod keep_jumping_tests {
     /// `CubeMobKeepOnJumpingGoal.canUse` is `!isPassenger()`: a cube riding
     /// a boat or another mob holds still, while one on its own keeps hopping.
     #[test]
+    #[ignore = "daily"]
     fn a_cube_that_rides_something_does_not_keep_jumping() {
         let mut starts = None;
         let ran = with_test_world(&[], |w, types| {
@@ -739,6 +744,7 @@ mod keep_jumping_tests {
     /// `AbstractCubeMob.tick` is not gated by NoAI (only `serverAiStep` is):
     /// a standing NoAI cube still records `wasOnGround`.
     #[test]
+    #[ignore = "daily"]
     fn a_no_ai_cube_updates_was_on_ground() {
         let mut result = None;
         let ran = with_test_world(&[], |w, types| {

@@ -4042,6 +4042,7 @@ mod despawn_tests {
     /// an axolotl with a custom name is kept however far it swims, while the name
     /// saves no other mob — a monster still goes.
     #[test]
+    #[ignore = "daily"]
     fn a_named_fish_or_axolotl_never_despawns() {
         crate::mobs::world::with_test_world(&[], |w, types| {
             let far = MobWorld {
@@ -4544,6 +4545,7 @@ mod hit_effect_tests {
     /// where the mob is hit 2. Without the fix each of these is a plain
     /// `AttackMob` and the mob keeps no effect at all (0 ticks).
     #[test]
+    #[ignore = "daily"]
     fn a_melee_effect_rides_the_hit_onto_a_mob() {
         let cases = [
             ("minecraft:cave_spider", "minecraft:poison", 140),
@@ -4609,6 +4611,7 @@ mod hit_effect_tests {
     /// On easy the cave spider's poison timer is 0, so nothing rides the hit:
     /// the mob it bites takes the damage alone (`AttackMob`, no effect).
     #[test]
+    #[ignore = "daily"]
     fn an_easy_cave_spiders_bite_carries_no_effect() {
         let mut out: Option<Vec<String>> = None;
         let ran = with_test_world(&[], |w, types| {
@@ -4696,6 +4699,7 @@ mod attack_sound_tests {
     /// pitch 1. Without the dolphin arm its bite is silent (no sound event at
     /// all); the axolotl and the panda sit next to it as the control.
     #[test]
+    #[ignore = "daily"]
     fn a_dolphins_blow_plays_its_attack_sound() {
         let Some(dolphin) = attack_sounds("minecraft:dolphin", false) else {
             return;
@@ -4787,6 +4791,7 @@ mod same_vehicle_push_tests {
     /// worn armour's stack (a dyed piece keeps its colour), a horse's
     /// armour in the body slot and its saddle, and nothing else.
     #[test]
+    #[ignore = "daily"]
     fn a_mobs_equipment_is_listed_by_slot() {
         with_test_world(&[], |_, types| {
             let mob = |name: &str| {
@@ -4836,6 +4841,7 @@ mod same_vehicle_push_tests {
     /// half a block toward its front and so inside its box, never push each
     /// other (#3199). The camel still pushes a mob that only overlaps it.
     #[test]
+    #[ignore = "daily"]
     fn a_camel_and_its_rider_never_push_each_other() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -4891,6 +4897,7 @@ mod same_vehicle_push_tests {
     /// pushes every other (11) with no cap, and exactly the first N in vanilla's order with a cap
     /// of N, skipping a chicken that already had N pushes this tick.
     #[test]
+    #[ignore = "daily"]
     fn a_mob_in_a_crowded_pen_pushes_at_most_the_cap() {
         let mut pen = None;
         with_test_world(&[], |_, types| {
@@ -5003,6 +5010,7 @@ mod same_vehicle_push_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn sleeping_villager_vetoes_only_pushes_received_during_other_mobs_ticks() {
         let mut pair = None;
         let ran = with_test_world(&[], |_, types| {
@@ -5064,6 +5072,7 @@ mod same_vehicle_push_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn sleeping_fox_vetoes_pushes_received_during_other_mobs_ticks() {
         let mut pair = None;
         let ran = with_test_world(&[], |_, types| {
@@ -5122,6 +5131,7 @@ mod same_vehicle_push_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_ridden_horse_is_not_pushed_but_still_pushes() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -5200,6 +5210,7 @@ mod warden_push_tests {
     use crate::mobs::world::{test_player, with_test_world};
 
     #[test]
+    #[ignore = "daily"]
     fn a_warden_in_the_ground_does_not_take_collision_pushes() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -5300,6 +5311,7 @@ mod ridden_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_server_leaves_a_horse_to_its_riders_client() {
         let Some(moved) = ridden(false) else {
             return;
@@ -5462,6 +5474,7 @@ mod bed_wake_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn a_sleeper_without_ai_still_stands_when_its_bed_is_gone() {
         let Some(m) = no_ai_sleeper() else { return };
         assert!(
@@ -5638,6 +5651,7 @@ mod forgiveness_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn peaceful_drops_an_iron_golems_existing_player_target() {
         crate::mobs::world::with_test_world(&[], |world, _| {
             let mut world = world.clone();
@@ -5724,6 +5738,7 @@ mod endermite_goal_tests {
     /// `HurtByTargetGoal` that alerts the others. The generic monster block
     /// an unlisted species gets has none of those (stroll 0.8, no alert).
     #[test]
+    #[ignore = "daily"]
     fn an_endermite_takes_the_hostile_goal_list() {
         let ran = with_test_world(&[], |_, types| {
             let m = Mob::new(
@@ -5776,6 +5791,7 @@ mod villager_ambient_tests {
     /// player has its menu open, ambient otherwise. `WanderingTrader` only has
     /// the trade branch.
     #[test]
+    #[ignore = "daily"]
     fn a_villager_is_silent_asleep_and_noisy_while_trading() {
         with_test_world(&[], |w, types| {
             assert_eq!(
@@ -5839,6 +5855,7 @@ mod fox_screech_tests {
     /// within 16 blocks, about one call in ten screeches at volume 2; by day,
     /// in the End, or with a player near, never.
     #[test]
+    #[ignore = "daily"]
     fn a_fox_screeches_only_at_night_with_no_player_near() {
         with_test_world(&[], |w, types| {
             let mut night = w.clone();
@@ -5910,6 +5927,7 @@ mod age_up_tests {
     use std::sync::Arc;
 
     #[test]
+    #[ignore = "daily"]
     fn sleep_answer_is_applied_with_or_without_ai() {
         let ran = crate::mobs::world::with_test_world(&[], |w, types| {
             for no_ai in [false, true] {
@@ -5945,6 +5963,7 @@ mod age_up_tests {
     /// Official Java 26.3: NoAI leaves both age clocks running. AgeLocked
     /// holds a baby's age, but a positive breeding cooldown still expires.
     #[test]
+    #[ignore = "daily"]
     fn age_clocks_tick_with_no_ai_and_respect_baby_age_lock() {
         let ran = crate::mobs::world::with_test_world(&[], |w, types| {
             for species in ["pig", "cow", "horse", "turtle"] {
@@ -6050,6 +6069,7 @@ mod age_up_tests {
     /// mob through `setAge`, so a goat on its last baby tick grows up with the
     /// adult damage rather than keeping the baby's.
     #[test]
+    #[ignore = "daily"]
     fn a_goat_that_grows_up_on_its_tick_gets_the_adult_attack_damage() {
         let mut out: Option<(bool, f32)> = None;
         crate::mobs::world::with_test_world(&[], |w, types| {
@@ -6166,6 +6186,7 @@ mod burn_and_rose_tests {
     /// is not burnable, so a zombie standing in powder snow only freezes. The
     /// draws are the mob's own, so the answer over a run of them is fixed.
     #[test]
+    #[ignore = "daily"]
     fn powder_snow_keeps_a_zombie_from_burning_in_daylight() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -6195,6 +6216,7 @@ mod burn_and_rose_tests {
     /// the powder snow (`mobGriefing`) and is put out, once, and then no longer
     /// catches fire there in daylight.
     #[test]
+    #[ignore = "daily"]
     fn a_burning_zombie_in_powder_snow_breaks_the_block_and_is_put_out() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -6237,6 +6259,7 @@ mod burn_and_rose_tests {
     /// `isInvulnerableTo(wither)`, not the regional difficulty of a fresh
     /// chunk and not the hit timer: a golem that was just hurt still gets it.
     #[test]
+    #[ignore = "daily"]
     fn wither_rose_applies_wither_whatever_the_hit_timer_and_local_difficulty() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -6264,6 +6287,7 @@ mod burn_and_rose_tests {
     /// rose's cell between the two boxes and gets wither, while one standing
     /// beside it does not.
     #[test]
+    #[ignore = "daily"]
     fn a_mob_falling_past_a_wither_rose_gets_wither_and_one_beside_it_does_not() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -6357,6 +6381,7 @@ mod wither_block_slowdown_tests {
     /// `SweetBerryBushBlock.entityInside` -> `makeStuckInBlock`: a regular mob
     /// (e.g. cow) is slowed down and its fall distance is reset to 0.
     #[test]
+    #[ignore = "daily"]
     fn cow_gets_stuck_in_sweet_berry_bush() {
         let ran =
             with_built_test_world(&[], build_with("minecraft:sweet_berry_bush"), |w, types| {
@@ -6380,6 +6405,7 @@ mod wither_block_slowdown_tests {
     /// `PowderSnowBlock.entityInside` -> `makeStuckInBlock`: a regular mob
     /// (e.g. cow) in powder snow is slowed down and its fall distance is reset to 0.
     #[test]
+    #[ignore = "daily"]
     fn cow_gets_stuck_in_powder_snow() {
         let ran = with_built_test_world(&[], build_with("minecraft:powder_snow"), |w, types| {
             let mut m = mob(types, "minecraft:cow");
@@ -6402,6 +6428,7 @@ mod wither_block_slowdown_tests {
     /// `WitherBoss.makeStuckInBlock` is a NO-OP: a wither inside sweet berry bush
     /// does not receive stuck multiplier and preserves its fall distance.
     #[test]
+    #[ignore = "daily"]
     fn wither_does_not_get_stuck_in_sweet_berry_bush() {
         let ran =
             with_built_test_world(&[], build_with("minecraft:sweet_berry_bush"), |w, types| {
@@ -6421,6 +6448,7 @@ mod wither_block_slowdown_tests {
     /// `WitherBoss.makeStuckInBlock` is a NO-OP: a wither inside powder snow
     /// does not receive stuck multiplier and preserves its fall distance.
     #[test]
+    #[ignore = "daily"]
     fn wither_does_not_get_stuck_in_powder_snow() {
         let ran = with_built_test_world(&[], build_with("minecraft:powder_snow"), |w, types| {
             let mut m = mob(types, "minecraft:wither");
@@ -6439,6 +6467,7 @@ mod wither_block_slowdown_tests {
     /// `SweetBerryBushBlock.entityInside`: Wither is NOT exempt from damage
     /// when moving through a mature bush (age > 0).
     #[test]
+    #[ignore = "daily"]
     fn wither_takes_damage_when_moving_in_mature_sweet_berry_bush() {
         let ran = with_built_test_world(
             &[],
@@ -6499,6 +6528,7 @@ mod silverfish_walk_target_tests {
     /// to the monster's light value. Horizon treated stone like any other
     /// block, so a silverfish had no reason to walk back into the wall.
     #[test]
+    #[ignore = "daily"]
     fn a_silverfish_prefers_a_block_on_an_infested_host() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -6555,6 +6585,7 @@ mod iron_golem_push_tests {
     /// becomes its target one time in 20, and the draw is made for those alone,
     /// so a creeper or an animal leaves the golem's random alone.
     #[test]
+    #[ignore = "daily"]
     fn an_iron_golem_targets_the_monster_that_bumps_it() {
         let mut test_level = crate::health::TestLevel::new(0);
         let level = &mut test_level.level();
@@ -6600,6 +6631,7 @@ mod iron_golem_push_tests {
     /// items' components in the data reports (iron axe 8, iron sword 5,
     /// diamond sword 6, stone sword 4, golden axe 6, trident 8, bow none).
     #[test]
+    #[ignore = "daily"]
     fn a_held_weapon_adds_its_attack_damage_to_the_melee_hit() {
         // (mob, main hand, the item's attack_damage modifier)
         let cases: [(&str, Option<&str>, f32); 9] = [
@@ -6659,6 +6691,7 @@ mod allay_healing_tests {
     use std::sync::Arc;
 
     #[test]
+    #[ignore = "daily"]
     fn allays_heal_on_tenth_ticks_without_enabling_noai_work() {
         let ran = crate::mobs::world::with_test_world(&[], |w, types| {
             for no_ai in [true, false] {
@@ -6709,6 +6742,7 @@ mod ravager_noai_tests {
     use std::sync::Arc;
 
     #[test]
+    #[ignore = "daily"]
     fn ravager_counters_tick_without_ai_and_stun_starts_a_full_roar() {
         crate::mobs::world::with_test_world(&[], |w, types| {
             for no_ai in [false, true] {
@@ -6794,6 +6828,7 @@ mod air_tests {
     /// block on top of it and the golem's own `decreaseAirSupply` holding its air.
     /// 300 ticks take the air from 300 to 0 and 20 more deal the drown's 2.
     #[test]
+    #[ignore = "daily"]
     fn the_types_the_jar_lists_breathe_under_water() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -6850,6 +6885,7 @@ mod air_tests {
     /// `#can_breathe_under_water`: under water it loses a breath a tick from
     /// its 4800, as `LivingEntity.baseTick` takes it, so it must surface.
     #[test]
+    #[ignore = "daily"]
     fn a_dolphin_holds_its_breath_under_water() {
         let Some(air) = air_after("minecraft:dolphin", 4800, 10) else {
             return;
@@ -6862,6 +6898,7 @@ mod air_tests {
     /// still climbs four at a time to 300, and a fish's own handler fills it to
     /// 300 in water. Air above the maximum is left alone.
     #[test]
+    #[ignore = "daily"]
     fn a_dolphin_refills_to_its_own_maximum() {
         let build = |world: &mut crate::world::World,
                      registry: &horizon_world::registry::BlockRegistry| {
@@ -6905,6 +6942,7 @@ mod air_tests {
     /// `getAirSupply() <= -20`: a cod out of water with `{Air:-25}` still drowns, is
     /// reset to 0 and takes the 2.
     #[test]
+    #[ignore = "daily"]
     fn a_water_creature_below_minus_twenty_still_drowns() {
         let ran = crate::mobs::world::with_test_world(&[], |w, types| {
             let drowned = |start: i32| {
@@ -6925,6 +6963,7 @@ mod air_tests {
 
     /// A copper golem is in `#can_breathe_under_water`: its air stays full.
     #[test]
+    #[ignore = "daily"]
     fn a_copper_golem_breathes_under_water() {
         let Some(air) = air_after("minecraft:copper_golem", 300, 10) else {
             return;
@@ -7190,6 +7229,7 @@ mod dolphin_noai_air_tests {
     /// `Dolphin.tick` restores max air after super.tick for a NoAI dolphin,
     /// even when that superclass tick refilled or consumed loaded air.
     #[test]
+    #[ignore = "daily"]
     fn noai_dolphins_restore_air_after_the_full_mob_tick() {
         for water in [false, true] {
             for initial in [4800, 100] {
@@ -7200,6 +7240,7 @@ mod dolphin_noai_air_tests {
 
     /// The NoAI exception must not suppress normal underwater consumption.
     #[test]
+    #[ignore = "daily"]
     fn normal_dolphins_keep_their_underwater_countdown() {
         check(true, false, 4800, [4799, 4798]);
     }
@@ -7261,6 +7302,7 @@ mod nautilus_noai_air_tests {
     /// `Nautilus.baseTick`: NoAI skips only handleAirSupply; super.baseTick
     /// still refills a breathing mob by four, capped at300.
     #[test]
+    #[ignore = "daily"]
     fn noai_nautilus_keeps_superclass_refill_in_both_media() {
         for water in [false, true] {
             check(water, true, 300, [300, 300]);
@@ -7271,6 +7313,7 @@ mod nautilus_noai_air_tests {
     /// With AI, handleAirSupply still uses the pre-super air on land and
     /// writes300 in water. The NoAI exception must not alter that policy.
     #[test]
+    #[ignore = "daily"]
     fn normal_nautilus_keeps_its_custom_handler() {
         check(false, false, 300, [299, 298]);
         check(false, false, 100, [99, 98]);
@@ -7290,6 +7333,7 @@ mod freeze_tests {
     /// answers `canFreeze` false, so it takes neither, and so does the stray (by
     /// tag), while the bogged, parched, wither skeleton and a zombie freeze.
     #[test]
+    #[ignore = "daily"]
     fn a_skeleton_never_freezes() {
         crate::mobs::world::with_built_test_world(
             &[],
@@ -7798,6 +7842,7 @@ mod walk_target_tests {
     /// 10 and grass by the light; a monster the negated light; and an enderman, a
     /// pillager and a warden the same 0 everywhere.
     #[test]
+    #[ignore = "daily"]
     fn a_stroll_scores_its_ground_the_way_the_jar_does() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],

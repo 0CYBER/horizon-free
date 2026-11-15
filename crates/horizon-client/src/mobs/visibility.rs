@@ -157,6 +157,7 @@ mod tests {
     /// visibility: an invisible zombie with no armour is 7% as visible, so a
     /// golem 10 blocks away does not find it, and one in full armour is.
     #[test]
+    #[ignore = "daily"]
     fn an_invisible_mob_is_found_from_less_far() {
         let invisible = |m: &mut Mob| m.invisible = true;
         let Some(visible) = golem_targets(10.0, |_| {}, None) else {
@@ -177,6 +178,7 @@ mod tests {
 
     /// A mod's visibility answer scales a mob target's range as a player's.
     #[test]
+    #[ignore = "daily"]
     fn a_mods_visibility_scales_a_mobs_range_to_a_mob() {
         assert_ne!(golem_targets(10.0, |_| {}, Some(&HideZombies)), Some(true));
         assert_ne!(

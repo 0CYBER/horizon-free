@@ -419,6 +419,7 @@ mod tests {
     /// passes over the wall, so the player stays a valid target — bites
     /// through the pane, exactly as vanilla 26.3 does.
     #[test]
+    #[ignore = "daily"]
     fn a_phantom_bites_a_player_pressed_behind_a_foot_high_pane_wall() {
         with_built_test_world(&[], press_setup(65), |w, types| {
             let mut w = w.clone();
@@ -469,6 +470,7 @@ mod tests {
     /// the player, in Horizon as in vanilla 26.3; the bite's box check alone
     /// would reach through the 0.125-thick pane.
     #[test]
+    #[ignore = "daily"]
     fn a_phantom_cannot_target_a_player_behind_a_window_of_panes() {
         with_built_test_world(&[], press_setup(67), |w, types| {
             let mut w = w.clone();
@@ -496,6 +498,7 @@ mod tests {
     /// `TargetingConditions.DEFAULT` checks line of sight (#4929): a phantom
     /// above takes a player in the open, not one boxed in stone or glass.
     #[test]
+    #[ignore = "daily"]
     fn a_phantom_cannot_target_a_player_it_cannot_see() {
         for roof in [None, Some("minecraft:stone"), Some("minecraft:glass")] {
             with_built_test_world(

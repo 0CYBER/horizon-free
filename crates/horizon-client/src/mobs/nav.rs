@@ -963,6 +963,7 @@ mod tests {
     /// chasing something drops 22 blocks at full health and 6 at four,
     /// where the shared formula would have given 3.
     #[test]
+    #[ignore = "daily"]
     fn a_creeper_falls_by_its_own_health_while_it_has_a_target() {
         // Skipped without the extracted vanilla data (CI's verify has none).
         crate::mobs::world::with_test_world(&[], |_, types| {

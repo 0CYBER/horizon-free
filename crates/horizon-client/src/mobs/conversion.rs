@@ -162,6 +162,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    #[ignore = "daily"]
     fn absorption_is_clamped_then_restarted_by_a_copied_absorption_effect() {
         with_test_world(&[], |_, types| {
             let mob =
@@ -191,6 +192,7 @@ mod tests {
         });
     }
     #[test]
+    #[ignore = "daily"]
     fn a_frozen_skeleton_becomes_a_stray_that_keeps_its_bow_and_name() {
         with_test_world(&[], |_, types| {
             let mob = |id, kind: &str| {
@@ -275,6 +277,7 @@ mod tests {
     /// `ConversionType.convertCommon` copies absorption through the target's
     /// setter, so it survives when the target's max absorption permits it.
     #[test]
+    #[ignore = "daily"]
     fn a_converting_mob_keeps_its_absorption() {
         with_test_world(&[], |_, types| {
             let mob = |id, kind: &str| {

@@ -458,6 +458,7 @@ mod owner_save_tests {
     /// `TargetingConditions.forNonCombat()`, whose `canBeSeenByAnyone` drops a
     /// dead target. A dead target is not copied.
     #[test]
+    #[ignore = "daily"]
     fn a_vex_does_not_copy_a_dead_owners_target() {
         use crate::mobs::world::with_test_world;
         let mut outcomes = Vec::new();

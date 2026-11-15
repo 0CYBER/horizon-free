@@ -1356,6 +1356,7 @@ mod tests {
     /// `NeutralMob.updatePersistentAnger`: anger at the player ends on
     /// Peaceful, as for a creative or spectator player (#11377).
     #[test]
+    #[ignore = "daily"]
     fn peaceful_ends_a_bees_anger_at_the_player() {
         with_test_world(&[], |w, _| {
             for (difficulty, still_angry) in [(2, true), (0, false)] {
@@ -1377,6 +1378,7 @@ mod tests {
     /// `BeeGrowCropGoal.tick`: level event 2011 (data 15) comes before the
     /// crop's new state (#11377).
     #[test]
+    #[ignore = "daily"]
     fn a_bee_sparks_a_crop_before_growing_it() {
         use crate::mobs::goals::Goal;
         crate::mobs::world::with_built_test_world(
@@ -1429,6 +1431,7 @@ mod tests {
 
     /// `Bee.doHurtTarget` on Normal: a mob is poisoned for 10 seconds (200 ticks).
     #[test]
+    #[ignore = "daily"]
     fn a_bee_sting_asks_for_ten_seconds_of_poison_on_normal() {
         with_test_world(&[], |w, _| {
             let mut m = bee();
@@ -1455,6 +1458,7 @@ mod tests {
     /// persistent anger target left, a bee still angry at the player targets
     /// them; with the rule off it targets no one.
     #[test]
+    #[ignore = "daily"]
     fn universal_anger_lets_an_angry_bee_pick_the_player() {
         with_test_world(&[], |w, _| {
             for rule in [false, true] {

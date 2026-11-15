@@ -53,6 +53,7 @@ fn dive_ages(ticks: i32) -> Option<(i32, Vec<i32>)> {
 /// ticks after the chase starts. A goal that also asks for an every-tick
 /// update ticks five times in five ticks instead, halving the dive's delay.
 #[test]
+#[ignore = "daily"]
 fn the_first_dive_comes_eight_ticks_after_the_chase_starts() {
     let Some((started, swoops)) = dive_ages(60) else {
         return;
@@ -71,6 +72,7 @@ fn the_first_dive_comes_eight_ticks_after_the_chase_starts() {
 /// at the phantom's block, played by the client at 0.3 volume with a 0.9-1.0
 /// pitch — and skipped for a silent phantom (`if (!Phantom.this.isSilent())`).
 #[test]
+#[ignore = "daily"]
 fn a_bite_is_level_event_1039_at_the_phantoms_block_unless_it_is_silent() {
     let mut outcomes = None;
     let ran = with_built_test_world(

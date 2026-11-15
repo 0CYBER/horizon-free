@@ -1780,6 +1780,7 @@ mod consume_tests {
     use crate::mobs::world::with_built_test_world;
 
     #[test]
+    #[ignore = "daily"]
     fn effective_components_admit_food_and_preserve_removed_consumables() {
         let _ = with_built_test_world(
             &[],
@@ -1886,6 +1887,7 @@ mod consume_tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn explicit_consume_sounds_keep_effect_order_even_for_a_silent_fox() {
         let _ = with_built_test_world(
             &[],
@@ -1943,6 +1945,7 @@ mod consume_tests {
     /// chorus fruit takes `TeleportRandomlyConsumeEffect`'s teleport, with its
     /// own sound and the portal trail (level event 2017).
     #[test]
+    #[ignore = "daily"]
     fn a_chorus_fruit_carries_the_fox_to_free_ground() {
         let ran = with_built_test_world(
             &[],
@@ -2070,6 +2073,7 @@ mod consume_tests {
     /// crumbs of `spawnItemParticles` but hands them to `Level.addParticle`,
     /// which a server does nothing with.
     #[test]
+    #[ignore = "daily"]
     fn a_golden_apple_feeds_the_fox_and_posts_the_eat_event() {
         let ran = with_built_test_world(
             &[],
@@ -2157,6 +2161,7 @@ mod consume_tests {
         /// `TargetingConditions.forCombat().range(12)`, so an invisible player at
         /// eleven blocks does not keep the fox alert, while a visible one does.
         #[test]
+        #[ignore = "daily"]
         fn an_invisible_player_far_away_is_not_alerting() {
             let mut outcomes = Vec::new();
             if !with_test_world(&[], |w, _| {
@@ -2216,6 +2221,7 @@ mod consume_tests {
         /// `Fox.FoxSleepGoal.canUse` refuses to sleep while `xxa`, `yya` or
         /// `zza` is nonzero, even when already asleep.
         #[test]
+        #[ignore = "daily"]
         fn a_fox_with_movement_input_does_not_sleep() {
             let mut outcomes = Vec::new();
             if !with_test_world(&[], |w, _| {
@@ -2320,6 +2326,7 @@ mod seek_shelter_tests {
     /// shade, but not while it stands in a village (`ServerLevel.isVillage`):
     /// there it stays out in the sun.
     #[test]
+    #[ignore = "daily"]
     fn a_village_fox_does_not_look_for_shade() {
         let (Some(open), Some(village)) =
             (seeks_shelter(&[]), seeks_shelter(&[villager_of_the_bell()]))
@@ -2355,6 +2362,7 @@ mod defend_tests {
     /// that attacker as its target, growls (`FOX_AGGRO`), sets `DEFENDING` and
     /// drops the flag when the goal stops.
     #[test]
+    #[ignore = "daily"]
     fn a_fox_defends_the_player_it_trusts() {
         let ran = with_built_test_world(
             &[zombie()],

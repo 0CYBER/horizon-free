@@ -1204,6 +1204,7 @@ mod tests {
     /// turtle's 0.1), then the whole motion is scaled by 0.9. Out of water
     /// this path does not run.
     #[test]
+    #[ignore = "daily"]
     fn water_travel_uses_get_speed_and_scales_by_nine_tenths() {
         let ran = crate::mobs::world::with_test_world(&[], |w, _| {
             let mut m = frog();
@@ -1362,6 +1363,7 @@ mod tests {
     /// long jump run at 1.25 and 1.0; 1.25 here would make a fleeing frog 60%
     /// slower than vanilla's.
     #[test]
+    #[ignore = "daily"]
     fn a_hurt_frog_panics_at_vanillas_two_times_speed() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],
@@ -1453,6 +1455,7 @@ mod tests {
     /// `block_place` is posted from the frog at the new block, then the lay
     /// sound, and the pregnancy is erased.
     #[test]
+    #[ignore = "daily"]
     fn laying_frogspawn_posts_block_place_from_the_frog() {
         let ran = crate::mobs::world::with_built_test_world(
             &[],

@@ -4,6 +4,7 @@ use crate::merchant::{ItemCost, MerchantOffer, Trader};
 use std::sync::Arc;
 
 #[test]
+#[ignore = "daily"]
 fn displayed_trade_items_have_no_drop_chance_and_clear_restores_it() {
     let ran = super::super::world::with_test_world(&[], |world, types| {
         let mut w = world.clone();

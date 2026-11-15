@@ -46,6 +46,7 @@ fn enderman(types: &crate::mobs::MobTypes, seed: i64) -> Mob {
 /// `stepOn`: when the magma's hurt teleports an enderman, the scan still
 /// walks the path it had, and the cobweb it stood in still holds it.
 #[test]
+#[ignore = "daily"]
 fn a_magma_teleport_leaves_the_block_scan_on_the_old_path() {
     with_built_test_world(
         &[],
@@ -76,6 +77,7 @@ fn a_magma_teleport_leaves_the_block_scan_on_the_old_path() {
 /// old position) leaves aiStep's fire contact at the landing spot: no
 /// fire there, so the fire timer only counts down (no re-ignite to 160).
 #[test]
+#[ignore = "daily"]
 fn a_burning_teleport_does_not_take_the_old_spots_fire_along() {
     with_built_test_world(
         &[],

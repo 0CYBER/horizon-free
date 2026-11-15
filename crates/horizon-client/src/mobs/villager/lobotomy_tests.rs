@@ -80,6 +80,7 @@ fn stuck_in(
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_villager_in_a_one_by_one_cell_is_stuck_and_one_in_the_open_is_not() {
     // `None`: the prepared vanilla data is missing here, as in a fresh checkout.
     let Some(cell) = stuck_in(true, None, None, |_| {}) else {
@@ -116,6 +117,7 @@ fn a_villager_in_a_one_by_one_cell_is_stuck_and_one_in_the_open_is_not() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_rider_is_stuck_in_the_open_and_a_sleeper_is_not_in_a_cell() {
     let Some(rider) = stuck_in(false, None, None, |m| m.extra.mount = Some(7)) else {
         return;
@@ -149,6 +151,7 @@ fn used_librarian_offer() -> Trader {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
     // (block at the remembered site, its x, day time, restocked)
     for (block, x, day_time, restocked) in [
@@ -194,6 +197,7 @@ fn a_stuck_librarian_restocks_only_at_its_own_workstation_within_reach() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_released_villager_gets_its_brain_back_at_its_next_check() {
     with_built_test_world(
         &[],
@@ -244,6 +248,7 @@ fn pocket_is_stuck(cells: &[(i32, i32)], furnish: &[(i32, i32, &str)]) -> Option
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_villager_with_a_bed_or_a_second_cell_is_still_stuck_but_a_room_is_not() {
     let Some(two) = pocket_is_stuck(&[(0, 0), (1, 0)], &[]) else {
         return;

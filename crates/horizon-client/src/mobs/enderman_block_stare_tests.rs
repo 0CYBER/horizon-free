@@ -49,6 +49,7 @@ fn tick_at(
 /// `level.getEntities(this.enderman, cube)`: the enderman's own box never
 /// blocks its feet cube, another mob's does.
 #[test]
+#[ignore = "daily"]
 fn the_enderman_itself_never_blocks_a_placement() {
     let Some(kind) = enderman_kind() else { return };
     let at = Vec3::new(0.5, 0.0, 0.5);
@@ -92,6 +93,7 @@ fn the_enderman_itself_never_blocks_a_placement() {
 /// hide a pumpkin behind them; a dandelion whose random offset moves it off
 /// the line does not.
 #[test]
+#[ignore = "daily"]
 fn take_block_reach_stops_at_outline_shapes() {
     let Some(kind) = enderman_kind() else { return };
     // EndermanTakeBlockGoal.tick: x - 2 + 4d, y + 3d, z - 2 + 4d.
@@ -201,6 +203,7 @@ fn calm(m: &mut Mob, cx: &mut Cx) {
 /// hears `DATA_CREEPY` change before `DATA_STARED_AT` clears, so the end of
 /// a stare's anger plays it too; anger from a hit does not.
 #[test]
+#[ignore = "daily"]
 fn the_stare_sound_is_throttled_silenced_and_at_the_eyes() {
     let Some(kind) = enderman_kind() else { return };
     with_test_world(&[], |w, _| {
@@ -250,6 +253,7 @@ fn the_stare_sound_is_throttled_silenced_and_at_the_eyes() {
 /// hit angers waits 600 ticks before its daylight teleport, as one a stare
 /// angers does; `setTarget(null)` zeroes it.
 #[test]
+#[ignore = "daily"]
 fn every_target_stamps_the_target_change_time() {
     let Some(kind) = enderman_kind() else { return };
     with_test_world(&[], |w, _| {

@@ -36,6 +36,7 @@ fn dig_cooldown(m: &mut Mob) -> i64 {
 /// "passenger or leashed"), so a `/summon`ed warden called Bob digs down and
 /// is gone.
 #[test]
+#[ignore = "daily"]
 fn only_a_persistent_or_leashed_warden_keeps_its_dig_cooldown() {
     let ran = with_test_world(&[], |w, types| {
         // What a warden holds a few ticks into its dig cooldown.
@@ -64,6 +65,7 @@ fn only_a_persistent_or_leashed_warden_keeps_its_dig_cooldown() {
 /// A warden on a player's team leaves that player and its other allies alone,
 /// and it never hunts an invulnerable mob.
 #[test]
+#[ignore = "daily"]
 fn the_warden_leaves_its_allies_and_invulnerable_mobs_alone() {
     let mut board = Scoreboard::default();
     board.add_team("t");
@@ -118,6 +120,7 @@ fn the_warden_leaves_its_allies_and_invulnerable_mobs_alone() {
 /// `Warden.VibrationUser.canReceiveVibration` through `isAlliedTo`: a team
 /// mate's vibration is not one the warden hears, so it never angers at it.
 #[test]
+#[ignore = "daily"]
 fn an_allied_vibration_is_not_heard() {
     let mut board = Scoreboard::default();
     board.add_team("t");

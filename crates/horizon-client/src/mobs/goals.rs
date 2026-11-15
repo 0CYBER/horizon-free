@@ -3427,6 +3427,7 @@ mod eat_block_tests {
     /// goal still runs (`EntityEvent` 10) and still shears the coat, and the
     /// grass stays.
     #[test]
+    #[ignore = "daily"]
     fn the_eat_goal_turns_grass_to_dirt_only_with_mob_griefing() {
         let Some(on) = sheep_events(true, false) else {
             return;
@@ -3471,6 +3472,7 @@ mod eat_block_tests {
     /// NeoForge's `canEntityGrief`: with the rule off, a mod's yes for this
     /// sheep lets it eat the grass (and only through `MobWorld::can_grief`).
     #[test]
+    #[ignore = "daily"]
     fn a_mods_grief_answer_overrides_the_rule_for_its_mob() {
         let Some(off) = sheep_events_hooked(false, false, Some(&GriefFor1)) else {
             return;
@@ -3489,6 +3491,7 @@ mod eat_block_tests {
     /// disappears with the rule on and stays with it off, while the goal eats
     /// either way.
     #[test]
+    #[ignore = "daily"]
     fn the_eat_goal_breaks_short_grass_only_with_mob_griefing() {
         let Some(on) = sheep_events(true, true) else {
             return;
@@ -3712,6 +3715,7 @@ mod avoid_entity_targeting_tests {
     /// 20 block range, but the wall is between them, so the goal must not pick
     /// them (it did before: only the distance was checked).
     #[test]
+    #[ignore = "daily"]
     fn a_rabbit_does_not_flee_a_player_behind_a_wall() {
         if let Some((in_range, picked)) = target(2, true) {
             assert!(in_range, "the player is inside the plain distance range");
@@ -3722,6 +3726,7 @@ mod avoid_entity_targeting_tests {
     /// `LivingEntity.canAttack`: in Peaceful no player is a target at all, so
     /// the goal does not pick them even in plain sight.
     #[test]
+    #[ignore = "daily"]
     fn a_rabbit_does_not_flee_in_peaceful() {
         if let Some((in_range, picked)) = target(0, false) {
             assert!(in_range, "the player is inside the plain distance range");
@@ -3732,6 +3737,7 @@ mod avoid_entity_targeting_tests {
     /// The control: the same world on normal difficulty with nothing in the way
     /// still picks the player.
     #[test]
+    #[ignore = "daily"]
     fn a_rabbit_flees_a_player_it_can_see() {
         if let Some((in_range, picked)) = target(2, false) {
             assert!(in_range, "the player is inside the plain distance range");
@@ -3741,6 +3747,7 @@ mod avoid_entity_targeting_tests {
 
     /// Upstream's visibility regression, also through the selected-guest path.
     #[test]
+    #[ignore = "daily"]
     fn an_invisible_player_tempts_only_within_two_blocks() {
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, types| {
@@ -3793,6 +3800,7 @@ mod avoid_entity_targeting_tests {
     /// which never picks a spectator: a spectator holding wheat does not tempt
     /// an animal.
     #[test]
+    #[ignore = "daily"]
     fn a_spectator_does_not_tempt_an_animal() {
         let mut outcomes = Vec::new();
         if !with_test_world(&[], |w, types| {
@@ -3840,6 +3848,7 @@ mod peaceful_targets_tests {
     /// hurt wolf neither takes its attacker (a player) as target nor picks one
     /// by sight, while at Normal it does.
     #[test]
+    #[ignore = "daily"]
     fn peaceful_mobs_never_target_the_player() {
         with_test_world(&[], |w, types| {
             let mut w = w.clone();
@@ -3881,6 +3890,7 @@ mod peaceful_targets_tests {
     /// `Mob.canAttack` refuses a Ghast, and `HurtByTargetGoal.canUse` ends
     /// with `canAttack(lastHurtByMob)`: a ghast's fireball is not retaliated.
     #[test]
+    #[ignore = "daily"]
     fn a_hurt_mob_does_not_retaliate_against_a_ghast() {
         let mut seen = None;
         with_test_world(&[], |_, types| {
@@ -3994,6 +4004,7 @@ mod visibility_hook_tests {
     /// NeoForge's `LivingVisibilityEvent` scales the range a targeting check
     /// sees the player from, and `getVisibilityPercent` clamps it to 10.
     #[test]
+    #[ignore = "daily"]
     fn a_mods_visibility_scales_the_targeting_range() {
         with_test_world(&[], |w, types| {
             let mut w = w.clone();
@@ -4019,6 +4030,7 @@ mod visibility_hook_tests {
     /// vanilla names: a zombie head fools a zombie, not a husk, and a
     /// skeleton skull a skeleton, not a stray.
     #[test]
+    #[ignore = "daily"]
     fn a_worn_head_hides_the_player_only_from_its_own_type() {
         with_test_world(&[], |w, types| {
             let mut w = w.clone();
@@ -4189,6 +4201,7 @@ mod breed_xp_tests {
     /// breed goal carries one 1-7 orb with the rule on, no orb with it off,
     /// and the pair breeds either way.
     #[test]
+    #[ignore = "daily"]
     fn the_breed_xp_follows_the_mob_drops_rule() {
         let Some(on) = llama_events(true) else {
             return;
@@ -4375,6 +4388,7 @@ mod melee_continue_tests {
     /// `MeleeAttackGoal.canContinueToUse`'s follow branch refuses a target
     /// outside the mob's home (`isWithinHome(target.blockPosition())`).
     #[test]
+    #[ignore = "daily"]
     fn a_chase_stops_outside_the_mobs_home() {
         let mut outcomes = None;
         let ran = with_test_world(&[], |w, types| {
@@ -4404,6 +4418,7 @@ mod melee_continue_tests {
 
     /// The same branch refuses a spectator (`!(player.isSpectator() || player.isCreative())`).
     #[test]
+    #[ignore = "daily"]
     fn a_chase_stops_when_the_target_is_a_spectator() {
         let mut outcomes = None;
         let ran = with_test_world(&[], |w, types| {
@@ -4465,6 +4480,7 @@ mod hurt_by_anger_tests {
     /// `HurtByTargetGoal.canUse` refuses a player when the `universal_anger`
     /// game rule is on: the anger target goals handle that hit instead.
     #[test]
+    #[ignore = "daily"]
     fn universal_anger_leaves_the_players_hit_to_the_anger_goals() {
         let mut outcomes = None;
         if !with_test_world(&[], |w, types| {
@@ -4526,6 +4542,7 @@ mod breed_continue_tests {
     /// `BreedGoal.canContinueToUse` refuses a partner that is panicking. The
     /// goal starts with a calm partner and must stop when the partner panics.
     #[test]
+    #[ignore = "daily"]
     fn a_breed_goal_stops_when_the_partner_panics() {
         let mut kind = None;
         if !with_test_world(&[], |_, types| {

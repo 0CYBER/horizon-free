@@ -349,6 +349,7 @@ mod tests {
     /// `UseItemGoal` for the wandering trader: the End has a fixed time, so
     /// it is neither dark nor bright outside and the trader drinks nothing.
     #[test]
+    #[ignore = "daily"]
     fn a_trader_does_not_drink_in_the_end() {
         use crate::mobs::world::with_test_world;
         use horizon_core::geometry::Vec3;
@@ -420,6 +421,7 @@ mod trade_start_tests {
     /// recently and within four blocks of the trading player. A hurt trader,
     /// or one whose customer walked away, must not start the stand-still goal.
     #[test]
+    #[ignore = "daily"]
     fn a_trader_stops_trading_when_hurt_or_out_of_reach() {
         let mut outcomes = Vec::new();
         let ran = with_test_world(&[], |w, types| {

@@ -736,6 +736,7 @@ mod ram_tests {
     /// absent, and `GoatAi.updateActivity` picks RAM before IDLE: a goat being
     /// fed or bred only follows.
     #[test]
+    #[ignore = "daily"]
     fn a_fed_or_bred_goat_starts_no_ram() {
         let kind = fake_goat();
         let mut partner = Mob::new(9, kind.clone(), Vec3::new(2.5, 64.0, 0.5), 0.0);
@@ -779,6 +780,7 @@ mod ram_tests {
     /// `RamTarget.tick` posts the hit (`noAggroMobAttack`) and then its push,
     /// which names the damage the victim's `applyItemBlocking` runs again on.
     #[test]
+    #[ignore = "daily"]
     fn a_ram_posts_the_hits_damage_with_its_push() {
         let kind = fake_goat();
         let ran = with_test_world(&[], |w, _| {

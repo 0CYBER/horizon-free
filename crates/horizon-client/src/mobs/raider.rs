@@ -762,6 +762,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "daily"]
     fn companions_and_shout_range_match_the_full_scan() {
         use crate::mobs::{
             Seen, seen_grid::SeenGrid, sensor_scan_tests::kind, world::with_test_world,
@@ -864,6 +865,7 @@ mod tests {
 
     /// `RaiderCelebration.tick` jumps only when the raider is not a passenger.
     #[test]
+    #[ignore = "daily"]
     fn a_celebrating_raider_does_not_jump_while_riding() {
         use crate::mobs::world::with_test_world;
         use std::sync::Arc;
@@ -900,6 +902,7 @@ mod tests {
     /// `ObtainRaidLeaderBannerGoal.canContinueToUse` ends with
     /// `!cannotPickUpBanner()`: a raid that is over stops the banner chase.
     #[test]
+    #[ignore = "daily"]
     fn a_banner_chase_stops_when_the_raid_ends() {
         use crate::mobs::world::with_built_test_world;
         use std::sync::Arc;

@@ -9,6 +9,7 @@ use crate::mobs::world::with_test_world;
 use horizon_core::random::LegacyRandom;
 
 #[test]
+#[ignore = "daily"]
 fn a_ridden_horse_is_not_counted_for_cramming() {
     // Three counted entities are one more than `maxEntityCramming - 1`.
     let ran = with_test_world(&[], |w, types| {

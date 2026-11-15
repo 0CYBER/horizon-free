@@ -1059,6 +1059,7 @@ mod scaffolding_sight_tests {
     /// ScaffoldingBlock.getCollisionShape: a viewer below the block sees
     /// through it, one above does not (issue 9607).
     #[test]
+    #[ignore = "daily"]
     fn scaffolding_blocks_sight_only_from_above() {
         let ran = super::with_built_test_world(
             &[],

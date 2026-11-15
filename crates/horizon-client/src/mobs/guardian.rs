@@ -390,6 +390,7 @@ mod elder_home_tests {
     /// `ElderGuardian.customServerAiStep`: with no home yet, `setHomeTo(blockPosition(), 16)`,
     /// the restriction its wandering goals read (`Mob::restricted`); a home it has is kept.
     #[test]
+    #[ignore = "daily"]
     fn an_elder_guardian_homes_where_it_stands() {
         with_test_world(&[], |w, types| {
             let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
@@ -427,6 +428,7 @@ mod elder_home_tests {
     /// the curse goes out with `isSilent() ? 0.0F : 1.0F`, and
     /// `ClientPacketListener.handleGameEvent` plays the curse sound only for 1.
     #[test]
+    #[ignore = "daily"]
     fn a_silent_elder_guardian_curses_without_the_sound() {
         with_test_world(&[], |w, types| {
             let kind = Arc::new(types.types["minecraft:elder_guardian"].clone());
@@ -631,6 +633,7 @@ mod tests {
     /// `Guardian.aiStep`: a guardian out of water flops, and the flop is heard
     /// (the elder's own sound) unless the guardian is silent (`!isSilent()`).
     #[test]
+    #[ignore = "daily"]
     fn a_silent_guardian_flops_without_a_sound() {
         for (kind, sound) in [
             ("minecraft:guardian", "entity.guardian.flop"),

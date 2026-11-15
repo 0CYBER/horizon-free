@@ -1661,6 +1661,7 @@ mod tests {
     /// a summon's `Passengers`) gets off so that it can dig. It was stubbed
     /// out, and such a warden stayed aboard for good (#8833).
     #[test]
+    #[ignore = "daily"]
     fn a_warden_forced_aboard_gets_off_to_dig() {
         let ran = crate::mobs::world::with_test_world(&[], |w, _| {
             let at = horizon_core::geometry::Vec3::new(0.5, 64.0, 0.5);
