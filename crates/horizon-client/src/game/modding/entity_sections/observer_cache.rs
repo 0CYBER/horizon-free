@@ -38,7 +38,7 @@ impl ObserverCache {
     }
 }
 
-#[cfg(all(test, feature = "alloc-count"))]
+#[cfg(all(test, feature = "alloc-count", not(feature = "system-allocator")))]
 mod tests {
     use super::*;
 
