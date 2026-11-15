@@ -307,7 +307,10 @@ fn code_only_reload_publishes_one_new_inventory_after_prepare_and_preserves_old_
                     (false, false, false, false, false, false)
                 );
                 assert!(old_songs.contains_key("inventorytest:requires_code"));
-                assert!(!read_tags(game).contains_key("inventorytest:requires_code"));
+                // Tag files ignore load conditions, including mod_loaded.
+                assert!(
+                    read_tags(game)["inventorytest:requires_code"].contains("minecraft:diamond")
+                );
                 assert!(old_tags["inventorytest:requires_code"].contains("minecraft:diamond"));
                 assert!(has_recipe(&old));
                 assert!(mod_api::__private::set_mod_enabled("machine_sample", true));

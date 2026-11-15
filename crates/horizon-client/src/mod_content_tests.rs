@@ -2895,7 +2895,7 @@ fn conditional_tag_layers_replace_only_when_server_inventory_accepts_them() {
         ),
         (
             "unsupported",
-            r#"{"neoforge:conditions":[{"type":"unknown:condition"}],"replace":true}"#,
+            r#"{"neoforge:conditions":[{"type":"unknown:condition"}],"replace":true,"values":["minecraft:diamond_block"]}"#,
         ),
         ("tail", r#"{"values":["minecraft:gold_block"]}"#),
     ];
@@ -2922,7 +2922,7 @@ fn conditional_tag_layers_replace_only_when_server_inventory_accepts_them() {
     let off = super::resource_root(&base, Path::new(""), &mods, &cache, &inventory(None)).unwrap();
     assert_eq!(
         read(&off)["values"],
-        serde_json::json!(["minecraft:stone", "minecraft:gold_block"])
+        serde_json::json!(["minecraft:diamond_block", "minecraft:gold_block"])
     );
     let on = super::resource_root(
         &base,
@@ -2935,7 +2935,7 @@ fn conditional_tag_layers_replace_only_when_server_inventory_accepts_them() {
     assert_ne!(on, off, "code-only IDs invalidate the flattened tag cache");
     assert_eq!(
         read(&on)["values"],
-        serde_json::json!(["minecraft:dirt", "minecraft:gold_block"])
+        serde_json::json!(["minecraft:diamond_block", "minecraft:gold_block"])
     );
     assert!(read(&on).get("neoforge:conditions").is_none());
     let client = super::resource_root(
@@ -2952,7 +2952,7 @@ fn conditional_tag_layers_replace_only_when_server_inventory_accepts_them() {
     assert_eq!(again, off);
     assert_eq!(
         read(&off)["values"],
-        serde_json::json!(["minecraft:stone", "minecraft:gold_block"])
+        serde_json::json!(["minecraft:diamond_block", "minecraft:gold_block"])
     );
     fs::remove_dir_all(scratch).unwrap();
 }

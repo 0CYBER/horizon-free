@@ -167,6 +167,8 @@ mod tests {
         use mod_platform::__private::part_tests::{ROBOT_FLUID, game_thread};
         with_game(|game| {
             let _mods = game_thread();
+            // Installing the capability fixture replaces the registry snapshot.
+            crate::game::mods::register_iterated_registries(&game.options.resources).unwrap();
             game.options.dedicated = Some(Vec::new());
             game.world
                 .chunks

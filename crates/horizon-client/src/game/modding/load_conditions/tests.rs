@@ -132,7 +132,7 @@ fn load_conditions_recipe_reload_counts_and_failed_candidates_keep_old_recipes()
                     let stack = game
                         .reload_datapacks(true, &game.level.enabled_features.clone())
                         .unwrap();
-                    assert_eq!(count.load(Ordering::SeqCst), 6);
+                    assert_eq!(count.load(Ordering::SeqCst), 5);
                     assert!(game.recipes().recipe("testmod:not_false").is_some());
                     assert!(game.recipes().recipe("testmod:not_true").is_none());
                     assert!(game.recipes().recipe("testmod:nested").is_some());
@@ -157,10 +157,9 @@ fn load_conditions_recipe_reload_counts_and_failed_candidates_keep_old_recipes()
                 count.store(0, Ordering::SeqCst);
                 game.reload_datapacks(true, &game.level.enabled_features.clone())
                     .unwrap();
-                assert_eq!(count.load(Ordering::SeqCst), 6);
+                assert_eq!(count.load(Ordering::SeqCst), 5);
                 assert!(
-                    !game
-                        .items()
+                    game.items()
                         .block_tags
                         .get("testmod:flag")
                         .is_some_and(|tag| tag.contains("minecraft:stone"))

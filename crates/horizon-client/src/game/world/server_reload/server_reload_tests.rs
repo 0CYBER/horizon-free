@@ -1036,21 +1036,28 @@ fn data_maps_updated_fires_for_each_registry_on_first_open_and_every_reload() {
             game.load_world(request(&root)).unwrap();
             let both = |count: usize| -> Vec<(String, DataMapsUpdateCause)> {
                 // In registry id order.
-                ["minecraft:block", "minecraft:item"]
-                    .into_iter()
-                    .cycle()
-                    .take(count)
-                    .map(|registry| (registry.to_owned(), DataMapsUpdateCause::ServerReload))
-                    .collect()
+                [
+                    "minecraft:block",
+                    "minecraft:entity_type",
+                    "minecraft:game_event",
+                    "minecraft:item",
+                    "minecraft:villager_profession",
+                    "minecraft:worldgen/biome",
+                ]
+                .into_iter()
+                .cycle()
+                .take(count)
+                .map(|registry| (registry.to_owned(), DataMapsUpdateCause::ServerReload))
+                .collect()
             };
             let unknown = Err(DataMapError::UnknownType);
-            assert_eq!(*seen.lock().unwrap(), both(2));
+            assert_eq!(*seen.lock().unwrap(), both(6));
             assert_eq!(
                 *reads.lock().unwrap(),
                 [[Ok(Some(10)), Ok(Some(5)), Ok(None), unknown, Ok(Some(3))]]
             );
             assert!(game.run_command("reload"));
-            assert_eq!(*seen.lock().unwrap(), both(4));
+            assert_eq!(*seen.lock().unwrap(), both(12));
             assert_eq!(
                 reads.lock().unwrap()[1],
                 [Ok(Some(25)), Ok(None), Ok(None), unknown, Ok(Some(3))]

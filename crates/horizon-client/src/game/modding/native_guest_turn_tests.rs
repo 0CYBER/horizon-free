@@ -175,6 +175,25 @@ fn refused_wire_reload_preserves_hub_and_engine_generation() {
         let old_context = game.loop_context.clone();
         let root = std::env::temp_dir().join(format!("reload-wire-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
+        // Table staging now reads the resource root before the wire reload.
+        // Supply its ordinary inputs, but deliberately omit the registry report
+        // so it is still the wire preparation that refuses this candidate.
+        let mut folders = vec![(game.options.resources.clone(), root.clone())];
+        while let Some((source, destination)) = folders.pop() {
+            std::fs::create_dir_all(&destination).unwrap();
+            for entry in std::fs::read_dir(&source).unwrap() {
+                let entry = entry.unwrap();
+                let name = entry.file_name();
+                let path = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    if source != game.options.resources || name == "data" {
+                        folders.push((path, destination.join(name)));
+                    }
+                } else if name != "registries.json" {
+                    std::fs::copy(path, destination.join(name)).unwrap();
+                }
+            }
+        }
         let stack = super::functions::pack_stack(
             &game.world_root,
             &root,

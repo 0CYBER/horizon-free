@@ -2015,6 +2015,9 @@ impl Game<'_> {
             return self.world.day_time;
         }
         let total = self.world.day_time;
+        if from == "minecraft:the_end" {
+            self.world.end_clock = total;
+        }
         self.ui.command_clocks.entry(from).or_default().0 = total;
         self.ui.active_clock = to.to_owned();
         if to == "minecraft:the_end" {

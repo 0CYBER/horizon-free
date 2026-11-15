@@ -763,6 +763,18 @@ fn mob_death_and_handle_preserve_namespaced_types() {
         "game::native_hooks::death_source_tests::mob_death_and_handle_preserve_namespaced_types",
         || {
             observed(false, false, |game, seen| {
+                // Entity-type keys are frozen once per Parts snapshot. This
+                // fixture needs its synthetic type in that first publication.
+                let blocks = &game.pack.assets.registry;
+                crate::game::api_values::register_game_keys((0..blocks.len()).map(|i| {
+                    blocks
+                        .state(horizon_world::registry::BlockStateId(i as u32))
+                        .unwrap()
+                        .name
+                        .clone()
+                }));
+                mod_api::__private::resolve_entity_types(["vulture:vulture", "minecraft:sheep"])
+                    .unwrap();
                 let sheep = game.res.mob_types().get("minecraft:sheep").unwrap().clone();
                 for (index, id) in ["vulture:vulture", "sheep", "minecraft:sheep"]
                     .into_iter()
