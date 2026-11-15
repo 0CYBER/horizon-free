@@ -789,7 +789,7 @@ impl Game<'_> {
     /// a portal (a vehicle's transition time is 0): the riders travel with
     /// it and ride it again on arrival (`Entity.teleportCrossDimension`), so
     /// a rider never waits for its own portal delay.
-    fn carry_riders_through_portals(&mut self) {
+    pub(in crate::game) fn carry_riders_through_portals(&mut self) {
         for (vehicle, entry) in self.take_carrying(self.dim) {
             let Some(plan) = self.vehicle_plan(vehicle, entry) else {
                 continue;
@@ -1369,7 +1369,7 @@ impl Game<'_> {
     /// arrives: it keeps its entity id, so the ride is never broken
     /// (`Entity.teleportCrossDimension` recreates the vehicle in the other
     /// dimension, and its passengers ride it again).
-    fn arrive_vehicle(&mut self, source: Dim, id: u32, at: Vec3, yaw: f32) {
+    pub(in crate::game) fn arrive_vehicle(&mut self, source: Dim, id: u32, at: Vec3, yaw: f32) {
         let Some(id) = self.parked_vehicle_root(source, id) else {
             return;
         };
