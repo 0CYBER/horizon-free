@@ -914,6 +914,7 @@ impl Game<'_> {
         self.perf.world_opening();
         let open_step = startup::step("server.open_world");
         self.finish_open_world(opening.world?.finish()?)?;
+        self.start_datapacks()?;
         drop(open_step);
         if let Some(sync) = opening.sync {
             startup::time("server.sync_adopt", || sync.adopt(&self.pack_files()));

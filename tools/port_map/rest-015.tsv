@@ -103,9 +103,9 @@ RandomCommand.resetAllSequencesAndSetNewDefaults	port	crates/horizon-client/src/
 RecipeCommand.register	port	crates/horizon-command/src/tree_world.rs::recipe	recipe give|take literals with recipe and * arguments
 RecipeCommand.giveRecipes	port	crates/horizon-client/src/game/commands/world_cmds.rs::Game::cmd_recipe	give branch; recipes added through change_recipes
 RecipeCommand.takeRecipes	port	crates/horizon-client/src/game/commands/world_cmds.rs::Game::cmd_recipe	take branch; recipes removed through change_recipes
-ReloadCommand.discoverNewPacks	port	crates/horizon-client/src/game/functions.rs::Game::reload_datapacks	gap: minor: enables newly found packs that are not disabled; no NeoForge reorder of new packs
+ReloadCommand.discoverNewPacks	port	crates/horizon-client/src/game/functions/loading.rs::Game::try_reload_datapacks	gap: minor: enables newly found packs that are not disabled; no NeoForge reorder of new packs
 ReloadCommand.register	port	crates/horizon-command/src/tree_misc.rs::register	reload literal
-ReloadCommand.reloadPacks	port	crates/horizon-client/src/game/functions.rs::Game::apply_pack_change	no message of its own; the content tables are reloaded with the functions
+ReloadCommand.reloadPacks	port	crates/horizon-client/src/game/functions/loading.rs::Game::apply_pack_change	no message of its own; the content tables are reloaded with the functions
 ReturnCommand.ReturnFailCustomExecutor.run	port	crates/horizon-client/src/game/functions.rs::Game::cmd_return	return fail branch: finish_return with no value
 ReturnCommand.ReturnFromCommandCustomModifier.apply	port	crates/horizon-client/src/game/commands/execute.rs::Game::run_return_run	return run: the command's result becomes the frame's return
 ReturnCommand.ReturnValueCustomExecutor.run	port	crates/horizon-client/src/game/functions.rs::Game::cmd_return	return value branch: finish_return with the value

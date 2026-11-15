@@ -22,7 +22,7 @@ ServerTickRateManager.updateJoiningPlayer	port	crates/horizon-client/src/lan/hub
 ServerTickRateManager.updateStepTicks	inline	crates/horizon-client/src/lan/hub.rs::Hub::sync_ticking	a step's revision change broadcasts TickingStep, and the same fn sends the ticking state when the rate or the freeze changed
 SuppressedExceptionCollector.addEntry	skip:server		feeds the system report's suppressed-exception section; no player-facing behaviour
 SuppressedExceptionCollector.dump	skip:server		system report section only
-WorldLoader.PackConfig.createResourceManager	port	crates/horizon-client/src/game/functions.rs::Game::reload_datapacks	discovers packs and rebuilds the data store; no resource manager object
+WorldLoader.PackConfig.createResourceManager	port	crates/horizon-client/src/game/functions/loading.rs::Game::try_reload_datapacks	discovers packs and rebuilds the data store; no resource manager object
 AdvancementVisibilityEvaluator.evaluateVisibility	port	crates/horizon-client/src/advancements.rs::Tree::visible	done, ancestors and near unhidden advancements in one walk
 AdvancementVisibilityEvaluator.evaluateVisibilityRule	inline	crates/horizon-client/src/advancements.rs::Tree::visible	rule match inside the walk
 AdvancementVisibilityEvaluator.evaluateVisiblityForUnfinishedNode	inline	crates/horizon-client/src/advancements.rs::Tree::visible	two-level check on the top three rules, in the walk

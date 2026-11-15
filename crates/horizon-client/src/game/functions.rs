@@ -1,5 +1,7 @@
 //! Data packs in the game: functions (`/function`, `/return`, tick and load
 //! tags, `/schedule`), predicates, `/reload` and `/datapack`.
+mod loading;
+mod registry_graph;
 use super::{
     Game,
     commands::{
@@ -15,6 +17,7 @@ use horizon_client::{
     text::{self, Text},
 };
 use horizon_world::nbt::Tag;
+pub(super) use loading::DatapacksRefused;
 
 /// A `TimerQueue` event.
 #[derive(Clone, Debug, PartialEq)]
@@ -195,55 +198,6 @@ impl Game<'_> {
 
     fn datapack_settings_path(&self) -> std::path::PathBuf {
         self.world_root.join("datapacks.json")
-    }
-    /// Discover and load the data packs of the world (once, or on `/reload`).
-    pub(super) fn ensure_datapacks(&mut self) {
-        if self.fns.loaded || self.world_root.as_os_str().is_empty() {
-            return;
-        }
-        self.reload_datapacks(false);
-    }
-    /// `ServerFunctionLibrary.reload`: validate the candidate functions with
-    /// the current content before exposing them to execution.
-    pub(super) fn reload_datapacks(&mut self, run_load: bool) {
-        let stack = pack_stack(
-            &self.world_root,
-            &self.options.resources,
-            self.cmds.vanilla_disabled,
-            &self.level.enabled_features,
-        );
-        self.fns.packs = stack.packs;
-        self.fns.enabled = stack.enabled;
-        let store = self.load_store();
-        self.fns.loaded = true;
-        self.fns.load_pending = true;
-        // An explicit reload (`/reload`, `/datapack`) reloads the content
-        // tables with the functions, as `ReloadableServerResources` does;
-        // the lazy first load ran after the world already built them.
-        if run_load {
-            self.reload_world_tables();
-        }
-        self.admit_store(store);
-        // The schedule is the world's live `TimerQueue` `SavedData`, not pack
-        // content: firing an event (`TimerQueue.tick`) and `/schedule clear`
-        // (`TimerQueue.remove`) drop it from the queue, and a reload only
-        // replaces the function library. Read the saved file when the world's
-        // data loads, then keep the queue as it is.
-        if !self.fns.schedule_loaded {
-            self.fns.schedule_loaded = true;
-            self.load_schedule();
-        }
-    }
-    fn load_store(&self) -> DataStore {
-        // The built-in pack first (lowest priority), unless disabled.
-        let stack = pack_stack(
-            &self.world_root,
-            &self.options.resources,
-            self.cmds.vanilla_disabled,
-            &self.level.enabled_features,
-        );
-        let packs: Vec<&DataPack> = stack.builtin.iter().chain(stack.enabled_packs()).collect();
-        DataStore::load(&packs)
     }
     /// `CommandFunction.parseCommand`: compile ordinary lines without running them.
     /// Macro lines are parsed
@@ -996,7 +950,9 @@ impl Game<'_> {
     /// ReloadCommand: the message, then the (asynchronous) reload; returns 0.
     pub(super) fn cmd_reload(&mut self) -> R<i32> {
         self.feedback(Text::translate("commands.reload.success", &[]));
-        self.reload_datapacks(true);
+        if !self.reload_datapacks(true) {
+            self.feedback(Text::translate("commands.reload.failure", &[]));
+        }
         Ok(0)
     }
     /// `PackLocationInfo.createChatLink`: the id decorated with its source
@@ -1219,8 +1175,9 @@ impl Game<'_> {
                     "commands.datapack.modify.enable",
                     &[self.pack_link(&name, true)],
                 ));
-                self.apply_pack_change();
-                Ok(self.selected_packs().len() as i32)
+                let count = self.selected_packs().len() as i32;
+                self.apply_pack_change(selected);
+                Ok(count)
             }
             _ => {
                 let name = name.unwrap_or_default();
@@ -1244,22 +1201,12 @@ impl Game<'_> {
                     "commands.datapack.modify.disable",
                     &[self.pack_link(&name, true)],
                 ));
-                self.apply_pack_change();
-                Ok(self.selected_packs().len() as i32)
+                let count = self.selected_packs().len() as i32;
+                self.apply_pack_change(selected);
+                Ok(count)
             }
         }
     }
-    /// `ReloadCommand.reloadPacks`: no message of its own. It reloads the
-    /// server's data as `/reload` does (`reload_datapacks`), the content
-    /// tables with the functions.
-    fn apply_pack_change(&mut self) {
-        self.save_datapack_settings();
-        let store = self.load_store();
-        self.fns.load_pending = true;
-        self.reload_world_tables();
-        self.admit_store(store);
-    }
-
     // ---- predicates -------------------------------------------------------------------
 
     /// `ResourceOrIdArgument.getLootPredicate`: accept the inline or named
@@ -2919,7 +2866,8 @@ mod required_tag_tests {
             r#"{"type":"minecraft:all_of","terms":["h121_canonical"]}"#,
         )
         .unwrap();
-        game.reload_datapacks(false);
+        // Invalid holders now refuse the candidate at reload, keeping the working library.
+        assert!(!game.reload_datapacks(false));
         let mut source = game.player_source();
         source.entity = Some(Target::Mob(actors[0].0));
         source.pos = game.target_position(Target::Mob(actors[0].0)).unwrap();
@@ -2940,17 +2888,18 @@ mod required_tag_tests {
             "all_reach_cycle_a",
         ] {
             assert!(
-                game.fns
+                !game
+                    .fns
                     .store
                     .predicates
                     .contains_key(&format!("h121:{name}"))
             );
             assert!(
-                !game.check_predicate(&format!("h121:{name}")).unwrap(),
+                game.check_predicate(&format!("h121:{name}")).is_err(),
                 "{name}"
             );
         }
-        assert!(!game.check_predicate("minecraft:h121_canonical").unwrap());
+        assert!(game.check_predicate("minecraft:h121_canonical").is_err());
         assert!(game.check_predicate("h121:reference").unwrap());
         game.command_source = previous;
         assert_eq!(game.world.game_time, clock);
@@ -2966,3 +2915,6 @@ mod pack_tag_tests;
 
 #[cfg(test)]
 mod schedule_reload_tests;
+
+#[cfg(test)]
+mod loading_tests;
