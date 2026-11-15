@@ -83,6 +83,8 @@ fn initial_recipe_book_packets(sync: &SyncData, book: &crate::recipe_book::Setti
     ]
 }
 
+// exhaustive: engine-owned configuration, constructed by the game and its network fixtures;
+// not a mod API value.
 #[derive(Clone, Debug)]
 pub struct HubConfig {
     pub default_game_mode: i32,
