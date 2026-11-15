@@ -853,7 +853,10 @@ fn bookshelf_abort_restores_items_flags_and_last_slot_but_keeps_issued_effects()
                         info.properties["slot_2_occupied"],
                         if extracting { "false" } else { "true" }
                     );
-                    assert_eq!(*changes.0.lock().unwrap(), [expected.clone()]);
+                    assert_eq!(
+                        changes.0.lock().unwrap().as_slice(),
+                        std::slice::from_ref(&expected)
+                    );
                     assert!(level.send_block_updated(host, pos));
                     Err(())
                 });
