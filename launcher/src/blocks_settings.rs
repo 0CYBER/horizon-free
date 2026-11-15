@@ -360,7 +360,7 @@ impl Launcher {
                             allow.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         match native_consent::resolve(&mut this.pending_consent, true, true, &mut this.settings, &this.mods.home()) {
                             Err(error) => this.consent_error = Some(error),
-                            Ok(Some(action)) => { this.consent_error = None; match action {
+                            Ok(Some(action)) => { this.consent_error = None; this.storage_revoke_error = None; match action {
                                 PendingConsent::Build(_) => {
                                     let (base, back_up) = this.native_consent_build.take().unwrap_or_default();
                                     this.build_native_on(base, back_up)

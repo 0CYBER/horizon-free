@@ -356,7 +356,7 @@ impl Launcher {
             for instance in instances::list() {
                 for (id, _, _) in native_status::enabled(&instance.home) {
                     if let Err(error) = browser::java::set_enabled(&instance.home, &id, false) {
-                        failure.get_or_insert(error);
+                        failure.get_or_insert((id, instance.name.clone(), error));
                     }
                 }
             }
@@ -365,10 +365,15 @@ impl Launcher {
         cx.spawn(async move |this, cx| {
             let failure = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.storage_revoke_error = failure.map(|error| {
+                this.storage_revoke_error = failure.map(|(id, instance, error)| {
                     trf(
-                        "The permission is off, but a native mod couldn't be switched off: {error}. Switch it off in its instance's Installed mods.",
-                        &[("error", &error)],
+                        "The permission is off, but {mod} in {instance} couldn't be switched off \
+                         ({error}). Switch it off in {instance}'s Installed mods.",
+                        &[
+                            ("mod", &id),
+                            ("instance", &instance),
+                            ("error", error.trim_end_matches('.')),
+                        ],
                     )
                 });
                 this.instance_mods_changed();

@@ -421,6 +421,10 @@ impl Launcher {
         self.load_profile_heads();
         // A Turn off question left open isn't still asked the next time Settings opens.
         self.storage_revoke = None;
+        // A Turn off error is read on the visit it shows in: leaving Settings settles it.
+        if self.page == Page::Settings && page != Page::Settings {
+            self.storage_revoke_error = None;
+        }
         self.storage_counting = None;
         self.storage_visit += 1;
         self.wardrobe_reload |= matches!(page, Page::Wardrobe | Page::Shop);
